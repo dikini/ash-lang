@@ -5,8 +5,8 @@
 - Related: [DN-0056](../design/DN-0056-scoped-continuation-retention-and-library-scheduling.md),
   [CP-0026](../proposals/CP-0026-scoped-owned-continuation-storage.md)
 
-> This task organizes work. It does not define Ash semantics. The accepted
-> proposal authorizes C2 after C1 retained-result verification.
+> This task organizes work. It does not define Ash semantics. C2 is active
+> under the accepted proposal; public release still depends on C3.
 
 ## Dependencies
 
@@ -34,8 +34,22 @@ narrowing the original issue criteria.
 CP-0026 is accepted. Its bounded model and correspondence passed independent
 source review and the frozen integration build; the
 [record](evidence/local-retained-control/c1-model/README.md) identifies the
-inputs and limits. C1 retained-result verification is pending before C2
-product work starts. No C1–C5 issue criterion is complete yet.
+inputs and limits. C1 was retained and independently verified at
+`6d530614d426db3f31fd0e9fe1f01d12399f78c9` by
+[PR #160](https://github.com/dikini/ash-lang/pull/160); [C1 #71](https://github.com/dikini/ash-lang/issues/71)
+is closed. C2 store work is active. Internal fixtures exercise private root,
+Retain and structural Continue through a store frame, including the current
+consumer's adapter and a running cleanup. Source-derived capture checks cover
+an imported continuation helper, enclosing and captured support, and actual
+interpreter conflicts. A separate focused control inspection checks saved
+cuts at Retain, including cuts never continued and later checkpoints; real
+restoration checks the current consumer's interpreter. This C2 work remains
+subject to independent review and the remaining acceptance checks.
+An ordinary Probe can be intercepted by a source handler; internal checks
+exercise its driver restriction and actual Store-provider selection. Image
+codecs preserve Store/Root/Retain carriers and generic Continue round-trips,
+while public Store release remains rejected until C3.
+C2–C5 and the connected full-workspace and Main gates remain open.
 
 ## Verification
 
@@ -59,6 +73,14 @@ drain argument is paper evidence, not a checked analysis or implementation.
 
 ## Deviations
 
-None. Return any semantic or proof gap to CP-0026 and DN-0056 before product
+The reserved `retain` keyword requires renaming the existing recursion
+examples in [syntax](../../spec/syntax.md),
+[name resolution](../../spec/name-resolution.md),
+[dynamic semantics](../../spec/dynamic-semantics.md), and the
+[tool guide](../tools/ash.md) when C5 updates current documentation. The
+executable recursion fixtures and their embedded mirrors are renamed with the
+parser change.
+
+Return any semantic or proof gap to CP-0026 and DN-0056 before product
 delivery; keep original issue criteria open until their full scopes are retained
 and verified.

@@ -92,6 +92,12 @@ impl TransformFamily for EffectOperationFamily {
         if let EffectExprKind::Operation(EffectOperation::Resource(resource)) = kind {
             binders.push(resource.handle.id());
         }
+        if let EffectExprKind::Operation(EffectOperation::Store(store)) = kind {
+            binders.push(store.handle.id());
+        }
+        if let EffectExprKind::Operation(EffectOperation::Continue(continuation)) = kind {
+            binders.push(continuation.adapter.answer.id());
+        }
         if let EffectExprKind::Operation(EffectOperation::Region(scope)) = kind {
             binders.push(scope.access.id());
         }
@@ -278,6 +284,68 @@ impl TransformFamily for EffectOperationFamily {
                         initializer: remap(remapped, resource.initializer)?,
                         body: remap(remapped, resource.body)?,
                     }),
+                    ty.into_inner(),
+                    effects,
+                    origin,
+                )
+            }
+            EffectOperation::Store(store) => {
+                let handle_type = IterativeTypeOwner::new(copy_type(builder, store.handle.ty())?);
+                let handle_id = copy_binder_id(builder, store.handle.id())?;
+                let handle_origin = copy_origin(builder, store.handle.origin())?;
+                let handle =
+                    builder.resolved_binder(handle_id, handle_type.into_inner(), handle_origin)?;
+                let mut acquisition = store.acquisition;
+                acquisition.identity = copy_variable_id(builder, acquisition.identity)?;
+                acquisition.handle = copy_binder_id(builder, acquisition.handle)?;
+                builder.store_scope(
+                    Box::new(super::effect::StoreScopeNode::new(
+                        acquisition,
+                        handle,
+                        remap(remapped, store.initializer)?,
+                        remap(remapped, store.body)?,
+                    )),
+                    ty.into_inner(),
+                    effects,
+                    origin,
+                )
+            }
+            EffectOperation::Continue(continuation) => {
+                let answer = &continuation.adapter.answer;
+                let answer_type = IterativeTypeOwner::new(copy_type(builder, answer.ty())?);
+                let answer_id = copy_binder_id(builder, answer.id())?;
+                let answer_origin = copy_origin(builder, answer.origin())?;
+                let answer =
+                    builder.resolved_binder(answer_id, answer_type.into_inner(), answer_origin)?;
+                builder.continue_control(
+                    super::effect::ContinueNode {
+                        store: remap(remapped, continuation.store)?,
+                        key: remap(remapped, continuation.key)?,
+                        adapter: Box::new(super::effect::ContinueAdapter {
+                            answer,
+                            some: remap(remapped, continuation.adapter.some)?,
+                            none: remap(remapped, continuation.adapter.none)?,
+                        }),
+                    },
+                    ty.into_inner(),
+                    effects,
+                    origin,
+                )
+            }
+            EffectOperation::RetainedRoot(root) => builder.retained_root(
+                super::effect::RetainedRootNode {
+                    store: remap(remapped, root.store)?,
+                    handler: remap(remapped, root.handler)?,
+                },
+                ty.into_inner(),
+                effects,
+                origin,
+            ),
+            EffectOperation::Retain(retain) => {
+                let handler = copy_handler_id(builder, retain.handler)?;
+                let owner = copy_resume_id(builder, retain.owner)?;
+                builder.retain_control(
+                    super::effect::RetainNode { handler, owner },
                     ty.into_inner(),
                     effects,
                     origin,

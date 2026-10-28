@@ -672,7 +672,7 @@ fn recursive_machine_evaluates_a_self_reference() {
         "main : Unit -> Int\n",
         "main () = {\n",
         "let rec self : Unit -> Int = fn(ignored) {\n",
-        "let retain : Unit -> Int = self\n",
+        "let saved : Unit -> Int = self\n",
         "42\n",
         "}\n",
         "self ()\n",

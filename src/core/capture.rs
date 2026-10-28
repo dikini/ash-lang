@@ -881,6 +881,12 @@ pub(crate) enum Failure {
         causes: Box<[Option<Span>; 2]>,
     },
     Invalid,
+    RetainedDriver {
+        source: Span,
+    },
+    RetainedInterpretation {
+        source: Span,
+    },
     Unsafe(UnsafeDiscard),
     CleanupContext {
         discard: Span,
@@ -1643,6 +1649,13 @@ impl<'a, F: CoreOperationFamily> FunctionMetadataPreparation<'a, F> {
                     .map_err(|_| Failure::Resource)?;
                 preparation.bound.push(resource.acquisition.identity);
             }
+            if let Some(EffectOperation::Store(store)) = (self.operation)(&node.kind) {
+                preparation
+                    .bound
+                    .try_reserve(1)
+                    .map_err(|_| Failure::Resource)?;
+                preparation.bound.push(store.acquisition.identity);
+            }
             if let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
                 F::pure(&node.kind)
             {
@@ -1791,6 +1804,9 @@ impl<'a, F: CoreOperationFamily> FunctionMetadataPreparation<'a, F> {
         let mut header = MetadataVariables::default();
         retain_type_variables(&mut header, &node.ty, budget)?;
         retain_row_variables(&mut header, F::effect_row(&node.effects), budget)?;
+        if let Some(EffectOperation::Store(store)) = (self.operation)(&node.kind) {
+            retain_type_variables(&mut header, store.handle.ty(), budget)?;
+        }
         if let Some(EffectOperation::Handler(handler)) = (self.operation)(&node.kind) {
             for argument in handler.effect().arguments() {
                 retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
@@ -1841,6 +1857,9 @@ impl NodeMetadataHeaders {
         let mut header = MetadataVariables::default();
         retain_type_variables(&mut header, &node.ty, budget)?;
         retain_row_variables(&mut header, F::effect_row(&node.effects), budget)?;
+        if let Some(EffectOperation::Store(store)) = operation(&node.kind) {
+            retain_type_variables(&mut header, store.handle.ty(), budget)?;
+        }
         if let Some(EffectOperation::Handler(handler)) = operation(&node.kind) {
             for argument in handler.effect().arguments() {
                 retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
@@ -1910,6 +1929,10 @@ fn retain_function_metadata<F: CoreOperationFamily>(
         if let Some(EffectOperation::Resource(resource)) = operation(&node.kind) {
             bound.try_reserve(1).map_err(|_| Failure::Resource)?;
             bound.push(resource.acquisition.identity);
+        }
+        if let Some(EffectOperation::Store(store)) = operation(&node.kind) {
+            bound.try_reserve(1).map_err(|_| Failure::Resource)?;
+            bound.push(store.acquisition.identity);
         }
         if let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
             F::pure(&node.kind)
@@ -2517,6 +2540,59 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
                 budget,
             )?)
         }
+        Some(EffectOperation::Store(store)) => {
+            let api = crate::resolved::StoreApi::for_module(store.acquisition.builtin)
+                .ok_or(Failure::Invalid)?;
+            graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+            let scope = graph.code.len();
+            data.position(scope, id, budget)?;
+            charge(budget, 2)?;
+            let probe = EffectInstance::new(
+                api.probe(),
+                Box::new([Type::Variable(store.acquisition.identity)]),
+            );
+            graph.code.push(Control::Resource {
+                body: index(store.body) + 1,
+                effect: Request::effect(&probe, store.acquisition.span, budget)?,
+            });
+            Control::Sequence(copy_slice(&[index(store.initializer) + 1, scope], budget)?)
+        }
+        Some(EffectOperation::Continue(continuation)) => {
+            charge(budget, 1)?;
+            graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+            let transfer = graph.code.len();
+            data.position(transfer, id, budget)?;
+            graph.code.push(Control::Continue {
+                store: index(continuation.store) + 1,
+                key: index(continuation.key) + 1,
+                some: index(continuation.adapter.some) + 1,
+                none: index(continuation.adapter.none) + 1,
+            });
+            Control::Sequence(copy_slice(
+                &[
+                    index(continuation.store) + 1,
+                    index(continuation.key) + 1,
+                    transfer,
+                ],
+                budget,
+            )?)
+        }
+        Some(EffectOperation::RetainedRoot(root)) => {
+            charge(budget, 1)?;
+            graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+            let scope = graph.code.len();
+            data.position(scope, id, budget)?;
+            graph.code.push(Control::RetainedRoot {
+                body: index(root.handler) + 1,
+                store: index(root.store) + 1,
+            });
+            Control::Sequence(copy_slice(&[index(root.store) + 1, scope], budget)?)
+        }
+        Some(EffectOperation::Retain(retain)) => Control::Retain {
+            owner: *owners
+                .get(&(retain.handler, retain.owner))
+                .ok_or(Failure::Invalid)?,
+        },
         Some(EffectOperation::Request(request)) => {
             graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
             let perform = graph.code.len();
@@ -3080,6 +3156,9 @@ fn build_capture_graph<F: CoreOperationFamily>(
             if let Some(EffectOperation::Resource(resource)) = operation(&node.kind) {
                 resource_scope.get_or_insert(resource.acquisition.span);
             }
+            if let Some(EffectOperation::Store(store)) = operation(&node.kind) {
+                resource_scope.get_or_insert(store.acquisition.span);
+            }
             if let Some(EffectOperation::Registration(scope)) = operation(&node.kind) {
                 resource_scope.get_or_insert(scope.span);
             }
@@ -3305,6 +3384,12 @@ fn solve_capture_values<F: CoreOperationFamily>(
                     }
                     Some(EffectOperation::Resource(resource)) => {
                         value = values[index(resource.body)].copy(budget)?;
+                    }
+                    Some(EffectOperation::Store(store)) => {
+                        value = values[index(store.body)].copy(budget)?;
+                    }
+                    Some(EffectOperation::RetainedRoot(root)) => {
+                        value = values[index(root.handler)].copy(budget)?;
                     }
                     Some(EffectOperation::Handler(handler)) => {
                         value.join(&values[index(handler.body())], budget)?;
@@ -3777,6 +3862,52 @@ mod tests {
             .unwrap();
         assert_eq!(actual.variables, expected.variables);
         assert_eq!(actual.identities, expected.identities);
+    }
+
+    #[test]
+    fn retained_store_metadata_binds_its_identity_and_keeps_outer_variables() {
+        use super::super::effect::{EffectExprKind, StoreScopeNode};
+        use crate::types::{ComputationType, EffectRowVariable, NominalTypeId};
+        let mut nodes = metadata_header_nodes();
+        let EffectExprKind::Operation(EffectOperation::Resource(resource)) = &nodes[3].kind else {
+            unreachable!()
+        };
+        let acquisition = crate::resolved::StoreAcquisition {
+            builtin: resource.acquisition.builtin,
+            identity: resource.acquisition.identity,
+            handle: resource.acquisition.handle,
+            span: resource.acquisition.span,
+        };
+        let mut handle = resource.handle.clone();
+        let descriptor = Type::EffectfulFunction(
+            Box::new(Type::Unit),
+            Box::new(ComputationType::new(
+                Type::Variable(TypeVariableId::generated(903)),
+                EffectRow::open(
+                    EffectRowVariable::Rigid(TypeVariableId::generated(905)),
+                    Box::new([]),
+                ),
+            )),
+        );
+        handle.replace_type(Type::Application(
+            Box::new(Type::Application(
+                Box::new(Type::Nominal(NominalTypeId::new(acquisition.builtin, 0))),
+                Box::new(Type::Variable(acquisition.identity)),
+            )),
+            Box::new(descriptor),
+        ));
+        let store = StoreScopeNode::new(acquisition, handle, resource.initializer, resource.body);
+        nodes[3].kind = EffectExprKind::Operation(EffectOperation::Store(Box::new(store)));
+        // The descriptor alone supplies A and E. The descendant type
+        // application uses unrelated identities.
+        nodes[0].ty = Type::Unit;
+        nodes[0].effects = EffectRow::empty();
+        let mut owner = FunctionMetadataPreparation::new(&nodes, metadata_header_operation);
+        let value = owner.collect(3, &mut TypeWorkBudget::unbounded()).unwrap();
+        assert!(!value.identities.contains(&TypeVariableId::generated(900)));
+        assert!(value.identities.contains(&TypeVariableId::generated(903)));
+        assert!(value.identities.contains(&TypeVariableId::generated(905)));
+        requested_metadata_matches(&mut owner, 3, &[]);
     }
 
     #[test]
@@ -4544,6 +4675,701 @@ mod tests {
             .map(|(module, source)| (*module, source.id()))
             .collect::<Vec<_>>();
         super::super::validate_effect_modules(core, &sources, &modules)
+    }
+
+    #[derive(Clone, Copy)]
+    pub(super) enum RetainedContextFixture {
+        Outer,
+        ConflictingHandler,
+        RemovedInterpreter,
+        RemovedInterpreterWithoutContinue,
+        RemovedInterpreterAfterRepeatedRetain,
+        UnknownCallbackWithoutContinue,
+        UnusedInnerInterpreter,
+        CapturedInnerInterpreter,
+        DeclaredPureInterpreter,
+        ShortLivedSupport,
+        ShortLivedAlias,
+        InnerUnused,
+        CapturedSupport,
+        PreexistingSlot,
+        SelfCapture,
+        ShortLivedRegion,
+        ShortLivedRegionAggregate,
+        OuterRegionBacking,
+        CapturedRegionBacking,
+        DriverAfterSuffix,
+        DriverInSuffix,
+        DriverInterceptedInSuffix,
+        DriverNestedRoot,
+        DriverContinueInBranch,
+    }
+
+    pub(super) fn retained_context_core(
+        fixture: RetainedContextFixture,
+    ) -> Result<super::super::UnvalidatedEffectProgram, crate::elaborate::TypeError> {
+        retained_context_fixture(fixture).map(|(core, _)| core)
+    }
+
+    fn retained_context_fixture(
+        fixture: RetainedContextFixture,
+    ) -> Result<(super::super::UnvalidatedEffectProgram, Option<usize>), crate::elaborate::TypeError>
+    {
+        use crate::{
+            elaborate::{EffectElaborator, check_module, link_modules},
+            evidence_validation::validate_interface_evidence,
+            module::{ModuleRoots, load_module_graph},
+        };
+        let source_identity = SourceFile::new("retained-context-id", "")
+            .unwrap()
+            .id()
+            .value();
+        let directory = std::env::temp_dir().join(format!(
+            "ash-retained-context-{}-{source_identity}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let mut helper = String::from(concat!(
+            "import @builtin.retained_control as Control\n",
+            "pub relay<N,A,E : EffectRow> : ",
+            "(Control.Store<N,(Unit -> A ! {Control.Drive<N> | E})>, Control.Key<N>) -> ",
+            "Control.Option<A> ! {Control.Drive<N> | E}\n",
+            "relay pair = Control.advance_with_drive pair\n",
+        ));
+        if matches!(fixture, RetainedContextFixture::PreexistingSlot) {
+            helper.push_str("pub inspect<A> : Control.Option<A> -> Int\ninspect option = match option {\nControl.None => 0\nControl.Some(answer) => 42\n}\n");
+        }
+        std::fs::write(directory.join("helper.ash"), helper).unwrap();
+        let continuation = if matches!(fixture, RetainedContextFixture::ConflictingHandler) {
+            "handle (relay (store,key)) with Marker {\nemit ignored => resume ()\n}"
+        } else {
+            "relay (store,key)"
+        };
+        let inner_cell = matches!(
+            fixture,
+            RetainedContextFixture::ShortLivedSupport
+                | RetainedContextFixture::ShortLivedAlias
+                | RetainedContextFixture::InnerUnused
+                | RetainedContextFixture::CapturedSupport
+                | RetainedContextFixture::PreexistingSlot
+                | RetainedContextFixture::SelfCapture
+                | RetainedContextFixture::UnusedInnerInterpreter
+                | RetainedContextFixture::CapturedInnerInterpreter
+                | RetainedContextFixture::DeclaredPureInterpreter
+        );
+        let (row, read) = if matches!(
+            fixture,
+            RetainedContextFixture::InnerUnused
+                | RetainedContextFixture::PreexistingSlot
+                | RetainedContextFixture::SelfCapture
+                | RetainedContextFixture::UnusedInnerInterpreter
+                | RetainedContextFixture::CapturedInnerInterpreter
+                | RetainedContextFixture::DeclaredPureInterpreter
+        ) {
+            ("Control.Drive<N>,Marker", "41")
+        } else if matches!(fixture, RetainedContextFixture::CapturedSupport) {
+            ("Control.Drive<N>,Marker", "Cell.read c")
+        } else if matches!(fixture, RetainedContextFixture::ShortLivedAlias) {
+            (
+                "Control.Drive<N>,Marker",
+                "handle (Cell.read saved) with Cell.Ops<R> {\nread ignored => resume 41\nwrite ignored => resume ()\n}",
+            )
+        } else if inner_cell {
+            (
+                "Control.Drive<N>,Marker",
+                "handle (Cell.read c) with Cell.Ops<R> {\nread ignored => resume 41\nwrite ignored => resume ()\n}",
+            )
+        } else {
+            ("Control.Drive<N>,Cell.Ops<R>,Marker", "Cell.read c")
+        };
+        let prefix = if matches!(fixture, RetainedContextFixture::ShortLivedAlias) {
+            "let saved = c\n"
+        } else if matches!(fixture, RetainedContextFixture::SelfCapture) {
+            "let saved = store\n"
+        } else {
+            ""
+        };
+        let suffix = if matches!(fixture, RetainedContextFixture::SelfCapture) {
+            "let _ = saved\n"
+        } else {
+            ""
+        };
+        let result = if matches!(fixture, RetainedContextFixture::UnusedInnerInterpreter) {
+            format!("Done({read})")
+        } else if matches!(fixture, RetainedContextFixture::DeclaredPureInterpreter) {
+            "Done(pure_marker ())".to_owned()
+        } else if matches!(fixture, RetainedContextFixture::CapturedInnerInterpreter) {
+            format!(
+                "handle {{\nlet _ = perform Marker.emit ()\nDone({read})\n}} \
+                 with Marker {{\nemit ignored => resume ()\n}}"
+            )
+        } else {
+            format!("let _ = perform Marker.emit ()\nDone({read})")
+        };
+        let body = format!("{prefix}let _ = perform Checkpoint<N>.checkpoint ()\n{suffix}{result}");
+        let body = if matches!(fixture, RetainedContextFixture::CapturedSupport) {
+            format!("resource cell<R> c = 41 {{\n{body}\n}}")
+        } else {
+            body
+        };
+        let branch = format!(
+            "handle {{\n{body}\n}} with Checkpoint<N> using store {{\n\
+             checkpoint ignored => {{\nlet key = retain\nPending(key)\n}}\n}}"
+        );
+        let branch = if matches!(
+            fixture,
+            RetainedContextFixture::RemovedInterpreter
+                | RetainedContextFixture::RemovedInterpreterWithoutContinue
+        ) {
+            format!("handle ({branch}) with Marker {{\nemit ignored => resume ()\n}}")
+        } else if matches!(
+            fixture,
+            RetainedContextFixture::UnusedInnerInterpreter
+                | RetainedContextFixture::DeclaredPureInterpreter
+        ) {
+            format!(
+                "handle {{\nlet saved = {branch}\n\
+                 let _ = perform Marker.emit ()\nsaved\n}} with Marker {{\nemit ignored => resume ()\n}}"
+            )
+        } else {
+            branch
+        };
+        let branch = if inner_cell
+            && !matches!(
+                fixture,
+                RetainedContextFixture::CapturedSupport
+                    | RetainedContextFixture::PreexistingSlot
+                    | RetainedContextFixture::SelfCapture
+                    | RetainedContextFixture::UnusedInnerInterpreter
+                    | RetainedContextFixture::CapturedInnerInterpreter
+                    | RetainedContextFixture::DeclaredPureInterpreter
+            ) {
+            format!("resource cell<R> c = 41 {{\n{branch}\n}}")
+        } else {
+            branch
+        };
+        let resumed = if matches!(fixture, RetainedContextFixture::PreexistingSlot) {
+            "inspect resumed"
+        } else {
+            "42"
+        };
+        let consume = if matches!(
+            fixture,
+            RetainedContextFixture::RemovedInterpreterWithoutContinue
+        ) {
+            "let _ = perform Marker.emit ()\n42".to_owned()
+        } else {
+            format!(
+                "match step {{\nDone(value) => value\nPending(key) => {{\nlet resumed = {continuation}\n{resumed}\n}}\n}}"
+            )
+        };
+        let consume = if matches!(fixture, RetainedContextFixture::PreexistingSlot) {
+            format!("resource cell<R> c = 41 {{\n{consume}\n}}")
+        } else {
+            consume
+        };
+        let store = format!(
+            "resource Control.Store<N,(Unit -> Step<N> ! {{{row}}})> store = () {{\n\
+             let step = {branch}\n{consume}\n}}"
+        );
+        let driver_fixture = matches!(
+            fixture,
+            RetainedContextFixture::DriverAfterSuffix
+                | RetainedContextFixture::DriverInSuffix
+                | RetainedContextFixture::DriverInterceptedInSuffix
+                | RetainedContextFixture::DriverNestedRoot
+                | RetainedContextFixture::DriverContinueInBranch
+                | RetainedContextFixture::RemovedInterpreterAfterRepeatedRetain
+        );
+        let program = if matches!(
+            fixture,
+            RetainedContextFixture::UnknownCallbackWithoutContinue
+        ) {
+            "resource Control.Store<N,(Unit -> Step<N> ! {Control.Drive<N>,Marker,External})> store = () {\n\
+             let step = handle (handle {\n\
+             let _ = perform Checkpoint<N>.checkpoint ()\n\
+             let action = perform External.get ()\n\
+             let _ = action ()\n\
+             Done(41)\n\
+             } with Checkpoint<N> using store {\n\
+             checkpoint ignored => {\nlet key = retain\nPending(key)\n}\n\
+             }) with Marker {\nemit ignored => resume ()\n}\n\
+             let _ = perform Marker.emit ()\n42\n}"
+                .to_owned()
+        } else if matches!(
+            fixture,
+            RetainedContextFixture::RemovedInterpreterAfterRepeatedRetain
+        ) {
+            "resource Control.Store<N,(Unit -> Step<N> ! {Control.Drive<N>,Marker})> store = () {\n\
+             let step = handle (handle {\n\
+             let _ = perform Checkpoint<N>.start ()\n\
+             let _ = perform Checkpoint<N>.pause ()\n\
+             let _ = perform Marker.emit ()\n\
+             Done(41)\n\
+             } with Checkpoint<N> using store {\n\
+             start ignored => {\nlet key = retain\nPending(key)\n}\n\
+             pause ignored => {\nlet key = retain\nPending(key)\n}\n\
+             }) with Marker {\nemit ignored => resume ()\n}\n\
+             let _ = perform Marker.emit ()\n42\n}"
+                .to_owned()
+        } else if matches!(fixture, RetainedContextFixture::DriverNestedRoot) {
+            let inner = "handle {\n\
+                         let _ = perform Checkpoint<N>.pause ()\n\
+                         Done(41)\n\
+                         } with Checkpoint<N> using store {\n\
+                         start ignored => resume ()\n\
+                         pause ignored => {\nlet key = retain\nPending(key)\n}\n}\n";
+            format!(
+                "resource Control.Store<N,(Unit -> Step<N> ! {{Control.Drive<N>,Marker}})> store = () {{\n\
+                 let step = handle {{\n\
+                 let inner = {inner}\n\
+                 let _ = perform Checkpoint<N>.start ()\n\
+                 let _ = perform Marker.emit ()\n\
+                 inner\n\
+                 }} with Checkpoint<N> using store {{\n\
+                 start ignored => resume ()\n\
+                 pause ignored => {{\nlet key = retain\nPending(key)\n}}\n\
+                 }}\n42\n}}"
+            )
+        } else if matches!(fixture, RetainedContextFixture::DriverContinueInBranch) {
+            let checkpoint = "pause ignored => {\nlet key = retain\nPending(key)\n}";
+            format!(
+                "resource Control.Store<N,(Unit -> Step<N> ! {{Control.Drive<N>,Marker}})> store = () {{\n\
+                 let first = handle {{\n\
+                 let _ = perform Checkpoint<N>.pause ()\n\
+                 let _ = perform Marker.emit ()\n\
+                 Done(41)\n\
+                 }} with Checkpoint<N> using store {{\n\
+                 start ignored => resume ()\n{checkpoint}\n}}\n\
+                 match first {{\nDone(value) => value\nPending(key) => {{\n\
+                 let second = handle {{\n\
+                 let _ = relay (store,key)\n\
+                 let _ = perform Checkpoint<N>.pause ()\n\
+                 let _ = perform Marker.emit ()\n\
+                 Done(41)\n\
+                 }} with Checkpoint<N> using store {{\n\
+                 start ignored => resume ()\n{checkpoint}\n}}\n42\n}}\n}}\n}}"
+            )
+        } else if driver_fixture {
+            let in_suffix = match fixture {
+                RetainedContextFixture::DriverInSuffix => {
+                    "let _ = perform Control.Probe<N>.quiescent ()\n"
+                }
+                RetainedContextFixture::DriverInterceptedInSuffix => {
+                    "let _ = handle (perform Control.Probe<N>.quiescent ()) with Control.Probe<N> {\n\
+                     quiescent ignored => resume true\n}\n"
+                }
+                _ => "",
+            };
+            let after_root = if matches!(fixture, RetainedContextFixture::DriverAfterSuffix) {
+                "let _ = perform Control.Probe<N>.quiescent ()\n"
+            } else {
+                ""
+            };
+            format!(
+                "resource Control.Store<N,(Unit -> Step<N> ! {{Control.Drive<N>,Control.Probe<N>,Marker}})> store = () {{\n\
+                 let step = handle {{\n\
+                 let _ = perform Checkpoint<N>.start ()\n\
+                 let _ = perform Checkpoint<N>.pause ()\n\
+                 let _ = perform Marker.emit ()\n\
+                 Done(41)\n\
+                 }} with Checkpoint<N> using store {{\n\
+                 start ignored => {{\n\
+                 let answer = resume ()\n\
+                 {in_suffix}answer\n\
+                 }}\n\
+                 pause ignored => {{\n\
+                 let key = retain\n\
+                 Pending(key)\n\
+                 }}\n\
+                 }}\n\
+                 {after_root}42\n\
+                 }}"
+            )
+        } else if matches!(
+            fixture,
+            RetainedContextFixture::ShortLivedRegion
+                | RetainedContextFixture::ShortLivedRegionAggregate
+                | RetainedContextFixture::OuterRegionBacking
+                | RetainedContextFixture::CapturedRegionBacking
+        ) {
+            let action = if matches!(fixture, RetainedContextFixture::OuterRegionBacking) {
+                "let action : Unit -> Int = using outer {\n\
+                 let function : Unit -> Int = fn(ignored) {\n41\n}\n\
+                 function\n}\n"
+            } else if matches!(fixture, RetainedContextFixture::ShortLivedRegionAggregate) {
+                "let action : Unit -> Int = fn(ignored) {\n41\n}\n\
+                 let saved = using outer {\n(action, ())\n}\n"
+            } else {
+                "let action : Unit -> Int = fn(ignored) {\n41\n}\n"
+            };
+            let result = if matches!(fixture, RetainedContextFixture::ShortLivedRegionAggregate) {
+                "match saved {\n(function, ignored) => using outer {\nDone(function ())\n}\n}\n"
+            } else {
+                "using outer {\nDone(action ())\n}\n"
+            };
+            let body = format!(
+                "let _ = perform Checkpoint<N>.checkpoint ()\n\
+                 let _ = perform Marker.emit ()\n{result}"
+            );
+            let clause = "checkpoint ignored => {\n\
+                          let key = retain\n\
+                          using outer {\nPending(key)\n}\n}\n";
+            let step = if matches!(fixture, RetainedContextFixture::CapturedRegionBacking) {
+                format!(
+                    "handle {{\nregion<I> inner {{\n{action}{body}}}\n}} \
+                     with Checkpoint<N> using store {{\n{clause}}}"
+                )
+            } else {
+                format!(
+                    "region<I> inner {{\n{action}handle {{\n{body}}} \
+                     with Checkpoint<N> using store {{\n{clause}}}\n}}"
+                )
+            };
+            format!(
+                "region<O> outer {{\n\
+                 resource Control.Store<N,(Unit -> Step<N> ! {{Control.Drive<N>,Marker}})> store = () {{\n\
+                 let step = {step}\n\
+                 {consume}\n\
+                 }}\n\
+                 }}"
+            )
+        } else if inner_cell {
+            store
+        } else {
+            format!("resource cell<R> c = 41 {{\n{store}\n}}")
+        };
+        let helper_import = if matches!(fixture, RetainedContextFixture::PreexistingSlot) {
+            "import helper (relay, inspect)\n"
+        } else {
+            "import helper (relay)\n"
+        };
+        let checkpoint = if driver_fixture {
+            "start : Unit -> Unit\npause : Unit -> Unit"
+        } else {
+            "checkpoint : Unit -> Unit"
+        };
+        let pure_marker = if matches!(fixture, RetainedContextFixture::DeclaredPureInterpreter) {
+            "pure_marker : Unit -> Int ! {Marker}\npure_marker ignored = 41\n"
+        } else {
+            ""
+        };
+        let (external, main_effects) = if matches!(
+            fixture,
+            RetainedContextFixture::UnknownCallbackWithoutContinue
+        ) {
+            (
+                "effect External {\nget : Unit -> (Unit -> Unit ! {Marker})\n}\n",
+                " ! {External}",
+            )
+        } else {
+            ("", "")
+        };
+        let source = format!(
+            "import @builtin.cell as Cell\n\
+             import @builtin.retained_control as Control\n\
+             {helper_import}\
+             effect Marker {{\nemit : Unit -> Unit\n}}\n\
+             {pure_marker}{external}\
+             effect Checkpoint<N> {{\n{checkpoint}\n}}\n\
+             type Step<N> = Done(Int)\n| Pending(Control.Key<N>)\n\
+             main : Unit -> Int{main_effects}\n\
+             main () = handle ({program}) with Marker {{\nemit ignored => resume ()\n}}\n"
+        );
+        let entry = directory.join("entry.ash");
+        std::fs::write(&entry, &source).unwrap();
+        let loaded = load_module_graph(&entry, &ModuleRoots::empty());
+        std::fs::remove_dir_all(directory).unwrap();
+        let graph = loaded.unwrap();
+        let (resolved, mut dependencies) = resolved_entry_with_checked_dependencies(&graph);
+        let checked = check_module(resolved);
+        if matches!(
+            fixture,
+            RetainedContextFixture::UnknownCallbackWithoutContinue
+        ) && let Err(crate::elaborate::TypeError::Source(diagnostic)) = &checked
+            && diagnostic.reason == crate::elaborate::TypeReason::RetainedInterpretation
+        {
+            let range = diagnostic.primary.span().range();
+            assert!(
+                source[range.start() as usize..range.end() as usize].contains("action"),
+                "the refusal must come from the unknown callback, not its producer"
+            );
+        }
+        dependencies.push(checked?);
+        let linked =
+            validate_interface_evidence(link_modules(dependencies, graph.entry()).unwrap())
+                .unwrap();
+        let mut elaborator = EffectElaborator::for_module_program(&linked).unwrap();
+        let root = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap()
+            .node;
+        let core = elaborator.finish(root).unwrap();
+        let pre_release_work = if matches!(
+            fixture,
+            RetainedContextFixture::OuterRegionBacking
+                | RetainedContextFixture::CapturedRegionBacking
+        ) {
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let module_sources = graph
+                .modules()
+                .iter()
+                .map(|module| (module.id(), module.source().id()))
+                .collect::<Vec<_>>();
+            let mut work = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
+            let error = crate::core::check_ordinary_effect_modules_with_budget_for_test(
+                &core,
+                &sources,
+                &module_sources,
+                &mut work,
+            )
+            .expect_err("the separate drain proof still gates Store release");
+            assert_eq!(
+                error.reason(),
+                crate::core::ValidationReason::RetainedRelease
+            );
+            Some(work.used())
+        } else {
+            None
+        };
+        Ok((core, pre_release_work))
+    }
+
+    #[test]
+    fn retained_capture_requires_the_same_actual_outer_interpreter() {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+        let core = retained_context_core(RetainedContextFixture::Outer).expect("source admission");
+        let mut budget = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
+        check_nodes(&core.nodes, &[], &[], operation, &mut budget)
+            .expect("the original outer Cell and Marker owners remain available");
+        eprintln!("linked capture work={}", budget.used());
+        match retained_context_core(RetainedContextFixture::ConflictingHandler) {
+            Err(crate::elaborate::TypeError::Source(diagnostic)) => assert_eq!(
+                diagnostic.reason,
+                crate::elaborate::TypeReason::RetainedInterpretation,
+            ),
+            _ => panic!("a nearer Marker handler must reject the restored interpreter"),
+        }
+        for fixture in [
+            RetainedContextFixture::UnusedInnerInterpreter,
+            RetainedContextFixture::CapturedInnerInterpreter,
+            RetainedContextFixture::DeclaredPureInterpreter,
+        ] {
+            retained_context_core(fixture).expect(
+                "an unrelated or captured handler does not change the external interpreter",
+            );
+        }
+        match retained_context_core(RetainedContextFixture::RemovedInterpreter) {
+            Err(crate::elaborate::TypeError::Source(diagnostic)) => assert_eq!(
+                diagnostic.reason,
+                crate::elaborate::TypeReason::RetainedInterpretation,
+            ),
+            Err(other) => panic!("expected an interpreter rejection, got {other:?}"),
+            Ok(_) => panic!("a removed Marker handler cannot interpret the retained suffix"),
+        }
+    }
+
+    #[test]
+    fn retained_capture_requires_support_to_outlive_the_store() {
+        for fixture in [
+            RetainedContextFixture::ShortLivedSupport,
+            RetainedContextFixture::ShortLivedAlias,
+        ] {
+            match retained_context_core(fixture) {
+                Err(crate::elaborate::TypeError::Source(diagnostic)) => assert_eq!(
+                    diagnostic.reason,
+                    crate::elaborate::TypeReason::ResourceEscape,
+                ),
+                Err(other) => panic!("expected a support-lifetime rejection, got {other:?}"),
+                Ok(_) => panic!("the captured Cell cannot close while the Store retains its user"),
+            }
+        }
+    }
+
+    #[test]
+    fn retained_capture_requires_its_interpreter_before_any_continue() {
+        for fixture in [
+            RetainedContextFixture::RemovedInterpreterWithoutContinue,
+            RetainedContextFixture::RemovedInterpreterAfterRepeatedRetain,
+            RetainedContextFixture::UnknownCallbackWithoutContinue,
+        ] {
+            match retained_context_core(fixture) {
+                Err(crate::elaborate::TypeError::Source(diagnostic)) => assert_eq!(
+                    diagnostic.reason,
+                    crate::elaborate::TypeReason::RetainedInterpretation,
+                ),
+                Err(other) => panic!("expected an interpreter rejection, got {other:?}"),
+                Ok(_) => panic!("an unresumed capture still needs its original interpreter"),
+            }
+        }
+    }
+
+    #[test]
+    fn retained_capture_requires_original_store_owner_in_focused_replay() {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+        let core = retained_context_core(RetainedContextFixture::InnerUnused)
+            .expect("an unused inner Cell is not retained support");
+        let mut budget = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
+        check_nodes(&core.nodes, &[], &[], operation, &mut budget)
+            .expect("focused replay preserves the enclosing Store's original owner");
+    }
+
+    #[test]
+    fn retained_capture_requires_owned_inner_support_to_move_with_the_cut() {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+        let core = retained_context_core(RetainedContextFixture::CapturedSupport)
+            .expect("a branch-owned Cell moves with its retained continuation");
+        let mut budget = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
+        check_nodes(&core.nodes, &[], &[], operation, &mut budget)
+            .expect("the retained cut owns the inner Cell and its completion");
+    }
+
+    #[test]
+    fn retained_capture_requires_existing_slot_to_survive_focused_replay() {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+        let core = retained_context_core(RetainedContextFixture::PreexistingSlot)
+            .expect("a live slot survives entering an unrelated Cell scope");
+        let mut budget = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
+        check_nodes(&core.nodes, &[], &[], operation, &mut budget)
+            .expect("focused replay restores the slot to its current consumer");
+    }
+
+    #[test]
+    fn retained_capture_rejects_an_actual_store_handle_in_its_saved_values() {
+        match retained_context_core(RetainedContextFixture::SelfCapture) {
+            Err(crate::elaborate::TypeError::Source(diagnostic)) => assert_eq!(
+                diagnostic.reason,
+                crate::elaborate::TypeReason::ResourceEscape,
+            ),
+            Err(other) => panic!("expected a self-capture rejection, got {other:?}"),
+            Ok(_) => panic!("a Store cannot own a continuation that captures its handle"),
+        }
+    }
+
+    #[test]
+    fn retained_capture_requires_region_backing_to_survive_the_store() {
+        for fixture in [
+            RetainedContextFixture::ShortLivedRegion,
+            RetainedContextFixture::ShortLivedRegionAggregate,
+        ] {
+            match retained_context_core(fixture) {
+                Err(crate::elaborate::TypeError::Source(diagnostic)) => assert_eq!(
+                    diagnostic.reason,
+                    crate::elaborate::TypeReason::ResourceEscape,
+                ),
+                Err(other) => panic!("expected a region-support rejection, got {other:?}"),
+                Ok(_) => panic!("a retained closure cannot outlive its backing region"),
+            }
+        }
+    }
+
+    #[test]
+    fn retained_capture_allows_enclosing_and_owned_region_backing() {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+        for fixture in [
+            RetainedContextFixture::OuterRegionBacking,
+            RetainedContextFixture::CapturedRegionBacking,
+        ] {
+            let (core, pre_release_work) = retained_context_fixture(fixture)
+                .expect("the backing region encloses the Store or moves with the captured work");
+            let mut budget = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
+            check_nodes(&core.nodes, &[], &[], operation, &mut budget)
+                .expect("linked control must reconstruct region backing");
+            let used = budget.used();
+            let prefix = pre_release_work.expect("the ordinary Core prefix was checked");
+            let limit = 3 * crate::types::TYPE_WORK_LIMIT;
+            eprintln!(
+                "retained region Core work: prefix={prefix}, capture={used}, subtotal={}",
+                prefix + used
+            );
+            let mut remaining = TypeWorkBudget::with_limit(limit - prefix);
+            check_nodes(&core.nodes, &[], &[], operation, &mut remaining)
+                .expect("the Core prefix and capture proof must fit the shared budget");
+            if matches!(fixture, RetainedContextFixture::CapturedRegionBacking) {
+                let mut exact = TypeWorkBudget::with_limit(used);
+                check_nodes(&core.nodes, &[], &[], operation, &mut exact)
+                    .expect("the measured budget must admit the same capture proof");
+                assert_eq!(exact.used(), used);
+                let mut short = TypeWorkBudget::with_limit(used - 1);
+                assert!(matches!(
+                    check_nodes(&core.nodes, &[], &[], operation, &mut short),
+                    Err(Failure::Resource)
+                ));
+                let mut retry = TypeWorkBudget::with_limit(used);
+                check_nodes(&core.nodes, &[], &[], operation, &mut retry)
+                    .expect("a fresh exact-budget retry must succeed");
+            }
+        }
+    }
+
+    #[test]
+    fn retained_driver_waits_for_the_post_resume_clause_suffix() {
+        retained_context_core(RetainedContextFixture::DriverAfterSuffix)
+            .expect("a Probe after the private root returns is driver control");
+        for fixture in [
+            RetainedContextFixture::DriverInSuffix,
+            RetainedContextFixture::DriverInterceptedInSuffix,
+        ] {
+            match retained_context_core(fixture) {
+                Err(crate::elaborate::TypeError::Source(diagnostic)) => assert_eq!(
+                    diagnostic.reason,
+                    crate::elaborate::TypeReason::RetainedDriver,
+                ),
+                Err(other) => panic!("expected a driver-context diagnostic, got {other:?}"),
+                Ok(_) => panic!("a clause suffix cannot drive its active Store"),
+            }
+        }
+    }
+
+    #[test]
+    fn retained_driver_rejects_nested_root_and_imported_continue() {
+        for fixture in [
+            RetainedContextFixture::DriverNestedRoot,
+            RetainedContextFixture::DriverContinueInBranch,
+        ] {
+            match retained_context_core(fixture) {
+                Err(crate::elaborate::TypeError::Source(diagnostic)) => assert_eq!(
+                    diagnostic.reason,
+                    crate::elaborate::TypeReason::RetainedDriver,
+                ),
+                Err(other) => panic!("expected a driver-context diagnostic, got {other:?}"),
+                Ok(_) => panic!("an active branch cannot drive the same Store"),
+            }
+        }
     }
 
     fn checked_core() -> (

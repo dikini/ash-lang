@@ -36,6 +36,71 @@ impl Tree {
     }
 }
 
+#[test]
+fn retained_continue_crosses_imported_generic_helpers_with_shared_answer_row() {
+    let tree = Tree::new();
+    tree.write(
+        "helper.ash",
+        concat!(
+            "import @builtin.retained_control as Control\n",
+            "pub forward<N,A,E : EffectRow> : ",
+            "(Control.Store<N,(Unit -> A ! {| E})>,Control.Key<N>) -> ",
+            "Control.Option<A> ! {Control.Drive<N> | E}\n",
+            "forward pair = Control.advance pair\n",
+            "pub forward_driven<N,A,E : EffectRow> : ",
+            "(Control.Store<N,(Unit -> A ! {Control.Drive<N> | E})>,Control.Key<N>) -> ",
+            "Control.Option<A> ! {Control.Drive<N> | E}\n",
+            "forward_driven pair = Control.advance_with_drive pair\n",
+        ),
+    );
+    tree.write("facade.ash", "pub import helper (forward,forward_driven)\n");
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "import @builtin.retained_control as Control\nimport facade as F\n",
+            "nested<N,E : EffectRow> : ",
+            "(Control.Store<N,(Unit -> (Unit -> Int ! {| E}) ! {| E})>,Control.Key<N>) -> ",
+            "Control.Option<(Unit -> Int ! {| E})> ! {Control.Drive<N> | E}\n",
+            "nested pair = F.forward pair\n",
+            "nested_driven<N,E : EffectRow> : ",
+            "(Control.Store<N,(Unit -> (Unit -> Int ! {| E}) ! {Control.Drive<N> | E})>,Control.Key<N>) -> ",
+            "Control.Option<(Unit -> Int ! {| E})> ! {Control.Drive<N> | E}\n",
+            "nested_driven pair = {\nlet alias : ",
+            "(Control.Store<N,(Unit -> (Unit -> Int ! {| E}) ! {Control.Drive<N> | E})>,Control.Key<N>) -> ",
+            "Control.Option<(Unit -> Int ! {| E})> ! {Control.Drive<N> | E} = F.forward_driven\n",
+            "alias pair\n}\n",
+            "main : Unit -> Int\nmain () = 42\n",
+        ),
+    );
+    let observation = ash::driver::run_path(ash::driver::RunConfiguration {
+        entry: entry.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("the imported helper is checked and linked with the shared answer row");
+    assert_eq!(observation.value_display(), "42");
+
+    tree.write(
+        "entry.ash",
+        concat!(
+            "import @builtin.retained_control as Control\nimport facade as F\n",
+            "main : Unit -> Int\n",
+            "main () = resource Control.Store<N,(Unit -> Int)> store = () {\n",
+            "let relay : (Control.Store<N,(Unit -> Int)>,Control.Key<N>) -> ",
+            "Control.Option<Int> ! {Control.Drive<N>} = F.forward\n42\n}\n",
+        ),
+    );
+    let failure = ash::driver::compile_path(ash::driver::RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("store release is still awaiting C3");
+    assert_eq!(
+        failure.reason_code(),
+        "core.validation.retained-release",
+        "{failure:?}"
+    );
+}
+
 impl Drop for Tree {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);

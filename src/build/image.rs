@@ -179,6 +179,14 @@ struct CellAcquisitionRecord {
     span: SpanRecord,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct StoreAcquisitionRecord {
+    module: u32,
+    identity: TypeVariableIdentity,
+    handle: BinderIdentity,
+    span: SpanRecord,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 enum TypeTag {
     Variable(TypeVariableIdentity),
@@ -370,6 +378,27 @@ enum NodeTag {
         handle: u32,
         initializer: u32,
         body: u32,
+    },
+    StoreScope {
+        acquisition: StoreAcquisitionRecord,
+        handle: u32,
+        initializer: u32,
+        body: u32,
+    },
+    Continue {
+        store: u32,
+        key: u32,
+        answer: u32,
+        some: u32,
+        none: u32,
+    },
+    RetainedRoot {
+        store: u32,
+        handler: u32,
+    },
+    Retain {
+        handler: u32,
+        owner: u32,
     },
     Cleanup {
         callback: BinderIdentity,
@@ -825,6 +854,8 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
                     ModuleRoleRecord::BuiltinRegion
                 } else if module.is_builtin_generic_cell() {
                     ModuleRoleRecord::BuiltinGenericCell
+                } else if module.is_builtin_retained_control() {
+                    ModuleRoleRecord::BuiltinRetainedControl
                 } else if module.is_builtin_cell() {
                     ModuleRoleRecord::BuiltinCell
                 } else if module.is_builtin_string() {
@@ -923,6 +954,21 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
 }
 
 impl Encoder<'_> {
+    fn encode_store_acquisition(
+        &mut self,
+        acquisition: crate::resolved::StoreAcquisition,
+    ) -> Result<StoreAcquisitionRecord, ImageFailure> {
+        if !acquisition.builtin.is_builtin_retained_control() {
+            return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+        }
+        Ok(StoreAcquisitionRecord {
+            module: self.module(acquisition.builtin)?,
+            identity: self.type_variable(acquisition.identity)?,
+            handle: self.binder_id(acquisition.handle)?,
+            span: self.span(acquisition.span)?,
+        })
+    }
+
     fn encode_cell_acquisition(
         &mut self,
         acquisition: crate::resolved::ResourceAcquisition,
@@ -1660,7 +1706,7 @@ struct DecodedType {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x19";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x1a";
 
 enum WireOutput<'a> {
     Encoded(Vec<u8>),
@@ -1926,6 +1972,7 @@ wire_struct!(
     write,
     span
 );
+wire_struct!(StoreAcquisitionRecord, module, identity, handle, span);
 wire_struct!(PatternRecord, tag, children, ty, origin);
 wire_struct!(ArmRecord, pattern, body, origin);
 wire_struct!(RecursiveMemberRecord, binder, initializer);
@@ -2150,6 +2197,42 @@ impl Wire for NodeTag {
     const MINIMUM: usize = 1;
     fn write(&self, writer: &mut WireWriter<'_>) -> Result<(), ImageFailure> {
         match self {
+            Self::StoreScope {
+                acquisition,
+                handle,
+                initializer,
+                body,
+            } => {
+                39u8.write(writer)?;
+                acquisition.write(writer)?;
+                handle.write(writer)?;
+                initializer.write(writer)?;
+                body.write(writer)
+            }
+            Self::Continue {
+                store,
+                key,
+                answer,
+                some,
+                none,
+            } => {
+                40u8.write(writer)?;
+                store.write(writer)?;
+                key.write(writer)?;
+                answer.write(writer)?;
+                some.write(writer)?;
+                none.write(writer)
+            }
+            Self::RetainedRoot { store, handler } => {
+                41u8.write(writer)?;
+                store.write(writer)?;
+                handler.write(writer)
+            }
+            Self::Retain { handler, owner } => {
+                42u8.write(writer)?;
+                handler.write(writer)?;
+                owner.write(writer)
+            }
             Self::IntegerMagnitude { negative, bytes } => {
                 37u8.write(writer)?;
                 negative.write(writer)?;
@@ -2446,6 +2529,27 @@ impl Wire for NodeTag {
     }
     fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
         Ok(match u8::read(reader)? {
+            39 => Self::StoreScope {
+                acquisition: Wire::read(reader)?,
+                handle: Wire::read(reader)?,
+                initializer: Wire::read(reader)?,
+                body: Wire::read(reader)?,
+            },
+            40 => Self::Continue {
+                store: Wire::read(reader)?,
+                key: Wire::read(reader)?,
+                answer: Wire::read(reader)?,
+                some: Wire::read(reader)?,
+                none: Wire::read(reader)?,
+            },
+            41 => Self::RetainedRoot {
+                store: Wire::read(reader)?,
+                handler: Wire::read(reader)?,
+            },
+            42 => Self::Retain {
+                handler: Wire::read(reader)?,
+                owner: Wire::read(reader)?,
+            },
             38 => Self::RegionClosure {
                 api: Wire::read(reader)?,
                 context: Wire::read(reader)?,
@@ -2939,7 +3043,9 @@ impl PureImage {
                     }
                     crate::module::ImageModuleRole::BuiltinBytes
                 }
-                ModuleRoleRecord::BuiltinCell | ModuleRoleRecord::BuiltinGenericCell => {
+                ModuleRoleRecord::BuiltinCell
+                | ModuleRoleRecord::BuiltinGenericCell
+                | ModuleRoleRecord::BuiltinRetainedControl => {
                     return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
                 }
                 ModuleRoleRecord::BuiltinForeign => {
@@ -3366,6 +3472,10 @@ impl Decoder<'_> {
             | NodeTag::RegionBuffer { .. }
             | NodeTag::RegionAllocate { .. }
             | NodeTag::CellScope { .. }
+            | NodeTag::StoreScope { .. }
+            | NodeTag::Continue { .. }
+            | NodeTag::RetainedRoot { .. }
+            | NodeTag::Retain { .. }
             | NodeTag::Cleanup { .. }
             | NodeTag::Registration { .. }
             | NodeTag::Handler(_)
@@ -3659,6 +3769,419 @@ mod provenance_tests;
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn retained_control_image_tags_keep_fields_and_reject_truncation() {
+        let cases: [(NodeTag, &[u8]); 4] = [
+            (
+                NodeTag::StoreScope {
+                    acquisition: StoreAcquisitionRecord {
+                        module: 3,
+                        identity: TypeVariableIdentity::Resolved {
+                            module: 7,
+                            local: 8,
+                        },
+                        handle: BinderIdentity::Resolved {
+                            module: 7,
+                            local: 9,
+                        },
+                        span: SpanRecord {
+                            source: 2,
+                            start: 4,
+                            end: 5,
+                        },
+                    },
+                    handle: 11,
+                    initializer: 12,
+                    body: 13,
+                },
+                &[39, 3, 0, 7, 8, 1, 7, 9, 2, 4, 5, 11, 12, 13],
+            ),
+            (
+                NodeTag::Continue {
+                    store: 21,
+                    key: 22,
+                    answer: 23,
+                    some: 24,
+                    none: 25,
+                },
+                &[40, 21, 22, 23, 24, 25],
+            ),
+            (
+                NodeTag::RetainedRoot {
+                    store: 31,
+                    handler: 32,
+                },
+                &[41, 31, 32],
+            ),
+            (
+                NodeTag::Retain {
+                    handler: 41,
+                    owner: 42,
+                },
+                &[42, 41, 42],
+            ),
+        ];
+        for (tag, expected) in cases {
+            let mut work = TypeWorkBudget::default();
+            let mut writer = WireWriter {
+                output: WireOutput::Encoded(Vec::new()),
+                work: &mut work,
+            };
+            tag.write(&mut writer).unwrap();
+            let WireOutput::Encoded(bytes) = writer.output else {
+                unreachable!()
+            };
+            assert_eq!(bytes, expected);
+            let mut work = TypeWorkBudget::default();
+            let mut reader = WireReader {
+                bytes: &bytes,
+                offset: 0,
+                work: &mut work,
+            };
+            let restored = NodeTag::read(&mut reader).unwrap();
+            assert_eq!(reader.offset, bytes.len());
+            let mut work = TypeWorkBudget::default();
+            let mut writer = WireWriter {
+                output: WireOutput::Encoded(Vec::new()),
+                work: &mut work,
+            };
+            restored.write(&mut writer).unwrap();
+            assert!(matches!(writer.output, WireOutput::Encoded(actual) if actual == bytes));
+            for end in 0..bytes.len() {
+                let mut work = TypeWorkBudget::default();
+                let mut reader = WireReader {
+                    bytes: &bytes[..end],
+                    offset: 0,
+                    work: &mut work,
+                };
+                assert!(matches!(
+                    NodeTag::read(&mut reader),
+                    Err(ImageFailure::InvalidEncoding)
+                ));
+            }
+        }
+    }
+
+    fn retained_continue_source_tree() -> SourceTree {
+        let tree = SourceTree::new();
+        tree.write(
+            "entry.ash",
+            concat!(
+                "import @builtin.retained_control as Control\n",
+                "nested<N,E : EffectRow> : ",
+                "(Control.Store<N,(Unit -> (Unit -> Int ! {| E}) ! {| E})>, Control.Key<N>) -> ",
+                "Control.Option<(Unit -> Int ! {| E})> ! {Control.Drive<N> | E}\n",
+                "nested pair = Control.advance pair\n",
+                "main : Unit -> Int\nmain () = 42\n",
+            ),
+        );
+        tree
+    }
+
+    #[test]
+    fn retained_continue_image_rebuilds_the_actual_adapter_and_revalidates_it() {
+        let tree = retained_continue_source_tree();
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let original_count = program
+            .nodes()
+            .iter()
+            .filter(|node| {
+                matches!(
+                    node.kind,
+                    crate::core::EffectExprKind::Operation(crate::core::EffectOperation::Continue(
+                        _
+                    ))
+                )
+            })
+            .count();
+        assert!(original_count > 0);
+        let image = encode_effect_for_build(
+            program,
+            provenance,
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap()
+        .image;
+        let index = image
+            .nodes
+            .iter()
+            .position(|node| matches!(node.tag, NodeTag::Continue { .. }))
+            .unwrap();
+        let NodeTag::Continue {
+            store,
+            key,
+            answer,
+            some,
+            none,
+        } = image.nodes[index].tag
+        else {
+            unreachable!()
+        };
+        assert_ne!(some, none);
+        let expected = image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        let decoded = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        decoded
+            .admit_expected_native_facts(&expected, &mut TypeWorkBudget::default())
+            .unwrap();
+        let restored = decoded
+            .restore_effect(&mut TypeWorkBudget::default())
+            .unwrap();
+        assert_eq!(
+            restored
+                .program
+                .nodes()
+                .iter()
+                .filter(|node| {
+                    matches!(
+                        node.kind,
+                        crate::core::EffectExprKind::Operation(
+                            crate::core::EffectOperation::Continue(_)
+                        )
+                    )
+                })
+                .count(),
+            original_count
+        );
+        assert_eq!(
+            crate::eval::evaluate_effect(&restored.program)
+                .unwrap()
+                .value
+                .to_string(),
+            "42"
+        );
+
+        for field in 0..5 {
+            let mut changed =
+                PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+            let NodeTag::Continue {
+                store,
+                key,
+                answer,
+                some,
+                none,
+            } = &mut changed.nodes[index].tag
+            else {
+                unreachable!()
+            };
+            *[store, key, answer, some, none][field] = u32::MAX;
+            assert!(matches!(
+                changed.restore_effect(&mut TypeWorkBudget::default()),
+                Err(ImageFailure::InvalidRecord)
+            ));
+        }
+
+        // Both adapters stay reachable, but swapping their Some/None roles
+        // must fail the independently reconstructed Core checks.
+        let mut changed = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        changed.nodes[index].tag = NodeTag::Continue {
+            store,
+            key,
+            answer,
+            some: none,
+            none: some,
+        };
+        changed
+            .admit_expected_native_facts(&expected, &mut TypeWorkBudget::default())
+            .unwrap();
+        assert!(matches!(
+            changed.restore_effect(&mut TypeWorkBudget::default()),
+            Err(ImageFailure::Validation(_))
+        ));
+    }
+
+    #[test]
+    fn retained_scope_image_carriers_use_actual_operands_and_ids() {
+        use crate::core::{EffectExprKind, EffectOperation};
+
+        let tree = retained_continue_source_tree();
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let continuation = program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Continue(continuation)) => {
+                    Some(continuation)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let builtin = provenance
+            .iter()
+            .find_map(|(module, _)| module.is_builtin_retained_control().then_some(*module))
+            .unwrap();
+        let answer = continuation.adapter.answer.clone();
+        let origin = answer.origin().clone();
+        let acquisition = crate::resolved::StoreAcquisition {
+            builtin,
+            identity: crate::types::TypeVariableId::resolved(builtin, 0),
+            handle: answer.id(),
+            span: origin.primary_span(),
+        };
+        // These low-level nodes exercise the codec before Store release is
+        // admitted. They are deliberately not a validated executable program.
+        let store = EffectExprKind::Operation(EffectOperation::Store(Box::new(
+            crate::core::effect::StoreScopeNode::new(
+                acquisition,
+                answer,
+                continuation.store,
+                continuation.key,
+            ),
+        )));
+        let root = EffectExprKind::Operation(EffectOperation::RetainedRoot(
+            crate::core::effect::RetainedRootNode {
+                store: continuation.store,
+                handler: continuation.key,
+            },
+        ));
+        let retain =
+            EffectExprKind::Operation(EffectOperation::Retain(crate::core::effect::RetainNode {
+                handler: crate::core::HandlerId::new(17),
+                owner: crate::resolved::ResumeId::new(23),
+            }));
+        let mut work = TypeWorkBudget::default();
+        let mut encoder = encode_program(
+            program,
+            provenance,
+            &mut work,
+            true,
+            |_| Ok(()),
+            |encoder, kind| encoder.encode_effect_node(kind),
+        )
+        .unwrap();
+        let expected_store = encoder.node(continuation.store).unwrap();
+        let expected_key = encoder.node(continuation.key).unwrap();
+        let tags = [
+            encoder.encode_effect_node(&store).unwrap(),
+            encoder.encode_effect_node(&root).unwrap(),
+            encoder.encode_effect_node(&retain).unwrap(),
+        ];
+        let NodeTag::StoreScope {
+            acquisition: stored_acquisition,
+            handle,
+            initializer,
+            body,
+        } = tags[0]
+        else {
+            panic!("Store carrier")
+        };
+        assert_eq!(initializer, expected_store);
+        assert_eq!(body, expected_key);
+        assert_eq!(
+            stored_acquisition.handle,
+            encoder.image.binders[handle as usize].id
+        );
+        assert!(matches!(
+            tags[1],
+            NodeTag::RetainedRoot { store, handler }
+                if store == expected_store && handler == expected_key
+        ));
+        assert!(matches!(
+            tags[2],
+            NodeTag::Retain {
+                handler: 17,
+                owner: 23
+            }
+        ));
+        let image = encoder.image;
+        let modules = provenance
+            .iter()
+            .map(|(module, _)| *module)
+            .collect::<Vec<_>>();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref().clone())
+            .collect::<Vec<_>>();
+        let mut work = TypeWorkBudget::default();
+        let mut decoder = Decoder {
+            image: &image,
+            expected_fact_prefixes: None,
+            sources: CoordinateStorage::Borrowed(&sources),
+            modules: CoordinateStorage::Borrowed(&modules),
+            source_declaration_catalogs: HashMap::new(),
+            decoded_types: HashMap::new(),
+            decoded_rows: HashMap::new(),
+            work: &mut work,
+        };
+        assert_eq!(
+            decoder.store_acquisition(stored_acquisition).unwrap(),
+            acquisition
+        );
+        let non_store_module = modules
+            .iter()
+            .position(|module| !module.is_builtin_retained_control())
+            .unwrap();
+        assert!(matches!(
+            decoder.store_acquisition(StoreAcquisitionRecord {
+                module: non_store_module as u32,
+                ..stored_acquisition
+            }),
+            Err(ImageFailure::InvalidRecord)
+        ));
+        let mut builder =
+            crate::core::EffectCoreBuilder::with_effect_registry(Arc::clone(program.registry()));
+        let binders = decoder.source_binder_reservations().unwrap();
+        builder
+            .reserve_image_binders(&binders, decoder.work)
+            .unwrap();
+        let mut children = Vec::new();
+        for _ in 0..image.nodes.len() {
+            children.push(builder.unit(Type::Unit, origin.clone()).unwrap());
+        }
+        for tag in tags {
+            decoder
+                .effect_node(
+                    &mut builder,
+                    program.registry(),
+                    &children,
+                    &[],
+                    tag,
+                    IterativeTypeOwner::new(Type::Unit),
+                    crate::types::EffectRow::empty(),
+                    OriginOwner(Some(origin.clone())),
+                )
+                .unwrap();
+        }
+        let bad_root = NodeTag::RetainedRoot {
+            store: expected_store,
+            handler: u32::MAX,
+        };
+        assert!(matches!(
+            decoder.effect_node(
+                &mut builder,
+                program.registry(),
+                &children,
+                &[],
+                bad_root,
+                IterativeTypeOwner::new(Type::Unit),
+                crate::types::EffectRow::empty(),
+                OriginOwner(Some(origin)),
+            ),
+            Err(ImageFailure::InvalidRecord)
+        ));
+    }
+
+    #[test]
+    fn retained_store_image_work_does_not_grant_public_release() {
+        let tree = SourceTree::new();
+        tree.write(
+            "entry.ash",
+            concat!(
+                "import @builtin.retained_control as Control\n",
+                "main : Unit -> Int\n",
+                "main () = resource Control.Store<N,(Unit -> Int)> store = () {\n42\n}\n",
+            ),
+        );
+        let failure = compile_path(tree.configuration())
+            .expect_err("Store release still needs its independent drain proof");
+        assert_eq!(failure.reason_code(), "core.validation.retained-release");
+    }
 
     #[test]
     fn integer_region_image_preserves_inline_width_digit_storage_and_arithmetic() {
@@ -5934,6 +6457,7 @@ enum ModuleRoleRecord {
     BuiltinForeign,
     BuiltinCell,
     BuiltinGenericCell,
+    BuiltinRetainedControl,
     BuiltinString,
     BuiltinBytes,
 }
@@ -6178,6 +6702,7 @@ impl Wire for ModuleRoleRecord {
             Self::BuiltinGenericCell => 5,
             Self::BuiltinRegion => 6,
             Self::BuiltinRegionFacade => 7,
+            Self::BuiltinRetainedControl => 8,
         }
         .write(writer)
     }
@@ -6191,6 +6716,7 @@ impl Wire for ModuleRoleRecord {
             5 => Ok(Self::BuiltinGenericCell),
             6 => Ok(Self::BuiltinRegion),
             7 => Ok(Self::BuiltinRegionFacade),
+            8 => Ok(Self::BuiltinRetainedControl),
             _ => Err(ImageFailure::InvalidEncoding),
         }
     }
@@ -7676,7 +8202,7 @@ impl Encoder<'_> {
                 selected.insert(parameter.id, ());
             }
         }
-        // Preserve actual source Cell and region scope identities beyond
+        // Preserve actual source Cell, Store and region scope identities beyond
         // declaration-owned variables. The generated root owns no registry fact.
         let mut parameters = Vec::new();
         for parameter in registry.type_variables() {
@@ -7819,6 +8345,47 @@ impl Encoder<'_> {
                 handle: self.encode_binder(scope.handle())?,
                 initializer: self.node(scope.initializer())?,
                 body: self.node(scope.body())?,
+            }),
+            EffectExprKind::Operation(EffectOperation::Store(scope)) => {
+                use crate::core::dialect::CoreOperationFamily;
+
+                // Store's handle is exposed through the operation-binder walk.
+                let mut handle = None;
+                crate::core::effect::EffectOperationFamily::visit_operation_binders(
+                    kind,
+                    &mut |binder| {
+                        handle = Some(if handle.is_some() {
+                            Err(ImageFailure::InvalidRecord)
+                        } else {
+                            self.encode_binder(binder)
+                        });
+                    },
+                );
+                Ok(NodeTag::StoreScope {
+                    acquisition: self.encode_store_acquisition(scope.acquisition)?,
+                    handle: handle.ok_or(ImageFailure::InvalidRecord)??,
+                    initializer: self.node(scope.initializer())?,
+                    body: self.node(scope.body())?,
+                })
+            }
+            EffectExprKind::Operation(EffectOperation::Continue(continuation)) => {
+                Ok(NodeTag::Continue {
+                    store: self.node(continuation.store)?,
+                    key: self.node(continuation.key)?,
+                    answer: self.encode_binder(&continuation.adapter.answer)?,
+                    some: self.node(continuation.adapter.some)?,
+                    none: self.node(continuation.adapter.none)?,
+                })
+            }
+            EffectExprKind::Operation(EffectOperation::RetainedRoot(root)) => {
+                Ok(NodeTag::RetainedRoot {
+                    store: self.node(root.store)?,
+                    handler: self.node(root.handler)?,
+                })
+            }
+            EffectExprKind::Operation(EffectOperation::Retain(retain)) => Ok(NodeTag::Retain {
+                handler: retain.handler.value(),
+                owner: retain.owner.value(),
             }),
             EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => Ok(NodeTag::Cleanup {
                 callback: self.binder_id(scope.callback)?,
@@ -8483,6 +9050,12 @@ impl Decoder<'_> {
                     self.cell_acquisition(acquisition)?.identity,
                     self.work,
                 )?;
+            } else if let NodeTag::StoreScope { acquisition, .. } = node.tag {
+                push(
+                    &mut identities,
+                    self.store_acquisition(acquisition)?.identity,
+                    self.work,
+                )?;
             } else if let NodeTag::Region {
                 identity,
                 entry: false,
@@ -8565,6 +9138,7 @@ impl PureImage {
         let mut seen_common = false;
         let mut seen_cell = false;
         let mut seen_generic_cell = false;
+        let mut seen_retained_control = false;
         let mut seen_region = false;
         let mut seen_region_facade = false;
         let mut seen_string = false;
@@ -8606,6 +9180,12 @@ impl PureImage {
                         return Err(ImageFailure::InvalidRecord);
                     }
                     crate::module::ImageModuleRole::BuiltinGenericCell
+                }
+                ModuleRoleRecord::BuiltinRetainedControl => {
+                    if std::mem::replace(&mut seen_retained_control, true) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinRetainedControl
                 }
                 ModuleRoleRecord::BuiltinCell => {
                     if std::mem::replace(&mut seen_cell, true) {
@@ -8752,6 +9332,22 @@ impl PureImage {
 }
 
 impl Decoder<'_> {
+    fn store_acquisition(
+        &mut self,
+        record: StoreAcquisitionRecord,
+    ) -> Result<crate::resolved::StoreAcquisition, ImageFailure> {
+        let builtin = *get(&self.modules, record.module)?;
+        if !builtin.is_builtin_retained_control() {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        Ok(crate::resolved::StoreAcquisition {
+            builtin,
+            identity: self.type_variable(record.identity)?,
+            handle: self.binder_id(record.handle)?,
+            span: self.span(record.span)?,
+        })
+    }
+
     fn cell_acquisition(
         &mut self,
         record: CellAcquisitionRecord,
@@ -9044,6 +9640,82 @@ impl Decoder<'_> {
                             effects,
                             origin.take(),
                         )
+                    })
+                    .map_err(ImageFailure::from);
+            }
+            NodeTag::StoreScope {
+                acquisition,
+                handle,
+                initializer,
+                body,
+            } => {
+                let acquisition = self.store_acquisition(acquisition)?;
+                let handle = self.binder(builder, handle)?;
+                let initializer = *get(nodes, initializer)?;
+                let body = *get(nodes, body)?;
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.store_scope(
+                            Box::new(crate::core::effect::StoreScopeNode::new(
+                                acquisition,
+                                handle,
+                                initializer,
+                                body,
+                            )),
+                            ty.into_inner(),
+                            effects,
+                            origin.take(),
+                        )
+                    })
+                    .map_err(ImageFailure::from);
+            }
+            NodeTag::Continue {
+                store,
+                key,
+                answer,
+                some,
+                none,
+            } => {
+                let store = *get(nodes, store)?;
+                let key = *get(nodes, key)?;
+                let answer = self.binder(builder, answer)?;
+                let some = *get(nodes, some)?;
+                let none = *get(nodes, none)?;
+                let continuation = crate::core::effect::ContinueNode {
+                    store,
+                    key,
+                    adapter: Box::new(crate::core::effect::ContinueAdapter { answer, some, none }),
+                };
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.continue_control(
+                            continuation,
+                            ty.into_inner(),
+                            effects,
+                            origin.take(),
+                        )
+                    })
+                    .map_err(ImageFailure::from);
+            }
+            NodeTag::RetainedRoot { store, handler } => {
+                let root = crate::core::effect::RetainedRootNode {
+                    store: *get(nodes, store)?,
+                    handler: *get(nodes, handler)?,
+                };
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.retained_root(root, ty.into_inner(), effects, origin.take())
+                    })
+                    .map_err(ImageFailure::from);
+            }
+            NodeTag::Retain { handler, owner } => {
+                let retain = crate::core::effect::RetainNode {
+                    handler: crate::core::HandlerId::new(handler),
+                    owner: crate::resolved::ResumeId::new(owner),
+                };
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.retain_control(retain, ty.into_inner(), effects, origin.take())
                     })
                     .map_err(ImageFailure::from);
             }
@@ -9443,6 +10115,14 @@ fn encode_native_preparation(
         )) = &node.kind
         {
             if !scope.acquisition.builtin.is_builtin_resource() {
+                return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata).into());
+            }
+            push(&mut identities, scope.acquisition.identity, work)?;
+        } else if let crate::core::EffectExprKind::Operation(crate::core::EffectOperation::Store(
+            scope,
+        )) = &node.kind
+        {
+            if !scope.acquisition.builtin.is_builtin_retained_control() {
                 return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata).into());
             }
             push(&mut identities, scope.acquisition.identity, work)?;

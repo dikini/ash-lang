@@ -18,6 +18,9 @@ pub(super) fn refuse_disposal_growth() -> bool {
     machine_test_hooks::FAIL_DISPOSAL_GROWTH.replace(false)
 }
 #[cfg(test)]
+#[path = "machine_retained_tests.rs"]
+mod machine_retained_tests;
+#[cfg(test)]
 #[path = "machine_storage_tests.rs"]
 mod machine_storage_tests;
 
@@ -27,7 +30,7 @@ use super::{
     failure::{charge_runtime_work, resource_failure},
     value::{
         ActivationKey, ExecutableNode, ExecutableProgram, HeapCell, Location, ObservedHeap,
-        ObservedValue,
+        ObservedValue, RetainedKey,
     },
 };
 use crate::{
@@ -646,10 +649,28 @@ enum Frame {
         node: NodeId,
         environment: Environment,
     },
+    RetainedRootStore {
+        node: NodeId,
+        environment: Environment,
+    },
+    ContinueStore {
+        node: NodeId,
+        environment: Environment,
+    },
+    ContinueKey {
+        node: NodeId,
+        environment: Environment,
+        store: ActivationKey,
+    },
     ResourceBoundary {
         node: NodeId,
         key: ActivationKey,
         payload: ResourcePayload,
+    },
+    // This frame is the branch completion owner. Capturing it moves the owner;
+    // only its actual return retires the store's outstanding root count.
+    RetainedRootCompletion {
+        key: ActivationKey,
     },
     Bind {
         binder: BinderId,
@@ -696,6 +717,7 @@ enum Frame {
         node: NodeId,
         environment: Environment,
         registration: Option<RegistrationKey>,
+        retained: Option<ActivationKey>,
     },
     Request {
         node: NodeId,
@@ -713,6 +735,7 @@ enum Frame {
         owner: ResumeId,
         continuation: Option<CapturedContinuation>,
         registration: Option<RegistrationKey>,
+        retained: Option<ActivationKey>,
         // A count above one represents adjacent consumed, unregistered
         // boundaries with this exact handler and resume identity. Live or
         // registered boundaries always have count one.
@@ -727,6 +750,9 @@ enum ResourcePayload {
         value: Value,
         instance: EffectInstance,
     },
+    // Kept behind the existing uniquely owned resource boundary. Linked
+    // release remains closed until the admission analysis is connected.
+    Store(Box<RetainedStore>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -735,6 +761,207 @@ struct RegistrationKey(u32);
 #[derive(Debug)]
 struct CapturedContinuation {
     frames: Vec<Frame>,
+}
+
+#[derive(Debug)]
+struct RetainedSlot {
+    generation: u64,
+    continuation: Option<CapturedContinuation>,
+}
+
+/// A store owns each capture exactly once; keys only identify a generation.
+#[derive(Debug)]
+struct RetainedStore {
+    activation: ActivationKey,
+    api: crate::resolved::StoreApi,
+    slots: Vec<RetainedSlot>,
+    active_roots: usize,
+}
+
+struct RestorePreparation {
+    slot: usize,
+    captured_len: usize,
+    remaining: usize,
+}
+
+impl RetainedStore {
+    fn new(activation: ActivationKey, api: crate::resolved::StoreApi) -> Self {
+        Self {
+            activation,
+            api,
+            slots: Vec::new(),
+            active_roots: 0,
+        }
+    }
+
+    fn retain(
+        &mut self,
+        owner: &mut Option<CapturedContinuation>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<RetainedKey, RuntimeFailure> {
+        disposal::check()?;
+        if owner.is_none() {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        charge_effect_work(work, 1, RuntimePhase::Capture)?;
+        let mut available = None;
+        for (index, slot) in self.slots.iter().enumerate() {
+            charge_effect_work(work, 1, RuntimePhase::Capture)?;
+            if slot.continuation.is_none()
+                && let Some(generation) = slot.generation.checked_add(1)
+            {
+                available = Some((index, generation));
+                break;
+            }
+        }
+        let (index, generation) = if let Some(available) = available {
+            available
+        } else {
+            reserve_control(&mut self.slots, 1, RuntimeResource::RetainedSlots, false)?;
+            (self.slots.len(), 0)
+        };
+        let capture = owner.as_ref().ok_or(RuntimeFailure::InvalidControlState)?;
+        inspect_retained_owner(capture, self.activation, work)?;
+        let key = RetainedKey {
+            activation: self.activation,
+            slot: index,
+            generation,
+        };
+        // No fallible work follows taking the clause's owned capture.
+        let continuation = owner.take().ok_or(RuntimeFailure::InvalidControlState)?;
+        if index == self.slots.len() {
+            self.slots.push(RetainedSlot {
+                generation,
+                continuation: Some(continuation),
+            });
+        } else {
+            let slot = &mut self.slots[index];
+            slot.generation = generation;
+            slot.continuation = Some(continuation);
+        }
+        Ok(key)
+    }
+
+    fn prepare_restore(
+        &self,
+        key: RetainedKey,
+        captured_cells: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Option<RestorePreparation>, RuntimeFailure> {
+        disposal::check()?;
+        charge_effect_work(work, 1, RuntimePhase::Capture)?;
+        if key.activation != self.activation {
+            return Ok(None);
+        }
+        let Some(slot) = self.slots.get(key.slot) else {
+            return Ok(None);
+        };
+        let Some(captured) = slot
+            .continuation
+            .as_ref()
+            .filter(|_| slot.generation == key.generation)
+        else {
+            return Ok(None);
+        };
+        let captured_len = captured.frames.len();
+        let remaining = captured_cells
+            .checked_sub(captured_len)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        Ok(Some(RestorePreparation {
+            slot: key.slot,
+            captured_len,
+            remaining,
+        }))
+    }
+
+    #[cfg(test)]
+    fn restore(
+        &mut self,
+        key: RetainedKey,
+        frames: &mut Vec<Frame>,
+        adapter: Frame,
+        captured_cells: &mut usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, RuntimeFailure> {
+        let Some(prepared) = self.prepare_restore(key, *captured_cells, work)? else {
+            return Ok(false);
+        };
+        let needed = prepared.captured_len.checked_add(1).ok_or_else(|| {
+            control_failure(
+                ResourceFailureCause::ConfiguredCapacity,
+                RuntimeResource::FrameStorage,
+                None,
+                None,
+            )
+        })?;
+        reserve_control(frames, needed, RuntimeResource::FrameStorage, false)?;
+        // The actual adapter was prepared for the current consumer before this
+        // call. Capacity and accounting are checked while the slot owns C.
+        let mut captured = self.slots[prepared.slot]
+            .continuation
+            .take()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        frames.push(adapter);
+        frames.append(&mut captured.frames);
+        *captured_cells = prepared.remaining;
+        Ok(true)
+    }
+}
+
+// Follow the same owned capture edges as teardown. A store may not move its
+// own boundary into itself, even through a nested clause or another store.
+fn inspect_retained_owner(
+    capture: &CapturedContinuation,
+    activation: ActivationKey,
+    work: &mut TypeWorkBudget,
+) -> Result<(), RuntimeFailure> {
+    let mut pending = Vec::new();
+    reserve_control(&mut pending, 1, RuntimeResource::CaptureInspection, false)?;
+    pending.push(capture);
+    while let Some(capture) = pending.pop() {
+        charge_effect_work(
+            work,
+            capture.frames.len().saturating_add(1),
+            RuntimePhase::Capture,
+        )?;
+        for frame in &capture.frames {
+            match frame {
+                Frame::ResourceBoundary { key, .. } if *key == activation => {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                Frame::ResourceBoundary {
+                    payload: ResourcePayload::Store(store),
+                    ..
+                } => {
+                    charge_effect_work(work, store.slots.len(), RuntimePhase::Capture)?;
+                    for slot in &store.slots {
+                        if let Some(nested) = &slot.continuation {
+                            reserve_control(
+                                &mut pending,
+                                1,
+                                RuntimeResource::CaptureInspection,
+                                false,
+                            )?;
+                            pending.push(nested);
+                        }
+                    }
+                }
+                Frame::RegionAllocated { segment, .. } => {
+                    reserve_control(&mut pending, 1, RuntimeResource::CaptureInspection, false)?;
+                    pending.push(segment);
+                }
+                Frame::ClauseBoundary {
+                    continuation: Some(nested),
+                    ..
+                } => {
+                    reserve_control(&mut pending, 1, RuntimeResource::CaptureInspection, false)?;
+                    pending.push(nested);
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 // An explicit first handler is the segment's selected cut. A mismatched
@@ -787,6 +1014,19 @@ impl Drop for CapturedContinuation {
             {
                 for child in nested.frames.drain(..) {
                     pending.push(child);
+                }
+            }
+            if let Frame::ResourceBoundary {
+                payload: ResourcePayload::Store(store),
+                ..
+            } = &mut frame
+            {
+                for slot in &mut store.slots {
+                    if let Some(mut nested) = slot.continuation.take() {
+                        for child in nested.frames.drain(..) {
+                            pending.push(child);
+                        }
+                    }
                 }
             }
         }
@@ -962,6 +1202,14 @@ impl<'runtime> Machine<'runtime> {
                     }
                     if self.registration(node).is_some() {
                         self.acquire_registration(node, environment)?;
+                        continue;
+                    }
+                    if let Some(ExecutableNode::Effect(expression)) = self.program.node(node)
+                        && let EffectExprKind::Operation(EffectOperation::Retain(retain)) =
+                            &expression.kind
+                    {
+                        let (handler, owner) = (retain.handler, retain.owner);
+                        self.retain_selected(handler, owner)?;
                         continue;
                     }
                     if let Some(ExecutableNode::Effect(expression)) = self.program.node(node)
@@ -1341,7 +1589,66 @@ impl<'runtime> Machine<'runtime> {
             Frame::ResourceInitializer { node, environment } => {
                 self.acquire_resource(node, environment, value)?;
             }
+            Frame::RetainedRootStore { node, environment } => {
+                let Value::ResourceHandle(key) = value else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                let handler = match self.program.node(node) {
+                    Some(ExecutableNode::Effect(expression)) => match &expression.kind {
+                        EffectExprKind::Operation(EffectOperation::RetainedRoot(root)) => {
+                            root.handler
+                        }
+                        _ => return Err(RuntimeFailure::InvalidControlState),
+                    },
+                    _ => return Err(RuntimeFailure::InvalidControlState),
+                };
+                self.begin_retained_root(handler, key, environment)?;
+            }
+            Frame::ContinueStore { node, environment } => {
+                let Value::ResourceHandle(store) = value else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                let key = match self.program.node(node) {
+                    Some(ExecutableNode::Effect(expression)) => match &expression.kind {
+                        EffectExprKind::Operation(EffectOperation::Continue(continuation)) => {
+                            continuation.key
+                        }
+                        _ => return Err(RuntimeFailure::InvalidControlState),
+                    },
+                    _ => return Err(RuntimeFailure::InvalidControlState),
+                };
+                reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+                self.frames.push(Frame::ContinueKey {
+                    node,
+                    environment: environment.clone(),
+                    store,
+                });
+                self.apply(Transition::direct(Control::Evaluate(key, environment)));
+            }
+            Frame::ContinueKey {
+                node,
+                environment,
+                store,
+            } => {
+                let Value::RetainedKey(key) = value else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                self.continue_retained(node, environment, store, key)?;
+            }
             Frame::ResourceBoundary { key, payload, .. } => {
+                if let ResourcePayload::Store(store) = &payload {
+                    charge_effect_work(
+                        &mut self.instantiation_work,
+                        store.slots.len(),
+                        RuntimePhase::Cleanup,
+                    )?;
+                    if store.activation != key
+                        || store.active_roots != 0
+                        || store.slots.iter().any(|slot| slot.continuation.is_some())
+                    {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                }
                 self.live_resources = self
                     .live_resources
                     .checked_sub(1)
@@ -1351,12 +1658,35 @@ impl<'runtime> Machine<'runtime> {
                 self.trace_effect(EffectTraceEvent::ResourceReleased(key.0));
                 self.apply(Transition::direct(Control::Return(result)));
             }
+            Frame::RetainedRootCompletion { key } => {
+                let index = self.retained_store_index(key)?;
+                let Frame::ResourceBoundary {
+                    payload: ResourcePayload::Store(store),
+                    ..
+                } = &mut self.frames[index]
+                else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                store.active_roots = store
+                    .active_roots
+                    .checked_sub(1)
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                self.apply(Transition::direct(Control::Return(value)));
+            }
             Frame::NativeInterpretBoundary { .. } => {
                 self.apply(Transition::direct(Control::Return(value)));
             }
             Frame::HandlerBoundary {
-                node, registration, ..
+                node,
+                registration,
+                retained,
+                ..
             } => {
+                if let Some(key) = retained
+                    && (registration.is_some() || !self.retained_root_active(key)?)
+                {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
                 if let Some(key) = registration {
                     let index = self.registration_owner(key, node, 0)?;
                     let Frame::RegistrationBoundary { handler_active, .. } =
@@ -1383,12 +1713,18 @@ impl<'runtime> Machine<'runtime> {
                 handler,
                 continuation,
                 registration,
+                retained,
                 completion_count,
                 ..
             } => {
                 if continuation.is_some()
                     || completion_count == 0
-                    || registration.is_some() && completion_count != 1
+                    || (registration.is_some() || retained.is_some()) && completion_count != 1
+                {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                if let Some(key) = retained
+                    && (registration.is_some() || !self.retained_root_active(key)?)
                 {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
@@ -1691,6 +2027,7 @@ impl<'runtime> Machine<'runtime> {
             node: scope.body,
             environment: environment.clone(),
             registration: Some(key),
+            retained: None,
         });
         self.live_registrations = live;
         self.next_registration = next;
@@ -1698,6 +2035,336 @@ impl<'runtime> Machine<'runtime> {
         self.trace.push(TraceEvent::Enter(scope.body));
         self.trace_effect(EffectTraceEvent::HandlerActivated(scope.handler));
         self.apply(Transition::direct(Control::Evaluate(body, environment)));
+        Ok(())
+    }
+
+    // The owner is the actual live resource frame, never a key or a copied
+    // source value. Captured slots are deliberately not searched as drivers.
+    fn retained_store_index(&mut self, key: ActivationKey) -> Result<usize, RuntimeFailure> {
+        charge_effect_work(
+            &mut self.instantiation_work,
+            self.frames.len(),
+            RuntimePhase::Access,
+        )?;
+        let mut found = None;
+        for (index, frame) in self.frames.iter().enumerate() {
+            if let Frame::ResourceBoundary {
+                key: candidate,
+                payload: ResourcePayload::Store(store),
+                ..
+            } = frame
+                && *candidate == key
+            {
+                if store.activation != key || found.replace(index).is_some() {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+            }
+        }
+        found.ok_or(RuntimeFailure::InvalidControlState)
+    }
+
+    // Region service and an ordinary selected clause can temporarily own an
+    // active suffix. Follow those physical owned edges, but not dormant slots.
+    fn retained_root_active(&mut self, key: ActivationKey) -> Result<bool, RuntimeFailure> {
+        let mut pending = Vec::new();
+        reserve_control(&mut pending, 1, RuntimeResource::CaptureInspection, false)?;
+        pending.push(self.frames.as_slice());
+        while let Some(frames) = pending.pop() {
+            charge_effect_work(
+                &mut self.instantiation_work,
+                frames.len().saturating_add(1),
+                RuntimePhase::Capture,
+            )?;
+            for frame in frames {
+                match frame {
+                    Frame::RetainedRootCompletion { key: found } if *found == key => {
+                        return Ok(true);
+                    }
+                    Frame::RegionAllocated { segment, .. } => {
+                        reserve_control(
+                            &mut pending,
+                            1,
+                            RuntimeResource::CaptureInspection,
+                            false,
+                        )?;
+                        pending.push(segment.frames.as_slice());
+                    }
+                    Frame::ClauseBoundary {
+                        continuation: Some(segment),
+                        ..
+                    } => {
+                        reserve_control(
+                            &mut pending,
+                            1,
+                            RuntimeResource::CaptureInspection,
+                            false,
+                        )?;
+                        pending.push(segment.frames.as_slice());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    fn ensure_retained_driver(&mut self, key: ActivationKey) -> Result<(), RuntimeFailure> {
+        self.retained_store_index(key)?;
+        if self.retained_root_active(key)? {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        Ok(())
+    }
+
+    fn begin_retained_root(
+        &mut self,
+        node: NodeId,
+        key: ActivationKey,
+        environment: Environment,
+    ) -> Result<(), RuntimeFailure> {
+        disposal::check()?;
+        self.ensure_retained_driver(key)?;
+        let index = self.retained_store_index(key)?;
+        let handler = self
+            .handler(node)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let (body, handler_id) = (handler.body(), handler.id());
+        let Frame::ResourceBoundary {
+            payload: ResourcePayload::Store(store),
+            ..
+        } = &self.frames[index]
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let active = store.active_roots.checked_add(1).ok_or_else(|| {
+            control_failure(
+                ResourceFailureCause::ConfiguredCapacity,
+                RuntimeResource::FrameStorage,
+                Some(1),
+                Some(0),
+            )
+        })?;
+        reserve_control(&mut self.frames, 2, RuntimeResource::FrameStorage, false)?;
+        reserve_control(&mut self.trace, 1, RuntimeResource::EffectTrace, false)?;
+        if let Some(trace) = &mut self.effect_trace {
+            reserve_control(trace, 1, RuntimeResource::EffectTrace, false)?;
+        }
+        let Frame::ResourceBoundary {
+            payload: ResourcePayload::Store(store),
+            ..
+        } = &mut self.frames[index]
+        else {
+            unreachable!("the checked store remains in place");
+        };
+        store.active_roots = active;
+        self.frames.push(Frame::RetainedRootCompletion { key });
+        self.frames.push(Frame::HandlerBoundary {
+            node,
+            environment: environment.clone(),
+            registration: None,
+            retained: Some(key),
+        });
+        self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
+        self.trace.push(TraceEvent::Enter(node));
+        self.trace_effect(EffectTraceEvent::HandlerActivated(handler_id));
+        self.apply(Transition::direct(Control::Evaluate(body, environment)));
+        Ok(())
+    }
+
+    fn retain_selected(
+        &mut self,
+        handler: HandlerId,
+        owner: ResumeId,
+    ) -> Result<(), RuntimeFailure> {
+        disposal::check()?;
+        charge_effect_work(
+            &mut self.instantiation_work,
+            self.frames.len(),
+            RuntimePhase::Capture,
+        )?;
+        let clause = self
+            .frames
+            .iter()
+            .rposition(|frame| matches!(frame, Frame::ClauseBoundary { .. }))
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let Frame::ClauseBoundary {
+            handler: found_handler,
+            owner: found_owner,
+            continuation: Some(captured),
+            registration: None,
+            retained: Some(key),
+            completion_count: 1,
+        } = &self.frames[clause]
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        if *found_handler != handler || *found_owner != owner {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let key = *key;
+        let Some(Frame::HandlerBoundary {
+            node,
+            registration: None,
+            retained: Some(found),
+            ..
+        }) = captured.frames.first()
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        if *found != key
+            || self
+                .handler(*node)
+                .is_none_or(|actual| actual.id() != handler)
+            || !self.retained_root_active(key)?
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let store = self.retained_store_index(key)?;
+        if store >= clause {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let (older, younger) = self.frames.split_at_mut(clause);
+        let Frame::ResourceBoundary {
+            payload: ResourcePayload::Store(store),
+            ..
+        } = &mut older[store]
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        if store.active_roots == 0 {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let Frame::ClauseBoundary { continuation, .. } = &mut younger[0] else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let locator = store.retain(continuation, &mut self.instantiation_work)?;
+        self.apply(Transition::direct(Control::Return(Value::RetainedKey(
+            locator,
+        ))));
+        Ok(())
+    }
+
+    fn continue_retained(
+        &mut self,
+        node: NodeId,
+        environment: Environment,
+        activation: ActivationKey,
+        key: RetainedKey,
+    ) -> Result<(), RuntimeFailure> {
+        disposal::check()?;
+        let (binder, some, none) = match self.program.node(node) {
+            Some(ExecutableNode::Effect(expression)) => match &expression.kind {
+                EffectExprKind::Operation(EffectOperation::Continue(continuation)) => (
+                    continuation.adapter.answer.id(),
+                    continuation.adapter.some,
+                    continuation.adapter.none,
+                ),
+                _ => return Err(RuntimeFailure::InvalidControlState),
+            },
+            _ => return Err(RuntimeFailure::InvalidControlState),
+        };
+        self.ensure_retained_driver(activation)?;
+        let index = self.retained_store_index(activation)?;
+        let Frame::ResourceBoundary {
+            payload: ResourcePayload::Store(store),
+            ..
+        } = &self.frames[index]
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let prepared =
+            store.prepare_restore(key, self.captured_cells, &mut self.instantiation_work)?;
+        let Some(prepared) = prepared else {
+            self.apply(Transition::direct(Control::Evaluate(none, environment)));
+            return Ok(());
+        };
+        let next_roots = store.active_roots.checked_add(1).ok_or_else(|| {
+            control_failure(
+                ResourceFailureCause::ConfiguredCapacity,
+                RuntimeResource::FrameStorage,
+                Some(1),
+                Some(0),
+            )
+        })?;
+        let captured = store.slots[prepared.slot]
+            .continuation
+            .as_ref()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let Some(Frame::HandlerBoundary {
+            retained: Some(found),
+            registration: None,
+            ..
+        }) = captured.frames.first()
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        if *found != activation {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        charge_effect_work(
+            &mut self.instantiation_work,
+            captured.frames.len().saturating_mul(2),
+            RuntimePhase::Capture,
+        )?;
+        let mut handlers = 0usize;
+        for frame in &captured.frames {
+            if let Frame::HandlerBoundary { node, .. } = frame {
+                self.handler(*node)
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                handlers += 1;
+            }
+        }
+        let needed = prepared.captured_len.checked_add(2).ok_or_else(|| {
+            control_failure(
+                ResourceFailureCause::ConfiguredCapacity,
+                RuntimeResource::FrameStorage,
+                None,
+                None,
+            )
+        })?;
+        reserve_control(
+            &mut self.frames,
+            needed,
+            RuntimeResource::FrameStorage,
+            false,
+        )?;
+        if let Some(trace) = &mut self.effect_trace {
+            reserve_control(trace, handlers, RuntimeResource::EffectTrace, false)?;
+        }
+        // Slot ownership remains intact until all authentication, accounting
+        // and destination reservations have succeeded.
+        let Frame::ResourceBoundary {
+            payload: ResourcePayload::Store(store),
+            ..
+        } = &mut self.frames[index]
+        else {
+            unreachable!("the checked store remains in place");
+        };
+        let mut captured = store.slots[prepared.slot]
+            .continuation
+            .take()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        store.active_roots = next_roots;
+        self.frames.push(Frame::Bind {
+            binder,
+            body: some,
+            environment,
+        });
+        self.frames
+            .push(Frame::RetainedRootCompletion { key: activation });
+        for frame in &captured.frames {
+            if let Frame::HandlerBoundary { node, .. } = frame {
+                let handler = self
+                    .handler(*node)
+                    .expect("handler checked before the move")
+                    .id();
+                self.trace_effect(EffectTraceEvent::HandlerRestored(handler));
+            }
+        }
+        self.frames.append(&mut captured.frames);
+        self.captured_cells = prepared.remaining;
+        self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
+        self.apply(Transition::direct(Control::Return(Value::Unit)));
         Ok(())
     }
 
@@ -1712,27 +2379,51 @@ impl<'runtime> Machine<'runtime> {
         let Some(ExecutableNode::Effect(expression)) = resource_program.node(node) else {
             return Err(RuntimeFailure::InvalidControlState);
         };
-        let EffectExprKind::Operation(EffectOperation::Resource(resource)) = &expression.kind
-        else {
-            return Err(RuntimeFailure::InvalidControlState);
-        };
-        let acquisition = resource.acquisition;
-        let body = resource.body();
-        let api = acquisition
-            .api()
-            .ok_or(RuntimeFailure::InvalidControlState)?;
-        if !api.registry(self.program.registry()) {
-            return Err(RuntimeFailure::InvalidControlState);
-        }
-        if !api.generic() {
-            read_integer(&value, &self.heap, &mut self.instantiation_work).map_err(|failure| {
-                if failure == RuntimeFailure::UnexpectedPrimitiveValue {
-                    RuntimeFailure::InvalidControlState
-                } else {
-                    failure
+        let (identity, handle, body, cell, store_api) = match &expression.kind {
+            EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
+                let acquisition = resource.acquisition;
+                let api = acquisition
+                    .api()
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                if !api.registry(self.program.registry()) {
+                    return Err(RuntimeFailure::InvalidControlState);
                 }
-            })?;
-        }
+                if !api.generic() {
+                    read_integer(&value, &self.heap, &mut self.instantiation_work).map_err(
+                        |failure| {
+                            if failure == RuntimeFailure::UnexpectedPrimitiveValue {
+                                RuntimeFailure::InvalidControlState
+                            } else {
+                                failure
+                            }
+                        },
+                    )?;
+                }
+                (
+                    acquisition.identity,
+                    acquisition.handle,
+                    resource.body(),
+                    Some((resource, api)),
+                    None,
+                )
+            }
+            EffectExprKind::Operation(EffectOperation::Store(store)) => {
+                let acquisition = store.acquisition;
+                let api = crate::resolved::StoreApi::for_module(acquisition.builtin)
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                if !api.registry(self.program.registry()) || !matches!(value, Value::Unit) {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                (
+                    acquisition.identity,
+                    acquisition.handle,
+                    store.body(),
+                    None,
+                    Some(api),
+                )
+            }
+            _ => return Err(RuntimeFailure::InvalidControlState),
+        };
         let live = self
             .live_resources
             .checked_add(1)
@@ -1780,19 +2471,17 @@ impl<'runtime> Machine<'runtime> {
                 )
             })?;
         }
-        environment.instantiation = environment.instantiation.acquire(
-            acquisition.identity,
-            key,
-            &mut self.instantiation_work,
-            None,
-        )?;
+        environment.instantiation =
+            environment
+                .instantiation
+                .acquire(identity, key, &mut self.instantiation_work, None)?;
         disposal::check()?;
         environment = environment.extend_in_phase(
-            acquisition.handle,
+            handle,
             Value::ResourceHandle(key),
             RuntimePhase::Acquisition,
         )?;
-        let payload = if api.generic() {
+        let payload = if let Some((resource, _)) = cell.filter(|(_, api)| api.generic()) {
             charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Acquisition)?;
             let instance = resource
                 .instance_with_budget(&mut self.instantiation_work)
@@ -1810,8 +2499,13 @@ impl<'runtime> Machine<'runtime> {
                 Some(RuntimePhase::Acquisition),
             )?;
             ResourcePayload::Generic { value, instance }
-        } else {
+        } else if cell.is_some() {
             ResourcePayload::Cell(value)
+        } else {
+            ResourcePayload::Store(Box::new(RetainedStore::new(
+                key,
+                store_api.ok_or(RuntimeFailure::InvalidControlState)?,
+            )))
         };
         // Publish only after every fallible preflight. The frame is the sole
         // payload owner; handles and lexical metadata carry only its key.
@@ -1925,6 +2619,28 @@ impl<'runtime> Machine<'runtime> {
             &mut self.instantiation_work,
             Some(RuntimePhase::Access),
         )?;
+        // A source handler can intercept Probe, but it cannot grant the
+        // store's driver authority to an active branch. Check the actual
+        // live store before choosing any interpreter.
+        if let Some(api) = crate::resolved::StoreApi::for_module(effect.effect().module())
+            && effect.effect() == api.probe()
+            && let Some(key) = Instantiation::activation_at(&effect, 0)
+        {
+            charge_effect_work(
+                &mut self.instantiation_work,
+                self.frames.len(),
+                RuntimePhase::Access,
+            )?;
+            if self.frames.iter().any(|frame| {
+                matches!(frame, Frame::ResourceBoundary {
+                    key: found,
+                    payload: ResourcePayload::Store(_),
+                    ..
+                } if *found == key)
+            }) {
+                self.ensure_retained_driver(key)?;
+            }
+        }
         charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
         let source_symbol = self
             .program
@@ -1967,6 +2683,18 @@ impl<'runtime> Machine<'runtime> {
                 continue;
             }
             if let Frame::ResourceBoundary { node, key, payload } = frame {
+                if let ResourcePayload::Store(store) = payload {
+                    // Acquisition authenticated this exact API with the store
+                    // owner. Locators and request spellings grant no provider.
+                    let api = store.api;
+                    if effect.effect() == api.probe()
+                        && Instantiation::activation_at(&effect, 0) == Some(*key)
+                    {
+                        self.trace_effect(EffectTraceEvent::Request(operation));
+                        return self.interpret_store_probe(index, api, operation, value);
+                    }
+                    continue;
+                }
                 let resource = self
                     .resource(*node)
                     .ok_or(RuntimeFailure::InvalidControlState)?;
@@ -1987,6 +2715,9 @@ impl<'runtime> Machine<'runtime> {
                                 &effect,
                                 &mut self.instantiation_work,
                             )?
+                    }
+                    ResourcePayload::Store(_) => {
+                        unreachable!("store boundaries are not cell providers")
                     }
                 };
                 if matches {
@@ -2029,6 +2760,10 @@ impl<'runtime> Machine<'runtime> {
         let Some(selected) = selected else {
             return Err(RuntimeFailure::ForeignBinding);
         };
+        let retained = match &self.frames[selected] {
+            Frame::HandlerBoundary { retained, .. } => *retained,
+            _ => return Err(RuntimeFailure::InvalidControlState),
+        };
         let registration = match &self.frames[selected] {
             Frame::HandlerBoundary {
                 node,
@@ -2037,6 +2772,14 @@ impl<'runtime> Machine<'runtime> {
             } => Some((*key, *node)),
             _ => None,
         };
+        if retained.is_some() && registration.is_some() {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        if let Some(key) = retained
+            && (!self.retained_root_active(key)? || self.retained_store_index(key)? >= selected)
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
         let registration_owner = if let Some((key, handler)) = registration {
             let index = self.registration_owner(key, handler, 1)?;
             let Frame::RegistrationBoundary {
@@ -2116,6 +2859,7 @@ impl<'runtime> Machine<'runtime> {
             owner: clause_owner,
             continuation: Some(continuation),
             registration: registration.map(|(key, _)| key),
+            retained,
         });
         self.trace_effect(EffectTraceEvent::Request(operation));
         self.trace_effect(EffectTraceEvent::HandlerSelected(handler_id));
@@ -2206,6 +2950,41 @@ impl<'runtime> Machine<'runtime> {
         };
         drop(retained);
         self.apply(Transition::direct(Control::Return(result)));
+        Ok(())
+    }
+
+    fn interpret_store_probe(
+        &mut self,
+        selected: usize,
+        api: crate::resolved::StoreApi,
+        operation: OperationId,
+        value: Value,
+    ) -> Result<(), RuntimeFailure> {
+        disposal::check()?;
+        if operation != OperationId::new(api.probe(), 0) || !matches!(value, Value::Unit) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let Frame::ResourceBoundary {
+            key,
+            payload: ResourcePayload::Store(store),
+            ..
+        } = &self.frames[selected]
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        if store.activation != *key || store.api.probe() != api.probe() {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        charge_effect_work(
+            &mut self.instantiation_work,
+            store.slots.len(),
+            RuntimePhase::Access,
+        )?;
+        let quiescent =
+            store.active_roots == 0 && store.slots.iter().all(|slot| slot.continuation.is_none());
+        self.apply(Transition::direct(Control::Return(Value::Boolean(
+            quiescent,
+        ))));
         Ok(())
     }
 
@@ -2403,7 +3182,7 @@ impl<'runtime> Machine<'runtime> {
             },
             _ => return Err(RuntimeFailure::InvalidControlState),
         };
-        let (boundary_index, registration) = self
+        let (boundary_index, registration, retained_root) = self
             .frames
             .iter()
             .enumerate()
@@ -2413,13 +3192,19 @@ impl<'runtime> Machine<'runtime> {
                     handler: found_handler,
                     owner: found_owner,
                     registration,
+                    retained,
                     ..
                 } if *found_handler == handler && *found_owner == owner => {
-                    Some((index, *registration))
+                    Some((index, *registration, *retained))
                 }
                 _ => None,
             })
             .ok_or(RuntimeFailure::InvalidControlState)?;
+        if let Some(key) = retained_root
+            && (registration.is_some() || !self.retained_root_active(key)?)
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
         let registration_owner = if let Some(key) = registration {
             let index = self.registration_owner_for_handler(key, handler, false)?;
             let Frame::RegistrationBoundary {
@@ -2452,6 +3237,24 @@ impl<'runtime> Machine<'runtime> {
             .as_ref()
             .ok_or(RuntimeFailure::InvalidControlState)?;
         let captured_len = captured.frames.len();
+        if let Some(key) = retained_root {
+            let Some(Frame::HandlerBoundary {
+                node,
+                registration: None,
+                retained: Some(found),
+                ..
+            }) = captured.frames.first()
+            else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            if *found != key
+                || self
+                    .handler(*node)
+                    .is_none_or(|actual| actual.id() != handler)
+            {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+        }
         if let Some(key) = registration {
             charge_effect_work(
                 &mut self.instantiation_work,
@@ -2503,7 +3306,10 @@ impl<'runtime> Machine<'runtime> {
         // Only the immediately preceding consumed boundary can be replaced.
         // Expanding the count gives the same adjacent identity cuts and
         // deferred ClauseReturned events as the original frames.
-        let merged_count = if boundary_index + 1 == self.frames.len() && registration.is_none() {
+        let merged_count = if boundary_index + 1 == self.frames.len()
+            && registration.is_none()
+            && retained_root.is_none()
+        {
             match boundary_index
                 .checked_sub(1)
                 .and_then(|index| self.frames.get(index))
@@ -2513,16 +3319,20 @@ impl<'runtime> Machine<'runtime> {
                     owner: previous_owner,
                     continuation,
                     registration: previous_registration,
+                    retained: previous_retained,
                     completion_count,
                 }) => {
                     if *completion_count == 0
-                        || (continuation.is_some() || previous_registration.is_some())
+                        || (continuation.is_some()
+                            || previous_registration.is_some()
+                            || previous_retained.is_some())
                             && *completion_count != 1
                     {
                         return Err(RuntimeFailure::InvalidControlState);
                     }
                     if continuation.is_none()
                         && previous_registration.is_none()
+                        && previous_retained.is_none()
                         && *previous_handler == handler
                         && *previous_owner == owner
                     {
@@ -2598,7 +3408,7 @@ impl<'runtime> Machine<'runtime> {
 
     fn discard(&mut self, handler: HandlerId, owner: ResumeId) -> Result<(), RuntimeFailure> {
         disposal::check()?;
-        let (boundary_index, registration) = self
+        let (boundary_index, registration, retained_root) = self
             .frames
             .iter()
             .enumerate()
@@ -2608,16 +3418,17 @@ impl<'runtime> Machine<'runtime> {
                     handler: found_handler,
                     owner: found_owner,
                     registration,
+                    retained,
                     ..
                 } if *found_handler == handler && *found_owner == owner => {
-                    Some((index, *registration))
+                    Some((index, *registration, *retained))
                 }
                 _ => None,
             })
             .ok_or(RuntimeFailure::InvalidControlState)?;
         // A generated registration clause must resume its publication. Local
         // source handlers in a callback have their own ordinary capabilities.
-        if registration.is_some() {
+        if registration.is_some() || retained_root.is_some() {
             return Err(RuntimeFailure::InvalidControlState);
         }
         let Frame::ClauseBoundary {
@@ -2660,7 +3471,14 @@ impl<'runtime> Machine<'runtime> {
                 match frame {
                     Frame::CleanupCompletion { .. }
                     | Frame::RegionCompletion { .. }
-                    | Frame::CloseCompletion => {
+                    | Frame::CloseCompletion
+                    | Frame::RetainedRootCompletion { .. }
+                    | Frame::HandlerBoundary {
+                        retained: Some(_), ..
+                    }
+                    | Frame::ClauseBoundary {
+                        retained: Some(_), ..
+                    } => {
                         return Err(RuntimeFailure::InvalidControlState);
                     }
                     Frame::RegionAllocated { segment, .. } => {
@@ -3027,6 +3845,19 @@ fn dispatch_entry(
                     EffectOperation::Registration(_) => {
                         return Err(RuntimeFailure::InvalidControlState);
                     }
+                    EffectOperation::Store(store) => Transition::suspend(
+                        Control::Evaluate(store.initializer(), environment.clone()),
+                        Frame::ResourceInitializer { node, environment },
+                    ),
+                    EffectOperation::RetainedRoot(root) => Transition::suspend(
+                        Control::Evaluate(root.store, environment.clone()),
+                        Frame::RetainedRootStore { node, environment },
+                    ),
+                    EffectOperation::Continue(continuation) => Transition::suspend(
+                        Control::Evaluate(continuation.store, environment.clone()),
+                        Frame::ContinueStore { node, environment },
+                    ),
+                    EffectOperation::Retain(_) => return Err(RuntimeFailure::InvalidControlState),
                     EffectOperation::Cleanup(_) => return Err(RuntimeFailure::InvalidControlState),
                     EffectOperation::Resource(resource) => Transition::suspend(
                         Control::Evaluate(resource.initializer(), environment.clone()),
@@ -3049,6 +3880,7 @@ fn dispatch_entry(
                             node,
                             environment,
                             registration: None,
+                            retained: None,
                         },
                     ),
                     EffectOperation::Resume(resume) => Transition::suspend(
@@ -4466,6 +5298,7 @@ mod tests {
 
     fn consumed_completion(handler: HandlerId, owner: ResumeId, count: usize) -> Frame {
         Frame::ClauseBoundary {
+            retained: None,
             handler,
             owner,
             continuation: None,
@@ -4476,6 +5309,7 @@ mod tests {
 
     fn live_completion(handler: HandlerId, owner: ResumeId, frames: Vec<Frame>) -> Frame {
         Frame::ClauseBoundary {
+            retained: None,
             handler,
             owner,
             continuation: Some(CapturedContinuation { frames }),
@@ -4551,6 +5385,7 @@ mod tests {
                 1 => consumed_completion(other_handler, owner, 1),
                 2 => live_completion(handler, owner, Vec::new()),
                 3 => Frame::ClauseBoundary {
+                    retained: None,
                     handler,
                     owner,
                     continuation: None,
@@ -4644,6 +5479,7 @@ mod tests {
             let mut machine = Machine::new_effect(&program);
             machine.control.take();
             machine.frames.push(Frame::ClauseBoundary {
+                retained: None,
                 handler,
                 owner,
                 continuation: Some(CapturedContinuation { frames: Vec::new() }),
@@ -4673,6 +5509,7 @@ mod tests {
             assert_eq!(
                 machine.return_from(
                     Frame::ClauseBoundary {
+                        retained: None,
                         handler,
                         owner,
                         continuation: None,
@@ -4800,6 +5637,7 @@ mod tests {
             let captured = captured.expect("three physical cells fit exactly");
             assert_eq!(machine.captured_cells, 3);
             machine.frames.push(Frame::ClauseBoundary {
+                retained: None,
                 handler,
                 owner,
                 continuation: Some(captured),
@@ -4829,6 +5667,7 @@ mod tests {
             let mut machine = capture_machine(1);
             machine.frames.clear();
             machine.frames.push(Frame::ClauseBoundary {
+                retained: None,
                 handler,
                 owner,
                 continuation: (case == 1).then(|| CapturedContinuation { frames: Vec::new() }),
@@ -4837,6 +5676,7 @@ mod tests {
             });
             let captured = machine.capture_from(0).unwrap();
             machine.frames.push(Frame::ClauseBoundary {
+                retained: None,
                 handler,
                 owner,
                 continuation: Some(captured),
@@ -5212,6 +6052,7 @@ mod tests {
             machine.acquire_cleanup(scope, environment.clone()).unwrap();
             let nested = machine.capture_from(0).unwrap();
             machine.frames.push(Frame::ClauseBoundary {
+                retained: None,
                 completion_count: 1,
                 registration: None,
                 handler: HandlerId::new(1),
@@ -5225,6 +6066,7 @@ mod tests {
             machine.acquire_cleanup(scope, environment.clone()).unwrap();
             let captured = machine.capture_from(0).unwrap();
             machine.frames.push(Frame::ClauseBoundary {
+                retained: None,
                 completion_count: 1,
                 registration: None,
                 handler,
@@ -5316,6 +6158,7 @@ mod tests {
                 RuntimeResource::CleanupOwners
             ));
             machine.frames.push(Frame::ClauseBoundary {
+                retained: None,
                 completion_count: 1,
                 registration: None,
                 handler: HandlerId::new(0),
@@ -5585,6 +6428,7 @@ mod tests {
         let wrong = HandlerId::new(handler.value().checked_add(1).unwrap());
         let captured = CapturedContinuation {
             frames: vec![Frame::HandlerBoundary {
+                retained: None,
                 node: handler_node,
                 environment,
                 registration: None,
@@ -5626,6 +6470,7 @@ mod tests {
         assert_eq!(captured.frames.len(), 1);
         let forest = CapturedContinuation {
             frames: vec![Frame::ClauseBoundary {
+                retained: None,
                 completion_count: 1,
                 handler: wrong,
                 owner: ResumeId::new(0),
@@ -5845,6 +6690,7 @@ mod tests {
             Err(RuntimeFailure::InvalidControlState)
         );
         machine.frames.push(Frame::HandlerBoundary {
+            retained: None,
             node: handler_node,
             environment: environment.clone(),
             registration: Some(RegistrationKey(0)),
@@ -5989,6 +6835,7 @@ mod tests {
         };
         *registration = Some(RegistrationKey(0));
         machine.frames.push(Frame::HandlerBoundary {
+            retained: None,
             node: handler_node,
             environment: environment.clone(),
             registration: Some(RegistrationKey(0)),
@@ -6061,6 +6908,7 @@ mod tests {
         };
         *registration = Some(RegistrationKey(0));
         captured.frames.push(Frame::HandlerBoundary {
+            retained: None,
             node: handler_node,
             environment: environment.clone(),
             registration: Some(RegistrationKey(0)),
@@ -6102,6 +6950,7 @@ mod tests {
             .acquire_registration(node, environment.clone())
             .unwrap();
         let stale = Frame::HandlerBoundary {
+            retained: None,
             node: handler_node,
             environment,
             registration: Some(RegistrationKey(0)),
@@ -6161,6 +7010,7 @@ mod tests {
         machine.return_from(restored, integer("4")).unwrap();
         let events = machine.effect_trace.clone();
         let duplicate = Frame::ClauseBoundary {
+            retained: None,
             completion_count: 1,
             handler: handler_id,
             owner,
@@ -6238,6 +7088,7 @@ mod tests {
                 .unwrap();
         }
         machine.frames.push(Frame::HandlerBoundary {
+            retained: None,
             node: handler_node,
             environment,
             registration: Some(RegistrationKey(0)),
@@ -6921,6 +7772,7 @@ mod tests {
                 let handler = HandlerId::new(0);
                 let owner = ResumeId::new(0);
                 machine.frames.push(Frame::ClauseBoundary {
+                    retained: None,
                     completion_count: 1,
                     registration: None,
                     handler,
@@ -6996,6 +7848,7 @@ mod tests {
         let handler = HandlerId::new(0);
         let owner = ResumeId::new(0);
         machine.frames.push(Frame::ClauseBoundary {
+            retained: None,
             completion_count: 1,
             registration: None,
             handler,
@@ -7541,6 +8394,7 @@ mod tests {
             let handler = HandlerId::new(0);
             let owner = ResumeId::new(0);
             machine.frames.push(Frame::ClauseBoundary {
+                retained: None,
                 completion_count: 1,
                 registration: None,
                 handler,
@@ -7695,6 +8549,7 @@ mod tests {
                                 payload: ResourcePayload::Cell(Value::SmallInteger(41)),
                             },
                             Frame::ClauseBoundary {
+                                retained: None,
                                 completion_count: 1,
                                 registration: None,
                                 handler: HandlerId::new(0),
@@ -7705,6 +8560,7 @@ mod tests {
                     };
                 }
                 failure.frames.push(Frame::ClauseBoundary {
+                    retained: None,
                     completion_count: 1,
                     registration: None,
                     handler: HandlerId::new(0),
@@ -7842,6 +8698,7 @@ mod tests {
                 for depth in 0..32_768_u32 {
                     continuation = CapturedContinuation {
                         frames: vec![Frame::ClauseBoundary {
+                            retained: None,
                             completion_count: 1,
                             registration: None,
                             handler: HandlerId::new(depth),
@@ -7961,6 +8818,7 @@ mod tests {
         machine.captured_cells = 1;
         let captured = machine.capture_from(0).expect("exact remaining quota");
         machine.frames.push(Frame::ClauseBoundary {
+            retained: None,
             completion_count: 1,
             registration: None,
             handler: HandlerId::new(1),
@@ -7973,6 +8831,7 @@ mod tests {
             }),
         });
         machine.frames.push(Frame::ClauseBoundary {
+            retained: None,
             completion_count: 1,
             registration: None,
             handler,
@@ -8046,6 +8905,7 @@ mod tests {
             pending_invocations: 1,
         });
         machine.frames.push(Frame::ClauseBoundary {
+            retained: None,
             completion_count: 1,
             handler: HandlerId::new(1),
             owner: ResumeId::new(1),
@@ -8060,6 +8920,7 @@ mod tests {
         machine.live_cleanups = 1;
         let captured = machine.capture_from(1).unwrap();
         machine.frames.push(Frame::ClauseBoundary {
+            retained: None,
             completion_count: 1,
             handler,
             owner,
@@ -8126,6 +8987,7 @@ mod tests {
             let mut captured = machine.capture_from(0).expect("capture fits");
             if nested {
                 captured.frames[1] = Frame::ClauseBoundary {
+                    retained: None,
                     completion_count: 1,
                     registration: None,
                     handler: HandlerId::new(1),
@@ -8141,6 +9003,7 @@ mod tests {
             }
             machine.captured_cells = retained;
             machine.frames.push(Frame::ClauseBoundary {
+                retained: None,
                 completion_count: 1,
                 registration: None,
                 handler: found_handler,
@@ -8217,6 +9080,7 @@ mod tests {
                         if live_nested {
                             captured = CapturedContinuation {
                                 frames: vec![Frame::ClauseBoundary {
+                                    retained: None,
                                     completion_count: 1,
                                     registration: None,
                                     handler,
@@ -8226,6 +9090,7 @@ mod tests {
                             };
                         } else {
                             captured.frames.push(Frame::ClauseBoundary {
+                                retained: None,
                                 completion_count: 1,
                                 registration: None,
                                 handler,
@@ -8252,6 +9117,7 @@ mod tests {
                         assert!(machine.frames.is_empty());
                     }
                     machine.frames.push(Frame::ClauseBoundary {
+                        retained: None,
                         completion_count: 1,
                         registration: None,
                         handler,
@@ -8288,6 +9154,7 @@ mod tests {
         let mut machine = capture_machine(3);
         let captured = machine.capture_from(0).expect("capture fits");
         machine.frames.push(Frame::ClauseBoundary {
+            retained: None,
             completion_count: 1,
             registration: None,
             handler,
@@ -8295,6 +9162,7 @@ mod tests {
             continuation: Some(captured),
         });
         machine.frames.push(Frame::ClauseBoundary {
+            retained: None,
             completion_count: 1,
             registration: None,
             handler,

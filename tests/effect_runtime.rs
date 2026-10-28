@@ -390,6 +390,22 @@ fn generic_row_bearing_function_argument_preserves_complete_row_substitution() {
 }
 
 #[test]
+fn polymorphic_row_value_specializes_in_a_local_annotation() {
+    let evaluation = run_effect_source(
+        "generic-row-local-value",
+        concat!(
+            "effect Ping<N> {\nping : Unit -> Unit\n}\n",
+            "forward<N,A,E : EffectRow> : (Unit -> A ! {| E}) -> A ! {Ping<N> | E}\n",
+            "forward cb = {\nlet ignored = perform Ping<N>.ping ()\ncb ()\n}\n",
+            "main : Unit -> Int\nmain () = {\n",
+            "let local : (Unit -> Int) -> Int ! {Ping<Int>} = forward\n",
+            "handle (local (fn(ignored) {\n42\n})) with Ping<Int> {\nping ignored => resume ()\n}\n}\n",
+        ),
+    );
+    assert_eq!(evaluation.value.to_string(), "42");
+}
+
+#[test]
 fn generic_row_forwarding_accepts_an_empty_effect_row() {
     let evaluation = run_effect_source(
         "generic-empty-row",

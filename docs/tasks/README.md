@@ -10,8 +10,8 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 ## Active tasks
 
 - [TASK-0057: Local retained control](TASK-0057-local-retained-control.md) has
-  an active contract and bounded proof assignment; product implementation
-  depends on C1 retained-result verification after the required proof gate.
+  an accepted contract and retained C1 proof; C2 store work is active and
+  public release depends on C3.
 
 The lexical-region product's language rules are in the
 [specification](../../spec/README.md); its existing

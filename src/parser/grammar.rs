@@ -36,6 +36,7 @@ pub(super) enum PrimaryForm {
     Parenthesized,
     Perform,
     Discard,
+    Retain,
     Hook,
     Registration,
     Cleanup,
@@ -162,6 +163,7 @@ const CURRENT_ASH_DIALECT: ParserDialect = ParserDialect {
             PrimaryForm::Parenthesized,
             PrimaryForm::Perform,
             PrimaryForm::Discard,
+            PrimaryForm::Retain,
             PrimaryForm::Hook,
             PrimaryForm::Registration,
             PrimaryForm::Cleanup,
@@ -1683,6 +1685,10 @@ fn handler_expression(parser: &mut Parser<'_>) {
     expression(parser);
     let _ = parser.expect(&TokenKind::With, ExpectedForm::Expression);
     effect_instance(parser);
+    if parser.at(&TokenKind::Using) {
+        let _ = parser.bump();
+        expression::primary_expression(parser);
+    }
     let _ = parser.expect(&TokenKind::LeftBrace, ExpectedForm::LeftBrace);
     let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
     if matches!(

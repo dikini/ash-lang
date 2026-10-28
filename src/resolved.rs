@@ -67,6 +67,141 @@ impl RegionApi {
     }
 }
 
+/// Fixed source identities belonging to the compiler-owned store module.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct StoreApi {
+    module: ModuleId,
+}
+
+impl StoreApi {
+    pub(crate) fn for_module(module: ModuleId) -> Option<Self> {
+        module
+            .is_builtin_retained_control()
+            .then_some(Self { module })
+    }
+
+    pub(crate) fn store(self) -> NominalTypeId {
+        NominalTypeId::new(self.module, 0)
+    }
+
+    pub(crate) fn module(self) -> ModuleId {
+        self.module
+    }
+
+    pub(crate) fn key(self) -> NominalTypeId {
+        NominalTypeId::new(self.module, 1)
+    }
+
+    pub(crate) fn option(self) -> NominalTypeId {
+        NominalTypeId::new(self.module, 2)
+    }
+
+    pub(crate) fn drive(self) -> EffectId {
+        EffectId::new(self.module, 0)
+    }
+
+    pub(crate) fn probe(self) -> EffectId {
+        EffectId::new(self.module, 1)
+    }
+
+    pub(crate) fn hides_constructor(self, id: ConstructorId) -> bool {
+        id.owner() == self.store() || id.owner() == self.key()
+    }
+
+    /// Authenticate the fixed store, locator, answer and effect declarations.
+    pub(crate) fn registry(self, registry: &ResolvedRegistry) -> bool {
+        for (id, name, parameters, constructors) in [
+            (
+                self.store(),
+                "Store",
+                &[(0, "N"), (1, "D")][..],
+                &[("HiddenStore", None)][..],
+            ),
+            (
+                self.key(),
+                "Key",
+                &[(2, "N")][..],
+                &[("HiddenKey", None)][..],
+            ),
+            (
+                self.option(),
+                "Option",
+                &[(3, "A")][..],
+                &[("None", None), ("Some", Some(3))][..],
+            ),
+        ] {
+            let (Some(nominal), Some(actual_parameters)) =
+                (registry.nominal(id), registry.nominal_parameters(id))
+            else {
+                return false;
+            };
+            if nominal.id != id
+                || nominal.spelling != name
+                || nominal.declaration_kind != ResolvedNominalDeclarationKind::Data
+                || nominal.representation.is_some()
+                || nominal.representation_provenance.is_some()
+                || actual_parameters.len() != parameters.len()
+                || !actual_parameters
+                    .iter()
+                    .zip(parameters)
+                    .all(|(actual, (ordinal, spelling))| {
+                        actual.id == TypeVariableId::resolved(self.module, *ordinal)
+                            && actual.kind == Kind::Type
+                            && actual.spelling == *spelling
+                    })
+                || nominal.constructors.len() != constructors.len()
+            {
+                return false;
+            }
+            for (ordinal, (spelling, parameter)) in constructors.iter().enumerate() {
+                let constructor_id = ConstructorId::new(id, ordinal as u32);
+                let Some(actual) = registry.constructor(constructor_id) else {
+                    return false;
+                };
+                if nominal.constructors[ordinal] != constructor_id
+                    || actual.id != constructor_id
+                    || actual.owner != id
+                    || actual.spelling != *spelling
+                    || match (actual.payload.as_ref(), parameter) {
+                        (None, None) => false,
+                        (Some(Type::Variable(actual)), Some(expected)) => {
+                            *actual != TypeVariableId::resolved(self.module, *expected)
+                        }
+                        _ => true,
+                    }
+                {
+                    return false;
+                }
+            }
+        }
+        for (id, name, parameter, operation, result) in [
+            (self.drive(), "Drive", 4, "internal", Type::Unit),
+            (self.probe(), "Probe", 5, "quiescent", Type::Bool),
+        ] {
+            let Some(effect) = registry.effect(id) else {
+                return false;
+            };
+            if effect.id != id
+                || !effect.public
+                || effect.spelling != name
+                || effect.native_contract.is_some()
+                || effect.parameters.len() != 1
+                || effect.parameters[0].id != TypeVariableId::resolved(self.module, parameter)
+                || effect.parameters[0].kind != Kind::Type
+                || effect.parameters[0].spelling != "N"
+                || effect.operations.len() != 1
+                || effect.operations[0].id != OperationId::new(id, 0)
+                || effect.operations[0].spelling != operation
+                || !matches!(&effect.operations[0].annotation.ty,
+                    Type::Function(domain, value) if **domain == Type::Unit && **value == result)
+            {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// The fixed relation admitted by the loader's private resource origins.
 /// This descriptor contains identities only; ordinary registries own its facts.
 #[derive(Clone, Copy)]
@@ -22874,6 +23009,13 @@ pub(crate) fn lexical_method_capture_occurrences<'a>(
                 pending.push(&resource.initializer);
                 pending.push(&resource.body);
             }
+            ResolvedExprKind::Store(store) => {
+                budget.charge(1)?;
+                bound.try_reserve(1).map_err(|_| ())?;
+                bound.insert(store.handle.id);
+                pending.push(&store.initializer);
+                pending.push(&store.body);
+            }
             ResolvedExprKind::Perform(request) => pending.push(&request.operand),
             ResolvedExprKind::Cleanup(cleanup) => {
                 pending.push(&cleanup.body);
@@ -22882,16 +23024,25 @@ pub(crate) fn lexical_method_capture_occurrences<'a>(
             ResolvedExprKind::Handle(handler) => {
                 budget.charge(handler.clauses.len())?;
                 pending
-                    .try_reserve(handler.clauses.len().saturating_add(1))
+                    .try_reserve(
+                        handler
+                            .clauses
+                            .len()
+                            .saturating_add(1 + usize::from(handler.store.is_some())),
+                    )
                     .map_err(|_| ())?;
                 pending.push(&handler.body);
+                if let Some(store) = &handler.store {
+                    budget.charge(1)?;
+                    pending.push(store);
+                }
                 for clause in &handler.clauses {
                     pattern_ids(&clause.pattern, &mut bound, budget)?;
                     pending.push(&clause.body);
                 }
             }
             ResolvedExprKind::Resume(resume) => pending.push(&resume.value),
-            ResolvedExprKind::Discard(_) => {}
+            ResolvedExprKind::Discard(_) | ResolvedExprKind::Retain(_) => {}
             ResolvedExprKind::String(_)
             | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
@@ -22991,8 +23142,12 @@ pub enum ResolvedExprKind {
     Resume(ResolvedResumeExpr),
     /// Nullary consumption of the enclosing clause capability.
     Discard(ResolvedDiscardExpr),
+    /// Transfer of the selected private checkpoint clause capability.
+    Retain(ResolvedRetainExpr),
     /// A scoped resource acquisition with a rigid, nongeneralized identity.
     Resource(Box<ResolvedResourceExpr>),
+    /// A local retained-control store with a fresh scoped identity.
+    Store(Box<ResolvedStoreExpr>),
     /// A prospective region identity, prepared before its access binder is live.
     Region(Box<ResolvedRegionExpr>),
     /// Explicit fresh-allocation selection with a restoration boundary.
@@ -23217,6 +23372,46 @@ pub struct ResolvedResourceExpr {
     pub body: Box<ResolvedExpr>,
 }
 
+/// Authenticated source coordinates for one store owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct StoreAcquisition {
+    pub(crate) builtin: ModuleId,
+    pub(crate) identity: TypeVariableId,
+    pub(crate) handle: BinderId,
+    pub(crate) span: Span,
+}
+
+impl StoreAcquisition {
+    pub(crate) fn owns(self, store: &ResolvedStoreExpr) -> bool {
+        self.builtin.is_builtin_retained_control()
+            && self == store.acquisition
+            && self.identity == store.identity.id
+            && self.handle == store.handle.id
+            && store.identity.kind == Kind::Type
+            && self.identity.module().is_some()
+            && self.identity.module() == self.handle.module()
+            && self.span.cover(store.identity.origin.primary_span()) == Some(self.span)
+            && self.span.cover(store.handle.origin.primary_span()) == Some(self.span)
+    }
+}
+
+/// A store's descriptor and body are checked under its fresh identity; the
+/// initializer remains in the preceding scope.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedStoreExpr {
+    pub(crate) acquisition: StoreAcquisition,
+    /// The rigid kind-Type identity owned by the store.
+    pub identity: ResolvedTypeVariable,
+    /// The body-local non-owning store handle.
+    pub handle: Binder,
+    /// Its fixed function descriptor, checked inside the identity scope.
+    pub descriptor: ResolvedOwnerArgument,
+    /// The initializer in the preceding term and type scope.
+    pub initializer: Box<ResolvedExpr>,
+    /// The store-scoped computation.
+    pub body: Box<ResolvedExpr>,
+}
+
 impl ResolvedResourceExpr {
     /// The generic payload is retained in the exact generated provider application.
     pub(crate) fn payload(&self) -> Option<&Type> {
@@ -23241,6 +23436,13 @@ impl ResolvedResourceExpr {
 pub struct ResolvedDiscardExpr {
     /// Enclosing clause owner; absent only in malformed standalone probes.
     pub owner: Option<ResumeId>,
+}
+
+/// One nullary retained-control transfer owned by a private clause.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolvedRetainExpr {
+    /// Enclosing private clause owner.
+    pub owner: ResumeId,
 }
 
 /// Stable identity for one lexical handler clause's resume capability.
@@ -23294,6 +23496,8 @@ pub struct ResolvedHandleExpr {
     pub hook_registration: Option<Box<HookRegistrationContract>>,
     /// Compiler-owned identity clause and source relation of an empty hook root.
     pub hook_root: Option<HookRootContract>,
+    /// Actual store expression establishing a private retained-control root.
+    pub store: Option<Box<ResolvedExpr>>,
     /// Handled computation.
     pub body: Box<ResolvedExpr>,
     /// Exact handled instance.
@@ -23685,6 +23889,9 @@ fn discard_resolved_body_work(
             }
             ResolvedExprKind::Handle(handler) => {
                 expressions.push(*handler.body);
+                if let Some(store) = handler.store {
+                    expressions.push(*store);
+                }
                 discard_origin_iteratively(handler.effect.origin);
                 for clause in handler.clauses {
                     patterns.push(clause.pattern);
@@ -23710,12 +23917,19 @@ fn discard_resolved_body_work(
                 expressions.push(*resource.initializer);
                 expressions.push(*resource.body);
             }
+            ResolvedExprKind::Store(store) => {
+                discard_resolved_type_variable(store.identity);
+                discard_binder(store.handle);
+                store.descriptor.discard_iteratively();
+                expressions.push(*store.initializer);
+                expressions.push(*store.body);
+            }
             ResolvedExprKind::Cleanup(cleanup) => {
                 expressions.push(*cleanup.body);
                 expressions.push(*cleanup.action);
             }
             ResolvedExprKind::Resume(resume) => expressions.push(*resume.value),
-            ResolvedExprKind::Discard(_) => {}
+            ResolvedExprKind::Discard(_) | ResolvedExprKind::Retain(_) => {}
         }
     }
     while let Some(pattern) = patterns.pop() {

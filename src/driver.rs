@@ -2291,7 +2291,7 @@ mod tests {
                         writeln!(text, "{introducer} f{index} : Unit -> Int = fn(ignored) {{")
                             .expect("String writing cannot fail");
                         text.push_str(
-                            "let retain : Unit -> Int = fn(value) {\nf0 value\n}\n1\n}\n",
+                            "let saved : Unit -> Int = fn(value) {\nf0 value\n}\n1\n}\n",
                         );
                     } else {
                         writeln!(

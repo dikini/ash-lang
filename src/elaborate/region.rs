@@ -403,7 +403,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         })
     }
 
-    fn region_api_at(&mut self, _span: Span) -> Result<RegionApi, TypeError> {
+    pub(super) fn region_api_at(&mut self, _span: Span) -> Result<RegionApi, TypeError> {
         self.type_work
             .charge(self.registry.effects().len())
             .map_err(|()| type_resource())?;

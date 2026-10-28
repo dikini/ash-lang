@@ -7580,6 +7580,7 @@ enum BodyWork<'a> {
     Expression(&'a ResolvedExpr),
     RegionBody(&'a crate::resolved::ResolvedRegionExpr),
     ResourceBody(&'a crate::resolved::ResolvedResourceExpr),
+    StoreBody(&'a crate::resolved::ResolvedStoreExpr),
     ResourceExit(&'a crate::resolved::ResolvedTypeVariable),
     Declaration(&'a ResolvedLocalDeclaration),
     LexicalNewtype(&'a crate::resolved::ResolvedNominalType),
@@ -7716,6 +7717,36 @@ fn check_expression_work<'a>(
                     budget,
                 )?;
             }
+            BodyWork::StoreBody(store) => {
+                let parameters = std::slice::from_ref(&store.identity);
+                authenticate_owner_parameters(registry, parameters, budget)?;
+                if store.identity.kind != Kind::Type || !store.acquisition.owns(store) {
+                    return Err(KindFailure::internal_cause(
+                        span,
+                        KindInternalCause::ResourceIdentityKind,
+                    ));
+                }
+                environments.extend_owner_parameters(parameters, budget)?;
+                let KindedArgument::TypeArg(descriptor) = &store.descriptor.ty else {
+                    return Err(KindFailure::internal_cause(
+                        span,
+                        KindInternalCause::ResourceIdentityKind,
+                    ));
+                };
+                environments.expect_value_type_parts(
+                    descriptor,
+                    &store.descriptor.provenance,
+                    store.descriptor.span,
+                    budget,
+                )?;
+                push_body_work(
+                    &mut work,
+                    BodyWork::ResourceExit(&store.identity),
+                    span,
+                    budget,
+                )?;
+                push_body_work(&mut work, BodyWork::Expression(&store.body), span, budget)?;
+            }
             BodyWork::ResourceExit(identity) => {
                 environments.remove_owner_parameter_extension(std::slice::from_ref(identity));
             }
@@ -7767,6 +7798,20 @@ fn check_expression_work<'a>(
                         &mut work,
                         BodyWork::Expression(&resource.initializer),
                         resource.initializer.span,
+                        budget,
+                    )?;
+                }
+                ResolvedExprKind::Store(store) => {
+                    push_body_work(
+                        &mut work,
+                        BodyWork::StoreBody(store),
+                        expression.span,
+                        budget,
+                    )?;
+                    push_body_work(
+                        &mut work,
+                        BodyWork::Expression(&store.initializer),
+                        store.initializer.span,
                         budget,
                     )?;
                 }
@@ -7856,6 +7901,9 @@ fn check_expression_work<'a>(
                         handler.body.span,
                         budget,
                     )?;
+                    if let Some(store) = &handler.store {
+                        push_body_work(&mut work, BodyWork::Expression(store), store.span, budget)?;
+                    }
                 }
                 ResolvedExprKind::Resume(resume) => push_body_work(
                     &mut work,
@@ -7869,7 +7917,8 @@ fn check_expression_work<'a>(
                 | ResolvedExprKind::Unit
                 | ResolvedExprKind::Occurrence(_)
                 | ResolvedExprKind::Constructor(_)
-                | ResolvedExprKind::Discard(_) => {}
+                | ResolvedExprKind::Discard(_)
+                | ResolvedExprKind::Retain(_) => {}
             },
         }
     }
@@ -8027,6 +8076,7 @@ fn body_work_span(item: BodyWork<'_>) -> Span {
         BodyWork::Expression(expression) => expression.span,
         BodyWork::RegionBody(region) => region.identity.origin.primary_span(),
         BodyWork::ResourceBody(resource) => resource.acquisition.span,
+        BodyWork::StoreBody(store) => store.acquisition.span,
         BodyWork::ResourceExit(identity) => identity.origin.primary_span(),
         BodyWork::Declaration(declaration) => local_declaration_span(declaration),
         BodyWork::LexicalNewtype(nominal) => nominal.origin.primary_span(),

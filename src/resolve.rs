@@ -757,6 +757,8 @@ pub enum ResolveReason {
     ForeignContract,
     /// Source evidence cannot introduce the compiler-owned cell provider.
     SealedProvider,
+    /// The compiler-owned store drive can be named in rows but not performed or handled.
+    SealedDrive,
     /// Resource acquisition requires a direct compiler-owned cell dependency.
     ResourceBuiltinRequired,
     /// An occurrence has no binding in lexical scope.
@@ -801,6 +803,8 @@ pub enum ResolveReason {
     DuplicateEffect,
     /// A resume form occurs outside an operation clause.
     ResumeOutsideClause,
+    /// Retain does not name the nearest selected private-root clause.
+    RetainOutsideRoot,
     /// An uppercase term or pattern names no constructor.
     UnknownConstructor,
     /// One pattern vector binds the same spelling more than once.
@@ -822,6 +826,7 @@ impl fmt::Display for ResolveReason {
         formatter.write_str(match self {
             Self::ForeignContract => "foreign.contract",
             Self::SealedProvider => "resolve.sealed-provider",
+            Self::SealedDrive => "resolve.sealed-drive",
             Self::ResourceBuiltinRequired => "resolve.resource-builtin-required",
             Self::UnknownName => "resolve.unknown-name",
             Self::EquationNameMismatch => "resolve.equation-name-mismatch",
@@ -844,6 +849,7 @@ impl fmt::Display for ResolveReason {
             Self::EffectKind => "effect.kind",
             Self::DuplicateEffect => "effect.duplicate",
             Self::ResumeOutsideClause => "effect.resume-outside-clause",
+            Self::RetainOutsideRoot => "effect.retain-outside-root",
             Self::UnknownConstructor => "resolve.unknown-constructor",
             Self::DuplicatePatternBinder => "pattern.duplicate-binder",
             Self::DuplicateRecursiveMember => "resolve.duplicate-recursive-member",
@@ -1096,10 +1102,16 @@ impl ResolveError {
             ResolveReason::SealedProvider => {
                 return Some((self.message()?, "sealed_provider_declaration"));
             }
+            ResolveReason::SealedDrive => {
+                return Some((self.message()?, "sealed_store_drive"));
+            }
             ResolveReason::ResourceBuiltinRequired => {
                 return Some((self.message()?, "resource_acquisition"));
             }
             ResolveReason::ResumeOutsideClause => {
+                return Some((self.message()?, "continuation_use"));
+            }
+            ResolveReason::RetainOutsideRoot => {
                 return Some((self.message()?, "continuation_use"));
             }
             ResolveReason::TypeKind | ResolveReason::InterfaceKind | ResolveReason::EffectKind => {
@@ -1246,8 +1258,10 @@ impl ResolveError {
             ResolveReason::ResumeOutsideClause => {
                 Some(("operation", "keyword", self.found.as_deref()?))
             }
+            ResolveReason::RetainOutsideRoot => None,
             ResolveReason::EffectOperationShape
             | ResolveReason::SealedProvider
+            | ResolveReason::SealedDrive
             | ResolveReason::DuplicateEffect => None,
             _ => Some(("name", "identifier", self.found.as_deref()?)),
         }
@@ -1328,6 +1342,9 @@ impl ResolveError {
             ResolveReason::SealedProvider => {
                 return Some(crate::message::Message::resolve_sealed_provider());
             }
+            ResolveReason::SealedDrive => {
+                return Some(crate::message::Message::resolve_sealed_drive());
+            }
             ResolveReason::ResourceBuiltinRequired => {
                 return Some(crate::message::Message::resolve_builtin_required(
                     self.expected.as_deref()?,
@@ -1337,6 +1354,9 @@ impl ResolveError {
                 return Some(crate::message::Message::resolve_continuation_outside(
                     self.found.as_deref()?,
                 ));
+            }
+            ResolveReason::RetainOutsideRoot => {
+                return Some(crate::message::Message::resolve_retain_outside_root());
             }
             _ => {}
         }
@@ -1688,6 +1708,7 @@ fn resolve_module_names_with_budget(
         if !owner.is_builtin_foreign()
             && !owner.is_builtin_region()
             && !owner.is_builtin_region_facade()
+            && !owner.is_builtin_retained_control()
         {
             return Ok(());
         }
@@ -1700,7 +1721,9 @@ fn resolve_module_names_with_budget(
                     "builtin source authentication exceeded its type-work budget",
                 )
             })?;
-        let canonical = if owner.is_builtin_region_facade() {
+        let canonical = if owner.is_builtin_retained_control() {
+            crate::module::retained_control_builtin_source_text()
+        } else if owner.is_builtin_region_facade() {
             crate::module::region_facade_builtin_source_text()
         } else if owner.is_builtin_region() {
             crate::module::region_builtin_source_text()
@@ -2405,6 +2428,7 @@ struct Resolver {
     type_scopes: Vec<HashMap<String, TypeVariableId>>,
     nominal_parameter_counts: HashMap<NominalTypeId, usize>,
     active_resumes: Vec<ResumeId>,
+    retained_clause: Option<ResumeId>,
     next_resume: u32,
     type_work: TypeWorkBudget,
     constraint_work: InterfaceConstraintBudget,
@@ -2813,6 +2837,7 @@ impl Resolver {
             type_scopes: Vec::new(),
             nominal_parameter_counts: HashMap::new(),
             active_resumes: Vec::new(),
+            retained_clause: None,
             next_resume: 0,
             type_work,
             constraint_work,
@@ -10261,6 +10286,7 @@ impl Resolver {
             kind: ResolvedExprKind::Handle(ResolvedHandleExpr {
                 hook_registration: None,
                 hook_root: Some(contract),
+                store: None,
                 body: Box::new(body.into_inner()),
                 effect,
                 clauses,
@@ -10471,6 +10497,7 @@ impl Resolver {
                     kind: ResolvedExprKind::Handle(ResolvedHandleExpr {
                         hook_registration: Some(Box::new(contract)),
                         hook_root: None,
+                        store: None,
                         body: Box::new(body.into_inner()),
                         effect,
                         clauses,
@@ -11009,6 +11036,135 @@ impl Resolver {
         Ok(())
     }
 
+    fn start_builtin_store<'a>(
+        &mut self,
+        source: &'a crate::surface::SurfaceProviderResourceExpr,
+        builtin: ModuleId,
+        span: Span,
+        tasks: &mut ResolveTaskBuffer<'a>,
+        expressions: &mut ResolvedExpressionBuffer,
+    ) -> Result<(), ResolveError> {
+        if source.arguments.len() != 2 {
+            return Err(error(
+                ResolveReason::TypeKind,
+                span,
+                "store requires an identity and a function descriptor",
+            ));
+        }
+        let SurfaceTypeKind::Named(SurfaceReference::Unqualified(identity_source)) =
+            &source.arguments[0].kind
+        else {
+            return Err(error(
+                ResolveReason::TypeKind,
+                source.arguments[0].span,
+                "store owner must be a fresh unqualified Type identity",
+            ));
+        };
+        let initializer = expressions.pop_owned().ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "store initializer is missing",
+            )
+        })?;
+        let identity = self.allocate_type_variable(identity_source, None, Kind::Type)?;
+        let handle = self.allocate_binder(&source.handle.text, source.handle.span)?;
+        self.type_work.charge(6).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "store scope exceeded its budget",
+            )
+        })?;
+        self.lexical_method_parameters
+            .0
+            .try_reserve(1)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "store identity could not be reserved",
+                )
+            })?;
+        let retained = self.clone_type_variable_for_retention(
+            &identity,
+            span,
+            "store identity retention exceeded its budget",
+        )?;
+        self.lexical_method_parameters.push(retained);
+        let scope_checkpoint = self.scopes.len();
+        let type_scope_checkpoint = self.type_scopes.len();
+        let mut terms = HashMap::new();
+        terms.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "store handle scope could not be reserved",
+            )
+        })?;
+        terms.insert(
+            handle.spelling.clone(),
+            ResolvedTermBinding::local(ResolvedTermName::Global(handle.id)),
+        );
+        let mut types = HashMap::new();
+        types.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "store type scope could not be reserved",
+            )
+        })?;
+        types.insert(identity.spelling.clone(), identity.id);
+        self.scopes.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "store scope could not be reserved",
+            )
+        })?;
+        self.type_scopes.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "store type scope could not be reserved",
+            )
+        })?;
+        self.scopes.push(terms);
+        self.type_scopes.push(types);
+        let descriptor = ResolvedStoreDescriptorOwner(Some(Box::new(
+            self.resolve_owner_argument(&source.arguments[1])?,
+        )));
+        if !matches!(
+            descriptor.0.as_ref().map(|arg| &arg.ty),
+            Some(crate::types::KindedArgument::TypeArg(_))
+        ) {
+            return Err(error(
+                ResolveReason::TypeKind,
+                source.arguments[1].span,
+                "store descriptor must have kind Type",
+            ));
+        }
+        tasks.0.try_reserve(2).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "store body could not be scheduled",
+            )
+        })?;
+        tasks.push(ResolveTask::FinishStore {
+            builtin,
+            descriptor,
+            identity,
+            handle,
+            initializer: Box::new(initializer),
+            scope_checkpoint,
+            type_scope_checkpoint,
+            span,
+        });
+        tasks.push(ResolveTask::VisitBlock(&source.body));
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn finish_resource_expression(
         &mut self,
@@ -11543,6 +11699,60 @@ impl Resolver {
                     tasks,
                     expressions,
                 )?;
+            }
+            ResolveTask::StoreInitializer {
+                source,
+                builtin,
+                span,
+            } => {
+                self.start_builtin_store(source, builtin, span, tasks, expressions)?;
+            }
+            ResolveTask::FinishStore {
+                builtin,
+                descriptor,
+                identity,
+                handle,
+                initializer,
+                scope_checkpoint,
+                type_scope_checkpoint,
+                span,
+            } => {
+                let body = expressions.pop_owned().ok_or_else(|| {
+                    error(ResolveReason::InternalState, span, "store body is missing")
+                })?;
+                self.scopes.truncate(scope_checkpoint);
+                self.type_scopes.truncate(type_scope_checkpoint);
+                self.type_work.charge(3).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "store owner retention exceeded its budget",
+                    )
+                })?;
+                let descriptor = descriptor.into_inner().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "store descriptor is missing",
+                    )
+                })?;
+                let acquisition = crate::resolved::StoreAcquisition {
+                    builtin,
+                    identity: identity.id,
+                    handle: handle.id,
+                    span,
+                };
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Store(Box::new(crate::resolved::ResolvedStoreExpr {
+                        acquisition,
+                        identity,
+                        handle,
+                        descriptor,
+                        initializer: Box::new(initializer.into_inner()),
+                        body: Box::new(body.into_inner()),
+                    })),
+                    span,
+                });
             }
             ResolveTask::FinishResource {
                 builtin,
@@ -12190,6 +12400,29 @@ impl Resolver {
             &handler.effect.arguments,
             handler.effect.span,
         )?;
+        if crate::resolved::StoreApi::for_module(effect.instance.effect().module())
+            .is_some_and(|api| effect.instance.effect() == api.drive())
+        {
+            return Err(error(
+                ResolveReason::SealedDrive,
+                handler.effect.span,
+                "the store drive cannot be handled directly",
+            ));
+        }
+        let store = handler
+            .store
+            .as_deref()
+            .map(|store| self.resolve_expr(store).map(ResolvedExpressionOwner::new))
+            .transpose()?;
+        if store.is_some() {
+            self.type_work.charge(1).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "private-root store storage exceeded its type-work budget",
+                )
+            })?;
+        }
         let body = ResolvedExpressionOwner::new(self.resolve_expr(&handler.body)?);
         self.type_work.charge(handler.clauses.len()).map_err(|()| {
             error(
@@ -12257,9 +12490,14 @@ impl Resolver {
                 )
             })?;
             self.active_resumes.push(resume);
+            let prior_retained_clause = std::mem::replace(
+                &mut self.retained_clause,
+                handler.store.as_ref().map(|_| resume),
+            );
             let resolved_body = self
                 .resolve_expr(&clause.body)
                 .map(ResolvedExpressionOwner::new);
+            self.retained_clause = prior_retained_clause;
             self.active_resumes.truncate(resume_checkpoint);
             self.scopes.truncate(scope_checkpoint);
             clauses.push(ResolvedHandlerClause {
@@ -12275,6 +12513,7 @@ impl Resolver {
             kind: ResolvedExprKind::Handle(ResolvedHandleExpr {
                 hook_registration: None,
                 hook_root: None,
+                store: store.map(|store| Box::new(store.into_inner())),
                 body: Box::new(body.into_inner()),
                 effect,
                 clauses,
@@ -12318,6 +12557,15 @@ impl Resolver {
                     &registration.effect.arguments,
                     registration.effect.span,
                 )?;
+                if crate::resolved::StoreApi::for_module(effect.instance.effect().module())
+                    .is_some_and(|api| effect.instance.effect() == api.drive())
+                {
+                    return Err(error(
+                        ResolveReason::SealedDrive,
+                        registration.effect.span,
+                        "the store drive cannot be registered directly",
+                    ));
+                }
                 self.type_work.charge(3).map_err(|()| {
                     error(
                         ResolveReason::TypeResourceExhausted,
@@ -12345,6 +12593,15 @@ impl Resolver {
                     &hook.effect.arguments,
                     hook.effect.span,
                 )?;
+                if crate::resolved::StoreApi::for_module(effect.instance.effect().module())
+                    .is_some_and(|api| effect.instance.effect() == api.drive())
+                {
+                    return Err(error(
+                        ResolveReason::SealedDrive,
+                        hook.effect.span,
+                        "the store drive cannot be hooked directly",
+                    ));
+                }
                 self.type_work.charge(2).map_err(|()| {
                     error(
                         ResolveReason::TypeResourceExhausted,
@@ -12368,6 +12625,31 @@ impl Resolver {
 
             SurfaceExprKind::ProviderResource(source) => {
                 let family = self.nominal_reference(&source.family)?;
+                if let Some(api) = crate::resolved::StoreApi::for_module(family.id.module())
+                    && family.id == api.store()
+                {
+                    self.type_work.charge(2).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            expression.span,
+                            "store scheduling exceeded its budget",
+                        )
+                    })?;
+                    tasks.0.try_reserve(2).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            expression.span,
+                            "store tasks could not reserve storage",
+                        )
+                    })?;
+                    tasks.push(ResolveTask::StoreInitializer {
+                        source,
+                        builtin: family.id.module(),
+                        span: expression.span,
+                    });
+                    tasks.push(ResolveTask::VisitExpr(&source.initializer));
+                    return Ok(());
+                }
                 if let Some(api) = crate::resolved::ResourceApi::for_module(family.id.module())
                     && api.generic()
                     && family.id == api.handle()
@@ -12721,6 +13003,15 @@ impl Resolver {
                     &request.arguments,
                     request.effect.span(),
                 )?;
+                if crate::resolved::StoreApi::for_module(effect.instance.effect().module())
+                    .is_some_and(|api| effect.instance.effect() == api.drive())
+                {
+                    return Err(error(
+                        ResolveReason::SealedDrive,
+                        request.effect.span(),
+                        "the store drive cannot be performed directly",
+                    ));
+                }
                 let operation =
                     self.resolved_operation(effect.instance.effect(), &request.operation)?;
                 self.type_work.charge(2).map_err(|()| {
@@ -12786,6 +13077,24 @@ impl Resolver {
                     span: expression.span,
                 });
             }
+            SurfaceExprKind::Retain => {
+                let owner = self
+                    .active_resumes
+                    .last()
+                    .copied()
+                    .filter(|owner| Some(*owner) == self.retained_clause)
+                    .ok_or_else(|| {
+                        error(
+                            ResolveReason::RetainOutsideRoot,
+                            expression.span,
+                            "retain requires the nearest clause of a private checkpoint root",
+                        )
+                    })?;
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Retain(crate::resolved::ResolvedRetainExpr { owner }),
+                    span: expression.span,
+                });
+            }
         }
         Ok(())
     }
@@ -12808,6 +13117,20 @@ impl Drop for ResolvedCellPayloadOwner {
     fn drop(&mut self) {
         if let Some(payload) = self.0.take() {
             (*payload).discard_iteratively();
+        }
+    }
+}
+
+struct ResolvedStoreDescriptorOwner(Option<Box<crate::resolved::ResolvedOwnerArgument>>);
+impl ResolvedStoreDescriptorOwner {
+    fn into_inner(mut self) -> Option<crate::resolved::ResolvedOwnerArgument> {
+        self.0.take().map(|descriptor| *descriptor)
+    }
+}
+impl Drop for ResolvedStoreDescriptorOwner {
+    fn drop(&mut self) {
+        if let Some(descriptor) = self.0.take() {
+            descriptor.discard_iteratively();
         }
     }
 }
@@ -12909,6 +13232,11 @@ enum ResolveTask<'a> {
         builtin: ModuleId,
         span: Span,
     },
+    StoreInitializer {
+        source: &'a crate::surface::SurfaceProviderResourceExpr,
+        builtin: ModuleId,
+        span: Span,
+    },
     ResourceInitializer {
         source: &'a crate::surface::SurfaceResourceExpr,
         span: Span,
@@ -12916,6 +13244,16 @@ enum ResolveTask<'a> {
     FinishResource {
         builtin: ModuleId,
         payload: ResolvedCellPayloadOwner,
+        identity: ResolvedTypeVariable,
+        handle: Binder,
+        initializer: Box<ResolvedExpressionOwner>,
+        scope_checkpoint: usize,
+        type_scope_checkpoint: usize,
+        span: Span,
+    },
+    FinishStore {
+        builtin: ModuleId,
+        descriptor: ResolvedStoreDescriptorOwner,
         identity: ResolvedTypeVariable,
         handle: Binder,
         initializer: Box<ResolvedExpressionOwner>,
@@ -13010,8 +13348,10 @@ impl ResolveTask<'_> {
             | Self::FinishHook { span, .. }
             | Self::FinishRegistration { span, .. }
             | Self::GenericResourceInitializer { span, .. }
+            | Self::StoreInitializer { span, .. }
             | Self::ResourceInitializer { span, .. }
             | Self::FinishResource { span, .. }
+            | Self::FinishStore { span, .. }
             | Self::FinishBinary { span, .. }
             | Self::FinishBlock { span, .. }
             | Self::FinishFunction { span, .. }

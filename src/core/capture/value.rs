@@ -33,6 +33,11 @@ enum Expr {
     // Transparent scope/conversion; result diagnostics follow the original
     // user answer rather than the wrapper's declaration span.
     Forward(usize),
+    // The Store is an evaluated control input, not part of the answer.
+    RetainedRoot {
+        store: usize,
+        handler: usize,
+    },
     Merge(Vec<usize>),
     // Type-argument union seed, distinct from an independent value alternative.
     MetadataMerge(Vec<usize>),
@@ -74,6 +79,9 @@ enum Expr {
         arms: Vec<(Vec<(usize, usize)>, usize)>,
     },
     Resource {
+        // The term handle of a Store is distinct from its type identity and
+        // from non-owning keys, even though all retain the same lifetime.
+        store: bool,
         success: Option<ConstructorId>,
         failure: Option<ConstructorId>,
         failure_payload: Option<usize>,
@@ -86,10 +94,18 @@ enum Expr {
     Request {
         operand: usize,
         scalar: bool,
+        region_view: bool,
         descriptor: Option<usize>,
     },
     Resume {
         operand: usize,
+    },
+    Continue {
+        store: usize,
+        key: usize,
+        answer: usize,
+        some: usize,
+        none: usize,
     },
     Handler {
         body: usize,
@@ -142,6 +158,10 @@ impl Expr {
             Self::Unknown => Self::Unknown,
             Self::Alias(value) => Self::Alias(value + offset),
             Self::Forward(value) => Self::Forward(value + offset),
+            Self::RetainedRoot { store, handler } => Self::RetainedRoot {
+                store: store + offset,
+                handler: handler + offset,
+            },
             Self::Merge(values) => Self::Merge(ids(values, budget)?),
             Self::MetadataMerge(values) => Self::MetadataMerge(ids(values, budget)?),
             Self::Tuple(values) => Self::Tuple(ids(values, budget)?),
@@ -216,6 +236,7 @@ impl Expr {
                 }
             }
             Self::Resource {
+                store,
                 success,
                 failure,
                 failure_payload,
@@ -225,6 +246,7 @@ impl Expr {
                 body,
                 source,
             } => Self::Resource {
+                store: *store,
                 success: *success,
                 failure: *failure,
                 failure_payload: failure_payload.map(|value| value + offset),
@@ -237,14 +259,29 @@ impl Expr {
             Self::Request {
                 operand,
                 scalar,
+                region_view,
                 descriptor,
             } => Self::Request {
                 operand: operand + offset,
                 scalar: *scalar,
+                region_view: *region_view,
                 descriptor: descriptor.map(|value| value + offset),
             },
             Self::Resume { operand } => Self::Resume {
                 operand: operand + offset,
+            },
+            Self::Continue {
+                store,
+                key,
+                answer,
+                some,
+                none,
+            } => Self::Continue {
+                store: store + offset,
+                key: key + offset,
+                answer: answer + offset,
+                some: some + offset,
+                none: none + offset,
             },
             Self::Evidence { value, bindings } => {
                 let mut bindings = copy_slice(bindings, budget)?;
@@ -480,6 +517,9 @@ impl Graph {
                 Expr::Alias(value) | Expr::Forward(value) | Expr::Project { value, .. } => {
                     children = copy_slice(&[*value], budget)?
                 }
+                Expr::RetainedRoot { store, handler } => {
+                    children = copy_slice(&[*store, *handler], budget)?
+                }
                 Expr::Merge(values) | Expr::MetadataMerge(values) | Expr::Tuple(values) => {
                     children = copy_slice(values, budget)?
                 }
@@ -555,10 +595,29 @@ impl Graph {
                         children.push(*value);
                     }
                 }
-                Expr::Request { operand, .. } => {
+                Expr::Request {
+                    operand,
+                    descriptor,
+                    ..
+                } => {
                     children = copy_slice(&[*operand], budget)?;
+                    if let Some(descriptor) = descriptor {
+                        charge(budget, 1)?;
+                        children.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        children.push(*descriptor);
+                    }
                 }
                 Expr::Resume { operand } => children = copy_slice(&[*operand], budget)?,
+                Expr::Continue {
+                    store,
+                    key,
+                    answer,
+                    some,
+                    none,
+                } => {
+                    bindings = copy_slice(&[*answer], budget)?;
+                    children = copy_slice(&[*store, *key, *some, *none], budget)?;
+                }
                 Expr::Handler {
                     body,
                     clauses,
@@ -1583,6 +1642,7 @@ impl Graph {
                 }
             }
             Some(EffectOperation::Region(scope)) => Expr::Resource {
+                store: false,
                 success: None,
                 failure: None,
                 failure_payload: None,
@@ -1595,11 +1655,13 @@ impl Graph {
             Some(EffectOperation::RegionAllocate(allocation)) => Expr::Request {
                 operand: index(allocation.context),
                 scalar: false,
+                region_view: false,
                 descriptor: Some(index(allocation.request)),
             },
             Some(EffectOperation::Resource(resource)) => {
                 resource.acquisition.api().ok_or(Failure::Invalid)?;
                 Expr::Resource {
+                    store: false,
                     success: None,
                     failure: None,
                     failure_payload: None,
@@ -1610,6 +1672,47 @@ impl Graph {
                     source: resource.acquisition.span,
                 }
             }
+            Some(EffectOperation::Store(store)) => {
+                crate::resolved::StoreApi::for_module(store.acquisition.builtin)
+                    .ok_or(Failure::Invalid)?;
+                Expr::Resource {
+                    store: true,
+                    success: None,
+                    failure: None,
+                    failure_payload: None,
+                    handle: self.symbol(symbols, store.handle.id(), source, budget)?,
+                    identity: self.symbol(types, store.acquisition.identity, source, budget)?,
+                    initializer: index(store.initializer),
+                    body: index(store.body),
+                    source: store.acquisition.span,
+                }
+            }
+            Some(EffectOperation::RetainedRoot(root)) => Expr::RetainedRoot {
+                store: index(root.store),
+                handler: index(root.handler),
+            },
+            Some(EffectOperation::Retain(_)) => {
+                // A locator does not own the stored continuation, but its
+                // type retains the lifetime of the actual Store identity.
+                let mut metadata = MetadataVariables::default();
+                super::retain_type_variables(&mut metadata, &node.ty, budget)?;
+                let mut slots = Vec::new();
+                charge(budget, metadata.variables.len())?;
+                slots
+                    .try_reserve(metadata.variables.len())
+                    .map_err(|_| Failure::Resource)?;
+                for variable in metadata.variables {
+                    slots.push(self.symbol(types, variable, source, budget)?);
+                }
+                Expr::MetadataMerge(slots)
+            }
+            Some(EffectOperation::Continue(continuation)) => Expr::Continue {
+                store: index(continuation.store),
+                key: index(continuation.key),
+                answer: self.symbol(symbols, continuation.adapter.answer.id(), source, budget)?,
+                some: index(continuation.adapter.some),
+                none: index(continuation.adapter.none),
+            },
             Some(selected_operation @ EffectOperation::Handler(_)) => self
                 .build_handler_operation(
                     selected_operation,
@@ -1626,6 +1729,7 @@ impl Graph {
                 descriptor: None,
                 operand: index(request.operand()),
                 scalar: scalar(&node.ty),
+                region_view: region_view_query(request, &node.ty),
             },
             Some(EffectOperation::Resume(resume)) => Expr::Resume {
                 operand: index(resume.value()),
@@ -2021,6 +2125,7 @@ impl Graph {
                     retain(*handle)?;
                     retain(*identity)?;
                 }
+                Expr::Continue { answer, .. } => retain(*answer)?,
                 Expr::Handler { clauses, .. } => {
                     for clause in clauses {
                         for &(binder, _) in &clause.bindings {
@@ -2169,6 +2274,7 @@ impl Graph {
             Expr::Request {
                 operand: context,
                 scalar: false,
+                region_view: false,
                 descriptor: Some(descriptor),
             },
             source,
@@ -2264,6 +2370,16 @@ fn scalar(ty: &Type) -> bool {
     matches!(ty, Type::Bool | Type::Unit)
 }
 
+fn region_view_query(request: &crate::core::effect::RequestNode, ty: &Type) -> bool {
+    let effect = request.effect();
+    crate::resolved::RegionApi::for_module(effect.effect().module()).is_some_and(|api| {
+        effect.effect() == api.default_alloc()
+            && effect.arguments().is_empty()
+            && request.operation() == crate::types::OperationId::new(api.default_alloc(), 1)
+            && *ty == Type::Nominal(api.region_view())
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Atom {
     Free,
@@ -2271,10 +2387,19 @@ enum Atom {
     MetadataNeutral,
     IndependentCallable,
     Unknown,
+    // An authenticated context query returns this opaque, non-owning runtime
+    // value. Its region support remains unknown, but it is not a Store handle.
+    RegionView,
     Closure(usize, usize),
     Aggregate(usize, usize),
     Constructor(ConstructorId),
     Resource(usize, usize),
+    // The actual Store term handle; unlike its type identity, it is not a
+    // permissible dependency of a continuation owned by that same Store.
+    Store(usize, usize),
+    // A non-owning locator is published only by an observed retain transfer.
+    // Its finite site/context coordinate may summarize multiple generations.
+    RetainedKey(usize, usize),
 }
 
 #[derive(Debug)]
@@ -2585,6 +2710,28 @@ pub(super) struct Cut {
     pub(super) context: usize,
     pub(super) input: usize,
     pub(super) result: usize,
+}
+
+#[derive(Default)]
+pub(super) struct SavedInputs {
+    ports: Vec<usize>,
+    pending: Vec<(usize, usize)>,
+    missing_frozen: bool,
+}
+
+impl SavedInputs {
+    pub(super) fn extend_ports(
+        &mut self,
+        ports: &[usize],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, ports.len())?;
+        self.ports
+            .try_reserve(ports.len())
+            .map_err(|_| Failure::Resource)?;
+        self.ports.extend_from_slice(ports);
+        Ok(())
+    }
 }
 
 struct PreparedCut {
@@ -3623,6 +3770,25 @@ impl<'a> Analysis<'a> {
         self.edge(target, source, budget)
     }
 
+    #[cfg(test)]
+    pub(super) fn restored_cut_input_for_test(
+        &self,
+        creation: usize,
+        code: usize,
+        position: usize,
+    ) -> Option<usize> {
+        self.cuts
+            .get(&(creation, code, position))
+            .map(|cut| cut.cut.input)
+    }
+
+    #[cfg(test)]
+    pub(super) fn has_edge_for_test(&self, target: usize, source: usize) -> bool {
+        self.slots
+            .get(target)
+            .is_some_and(|slot| slot.edges.contains(&source))
+    }
+
     pub(super) fn restore_event(
         &mut self,
         port: usize,
@@ -3651,6 +3817,7 @@ impl<'a> Analysis<'a> {
     ) -> Result<(Self, usize), Failure> {
         let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
         let Expr::Resource {
+            store,
             success,
             handle,
             identity,
@@ -3704,10 +3871,15 @@ impl<'a> Analysis<'a> {
         // its creation coordinates; replaying its effects cannot rebuild it
         // inside this fresh lifetime query (notably a region provider pair).
         query.freeze_slot(initializer, creation, context, budget)?;
-        for input in [handle, identity] {
-            let input = query.slot(input, context, budget)?;
-            query.atom(input, Atom::Resource(expression, context), budget)?;
-        }
+        let handle = query.slot(handle, context, budget)?;
+        let handle_atom = if store {
+            Atom::Store(expression, context)
+        } else {
+            Atom::Resource(expression, context)
+        };
+        query.atom(handle, handle_atom, budget)?;
+        let identity = query.slot(identity, context, budget)?;
+        query.atom(identity, Atom::Resource(expression, context), budget)?;
         let result = query.slot(expression, context, budget)?;
         query.slots[result].terminal = true;
         if success.is_some() {
@@ -3956,6 +4128,94 @@ impl<'a> Analysis<'a> {
         self.link(result, body, creation, budget)
     }
 
+    /// Publish the locator only after control has moved the selected owner.
+    pub(super) fn retained_key(
+        &mut self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, usize), Failure> {
+        let port = self.port(code, context, budget)?;
+        let coordinate = self.slots[port].key;
+        self.atom(port, Atom::RetainedKey(coordinate.0, coordinate.1), budget)?;
+        Ok(coordinate)
+    }
+
+    /// Resolve an actual Store operand. Empty or non-resource alternatives are
+    /// not evidence of an authenticated owner.
+    pub(super) fn store_targets(
+        &mut self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(Vec<(usize, usize)>, bool), Failure> {
+        let port = self.port(code, context, budget)?;
+        self.close(budget)?;
+        let mut targets = Vec::new();
+        let mut unknown = false;
+        for atom in &self.slots[port].atoms {
+            charge(budget, 1)?;
+            match *atom {
+                Atom::Store(owner, creation) => {
+                    targets.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    targets.push((owner, creation));
+                }
+                Atom::MetadataNeutral => {}
+                _ => unknown = true,
+            }
+        }
+        Ok((targets, unknown))
+    }
+
+    /// Locators remain ordinary values; Resource atoms retain their lexical
+    /// lifetime but are not themselves a locator or an owning edge.
+    pub(super) fn retained_keys(
+        &mut self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(Vec<(usize, usize)>, bool), Failure> {
+        let port = self.port(code, context, budget)?;
+        self.close(budget)?;
+        let mut keys = Vec::new();
+        let mut unknown = false;
+        for atom in &self.slots[port].atoms {
+            charge(budget, 1)?;
+            match *atom {
+                Atom::RetainedKey(site, creation) => {
+                    keys.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    keys.push((site, creation));
+                }
+                Atom::Resource(..) | Atom::MetadataNeutral => {}
+                _ => unknown = true,
+            }
+        }
+        Ok((keys, unknown))
+    }
+
+    /// Connect the Unit reply and current consumer's answer binder when the
+    /// actual captured segment is restored.
+    pub(super) fn continue_capture(
+        &mut self,
+        code: usize,
+        context: usize,
+        request: usize,
+        handler: usize,
+        creation: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let port = self.port(code, context, budget)?;
+        let (expression, _) = self.slots[port].key;
+        let Expr::Continue { answer, .. } = self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        let handler = *self.graph.positions.get(&handler).ok_or(Failure::Invalid)?;
+        let answer = self.slot(answer, context, budget)?;
+        let result = self.slot(handler, creation, budget)?;
+        self.atom(request, Atom::Free, budget)?;
+        self.edge(answer, result, budget)
+    }
+
     /// Conditional birth witnesses are existing original predecessor ports.
     /// The lexical walk excludes this resource and all subtree-bound symbols.
     /// In a focused query these ports were frozen before its fresh owner exists.
@@ -3980,6 +4240,225 @@ impl<'a> Analysis<'a> {
             }
         }
         Ok(ports)
+    }
+
+    // Existing inputs keep their exact port. A late active input may be
+    // resolved after convergence; a missing frozen input cannot be rebuilt.
+    fn saved_slot(
+        &self,
+        expression: usize,
+        context: usize,
+        inputs: &mut SavedInputs,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, 1)?;
+        if let Some(port) = self.indices.get(&(expression, context)) {
+            inputs.ports.try_reserve(1).map_err(|_| Failure::Resource)?;
+            inputs.ports.push(*port);
+        } else if context < self.frozen_contexts {
+            inputs.missing_frozen = true;
+        } else {
+            inputs
+                .pending
+                .try_reserve(1)
+                .map_err(|_| Failure::Resource)?;
+            inputs.pending.push((expression, context));
+        }
+        Ok(())
+    }
+
+    /// Observe only the syntactic lexical inputs of this saved control cut.
+    pub(super) fn saved_inputs(
+        &self,
+        code: usize,
+        context: usize,
+        inputs: &mut SavedInputs,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        for input in self.graph.free_inputs(expression, budget)? {
+            self.saved_slot(input, context, inputs, budget)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn saved_value(
+        &self,
+        code: usize,
+        context: usize,
+        inputs: &mut SavedInputs,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, 1)?;
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        self.saved_slot(expression, context, inputs, budget)
+    }
+
+    /// Match control uses an unpositioned synthetic Choice after evaluating
+    /// the scrutinee. Its owning value expression preserves the arm binders.
+    pub(super) fn saved_choice_inputs(
+        &self,
+        parent: usize,
+        choice: usize,
+        context: usize,
+        inputs: &mut SavedInputs,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, 1)?;
+        if self.graph.positions.contains_key(&choice) {
+            return self.saved_inputs(choice, context, inputs, budget);
+        }
+        let expression = *self.graph.positions.get(&parent).ok_or(Failure::Invalid)?;
+        if !matches!(self.graph.expressions[expression], Expr::Match { .. }) {
+            return Err(Failure::Invalid);
+        }
+        self.saved_inputs(parent, context, inputs, budget)
+    }
+
+    pub(super) fn saved_handler_inputs(
+        &self,
+        code: usize,
+        context: usize,
+        inputs: &mut SavedInputs,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let Expr::Handler {
+            clauses,
+            cell_owner,
+            ..
+        } = &self.graph.expressions[expression]
+        else {
+            return Err(Failure::Invalid);
+        };
+        for input in clauses
+            .iter()
+            .flat_map(|clause| clause.captures.iter())
+            .copied()
+            .chain(*cell_owner)
+        {
+            self.saved_slot(input, context, inputs, budget)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn saved_clause_inputs(
+        &self,
+        code: usize,
+        ordinal: usize,
+        context: usize,
+        inputs: &mut SavedInputs,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let Expr::Handler { clauses, .. } = &self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        let clause = clauses.get(ordinal).ok_or(Failure::Invalid)?;
+        for input in self.graph.free_inputs(clause.body, budget)? {
+            self.saved_slot(input, context, inputs, budget)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn saved_continue_inputs(
+        &self,
+        code: usize,
+        context: usize,
+        inputs: &mut SavedInputs,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let Expr::Continue { answer, some, .. } = self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        for input in self.graph.free_inputs(some, budget)? {
+            charge(budget, 1)?;
+            if input == answer {
+                continue;
+            }
+            self.saved_slot(input, context, inputs, budget)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn control_source(
+        &self,
+        code: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Span, Failure> {
+        charge(budget, 1)?;
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        self.graph
+            .sources
+            .get(expression)
+            .copied()
+            .ok_or(Failure::Invalid)
+    }
+
+    pub(super) fn retained_support_site(
+        &self,
+        code: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(Span, Span), Failure> {
+        let source = self.control_source(code, budget)?;
+        charge(budget, 1)?;
+        let (focus, _) = self.focus.ok_or(Failure::Invalid)?;
+        let Expr::Resource {
+            source: acquisition,
+            ..
+        } = self.graph.expressions[focus]
+        else {
+            return Err(Failure::Invalid);
+        };
+        Ok((source, acquisition))
+    }
+
+    pub(super) fn check_retained_support(
+        &mut self,
+        target: (usize, usize),
+        store_owner: bool,
+        inputs: &SavedInputs,
+        source: Span,
+        acquisition: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        self.close(budget)?;
+        let mut complete = !inputs.missing_frozen;
+        let mut found = false;
+        let mut ports = copy_slice(&inputs.ports, budget)?;
+        charge(budget, inputs.pending.len())?;
+        ports
+            .try_reserve(inputs.pending.len())
+            .map_err(|_| Failure::Resource)?;
+        for key in &inputs.pending {
+            if let Some(port) = self.indices.get(key) {
+                ports.push(*port);
+            } else {
+                complete = false;
+            }
+        }
+        for input in ports {
+            let (dependencies, known, store_handle) =
+                self.dependencies_with_completeness(input, store_owner.then_some(target), budget)?;
+            charge(budget, dependencies.len())?;
+            found |= if store_owner {
+                store_handle
+            } else {
+                dependencies.contains(&Atom::Resource(target.0, target.1))
+            };
+            complete &= known;
+        }
+        if found {
+            return Err(Failure::Escape {
+                source,
+                acquisition,
+            });
+        }
+        if !complete {
+            return Err(Failure::Invalid);
+        }
+        Ok(())
     }
 
     pub(super) fn cell_initializer_source(
@@ -4163,6 +4642,7 @@ impl<'a> Analysis<'a> {
                 | Expr::Resource { body, .. }
                 | Expr::Cleanup { body, .. } => *body,
                 Expr::Evidence { value, .. } | Expr::Forward(value) => *value,
+                Expr::RetainedRoot { handler, .. } => *handler,
                 Expr::Match { arms, .. } if arms.len() == 1 => arms[0].1,
                 _ => {
                     return self
@@ -4250,12 +4730,25 @@ impl<'a> Analysis<'a> {
         budget: &mut TypeWorkBudget,
     ) -> Result<Vec<(usize, usize)>, Failure> {
         let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
-        let Expr::Resource { handle, .. } = self.graph.expressions[expression] else {
+        let Expr::Resource { handle, store, .. } = self.graph.expressions[expression] else {
             return Err(Failure::Invalid);
         };
         let port = self.slot(handle, context, budget)?;
         self.close(budget)?;
-        self.cell_targets(port, budget)
+        if store {
+            let mut targets = Vec::new();
+            for atom in &self.slots[port].atoms {
+                charge(budget, 1)?;
+                let Atom::Store(owner, creation) = atom else {
+                    return Err(Failure::Invalid);
+                };
+                targets.try_reserve(1).map_err(|_| Failure::Resource)?;
+                targets.push((*owner, *creation));
+            }
+            Ok(targets)
+        } else {
+            self.cell_targets(port, budget)
+        }
     }
 
     fn cell_targets(
@@ -4445,15 +4938,31 @@ impl<'a> Analysis<'a> {
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
         let (expression, _context) = self.slots[request].key;
-        let scalar = matches!(
+        let atom = match self.graph.expressions[expression] {
+            Expr::Request { scalar: true, .. } | Expr::Call { scalar: true, .. } => Atom::Free,
+            Expr::Request {
+                region_view: true, ..
+            } => Atom::RegionView,
+            _ => Atom::Unknown,
+        };
+        self.atom(request, atom, budget)
+    }
+
+    /// A private retained checkpoint's checked reply is exactly Unit. This
+    /// fact is used only by the separate hypothetical-cut inspection.
+    pub(super) fn inspection_unit_reply(
+        &mut self,
+        request: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let (expression, _) = self.slots.get(request).ok_or(Failure::Invalid)?.key;
+        if !matches!(
             self.graph.expressions[expression],
-            Expr::Request { scalar: true, .. } | Expr::Call { scalar: true, .. }
-        );
-        self.atom(
-            request,
-            if scalar { Atom::Free } else { Atom::Unknown },
-            budget,
-        )
+            Expr::Request { scalar: true, .. }
+        ) {
+            return Err(Failure::Invalid);
+        }
+        self.atom(request, Atom::Free, budget)
     }
 
     pub(super) fn check_payload(
@@ -4969,6 +5478,11 @@ impl<'a> Analysis<'a> {
                 P::link(self, slot, *value, context, budget)?;
                 SetupOutcome::FixedSetupReady
             }
+            Expr::RetainedRoot { store, handler } => {
+                self.slot(*store, context, budget)?;
+                P::link(self, slot, *handler, context, budget)?;
+                SetupOutcome::FixedSetupReady
+            }
             Expr::Merge(values) | Expr::MetadataMerge(values) => {
                 self.atom(
                     slot,
@@ -5247,6 +5761,7 @@ impl<'a> Analysis<'a> {
                 SetupOutcome::FixedSetupReady
             }
             Expr::Resource {
+                store,
                 success,
                 handle,
                 identity,
@@ -5264,7 +5779,12 @@ impl<'a> Analysis<'a> {
                 }
                 let handle = self.slot(*handle, context, budget)?;
                 let identity = self.slot(*identity, context, budget)?;
-                self.atom(handle, Atom::Resource(expression, context), budget)?;
+                let handle_atom = if *store {
+                    Atom::Store(expression, context)
+                } else {
+                    Atom::Resource(expression, context)
+                };
+                self.atom(handle, handle_atom, budget)?;
                 self.atom(identity, Atom::Resource(expression, context), budget)?;
 
                 if success.is_some() {
@@ -5290,6 +5810,20 @@ impl<'a> Analysis<'a> {
             }
             Expr::Resume { operand } => {
                 self.slot(*operand, context, budget)?;
+                SetupOutcome::NeedsInputsOrDynamic
+            }
+            Expr::Continue {
+                store,
+                key,
+                answer,
+                some,
+                none,
+            } => {
+                self.slot(*store, context, budget)?;
+                self.slot(*key, context, budget)?;
+                self.slot(*answer, context, budget)?;
+                P::link(self, slot, *some, context, budget)?;
+                P::link(self, slot, *none, context, budget)?;
                 SetupOutcome::NeedsInputsOrDynamic
             }
             Expr::Handler {
@@ -5470,6 +6004,11 @@ impl<'a> Analysis<'a> {
                         pending.try_reserve(1).map_err(|_| Failure::Resource)?;
                         pending.push(*value);
                     }
+                    Expr::RetainedRoot { handler, .. } => {
+                        charge(budget, 1)?;
+                        pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        pending.push(*handler);
+                    }
                     Expr::ResidentTuple { fields, owner, .. } => {
                         charge(budget, fields.len() + 1)?;
                         pending
@@ -5599,9 +6138,21 @@ impl<'a> Analysis<'a> {
         root: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<Vec<Atom>, Failure> {
+        self.dependencies_with_completeness(root, None, budget)
+            .map(|(resources, _, _)| resources)
+    }
+
+    fn dependencies_with_completeness(
+        &mut self,
+        root: usize,
+        store_target: Option<(usize, usize)>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(Vec<Atom>, bool, bool), Failure> {
         let mut pending = copy_slice(&[root], budget)?;
         let mut visited = HashSet::new();
         let mut resources = Vec::new();
+        let mut complete = true;
+        let mut store_handle = false;
         while let Some(slot) = pending.pop() {
             charge(budget, 1)?;
             visited.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -5611,15 +6162,23 @@ impl<'a> Analysis<'a> {
             if let Some(reader) = self.current {
                 self.watch(slot, reader, budget)?;
             }
+            complete &= !self.slots[slot].atoms.is_empty();
             // This walk only reads atoms; watches above change reader lists, not values.
             for &atom in &self.slots[slot].atoms {
                 charge(budget, 1)?;
                 let fields = match atom {
-                    Atom::Resource(..) => {
+                    Atom::Resource(..) | Atom::Store(..) => {
+                        let resource = match atom {
+                            Atom::Store(owner, creation) => {
+                                store_handle |= store_target == Some((owner, creation));
+                                Atom::Resource(owner, creation)
+                            }
+                            _ => atom,
+                        };
                         charge(budget, resources.len())?;
-                        if !resources.contains(&atom) {
+                        if !resources.contains(&resource) {
                             resources.try_reserve(1).map_err(|_| Failure::Resource)?;
-                            resources.push(atom);
+                            resources.push(resource);
                         }
                         None
                     }
@@ -5637,6 +6196,8 @@ impl<'a> Analysis<'a> {
                             pending.try_reserve(1).map_err(|_| Failure::Resource)?;
                             if let Some(slot) = self.indices.get(&(*owner, context)) {
                                 pending.push(*slot);
+                            } else {
+                                complete = false;
                             }
                             Some((fields.as_slice(), context))
                         }
@@ -5652,12 +6213,24 @@ impl<'a> Analysis<'a> {
                                 pending.try_reserve(1).map_err(|_| Failure::Resource)?;
                                 if let Some(slot) = self.indices.get(&(*value, context)) {
                                     pending.push(*slot);
+                                } else {
+                                    complete = false;
                                 }
                             }
                             Some((std::slice::from_ref(body), context))
                         }
                         _ => return Err(Failure::Invalid),
                     },
+                    Atom::Unknown => {
+                        complete = false;
+                        None
+                    }
+                    Atom::RegionView => {
+                        // This exact runtime value cannot contain a Store
+                        // handle. Its region lifetime is still unresolved.
+                        complete &= store_target.is_some();
+                        None
+                    }
                     _ => None,
                 };
                 if let Some((fields, context)) = fields {
@@ -5669,12 +6242,14 @@ impl<'a> Analysis<'a> {
                         charge(budget, 1)?;
                         if let Some(slot) = self.indices.get(&(*field, context)) {
                             pending.push(*slot);
+                        } else {
+                            complete = false;
                         }
                     }
                 }
             }
         }
-        Ok(resources)
+        Ok((resources, complete, store_handle))
     }
 }
 
@@ -5756,6 +6331,7 @@ mod tests {
             Expr::Slot,
             Expr::Tuple(vec![3, 4]),
             Expr::Resource {
+                store: false,
                 success: Some(ConstructorId::new(
                     crate::types::NominalTypeId::new(crate::module::ModuleId::new(990), 0),
                     0,
@@ -5891,6 +6467,7 @@ mod tests {
             Expr::Slot,
         ]);
         original.expressions[3] = Expr::Resource {
+            store: false,
             success: None,
             failure: None,
             failure_payload: None,
@@ -6036,6 +6613,7 @@ mod tests {
                 Expr::Slot,
             ]);
             graph.expressions[5] = Expr::Resource {
+                store: false,
                 success: None,
                 failure: None,
                 failure_payload: None,
@@ -6116,6 +6694,7 @@ mod tests {
         ]);
         for _ in 0..2 {
             graph.expressions.push(Expr::Resource {
+                store: false,
                 success: None,
                 failure: None,
                 failure_payload: None,
@@ -6375,6 +6954,7 @@ mod tests {
                     arms: vec![(Vec::new(), 1)],
                 },
                 5 => Expr::Resource {
+                    store: false,
                     success: None,
                     failure: None,
                     failure_payload: None,
@@ -6497,6 +7077,7 @@ mod tests {
             Expr::Scalar,
         ]);
         graph.expressions.push(Expr::Resource {
+            store: false,
             success: None,
             failure: None,
             failure_payload: None,
@@ -6535,6 +7116,7 @@ mod tests {
             Expr::Tuple(vec![3]),
         ]);
         graph.expressions.push(Expr::Resource {
+            store: false,
             success: None,
             failure: None,
             failure_payload: None,
@@ -7964,6 +8546,7 @@ mod tests {
         ]);
         let span = graph.sources[0];
         graph.expressions.push(Expr::Resource {
+            store: false,
             success: None,
             failure: None,
             failure_payload: None,
@@ -8435,6 +9018,7 @@ mod tests {
         ]);
         let span = original.sources[0];
         original.expressions.push(Expr::Resource {
+            store: false,
             success: None,
             failure: None,
             failure_payload: None,
@@ -9111,6 +9695,280 @@ mod tests {
     }
 
     #[test]
+    fn retained_root_focus_inputs_preserve_store_without_adding_it_to_the_answer() {
+        let graph = graph(vec![
+            Expr::Slot,
+            Expr::Slot,
+            Expr::RetainedRoot {
+                store: 0,
+                handler: 1,
+            },
+        ]);
+        let mut work = TypeWorkBudget::unbounded();
+        let mut inputs = graph.free_inputs(2, &mut work).unwrap();
+        inputs.sort_unstable();
+        assert_eq!(inputs, vec![0, 1]);
+
+        let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+        let store = analysis.slot(0, 0, &mut work).unwrap();
+        let handler = analysis.slot(1, 0, &mut work).unwrap();
+        analysis
+            .atom(store, Atom::Resource(17, 0), &mut work)
+            .unwrap();
+        analysis.atom(handler, Atom::Free, &mut work).unwrap();
+        let answer = analysis.slot(2, 0, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        assert_eq!(analysis.slots[answer].atoms, vec![Atom::Free]);
+    }
+
+    #[test]
+    fn region_request_focus_includes_the_allocation_descriptor() {
+        let graph = graph(vec![
+            Expr::Slot,
+            Expr::Slot,
+            Expr::Request {
+                operand: 0,
+                scalar: false,
+                region_view: false,
+                descriptor: Some(1),
+            },
+        ]);
+        let mut inputs = graph
+            .free_inputs(2, &mut TypeWorkBudget::unbounded())
+            .unwrap();
+        inputs.sort_unstable();
+        assert_eq!(inputs, vec![0, 1]);
+    }
+
+    #[test]
+    fn retained_support_requires_complete_captured_values() {
+        let graph = graph(vec![
+            Expr::Slot,
+            Expr::Unknown,
+            Expr::Scalar,
+            Expr::Function {
+                parameters: Vec::new(),
+                body: 2,
+                captures: vec![0],
+            },
+        ]);
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+        let capture = analysis.slot(0, 0, &mut work).unwrap();
+        let unknown = analysis.slot(1, 0, &mut work).unwrap();
+        let closure = analysis.slot(3, 0, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        let source = graph.sources[0];
+        let check = |analysis: &mut Analysis<'_>, ports: &[usize], missing_frozen, work: &mut _| {
+            let inputs = SavedInputs {
+                ports: ports.to_vec(),
+                pending: Vec::new(),
+                missing_frozen,
+            };
+            analysis.check_retained_support((17, 0), false, &inputs, source, source, work)
+        };
+        assert!(matches!(
+            check(&mut analysis, &[closure], false, &mut work),
+            Err(Failure::Invalid)
+        ));
+        assert!(matches!(
+            check(&mut analysis, &[], true, &mut work),
+            Err(Failure::Invalid)
+        ));
+        assert!(matches!(
+            check(&mut analysis, &[unknown], false, &mut work),
+            Err(Failure::Invalid)
+        ));
+        analysis.atom(capture, Atom::Free, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        check(&mut analysis, &[closure], false, &mut work).unwrap();
+        analysis
+            .atom(capture, Atom::Resource(17, 0), &mut work)
+            .unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(matches!(
+            check(&mut analysis, &[closure], false, &mut work),
+            Err(Failure::Escape { .. })
+        ));
+    }
+
+    #[test]
+    fn retained_store_support_distinguishes_handles_from_keys_and_metadata() {
+        let mut graph = graph(vec![
+            Expr::Slot,
+            Expr::Scalar,
+            Expr::Function {
+                parameters: Vec::new(),
+                body: 1,
+                captures: vec![0],
+            },
+        ]);
+        graph.positions.insert(7, 0);
+        for (atoms, expect_escape, expect_unknown) in [
+            (
+                vec![Atom::Resource(17, 0), Atom::RetainedKey(4, 0)],
+                false,
+                false,
+            ),
+            (vec![Atom::Store(17, 0)], true, false),
+            (vec![Atom::RegionView], false, false),
+            (vec![Atom::Unknown], false, true),
+            (vec![Atom::Unknown, Atom::Resource(17, 0)], false, true),
+        ] {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+            let capture = analysis.slot(0, 0, &mut work).unwrap();
+            for atom in atoms {
+                analysis.atom(capture, atom, &mut work).unwrap();
+            }
+            let closure = analysis.slot(2, 0, &mut work).unwrap();
+            analysis.close(&mut work).unwrap();
+            let inputs = SavedInputs {
+                ports: vec![closure],
+                pending: Vec::new(),
+                missing_frozen: false,
+            };
+            let source = graph.sources[0];
+            let result =
+                analysis.check_retained_support((17, 0), true, &inputs, source, source, &mut work);
+            if expect_escape {
+                assert!(matches!(result, Err(Failure::Escape { .. })));
+                assert!(
+                    analysis
+                        .dependencies(closure, &mut work)
+                        .unwrap()
+                        .contains(&Atom::Resource(17, 0))
+                );
+            } else if expect_unknown {
+                assert!(matches!(result, Err(Failure::Invalid)));
+            } else {
+                result.unwrap();
+            }
+        }
+
+        for (atom, expected) in [
+            (Atom::Store(17, 0), (vec![(17, 0)], false)),
+            (Atom::Resource(17, 0), (vec![], true)),
+        ] {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+            let port = analysis.slot(0, 0, &mut work).unwrap();
+            analysis.atom(port, atom, &mut work).unwrap();
+            assert_eq!(analysis.store_targets(7, 0, &mut work).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn retained_region_view_only_resolves_store_handle_absence() {
+        for (region_view, expected) in [(true, Atom::RegionView), (false, Atom::Unknown)] {
+            let graph = graph(vec![
+                Expr::Scalar,
+                Expr::Request {
+                    operand: 0,
+                    scalar: false,
+                    region_view,
+                    descriptor: None,
+                },
+            ]);
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+            let port = analysis.slot(1, 0, &mut work).unwrap();
+            analysis.external_result(port, &mut work).unwrap();
+            assert_eq!(analysis.slots[port].atoms, vec![expected]);
+            let (_, store_known, store_found) = analysis
+                .dependencies_with_completeness(port, Some((17, 0)), &mut work)
+                .unwrap();
+            assert_eq!(store_known, region_view);
+            assert!(!store_found);
+            let (_, lifetime_known, _) = analysis
+                .dependencies_with_completeness(port, None, &mut work)
+                .unwrap();
+            assert!(!lifetime_known);
+        }
+    }
+
+    #[test]
+    fn retained_region_context_fact_requires_the_exact_query() {
+        use crate::core::effect::{EffectExprKind, RequestNode};
+        let core = super::super::tests::retained_context_core(
+            super::super::tests::RetainedContextFixture::PreexistingSlot,
+        )
+        .unwrap();
+        let (request, ty) = core
+            .nodes
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Request(request))
+                    if region_view_query(request, &node.ty) =>
+                {
+                    Some((request, &node.ty))
+                }
+                _ => None,
+            })
+            .expect("source lowering contains a canonical region-context query");
+        assert!(region_view_query(request, ty));
+        assert!(!region_view_query(request, &Type::Unit));
+        let allocation = RequestNode::new(
+            request.effect().clone(),
+            crate::types::OperationId::new(request.effect().effect(), 0),
+            request.operand(),
+        );
+        assert!(!region_view_query(&allocation, ty));
+        let extra_argument = RequestNode::new(
+            crate::types::EffectInstance::new(request.effect().effect(), Box::new([Type::Unit])),
+            request.operation(),
+            request.operand(),
+        );
+        assert!(!region_view_query(&extra_argument, ty));
+        let other_effect = crate::types::EffectId::new(crate::module::ModuleId::new(812), 0);
+        let unauthenticated = RequestNode::new(
+            crate::types::EffectInstance::new(other_effect, Box::new([])),
+            crate::types::OperationId::new(other_effect, 1),
+            request.operand(),
+        );
+        assert!(!region_view_query(&unauthenticated, ty));
+    }
+
+    #[test]
+    fn retained_support_resolves_only_late_active_inputs_at_the_original_cut() {
+        let graph = graph(vec![Expr::Slot]);
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+        let source = graph.sources[0];
+        let mut active = SavedInputs::default();
+        analysis.saved_slot(0, 0, &mut active, &mut work).unwrap();
+        assert!(matches!(
+            analysis.check_retained_support((17, 0), false, &active, source, source, &mut work),
+            Err(Failure::Invalid)
+        ));
+        let port = analysis.slot(0, 0, &mut work).unwrap();
+        analysis.atom(port, Atom::Free, &mut work).unwrap();
+        analysis
+            .check_retained_support((17, 0), false, &active, source, source, &mut work)
+            .unwrap();
+
+        let mut frozen_analysis = Analysis::new(&graph, &mut work).unwrap();
+        frozen_analysis.frozen_contexts = 1;
+        let mut frozen = SavedInputs::default();
+        frozen_analysis
+            .saved_slot(0, 0, &mut frozen, &mut work)
+            .unwrap();
+        let port = frozen_analysis.slot(0, 0, &mut work).unwrap();
+        frozen_analysis.atom(port, Atom::Free, &mut work).unwrap();
+        assert!(matches!(
+            frozen_analysis.check_retained_support(
+                (17, 0),
+                false,
+                &frozen,
+                source,
+                source,
+                &mut work
+            ),
+            Err(Failure::Invalid)
+        ));
+    }
+
+    #[test]
     fn wide_expression_copies_preflight_outer_staging_and_retry_exactly() {
         const WIDTH: usize = 128;
         for expression in [
@@ -9223,6 +10081,7 @@ mod tests {
                 },
             };
             graph.expressions[3] = Expr::Resource {
+                store: false,
                 success: None,
                 failure: None,
                 failure_payload: None,
@@ -9564,6 +10423,7 @@ mod tests {
                     body: 3,
                 },
                 4 => Expr::Resource {
+                    store: false,
                     success: None,
                     failure: None,
                     failure_payload: None,
@@ -10015,9 +10875,11 @@ mod tests {
                 descriptor: None,
                 operand: 0,
                 scalar: true,
+                region_view: false,
             },
         ]);
         graph.expressions.push(Expr::Resource {
+            store: false,
             success: None,
             failure: None,
             failure_payload: None,
@@ -10195,6 +11057,7 @@ mod tests {
             Expr::Scalar,
             Expr::Tuple(vec![1, 2]),
             Expr::Resource {
+                store: false,
                 success: Some(completed),
                 failure: Some(refused),
                 failure_payload: None,
@@ -10262,6 +11125,7 @@ mod tests {
         );
         let mut graph = graph(vec![Expr::Scalar, Expr::Slot, Expr::Slot, Expr::Slot]);
         graph.expressions.push(Expr::Resource {
+            store: false,
             success: Some(success),
             failure: Some(ConstructorId::new(success.owner(), 1)),
             failure_payload: None,
@@ -10373,6 +11237,7 @@ mod tests {
             Expr::Tuple(vec![0, 4]),
         ]);
         graph.expressions.push(Expr::Resource {
+            store: false,
             success: None,
             failure: None,
             failure_payload: None,

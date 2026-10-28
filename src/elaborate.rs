@@ -82,6 +82,16 @@ pub enum TypeReason {
     FunctionNeedsContext,
     /// An application function position did not have a function type.
     NotApplicable,
+    /// A retained-control store needs a Unit-domain function descriptor.
+    StoreDescriptor,
+    /// Retain requires a checkpoint operation whose reply is Unit.
+    RetainReply,
+    /// The private root's outstanding completion cannot be discarded.
+    RetainedRootDiscard,
+    /// A store was driven before its active branch completed.
+    RetainedDriver,
+    /// A restored branch would use a different external interpreter.
+    RetainedInterpretation,
     /// An application argument did not match the function domain.
     Argument,
     /// An annotated binding initializer did not match its annotation.
@@ -393,6 +403,16 @@ impl TypeReason {
                 "continuation_capture",
                 None,
             ),
+            Self::RetainReply => (Message::retain_reply(), "continuation_use", None),
+            Self::RetainedRootDiscard => {
+                (Message::retained_root_discard(), "continuation_use", None)
+            }
+            Self::RetainedDriver => (Message::retained_driver(), "retained_driver", None),
+            Self::RetainedInterpretation => (
+                Message::retained_interpretation(),
+                "retained_interpretation",
+                None,
+            ),
             Self::PatternMismatch => (
                 Message::pattern_type_mismatch(expected?),
                 "pattern",
@@ -557,6 +577,11 @@ impl fmt::Display for TypeReason {
             Self::OperatorOperand => formatter.write_str("type.operator-operand"),
             Self::FunctionNeedsContext => formatter.write_str("type.function-needs-context"),
             Self::NotApplicable => formatter.write_str("type.not-applicable"),
+            Self::StoreDescriptor => formatter.write_str("type.store-descriptor"),
+            Self::RetainReply => formatter.write_str("effect.retain-reply"),
+            Self::RetainedRootDiscard => formatter.write_str("effect.retained-root-discard"),
+            Self::RetainedDriver => formatter.write_str("effect.retained-driver"),
+            Self::RetainedInterpretation => formatter.write_str("effect.retained-interpretation"),
             Self::Argument => formatter.write_str("type.argument"),
             Self::BindingInitializer => formatter.write_str("type.binding-initializer"),
             Self::DefinitionResult => formatter.write_str("type.definition-result"),
@@ -2843,6 +2868,7 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     deferred_local_nominal_escapes: Vec<(NominalTypeId, InferenceVariableId, Span)>,
     deferred_resource_escapes: Vec<(TypeVariableId, InferenceVariableId, Span, Span)>,
     active_acquisitions: Vec<crate::resolved::ResourceAcquisition>,
+    active_stores: Vec<crate::resolved::StoreAcquisition>,
     // A generic computation requires complete dependency inference before summary publication.
     generic_dependency_origin: Option<Span>,
 
@@ -3040,6 +3066,12 @@ impl CoreLoweringFamily for EffectOperationFamily {
             EffectOperation::Resource(resource) => {
                 builder.resource_scope(resource, ty, effects, origin)
             }
+            EffectOperation::Store(store) => builder.store_scope(store, ty, effects, origin),
+            EffectOperation::Continue(continuation) => {
+                builder.continue_control(continuation, ty, effects, origin)
+            }
+            EffectOperation::RetainedRoot(root) => builder.retained_root(root, ty, effects, origin),
+            EffectOperation::Retain(retain) => builder.retain_control(retain, ty, effects, origin),
             EffectOperation::Request(request) => {
                 let (effect, operation, operand) = request.into_parts();
                 builder.request(effect, operation, operand, ty, effects, origin)
@@ -3102,12 +3134,16 @@ struct ActiveResume {
     handler: HandlerId,
     input: Type,
     result: Type,
+    retained: Option<(crate::resolved::StoreApi, Type)>,
 }
 
 impl Drop for ActiveResume {
     fn drop(&mut self) {
         discard_type_iteratively(std::mem::replace(&mut self.input, Type::Unit));
         discard_type_iteratively(std::mem::replace(&mut self.result, Type::Unit));
+        if let Some((_, owner)) = self.retained.take() {
+            discard_type_iteratively(owner);
+        }
     }
 }
 
@@ -3306,6 +3342,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
+            active_stores: Vec::new(),
             generic_dependency_origin: None,
 
             monomorphic_recursive: HashSet::new(),
@@ -3448,6 +3485,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
+            active_stores: Vec::new(),
             generic_dependency_origin: None,
 
             monomorphic_recursive: HashSet::new(),
@@ -3581,6 +3619,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
+            active_stores: Vec::new(),
             generic_dependency_origin: None,
 
             monomorphic_recursive: HashSet::new(),
@@ -4020,6 +4059,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
+            active_stores: Vec::new(),
             generic_dependency_origin: None,
 
             monomorphic_recursive: HashSet::new(),
@@ -10761,7 +10801,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     self.elaborate_foreign_constant(equational, &mut prepared.context)?,
                 ),
                 ResolvedDefinitionKind::Equational(equational) => {
-                    let function_type =
+                    let mut function_type =
                         ProvenancedTypeOwner::new(ProvenancedType::from_resolved_with_budget(
                             &equational.interface.annotation,
                             &mut self.type_work,
@@ -10775,7 +10815,26 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     }
                     (
                         &equational.interface.name,
-                        if let Some(intrinsic) =
+                        if let Some(module) = equational.interface.name.id.module()
+                            && module.is_builtin_retained_control()
+                            && matches!(
+                                equational.interface.name.spelling.as_str(),
+                                "advance" | "advance_with_drive"
+                            )
+                        {
+                            // Build all of the intrinsic's ports from the same
+                            // scheme-wide row qualification as an ordinary
+                            // equation body, before allocating its binders.
+                            self.qualify_checking_type(&mut function_type, true)?;
+                            let ty = self.clone_type(&function_type.ty)?;
+                            let node = self.lower_store_advance(module, &ty, definition.span())?;
+                            TypedNode {
+                                node,
+                                ty,
+                                effects: EffectRow::empty(),
+                                provenance: function_type.provenance.clone(),
+                            }
+                        } else if let Some(intrinsic) =
                             self.builtin_intrinsic(&equational.interface.name, &function_type.ty)?
                         {
                             let ty = self.clone_type(&function_type.ty)?;
@@ -11427,6 +11486,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     "this nested scope cannot capture the clause completion capability",
                 )
             })?;
+        if active.retained.is_some() {
+            return Err(inference_failure(
+                TypeReason::RetainedRootDiscard,
+                span,
+                "a private checkpoint root must be resumed or retained",
+            ));
+        }
         let operation = EffectOperation::Discard(crate::core::DiscardNode::new(
             active.handler,
             owner,
@@ -11440,6 +11506,59 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(TypedNode {
             node,
             ty: Type::Unit,
+            effects,
+            provenance,
+        })
+    }
+
+    fn synthesize_retain(
+        &mut self,
+        retain: &crate::resolved::ResolvedRetainExpr,
+        span: Span,
+    ) -> Result<TypedNode, TypeError> {
+        // The nearest clause is a barrier, including when it is an ordinary
+        // nested handler. Never search for an older private root.
+        let active = self.active_resumes.last().ok_or_else(invalid_state)?;
+        if active.owner != retain.owner {
+            return Err(invalid_state());
+        }
+        let (api, owner) = active.retained.as_ref().ok_or_else(invalid_state)?;
+        if !matches!(active.input, Type::Unit) {
+            return Err(inference_failure(
+                TypeReason::RetainReply,
+                span,
+                "retain requires a checkpoint whose resume reply is Unit",
+            ));
+        }
+        let api = *api;
+        let handler = active.handler;
+        let identity = IterativeTypeOwner::new(
+            clone_type_with_budget(owner, &mut self.type_work).map_err(|()| type_resource())?,
+        );
+        self.type_work.charge(3).map_err(|()| type_resource())?;
+        let ty = IterativeTypeOwner::new(Type::Application(
+            Box::new(Type::Nominal(api.key())),
+            Box::new(self.clone_type(&identity)?),
+        ));
+        let effects = EffectRow::singleton(EffectInstance::new(
+            api.drive(),
+            Box::new([identity.into_inner()]),
+        ));
+        let core_ty = self.pure_core_type(&ty)?;
+        let core_effects = self.core_effect_row(&effects)?;
+        let node = self.push_effect_core(
+            core_ty,
+            core_effects,
+            Origin::Source(span),
+            EffectOperation::Retain(crate::core::effect::RetainNode {
+                handler,
+                owner: retain.owner,
+            }),
+        )?;
+        let provenance = self.at_span_provenance(&ty, span)?;
+        Ok(TypedNode {
+            node,
+            ty: ty.into_inner(),
             effects,
             provenance,
         })
@@ -11854,9 +11973,65 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         span: Span,
         context: &mut TypeContext,
         body: TypedNode,
+        store: Option<TypedNode>,
         rewrite_checkpoint: crate::core::dialect::TypeRewriteCheckpoint,
     ) -> Result<TypedNode, TypeError> {
         let body = TypedNodeOwner::new(body);
+        let store = store.map(TypedNodeOwner::new);
+        let retained = if let Some(store) = store.as_ref() {
+            if handler.hook_root.is_some() || handler.hook_registration.is_some() {
+                return Err(invalid_state());
+            }
+            let (api, owner, ports) =
+                crate::core::effect::store_ports(&store.ty).ok_or_else(|| {
+                    inference_failure(
+                        TypeReason::StoreDescriptor,
+                        span,
+                        "a private root requires a retained-control Store operand",
+                    )
+                })?;
+            // Source checking sees the authenticated opaque import, not its
+            // hidden constructor declarations. Linked Core rechecks the full
+            // builtin registry before any retained-control carrier is admitted.
+            let owner = IterativeTypeOwner::new(self.clone_type(owner)?);
+            let answer = IterativeTypeOwner::new(self.clone_type(ports.value())?);
+            match self.unify(&body.ty, &answer) {
+                Ok(()) => {}
+                Err(UnificationFailure::Mismatch) => {
+                    let expected = IterativeTypeOwner::new(self.zonk(&answer)?);
+                    let actual = IterativeTypeOwner::new(self.zonk(&body.ty)?);
+                    return Err(check_mismatch(
+                        CheckKind::General,
+                        handler.body.span,
+                        expected.into_inner(),
+                        actual.into_inner(),
+                        Some(span),
+                        &self.registry,
+                    ));
+                }
+                Err(UnificationFailure::RowExclusion) => {
+                    return Err(row_exclusion_error(span, None));
+                }
+                Err(UnificationFailure::Infinite) => {
+                    return Err(inference_failure(
+                        TypeReason::InfiniteType,
+                        span,
+                        "this root would require an infinite type",
+                    ));
+                }
+                Err(UnificationFailure::Kind { context, span }) => {
+                    return Err(TypeError::Internal(ElaborationFailure::Kind {
+                        context,
+                        span,
+                    }));
+                }
+                Err(UnificationFailure::Resource) => return Err(type_resource()),
+                Err(UnificationFailure::Invariant) => return Err(invalid_state()),
+            }
+            Some((api, owner))
+        } else {
+            None
+        };
         if let Some(root) = &handler.hook_root {
             self.type_work
                 .charge(6)
@@ -11961,6 +12136,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             context,
             &result_type,
             output,
+            retained.as_ref().map(|(api, owner)| (*api, &**owner)),
         )?;
         output = clause_output;
 
@@ -11999,7 +12175,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let core_handler_effect =
             clone_effect_instance_with_budget(&handler.effect.instance, &mut self.type_work)
                 .map_err(|error| TypeError::Internal(error.into()))?;
-        let node = self.push_effect_core(
+        let handler_node = self.push_effect_core(
             core_ty,
             core_effects,
             Origin::Source(span),
@@ -12010,11 +12186,28 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 clauses,
             )),
         )?;
+        let (node, effects) = if let Some(store) = store.as_ref() {
+            let effects = self.union_effects(&store.effects, &output, span)?;
+            let core_ty = self.pure_core_type(&ty)?;
+            let core_effects = self.core_effect_row(&effects)?;
+            let root = self.push_effect_core(
+                core_ty,
+                core_effects,
+                Origin::Source(span),
+                EffectOperation::RetainedRoot(crate::core::effect::RetainedRootNode {
+                    store: store.node,
+                    handler: handler_node,
+                }),
+            )?;
+            (root, effects)
+        } else {
+            (handler_node, output)
+        };
         let provenance = self.at_span_provenance(&ty, span)?;
         Ok(TypedNode {
             node,
             ty,
-            effects: output,
+            effects,
             provenance,
         })
     }
@@ -12029,6 +12222,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         context: &mut TypeContext,
         result_type: &Type,
         initial_effects: EffectRow,
+        retained: Option<(crate::resolved::StoreApi, &Type)>,
     ) -> Result<(HandlerId, EffectRow, Vec<CheckedEffectClause>), TypeError> {
         let declaration = self
             .registry
@@ -12104,11 +12298,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 self.active_resumes
                     .try_reserve(1)
                     .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let retained = retained
+                    .map(|(api, owner)| self.clone_type(owner).map(|owner| (api, owner)))
+                    .transpose()?;
                 self.active_resumes.push(ActiveResume {
                     owner: clause.resume,
                     handler: handler_id,
                     input: resume_result.into_inner(),
                     result: active_result.into_inner(),
+                    retained,
                 });
                 active = true;
                 let clause_start = self.builder.node_checkpoint();
@@ -13238,6 +13436,329 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
+    fn schedule_store<'a>(
+        &mut self,
+        store: &'a crate::resolved::ResolvedStoreExpr,
+        span: Span,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
+        self.type_work.charge(2).map_err(|()| type_resource())?;
+        tasks.0.try_reserve(2).map_err(|_| type_resource())?;
+        tasks.push(ElaborationTask::StoreBody { store, span });
+        tasks.push(ElaborationTask::Check {
+            expression: &store.initializer,
+            expected: ProvenancedType {
+                ty: Type::Unit,
+                provenance: TypeProvenance::atom(Some(store.initializer.span)),
+            },
+            kind: CheckKind::General,
+        });
+        Ok(())
+    }
+
+    // The canonical builtin is a real callable, so aliases and imported
+    // helpers retain the same structural Continue body.
+    fn lower_store_advance(
+        &mut self,
+        module: crate::module::ModuleId,
+        ty: &Type,
+        span: Span,
+    ) -> Result<NodeId, TypeError> {
+        let function = ty.function_view().ok_or_else(invalid_state)?;
+        let Type::Tuple(arguments) = function.domain() else {
+            return Err(invalid_state());
+        };
+        let [store_type, key_type] = arguments.as_ref() else {
+            return Err(invalid_state());
+        };
+        let (api, identity, ports) =
+            crate::core::effect::store_ports(store_type).ok_or_else(invalid_state)?;
+        if api.module() != module {
+            return Err(invalid_state());
+        }
+        self.type_work.charge(4).map_err(|()| type_resource())?;
+        let expected_key = IterativeTypeOwner::new(Type::Application(
+            Box::new(Type::Nominal(api.key())),
+            Box::new(self.clone_type(identity)?),
+        ));
+        let expected_result = IterativeTypeOwner::new(Type::Application(
+            Box::new(Type::Nominal(api.option())),
+            Box::new(self.clone_type(ports.value())?),
+        ));
+        if !same_type_with_budget(key_type, &expected_key, &mut self.type_work)
+            .map_err(|()| type_resource())?
+            || !same_type_with_budget(function.value(), &expected_result, &mut self.type_work)
+                .map_err(|()| type_resource())?
+        {
+            return Err(invalid_state());
+        }
+        let row = function.effects().ok_or_else(invalid_state)?;
+        let drive = EffectRow::singleton(EffectInstance::new(
+            api.drive(),
+            Box::new([self.clone_type(identity)?]),
+        ));
+        let latent = match ports.effects() {
+            Some(effects) => clone_effect_row_with_budget(effects, &mut self.type_work)
+                .map_err(|()| type_resource())?,
+            None => EffectRow::empty(),
+        };
+        let region = self.region_api_at(span)?;
+        let allocation =
+            EffectRow::singleton(EffectInstance::new(region.default_alloc(), Box::new([])));
+        self.type_work.charge(1).map_err(|()| type_resource())?;
+        self.expected_effect_rows
+            .try_reserve(1)
+            .map_err(|_| type_resource())?;
+        self.expected_effect_rows.push(
+            clone_effect_row_with_budget(row, &mut self.type_work).map_err(|()| type_resource())?,
+        );
+        let reconstructed = (|| {
+            let resumed = self.union_effects(&drive, &latent, span)?;
+            self.union_effects(&resumed, &allocation, span)
+        })();
+        self.expected_effect_rows.pop();
+        let reconstructed = reconstructed?;
+        if !self.same_effect_rows(&reconstructed, row)? {
+            return Err(invalid_state());
+        }
+
+        let parameter_type = self.pure_core_type(function.domain())?;
+        let parameter = self.builder.binder(parameter_type, Origin::Source(span))?;
+        let parameter_type = self.pure_core_type(function.domain())?;
+        let scrutinee =
+            self.builder
+                .variable(parameter.id(), parameter_type, Origin::Source(span))?;
+        let store_binder_type = self.pure_core_type(store_type)?;
+        let store = self
+            .builder
+            .binder(store_binder_type, Origin::Source(span))?;
+        let key_binder_type = self.pure_core_type(key_type)?;
+        let key = self.builder.binder(key_binder_type, Origin::Source(span))?;
+        let store_value_type = self.pure_core_type(store_type)?;
+        let store_value =
+            self.builder
+                .variable(store.id(), store_value_type, Origin::Source(span))?;
+        let key_value_type = self.pure_core_type(key_type)?;
+        let key_value = self
+            .builder
+            .variable(key.id(), key_value_type, Origin::Source(span))?;
+        let answer_type = self.pure_core_type(ports.value())?;
+        let answer = self.builder.binder(answer_type, Origin::Source(span))?;
+        let answer_type = self.pure_core_type(ports.value())?;
+        let answer_value = self
+            .builder
+            .variable(answer.id(), answer_type, Origin::Source(span))?;
+        let some = self.initialize_region_record(
+            Some(crate::types::ConstructorId::new(api.option(), 1)),
+            vec![answer_value],
+            function.value(),
+            &allocation,
+            span,
+        )?;
+        let none = self.initialize_region_record(
+            Some(crate::types::ConstructorId::new(api.option(), 0)),
+            Vec::new(),
+            function.value(),
+            &allocation,
+            span,
+        )?;
+        self.type_work.charge(1).map_err(|()| type_resource())?;
+        let result_type = self.pure_core_type(function.value())?;
+        let effects = self.core_effect_row(row)?;
+        let body = self.push_effect_core(
+            result_type,
+            effects,
+            Origin::Source(span),
+            EffectOperation::Continue(crate::core::effect::ContinueNode {
+                store: store_value,
+                key: key_value,
+                adapter: Box::new(crate::core::effect::ContinueAdapter { answer, some, none }),
+            }),
+        )?;
+        let store_pattern_type = self.pure_core_type(store_type)?;
+        let key_pattern_type = self.pure_core_type(key_type)?;
+        let tuple_pattern_type = self.pure_core_type(function.domain())?;
+        let pattern = CorePattern::new(
+            tuple_pattern_type,
+            Origin::Source(span),
+            CorePatternKind::Tuple(
+                vec![
+                    CorePattern::new(
+                        store_pattern_type,
+                        Origin::Source(span),
+                        CorePatternKind::Binder(store),
+                    ),
+                    CorePattern::new(
+                        key_pattern_type,
+                        Origin::Source(span),
+                        CorePatternKind::Binder(key),
+                    ),
+                ]
+                .into_boxed_slice(),
+            ),
+        );
+        let match_type = self.pure_core_type(function.value())?;
+        let body = self.builder.match_expression(
+            scrutinee,
+            vec![CoreMatchArm::new(pattern, body, Origin::Source(span))],
+            match_type,
+            Origin::Source(span),
+        )?;
+        let core_type = self.pure_core_type(ty)?;
+        self.construct_function(parameter, body, core_type, Origin::Source(span))
+    }
+
+    fn step_store_body<'a>(
+        &mut self,
+        store: &'a crate::resolved::ResolvedStoreExpr,
+        span: Span,
+        context: &mut TypeContext,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+        values: &mut TypedNodeBuffer,
+    ) -> Result<(), TypeError> {
+        if !F::EFFECTS || !store.acquisition.owns(store) {
+            return Err(invalid_state());
+        }
+        let initializer = values.pop().ok_or_else(invalid_state)?;
+        let crate::types::KindedArgument::TypeArg(descriptor) = &store.descriptor.ty else {
+            return Err(invalid_state());
+        };
+        let descriptor = IterativeTypeOwner::new(self.zonk(descriptor)?);
+        if !descriptor
+            .function_view()
+            .is_some_and(|view| matches!(view.domain(), Type::Unit))
+        {
+            return Err(inference_failure(
+                TypeReason::StoreDescriptor,
+                store.descriptor.span,
+                "a store descriptor must be a function from Unit",
+            ));
+        }
+        let api = crate::resolved::StoreApi::for_module(store.acquisition.builtin)
+            .ok_or_else(invalid_state)?;
+        self.type_work.charge(7).map_err(|()| type_resource())?;
+        tasks.0.try_reserve(2).map_err(|_| type_resource())?;
+        context
+            .binders
+            .try_reserve(1)
+            .map_err(|_| type_resource())?;
+        self.active_stores
+            .try_reserve(1)
+            .map_err(|_| type_resource())?;
+        let handle_type = IterativeTypeOwner::new(Type::Application(
+            Box::new(Type::Application(
+                Box::new(Type::Nominal(api.store())),
+                Box::new(Type::Variable(store.identity.id)),
+            )),
+            Box::new(descriptor.into_inner()),
+        ));
+        let provenance =
+            self.at_span_provenance(&handle_type, store.handle.origin.primary_span())?;
+        let fact = self.clone_type(&handle_type)?;
+        if context.insert_with_provenance(store.handle.id, fact, provenance)? {
+            return Err(invalid_state());
+        }
+        self.active_stores.push(store.acquisition);
+        let handle = self.builder.resolved_binder(
+            store.handle.id,
+            handle_type.into_inner(),
+            store.handle.origin.clone(),
+        )?;
+        tasks.push(ElaborationTask::FinishStore(Box::new(StoreProgress {
+            store,
+            span,
+            initializer,
+            handle,
+        })));
+        tasks.push(ElaborationTask::Synthesize {
+            expression: &store.body,
+            cause: None,
+        });
+        Ok(())
+    }
+
+    fn step_store_completion(
+        &mut self,
+        progress: Box<StoreProgress<'_>>,
+        context: &mut TypeContext,
+        values: &mut TypedNodeBuffer,
+    ) -> Result<(), TypeError> {
+        let StoreProgress {
+            store,
+            span,
+            initializer,
+            handle,
+        } = *progress;
+        let body = values.pop().ok_or_else(invalid_state)?;
+        if self.active_stores.pop() != Some(store.acquisition) {
+            return Err(invalid_state());
+        }
+        context.remove_and_discard(store.handle.id);
+        let ty = IterativeTypeOwner::new(self.zonk(&body.ty)?);
+        let body_effects = self.zonk_effect_row(&body.effects)?;
+        let api = crate::resolved::StoreApi::for_module(store.acquisition.builtin)
+            .ok_or_else(invalid_state)?;
+        let drive = EffectInstance::new(api.drive(), Box::new([Type::Variable(store.identity.id)]));
+        let probe = EffectInstance::new(api.probe(), Box::new([Type::Variable(store.identity.id)]));
+        let outward = self.remove_cleanup_effect(&body_effects, &drive, span, true)?;
+        let outward = self.remove_cleanup_effect(&outward, &probe, span, true)?;
+        let effects = self.union_effects(&initializer.effects, &outward, span)?;
+        let row_type = IterativeTypeOwner::new(Type::function_computation(
+            Type::Unit,
+            ComputationType::new(Type::Unit, self.core_effect_row(&effects)?),
+        ));
+        for outward in [&*ty, &*row_type] {
+            self.defer_resource_escape(store.identity.id, outward, store.body.span, span)?;
+            if type_contains_variable(outward, store.identity.id, &mut self.constraint_work)
+                .map_err(|()| constraint_resource())?
+            {
+                return Err(self.resource_escape_failure(
+                    store.body.span,
+                    span,
+                    "this outward computation contains the store identity",
+                ));
+            }
+        }
+        self.type_work
+            .charge(context.binders.capacity())
+            .map_err(|()| type_resource())?;
+        for fact in context.binders.values() {
+            let fact_type = IterativeTypeOwner::new(self.zonk(&fact.ty)?);
+            let fact_span = fact.provenance.span().unwrap_or(store.body.span);
+            self.defer_resource_escape(store.identity.id, &fact_type, fact_span, span)?;
+            if type_contains_variable(&fact_type, store.identity.id, &mut self.constraint_work)
+                .map_err(|()| constraint_resource())?
+            {
+                return Err(self.resource_escape_failure(
+                    fact_span,
+                    span,
+                    "an enclosing binding contains the store identity",
+                ));
+            }
+        }
+        let core_type = self.clone_type(&ty)?;
+        let core_effects = self.core_effect_row(&effects)?;
+        let provenance = body.provenance.clone();
+        let node = self.push_effect_core(
+            core_type,
+            core_effects,
+            Origin::Source(span),
+            EffectOperation::Store(Box::new(crate::core::effect::StoreScopeNode::new(
+                store.acquisition,
+                handle,
+                initializer.node,
+                body.node,
+            ))),
+        )?;
+        values.push(TypedNode {
+            node,
+            ty: ty.into_inner(),
+            effects,
+            provenance,
+        });
+        Ok(())
+    }
+
     fn schedule_resource<'a>(
         &mut self,
         resource: &'a crate::resolved::ResolvedResourceExpr,
@@ -13709,9 +14230,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         context: &mut TypeContext,
     ) -> Result<TypedNode, TypeError> {
         let checkpoint = self.active_acquisitions.len();
+        let store_checkpoint = self.active_stores.len();
         let result = self.elaborate_expression_work(initial, context);
         while self.active_acquisitions.len() > checkpoint {
             if let Some(acquisition) = self.active_acquisitions.pop() {
+                context.remove_and_discard(acquisition.handle);
+            }
+        }
+        while self.active_stores.len() > store_checkpoint {
+            if let Some(acquisition) = self.active_stores.pop() {
                 context.remove_and_discard(acquisition.handle);
             }
         }
@@ -13740,17 +14267,32 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     span,
                     rewrite_checkpoint,
                 } => {
-                    let body = values.pop().ok_or_else(invalid_state)?.into_inner();
+                    let body = values.pop().ok_or_else(invalid_state)?;
+                    let store = if handler.store.is_some() {
+                        Some(values.pop().ok_or_else(invalid_state)?)
+                    } else {
+                        None
+                    };
                     values.push(if handler.hook_registration.is_some() {
+                        if store.is_some() {
+                            return Err(invalid_state());
+                        }
                         self.finish_registration_handler(
                             handler,
                             span,
                             context,
-                            body,
+                            body.into_inner(),
                             rewrite_checkpoint,
                         )?
                     } else {
-                        self.finish_handler(handler, span, context, body, rewrite_checkpoint)?
+                        self.finish_handler(
+                            handler,
+                            span,
+                            context,
+                            body.into_inner(),
+                            store.map(|store| store.into_inner()),
+                            rewrite_checkpoint,
+                        )?
                     });
                 }
                 ElaborationTask::FinishBlock {
@@ -13898,7 +14440,28 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let ty = IterativeTypeOwner::new(ty);
 
         let arguments = OwnedTypeBuffer(arguments);
-        let provenance = fact.provenance.clone();
+        // Instantiation can add scheme-wide row exclusions to a nested row,
+        // changing the shape described by the original source provenance.
+        let provenance = if !fact.quantified.is_empty()
+            && !fact
+                .provenance
+                .aligns_with_budget(&ty, &mut self.type_work)
+                .map_err(|()| type_resource())?
+        {
+            if !fact
+                .provenance
+                .aligns_with_budget(&fact.ty, &mut self.type_work)
+                .map_err(|()| type_resource())?
+            {
+                return Err(invalid_state());
+            }
+            match fact.provenance.span() {
+                Some(span) => self.at_span_provenance(&ty, span)?,
+                None => self.unknown_provenance(&ty)?,
+            }
+        } else {
+            fact.provenance.clone()
+        };
         let has_lowered_global_scheme = self
             .evidence_lowering
             .as_ref()
@@ -14589,6 +15152,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ResolvedExprKind::Resource(resource) => {
                 self.schedule_resource(resource, current.span, tasks)?;
             }
+            ResolvedExprKind::Store(store) => {
+                self.schedule_store(store, current.span, tasks)?;
+            }
             ResolvedExprKind::Region(region) => {
                 self.schedule_region(region, current.span, tasks)?
             }
@@ -14599,12 +15165,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 self.schedule_perform(request, current.span, tasks)?;
             }
             ResolvedExprKind::Handle(handler) => {
+                let count = 2 + usize::from(handler.store.is_some());
                 self.type_work
-                    .charge(2)
+                    .charge(count)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 tasks
                     .0
-                    .try_reserve(2)
+                    .try_reserve(count)
                     .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 tasks.push(ElaborationTask::FinishHookBody {
                     handler,
@@ -14615,10 +15182,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     expression: &handler.body,
                     cause: None,
                 });
+                if let Some(store) = handler.store.as_deref() {
+                    tasks.push(ElaborationTask::Synthesize {
+                        expression: store,
+                        cause: None,
+                    });
+                }
             }
             ResolvedExprKind::Resume(resume) => {
                 let typed = self.synthesize_resume(resume, current.span, context)?;
                 values.push(typed);
+            }
+            ResolvedExprKind::Retain(retain) => {
+                values.push(self.synthesize_retain(retain, current.span)?);
             }
             ResolvedExprKind::Discard(_) => return Err(invalid_state()),
             ResolvedExprKind::Function(function) => {
@@ -14732,6 +15308,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ElaborationTask::ResourceBody { resource, span } => {
                 self.step_resource_body(resource, span, context, tasks, values)?;
             }
+            ElaborationTask::StoreBody { store, span } => {
+                self.step_store_body(store, span, context, tasks, values)?;
+            }
             ElaborationTask::RegionBody { source, span } => {
                 self.region_body(source, span, context, tasks, values)?
             }
@@ -14746,6 +15325,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
             ElaborationTask::FinishResource(progress) => {
                 self.step_resource_completion(progress, context, values)?;
+            }
+            ElaborationTask::FinishStore(progress) => {
+                self.step_store_completion(progress, context, values)?;
             }
 
             ElaborationTask::Equation(_) => return Err(invalid_state()),
@@ -21878,6 +22460,11 @@ enum ElaborationTask<'a> {
         span: Span,
     },
     FinishResource(Box<ResourceProgress<'a>>),
+    StoreBody {
+        store: &'a crate::resolved::ResolvedStoreExpr,
+        span: Span,
+    },
+    FinishStore(Box<StoreProgress<'a>>),
 
     Equation(EquationTask<'a>),
     RetainLocalNewtype(NominalTypeId),
@@ -22271,6 +22858,13 @@ enum ElaboratedDeclaration {
 
 struct ResourceProgress<'a> {
     resource: &'a crate::resolved::ResolvedResourceExpr,
+    span: Span,
+    initializer: TypedNodeOwner,
+    handle: TypedBinder,
+}
+
+struct StoreProgress<'a> {
+    store: &'a crate::resolved::ResolvedStoreExpr,
     span: Span,
     initializer: TypedNodeOwner,
     handle: TypedBinder,
@@ -23223,10 +23817,12 @@ fn discard_elaboration_task(task: ElaborationTask<'_>) {
         | ElaborationTask::SelectionBody { .. }
         | ElaborationTask::FinishSelection(_)
         | ElaborationTask::ResourceBody { .. }
+        | ElaborationTask::StoreBody { .. }
         | ElaborationTask::FinishCleanup { .. }
         | ElaborationTask::BeginCleanupBinding { .. }
         | ElaborationTask::FinishHookBody { .. }
         | ElaborationTask::FinishResource(_)
+        | ElaborationTask::FinishStore(_)
         | ElaborationTask::FinishPerform(_) => {}
         ElaborationTask::RetainLocalNewtype(_)
         | ElaborationTask::Synthesize { .. }
@@ -24467,6 +25063,10 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
                 work.push(&resource.body);
                 work.push(&resource.initializer);
             }
+            ResolvedExprKind::Store(store) => {
+                work.push(&store.body);
+                work.push(&store.initializer);
+            }
             ResolvedExprKind::Cleanup(cleanup) => {
                 work.push(&cleanup.body);
                 work.push(&cleanup.action);
@@ -24474,10 +25074,13 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
             ResolvedExprKind::Perform(request) => work.push(&request.operand),
             ResolvedExprKind::Handle(handler) => {
                 work.push(&handler.body);
+                if let Some(store) = &handler.store {
+                    work.push(store);
+                }
                 work.extend(handler.clauses.iter().map(|clause| &clause.body));
             }
             ResolvedExprKind::Resume(resume) => work.push(&resume.value),
-            ResolvedExprKind::Discard(_) => {}
+            ResolvedExprKind::Discard(_) | ResolvedExprKind::Retain(_) => {}
             ResolvedExprKind::String(_)
             | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
@@ -24918,7 +25521,13 @@ fn charge_type_provenance_nodes(ty: &Type, budget: &mut TypeWorkBudget) -> Resul
         budget.charge(1)?;
         match ty {
             Type::Function(domain, codomain) | Type::Application(domain, codomain) => {
+                work.try_reserve(2).map_err(|_| ())?;
                 work.push(codomain);
+                work.push(domain);
+            }
+            Type::EffectfulFunction(domain, codomain) => {
+                work.try_reserve(2).map_err(|_| ())?;
+                work.push(codomain.value());
                 work.push(domain);
             }
             _ => {}
@@ -26706,6 +27315,17 @@ fn capture_failure(
             TypeError::source(diagnostic)
         }
         Failure::Invalid => invalid_state(),
+        Failure::RetainedDriver { source } => TypeError::source(Diagnostic::new(
+            TypeReason::RetainedDriver,
+            SourceLabel::new(source, "this Store still has an active branch"),
+        )),
+        Failure::RetainedInterpretation { source } => TypeError::source(Diagnostic::new(
+            TypeReason::RetainedInterpretation,
+            SourceLabel::new(
+                source,
+                "this retained computation requires a different interpreter",
+            ),
+        )),
         Failure::Resource => type_resource(),
         Failure::Dependency {
             source,
@@ -26952,6 +27572,10 @@ fn resume_usage_with_budget(
                     push(&mut tasks, Task::Visit(&resource.body), budget)?;
                     push(&mut tasks, Task::Visit(&resource.initializer), budget)?;
                 }
+                ResolvedExprKind::Store(store) => {
+                    push(&mut tasks, Task::Visit(&store.body), budget)?;
+                    push(&mut tasks, Task::Visit(&store.initializer), budget)?;
+                }
                 ResolvedExprKind::Cleanup(cleanup) => {
                     push(&mut tasks, Task::Visit(&cleanup.action), budget)?;
                     push(&mut tasks, Task::Visit(&cleanup.body), budget)?;
@@ -26966,6 +27590,9 @@ fn resume_usage_with_budget(
                         Task::CheckHandlerClauses(&handler.clauses, expression.span),
                         budget,
                     )?;
+                    if let Some(store) = &handler.store {
+                        push(&mut tasks, Task::Visit(store), budget)?;
+                    }
                 }
                 ResolvedExprKind::Resume(resume) => {
                     push(
@@ -26979,6 +27606,13 @@ fn resume_usage_with_budget(
                     push(
                         &mut tasks,
                         Task::Consume(discard.owner, expression.span),
+                        budget,
+                    )?;
+                }
+                ResolvedExprKind::Retain(retain) => {
+                    push(
+                        &mut tasks,
+                        Task::Consume(Some(retain.owner), expression.span),
                         budget,
                     )?;
                 }
@@ -27153,6 +27787,11 @@ fn contains_resume_owner_with_budget(
                     return Ok(true);
                 }
             }
+            ResolvedExprKind::Retain(retain) => {
+                if retain.owner == owner {
+                    return Ok(true);
+                }
+            }
 
             ResolvedExprKind::Region(region) => {
                 schedule(&mut pending, &region.body, budget)?;
@@ -27167,6 +27806,10 @@ fn contains_resume_owner_with_budget(
             ResolvedExprKind::Resource(resource) => {
                 schedule(&mut pending, &resource.body, budget)?;
                 schedule(&mut pending, &resource.initializer, budget)?;
+            }
+            ResolvedExprKind::Store(store) => {
+                schedule(&mut pending, &store.body, budget)?;
+                schedule(&mut pending, &store.initializer, budget)?;
             }
             ResolvedExprKind::Cleanup(cleanup) => {
                 schedule(&mut pending, &cleanup.body, budget)?;
@@ -27248,6 +27891,9 @@ fn contains_resume_owner_with_budget(
             }
             ResolvedExprKind::Handle(handler) => {
                 schedule(&mut pending, &handler.body, budget)?;
+                if let Some(store) = &handler.store {
+                    schedule(&mut pending, store, budget)?;
+                }
                 for clause in &handler.clauses {
                     schedule(&mut pending, &clause.body, budget)?;
                 }
@@ -27457,10 +28103,12 @@ fn effect_expression_work_contains_syntax(
             | ResolvedExprKind::Region(_)
             | ResolvedExprKind::RegionSelection(_)
             | ResolvedExprKind::Resource(_)
+            | ResolvedExprKind::Store(_)
             | ResolvedExprKind::Perform(_)
             | ResolvedExprKind::Handle(_)
             | ResolvedExprKind::Resume(_)
-            | ResolvedExprKind::Discard(_) => return Ok(true),
+            | ResolvedExprKind::Discard(_)
+            | ResolvedExprKind::Retain(_) => return Ok(true),
             ResolvedExprKind::Tuple(elements) => {
                 for element in elements {
                     schedule_effect_expression(&mut work, element, budget)?;
@@ -27725,6 +28373,11 @@ fn collect_expression_binders(binders: &mut Vec<BinderId>, mut expressions: Vec<
                 expressions.push(&resource.body);
                 expressions.push(&resource.initializer);
             }
+            ResolvedExprKind::Store(store) => {
+                binders.push(store.handle.id);
+                expressions.push(&store.body);
+                expressions.push(&store.initializer);
+            }
             ResolvedExprKind::Cleanup(cleanup) => {
                 expressions.push(&cleanup.body);
                 expressions.push(&cleanup.action);
@@ -27732,13 +28385,16 @@ fn collect_expression_binders(binders: &mut Vec<BinderId>, mut expressions: Vec<
             ResolvedExprKind::Perform(request) => expressions.push(&request.operand),
             ResolvedExprKind::Handle(handler) => {
                 expressions.push(&handler.body);
+                if let Some(store) = &handler.store {
+                    expressions.push(store);
+                }
                 for clause in &handler.clauses {
                     collect_pattern_binders(&clause.pattern, binders);
                     expressions.push(&clause.body);
                 }
             }
             ResolvedExprKind::Resume(resume) => expressions.push(&resume.value),
-            ResolvedExprKind::Discard(_) => {}
+            ResolvedExprKind::Discard(_) | ResolvedExprKind::Retain(_) => {}
             ResolvedExprKind::String(_)
             | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
@@ -34053,6 +34709,25 @@ mod tests {
     }
 
     #[test]
+    fn rebuilt_effectful_provenance_charges_its_function_children() {
+        let source = SourceFile::new("provenance-effect.ash", "").expect("source fits");
+        let effect = EffectInstance::new(
+            crate::types::EffectId::new(ModuleId::from(source.id()), 0),
+            Box::new([]),
+        );
+        let ty = Type::function_computation(
+            Type::Int,
+            crate::types::ComputationType::new(Type::Bool, EffectRow::singleton(effect)),
+        );
+        let mut short = TypeWorkBudget::with_limit(2);
+        assert_eq!(unknown_provenance_with_budget(&ty, &mut short), Err(()));
+        let mut exact = TypeWorkBudget::with_limit(3);
+        let provenance = unknown_provenance_with_budget(&ty, &mut exact).expect("three nodes fit");
+        assert!(provenance.aligns(&ty));
+        assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
     fn rebuilt_application_span_provenance_has_an_exact_stack_safe_node_budget() {
         const DEPTH: usize = 32_768;
         const PROVENANCE_NODES: usize = 2 * DEPTH + 1;
@@ -39492,6 +40167,39 @@ mod tests {
             elaborator.synthesize(&function.body.result, &context),
             Err(TypeError::Internal(ElaborationFailure::InvalidState))
         );
+    }
+
+    #[test]
+    fn quantified_global_cannot_rebuild_an_invalid_original_provenance() {
+        let program = resolved_module_fixture(
+            "quantified-invalid-provenance.ash",
+            "identity<A> : A -> A\nidentity value = value\n",
+            "(Int -> Int)",
+            "identity",
+        );
+        let expression = fixture_result(&program);
+        let ResolvedExprKind::Occurrence(occurrence) = &expression.kind else {
+            panic!("expected a global occurrence");
+        };
+        let binder = occurrence.global_binder().unwrap();
+        let parameter = TypeVariableId::generated(42);
+        let mut context = TypeContext::new();
+        context.binders.insert(
+            binder,
+            TypeFact {
+                ty: Type::Function(
+                    Box::new(Type::Variable(parameter)),
+                    Box::new(Type::Variable(parameter)),
+                ),
+                provenance: TypeProvenance::atom(None),
+                quantified: Box::new([(parameter, Kind::Type)]),
+            },
+        );
+        let mut elaborator = Elaborator::for_module(&program).unwrap();
+        assert!(matches!(
+            elaborator.synthesize_global_occurrence(binder, occurrence, expression.span, &context),
+            Err(TypeError::Internal(ElaborationFailure::InvalidState)),
+        ));
     }
 
     #[test]
