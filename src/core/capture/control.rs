@@ -6208,6 +6208,7 @@ impl<'a> Analysis<'a> {
             };
             let label = self.label(code, context, budget)?;
             if let Some(effect) = &self.labels[label].effect {
+                retained.try_reserve(1).map_err(|_| Failure::Resource)?;
                 retained.push(
                     crate::core::effect::clone_effect_instance_with_budget(effect, budget)
                         .map_err(|_| Failure::Resource)?,
