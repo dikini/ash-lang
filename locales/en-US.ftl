@@ -234,6 +234,7 @@ continuation-already-consumed = This path has already consumed the continuation;
 continuation-capture = This nested scope cannot capture the enclosing clause's continuation capability.
 retain-reply = A retained checkpoint must accept `Unit` as its resume reply.
 retained-root-discard = A private checkpoint root must be resumed or retained; it cannot be discarded.
+retained-interpretation = Retained control requires the same surrounding interpreter when resumed.
 pattern-type-mismatch = This pattern cannot match a value of type `{ $expected }`.
 pattern-constructor-payload = This constructor has the wrong payload shape.
 pattern-constructor-owner = This constructor belongs to a different nominal type than the value being matched.

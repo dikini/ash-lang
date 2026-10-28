@@ -881,6 +881,9 @@ pub(crate) enum Failure {
         causes: Box<[Option<Span>; 2]>,
     },
     Invalid,
+    RetainedInterpretation {
+        source: Span,
+    },
     Unsafe(UnsafeDiscard),
     CleanupContext {
         discard: Span,
@@ -2534,40 +2537,59 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
                 budget,
             )?)
         }
-        // Public store release remains rejected by linked Core validation. This
-        // staging path preserves child evaluation order; retained-control
-        // ownership is added here before that release restriction is lifted.
-        Some(EffectOperation::Store(store)) => Control::Sequence(copy_slice(
-            &[index(store.initializer) + 1, index(store.body) + 1],
-            budget,
-        )?),
+        Some(EffectOperation::Store(store)) => {
+            let api = crate::resolved::StoreApi::for_module(store.acquisition.builtin)
+                .ok_or(Failure::Invalid)?;
+            graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+            let scope = graph.code.len();
+            data.position(scope, id, budget)?;
+            charge(budget, 2)?;
+            let probe = EffectInstance::new(
+                api.probe(),
+                Box::new([Type::Variable(store.acquisition.identity)]),
+            );
+            graph.code.push(Control::Resource {
+                body: index(store.body) + 1,
+                effect: Request::effect(&probe, store.acquisition.span, budget)?,
+            });
+            Control::Sequence(copy_slice(&[index(store.initializer) + 1, scope], budget)?)
+        }
         Some(EffectOperation::Continue(continuation)) => {
             charge(budget, 1)?;
             graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
-            let branch = graph.code.len();
-            graph.code.push(Control::Choice(copy_slice(
-                &[
-                    index(continuation.adapter.some) + 1,
-                    index(continuation.adapter.none) + 1,
-                ],
-                budget,
-            )?));
+            let transfer = graph.code.len();
+            data.position(transfer, id, budget)?;
+            graph.code.push(Control::Continue {
+                store: index(continuation.store) + 1,
+                key: index(continuation.key) + 1,
+                some: index(continuation.adapter.some) + 1,
+                none: index(continuation.adapter.none) + 1,
+            });
             Control::Sequence(copy_slice(
                 &[
                     index(continuation.store) + 1,
                     index(continuation.key) + 1,
-                    branch,
+                    transfer,
                 ],
                 budget,
             )?)
         }
-        // Both carriers are rejected by the linked envelope until their
-        // retained ownership and completion control are reconstructed here.
-        Some(EffectOperation::RetainedRoot(root)) => Control::Sequence(copy_slice(
-            &[index(root.store) + 1, index(root.handler) + 1],
-            budget,
-        )?),
-        Some(EffectOperation::Retain(_)) => Control::Return,
+        Some(EffectOperation::RetainedRoot(root)) => {
+            charge(budget, 1)?;
+            graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+            let scope = graph.code.len();
+            data.position(scope, id, budget)?;
+            graph.code.push(Control::RetainedRoot {
+                body: index(root.handler) + 1,
+                store: index(root.store) + 1,
+            });
+            Control::Sequence(copy_slice(&[index(root.store) + 1, scope], budget)?)
+        }
+        Some(EffectOperation::Retain(retain)) => Control::Retain {
+            owner: *owners
+                .get(&(retain.handler, retain.owner))
+                .ok_or(Failure::Invalid)?,
+        },
         Some(EffectOperation::Request(request)) => {
             graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
             let perform = graph.code.len();
@@ -3131,6 +3153,9 @@ fn build_capture_graph<F: CoreOperationFamily>(
             if let Some(EffectOperation::Resource(resource)) = operation(&node.kind) {
                 resource_scope.get_or_insert(resource.acquisition.span);
             }
+            if let Some(EffectOperation::Store(store)) = operation(&node.kind) {
+                resource_scope.get_or_insert(store.acquisition.span);
+            }
             if let Some(EffectOperation::Registration(scope)) = operation(&node.kind) {
                 resource_scope.get_or_insert(scope.span);
             }
@@ -3356,6 +3381,12 @@ fn solve_capture_values<F: CoreOperationFamily>(
                     }
                     Some(EffectOperation::Resource(resource)) => {
                         value = values[index(resource.body)].copy(budget)?;
+                    }
+                    Some(EffectOperation::Store(store)) => {
+                        value = values[index(store.body)].copy(budget)?;
+                    }
+                    Some(EffectOperation::RetainedRoot(root)) => {
+                        value = values[index(root.handler)].copy(budget)?;
                     }
                     Some(EffectOperation::Handler(handler)) => {
                         value.join(&values[index(handler.body())], budget)?;
@@ -4641,6 +4672,248 @@ mod tests {
             .map(|(module, source)| (*module, source.id()))
             .collect::<Vec<_>>();
         super::super::validate_effect_modules(core, &sources, &modules)
+    }
+
+    #[derive(Clone, Copy)]
+    pub(super) enum RetainedContextFixture {
+        Outer,
+        ConflictingHandler,
+        ShortLivedSupport,
+        ShortLivedAlias,
+        InnerUnused,
+        CapturedSupport,
+        PreexistingSlot,
+    }
+
+    pub(super) fn retained_context_core(
+        fixture: RetainedContextFixture,
+    ) -> Result<super::super::UnvalidatedEffectProgram, crate::elaborate::TypeError> {
+        use crate::{
+            elaborate::{EffectElaborator, check_module, link_modules},
+            evidence_validation::validate_interface_evidence,
+            module::{ModuleRoots, load_module_graph},
+        };
+        let source_identity = SourceFile::new("retained-context-id", "")
+            .unwrap()
+            .id()
+            .value();
+        let directory = std::env::temp_dir().join(format!(
+            "ash-retained-context-{}-{source_identity}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let mut helper = String::from(concat!(
+            "import @builtin.retained_control as Control\n",
+            "pub relay<N,A,E : EffectRow> : ",
+            "(Control.Store<N,(Unit -> A ! {Control.Drive<N> | E})>, Control.Key<N>) -> ",
+            "Control.Option<A> ! {Control.Drive<N> | E}\n",
+            "relay pair = Control.advance_with_drive pair\n",
+        ));
+        if matches!(fixture, RetainedContextFixture::PreexistingSlot) {
+            helper.push_str("pub inspect<A> : Control.Option<A> -> Int\ninspect option = match option {\nControl.None => 0\nControl.Some(answer) => 42\n}\n");
+        }
+        std::fs::write(directory.join("helper.ash"), helper).unwrap();
+        let continuation = if matches!(fixture, RetainedContextFixture::ConflictingHandler) {
+            "handle (relay (store,key)) with Marker {\nemit ignored => resume ()\n}"
+        } else {
+            "relay (store,key)"
+        };
+        let inner_cell = matches!(
+            fixture,
+            RetainedContextFixture::ShortLivedSupport
+                | RetainedContextFixture::ShortLivedAlias
+                | RetainedContextFixture::InnerUnused
+                | RetainedContextFixture::CapturedSupport
+                | RetainedContextFixture::PreexistingSlot
+        );
+        let (row, read) = if matches!(
+            fixture,
+            RetainedContextFixture::InnerUnused | RetainedContextFixture::PreexistingSlot
+        ) {
+            ("Control.Drive<N>,Marker", "41")
+        } else if matches!(fixture, RetainedContextFixture::CapturedSupport) {
+            ("Control.Drive<N>,Marker", "Cell.read c")
+        } else if matches!(fixture, RetainedContextFixture::ShortLivedAlias) {
+            (
+                "Control.Drive<N>,Marker",
+                "handle (Cell.read saved) with Cell.Ops<R> {\nread ignored => resume 41\nwrite ignored => resume ()\n}",
+            )
+        } else if inner_cell {
+            (
+                "Control.Drive<N>,Marker",
+                "handle (Cell.read c) with Cell.Ops<R> {\nread ignored => resume 41\nwrite ignored => resume ()\n}",
+            )
+        } else {
+            ("Control.Drive<N>,Cell.Ops<R>,Marker", "Cell.read c")
+        };
+        let prefix = if matches!(fixture, RetainedContextFixture::ShortLivedAlias) {
+            "let saved = c\n"
+        } else {
+            ""
+        };
+        let body = format!(
+            "{prefix}let _ = perform Checkpoint<N>.checkpoint ()\n\
+             let _ = perform Marker.emit ()\nDone({read})"
+        );
+        let body = if matches!(fixture, RetainedContextFixture::CapturedSupport) {
+            format!("resource cell<R> c = 41 {{\n{body}\n}}")
+        } else {
+            body
+        };
+        let branch = format!(
+            "handle {{\n{body}\n}} with Checkpoint<N> using store {{\n\
+             checkpoint ignored => {{\nlet key = retain\nPending(key)\n}}\n}}"
+        );
+        let branch = if inner_cell
+            && !matches!(
+                fixture,
+                RetainedContextFixture::CapturedSupport | RetainedContextFixture::PreexistingSlot
+            ) {
+            format!("resource cell<R> c = 41 {{\n{branch}\n}}")
+        } else {
+            branch
+        };
+        let resumed = if matches!(fixture, RetainedContextFixture::PreexistingSlot) {
+            "inspect resumed"
+        } else {
+            "42"
+        };
+        let consume = format!(
+            "match step {{\nDone(value) => value\nPending(key) => {{\nlet resumed = {continuation}\n{resumed}\n}}\n}}"
+        );
+        let consume = if matches!(fixture, RetainedContextFixture::PreexistingSlot) {
+            format!("resource cell<R> c = 41 {{\n{consume}\n}}")
+        } else {
+            consume
+        };
+        let store = format!(
+            "resource Control.Store<N,(Unit -> Step<N> ! {{{row}}})> store = () {{\n\
+             let step = {branch}\n{consume}\n}}"
+        );
+        let program = if inner_cell {
+            store
+        } else {
+            format!("resource cell<R> c = 41 {{\n{store}\n}}")
+        };
+        let helper_import = if matches!(fixture, RetainedContextFixture::PreexistingSlot) {
+            "import helper (relay, inspect)\n"
+        } else {
+            "import helper (relay)\n"
+        };
+        let source = format!(
+            "import @builtin.cell as Cell\n\
+             import @builtin.retained_control as Control\n\
+             {helper_import}\
+             effect Marker {{\nemit : Unit -> Unit\n}}\n\
+             effect Checkpoint<N> {{\ncheckpoint : Unit -> Unit\n}}\n\
+             type Step<N> = Done(Int)\n| Pending(Control.Key<N>)\n\
+             main : Unit -> Int\n\
+             main () = handle ({program}) with Marker {{\nemit ignored => resume ()\n}}\n"
+        );
+        let entry = directory.join("entry.ash");
+        std::fs::write(&entry, source).unwrap();
+        let loaded = load_module_graph(&entry, &ModuleRoots::empty());
+        std::fs::remove_dir_all(directory).unwrap();
+        let graph = loaded.unwrap();
+        let (resolved, mut dependencies) = resolved_entry_with_checked_dependencies(&graph);
+        dependencies.push(check_module(resolved)?);
+        let linked =
+            validate_interface_evidence(link_modules(dependencies, graph.entry()).unwrap())
+                .unwrap();
+        let mut elaborator = EffectElaborator::for_module_program(&linked).unwrap();
+        let root = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap()
+            .node;
+        Ok(elaborator.finish(root).unwrap())
+    }
+
+    #[test]
+    fn retained_capture_requires_the_same_actual_outer_interpreter() {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+        let core = retained_context_core(RetainedContextFixture::Outer).expect("source admission");
+        let mut budget = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
+        check_nodes(&core.nodes, &[], &[], operation, &mut budget)
+            .expect("the original outer Cell and Marker owners remain available");
+        eprintln!("linked capture work={}", budget.used());
+        match retained_context_core(RetainedContextFixture::ConflictingHandler) {
+            Err(crate::elaborate::TypeError::Source(diagnostic)) => assert_eq!(
+                diagnostic.reason,
+                crate::elaborate::TypeReason::RetainedInterpretation,
+            ),
+            _ => panic!("a nearer Marker handler must reject the restored interpreter"),
+        }
+    }
+
+    #[test]
+    fn retained_capture_requires_support_to_outlive_the_store() {
+        for fixture in [
+            RetainedContextFixture::ShortLivedSupport,
+            RetainedContextFixture::ShortLivedAlias,
+        ] {
+            match retained_context_core(fixture) {
+                Err(crate::elaborate::TypeError::Source(diagnostic)) => assert_eq!(
+                    diagnostic.reason,
+                    crate::elaborate::TypeReason::ResourceEscape,
+                ),
+                Err(other) => panic!("expected a support-lifetime rejection, got {other:?}"),
+                Ok(_) => panic!("the captured Cell cannot close while the Store retains its user"),
+            }
+        }
+    }
+
+    #[test]
+    fn retained_capture_requires_original_store_owner_in_focused_replay() {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+        let core = retained_context_core(RetainedContextFixture::InnerUnused)
+            .expect("an unused inner Cell is not retained support");
+        let mut budget = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
+        check_nodes(&core.nodes, &[], &[], operation, &mut budget)
+            .expect("focused replay preserves the enclosing Store's original owner");
+    }
+
+    #[test]
+    fn retained_capture_requires_owned_inner_support_to_move_with_the_cut() {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+        let core = retained_context_core(RetainedContextFixture::CapturedSupport)
+            .expect("a branch-owned Cell moves with its retained continuation");
+        let mut budget = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
+        check_nodes(&core.nodes, &[], &[], operation, &mut budget)
+            .expect("the retained cut owns the inner Cell and its completion");
+    }
+
+    #[test]
+    fn retained_capture_requires_existing_slot_to_survive_focused_replay() {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+        let core = retained_context_core(RetainedContextFixture::PreexistingSlot)
+            .expect("a live slot survives entering an unrelated Cell scope");
+        let mut budget = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
+        check_nodes(&core.nodes, &[], &[], operation, &mut budget)
+            .expect("focused replay restores the slot to its current consumer");
     }
 
     fn checked_core() -> (

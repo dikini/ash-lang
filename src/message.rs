@@ -1332,6 +1332,8 @@ messages! {
     retain_reply => "retain-reply" {},
     /// A retained root's completion must be resumed or stored.
     retained_root_discard => "retained-root-discard" {},
+    /// Resuming retained control would change a required interpreter.
+    retained_interpretation => "retained-interpretation" {},
     /// A pattern disagrees with the type of the value being matched.
     pattern_type_mismatch => "pattern-type-mismatch" { expected: &'a str = "Bool" },
     /// A constructor occurrence has the wrong payload shape.

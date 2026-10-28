@@ -13596,6 +13596,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 &node.kind,
                 super::effect::EffectExprKind::Operation(
                     super::effect::EffectOperation::Resource(_)
+                        | super::effect::EffectOperation::Store(_)
                         | super::effect::EffectOperation::Region(_)
                         | super::effect::EffectOperation::Cleanup(_)
                         | super::effect::EffectOperation::Registration(_)
@@ -13628,6 +13629,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 ValidationError::new(ValidationReason::Resource, None)
             }
             super::capture::Failure::Invalid => {
+                ValidationError::new(ValidationReason::Handler, None)
+            }
+            super::capture::Failure::RetainedInterpretation { .. } => {
                 ValidationError::new(ValidationReason::Handler, None)
             }
             super::capture::Failure::Escape {

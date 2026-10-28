@@ -254,6 +254,21 @@ pub(super) enum Control {
         body: usize,
         effect: Request,
     },
+    /// The Store operand has already been evaluated before this boundary.
+    RetainedRoot {
+        body: usize,
+        store: usize,
+    },
+    Retain {
+        owner: usize,
+    },
+    /// Both operands have already been evaluated; adapter branches are delayed.
+    Continue {
+        store: usize,
+        key: usize,
+        some: usize,
+        none: usize,
+    },
     Resume {
         owner: usize,
         value: usize,
@@ -310,6 +325,16 @@ impl Control {
                 pending.try_reserve(2).map_err(|_| Failure::Resource)?;
                 pending.extend([*body, *action]);
             }
+            Self::Continue {
+                store,
+                key,
+                some,
+                none,
+            } => {
+                charge(budget, 4)?;
+                pending.try_reserve(4).map_err(|_| Failure::Resource)?;
+                pending.extend([*store, *key, *some, *none]);
+            }
             Self::Sequence(children) | Self::Choice(children) => {
                 charge(budget, children.len())?;
                 pending
@@ -337,6 +362,7 @@ impl Control {
             Self::NativeInterpret { body: value, .. }
             | Self::Resume { value, .. }
             | Self::Resource { body: value, .. }
+            | Self::RetainedRoot { body: value, .. }
             | Self::Registration { body: value, .. } => {
                 pending.try_reserve(1).map_err(|_| Failure::Resource)?;
                 pending.push(*value);
@@ -419,6 +445,24 @@ impl Control {
                 body: body + code_offset,
                 effect: effect.copy(budget)?,
             },
+            Self::RetainedRoot { body, store } => Self::RetainedRoot {
+                body: body + code_offset,
+                store: store + code_offset,
+            },
+            Self::Retain { owner } => Self::Retain {
+                owner: owner + code_offset,
+            },
+            Self::Continue {
+                store,
+                key,
+                some,
+                none,
+            } => Self::Continue {
+                store: store + code_offset,
+                key: key + code_offset,
+                some: some + code_offset,
+                none: none + code_offset,
+            },
             Self::Handler {
                 body,
                 effect,
@@ -476,6 +520,9 @@ pub(super) fn query_required(
             graph.code[code],
             Control::Discard { .. }
                 | Control::Resource { .. }
+                | Control::RetainedRoot { .. }
+                | Control::Retain { .. }
+                | Control::Continue { .. }
                 | Control::Registration { .. }
                 | Control::Cleanup { .. }
         ) {
@@ -528,6 +575,7 @@ enum Site {
     Next(Position),
     Handler(usize),
     Resource(usize),
+    RetainedRoot(usize),
     Clause(usize, bool),
 }
 
@@ -637,6 +685,13 @@ enum Frame {
         value_context: usize,
         focused: bool,
     },
+    RetainedRoot {
+        code: usize,
+        context: usize,
+        value_context: usize,
+        store: Address,
+        baseline: Address,
+    },
     Clause {
         handler: usize,
         ordinal: usize,
@@ -661,7 +716,8 @@ impl Frame {
             | Self::NativeInterpret { value_context, .. }
             | Self::Registration { value_context, .. }
             | Self::Handler { value_context, .. }
-            | Self::Resource { value_context, .. } => value_context,
+            | Self::Resource { value_context, .. }
+            | Self::RetainedRoot { value_context, .. } => value_context,
             Self::Clause { clause_context, .. } => clause_context,
         }
     }
@@ -676,6 +732,7 @@ impl Frame {
             Self::NativeInterpret { code, .. } => Site::NativeInterpret(code),
             Self::Handler { code, .. } => Site::Handler(code),
             Self::Resource { code, .. } => Site::Resource(code),
+            Self::RetainedRoot { code, .. } => Site::RetainedRoot(code),
             Self::Clause {
                 owner, consumed, ..
             } => Site::Clause(owner, consumed),
@@ -692,6 +749,13 @@ impl Frame {
         {
             *capture = map.get(capture).copied().unwrap_or(*capture);
         }
+        if let Self::RetainedRoot {
+            store, baseline, ..
+        } = self
+        {
+            *store = map.get(store).copied().unwrap_or(*store);
+            *baseline = map.get(baseline).copied().unwrap_or(*baseline);
+        }
     }
 }
 
@@ -700,6 +764,43 @@ struct Edge {
     address: Address,
     frame: Frame,
     next: Address,
+}
+
+/// A Store owns this capture; the locator and interpreter baseline do not.
+/// A spent entry preserves the bounded allocation coordinate for stale keys.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct RetainedCapture {
+    store: Address,
+    key: (usize, usize),
+    capture: Option<Address>,
+    baseline: Address,
+    root: usize,
+    root_context: usize,
+    root_value_context: usize,
+    handler: usize,
+    handler_context: usize,
+    event: Event,
+}
+
+// A Store in an owned cut also owns every live capture in its slots. Locator
+// values and spent entries do not themselves add continuation edges.
+fn push_store_captures(
+    state: &State,
+    store: Address,
+    pending: &mut Vec<Address>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
+    for retained in &state.retained {
+        charge(budget, 1)?;
+        if retained.store == store
+            && let Some(capture) = retained.capture
+        {
+            charge(budget, 1)?;
+            pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+            pending.push(capture);
+        }
+    }
+    Ok(())
 }
 
 /// Current roots are immutable value ports. A later replacement changes only
@@ -820,6 +921,7 @@ struct State {
     value_context: usize,
     stack: Address,
     heap: Vec<Edge>,
+    retained: Vec<RetainedCapture>,
     cells: Vec<CellContents>,
     abandoned: Option<(usize, Event)>,
 }
@@ -848,6 +950,7 @@ impl State {
             budget,
             self.heap.len().checked_add(1).ok_or(Failure::Resource)?,
         )?;
+        charge(budget, self.retained.len())?;
         self.charge_cells(budget)
     }
 
@@ -880,6 +983,7 @@ impl State {
             value_context: self.value_context,
             stack: self.stack,
             heap: copy_slice(&self.heap, budget)?,
+            retained: copy_slice(&self.retained, budget)?,
             cells,
             abandoned: self.abandoned,
         })
@@ -890,12 +994,22 @@ impl State {
         map: &HashMap<Address, Address>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        charge(budget, self.heap.len() + 1)?;
+        charge(budget, self.heap.len() + self.retained.len() + 1)?;
         self.stack = map.get(&self.stack).copied().unwrap_or(self.stack);
         for edge in &mut self.heap {
             edge.address = map.get(&edge.address).copied().unwrap_or(edge.address);
             edge.next = map.get(&edge.next).copied().unwrap_or(edge.next);
             edge.frame.remap(map);
+        }
+        for retained in &mut self.retained {
+            retained.store = map.get(&retained.store).copied().unwrap_or(retained.store);
+            retained.baseline = map
+                .get(&retained.baseline)
+                .copied()
+                .unwrap_or(retained.baseline);
+            if let Some(capture) = &mut retained.capture {
+                *capture = map.get(capture).copied().unwrap_or(*capture);
+            }
         }
         Ok(())
     }
@@ -980,7 +1094,30 @@ impl State {
                 *address = address.older();
             }
         }
+        // Moving an enclosing Store also moves its slot table. Record exact
+        // copied owners before destination aging; references to owners outside
+        // this segment remain non-owning and are handled by ordinary renaming.
+        let mut moved_stores = Vec::new();
+        charge(budget, self.retained.len())?;
+        for (index, retained) in self.retained.iter().enumerate() {
+            let Some(&store) = destinations.get(&retained.store) else {
+                continue;
+            };
+            if !matches!(retained.store, Address::Slot { old: false, .. })
+                || !matches!(store, Address::Slot { old: false, .. })
+            {
+                return Err(Failure::Invalid);
+            }
+            moved_stores.try_reserve(1).map_err(|_| Failure::Resource)?;
+            moved_stores.push((index, store, destinations.get(&retained.baseline).copied()));
+        }
         self.rename(&renaming, budget)?;
+        for (index, store, baseline) in moved_stores {
+            self.retained[index].store = store;
+            if let Some(baseline) = baseline {
+                self.retained[index].baseline = baseline;
+            }
+        }
         let tail = renaming.get(&tail).copied().unwrap_or(tail);
         self.heap
             .try_reserve(edges.len())
@@ -989,6 +1126,24 @@ impl State {
         for edge in edges {
             let mut frame = edge.frame;
             frame.remap(&renaming);
+            if let (
+                Frame::RetainedRoot {
+                    store: original_store,
+                    baseline: original_baseline,
+                    ..
+                },
+                Frame::RetainedRoot {
+                    store, baseline, ..
+                },
+            ) = (edge.frame, &mut frame)
+            {
+                if let Some(&copied) = destinations.get(&original_store) {
+                    *store = copied;
+                }
+                if let Some(&copied) = destinations.get(&original_baseline) {
+                    *baseline = copied;
+                }
+            }
             let next = if boundary == Some(*edge) || edge.next == Address::End {
                 tail
             } else {
@@ -1016,6 +1171,14 @@ impl State {
         )?;
         self.heap.sort_unstable();
         self.heap.dedup();
+        charge(
+            budget,
+            self.retained
+                .len()
+                .saturating_mul(self.retained.len().max(1).ilog2() as usize + 1),
+        )?;
+        self.retained.sort_unstable();
+        self.retained.dedup();
         self.prune_sorted_heap(budget)
     }
 
@@ -1030,8 +1193,12 @@ impl State {
         }
         let mut reachable = HashSet::new();
         let mut pending = Vec::new();
-        pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+        charge(budget, self.retained.len())?;
+        pending
+            .try_reserve(self.retained.len() + 1)
+            .map_err(|_| Failure::Resource)?;
         pending.push(self.stack);
+        pending.extend(self.retained.iter().filter_map(|entry| entry.capture));
         while let Some(address) = pending.pop() {
             charge(budget, 1)?;
             if matches!(address, Address::Empty | Address::End) || reachable.contains(&address) {
@@ -1069,6 +1236,9 @@ impl State {
         root: Address,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
+        if !self.retained.is_empty() {
+            return self.prune_sorted_heap(budget);
+        }
         let edges = self.edges(root, budget)?;
         if edges.len() != 1
             || edges[0].next != self.stack
@@ -1105,6 +1275,19 @@ impl State {
 struct Selection {
     boundary: Edge,
     prefix: Vec<Edge>,
+}
+
+#[derive(Clone, Copy)]
+enum Completion {
+    Resume,
+    Discard,
+    Retain,
+}
+
+enum StoreBoundary {
+    Found(Edge),
+    Pending,
+    Symbolic,
 }
 
 // `select` returns (can_select, can_cross). Preserve the forward boundary
@@ -1245,8 +1428,16 @@ struct CellRetention {
     acquisition: Span,
 }
 
+struct RetainedSupport {
+    target: (usize, usize),
+    inputs: super::value::SavedInputs,
+    source: Span,
+    acquisition: Span,
+}
+
 pub(super) struct Analysis<'a> {
     graph: &'a SummaryGraph,
+    has_retained_root: bool,
     types: PreparedTypeUniverse<'a>,
     owner_rows: Vec<&'a EffectRow>,
     contexts: Vec<Context>,
@@ -1259,6 +1450,7 @@ pub(super) struct Analysis<'a> {
     focusing: bool,
     payloads: Vec<(usize, usize, usize)>,
     cell_retentions: Vec<CellRetention>,
+    retained_support: Vec<RetainedSupport>,
     pub(super) infer_cleanup_rows: bool,
     pub(super) collect_cleanup_rows: bool,
     pub(super) authenticate_actual_captures: bool,
@@ -1473,6 +1665,7 @@ impl<'a> TypeUniverseBuilder<'a> {
 struct ControlCodeInventory<'a> {
     graph: &'a SummaryGraph,
     has_resource: bool,
+    has_retained_root: bool,
     owner_rows: Vec<&'a EffectRow>,
 }
 
@@ -1502,6 +1695,9 @@ impl<'a> PrepaidControlCodeScan<'a> {
                 code,
                 Control::Discard { .. }
                     | Control::Resource { .. }
+                    | Control::RetainedRoot { .. }
+                    | Control::Retain { .. }
+                    | Control::Continue { .. }
                     | Control::Registration { .. }
                     | Control::Cleanup { .. }
             )
@@ -1551,8 +1747,10 @@ impl<'a> ControlCodeInventory<'a> {
         budget: &mut TypeWorkBudget,
     ) -> Result<Self, Failure> {
         let mut has_resource = false;
+        let mut has_retained_root = false;
         let mut owner_rows = Vec::new();
         for code in &graph.code {
+            has_retained_root |= matches!(code, Control::RetainedRoot { .. });
             if let Control::NativeInterpret { effects, .. } = code {
                 charge(budget, effects.len())?;
                 for request in effects {
@@ -1576,7 +1774,11 @@ impl<'a> ControlCodeInventory<'a> {
                         retain_owner_row_universe(effect.arguments(), &mut owner_rows, budget)?;
                     }
                 }
-                Control::Registration { .. } | Control::Cleanup { .. } => {
+                Control::Registration { .. }
+                | Control::Cleanup { .. }
+                | Control::RetainedRoot { .. }
+                | Control::Retain { .. }
+                | Control::Continue { .. } => {
                     has_resource = true;
                 }
                 _ => {}
@@ -1585,6 +1787,7 @@ impl<'a> ControlCodeInventory<'a> {
         Ok(Self {
             graph,
             has_resource,
+            has_retained_root,
             owner_rows,
         })
     }
@@ -1615,6 +1818,7 @@ impl<'a> Analysis<'a> {
         let ControlCodeInventory {
             graph,
             has_resource,
+            has_retained_root,
             mut owner_rows,
         } = inventory;
         let mut universe = TypeUniverseBuilder::new();
@@ -1700,6 +1904,7 @@ impl<'a> Analysis<'a> {
         });
         Ok(Self {
             graph,
+            has_retained_root,
             types,
             owner_rows,
             contexts,
@@ -1716,6 +1921,7 @@ impl<'a> Analysis<'a> {
             focusing: false,
             payloads: Vec::new(),
             cell_retentions: Vec::new(),
+            retained_support: Vec::new(),
             infer_cleanup_rows: false,
             collect_cleanup_rows: false,
             authenticate_actual_captures: false,
@@ -2439,6 +2645,7 @@ impl<'a> Analysis<'a> {
         let mut visited = HashSet::new();
         let mut calls: Vec<ObservedCall> = Vec::new();
         let mut value_requests = HashSet::new();
+        let mut unresolved_retained = HashSet::new();
         let mut observed_calls = HashMap::new();
         let mut revision = self
             .data
@@ -2467,6 +2674,7 @@ impl<'a> Analysis<'a> {
                     value_context,
                     stack: Address::Empty,
                     heap: Vec::new(),
+                    retained: Vec::new(),
                     cells: Vec::new(),
                     abandoned: None,
                 },
@@ -2507,6 +2715,51 @@ impl<'a> Analysis<'a> {
                     | Control::Registration { body, .. }
                     | Control::NativeInterpret { body, .. } => {
                         self.discover_boundary(state, *body, &mut pending, &mut visited, budget)?;
+                    }
+                    Control::RetainedRoot { body, store } => {
+                        let (body, store) = (*body, *store);
+                        state.charge_key(budget)?;
+                        if !value_requests.contains(&state) {
+                            value_requests
+                                .try_reserve(1)
+                                .map_err(|_| Failure::Resource)?;
+                            value_requests.insert(state.copy(budget)?);
+                        }
+                        self.discover_retained_root(
+                            state,
+                            body,
+                            store,
+                            &mut unresolved_retained,
+                            &mut pending,
+                            &mut visited,
+                            budget,
+                        )?;
+                    }
+                    Control::Continue {
+                        store,
+                        key,
+                        some,
+                        none,
+                    } => {
+                        let (store, key, some, none) = (*store, *key, *some, *none);
+                        state.charge_key(budget)?;
+                        if !value_requests.contains(&state) {
+                            value_requests
+                                .try_reserve(1)
+                                .map_err(|_| Failure::Resource)?;
+                            value_requests.insert(state.copy(budget)?);
+                        }
+                        self.discover_continue(
+                            state,
+                            store,
+                            key,
+                            some,
+                            none,
+                            &mut unresolved_retained,
+                            &mut pending,
+                            &mut visited,
+                            budget,
+                        )?;
                     }
                     Control::Request(request) => {
                         if request.region_service
@@ -2574,16 +2827,29 @@ impl<'a> Analysis<'a> {
                             self.completed(
                                 state,
                                 *owner,
-                                true,
+                                Completion::Resume,
                                 &mut pending,
                                 &mut visited,
                                 budget,
                             )?;
                         }
                     }
-                    Control::Discard { owner, .. } => {
-                        self.completed(state, *owner, false, &mut pending, &mut visited, budget)?
-                    }
+                    Control::Discard { owner, .. } => self.completed(
+                        state,
+                        *owner,
+                        Completion::Discard,
+                        &mut pending,
+                        &mut visited,
+                        budget,
+                    )?,
+                    Control::Retain { owner } => self.completed(
+                        state,
+                        *owner,
+                        Completion::Retain,
+                        &mut pending,
+                        &mut visited,
+                        budget,
+                    )?,
                 }
             }
             let Some(data) = &mut self.data else {
@@ -2612,6 +2878,9 @@ impl<'a> Analysis<'a> {
             for request in &value_requests {
                 pending.push_back(request.copy(budget)?);
             }
+        }
+        if !unresolved_retained.is_empty() {
+            return Err(Failure::Invalid);
         }
         Ok(())
     }
@@ -2673,6 +2942,583 @@ impl<'a> Analysis<'a> {
             }
         } else {
             self.returned(state, pending, visited, budget)?;
+        }
+        Ok(())
+    }
+
+    fn is_store(&self, frame: Frame) -> bool {
+        let Frame::Resource { code, .. } = frame else {
+            return false;
+        };
+        matches!(&self.graph.code[code], Control::Resource { effect, .. }
+            if effect.effect.as_ref().is_some_and(|instance|
+                crate::resolved::StoreApi::for_module(instance.effect().module())
+                    .is_some_and(|api| instance.effect() == api.probe())))
+    }
+
+    fn store_boundary(
+        &mut self,
+        state: &State,
+        operand: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<StoreBoundary, Failure> {
+        let (stores, _) = selections(
+            state,
+            state.stack,
+            |frame| Ok((self.is_store(frame), true)),
+            budget,
+        )?;
+        let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+        let (targets, unknown) = data.store_targets(operand, state.value_context, budget)?;
+        if targets.is_empty() && stores.is_empty() {
+            // A generic callable is checked before its actual caller supplies
+            // a Store. Its graph is retained for that later invocation.
+            return Ok(StoreBoundary::Symbolic);
+        }
+        if targets.is_empty() && !unknown {
+            return Ok(StoreBoundary::Pending);
+        }
+        if unknown || targets.len() != 1 {
+            return Err(Failure::Invalid);
+        }
+        let target = targets[0];
+        let mut matches = Vec::new();
+        let mut pending_owner = false;
+        for selected in stores {
+            charge(budget, 1)?;
+            let Frame::Resource {
+                code,
+                value_context,
+                ..
+            } = selected.boundary.frame
+            else {
+                return Err(Failure::Invalid);
+            };
+            // A focused replay gives the frame a new occurrence context, but
+            // its handle still names the original resource creation. Match
+            // the actual handle's owner, as for other resource providers.
+            let owners = data.cell_owner(code, value_context, budget)?;
+            if owners.is_empty() {
+                pending_owner = true;
+                continue;
+            }
+            let [owner] = owners.as_slice() else {
+                return Err(Failure::Invalid);
+            };
+            if *owner == target {
+                matches.try_reserve(1).map_err(|_| Failure::Resource)?;
+                matches.push(selected.boundary);
+            }
+        }
+        if pending_owner {
+            return Ok(StoreBoundary::Pending);
+        }
+        let [store] = matches.as_slice() else {
+            return Err(Failure::Invalid);
+        };
+        if !matches!(store.address, Address::Slot { old: false, .. }) {
+            return Err(Failure::Invalid);
+        }
+        Ok(StoreBoundary::Found(*store))
+    }
+
+    fn require_driver(
+        &self,
+        state: &State,
+        store: Address,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let mut pending = copy_slice(&[state.stack], budget)?;
+        let mut visited = HashSet::new();
+        while let Some(address) = pending.pop() {
+            charge(budget, 1)?;
+            if matches!(address, Address::Empty | Address::End) || visited.contains(&address) {
+                continue;
+            }
+            visited.try_reserve(1).map_err(|_| Failure::Resource)?;
+            visited.insert(address);
+            for edge in state.edges(address, budget)? {
+                if matches!(edge.frame, Frame::RetainedRoot { store: owner, .. } if owner == store)
+                {
+                    return Err(Failure::Invalid);
+                }
+                pending.try_reserve(2).map_err(|_| Failure::Resource)?;
+                pending.push(edge.next);
+                if let Frame::Clause {
+                    capture,
+                    consumed: false,
+                    ..
+                }
+                | Frame::Closing {
+                    capture: Some(capture),
+                    ..
+                } = edge.frame
+                {
+                    pending.push(capture);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn discover_retained_root(
+        &mut self,
+        state: State,
+        body: usize,
+        store: usize,
+        unresolved: &mut HashSet<State>,
+        pending: &mut VecDeque<State>,
+        visited: &mut HashSet<State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let selected = match self.store_boundary(&state, store, budget)? {
+            StoreBoundary::Symbolic => return Ok(()),
+            StoreBoundary::Pending => {
+                state.charge_key(budget)?;
+                unresolved.try_reserve(1).map_err(|_| Failure::Resource)?;
+                unresolved.insert(state);
+                return Ok(());
+            }
+            StoreBoundary::Found(selected) => selected,
+        };
+        state.charge_key(budget)?;
+        unresolved.remove(&state);
+        self.require_driver(&state, selected.address, budget)?;
+        let mut next = state;
+        next.push(
+            Frame::RetainedRoot {
+                code: next.position.code,
+                context: next.context,
+                value_context: next.value_context,
+                store: selected.address,
+                baseline: selected.next,
+            },
+            budget,
+        )?;
+        next.position = Position {
+            code: body,
+            next: 0,
+        };
+        Self::enqueue(next, pending, visited, budget)
+    }
+
+    fn check_retained_capture(
+        &self,
+        state: &State,
+        capture: Address,
+        store: Address,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let mut pending = copy_slice(&[capture], budget)?;
+        let mut seen = HashSet::new();
+        while let Some(address) = pending.pop() {
+            charge(budget, 1)?;
+            if matches!(address, Address::End | Address::Empty) || seen.contains(&address) {
+                continue;
+            }
+            if address == store {
+                return Err(Failure::Invalid);
+            }
+            seen.try_reserve(1).map_err(|_| Failure::Resource)?;
+            seen.insert(address);
+            let edges = state.edges(address, budget)?;
+            if edges.is_empty() {
+                return Err(Failure::Invalid);
+            }
+            for edge in edges {
+                if self.is_store(edge.frame) {
+                    push_store_captures(state, edge.address, &mut pending, budget)?;
+                }
+                pending.try_reserve(2).map_err(|_| Failure::Resource)?;
+                pending.push(edge.next);
+                if let Frame::Clause {
+                    capture,
+                    consumed: false,
+                    ..
+                }
+                | Frame::Closing {
+                    capture: Some(capture),
+                    ..
+                } = edge.frame
+                {
+                    pending.push(capture);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn record_retained_support(
+        &mut self,
+        state: &State,
+        capture: Address,
+        store: Address,
+        baseline: Address,
+        code: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let Some(target) = self
+            .data
+            .as_ref()
+            .and_then(super::value::Analysis::cell_focus)
+        else {
+            return Ok(());
+        };
+        let store_edges = state.edges(store, budget)?;
+        let [store_edge] = store_edges else {
+            return Err(Failure::Invalid);
+        };
+        // N's ordinary type and locator dependencies are not Store ownership.
+        // The separate self-capture admission remains a distinct obligation.
+        if matches!(store_edge.frame, Frame::Resource { focused: true, .. }) {
+            return Ok(());
+        }
+        let select_focus = |frame| {
+            let found = matches!(frame, Frame::Resource { focused: true, .. });
+            Ok((found, !found))
+        };
+        for root in [capture, baseline] {
+            let (selected, escaped) = selections(state, root, select_focus, budget)?;
+            if !selected.is_empty() {
+                if !escaped
+                    && selected.len() == 1
+                    && matches!(
+                        selected[0].boundary.address,
+                        Address::Slot { old: false, .. }
+                    )
+                {
+                    // The owner either moves with this cut or encloses N.
+                    return Ok(());
+                }
+                return Err(Failure::Invalid);
+            }
+            if !escaped {
+                return Err(Failure::Invalid);
+            }
+        }
+
+        let data = self.data.as_ref().ok_or(Failure::Invalid)?;
+        let (source, acquisition) = data.retained_support_site(code, budget)?;
+        let mut inputs = super::value::SavedInputs::default();
+        let mut pending = copy_slice(&[capture], budget)?;
+        let mut seen = HashSet::new();
+        while let Some(address) = pending.pop() {
+            charge(budget, 1)?;
+            if matches!(address, Address::Empty | Address::End) || seen.contains(&address) {
+                continue;
+            }
+            seen.try_reserve(1).map_err(|_| Failure::Resource)?;
+            seen.insert(address);
+            let edges = state.edges(address, budget)?;
+            if edges.is_empty() {
+                return Err(Failure::Invalid);
+            }
+            for edge in edges {
+                if self.is_store(edge.frame) {
+                    push_store_captures(state, edge.address, &mut pending, budget)?;
+                }
+                match edge.frame {
+                    Frame::Next {
+                        position,
+                        value_context,
+                        ..
+                    } => match &self.graph.code[position.code] {
+                        Control::Sequence(children) => {
+                            let current = position.next.checked_sub(1).ok_or(Failure::Invalid)?;
+                            if current >= children.len() {
+                                return Err(Failure::Invalid);
+                            }
+                            for child in &children[..current] {
+                                data.saved_value(*child, value_context, &mut inputs, budget)?;
+                            }
+                            for child in &children[current..] {
+                                if matches!(self.graph.code[*child], Control::Choice(_)) {
+                                    data.saved_choice_inputs(
+                                        position.code,
+                                        *child,
+                                        value_context,
+                                        &mut inputs,
+                                        budget,
+                                    )?;
+                                } else {
+                                    data.saved_inputs(*child, value_context, &mut inputs, budget)?;
+                                }
+                            }
+                        }
+                        Control::Resume { value, .. } if position.next == 1 => {
+                            data.saved_inputs(*value, value_context, &mut inputs, budget)?;
+                        }
+                        Control::Continue { .. } if position.next == 1 => {
+                            data.saved_continue_inputs(
+                                position.code,
+                                value_context,
+                                &mut inputs,
+                                budget,
+                            )?;
+                        }
+                        _ => return Err(Failure::Invalid),
+                    },
+                    Frame::Handler {
+                        code,
+                        capture_context,
+                        ..
+                    } => {
+                        data.saved_handler_inputs(code, capture_context, &mut inputs, budget)?;
+                    }
+                    Frame::RemovedHandler {
+                        code,
+                        value_context,
+                        ..
+                    } => {
+                        data.saved_handler_inputs(code, value_context, &mut inputs, budget)?;
+                    }
+                    Frame::Cleanup {
+                        code,
+                        value_context,
+                        running,
+                        ..
+                    } => {
+                        let Control::Cleanup { body, action, .. } = self.graph.code[code] else {
+                            return Err(Failure::Invalid);
+                        };
+                        data.saved_inputs(action, value_context, &mut inputs, budget)?;
+                        if running {
+                            data.saved_value(body, value_context, &mut inputs, budget)?;
+                        }
+                    }
+                    Frame::Clause {
+                        handler,
+                        ordinal,
+                        clause_context,
+                        capture_context,
+                        ..
+                    } => {
+                        data.saved_clause_inputs(
+                            handler,
+                            ordinal,
+                            clause_context,
+                            &mut inputs,
+                            budget,
+                        )?;
+                        data.saved_handler_inputs(handler, capture_context, &mut inputs, budget)?;
+                    }
+                    Frame::Resource { focused: true, .. } => {
+                        // A nested owned occurrence needs a path-specific proof.
+                        return Err(Failure::Invalid);
+                    }
+                    Frame::Resource {
+                        code,
+                        value_context,
+                        ..
+                    } => {
+                        data.saved_inputs(code, value_context, &mut inputs, budget)?;
+                        let occurrence = ProviderResourceOccurrence {
+                            code,
+                            value_context,
+                        };
+                        for cell in &state.cells {
+                            charge(budget, 1)?;
+                            if cell.occurrence == occurrence {
+                                inputs.extend_ports(&cell.roots, budget)?;
+                            }
+                        }
+                    }
+                    Frame::Closing {
+                        code,
+                        value_context,
+                        ..
+                    }
+                    | Frame::RetainedRoot {
+                        code,
+                        value_context,
+                        ..
+                    }
+                    | Frame::Registration {
+                        code,
+                        value_context,
+                        ..
+                    }
+                    | Frame::NativeInterpret {
+                        code,
+                        value_context,
+                        ..
+                    } => {
+                        data.saved_inputs(code, value_context, &mut inputs, budget)?;
+                    }
+                }
+                pending.try_reserve(2).map_err(|_| Failure::Resource)?;
+                pending.push(edge.next);
+                if let Frame::Clause {
+                    capture,
+                    consumed: false,
+                    ..
+                }
+                | Frame::Closing {
+                    capture: Some(capture),
+                    ..
+                } = edge.frame
+                {
+                    pending.push(capture);
+                }
+            }
+        }
+        charge(budget, 1)?;
+        self.retained_support
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        self.retained_support.push(RetainedSupport {
+            target,
+            inputs,
+            source,
+            acquisition,
+        });
+        Ok(())
+    }
+
+    fn check_retained_support(&mut self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+        data.close(budget)?;
+        for support in &self.retained_support {
+            charge(budget, 1)?;
+            data.check_retained_support(
+                support.target,
+                &support.inputs,
+                support.source,
+                support.acquisition,
+                budget,
+            )?;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn discover_continue(
+        &mut self,
+        state: State,
+        store: usize,
+        key: usize,
+        some: usize,
+        none: usize,
+        unresolved: &mut HashSet<State>,
+        pending: &mut VecDeque<State>,
+        visited: &mut HashSet<State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if state.position.next == 1 {
+            let mut next = state;
+            next.position = Position {
+                code: some,
+                next: 0,
+            };
+            return Self::enqueue_normalized(next, pending, visited, budget);
+        }
+        let store = match self.store_boundary(&state, store, budget)? {
+            StoreBoundary::Symbolic => return Ok(()),
+            StoreBoundary::Pending => {
+                state.charge_key(budget)?;
+                unresolved.try_reserve(1).map_err(|_| Failure::Resource)?;
+                unresolved.insert(state);
+                return Ok(());
+            }
+            StoreBoundary::Found(store) => store,
+        };
+        self.require_driver(&state, store.address, budget)?;
+        let (keys, unknown) = self.data.as_mut().ok_or(Failure::Invalid)?.retained_keys(
+            key,
+            state.value_context,
+            budget,
+        )?;
+        if unknown {
+            return Err(Failure::Invalid);
+        }
+        if keys.is_empty() {
+            state.charge_key(budget)?;
+            unresolved.try_reserve(1).map_err(|_| Failure::Resource)?;
+            unresolved.insert(state);
+            return Ok(());
+        }
+        state.charge_key(budget)?;
+        unresolved.remove(&state);
+
+        // A finite site/context key may summarize a stale generation. Keep
+        // the miss path unless the value domain can prove a particular live
+        // generation; a miss never consumes or executes a stored capture.
+        let mut missed = state.copy(budget)?;
+        missed.position = Position {
+            code: none,
+            next: 0,
+        };
+        Self::enqueue_normalized(missed, pending, visited, budget)?;
+
+        for (ordinal, retained) in state.retained.iter().copied().enumerate() {
+            charge(budget, 1)?;
+            let Some(capture) = retained.capture else {
+                continue;
+            };
+            if retained.store != store.address || !keys.contains(&retained.key) {
+                continue;
+            }
+            let request = retained.event.port.ok_or(Failure::Invalid)?;
+            let mut next = state.copy(budget)?;
+            // Older addresses summarize multiple occurrences. Restoring one
+            // cannot prove that all represented slots have been spent.
+            if matches!(capture, Address::Slot { old: false, .. }) {
+                next.retained[ordinal].capture = None;
+            }
+            self.data
+                .as_mut()
+                .ok_or(Failure::Invalid)?
+                .continue_capture(
+                    state.position.code,
+                    state.value_context,
+                    request,
+                    retained.handler,
+                    retained.handler_context,
+                    budget,
+                )?;
+            next.push(
+                Frame::Next {
+                    position: Position {
+                        code: state.position.code,
+                        next: 1,
+                    },
+                    context: state.context,
+                    value_context: state.value_context,
+                },
+                budget,
+            )?;
+            next.push(
+                Frame::RetainedRoot {
+                    code: retained.root,
+                    context: retained.root_context,
+                    value_context: retained.root_value_context,
+                    store: retained.store,
+                    baseline: retained.baseline,
+                },
+                budget,
+            )?;
+            let mut captured = Vec::new();
+            let mut todo = copy_slice(&[capture], budget)?;
+            let mut seen = HashSet::new();
+            while let Some(address) = todo.pop() {
+                charge(budget, 1)?;
+                if address == Address::End || seen.contains(&address) {
+                    continue;
+                }
+                seen.try_reserve(1).map_err(|_| Failure::Resource)?;
+                seen.insert(address);
+                for edge in state.edges(address, budget)? {
+                    captured.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    captured.push(*edge);
+                    todo.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    todo.push(edge.next);
+                }
+            }
+            next.stack =
+                next.copy_segment(capture, &captured, None, next.stack, Region::Active, budget)?;
+            next.position = Position { code: 0, next: 0 };
+            Self::enqueue(next, pending, visited, budget)?;
         }
         Ok(())
     }
@@ -2949,11 +3795,13 @@ impl<'a> Analysis<'a> {
                     normal.focused(entry.position.code, entry.value_context, budget)?;
                 self.data = Some(query);
                 self.cell_retentions.clear();
+                self.retained_support.clear();
                 let seed = self.restore_entry(entry, context, budget)?;
                 self.payloads.clear();
                 self.discover(&[], Some(&seed), budget)?;
                 self.check_cell_retentions(budget)?;
                 self.check_payloads(budget)?;
+                self.check_retained_support(budget)?;
                 let data = self.data.as_mut().ok_or(Failure::Invalid)?;
                 data.close(budget)?;
                 if let Err(failure) = data.check_resources(budget) {
@@ -3102,6 +3950,11 @@ impl<'a> Analysis<'a> {
                     value_context,
                     ..
                 }
+                | Frame::RetainedRoot {
+                    code,
+                    value_context,
+                    ..
+                }
                 | Frame::NativeInterpret {
                     code,
                     value_context,
@@ -3115,6 +3968,7 @@ impl<'a> Analysis<'a> {
                     let body = match &self.graph.code[*code] {
                         Control::Handler { body, .. }
                         | Control::Resource { body, .. }
+                        | Control::RetainedRoot { body, .. }
                         | Control::Registration { body, .. }
                         | Control::NativeInterpret { body, .. } => *body,
                         _ => return Err(Failure::Invalid),
@@ -3196,6 +4050,45 @@ impl<'a> Analysis<'a> {
             cell.occurrence =
                 relocate_provider_resource_occurrence(cell.occurrence, &restored_owners, budget)?;
         }
+        // A live Store slot is part of the same saved control graph as its
+        // frames. Rebuild its non-owning root/handler contexts and request
+        // port with the same cut identities; a spent locator has no capture.
+        for retained in &mut seed.retained {
+            charge(budget, 1)?;
+            if retained.capture.is_none() {
+                continue;
+            }
+            let Control::RetainedRoot { body, .. } = self.graph.code[retained.root] else {
+                return Err(Failure::Invalid);
+            };
+            retained.root_value_context = data
+                .restore_cut(
+                    retained.root_value_context,
+                    retained.root,
+                    usize::MAX - 1,
+                    body,
+                    &[],
+                    true,
+                    budget,
+                )?
+                .context;
+            let Control::Handler { body, .. } = self.graph.code[retained.handler] else {
+                return Err(Failure::Invalid);
+            };
+            retained.handler_context = data
+                .restore_cut(
+                    retained.handler_context,
+                    retained.handler,
+                    usize::MAX - 1,
+                    body,
+                    &[],
+                    true,
+                    budget,
+                )?
+                .context;
+            let port = retained.event.port.ok_or(Failure::Invalid)?;
+            retained.event.port = Some(data.restore_event(port, budget)?);
+        }
         // Connect the saved continuation graph by result ports. Reusing old
         // value-context equality would replay completed calls and acquisitions.
         for (index, edge) in seed.heap.iter().enumerate() {
@@ -3219,6 +4112,24 @@ impl<'a> Analysis<'a> {
                         data.join_ports(cuts[captured].input, port, budget)?;
                     }
                 }
+            }
+        }
+        for retained in &seed.retained {
+            charge(budget, 1)?;
+            let Some(capture) = retained.capture else {
+                continue;
+            };
+            let port = retained.event.port.ok_or(Failure::Invalid)?;
+            let mut connected = false;
+            for (index, edge) in seed.heap.iter().enumerate() {
+                charge(budget, 1)?;
+                if capture == edge.address {
+                    data.join_ports(cuts[index].input, port, budget)?;
+                    connected = true;
+                }
+            }
+            if !connected {
+                return Err(Failure::Invalid);
             }
         }
         let result = data.port(entry.position.code, context, budget)?;
@@ -3413,6 +4324,11 @@ impl<'a> Analysis<'a> {
                     value_context,
                     ..
                 }
+                | Frame::RetainedRoot {
+                    context,
+                    value_context,
+                    ..
+                }
                 | Frame::NativeInterpret {
                     context,
                     value_context,
@@ -3506,16 +4422,130 @@ impl<'a> Analysis<'a> {
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
+        if self.has_retained_root {
+            self.check_probe_driver(state, event, budget)?;
+        }
         // Finish boundary specialization before reserving the continuation
         // frame, which contains copied states and capture construction locals.
-        let boundaries = self.requested_boundaries(state, event, budget)?;
+        let boundaries = self.requested_boundaries(state, event, state.stack, budget)?;
+        if self.has_retained_root {
+            self.check_retained_interpretation(state, event, &boundaries, budget)?;
+        }
         self.requested_continuations(state, event, boundaries, pending, visited, budget)
+    }
+
+    fn check_probe_driver(
+        &mut self,
+        state: &State,
+        event: Event,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let mut pending = copy_slice(&[state.stack], budget)?;
+        let mut seen = HashSet::new();
+        while let Some(address) = pending.pop() {
+            charge(budget, 1)?;
+            if matches!(address, Address::Empty | Address::End) || seen.contains(&address) {
+                continue;
+            }
+            seen.try_reserve(1).map_err(|_| Failure::Resource)?;
+            seen.insert(address);
+            for edge in state.edges(address, budget)? {
+                if let Frame::RetainedRoot { store, .. } = edge.frame {
+                    let owners = state.edges(store, budget)?;
+                    let [owner] = owners else {
+                        return Err(Failure::Invalid);
+                    };
+                    let Frame::Resource { code, context, .. } = owner.frame else {
+                        return Err(Failure::Invalid);
+                    };
+                    let target = self.label(code, context, budget)?;
+                    if self.match_labels(event.label, target, budget)?.0 {
+                        return Err(Failure::Invalid);
+                    }
+                }
+                pending.try_reserve(2).map_err(|_| Failure::Resource)?;
+                pending.push(edge.next);
+                if let Frame::Clause {
+                    capture,
+                    consumed: false,
+                    ..
+                }
+                | Frame::Closing {
+                    capture: Some(capture),
+                    ..
+                } = edge.frame
+                {
+                    pending.push(capture);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn check_retained_interpretation(
+        &mut self,
+        state: &State,
+        event: Event,
+        boundaries: &(Vec<Selection>, bool),
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let mut checks = Vec::new();
+        for selected in &boundaries.0 {
+            for edge in &selected.prefix {
+                charge(budget, 1)?;
+                if let Frame::RetainedRoot { baseline, .. } = edge.frame {
+                    checks.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    checks.push((baseline, Some(selected.boundary)));
+                }
+            }
+        }
+        if boundaries.1 {
+            // A summarized stack may contain several possible escaped paths.
+            // Checking every active root is conservative for those paths.
+            let (roots, _) = selections(
+                state,
+                state.stack,
+                |frame| Ok((matches!(frame, Frame::RetainedRoot { .. }), true)),
+                budget,
+            )?;
+            for root in roots {
+                let Frame::RetainedRoot { baseline, .. } = root.boundary.frame else {
+                    return Err(Failure::Invalid);
+                };
+                checks.try_reserve(1).map_err(|_| Failure::Resource)?;
+                checks.push((baseline, None));
+            }
+        }
+        for (baseline, actual) in checks {
+            if !matches!(baseline, Address::Empty | Address::End)
+                && state.edges(baseline, budget)?.is_empty()
+            {
+                return Err(Failure::RetainedInterpretation {
+                    source: self.source(event),
+                });
+            }
+            let (expected, escaped) = self.requested_boundaries(state, event, baseline, budget)?;
+            let same = match actual {
+                Some(actual) => matches!(expected.as_slice(), [expected]
+                    if !escaped && matches!(actual.address, Address::Slot { old: false, .. })
+                        && expected.boundary.address == actual.address
+                        && expected.boundary.frame == actual.frame),
+                None => escaped && expected.is_empty(),
+            };
+            if !same {
+                return Err(Failure::RetainedInterpretation {
+                    source: self.source(event),
+                });
+            }
+        }
+        Ok(())
     }
 
     fn requested_boundaries(
         &mut self,
         state: &State,
         event: Event,
+        root: Address,
         budget: &mut TypeWorkBudget,
     ) -> Result<(Vec<Selection>, bool), Failure> {
         // Resolve labels first so selection's callback does not borrow the
@@ -3679,7 +4709,7 @@ impl<'a> Analysis<'a> {
         }
         selections(
             state,
-            state.stack,
+            root,
             |frame| {
                 Ok(match frame {
                     Frame::Handler { .. }
@@ -4431,6 +5461,12 @@ impl<'a> Analysis<'a> {
                 let mut edge = *edge;
                 let site = edge.frame.site();
                 edge.frame = match edge.frame {
+                    Frame::RetainedRoot { .. }
+                        if !self.infer_cleanup_rows || self.authenticate_actual_captures =>
+                    {
+                        // Source discard cannot retire unfinished private work.
+                        return Err(self.unsafe_discard(discard, event, None));
+                    }
                     Frame::Cleanup {
                         code,
                         running: true,
@@ -4530,11 +5566,14 @@ impl<'a> Analysis<'a> {
         &mut self,
         state: State,
         owner: usize,
-        resume: bool,
+        completion: Completion,
         pending: &mut VecDeque<State>,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
+        let resume = matches!(completion, Completion::Resume);
+        let discard = matches!(completion, Completion::Discard);
+        let retain = matches!(completion, Completion::Retain);
         let (selected, escaped) = selections(
             &state,
             state.stack,
@@ -4543,12 +5582,13 @@ impl<'a> Analysis<'a> {
                     Frame::Clause {
                         owner: candidate, ..
                     } if candidate == owner => (true, false),
+                    Frame::Clause { .. } if retain => (false, false),
                     _ => (false, true),
                 })
             },
             budget,
         )?;
-        if escaped {
+        if escaped || (retain && selected.is_empty()) {
             return Err(Failure::Invalid);
         }
         for mut selected in selected {
@@ -4576,13 +5616,13 @@ impl<'a> Analysis<'a> {
                     budget,
                 )?;
             }
-            if !resume
+            if discard
                 && event.unknown
                 && (!self.infer_cleanup_rows || self.authenticate_actual_captures)
             {
                 return Err(self.unsafe_discard(state.position.code, event, None));
             }
-            if !resume && self.authenticate_actual_captures {
+            if discard && self.authenticate_actual_captures {
                 let label = self.labels.get(event.label).ok_or(Failure::Invalid)?;
                 if event.unknown
                     || label.ambiguous_instance
@@ -4615,6 +5655,54 @@ impl<'a> Analysis<'a> {
                     self.actual_captures.push(occurrence);
                 }
             }
+            let retained_root = if retain {
+                if !matches!(selected.boundary.address, Address::Slot { old: false, .. }) {
+                    return Err(Failure::Invalid);
+                }
+                let (roots, escaped) = selections(
+                    &state,
+                    selected.boundary.next,
+                    |frame| {
+                        Ok(match frame {
+                            Frame::RetainedRoot { .. } => (true, false),
+                            _ => (false, true),
+                        })
+                    },
+                    budget,
+                )?;
+                let [root] = roots.as_slice() else {
+                    return Err(Failure::Invalid);
+                };
+                if escaped {
+                    return Err(Failure::Invalid);
+                }
+                let Frame::RetainedRoot {
+                    code,
+                    context,
+                    value_context,
+                    store,
+                    baseline,
+                } = root.boundary.frame
+                else {
+                    return Err(Failure::Invalid);
+                };
+                if !matches!(self.graph.code[code], Control::RetainedRoot { body, .. } if body == handler)
+                {
+                    return Err(Failure::Invalid);
+                }
+                self.check_retained_capture(&state, capture, store, budget)?;
+                self.record_retained_support(
+                    &state,
+                    capture,
+                    store,
+                    baseline,
+                    state.position.code,
+                    budget,
+                )?;
+                Some((store, baseline, code, context, value_context))
+            } else {
+                None
+            };
             let mut next = state.copy(budget)?;
             // Replacing this occurrence does not mutate an older activation
             // sharing the static owner identity.
@@ -4704,7 +5792,7 @@ impl<'a> Analysis<'a> {
                     Region::Active,
                     budget,
                 )?;
-            } else {
+            } else if discard {
                 next.abandoned = Some((state.position.code, event));
                 next.push(
                     Frame::Closing {
@@ -4725,6 +5813,30 @@ impl<'a> Analysis<'a> {
                     event,
                     budget,
                 )?;
+            } else {
+                let (store, baseline, root, root_context, root_value_context) =
+                    retained_root.ok_or(Failure::Invalid)?;
+                charge(budget, 1)?;
+                next.retained
+                    .try_reserve(1)
+                    .map_err(|_| Failure::Resource)?;
+                let key = self.data.as_mut().ok_or(Failure::Invalid)?.retained_key(
+                    state.position.code,
+                    state.value_context,
+                    budget,
+                )?;
+                next.retained.push(RetainedCapture {
+                    store,
+                    key,
+                    capture: Some(capture),
+                    baseline,
+                    root,
+                    root_context,
+                    root_value_context,
+                    handler,
+                    handler_context: value_context,
+                    event,
+                });
             }
             next.position = Position { code: 0, next: 0 };
             Self::enqueue(next, pending, visited, budget)?;
@@ -4811,6 +5923,147 @@ impl<'a> Analysis<'a> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn retained_existing_slot_replays_its_request_and_handler_in_the_focused_context() {
+        use super::super::tests::{RetainedContextFixture, retained_context_core};
+        use crate::core::effect::{EffectExprKind, EffectOperationFamily};
+        fn operation(kind: &EffectExprKind) -> Option<&crate::core::effect::EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+        let core = retained_context_core(RetainedContextFixture::PreexistingSlot).unwrap();
+        let mut work = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
+        let built = super::super::build_capture_graph::<EffectOperationFamily>(
+            &core.nodes,
+            &[],
+            &[],
+            operation,
+            &[],
+            &[],
+            None,
+            &mut work,
+        )
+        .unwrap()
+        .unwrap();
+        let mut analysis = Analysis::new(&built.graph, None, &mut work).unwrap();
+        analysis.discover(&built.roots, None, &mut work).unwrap();
+        let entry = analysis.entries.iter().find(|entry| {
+            entry.retained.iter().any(|slot| slot.capture.is_some())
+                && matches!(&built.graph.code[entry.position.code], Control::Resource { effect, .. }
+                    if effect.effect.as_ref().is_some_and(|effect| effect.effect().module().is_builtin_resource()))
+        }).expect("the Cell starts while the Store owns a live slot").copy(&mut work).unwrap();
+        let normal = analysis.data.take().unwrap();
+        let (query, context) = normal
+            .focused(entry.position.code, entry.value_context, &mut work)
+            .unwrap();
+        analysis.data = Some(query);
+        let restored = analysis.restore_entry(&entry, context, &mut work).unwrap();
+        let (old, slot) = entry
+            .retained
+            .iter()
+            .zip(&restored.retained)
+            .find(|(old, _)| old.capture.is_some())
+            .unwrap();
+        assert_ne!(
+            slot.event.port, old.event.port,
+            "the request result must be restored"
+        );
+        assert_ne!(
+            slot.root_value_context, old.root_value_context,
+            "the root must use its restored context"
+        );
+        let (handlers, escaped) = selections(
+            &restored,
+            slot.capture.unwrap(),
+            |frame| {
+                let found = matches!(frame, Frame::Handler { code, value_context, .. }
+                    if code == slot.handler && value_context == slot.handler_context);
+                Ok((found, !found))
+            },
+            &mut work,
+        )
+        .unwrap();
+        assert!(
+            !escaped && handlers.len() == 1,
+            "the slot must use its actual captured handler's restored value context"
+        );
+        let [head] = entry.edges(old.capture.unwrap(), &mut work).unwrap() else {
+            panic!("the source fixture has one captured entry")
+        };
+        let Frame::Next {
+            position,
+            value_context,
+            ..
+        } = head.frame
+        else {
+            panic!("the checkpoint is inside the fixture's saved sequence")
+        };
+        let data = analysis.data.as_ref().unwrap();
+        let input = data
+            .restored_cut_input_for_test(value_context, position.code, position.next)
+            .expect("the captured entry was rebuilt");
+        assert!(
+            data.has_edge_for_test(input, slot.event.port.unwrap()),
+            "the restored checkpoint result must feed the restored captured entry"
+        );
+    }
+
+    #[test]
+    fn retained_store_cut_follows_only_its_live_slot_captures() {
+        let address = |site| Address::Slot {
+            region: Region::Active,
+            site: Site::Resource(site),
+            allocation_context: 0,
+            old: false,
+        };
+        let owner = address(1);
+        let other = address(2);
+        let capture = address(3);
+        let event = Event {
+            code: 0,
+            label: 0,
+            unknown: false,
+            port: None,
+        };
+        let retained = |store, capture| RetainedCapture {
+            store,
+            key: (0, 0),
+            capture,
+            baseline: Address::End,
+            root: 0,
+            root_context: 0,
+            root_value_context: 0,
+            handler: 0,
+            handler_context: 0,
+            event,
+        };
+        let state = State {
+            position: Position { code: 0, next: 0 },
+            context: 0,
+            value_context: 0,
+            stack: Address::Empty,
+            heap: Vec::new(),
+            cells: Vec::new(),
+            abandoned: None,
+            retained: vec![
+                retained(owner, Some(capture)),
+                retained(owner, None),
+                retained(other, Some(address(4))),
+            ],
+        };
+        let mut pending = Vec::new();
+        push_store_captures(
+            &state,
+            owner,
+            &mut pending,
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+        assert_eq!(pending, vec![capture]);
+    }
+
+    #[test]
     fn generic_cell_copied_birth_intersection_is_atomic_and_keeps_snapshot_roots() {
         let original = State {
             position: Position { code: 0, next: 0 },
@@ -4819,6 +6072,7 @@ mod tests {
             stack: Address::Empty,
             heap: Vec::new(),
             abandoned: None,
+            retained: Vec::new(),
             cells: vec![CellContents {
                 occurrence: ProviderResourceOccurrence {
                     code: 1,
@@ -4898,6 +6152,7 @@ mod tests {
                         next: Address::Empty,
                     })
                     .collect(),
+                retained: Vec::new(),
                 cells: vec![CellContents {
                     occurrence: ProviderResourceOccurrence {
                         code: 1,
@@ -4948,6 +6203,7 @@ mod tests {
             stack: Address::Empty,
             heap: Vec::new(),
             abandoned: None,
+            retained: Vec::new(),
             cells: vec![CellContents {
                 occurrence: ProviderResourceOccurrence {
                     code: 1,
@@ -5094,6 +6350,7 @@ mod tests {
                 context: 0,
                 value_context: 0,
                 stack: address,
+                retained: Vec::new(),
                 cells: Vec::new(),
                 heap: vec![Edge {
                     address,
@@ -5107,7 +6364,7 @@ mod tests {
                 analysis.completed(
                     state,
                     7,
-                    false,
+                    Completion::Discard,
                     &mut VecDeque::new(),
                     &mut HashSet::new(),
                     &mut budget
@@ -5152,6 +6409,7 @@ mod tests {
             context: 0,
             value_context: 0,
             stack: address(removed),
+            retained: Vec::new(),
             cells: Vec::new(),
             heap: vec![
                 Edge {
@@ -5373,6 +6631,7 @@ mod tests {
             stack: Address::Empty,
             heap: Vec::new(),
             abandoned: None,
+            retained: Vec::new(),
             cells: vec![CellContents {
                 occurrence: ProviderResourceOccurrence {
                     code: 0,
@@ -5603,6 +6862,7 @@ mod tests {
                     value_context: 0,
                     stack: inner,
                     abandoned: None,
+                    retained: Vec::new(),
                     cells: Vec::new(),
                     heap: vec![
                         Edge {
@@ -5632,7 +6892,7 @@ mod tests {
                 Analysis::new(&graph, None, budget)?.completed(
                     state,
                     3,
-                    true,
+                    Completion::Resume,
                     &mut pending,
                     &mut HashSet::new(),
                     budget,
@@ -5729,6 +6989,7 @@ mod tests {
                 value_context: 0,
                 stack: root,
                 abandoned: None,
+                retained: Vec::new(),
                 cells: Vec::new(),
                 heap: vec![
                     Edge {
@@ -5753,7 +7014,7 @@ mod tests {
             Analysis::new(&graph, None, budget)?.completed(
                 state,
                 3,
-                true,
+                Completion::Resume,
                 &mut pending,
                 &mut HashSet::new(),
                 budget,
@@ -5837,6 +7098,7 @@ mod tests {
                             context: 3,
                             value_context: 4,
                             stack: address,
+                            retained: Vec::new(),
                             cells: Vec::new(),
                             heap: vec![Edge {
                                 address,
@@ -5895,6 +7157,7 @@ mod tests {
                 value_context: 0,
                 stack: heap[0].address,
                 heap,
+                retained: Vec::new(),
                 cells: Vec::new(),
                 abandoned: Some((7, event)),
             };
@@ -5974,6 +7237,7 @@ mod tests {
                 context: 2,
                 value_context: 3,
                 stack,
+                retained: Vec::new(),
                 cells: Vec::new(),
                 heap: vec![
                     Edge {
@@ -6011,6 +7275,7 @@ mod tests {
                         value_context: 5,
                         stack: Address::Empty,
                         heap: Vec::new(),
+                        retained: Vec::new(),
                         cells: Vec::new(),
                         abandoned: port.map(|port| {
                             (
@@ -6070,6 +7335,7 @@ mod tests {
                 context: 4,
                 value_context: 5,
                 stack: root,
+                retained: Vec::new(),
                 cells: Vec::new(),
                 heap: vec![Edge {
                     address: root,
@@ -6121,6 +7387,7 @@ mod tests {
                 value_context: 0,
                 stack: Address::Empty,
                 heap: Vec::new(),
+                retained: Vec::new(),
                 cells: Vec::new(),
                 abandoned: None,
             };
@@ -6194,6 +7461,7 @@ mod tests {
                 context: 0,
                 value_context: 0,
                 stack: root,
+                retained: Vec::new(),
                 cells: Vec::new(),
                 heap: vec![
                     Edge {
@@ -6279,6 +7547,7 @@ mod tests {
                 value_context: 0,
                 stack: Address::Empty,
                 heap: Vec::new(),
+                retained: Vec::new(),
                 cells: Vec::new(),
                 abandoned: None,
             };
@@ -6377,6 +7646,7 @@ mod tests {
             value_context: 0,
             stack: Address::Empty,
             heap: Vec::new(),
+            retained: Vec::new(),
             cells: Vec::new(),
             abandoned: None,
         };
@@ -6474,6 +7744,7 @@ mod tests {
                 value_context: 0,
                 stack: Address::Empty,
                 heap: Vec::new(),
+                retained: Vec::new(),
                 cells: Vec::new(),
                 abandoned: None,
             };
@@ -6598,6 +7869,7 @@ mod tests {
                 value_context: 0,
                 stack: root,
                 heap,
+                retained: Vec::new(),
                 cells: Vec::new(),
                 abandoned: None,
             };
@@ -6659,6 +7931,7 @@ mod tests {
                 value_context: 0,
                 stack: Address::Empty,
                 heap,
+                retained: Vec::new(),
                 cells: Vec::new(),
                 abandoned: None,
             };
@@ -6803,6 +8076,7 @@ mod tests {
                 value_context: 0,
                 stack: root,
                 heap: heap.clone(),
+                retained: Vec::new(),
                 cells: Vec::new(),
                 abandoned: None,
             };
