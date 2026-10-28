@@ -7,3 +7,4 @@ export LEAN_PATH="$proof_build_dir"
 # Reviewed proof registrations follow.
 lean -DwarningAsError=true -o "$proof_build_dir/Ownership.olean" Ownership.lean
 lean -DwarningAsError=true -o "$proof_build_dir/OwnershipExamples.olean" OwnershipExamples.lean
+lean -DwarningAsError=true -o "$proof_build_dir/DrainSafety.olean" DrainSafety.lean

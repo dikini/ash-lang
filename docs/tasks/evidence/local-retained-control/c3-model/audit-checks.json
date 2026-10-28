@@ -1,0 +1,320 @@
+{
+  "summary": {
+    "all_checks_passed": true,
+    "check_count": 123,
+    "receipt_sha256": "717fea322b63c90626938c0c98fadf3cbb2f4735a41959542fb1003ebafb3a90",
+    "counts": {
+      "Ownership": 18,
+      "OwnershipExamples": 31,
+      "DrainSafety": 33
+    },
+    "fresh": [
+      "DrainSafety"
+    ],
+    "reused": [
+      "Ownership",
+      "OwnershipExamples"
+    ],
+    "axioms": [
+      "Classical.choice",
+      "Quot.sound",
+      "propext"
+    ],
+    "compiler_file_count": 8,
+    "compile_seconds": 3.7977719080008683,
+    "peak_rss_kib": 558000,
+    "first_failed_log_sha256": "2647a23da84306de38fc848abc65f6985039cc0351b011ed2b2dae69135ca29c",
+    "durable_bundle_file_count": 16
+  },
+  "checks": {
+    "pin:/tmp/ash-m3/c3-frozen-0f737-retry1-evidence.json": true,
+    "pin:/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m3-evidence/c3-frozen-gate-0f737-v4-retry1.log": true,
+    "pin:/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m3-evidence/c3-gate-preparation/c3-gate-config-approved-v4-retry1.json": true,
+    "pin:/home/dikini/Projects/ash-lang/.worktree/m3-retained-control/docs/tasks/evidence/local-retained-control/c1-model/evidence.json": true,
+    "pin:/home/dikini/Projects/ash-lang/.worktree/m3-retained-control/tools/lean/integrate.py": true,
+    "pin:/home/dikini/Projects/ash-lang/.worktree/m3-retained-control/tools/lean/module_build.py": true,
+    "pin:/tmp/ash-m3/c3-frozen-0f737-retry1-module-progress.json": true,
+    "pin:/tmp/ash-m3/c3-frozen-0f737-retry1-productive-replay.sh": true,
+    "pin:/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m3-evidence/c3-gate-preparation/c3-gate-review-manifest-v4.json": true,
+    "pin:/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m3-evidence/c3-proof-source-review-0f73745e-v4.json": true,
+    "retry changes only output prefix": true,
+    "approved changes only status review attachment and root flag": true,
+    "root enabled exact pass review": true,
+    "unchanged product HEAD": true,
+    "clean worktree": true,
+    "product tree": true,
+    "pin:/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/bin/lean": true,
+    "pin:/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/Init.olean": true,
+    "pin:/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/Std.olean": true,
+    "pin:/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/libleanshared_1.so": true,
+    "pin:/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/libleanshared.so": true,
+    "pin:/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/libLake_shared.so": true,
+    "pin:/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/libInit_shared.so": true,
+    "pin:/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/libleanshared_2.so": true,
+    "compiler version parent": true,
+    "all compiler library pins unchanged": true,
+    "pin:/tmp/ash-m3/c3-frozen-0f737-retry1-source-snapshot/Ownership.lean": true,
+    "parent source unchanged:Ownership.lean": true,
+    "pin:/tmp/ash-m3/c3-frozen-0f737-retry1-source-snapshot/OwnershipExamples.lean": true,
+    "parent source unchanged:OwnershipExamples.lean": true,
+    "pin:/tmp/ash-m3/c3-frozen-0f737-retry1-source-snapshot/DrainSafety.lean": true,
+    "pin:/tmp/ash-m3/c3-frozen-0f737-retry1-source-snapshot/check.sh": true,
+    "pin:/tmp/ash-m3/c3-frozen-0f737-retry1-source-snapshot/lean-toolchain": true,
+    "parent source unchanged:lean-toolchain": true,
+    "reviewed DrainSafety copied exactly": true,
+    "reviewed correspondence unchanged": true,
+    "manifest file agrees": true,
+    "pin:/tmp/ash-m3/c3-frozen-0f737-retry1-manifest.json": true,
+    "registration exact": true,
+    "generated registration preserves parent": true,
+    "pin:/tmp/ash-m3/c3-frozen-0f737-retry1-review-cache/Ownership.log": true,
+    "pin:/tmp/ash-m3/c3-frozen-0f737-retry1-review-cache/Ownership.olean": true,
+    "selected artifact:Ownership": true,
+    "source pin:Ownership": true,
+    "reports exact:Ownership": true,
+    "only standard axioms:Ownership": true,
+    "no errors warnings sorry:Ownership": true,
+    "exit0:Ownership": true,
+    "pin:/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/7600aff46333c73025182f5127963e8fc2710c7256b140b1829169c01704da78/receipt.json": true,
+    "pin:/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/7600aff46333c73025182f5127963e8fc2710c7256b140b1829169c01704da78/module.olean": true,
+    "pin:/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/7600aff46333c73025182f5127963e8fc2710c7256b140b1829169c01704da78/module.log": true,
+    "module store inputs:Ownership": true,
+    "module store results:Ownership": true,
+    "actual build options:Ownership": true,
+    "module compiler equality:Ownership": true,
+    "runner pin:Ownership": true,
+    "imports actual:Ownership": true,
+    "parent reuse equality:Ownership": true,
+    "parent reuse evidence:Ownership": true,
+    "hardlink reuse:Ownership": true,
+    "pin:/tmp/ash-m3/c3-frozen-0f737-retry1-review-cache/OwnershipExamples.log": true,
+    "pin:/tmp/ash-m3/c3-frozen-0f737-retry1-review-cache/OwnershipExamples.olean": true,
+    "selected artifact:OwnershipExamples": true,
+    "source pin:OwnershipExamples": true,
+    "reports exact:OwnershipExamples": true,
+    "only standard axioms:OwnershipExamples": true,
+    "no errors warnings sorry:OwnershipExamples": true,
+    "exit0:OwnershipExamples": true,
+    "pin:/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/a5663d4a72094b3ceeabb5de919897e8bbfada0d7f6eac4e242b9ab86773f868/receipt.json": true,
+    "pin:/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/a5663d4a72094b3ceeabb5de919897e8bbfada0d7f6eac4e242b9ab86773f868/module.olean": true,
+    "pin:/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/a5663d4a72094b3ceeabb5de919897e8bbfada0d7f6eac4e242b9ab86773f868/module.log": true,
+    "module store inputs:OwnershipExamples": true,
+    "module store results:OwnershipExamples": true,
+    "actual build options:OwnershipExamples": true,
+    "module compiler equality:OwnershipExamples": true,
+    "runner pin:OwnershipExamples": true,
+    "imports actual:OwnershipExamples": true,
+    "parent reuse equality:OwnershipExamples": true,
+    "parent reuse evidence:OwnershipExamples": true,
+    "hardlink reuse:OwnershipExamples": true,
+    "pin:/tmp/ash-m3/c3-frozen-0f737-retry1-review-cache/DrainSafety.log": true,
+    "pin:/tmp/ash-m3/c3-frozen-0f737-retry1-review-cache/DrainSafety.olean": true,
+    "selected artifact:DrainSafety": true,
+    "source pin:DrainSafety": true,
+    "reports exact:DrainSafety": true,
+    "only standard axioms:DrainSafety": true,
+    "no errors warnings sorry:DrainSafety": true,
+    "exit0:DrainSafety": true,
+    "pin:/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/663fe2b7e63be331ce245d246626334b68e7307162ddd2c8d27d7d72c76277ef/receipt.json": true,
+    "pin:/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/663fe2b7e63be331ce245d246626334b68e7307162ddd2c8d27d7d72c76277ef/module.olean": true,
+    "pin:/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/663fe2b7e63be331ce245d246626334b68e7307162ddd2c8d27d7d72c76277ef/module.log": true,
+    "module store inputs:DrainSafety": true,
+    "module store results:DrainSafety": true,
+    "actual build options:DrainSafety": true,
+    "module compiler equality:DrainSafety": true,
+    "runner pin:DrainSafety": true,
+    "imports actual:DrainSafety": true,
+    "fresh compile not cache:DrainSafety": true,
+    "one fresh two reused": true,
+    "82 total": true,
+    "33 reviewed new reports": true,
+    "only affected module compiled": true,
+    "scheduler complete serial clean": true,
+    "memory headroom": true,
+    "pin:/tmp/ash-m3/c3-frozen-0f737-retry1-proof.log": true,
+    "combined proof log all ordered logs": true,
+    "durable copy:c3-frozen-0f737-retry1-manifest.json": true,
+    "durable copy:c3-frozen-0f737-retry1-productive-replay.sh": true,
+    "durable copy:c3-frozen-0f737-retry1-module-progress.json": true,
+    "durable copy:c3-frozen-0f737-retry1-proof.log": true,
+    "durable copy:c3-frozen-0f737-retry1-evidence.json": true,
+    "durable copy:c3-frozen-0f737-retry1-source-snapshot/OwnershipExamples.lean": true,
+    "durable copy:c3-frozen-0f737-retry1-source-snapshot/DrainSafety.lean": true,
+    "durable copy:c3-frozen-0f737-retry1-source-snapshot/check.sh": true,
+    "durable copy:c3-frozen-0f737-retry1-source-snapshot/Ownership.lean": true,
+    "durable copy:c3-frozen-0f737-retry1-source-snapshot/lean-toolchain": true,
+    "durable copy:c3-frozen-0f737-retry1-review-cache/Ownership.olean": true,
+    "durable copy:c3-frozen-0f737-retry1-review-cache/Ownership.log": true,
+    "durable copy:c3-frozen-0f737-retry1-review-cache/OwnershipExamples.olean": true,
+    "durable copy:c3-frozen-0f737-retry1-review-cache/OwnershipExamples.log": true,
+    "durable copy:c3-frozen-0f737-retry1-review-cache/DrainSafety.olean": true,
+    "durable copy:c3-frozen-0f737-retry1-review-cache/DrainSafety.log": true,
+    "first attempt lock failure preserved": true
+  },
+  "verified_files": [
+    {
+      "path": "/tmp/ash-m3/c3-frozen-0f737-retry1-evidence.json",
+      "sha256": "717fea322b63c90626938c0c98fadf3cbb2f4735a41959542fb1003ebafb3a90"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m3-evidence/c3-frozen-gate-0f737-v4-retry1.log",
+      "sha256": "dff6bb391bb719c87dbbd8080cea50e3422b8c2e7e04748b2b915f224025a5f9"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m3-evidence/c3-gate-preparation/c3-gate-config-approved-v4-retry1.json",
+      "sha256": "adb2c942c20e2d2e090659ecc8e7121732a3041f617fae3f4551f2533c537305"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/m3-retained-control/docs/tasks/evidence/local-retained-control/c1-model/evidence.json",
+      "sha256": "fa3462c847fe90766c33ef6d069dceaf5a3febec0b1cb78d490efbf06d46ed0b"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/m3-retained-control/tools/lean/integrate.py",
+      "sha256": "71db45359734912c7de68dc5580529e996d44ac001ba45d9968eb83ed55f12d1"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/m3-retained-control/tools/lean/module_build.py",
+      "sha256": "f12692ccb4f385775292b73ad4dc35df960537b9004f40cfb137d01d20a588c2"
+    },
+    {
+      "path": "/tmp/ash-m3/c3-frozen-0f737-retry1-module-progress.json",
+      "sha256": "0ee1e9f3f6eeaa00cc39b4439ec4c4ce08040d40cab106b389b17cd20613b40b"
+    },
+    {
+      "path": "/tmp/ash-m3/c3-frozen-0f737-retry1-productive-replay.sh",
+      "sha256": "65fbfb9b516a70a0f1d95f745725bff035cec94178659ba71d5a9f7d6a2dde45"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m3-evidence/c3-gate-preparation/c3-gate-review-manifest-v4.json",
+      "sha256": "fad2a73c870e57c8387741f073600f30aea9b33b9427d2641e3867ccf6485150"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m3-evidence/c3-proof-source-review-0f73745e-v4.json",
+      "sha256": "a508d2ddd2d5fc9bb76a13dc5a75e539634b3e72efe6132cf5e571166dc5697f"
+    },
+    {
+      "path": "/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/bin/lean",
+      "sha256": "e8baaa71855a616dc351028f3ad2200051b0671f423a1696a100e809302d5550"
+    },
+    {
+      "path": "/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/Init.olean",
+      "sha256": "9ed3667be31b6ce04b831418a8bc9e99c44804b8ddaf52f6ebbdebfd26d8409e"
+    },
+    {
+      "path": "/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/Std.olean",
+      "sha256": "588b5b6ddf35e57a5d542cfb86c8752ddfa5c100eb559e569e90e06a54184f67"
+    },
+    {
+      "path": "/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/libleanshared_1.so",
+      "sha256": "2f96493ac9046f64ec7bcb78102a4c1e7cd9a7042487f246af45eda8a96667f5"
+    },
+    {
+      "path": "/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/libleanshared.so",
+      "sha256": "23d636cac1cadcba37beac30eff9b9b20d66cee726cf5defb4ae39f1284a3e5a"
+    },
+    {
+      "path": "/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/libLake_shared.so",
+      "sha256": "b1d164bf248f35b9e9664e696f4cd05a79a7066065510fb9b459139c78beb354"
+    },
+    {
+      "path": "/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/libInit_shared.so",
+      "sha256": "2f96493ac9046f64ec7bcb78102a4c1e7cd9a7042487f246af45eda8a96667f5"
+    },
+    {
+      "path": "/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/libleanshared_2.so",
+      "sha256": "2f96493ac9046f64ec7bcb78102a4c1e7cd9a7042487f246af45eda8a96667f5"
+    },
+    {
+      "path": "/tmp/ash-m3/c3-frozen-0f737-retry1-source-snapshot/Ownership.lean",
+      "sha256": "5103f2a5b155da16d98b75d8d65a8cb0edd9bf9056c2de033f35efe3e81b71ee"
+    },
+    {
+      "path": "/tmp/ash-m3/c3-frozen-0f737-retry1-source-snapshot/OwnershipExamples.lean",
+      "sha256": "0ca6f7915479fca02a8abc8099e845b27a6706e2030ea51a8350d44f7b194c99"
+    },
+    {
+      "path": "/tmp/ash-m3/c3-frozen-0f737-retry1-source-snapshot/DrainSafety.lean",
+      "sha256": "c676f253d761fe44dbf9d1d9240a6a6451affbfc410f60bbaaf6986d1fba6677"
+    },
+    {
+      "path": "/tmp/ash-m3/c3-frozen-0f737-retry1-source-snapshot/check.sh",
+      "sha256": "e93c7374d985d345e8a402f1ffadeaaa7fae0fb061cd9af84bf92a23473863ca"
+    },
+    {
+      "path": "/tmp/ash-m3/c3-frozen-0f737-retry1-source-snapshot/lean-toolchain",
+      "sha256": "3aac669c7a910ec2389f4e4f921b605adf6ebf2d1e0c9b9cd0be4d33f3f5db71"
+    },
+    {
+      "path": "/tmp/ash-m3/c3-frozen-0f737-retry1-manifest.json",
+      "sha256": "6935f4f86c2824a46a6c2f6044d421d5b357cb82b76ee8183460417032cb0135"
+    },
+    {
+      "path": "/tmp/ash-m3/c3-frozen-0f737-retry1-review-cache/Ownership.log",
+      "sha256": "729df22023784976e6a8fd3cf14db587677866b7ae37a20b9f532a757e877255"
+    },
+    {
+      "path": "/tmp/ash-m3/c3-frozen-0f737-retry1-review-cache/Ownership.olean",
+      "sha256": "320c06ef021f1e4df1d74e8b0d2327a16e96cc06d79a31ca6ae1b2a65b4fed37"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/7600aff46333c73025182f5127963e8fc2710c7256b140b1829169c01704da78/receipt.json",
+      "sha256": "ab0a9578fe7243ee6fdc32970b8a1b6cfd505ac44cf1f28265c0f6a21de2146c"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/7600aff46333c73025182f5127963e8fc2710c7256b140b1829169c01704da78/module.olean",
+      "sha256": "320c06ef021f1e4df1d74e8b0d2327a16e96cc06d79a31ca6ae1b2a65b4fed37"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/7600aff46333c73025182f5127963e8fc2710c7256b140b1829169c01704da78/module.log",
+      "sha256": "729df22023784976e6a8fd3cf14db587677866b7ae37a20b9f532a757e877255"
+    },
+    {
+      "path": "/tmp/ash-m3/c3-frozen-0f737-retry1-review-cache/OwnershipExamples.log",
+      "sha256": "e70c6dd746b77459488acec3ae1fe5198a24822fb91afdd5ed126ace542b2c3e"
+    },
+    {
+      "path": "/tmp/ash-m3/c3-frozen-0f737-retry1-review-cache/OwnershipExamples.olean",
+      "sha256": "43bafc70d010c58c4c7aa367caebf3b4abcd54e12e93b351b440ecb96425b9d1"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/a5663d4a72094b3ceeabb5de919897e8bbfada0d7f6eac4e242b9ab86773f868/receipt.json",
+      "sha256": "f31761c092df8ef282767eb11eb4dab1d670aad5a05af3671ff6304f53918a61"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/a5663d4a72094b3ceeabb5de919897e8bbfada0d7f6eac4e242b9ab86773f868/module.olean",
+      "sha256": "43bafc70d010c58c4c7aa367caebf3b4abcd54e12e93b351b440ecb96425b9d1"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/a5663d4a72094b3ceeabb5de919897e8bbfada0d7f6eac4e242b9ab86773f868/module.log",
+      "sha256": "e70c6dd746b77459488acec3ae1fe5198a24822fb91afdd5ed126ace542b2c3e"
+    },
+    {
+      "path": "/tmp/ash-m3/c3-frozen-0f737-retry1-review-cache/DrainSafety.log",
+      "sha256": "1a3fd523c8e61ca4828fd6418b6482649faf1fcf05f9a84c036812c0e1af0c50"
+    },
+    {
+      "path": "/tmp/ash-m3/c3-frozen-0f737-retry1-review-cache/DrainSafety.olean",
+      "sha256": "36c29ce221e6c3edc1204ec55a2f3725d96d14ef3ee7c39d38eadec194490216"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/663fe2b7e63be331ce245d246626334b68e7307162ddd2c8d27d7d72c76277ef/receipt.json",
+      "sha256": "d96ab97e611daca169bdb6e12d6e3ffb243ed17bd706b05031270f2bff419cb2"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/663fe2b7e63be331ce245d246626334b68e7307162ddd2c8d27d7d72c76277ef/module.olean",
+      "sha256": "36c29ce221e6c3edc1204ec55a2f3725d96d14ef3ee7c39d38eadec194490216"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/663fe2b7e63be331ce245d246626334b68e7307162ddd2c8d27d7d72c76277ef/module.log",
+      "sha256": "1a3fd523c8e61ca4828fd6418b6482649faf1fcf05f9a84c036812c0e1af0c50"
+    },
+    {
+      "path": "/tmp/ash-m3/c3-frozen-0f737-retry1-proof.log",
+      "sha256": "0386436a26d8e3d632dffc76d6e91068141d2090e53c5363b0e1e03738dfceee"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m3-evidence/c3-frozen-gate-0f737-v4.log",
+      "sha256": "2647a23da84306de38fc848abc65f6985039cc0351b011ed2b2dae69135ca29c"
+    }
+  ]
+}

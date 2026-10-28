@@ -65,8 +65,9 @@ earlier branch result after another checkpoint.
 A source-derived linked Core fixture also checks reuse of an aggregate and its
 payload computation. Each case assignment now clears older aggregate origins
 before their payloads can be projected, and Resume drops the returned origin.
-The bounded correspondence still needs independent review before it can
-justify the release gate.
+The bounded correspondence passed independent source review, and its frozen
+[proof run](evidence/local-retained-control/c3-model/README.md) completed.
+Its receipt passed independent audit. Real linked release admission remains open.
 
 A cleanup-drain fixture's linked validation prefix and focused query use
 1,054,814 work units against the current 983,040 limit, before later validation.
