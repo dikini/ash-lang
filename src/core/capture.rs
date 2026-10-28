@@ -4682,6 +4682,9 @@ mod tests {
         Outer,
         ConflictingHandler,
         RemovedInterpreter,
+        RemovedInterpreterWithoutContinue,
+        RemovedInterpreterAfterRepeatedRetain,
+        UnknownCallbackWithoutContinue,
         UnusedInnerInterpreter,
         CapturedInnerInterpreter,
         DeclaredPureInterpreter,
@@ -4813,7 +4816,11 @@ mod tests {
             "handle {{\n{body}\n}} with Checkpoint<N> using store {{\n\
              checkpoint ignored => {{\nlet key = retain\nPending(key)\n}}\n}}"
         );
-        let branch = if matches!(fixture, RetainedContextFixture::RemovedInterpreter) {
+        let branch = if matches!(
+            fixture,
+            RetainedContextFixture::RemovedInterpreter
+                | RetainedContextFixture::RemovedInterpreterWithoutContinue
+        ) {
             format!("handle ({branch}) with Marker {{\nemit ignored => resume ()\n}}")
         } else if matches!(
             fixture,
@@ -4846,9 +4853,16 @@ mod tests {
         } else {
             "42"
         };
-        let consume = format!(
-            "match step {{\nDone(value) => value\nPending(key) => {{\nlet resumed = {continuation}\n{resumed}\n}}\n}}"
-        );
+        let consume = if matches!(
+            fixture,
+            RetainedContextFixture::RemovedInterpreterWithoutContinue
+        ) {
+            "let _ = perform Marker.emit ()\n42".to_owned()
+        } else {
+            format!(
+                "match step {{\nDone(value) => value\nPending(key) => {{\nlet resumed = {continuation}\n{resumed}\n}}\n}}"
+            )
+        };
         let consume = if matches!(fixture, RetainedContextFixture::PreexistingSlot) {
             format!("resource cell<R> c = 41 {{\n{consume}\n}}")
         } else {
@@ -4865,8 +4879,40 @@ mod tests {
                 | RetainedContextFixture::DriverInterceptedInSuffix
                 | RetainedContextFixture::DriverNestedRoot
                 | RetainedContextFixture::DriverContinueInBranch
+                | RetainedContextFixture::RemovedInterpreterAfterRepeatedRetain
         );
-        let program = if matches!(fixture, RetainedContextFixture::DriverNestedRoot) {
+        let program = if matches!(
+            fixture,
+            RetainedContextFixture::UnknownCallbackWithoutContinue
+        ) {
+            "resource Control.Store<N,(Unit -> Step<N> ! {Control.Drive<N>,Marker,External})> store = () {\n\
+             let step = handle (handle {\n\
+             let _ = perform Checkpoint<N>.checkpoint ()\n\
+             let action = perform External.get ()\n\
+             let _ = action ()\n\
+             Done(41)\n\
+             } with Checkpoint<N> using store {\n\
+             checkpoint ignored => {\nlet key = retain\nPending(key)\n}\n\
+             }) with Marker {\nemit ignored => resume ()\n}\n\
+             let _ = perform Marker.emit ()\n42\n}"
+                .to_owned()
+        } else if matches!(
+            fixture,
+            RetainedContextFixture::RemovedInterpreterAfterRepeatedRetain
+        ) {
+            "resource Control.Store<N,(Unit -> Step<N> ! {Control.Drive<N>,Marker})> store = () {\n\
+             let step = handle (handle {\n\
+             let _ = perform Checkpoint<N>.start ()\n\
+             let _ = perform Checkpoint<N>.pause ()\n\
+             let _ = perform Marker.emit ()\n\
+             Done(41)\n\
+             } with Checkpoint<N> using store {\n\
+             start ignored => {\nlet key = retain\nPending(key)\n}\n\
+             pause ignored => {\nlet key = retain\nPending(key)\n}\n\
+             }) with Marker {\nemit ignored => resume ()\n}\n\
+             let _ = perform Marker.emit ()\n42\n}"
+                .to_owned()
+        } else if matches!(fixture, RetainedContextFixture::DriverNestedRoot) {
             let inner = "handle {\n\
                          let _ = perform Checkpoint<N>.pause ()\n\
                          Done(41)\n\
@@ -5008,24 +5054,48 @@ mod tests {
         } else {
             ""
         };
+        let (external, main_effects) = if matches!(
+            fixture,
+            RetainedContextFixture::UnknownCallbackWithoutContinue
+        ) {
+            (
+                "effect External {\nget : Unit -> (Unit -> Unit ! {Marker})\n}\n",
+                " ! {External}",
+            )
+        } else {
+            ("", "")
+        };
         let source = format!(
             "import @builtin.cell as Cell\n\
              import @builtin.retained_control as Control\n\
              {helper_import}\
              effect Marker {{\nemit : Unit -> Unit\n}}\n\
-             {pure_marker}\
+             {pure_marker}{external}\
              effect Checkpoint<N> {{\n{checkpoint}\n}}\n\
              type Step<N> = Done(Int)\n| Pending(Control.Key<N>)\n\
-             main : Unit -> Int\n\
+             main : Unit -> Int{main_effects}\n\
              main () = handle ({program}) with Marker {{\nemit ignored => resume ()\n}}\n"
         );
         let entry = directory.join("entry.ash");
-        std::fs::write(&entry, source).unwrap();
+        std::fs::write(&entry, &source).unwrap();
         let loaded = load_module_graph(&entry, &ModuleRoots::empty());
         std::fs::remove_dir_all(directory).unwrap();
         let graph = loaded.unwrap();
         let (resolved, mut dependencies) = resolved_entry_with_checked_dependencies(&graph);
-        dependencies.push(check_module(resolved)?);
+        let checked = check_module(resolved);
+        if matches!(
+            fixture,
+            RetainedContextFixture::UnknownCallbackWithoutContinue
+        ) && let Err(crate::elaborate::TypeError::Source(diagnostic)) = &checked
+            && diagnostic.reason == crate::elaborate::TypeReason::RetainedInterpretation
+        {
+            let range = diagnostic.primary.span().range();
+            assert!(
+                source[range.start() as usize..range.end() as usize].contains("action"),
+                "the refusal must come from the unknown callback, not its producer"
+            );
+        }
+        dependencies.push(checked?);
         let linked =
             validate_interface_evidence(link_modules(dependencies, graph.entry()).unwrap())
                 .unwrap();
@@ -5122,6 +5192,24 @@ mod tests {
                 ),
                 Err(other) => panic!("expected a support-lifetime rejection, got {other:?}"),
                 Ok(_) => panic!("the captured Cell cannot close while the Store retains its user"),
+            }
+        }
+    }
+
+    #[test]
+    fn retained_capture_requires_its_interpreter_before_any_continue() {
+        for fixture in [
+            RetainedContextFixture::RemovedInterpreterWithoutContinue,
+            RetainedContextFixture::RemovedInterpreterAfterRepeatedRetain,
+            RetainedContextFixture::UnknownCallbackWithoutContinue,
+        ] {
+            match retained_context_core(fixture) {
+                Err(crate::elaborate::TypeError::Source(diagnostic)) => assert_eq!(
+                    diagnostic.reason,
+                    crate::elaborate::TypeReason::RetainedInterpretation,
+                ),
+                Err(other) => panic!("expected an interpreter rejection, got {other:?}"),
+                Ok(_) => panic!("an unresumed capture still needs its original interpreter"),
             }
         }
     }

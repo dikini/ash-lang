@@ -41,9 +41,10 @@ is closed. C2 store work is active. Internal fixtures exercise private root,
 Retain and structural Continue through a store frame, including the current
 consumer's adapter and a running cleanup. Source-derived capture checks cover
 an imported continuation helper, enclosing and captured support, and actual
-interpreter conflicts reached after restoration. Reached requests also reject
-intervening original interpreters; the saved cut still needs an independent
-interpreter-admission check at Retain, including when it is never continued.
+interpreter conflicts. A separate focused control inspection checks saved
+cuts at Retain, including cuts never continued and later checkpoints; real
+restoration checks the current consumer's interpreter. This C2 work remains
+subject to independent review and the remaining acceptance checks.
 An ordinary Probe can be intercepted by a source handler; internal checks
 exercise its driver restriction and actual Store-provider selection. Image
 codecs preserve Store/Root/Retain carriers and generic Continue round-trips,

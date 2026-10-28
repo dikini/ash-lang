@@ -4774,27 +4774,6 @@ impl<'a> Analysis<'a> {
         context: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<Option<Vec<(usize, usize)>>, Failure> {
-        self.handler_cell_owners_inner(code, context, false, budget)
-    }
-
-    /// Read an original interpreter's owner without creating a missing
-    /// historical input in a later or focused control context.
-    pub(super) fn existing_handler_cell_owners(
-        &mut self,
-        code: usize,
-        context: usize,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<Option<Vec<(usize, usize)>>, Failure> {
-        self.handler_cell_owners_inner(code, context, true, budget)
-    }
-
-    fn handler_cell_owners_inner(
-        &mut self,
-        code: usize,
-        context: usize,
-        existing_only: bool,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<Option<Vec<(usize, usize)>>, Failure> {
         let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
         let Expr::Handler { cell_owner, .. } = self.graph.expressions[expression] else {
             return Err(Failure::Invalid);
@@ -4802,15 +4781,7 @@ impl<'a> Analysis<'a> {
         let Some(owner) = cell_owner else {
             return Ok(None);
         };
-        let port = if existing_only {
-            charge(budget, 1)?;
-            let Some(port) = self.indices.get(&(owner, context)).copied() else {
-                return Ok(None);
-            };
-            port
-        } else {
-            self.slot(owner, context, budget)?
-        };
+        let port = self.slot(owner, context, budget)?;
         self.close(budget)?;
         let mut owners = Vec::new();
 
@@ -4975,6 +4946,23 @@ impl<'a> Analysis<'a> {
             _ => Atom::Unknown,
         };
         self.atom(request, atom, budget)
+    }
+
+    /// A private retained checkpoint's checked reply is exactly Unit. This
+    /// fact is used only by the separate hypothetical-cut inspection.
+    pub(super) fn inspection_unit_reply(
+        &mut self,
+        request: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let (expression, _) = self.slots.get(request).ok_or(Failure::Invalid)?.key;
+        if !matches!(
+            self.graph.expressions[expression],
+            Expr::Request { scalar: true, .. }
+        ) {
+            return Err(Failure::Invalid);
+        }
+        self.atom(request, Atom::Free, budget)
     }
 
     pub(super) fn check_payload(
