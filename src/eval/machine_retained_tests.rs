@@ -37,7 +37,7 @@ fn live_capture() -> CapturedContinuation {
 
 #[test]
 fn retained_move_restores_once_above_the_current_consumer() {
-    let mut store = RetainedStore::new(ActivationKey(7));
+    let mut store = RetainedStore::new(ActivationKey(7), test_store_api());
     let mut owner = Some(live_capture());
     let mut work = TypeWorkBudget::default();
     let key = store.retain(&mut owner, &mut work).unwrap();
@@ -182,7 +182,7 @@ fn retained_adapter_uses_the_current_consumer_region_after_restoration() {
         .clone()
         .extend(access, Value::RegionView(ActivationKey(99)))
         .unwrap();
-    let mut store = RetainedStore::new(ActivationKey(7));
+    let mut store = RetainedStore::new(ActivationKey(7), test_store_api());
     let mut capture = Some(CapturedContinuation {
         frames: vec![Frame::Bind {
             binder: adapter.answer.id(),
@@ -366,9 +366,27 @@ fn probe_fixture() -> (ValidatedEffectProgram, NodeId, NodeId, TypeVariableId) {
     (program, handler.unwrap(), request, identity)
 }
 
+fn probe_api(program: &ValidatedEffectProgram, request: NodeId) -> crate::resolved::StoreApi {
+    let EffectExprKind::Operation(EffectOperation::Request(request)) =
+        &program.node(request).unwrap().kind
+    else {
+        unreachable!()
+    };
+    crate::resolved::StoreApi::for_module(request.effect().effect().module()).unwrap()
+}
+
+fn test_store_api() -> crate::resolved::StoreApi {
+    static API: std::sync::OnceLock<crate::resolved::StoreApi> = std::sync::OnceLock::new();
+    *API.get_or_init(|| {
+        let (program, _, request, _) = probe_fixture();
+        probe_api(&program, request)
+    })
+}
+
 #[test]
 fn retained_probe_checks_driver_before_source_handler_selection() {
     let (program, handler, request, identity) = probe_fixture();
+    let api = probe_api(&program, request);
     let activation = ActivationKey(7);
     let mut machine = Machine::new_effect(&program);
     machine.control.take();
@@ -380,7 +398,7 @@ fn retained_probe_checks_driver_before_source_handler_selection() {
     machine.frames.push(Frame::ResourceBoundary {
         node: program.root(),
         key: activation,
-        payload: ResourcePayload::Store(Box::new(RetainedStore::new(activation))),
+        payload: ResourcePayload::Store(Box::new(RetainedStore::new(activation, api))),
     });
     machine
         .frames
@@ -429,7 +447,7 @@ fn retained_probe_checks_driver_before_source_handler_selection() {
     other.frames.push(Frame::ResourceBoundary {
         node: program.root(),
         key: activation,
-        payload: ResourcePayload::Store(Box::new(RetainedStore::new(activation))),
+        payload: ResourcePayload::Store(Box::new(RetainedStore::new(activation, api))),
     });
     other
         .frames
@@ -462,7 +480,7 @@ fn retained_probe_reads_the_actual_owned_work() {
     machine.frames.push(Frame::ResourceBoundary {
         node: program.root(),
         key: activation,
-        payload: ResourcePayload::Store(Box::new(RetainedStore::new(activation))),
+        payload: ResourcePayload::Store(Box::new(RetainedStore::new(activation, api))),
     });
     let probe = |machine: &mut Machine<'_>, expected| {
         machine
@@ -519,6 +537,74 @@ fn retained_probe_reads_the_actual_owned_work() {
 }
 
 #[test]
+fn retained_probe_request_selects_the_owning_store() {
+    let (program, _, request, identity) = probe_fixture();
+    let api = probe_api(&program, request);
+    let activation = ActivationKey(7);
+    let mut machine = Machine::new_effect(&program);
+    machine.control.take();
+    let instantiation = Instantiation::default()
+        .acquire(identity, activation, &mut machine.instantiation_work, None)
+        .unwrap();
+    machine.frames.push(Frame::ResourceBoundary {
+        node: program.root(),
+        key: activation,
+        payload: ResourcePayload::Store(Box::new(RetainedStore::new(activation, api))),
+    });
+    let other = ActivationKey(8);
+    let mut other_store = RetainedStore::new(other, api);
+    other_store.slots.push(RetainedSlot {
+        generation: 0,
+        continuation: Some(live_capture()),
+    });
+    machine.frames.push(Frame::ResourceBoundary {
+        node: program.root(),
+        key: other,
+        payload: ResourcePayload::Store(Box::new(other_store)),
+    });
+    machine
+        .return_request(request, &instantiation, Value::Unit)
+        .unwrap();
+    assert!(matches!(
+        machine.control.take(),
+        Some(Control::Return(Value::Boolean(true)))
+    ));
+    let Frame::ResourceBoundary {
+        payload: ResourcePayload::Store(store),
+        ..
+    } = &mut machine.frames[0]
+    else {
+        unreachable!()
+    };
+    store.slots.push(RetainedSlot {
+        generation: 0,
+        continuation: Some(live_capture()),
+    });
+    machine
+        .return_request(request, &instantiation, Value::Unit)
+        .unwrap();
+    assert!(matches!(
+        machine.control.take(),
+        Some(Control::Return(Value::Boolean(false)))
+    ));
+
+    let foreign_api = test_store_api();
+    assert_ne!(foreign_api.probe(), api.probe());
+    let mut foreign = Machine::new_effect(&program);
+    foreign.control.take();
+    foreign.frames.push(Frame::ResourceBoundary {
+        node: program.root(),
+        key: activation,
+        payload: ResourcePayload::Store(Box::new(RetainedStore::new(activation, foreign_api))),
+    });
+    assert_eq!(
+        foreign.return_request(request, &instantiation, Value::Unit),
+        Err(RuntimeFailure::ForeignBinding)
+    );
+    assert!(foreign.control.is_none());
+}
+
+#[test]
 fn retained_root_moves_only_the_nearest_associated_clause_owner() {
     let (program, handler_node, request_node, _) = checkpoint_fixture();
     let mut machine = Machine::new_effect(&program);
@@ -527,7 +613,7 @@ fn retained_root_moves_only_the_nearest_associated_clause_owner() {
     machine.frames.push(Frame::ResourceBoundary {
         node: program.root(),
         key: activation,
-        payload: ResourcePayload::Store(Box::new(RetainedStore::new(activation))),
+        payload: ResourcePayload::Store(Box::new(RetainedStore::new(activation, test_store_api()))),
     });
     machine.live_resources = 1;
     machine
@@ -607,7 +693,7 @@ fn retained_root_moves_only_the_nearest_associated_clause_owner() {
 fn retained_resume_reyield_preserves_each_suffix_and_unrelated_work() {
     let (program, handler_node, request_node, resume_node) = checkpoint_fixture();
     let activation = ActivationKey(7);
-    let mut store = RetainedStore::new(activation);
+    let mut store = RetainedStore::new(activation, test_store_api());
     let mut unrelated = Some(CapturedContinuation {
         frames: vec![Frame::CloseCompletion],
     });
@@ -692,7 +778,7 @@ fn retained_root_in_owned_service_segment_keeps_driver_blocked() {
     for region_segment in [false, true] {
         let mut machine = Machine::new_effect(&program);
         machine.control.take();
-        let mut store = RetainedStore::new(key);
+        let mut store = RetainedStore::new(key, test_store_api());
         store.active_roots = 1;
         machine.frames.push(Frame::ResourceBoundary {
             node: program.root(),
@@ -741,7 +827,7 @@ fn retained_outer_discard_refuses_to_abandon_a_root_completion() {
     machine.control.take();
     let handler = machine.handler(handler_node).unwrap().id();
     let owner = machine.handler(handler_node).unwrap().clauses()[0].resume();
-    let mut store = RetainedStore::new(key);
+    let mut store = RetainedStore::new(key, test_store_api());
     store.active_roots = 1;
     machine.frames.push(Frame::ResourceBoundary {
         node: program.root(),
@@ -896,7 +982,10 @@ fn retained_continue_carrier_runs_the_restored_branch_for_its_current_consumer()
         machine.frames.push(Frame::ResourceBoundary {
             node: program.root(),
             key: activation,
-            payload: ResourcePayload::Store(Box::new(RetainedStore::new(activation))),
+            payload: ResourcePayload::Store(Box::new(RetainedStore::new(
+                activation,
+                test_store_api(),
+            ))),
         });
         machine.live_resources = 1;
         (machine, environment, access)
@@ -1012,7 +1101,7 @@ fn retained_continue_carrier_runs_the_restored_branch_for_its_current_consumer()
 
 #[test]
 fn retained_move_prepares_storage_before_taking_either_owner() {
-    let mut store = RetainedStore::new(ActivationKey(3));
+    let mut store = RetainedStore::new(ActivationKey(3), test_store_api());
     let mut owner = Some(CapturedContinuation {
         frames: vec![saved(11)],
     });
@@ -1060,12 +1149,12 @@ fn retained_move_rejects_its_owner_inside_nested_captures() {
     let program = super::tests::effect_program("main : Unit -> Int\nmain () = 42\n");
     let node = program.root();
     let key = ActivationKey(3);
-    let mut store = RetainedStore::new(key);
+    let mut store = RetainedStore::new(key, test_store_api());
     let nested = CapturedContinuation {
         frames: vec![Frame::ResourceBoundary {
             node,
             key,
-            payload: ResourcePayload::Store(Box::new(RetainedStore::new(key))),
+            payload: ResourcePayload::Store(Box::new(RetainedStore::new(key, test_store_api()))),
         }],
     };
     let mut owner = Some(CapturedContinuation {
@@ -1088,6 +1177,7 @@ fn retained_move_rejects_its_owner_inside_nested_captures() {
 fn retained_store_edges_are_disposed_without_recursive_stack_growth() {
     let program = super::tests::effect_program("main : Unit -> Int\nmain () = 42\n");
     let node = program.root();
+    let api = test_store_api();
     std::thread::Builder::new()
         .stack_size(64 * 1024)
         .spawn(move || {
@@ -1097,6 +1187,7 @@ fn retained_store_edges_are_disposed_without_recursive_stack_growth() {
                 let store = RetainedStore {
                     active_roots: 0,
                     activation: key,
+                    api,
                     slots: vec![RetainedSlot {
                         generation: 0,
                         continuation: Some(captured),
@@ -1121,6 +1212,7 @@ fn retained_store_edges_are_disposed_without_recursive_stack_growth() {
 fn retained_store_disposal_reports_incomplete_without_retrying_growth() {
     let program = super::tests::effect_program("main : Unit -> Int\nmain () = 42\n");
     let node = program.root();
+    let api = test_store_api();
     let payload: Arc<[u8]> = Arc::from(&b"retained"[..]);
     let forest = || {
         let slots = (0..12)
@@ -1140,6 +1232,7 @@ fn retained_store_disposal_reports_incomplete_without_retrying_growth() {
                 payload: ResourcePayload::Store(Box::new(RetainedStore {
                     active_roots: 0,
                     activation: ActivationKey(3),
+                    api,
                     slots,
                 })),
             }],
@@ -1172,7 +1265,7 @@ fn retained_store_disposal_reports_incomplete_without_retrying_growth() {
 
 #[test]
 fn retained_locators_cannot_replay_or_cross_store_generations() {
-    let mut store = RetainedStore::new(ActivationKey(3));
+    let mut store = RetainedStore::new(ActivationKey(3), test_store_api());
     let mut work = TypeWorkBudget::default();
     let mut first = Some(CapturedContinuation {
         frames: vec![saved(1)],

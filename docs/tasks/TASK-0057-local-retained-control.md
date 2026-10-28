@@ -43,7 +43,7 @@ consumer's result adapter. Linked Core still rejects store release: root and
 row admission, interpretation and support checks, higher-order instantiation,
 and image support remain to be connected. An ordinary Probe can be intercepted
 by a source handler; internal checks exercise its driver restriction and
-store-state calculation. Store-provider selection and C3 freshness still need
+actual Store-provider selection and state calculation. C3 freshness still needs
 connected evidence. C2–C5 and the connected
 full-workspace and Main gates remain open.
 

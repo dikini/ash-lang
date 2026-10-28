@@ -773,6 +773,7 @@ struct RetainedSlot {
 #[derive(Debug)]
 struct RetainedStore {
     activation: ActivationKey,
+    api: crate::resolved::StoreApi,
     slots: Vec<RetainedSlot>,
     active_roots: usize,
 }
@@ -784,9 +785,10 @@ struct RestorePreparation {
 }
 
 impl RetainedStore {
-    fn new(activation: ActivationKey) -> Self {
+    fn new(activation: ActivationKey, api: crate::resolved::StoreApi) -> Self {
         Self {
             activation,
+            api,
             slots: Vec::new(),
             active_roots: 0,
         }
@@ -2377,7 +2379,7 @@ impl<'runtime> Machine<'runtime> {
         let Some(ExecutableNode::Effect(expression)) = resource_program.node(node) else {
             return Err(RuntimeFailure::InvalidControlState);
         };
-        let (identity, handle, body, cell) = match &expression.kind {
+        let (identity, handle, body, cell, store_api) = match &expression.kind {
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
                 let acquisition = resource.acquisition;
                 let api = acquisition
@@ -2402,6 +2404,7 @@ impl<'runtime> Machine<'runtime> {
                     acquisition.handle,
                     resource.body(),
                     Some((resource, api)),
+                    None,
                 )
             }
             EffectExprKind::Operation(EffectOperation::Store(store)) => {
@@ -2411,7 +2414,13 @@ impl<'runtime> Machine<'runtime> {
                 if !api.registry(self.program.registry()) || !matches!(value, Value::Unit) {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
-                (acquisition.identity, acquisition.handle, store.body(), None)
+                (
+                    acquisition.identity,
+                    acquisition.handle,
+                    store.body(),
+                    None,
+                    Some(api),
+                )
             }
             _ => return Err(RuntimeFailure::InvalidControlState),
         };
@@ -2493,7 +2502,10 @@ impl<'runtime> Machine<'runtime> {
         } else if cell.is_some() {
             ResourcePayload::Cell(value)
         } else {
-            ResourcePayload::Store(Box::new(RetainedStore::new(key)))
+            ResourcePayload::Store(Box::new(RetainedStore::new(
+                key,
+                store_api.ok_or(RuntimeFailure::InvalidControlState)?,
+            )))
         };
         // Publish only after every fallible preflight. The frame is the sole
         // payload owner; handles and lexical metadata carry only its key.
@@ -2671,25 +2683,10 @@ impl<'runtime> Machine<'runtime> {
                 continue;
             }
             if let Frame::ResourceBoundary { node, key, payload } = frame {
-                if matches!(payload, ResourcePayload::Store(_)) {
-                    let Some(request_api) =
-                        crate::resolved::StoreApi::for_module(effect.effect().module())
-                    else {
-                        continue;
-                    };
-                    if effect.effect() != request_api.probe() {
-                        continue;
-                    }
-                    let Some(ExecutableNode::Effect(expression)) = handler_program.node(*node)
-                    else {
-                        return Err(RuntimeFailure::InvalidControlState);
-                    };
-                    let EffectExprKind::Operation(EffectOperation::Store(store)) = &expression.kind
-                    else {
-                        return Err(RuntimeFailure::InvalidControlState);
-                    };
-                    let api = crate::resolved::StoreApi::for_module(store.acquisition.builtin)
-                        .ok_or(RuntimeFailure::InvalidControlState)?;
+                if let ResourcePayload::Store(store) = payload {
+                    // Acquisition authenticated this exact API with the store
+                    // owner. Locators and request spellings grant no provider.
+                    let api = store.api;
                     if effect.effect() == api.probe()
                         && Instantiation::activation_at(&effect, 0) == Some(*key)
                     {
@@ -2975,7 +2972,7 @@ impl<'runtime> Machine<'runtime> {
         else {
             return Err(RuntimeFailure::InvalidControlState);
         };
-        if store.activation != *key {
+        if store.activation != *key || store.api.probe() != api.probe() {
             return Err(RuntimeFailure::InvalidControlState);
         }
         charge_effect_work(
