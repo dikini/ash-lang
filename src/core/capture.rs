@@ -887,6 +887,7 @@ pub(crate) enum Failure {
     RetainedInterpretation {
         source: Span,
     },
+    RetainedRelease,
     Unsafe(UnsafeDiscard),
     CleanupContext {
         discard: Span,
@@ -2148,6 +2149,7 @@ fn compile_pure_capture_control<F: CoreOperationFamily>(
             }
             graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
             let branch = graph.code.len();
+            data.position(branch, id, budget)?;
             graph.code.push(Control::Choice(arms));
             Control::Sequence(copy_slice(
                 &[index(matching.scrutinee()) + 1, branch],
@@ -2824,6 +2826,11 @@ fn compile_with_boundary<F: CoreOperationFamily>(
         for id in 1..graph.code.len() {
             charge(budget, 1)?;
             if let Control::Sequence(children) | Control::Choice(children) = &graph.code[id] {
+                // A pure match can still produce the case observed by a
+                // later Store probe check. Preserve that result port.
+                if data.case_result_required(id) {
+                    continue;
+                }
                 charge(budget, children.len())?;
                 if children
                     .iter()
@@ -2864,6 +2871,7 @@ pub(crate) fn check_builder<F: CoreOperationFamily>(
         methods,
         adapters,
         None,
+        false,
         budget,
     )
 }
@@ -2888,7 +2896,30 @@ fn check_nodes_with_methods<F: CoreOperationFamily>(
     budget: &mut TypeWorkBudget,
 ) -> Result<Vec<CaptureValueSummary>, Failure> {
     analyze_nodes_with_methods(
-        nodes, globals, imports, operation, methods, adapters, None, budget,
+        nodes, globals, imports, operation, methods, adapters, None, false, budget,
+    )
+}
+
+/// The linked validator uses this same reconstruction when it asks for the
+/// additional Store-release proof. Source capture checks retain their existing
+/// admission contract.
+pub(super) fn check_nodes_with_release<F: CoreOperationFamily>(
+    nodes: &[StoredNode<F>],
+    globals: &[(BinderId, NodeId)],
+    imports: &[(BinderId, &CaptureValueSummary)],
+    operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<CaptureValueSummary>, Failure> {
+    analyze_nodes_with_methods(
+        nodes,
+        globals,
+        imports,
+        operation,
+        &[],
+        &[],
+        None,
+        true,
+        budget,
     )
 }
 
@@ -2910,6 +2941,7 @@ pub(crate) fn infer_cleanup_rows<F: CoreOperationFamily>(
         methods,
         adapters,
         Some(&mut rows),
+        false,
         budget,
     )?;
     Ok(rows)
@@ -2927,6 +2959,7 @@ fn analyze_nodes_with_methods<F: CoreOperationFamily>(
     methods: &[MethodUse],
     adapters: &[MethodAdapter],
     rows: Option<&mut Vec<CleanupRequirement>>,
+    check_release: bool,
     budget: &mut TypeWorkBudget,
 ) -> Result<Vec<CaptureValueSummary>, Failure> {
     let Some(BuiltCaptureGraph {
@@ -2947,13 +2980,14 @@ fn analyze_nodes_with_methods<F: CoreOperationFamily>(
             // Strict discovery already visits the original control paths. Keep
             // its passive row observations instead of constructing a second
             // inference-only solver; all safety checks still run in strict mode.
-            let requirements = check_control_roots_with_rows(&graph, roots, true, budget)?;
+            let requirements =
+                check_control_roots_with_rows(&graph, roots, true, check_release, budget)?;
             check_cleanup_rows(nodes, operation, &requirements, budget)?;
         } else {
             if has_discard {
                 check_cleanup_rows(nodes, operation, &[], budget)?;
             }
-            check_control_roots(&graph, roots, budget)?;
+            check_control_roots_with_rows(&graph, roots, false, check_release, budget)?;
         }
     }
     let graph = Arc::new(graph);
@@ -3141,6 +3175,7 @@ fn build_capture_graph<F: CoreOperationFamily>(
     bindings.extend(globals.iter().map(|(binder, node)| (*binder, index(*node))));
     let imported = ImportedCallables::new(imports, nodes.len(), budget)?;
     let mut has_discard = false;
+    let mut has_retained_control = false;
     let mut resource_scope = None;
     let mut parameters = HashMap::new();
     for (id, node) in nodes.iter().enumerate() {
@@ -3162,6 +3197,10 @@ fn build_capture_graph<F: CoreOperationFamily>(
             if let Some(EffectOperation::Registration(scope)) = operation(&node.kind) {
                 resource_scope.get_or_insert(scope.span);
             }
+            has_retained_control |= matches!(
+                operation(&node.kind),
+                Some(EffectOperation::RetainedRoot(_) | EffectOperation::Retain(_))
+            );
             has_discard |= matches!(operation(&node.kind), Some(EffectOperation::Discard(_)));
         }
         if let Some(EffectOperation::RegionClosure(closure)) = operation(&node.kind)
@@ -3203,7 +3242,7 @@ fn build_capture_graph<F: CoreOperationFamily>(
 
     // Resume-only final Core needs no abandonment proof. Module publication
     // still requests roots, because a caller may install a discarding handler.
-    if !has_discard && resource_scope.is_none() && globals.is_empty() {
+    if !has_discard && !has_retained_control && resource_scope.is_none() && globals.is_empty() {
         return Ok(None);
     }
 
@@ -3532,18 +3571,11 @@ fn check_cleanup_rows<F: CoreOperationFamily>(
 }
 
 // Keep solver storage out of the graph-construction caller's stack frame.
-fn check_control_roots(
-    graph: &SummaryGraph,
-    roots: Vec<usize>,
-    budget: &mut TypeWorkBudget,
-) -> Result<(), Failure> {
-    check_control_roots_with_rows(graph, roots, false, budget).map(|_| ())
-}
-
 fn check_control_roots_with_rows(
     graph: &SummaryGraph,
     roots: Vec<usize>,
     collect_cleanup_rows: bool,
+    check_release: bool,
     budget: &mut TypeWorkBudget,
 ) -> Result<Vec<CleanupRequirement>, Failure> {
     if let Some(scan) = control::PrepaidControlCodeScan::for_roots(graph, budget)? {
@@ -3559,6 +3591,7 @@ fn check_control_roots_with_rows(
         }
         let mut analysis = Analysis::from_prepaid_control_scan(scan, None, budget)?;
         analysis.collect_cleanup_rows = collect_cleanup_rows;
+        analysis.check_retained_release = check_release;
         analysis.check(&queries, budget)?;
         return Ok(std::mem::take(&mut analysis.cleanup_rows));
     }
@@ -4677,6 +4710,23 @@ mod tests {
         super::super::validate_effect_modules(core, &sources, &modules)
     }
 
+    fn validate_checked_core_with_work(
+        core: super::super::effect::UnvalidatedEffectProgram,
+        provenance: &[(crate::module::ModuleId, SourceFile)],
+        work: &mut TypeWorkBudget,
+    ) -> Result<super::super::effect::ValidatedEffectProgram, super::super::validate::ValidationError>
+    {
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source)
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        super::super::validate::validate_effect_modules_with_work(core, &sources, &modules, work)
+    }
+
     #[derive(Clone, Copy)]
     pub(super) enum RetainedContextFixture {
         Outer,
@@ -4713,8 +4763,13 @@ mod tests {
 
     fn retained_context_fixture(
         fixture: RetainedContextFixture,
-    ) -> Result<(super::super::UnvalidatedEffectProgram, Option<usize>), crate::elaborate::TypeError>
-    {
+    ) -> Result<
+        (
+            super::super::UnvalidatedEffectProgram,
+            Vec<(crate::module::ModuleId, SourceFile)>,
+        ),
+        crate::elaborate::TypeError,
+    > {
         use crate::{
             elaborate::{EffectElaborator, check_module, link_modules},
             evidence_validation::validate_interface_evidence,
@@ -5105,38 +5160,551 @@ mod tests {
             .unwrap()
             .node;
         let core = elaborator.finish(root).unwrap();
-        let pre_release_work = if matches!(
-            fixture,
-            RetainedContextFixture::OuterRegionBacking
-                | RetainedContextFixture::CapturedRegionBacking
-        ) {
-            let sources = graph
-                .modules()
-                .iter()
-                .map(|module| module.source())
-                .collect::<Vec<_>>();
-            let module_sources = graph
-                .modules()
-                .iter()
-                .map(|module| (module.id(), module.source().id()))
-                .collect::<Vec<_>>();
-            let mut work = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
-            let error = crate::core::check_ordinary_effect_modules_with_budget_for_test(
-                &core,
-                &sources,
-                &module_sources,
-                &mut work,
+        let provenance = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().clone()))
+            .collect();
+        Ok((core, provenance))
+    }
+
+    pub(super) fn retained_drain_fixture(source: &str) -> super::super::UnvalidatedEffectProgram {
+        retained_drain_fixture_with_provenance(source).0
+    }
+
+    #[test]
+    fn retained_store_free_root_still_builds_its_capture_graph() {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+
+        let core = retained_drain_fixture(concat!(
+            "import @builtin.retained_control as Control\n",
+            "effect Checkpoint<N> {\ncheckpoint : Unit -> Unit\n}\n",
+            "branch<N> : (Control.Store<N,(Unit -> Int ! {Control.Drive<N>})>, Unit) -> Int ! {Control.Drive<N>}\n",
+            "branch (store, ignored) = handle {\n",
+            "let _ = perform Checkpoint<N>.checkpoint ()\n7\n",
+            "} with Checkpoint<N> using store {\n",
+            "checkpoint ignored => {\nlet key = retain\n42\n}\n}\n",
+            "main : Unit -> Int\nmain () = 42\n",
+        ));
+        let root = core
+            .nodes
+            .iter()
+            .position(|node| {
+                matches!(
+                    operation(&node.kind),
+                    Some(EffectOperation::RetainedRoot(_))
+                )
+            })
+            .expect("the generic helper contains its actual private root");
+        let root = NodeId::new(core.arena, u32::try_from(root).unwrap());
+        let mut work = TypeWorkBudget::unbounded();
+        let domain = actual_capture_domain(&core.nodes, core.arena, root, &[], &[], &[], &mut work)
+            .expect("the root's actual control domain is reconstructible");
+        assert!(domain.iter().any(|id| matches!(
+            operation(&core.nodes[*id].kind),
+            Some(EffectOperation::Retain(_))
+        )));
+        assert!(!domain.iter().any(|id| matches!(
+            operation(&core.nodes[*id].kind),
+            Some(
+                EffectOperation::Store(_)
+                    | EffectOperation::Resource(_)
+                    | EffectOperation::Region(_)
+                    | EffectOperation::Cleanup(_)
+                    | EffectOperation::Registration(_)
+                    | EffectOperation::Discard(_)
             )
-            .expect_err("the separate drain proof still gates Store release");
-            assert_eq!(
-                error.reason(),
-                crate::core::ValidationReason::RetainedRelease
-            );
-            Some(work.used())
-        } else {
-            None
+        )));
+        let built = build_capture_graph(
+            &core.nodes,
+            &[],
+            &[],
+            operation,
+            &[],
+            &[],
+            Some(&domain),
+            &mut work,
+        )
+        .expect("the carrier graph must build")
+        .expect("the Store-free root cannot use the no-control fast path");
+        assert!(
+            built
+                .graph
+                .code
+                .iter()
+                .any(|code| matches!(code, control::Control::RetainedRoot { .. }))
+        );
+        assert!(
+            built
+                .graph
+                .code
+                .iter()
+                .any(|code| matches!(code, control::Control::Retain { .. }))
+        );
+    }
+
+    fn retained_drain_fixture_with_provenance(
+        source: &str,
+    ) -> (
+        super::super::UnvalidatedEffectProgram,
+        Vec<(crate::module::ModuleId, SourceFile)>,
+    ) {
+        use crate::{
+            elaborate::{EffectElaborator, check_module, link_modules},
+            evidence_validation::validate_interface_evidence,
+            module::{ModuleRoots, load_module_graph},
         };
-        Ok((core, pre_release_work))
+        let identity = SourceFile::new("retained-drain-id", "")
+            .unwrap()
+            .id()
+            .value();
+        let directory = std::env::temp_dir().join(format!(
+            "ash-retained-drain-{}-{identity}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(directory.join("entry.ash"), source).unwrap();
+        std::fs::write(
+            directory.join("probe_helper.ash"),
+            include_str!("../../tests/fixtures/retained-drain/probe_helper.ash"),
+        )
+        .unwrap();
+        let loaded = load_module_graph(&directory.join("entry.ash"), &ModuleRoots::empty());
+        std::fs::remove_dir_all(directory).unwrap();
+        let graph = loaded.unwrap();
+        let (resolved, mut dependencies) = resolved_entry_with_checked_dependencies(&graph);
+        let checked = check_module(resolved).expect("source fixture must elaborate");
+        let main = checked
+            .schemes()
+            .iter()
+            .find(|scheme| scheme.spelling == "main")
+            .expect("the source fixture has an entry");
+        let native_entry = matches!(
+            &main.scheme.value_type,
+            Type::EffectfulFunction(_, result) if !result.effects().is_empty()
+        );
+        let main_span = main.origin.primary_span();
+        dependencies.push(checked);
+        let linked =
+            validate_interface_evidence(link_modules(dependencies, graph.entry()).unwrap())
+                .unwrap();
+        let mut elaborator = EffectElaborator::for_module_program(&linked).unwrap();
+        let root = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap()
+            .node;
+        let core = if native_entry {
+            elaborator
+                .finish_with_owner_free_native_entry(root, main_span)
+                .unwrap_or_else(|_| panic!("the source entry has an authenticated native boundary"))
+                .0
+        } else {
+            elaborator.finish(root).unwrap()
+        };
+        let provenance = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().clone()))
+            .collect();
+        (core, provenance)
+    }
+
+    #[test]
+    fn retained_drain_tracks_actual_result_cases_and_fresh_probes() {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+        let fixtures = [
+            (
+                "recursive",
+                include_str!("../../tests/fixtures/retained-drain/basic.ash"),
+                true,
+            ),
+            (
+                "imported alias",
+                include_str!("../../tests/fixtures/retained-drain/imported-alias.ash"),
+                true,
+            ),
+            (
+                "early return",
+                include_str!("../../tests/fixtures/retained-drain/early-return.ash"),
+                false,
+            ),
+            (
+                "intercepted",
+                include_str!("../../tests/fixtures/retained-drain/intercepted.ash"),
+                false,
+            ),
+            (
+                "stale",
+                include_str!("../../tests/fixtures/retained-drain/stale.ash"),
+                false,
+            ),
+            (
+                "same helper after mutation",
+                include_str!("../../tests/fixtures/retained-drain/repeated-stale.ash"),
+                false,
+            ),
+            (
+                "unknown external after drain",
+                include_str!("../../tests/fixtures/retained-drain/unknown-external.ash"),
+                false,
+            ),
+            (
+                "post-resume retained work",
+                include_str!("../../tests/fixtures/retained-drain/post-resume.ash"),
+                false,
+            ),
+        ];
+        for (name, source, accepted) in fixtures {
+            let core = retained_drain_fixture(source);
+            let mut work = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
+            control::reset_drain_witness();
+            let result = check_nodes_with_release(&core.nodes, &[], &[], operation, &mut work);
+            eprintln!("{name}: work={}, result={result:?}", work.used());
+            if accepted {
+                assert!(result.is_ok(), "{name}: {result:?}");
+                assert!(
+                    control::drain_witnessed(),
+                    "{name}: no single retained representative reached normal release after restoration"
+                );
+            } else {
+                assert!(
+                    matches!(result, Err(Failure::RetainedRelease)),
+                    "{name}: {result:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn retained_drain_exhaustion_never_publishes_a_partial_result() {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+
+        let core = retained_drain_fixture(include_str!(
+            "../../tests/fixtures/retained-drain/basic.ash"
+        ));
+        let run = |work: &mut TypeWorkBudget| {
+            check_nodes_with_release(&core.nodes, &[], &[], operation, work)
+        };
+        let mut work = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
+        run(&mut work).expect("the complete drain query converges");
+        let exact = work.used();
+        assert!(exact > 0);
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(exact - 1)),
+            Err(Failure::Resource)
+        ));
+        let mut retry = TypeWorkBudget::with_limit(exact);
+        run(&mut retry).expect("a new query must not retain the exhausted partial result");
+        assert_eq!(retry.used(), exact);
+    }
+
+    #[test]
+    fn retained_drain_unused_captured_continue_can_be_checked() {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+
+        let source = include_str!("../../tests/fixtures/retained-drain/captured-continue.ash");
+        retained_drain_fixture(source);
+        let invoked = source.replace("let unused_action = ()", "let unused_action = action ()");
+        assert_ne!(invoked, source);
+        let core = retained_drain_fixture(&invoked);
+        let mut work = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
+        let result = check_nodes_with_release(&core.nodes, &[], &[], operation, &mut work);
+        eprintln!(
+            "captured invocation: work={}, result={result:?}",
+            work.used()
+        );
+        assert!(
+            result.is_ok() || matches!(result, Err(Failure::RetainedRelease)),
+            "the linked capture query must not fail internally: {result:?}"
+        );
+        let cleanup = retained_drain_cleanup_source(source);
+        assert_ne!(cleanup, source);
+        retained_drain_fixture(&cleanup);
+    }
+
+    fn retained_drain_cleanup_source(source: &str) -> String {
+        assert_eq!(source.matches("let action_result = ").count(), 1);
+        assert_eq!(source.matches("let unused_action = ()").count(), 1);
+        source
+            .replace(
+                "let action_result = Control.advance_with_drive (store, key)",
+                "let action_result = drain (store, key)",
+            )
+            .replace(
+                "let unused_action = ()",
+                "let unused_action = cleanup action {\n                        ()\n                    }",
+            )
+    }
+
+    #[test]
+    fn retained_drain_cleanup_uses_the_actual_captured_continue() {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+
+        let source = include_str!("../../tests/fixtures/retained-drain/captured-continue.ash");
+        let cleanup = retained_drain_cleanup_source(source);
+        assert_ne!(cleanup, source);
+        let (core, provenance) = retained_drain_fixture_with_provenance(&cleanup);
+        let mut work = TypeWorkBudget::unbounded();
+        control::reset_drain_witness();
+        let result = check_nodes_with_release(&core.nodes, &[], &[], operation, &mut work);
+        eprintln!("cleanup drain query={}, result={result:?}", work.used());
+        result.expect("cleanup must drain the retained work before normal Store release");
+        assert!(
+            control::drain_witnessed(),
+            "cleanup must restore a retained capture before normal Store release"
+        );
+        let mut linked_work = TypeWorkBudget::unbounded();
+        let linked = validate_checked_core_with_work(core, &provenance, &mut linked_work);
+        eprintln!(
+            "cleanup complete linked work={}, result={:?}",
+            linked_work.used(),
+            linked.as_ref().map(|_| ()).map_err(|error| error.reason())
+        );
+        linked.expect("the complete linked validator must admit the drained cleanup");
+    }
+
+    #[test]
+    fn retained_drain_cleanup_restores_an_owned_fresh_answer_handler() {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+
+        let core = retained_drain_fixture(include_str!(
+            "../../tests/fixtures/retained-drain/fresh-answer.ash"
+        ));
+        let mut work = TypeWorkBudget::unbounded();
+        control::reset_drain_witness();
+        let result = check_nodes_with_release(&core.nodes, &[], &[], operation, &mut work);
+        eprintln!(
+            "owned fresh answer: work={}, result={result:?}",
+            work.used()
+        );
+        result.expect("the owned allocator and cleanup must reach a drained Store close");
+        assert!(
+            control::drain_witnessed(),
+            "the fresh answer must follow a real retained restoration before Store close"
+        );
+    }
+
+    fn retained_drain_outer_discard_check(source: &str, accepted: bool, late_retain: bool) {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+
+        let core = retained_drain_fixture(source);
+        let mut work = TypeWorkBudget::unbounded();
+        control::reset_drain_witness();
+        let result = check_nodes_with_release(&core.nodes, &[], &[], operation, &mut work);
+        eprintln!("outer discard: work={}, result={result:?}", work.used());
+        if accepted {
+            assert!(result.is_ok(), "{result:?}");
+            assert!(
+                control::drain_discard_close_witnessed(false),
+                "no drain and completed cleanup reached the discarded Store close"
+            );
+        } else {
+            assert!(
+                matches!(result, Err(Failure::RetainedRelease)),
+                "{result:?}"
+            );
+            assert!(
+                control::drain_discard_close_witnessed(true),
+                "retained work was not observed at the discarded Store close"
+            );
+            if late_retain {
+                assert!(
+                    control::drain_discard_late_retain_witnessed(),
+                    "no new retain followed the completed drain before the discarded Store close"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn retained_drain_outer_discard_drains_before_close() {
+        retained_drain_outer_discard_check(
+            include_str!("../../tests/fixtures/retained-drain/outer-discard.ash"),
+            true,
+            false,
+        );
+    }
+
+    #[test]
+    fn retained_drain_outer_discard_without_drain_is_refused() {
+        let source = include_str!("../../tests/fixtures/retained-drain/outer-discard.ash");
+        let marker = "let release_step = drain (store, key)";
+        assert_eq!(source.matches(marker).count(), 1);
+        retained_drain_outer_discard_check(
+            &source.replace(marker, "let release_step = ()"),
+            false,
+            false,
+        );
+    }
+
+    #[test]
+    fn retained_drain_outer_discard_retain_after_drain_is_refused() {
+        let source = include_str!("../../tests/fixtures/retained-drain/outer-discard.ash");
+        let marker = "let late_step = ()";
+        assert_eq!(source.matches(marker).count(), 1);
+        let late = "let late_step = handle {\n                            let paused = perform Checkpoint<N>.checkpoint ()\n                            finished\n                        } with Checkpoint<N> using store {\n                            checkpoint ignored => {\n                                let late_key = retain\n                                finished\n                            }\n                        }";
+        retained_drain_outer_discard_check(&source.replace(marker, late), false, true);
+    }
+
+    #[test]
+    fn retained_drain_mutual_complete_linked_validation_counts_work() {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+
+        let (core, provenance) = retained_drain_fixture_with_provenance(include_str!(
+            "../../tests/fixtures/retained-drain/mutual.ash"
+        ));
+        let mut work = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
+        control::reset_drain_witness();
+        let result = check_nodes_with_release(&core.nodes, &[], &[], operation, &mut work);
+        eprintln!("mutual drain query={}, result={result:?}", work.used());
+        result.expect("the focused mutual drain query must converge");
+        assert!(
+            control::drain_witnessed(),
+            "mutual recursion must reach normal release after a real restoration"
+        );
+        let mut linked_work = TypeWorkBudget::unbounded();
+        let linked = validate_checked_core_with_work(core, &provenance, &mut linked_work);
+        eprintln!(
+            "mutual complete linked work={}, result={:?}",
+            linked_work.used(),
+            linked.as_ref().map(|_| ()).map_err(|error| error.reason())
+        );
+        linked.expect("the complete linked validator must admit the mutual drain");
+    }
+
+    #[test]
+    fn retained_drain_complete_linked_validation_measures_required_cases() {
+        let outer = include_str!("../../tests/fixtures/retained-drain/outer-discard.ash");
+        let no_drain = outer.replace(
+            "let release_step = drain (store, key)",
+            "let release_step = ()",
+        );
+        let late = "let late_step = handle {\n                            let paused = perform Checkpoint<N>.checkpoint ()\n                            finished\n                        } with Checkpoint<N> using store {\n                            checkpoint ignored => {\n                                let late_key = retain\n                                finished\n                            }\n                        }";
+        let late_retain = outer.replace("let late_step = ()", late);
+        assert_ne!(outer, no_drain);
+        assert_ne!(outer, late_retain);
+        let cases = [
+            (
+                "recursive",
+                include_str!("../../tests/fixtures/retained-drain/basic.ash"),
+                true,
+            ),
+            (
+                "imported alias",
+                include_str!("../../tests/fixtures/retained-drain/imported-alias.ash"),
+                true,
+            ),
+            (
+                "early return",
+                include_str!("../../tests/fixtures/retained-drain/early-return.ash"),
+                false,
+            ),
+            (
+                "intercepted probe",
+                include_str!("../../tests/fixtures/retained-drain/intercepted.ash"),
+                false,
+            ),
+            (
+                "stale probe",
+                include_str!("../../tests/fixtures/retained-drain/stale.ash"),
+                false,
+            ),
+            (
+                "repeated stale probe",
+                include_str!("../../tests/fixtures/retained-drain/repeated-stale.ash"),
+                false,
+            ),
+            (
+                "unknown external",
+                include_str!("../../tests/fixtures/retained-drain/unknown-external.ash"),
+                false,
+            ),
+            (
+                "post-resume retained work",
+                include_str!("../../tests/fixtures/retained-drain/post-resume.ash"),
+                false,
+            ),
+            (
+                "owned fresh answer",
+                include_str!("../../tests/fixtures/retained-drain/fresh-answer.ash"),
+                true,
+            ),
+            ("outer discard", outer, true),
+            ("outer discard without drain", no_drain.as_str(), false),
+            (
+                "outer discard after later retain",
+                late_retain.as_str(),
+                false,
+            ),
+        ];
+        let mut mismatches = Vec::new();
+        for (name, source, accepted) in cases {
+            let (core, provenance) = retained_drain_fixture_with_provenance(source);
+            let mut work = TypeWorkBudget::unbounded();
+            let result = validate_checked_core_with_work(core, &provenance, &mut work);
+            let reason = result.err().map(|error| error.reason());
+            eprintln!(
+                "{name}: complete linked work={}, reason={reason:?}",
+                work.used()
+            );
+            if (accepted && reason.is_some())
+                || (!accepted && reason != Some(super::super::ValidationReason::RetainedRelease))
+            {
+                mismatches.push((name, reason));
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "unexpected linked outcomes: {mismatches:?}"
+        );
     }
 
     #[test]
@@ -5304,21 +5872,13 @@ mod tests {
             RetainedContextFixture::OuterRegionBacking,
             RetainedContextFixture::CapturedRegionBacking,
         ] {
-            let (core, pre_release_work) = retained_context_fixture(fixture)
+            let (core, _) = retained_context_fixture(fixture)
                 .expect("the backing region encloses the Store or moves with the captured work");
             let mut budget = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
             check_nodes(&core.nodes, &[], &[], operation, &mut budget)
                 .expect("linked control must reconstruct region backing");
             let used = budget.used();
-            let prefix = pre_release_work.expect("the ordinary Core prefix was checked");
-            let limit = 3 * crate::types::TYPE_WORK_LIMIT;
-            eprintln!(
-                "retained region Core work: prefix={prefix}, capture={used}, subtotal={}",
-                prefix + used
-            );
-            let mut remaining = TypeWorkBudget::with_limit(limit - prefix);
-            check_nodes(&core.nodes, &[], &[], operation, &mut remaining)
-                .expect("the Core prefix and capture proof must fit the shared budget");
+            eprintln!("retained region capture work={used}");
             if matches!(fixture, RetainedContextFixture::CapturedRegionBacking) {
                 let mut exact = TypeWorkBudget::with_limit(used);
                 check_nodes(&core.nodes, &[], &[], operation, &mut exact)
@@ -5919,7 +6479,7 @@ mod tests {
                 .unwrap();
         assert!(!inferred.is_empty());
         let query = |budget: &mut TypeWorkBudget| {
-            check_control_roots_with_rows(&built.graph, built.roots.clone(), true, budget)
+            check_control_roots_with_rows(&built.graph, built.roots.clone(), true, false, budget)
         };
         let mut observed = TypeWorkBudget::default();
         let collected = query(&mut observed).unwrap();

@@ -394,6 +394,12 @@ fn checked_source_lowers_to_explicit_effect_core() {
                 EffectOperation::Resource(_) => {
                     panic!("resume-only fixture cannot contain resource")
                 }
+                EffectOperation::Store(_)
+                | EffectOperation::Continue(_)
+                | EffectOperation::RetainedRoot(_)
+                | EffectOperation::Retain(_) => {
+                    panic!("resume-only fixture cannot contain retained control")
+                }
                 EffectOperation::Registration(_) => {
                     panic!("resume-only fixture cannot contain registration")
                 }

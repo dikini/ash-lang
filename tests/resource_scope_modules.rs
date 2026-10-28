@@ -89,16 +89,12 @@ fn retained_continue_crosses_imported_generic_helpers_with_shared_answer_row() {
             "Control.Option<Int> ! {Control.Drive<N>} = F.forward\n42\n}\n",
         ),
     );
-    let failure = ash::driver::compile_path(ash::driver::RunConfiguration {
+    let observation = ash::driver::run_path(ash::driver::RunConfiguration {
         entry,
         roots: ModuleRoots::empty(),
     })
-    .expect_err("store release is still awaiting C3");
-    assert_eq!(
-        failure.reason_code(),
-        "core.validation.retained-release",
-        "{failure:?}"
-    );
+    .expect("an empty Store with an imported relay may close");
+    assert_eq!(observation.value_display(), "42");
 }
 
 impl Drop for Tree {

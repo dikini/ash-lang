@@ -4168,19 +4168,136 @@ mod tests {
     }
 
     #[test]
-    fn retained_store_image_work_does_not_grant_public_release() {
-        let tree = SourceTree::new();
-        tree.write(
-            "entry.ash",
+    fn retained_empty_store_image_revalidates_and_executes() {
+        assert_effect_image(
             concat!(
                 "import @builtin.retained_control as Control\n",
                 "main : Unit -> Int\n",
                 "main () = resource Control.Store<N,(Unit -> Int)> store = () {\n42\n}\n",
             ),
+            &[
+                ModuleRoleRecord::BuiltinRegion,
+                ModuleRoleRecord::BuiltinRetainedControl,
+            ],
         );
-        let failure = compile_path(tree.configuration())
-            .expect_err("Store release still needs its independent drain proof");
-        assert_eq!(failure.reason_code(), "core.validation.retained-release");
+    }
+
+    #[test]
+    fn retained_drain_images_use_the_actual_startup_budget_and_run() {
+        for (name, source, answer) in [
+            (
+                "recursive",
+                include_str!("../../tests/fixtures/retained-drain/basic.ash"),
+                "42",
+            ),
+            (
+                "outer discard",
+                include_str!("../../tests/fixtures/retained-drain/outer-discard.ash"),
+                "7",
+            ),
+        ] {
+            let tree = SourceTree::new();
+            tree.write("entry.ash", source);
+            let compiled = compile_path(tree.configuration()).expect("the drain compiles");
+            let (program, provenance) = compiled.effect_build_input().unwrap();
+            let mut preparation =
+                super::super::gas::preparation(provenance, program.nodes().len()).unwrap();
+            let mut image = encode_effect_for_build(
+                program,
+                provenance,
+                super::super::NATIVE_TARGET,
+                &mut preparation,
+            )
+            .unwrap()
+            .image;
+            let bytes = image.encode_bytes(&mut preparation).unwrap();
+            let facts = image.encode_native_expectations(&mut preparation).unwrap();
+            let mut startup = super::super::gas::startup(bytes.len(), facts.len()).unwrap();
+            let decoded = PureImage::decode_bytes(&bytes, &mut startup).unwrap();
+            decoded
+                .admit_expected_native_facts(&facts, &mut startup)
+                .unwrap();
+            let restored = decoded.restore_effect(&mut startup).unwrap();
+            eprintln!(
+                "{name}: image startup work={}, allowance={}",
+                startup.used(),
+                startup.limit()
+            );
+            assert_eq!(
+                crate::eval::evaluate_effect(&restored.program)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                answer
+            );
+            let facts: &'static [u8] = Box::leak(facts.into_boxed_slice());
+            let result = super::super::__run_private_effect_image(
+                &super::super::runtime_fingerprint(),
+                &bytes,
+                facts,
+                &[],
+                None,
+            )
+            .expect("the generated-host entry must revalidate and run the image");
+            assert_eq!(result.to_string(), answer, "{name}");
+
+            if name == "recursive" {
+                let start = u32::try_from(source.find("match quiet {").unwrap()).unwrap();
+                let matches = image
+                    .nodes
+                    .iter()
+                    .filter_map(|node| {
+                        let NodeTag::Match { arms, .. } = node.tag else {
+                            return None;
+                        };
+                        let mut origin = node.origin;
+                        let span = loop {
+                            match image.origins[usize::try_from(origin).unwrap()] {
+                                OriginRecord::Source(span) => break span,
+                                OriginRecord::Generated { cause, .. }
+                                | OriginRecord::Related { primary: cause, .. } => origin = cause,
+                            }
+                        };
+                        let source_record = &image.sources[usize::try_from(span.source).unwrap()];
+                        (span.start == start
+                            && source_record.text.get(&image.bytes).unwrap() == source.as_bytes())
+                        .then_some(arms)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(matches.len(), 1);
+                let arms = matches[0];
+                let pair = arms.get(&image.arms).unwrap();
+                assert_eq!(pair.len(), 2);
+                assert!(matches!(
+                    image.patterns[usize::try_from(pair[0].pattern).unwrap()].tag,
+                    PatternTag::Bool(true)
+                ));
+                assert!(matches!(
+                    image.patterns[usize::try_from(pair[1].pattern).unwrap()].tag,
+                    PatternTag::Bool(false)
+                ));
+                let first = usize::try_from(arms.start).unwrap();
+                let first_pattern = image.arms[first].pattern;
+                image.arms[first].pattern = image.arms[first + 1].pattern;
+                image.arms[first + 1].pattern = first_pattern;
+                let changed = image.encode_bytes(&mut preparation).unwrap();
+                let Err(failure) = super::super::__run_private_effect_image(
+                    &super::super::runtime_fingerprint(),
+                    &changed,
+                    facts,
+                    &[],
+                    None,
+                ) else {
+                    panic!("a decoded image cannot authorize an undrained Store");
+                };
+                assert!(matches!(
+                    failure,
+                    super::super::PrivateProgramFailure(super::super::PrivateFailure::Image(
+                        ImageFailure::Validation(error)
+                    )) if error.reason() == crate::core::ValidationReason::RetainedRelease
+                ));
+            }
+        }
     }
 
     #[test]
@@ -4298,6 +4415,16 @@ mod tests {
     }
 
     fn assert_region_image(source: &str) {
+        assert_effect_image(
+            source,
+            &[
+                ModuleRoleRecord::BuiltinRegion,
+                ModuleRoleRecord::BuiltinRegionFacade,
+            ],
+        );
+    }
+
+    fn assert_effect_image(source: &str, required_roles: &[ModuleRoleRecord]) {
         let tree = SourceTree::new();
         tree.write("entry.ash", source);
         let compiled = compile_path(tree.configuration()).unwrap();
@@ -4312,10 +4439,7 @@ mod tests {
             &mut TypeWorkBudget::default(),
         )
         .unwrap();
-        for role in [
-            ModuleRoleRecord::BuiltinRegion,
-            ModuleRoleRecord::BuiltinRegionFacade,
-        ] {
+        for &role in required_roles {
             assert!(build.image.sources.iter().any(|source| source.role == role));
         }
         let bytes = build

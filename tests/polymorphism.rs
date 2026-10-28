@@ -197,6 +197,10 @@ fn runtime_class(program: &ValidatedEffectProgram, event: &TraceEvent) -> &'stat
         EffectExprKind::Operation(EffectOperation::Cleanup(_)) => "cleanup",
         EffectExprKind::Operation(EffectOperation::Registration(_)) => "registration",
         EffectExprKind::Operation(EffectOperation::Resource(_)) => "resource",
+        EffectExprKind::Operation(EffectOperation::Store(_)) => "store",
+        EffectExprKind::Operation(EffectOperation::Continue(_)) => "continue",
+        EffectExprKind::Operation(EffectOperation::RetainedRoot(_)) => "retained-root",
+        EffectExprKind::Operation(EffectOperation::Retain(_)) => "retain",
         EffectExprKind::Operation(EffectOperation::Region(_)) => "region",
         EffectExprKind::Operation(EffectOperation::RegionAllocate(_)) => "region-allocate",
         EffectExprKind::Operation(EffectOperation::RegionValueRequest(_)) => "region-value-request",
@@ -213,6 +217,7 @@ fn runtime_class(program: &ValidatedEffectProgram, event: &TraceEvent) -> &'stat
 fn runtime_value_class(value: &Value) -> &'static str {
     match value {
         Value::ResourceHandle(_) => "resource-handle",
+        Value::RetainedKey(_) => "retained-key",
         Value::RegionRequest(_) => "region-request",
         Value::RegionStorage(_) => "region-storage",
         Value::RegionBackingFunction(_) => "region-backing-function",

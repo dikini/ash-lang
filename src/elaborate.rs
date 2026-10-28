@@ -12214,6 +12214,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
 
     /// Checks actual operation clauses without requiring a handled client body.
     /// Resume rows remain provisional until the caller replays the shared output.
+    #[allow(clippy::too_many_arguments)] // Clause context, result and retained owner are separate inputs.
     fn check_effect_clauses(
         &mut self,
         effect: &EffectInstance,
@@ -27314,7 +27315,8 @@ fn capture_failure(
             ));
             TypeError::source(diagnostic)
         }
-        Failure::Invalid => invalid_state(),
+        // The source capture pass does not issue the linked release query.
+        Failure::Invalid | Failure::RetainedRelease => invalid_state(),
         Failure::RetainedDriver { source } => TypeError::source(Diagnostic::new(
             TypeReason::RetainedDriver,
             SourceLabel::new(source, "this Store still has an active branch"),

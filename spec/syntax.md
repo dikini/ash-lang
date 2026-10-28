@@ -471,7 +471,7 @@ main () = {
         second ()
     }
     and second : Unit -> Int = fn(ignored) {
-        let retain : Unit -> Int = fn(value) {
+        let saved : Unit -> Int = fn(value) {
             first value
         }
         42

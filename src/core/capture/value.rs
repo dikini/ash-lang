@@ -18,6 +18,56 @@ use crate::{
 
 type CellOperand = (Vec<(usize, usize)>, Option<usize>);
 type RegionTargets = (Vec<(usize, usize)>, bool, bool);
+type CaseArm = (Vec<(usize, usize)>, usize, CasePattern);
+type CaseCallPorts = (usize, usize, Vec<(usize, usize)>);
+
+/// Cases observed by the Store-focused normal-return projection. These are
+/// value cases only; neither a constructor nor a Boolean grants authority.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) enum ValueCase {
+    Boolean(bool),
+    Constructor(ConstructorId),
+    Tuple,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) struct CaseFact {
+    pub(super) value: ValueCase,
+    // Only the actual selected Store provider creates this relation.
+    pub(super) fresh_probe: bool,
+    // An actually returned aggregate supplies its own payload ports.
+    pub(super) origin: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CasePattern {
+    Any,
+    Case(ValueCase, bool),
+    Opaque,
+}
+
+/// A constructor arm is decisive only when its payload pattern cannot fail.
+fn irrefutable_pattern(
+    pattern: &CorePattern,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, Failure> {
+    let mut pending = copy_slice(&[pattern], budget)?;
+    while let Some(pattern) = pending.pop() {
+        charge(budget, 1)?;
+        match &pattern.kind {
+            CorePatternKind::Binder(_) | CorePatternKind::Wildcard | CorePatternKind::Unit => {}
+            CorePatternKind::Tuple(elements) => {
+                charge(budget, elements.len())?;
+                pending
+                    .try_reserve(elements.len())
+                    .map_err(|_| Failure::Resource)?;
+                pending.extend(elements.iter());
+            }
+            CorePatternKind::Boolean(_) | CorePatternKind::Constructor { .. } => return Ok(false),
+        }
+    }
+    Ok(true)
+}
 
 #[derive(Debug)]
 enum Expr {
@@ -26,6 +76,7 @@ enum Expr {
         action: usize,
     },
     Scalar,
+    Boolean(bool),
     IndependentCallable,
     Slot,
     Unknown,
@@ -76,7 +127,9 @@ enum Expr {
     },
     Match {
         scrutinee: usize,
-        arms: Vec<(Vec<(usize, usize)>, usize)>,
+        // Preserve source order and whether a constructor payload can fail.
+        arms: Vec<CaseArm>,
+        result_case: bool,
     },
     Resource {
         // The term handle of a Store is distinct from its type identity and
@@ -153,6 +206,7 @@ impl Expr {
         charge(budget, 1)?;
         Ok(match self {
             Self::Scalar => Self::Scalar,
+            Self::Boolean(value) => Self::Boolean(*value),
             Self::IndependentCallable => Self::IndependentCallable,
             Self::Slot => Self::Slot,
             Self::Unknown => Self::Unknown,
@@ -221,18 +275,23 @@ impl Expr {
                 bindings: pairs(bindings, budget)?,
                 body: body + offset,
             },
-            Self::Match { scrutinee, arms } => {
+            Self::Match {
+                scrutinee,
+                arms,
+                result_case,
+            } => {
                 charge(budget, arms.len())?;
                 let mut copied = Vec::new();
                 copied
                     .try_reserve(arms.len())
                     .map_err(|_| Failure::Resource)?;
-                for (bindings, body) in arms {
-                    copied.push((pairs(bindings, budget)?, body + offset));
+                for (bindings, body, case) in arms {
+                    copied.push((pairs(bindings, budget)?, body + offset, *case));
                 }
                 Self::Match {
                     scrutinee: scrutinee + offset,
                     arms: copied,
+                    result_case: *result_case,
                 }
             }
             Self::Resource {
@@ -391,7 +450,8 @@ pub(super) fn observed_control_call_graph_for_test() -> Graph {
 }
 
 pub(super) struct CallSuccessors {
-    pub(super) targets: Vec<(usize, usize)>,
+    // Actual control target, invocation context, and source Function port.
+    pub(super) targets: Vec<(usize, usize, usize)>,
     pub(super) unknown: bool,
     pub(super) returns: bool,
 }
@@ -550,9 +610,11 @@ impl Graph {
                     }
                     children.push(*body);
                 }
-                Expr::Match { scrutinee, arms } => {
+                Expr::Match {
+                    scrutinee, arms, ..
+                } => {
                     children = copy_slice(&[*scrutinee], budget)?;
-                    for (arm, body) in arms {
+                    for (arm, body, _) in arms {
                         charge(budget, arm.len() * 2 + 1)?;
                         bindings
                             .try_reserve(arm.len())
@@ -660,8 +722,11 @@ impl Graph {
                     children.push(*value);
                     children.extend(evidence.iter().map(|(_, _, argument)| *argument));
                 }
-                Expr::Scalar | Expr::IndependentCallable | Expr::Unknown | Expr::Constructor(_) => {
-                }
+                Expr::Scalar
+                | Expr::Boolean(_)
+                | Expr::IndependentCallable
+                | Expr::Unknown
+                | Expr::Constructor(_) => {}
             }
             charge(budget, children.len() + bindings.len())?;
             pending
@@ -1183,6 +1248,7 @@ impl Graph {
                 function, id, nodes, symbols, types, methods, adapters, headers, None, budget,
             )?,
             Some(PureExprKind::Value(PureValue::String(_))) => Expr::Scalar,
+            Some(PureExprKind::Value(PureValue::Boolean(value))) => Expr::Boolean(value.value()),
             Some(PureExprKind::Value(PureValue::Intrinsic(intrinsic))) => {
                 self.targets.try_reserve(1).map_err(|_| Failure::Resource)?;
                 self.targets.insert(id, id);
@@ -1293,11 +1359,32 @@ impl Graph {
                     let bindings =
                         self.pattern(arm.pattern(), index(matching.scrutinee()), symbols, budget)?;
                     arms.try_reserve(1).map_err(|_| Failure::Resource)?;
-                    arms.push((bindings, index(arm.body())));
+                    let case = match &arm.pattern().kind {
+                        CorePatternKind::Binder(_) | CorePatternKind::Wildcard => CasePattern::Any,
+                        CorePatternKind::Boolean(value) => {
+                            CasePattern::Case(ValueCase::Boolean(*value), true)
+                        }
+                        CorePatternKind::Constructor {
+                            constructor,
+                            payload,
+                        } => CasePattern::Case(
+                            ValueCase::Constructor(*constructor),
+                            match payload {
+                                Some(payload) => irrefutable_pattern(payload, budget)?,
+                                None => true,
+                            },
+                        ),
+                        CorePatternKind::Tuple(_) | CorePatternKind::Unit => CasePattern::Opaque,
+                    };
+                    arms.push((bindings, index(arm.body()), case));
                 }
                 Expr::Match {
                     scrutinee: index(matching.scrutinee()),
                     arms,
+                    result_case: !matches!(
+                        node.ty,
+                        Type::Unit | Type::Int | Type::String | Type::Bytes
+                    ),
                 }
             }
             PureComputation::TypeAbstraction(abstraction) => {
@@ -2113,7 +2200,7 @@ impl Graph {
                     }
                 }
                 Expr::Match { arms, .. } => {
-                    for (bindings, _) in arms {
+                    for (bindings, _, _) in arms {
                         for &(binder, _) in bindings {
                             retain(binder)?;
                         }
@@ -2295,6 +2382,18 @@ impl Graph {
             .map_err(|_| Failure::Resource)?;
         self.positions.insert(code, expression);
         Ok(())
+    }
+
+    pub(super) fn case_result_required(&self, code: usize) -> bool {
+        self.positions.get(&code).is_some_and(|expression| {
+            matches!(
+                self.expressions.get(*expression),
+                Some(Expr::Match {
+                    result_case: true,
+                    ..
+                })
+            )
+        })
     }
 
     pub(super) fn append_global_initializers(
@@ -2554,6 +2653,60 @@ impl ContextPaths {
 
     fn len(&self) -> usize {
         self.paths.len()
+    }
+
+    // A standalone callable is also analyzed before an actual caller supplies
+    // its surrounding control. Focused and restored contexts are actual
+    // occurrences, and cannot inherit that symbolic-root status.
+    fn standalone_root(
+        &self,
+        mut context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<usize>, Failure> {
+        let length = self.paths.get(context).ok_or(Failure::Invalid)?.length();
+        charge(budget, length.checked_add(1).ok_or(Failure::Resource)?)?;
+        let mut root = None;
+        while let ContextPath::Step {
+            parent, transition, ..
+        } = *self.paths.get(context).ok_or(Failure::Invalid)?
+        {
+            match transition {
+                Transition::Root(id) if parent == 0 && root.is_none() => root = Some(id),
+                Transition::Root(_) | Transition::Focus | Transition::Restore(..) => {
+                    return Ok(None);
+                }
+                Transition::Call(_) | Transition::Invoke(..) | Transition::Dispatch(..) => {}
+            }
+            context = parent;
+        }
+        Ok(root)
+    }
+
+    // A rootless ordinary path is used for linked entry and the initial
+    // resource seed. Neither is a creation within a standalone callable root.
+    // Focused, restored, and malformed nested-root paths prove no such fact.
+    fn outside_standalone_root(
+        &self,
+        mut context: usize,
+        callable: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        let length = self.paths.get(context).ok_or(Failure::Invalid)?.length();
+        charge(budget, length.checked_add(1).ok_or(Failure::Resource)?)?;
+        while let ContextPath::Step {
+            parent, transition, ..
+        } = *self.paths.get(context).ok_or(Failure::Invalid)?
+        {
+            match transition {
+                Transition::Root(id) if parent == 0 => return Ok(id != callable),
+                Transition::Root(_) | Transition::Focus | Transition::Restore(..) => {
+                    return Ok(false);
+                }
+                Transition::Call(_) | Transition::Invoke(..) | Transition::Dispatch(..) => {}
+            }
+            context = parent;
+        }
+        Ok(true)
     }
 
     fn lookup(
@@ -3922,6 +4075,31 @@ impl<'a> Analysis<'a> {
     }
 
     #[cfg(test)]
+    pub(super) fn contexts_for_code(&self, code: usize) -> Vec<usize> {
+        let Some(expression) = self.graph.positions.get(&code) else {
+            return Vec::new();
+        };
+        self.slots
+            .iter()
+            .filter_map(|slot| (slot.key.0 == *expression).then_some(slot.key.1))
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(super) fn context_has_invoke(&self, mut context: usize) -> bool {
+        while let Some(ContextPath::Step {
+            parent, transition, ..
+        }) = self.contexts.paths.get(context)
+        {
+            if matches!(transition, Transition::Invoke(..)) {
+                return true;
+            }
+            context = *parent;
+        }
+        false
+    }
+
+    #[cfg(test)]
     pub(super) fn actual_request_path(
         &self,
         port: usize,
@@ -3970,19 +4148,45 @@ impl<'a> Analysis<'a> {
         Ok((request, output))
     }
 
+    #[cfg(test)]
     pub(super) fn root_context(
         &self,
         code: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<usize, Failure> {
+        Ok(self.callable_root_context(code, budget)?.unwrap_or(0))
+    }
+
+    pub(super) fn callable_root_context(
+        &self,
+        code: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<usize>, Failure> {
         charge(budget, 1)?;
         Ok(self
             .graph
             .positions
             .get(&code)
             .and_then(|expression| self.roots.get(expression))
-            .copied()
-            .unwrap_or(0))
+            .copied())
+    }
+
+    pub(super) fn standalone_root(
+        &self,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<usize>, Failure> {
+        self.contexts.standalone_root(context, budget)
+    }
+
+    pub(super) fn outside_standalone_root(
+        &self,
+        context: usize,
+        callable: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        self.contexts
+            .outside_standalone_root(context, callable, budget)
     }
 
     pub(super) fn port(
@@ -3994,6 +4198,283 @@ impl<'a> Analysis<'a> {
         charge(budget, 1)?;
         let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
         self.slot(expression, context, budget)
+    }
+
+    /// Read the actual scrutinee and ordered tests for a control choice.
+    pub(super) fn case_choice(
+        &mut self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<(usize, bool, Vec<CasePattern>)>, Failure> {
+        charge(budget, 1)?;
+        let Some(&expression) = self.graph.positions.get(&code) else {
+            return Ok(None);
+        };
+        let Expr::Match {
+            scrutinee,
+            arms,
+            result_case,
+        } = &self.graph.expressions[expression]
+        else {
+            return Ok(None);
+        };
+        charge(budget, arms.len())?;
+        let mut cases = Vec::new();
+        cases
+            .try_reserve(arms.len())
+            .map_err(|_| Failure::Resource)?;
+        cases.extend(arms.iter().map(|(_, _, case)| *case));
+        let scrutinee = *scrutinee;
+        let result_case = *result_case;
+        let scrutinee = self.slot(scrutinee, context, budget)?;
+        Ok(Some((scrutinee, result_case, cases)))
+    }
+
+    /// Read only path-local facts and transparent expressions. In particular,
+    /// global joined value edges never prove that two dynamic results agree.
+    pub(super) fn case_of(
+        &mut self,
+        mut port: usize,
+        facts: &[(usize, CaseFact)],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<CaseFact>, Failure> {
+        let mut seen = HashSet::new();
+        let mut projections = Vec::new();
+        loop {
+            charge(budget, facts.len() + 1)?;
+            seen.try_reserve(1).map_err(|_| Failure::Resource)?;
+            if !seen.insert(port) {
+                return Ok(None);
+            }
+            let &(expression, context) = &self.slots.get(port).ok_or(Failure::Invalid)?.key;
+            let known = facts
+                .iter()
+                .find(|(candidate, _)| *candidate == port)
+                .map(|(_, fact)| *fact);
+            let fact = match (&self.graph.expressions[expression], known) {
+                (_, Some(fact)) => Some(fact),
+                (Expr::Boolean(value), None) => Some(CaseFact {
+                    value: ValueCase::Boolean(*value),
+                    fresh_probe: false,
+                    origin: None,
+                }),
+                (Expr::ResidentTuple { constructor, .. }, None) => Some(CaseFact {
+                    value: constructor.map_or(ValueCase::Tuple, ValueCase::Constructor),
+                    fresh_probe: false,
+                    origin: Some(port),
+                }),
+                (Expr::Tuple(_), None) => Some(CaseFact {
+                    value: ValueCase::Tuple,
+                    fresh_probe: false,
+                    origin: Some(port),
+                }),
+                (
+                    Expr::Project {
+                        value,
+                        field,
+                        constructor,
+                    },
+                    None,
+                ) => {
+                    projections.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    projections.push((*field, *constructor));
+                    port = self.slot(*value, context, budget)?;
+                    None
+                }
+                (Expr::Alias(value) | Expr::Forward(value), None) => {
+                    port = self.slot(*value, context, budget)?;
+                    None
+                }
+                (
+                    Expr::Bind { body, .. }
+                    | Expr::Recursive { body, .. }
+                    | Expr::Cleanup { body, .. }
+                    | Expr::Resource {
+                        body,
+                        success: None,
+                        ..
+                    },
+                    None,
+                ) => {
+                    port = self.slot(*body, context, budget)?;
+                    None
+                }
+                (Expr::RetainedRoot { handler, .. }, None) => {
+                    port = self.slot(*handler, context, budget)?;
+                    None
+                }
+                _ => return Ok(None),
+            };
+            let Some(fact) = fact else { continue };
+            let Some((field, constructor)) = projections.pop() else {
+                return Ok(Some(fact));
+            };
+            let Some(origin) = fact.origin else {
+                return Ok(None);
+            };
+            let &(source, creation) = &self.slots.get(origin).ok_or(Failure::Invalid)?.key;
+            let fields = match &self.graph.expressions[source] {
+                Expr::Tuple(fields) if constructor.is_none() && fact.value == ValueCase::Tuple => {
+                    fields
+                }
+                Expr::ResidentTuple {
+                    fields,
+                    constructor: actual,
+                    ..
+                } if *actual == constructor
+                    && fact.value == actual.map_or(ValueCase::Tuple, ValueCase::Constructor) =>
+                {
+                    fields
+                }
+                _ => return Ok(None),
+            };
+            let Some(&value) = fields.get(field) else {
+                return Ok(None);
+            };
+            port = self.slot(value, creation, budget)?;
+        }
+    }
+
+    /// These are the actual initializer and binder of an executed Bind.
+    pub(super) fn case_binding(
+        &mut self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<(usize, usize)>, Failure> {
+        charge(budget, 1)?;
+        let Some(&expression) = self.graph.positions.get(&code) else {
+            return Ok(None);
+        };
+        let Expr::Bind {
+            binder,
+            initializer,
+            ..
+        } = self.graph.expressions[expression]
+        else {
+            return Ok(None);
+        };
+        let binder = self.slot(binder, context, budget)?;
+        let initializer = self.slot(initializer, context, budget)?;
+        Ok(Some((binder, initializer)))
+    }
+
+    pub(super) fn case_arm(
+        &mut self,
+        code: usize,
+        ordinal: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, usize), Failure> {
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let Expr::Match { arms, .. } = &self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        let body = arms.get(ordinal).ok_or(Failure::Invalid)?.1;
+        let result = self.slot(expression, context, budget)?;
+        let body = self.slot(body, context, budget)?;
+        Ok((result, body))
+    }
+
+    pub(super) fn case_arm_bindings(
+        &mut self,
+        code: usize,
+        ordinal: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<(usize, usize)>, Failure> {
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let Expr::Match { arms, .. } = &self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        let bindings = copy_slice(&arms.get(ordinal).ok_or(Failure::Invalid)?.0, budget)?;
+        let mut result = Vec::new();
+        result
+            .try_reserve(bindings.len())
+            .map_err(|_| Failure::Resource)?;
+        for (binder, value) in bindings {
+            let binder = self.slot(binder, context, budget)?;
+            let value = self.slot(value, context, budget)?;
+            result.push((binder, value));
+        }
+        Ok(result)
+    }
+
+    pub(super) fn case_handler_result(
+        &mut self,
+        code: usize,
+        ordinal: Option<usize>,
+        handler_context: usize,
+        body_context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, usize), Failure> {
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let Expr::Handler { body, clauses, .. } = &self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        let body = match ordinal {
+            Some(ordinal) => clauses.get(ordinal).ok_or(Failure::Invalid)?.body,
+            None => *body,
+        };
+        let result = self.slot(expression, handler_context, budget)?;
+        let body = self.slot(body, body_context, budget)?;
+        Ok((result, body))
+    }
+
+    pub(super) fn case_resume_operand(
+        &mut self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let Expr::Resume { operand } = self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        self.slot(operand, context, budget)
+    }
+
+    /// Exact arguments and result of the Closure selected by calls_after.
+    /// Captured Boolean values are deliberately not reconstructed from the
+    /// joined creation context; an ambiguous capture loses its case fact.
+    pub(super) fn case_call_ports(
+        &mut self,
+        code: usize,
+        caller: usize,
+        target: usize,
+        callee: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<CaseCallPorts, Failure> {
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let Expr::Call { arguments, .. } = &self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        let Expr::Function {
+            parameters, body, ..
+        } = &self.graph.expressions[target]
+        else {
+            return Err(Failure::Invalid);
+        };
+        if arguments.len() != parameters.len() {
+            return Err(Failure::Invalid);
+        }
+        let arguments = copy_slice(arguments, budget)?;
+        let parameters = copy_slice(parameters, budget)?;
+        let body = *body;
+        let result = self.slot(expression, caller, budget)?;
+        let body = self.slot(body, callee, budget)?;
+        let mut pairs = Vec::new();
+        pairs
+            .try_reserve(arguments.len())
+            .map_err(|_| Failure::Resource)?;
+        for (parameter, argument) in parameters.into_iter().zip(arguments) {
+            pairs.push((
+                self.slot(parameter, callee, budget)?,
+                self.slot(argument, caller, budget)?,
+            ));
+        }
+        Ok((result, body, pairs))
     }
 
     // Only discover's exact observed-State record supplies a delivered prefix.
@@ -4025,9 +4506,9 @@ impl<'a> Analysis<'a> {
                 Atom::Closure(target, creation) => {
                     let context =
                         self.invocation_context(context, expression, target, creation, budget)?;
-                    let target = *self.graph.targets.get(&target).ok_or(Failure::Invalid)?;
+                    let control = *self.graph.targets.get(&target).ok_or(Failure::Invalid)?;
                     targets.try_reserve(1).map_err(|_| Failure::Resource)?;
-                    targets.push((target, context));
+                    targets.push((control, context, target));
                 }
                 Atom::Unknown => opaque |= 1,
                 Atom::Constructor(_) | Atom::IndependentCallable => opaque |= 2,
@@ -5461,7 +5942,7 @@ impl<'a> Analysis<'a> {
         let (expression, context) = self.slots[slot].key;
         let graph = self.graph;
         let setup = match &graph.expressions[expression] {
-            Expr::Scalar => {
+            Expr::Scalar | Expr::Boolean(_) => {
                 self.atom(slot, Atom::Free, budget)?;
                 SetupOutcome::NeedsInputsOrDynamic
             }
@@ -5746,12 +6227,14 @@ impl<'a> Analysis<'a> {
                 P::link(self, slot, *body, context, budget)?;
                 SetupOutcome::FixedSetupReady
             }
-            Expr::Match { scrutinee, arms } => {
+            Expr::Match {
+                scrutinee, arms, ..
+            } => {
                 let scrutinee = self.slot(*scrutinee, context, budget)?;
                 if self.slots[scrutinee].atoms.is_empty() {
                     return Ok(SetupOutcome::NeedsInputsOrDynamic);
                 }
-                for (bindings, body) in arms {
+                for (bindings, body, _) in arms {
                     for &(binder, initializer) in bindings {
                         let binder = self.slot(binder, context, budget)?;
                         self.link(binder, initializer, context, budget)?;
@@ -6258,6 +6741,45 @@ type EvidenceKey = (crate::interface::RequirementId, crate::interface::MethodId)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_standalone_owner_paths_reject_same_root_and_focus() {
+        let mut work = TypeWorkBudget::unbounded();
+        let mut paths = ContextPaths::new(&mut work).unwrap();
+        let current = paths.intern(0, Transition::Root(10), &mut work).unwrap().0;
+        let other = paths.intern(0, Transition::Root(11), &mut work).unwrap().0;
+        let current_call = paths
+            .intern(current, Transition::Invoke(1, 2, 0), &mut work)
+            .unwrap()
+            .0;
+        let rootless_call = paths
+            .intern(0, Transition::Invoke(3, 4, 0), &mut work)
+            .unwrap()
+            .0;
+        let focus = paths.intern(0, Transition::Focus, &mut work).unwrap().0;
+        let restore = paths
+            .intern(focus, Transition::Restore(current, 5, 0), &mut work)
+            .unwrap()
+            .0;
+        let nested_root = paths
+            .intern(current, Transition::Root(12), &mut work)
+            .unwrap()
+            .0;
+        for context in [0, other, rootless_call] {
+            assert!(
+                paths
+                    .outside_standalone_root(context, 10, &mut work)
+                    .unwrap()
+            );
+        }
+        for context in [current, current_call, focus, restore, nested_root] {
+            assert!(
+                !paths
+                    .outside_standalone_root(context, 10, &mut work)
+                    .unwrap()
+            );
+        }
+    }
 
     fn graph(expressions: Vec<Expr>) -> Graph {
         let source = crate::source::SourceFile::new("value-cut.ash", "x").unwrap();
@@ -6951,7 +7473,8 @@ mod tests {
                 },
                 4 => Expr::Match {
                     scrutinee: 0,
-                    arms: vec![(Vec::new(), 1)],
+                    arms: vec![(Vec::new(), 1, CasePattern::Opaque)],
+                    result_case: false,
                 },
                 5 => Expr::Resource {
                     store: false,
@@ -9974,7 +10497,10 @@ mod tests {
         for expression in [
             Expr::Match {
                 scrutinee: 0,
-                arms: (0..WIDTH).map(|_| (Vec::new(), 0)).collect(),
+                arms: (0..WIDTH)
+                    .map(|_| (Vec::new(), 0, CasePattern::Opaque))
+                    .collect(),
+                result_case: false,
             },
             Expr::Handler {
                 cell_owner: None,
@@ -10332,7 +10858,11 @@ mod tests {
             },
             Expr::Match {
                 scrutinee: 0,
-                arms: vec![(Vec::new(), 4), (vec![(5, 2)], 6)],
+                arms: vec![
+                    (Vec::new(), 4, CasePattern::Opaque),
+                    (vec![(5, 2)], 6, CasePattern::Opaque),
+                ],
+                result_case: false,
             },
             Expr::Scalar,
             Expr::Slot,
@@ -10407,7 +10937,8 @@ mod tests {
             graph.expressions[6] = match shape {
                 0 => Expr::Match {
                     scrutinee: 0,
-                    arms: vec![(Vec::new(), 3)],
+                    arms: vec![(Vec::new(), 3, CasePattern::Opaque)],
+                    result_case: false,
                 },
                 1 => Expr::Tuple(vec![3, 0]),
                 2 => Expr::Call {

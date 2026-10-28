@@ -263,6 +263,7 @@ fn method_occurrences(definition: &CheckedDefinition, method: MethodId) -> Vec<&
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
             | ResolvedExprKind::Discard(_)
+            | ResolvedExprKind::Retain(_)
             | ResolvedExprKind::Constructor(_) => {}
             ResolvedExprKind::Tuple(elements) => expressions.extend(elements),
             ResolvedExprKind::Apply(application) => {
@@ -294,12 +295,19 @@ fn method_occurrences(definition: &CheckedDefinition, method: MethodId) -> Vec<&
             ResolvedExprKind::Perform(request) => expressions.push(&request.operand),
             ResolvedExprKind::Handle(handler) => {
                 expressions.push(&handler.body);
+                if let Some(store) = &handler.store {
+                    expressions.push(store);
+                }
                 expressions.extend(handler.clauses.iter().map(|clause| &clause.body));
             }
             ResolvedExprKind::Resume(resume) => expressions.push(&resume.value),
             ResolvedExprKind::Resource(resource) => {
                 expressions.push(&resource.initializer);
                 expressions.push(&resource.body);
+            }
+            ResolvedExprKind::Store(store) => {
+                expressions.push(&store.initializer);
+                expressions.push(&store.body);
             }
             ResolvedExprKind::Region(region) => {
                 if let Some(provider) = &region.provider {
@@ -2103,6 +2111,10 @@ fn higher_kinded_interface_erasure_adds_no_runtime_state_or_transition() {
                     EffectExprKind::Operation(EffectOperation::Cleanup(_)) => "cleanup",
                     EffectExprKind::Operation(EffectOperation::Registration(_)) => "registration",
                     EffectExprKind::Operation(EffectOperation::Resource(_)) => "resource",
+                    EffectExprKind::Operation(EffectOperation::Store(_)) => "store",
+                    EffectExprKind::Operation(EffectOperation::Continue(_)) => "continue",
+                    EffectExprKind::Operation(EffectOperation::RetainedRoot(_)) => "retained-root",
+                    EffectExprKind::Operation(EffectOperation::Retain(_)) => "retain",
                     EffectExprKind::Operation(EffectOperation::Region(_)) => "region",
                     EffectExprKind::Operation(EffectOperation::RegionAllocate(_)) => {
                         "region-allocate"

@@ -5,8 +5,8 @@
 - Related: [DN-0056](../design/DN-0056-scoped-continuation-retention-and-library-scheduling.md),
   [CP-0026](../proposals/CP-0026-scoped-owned-continuation-storage.md)
 
-> This task organizes work. It does not define Ash semantics. C2 is active
-> under the accepted proposal; public release still depends on C3.
+> This task organizes work. It does not define Ash semantics. C3 is active
+> under the accepted proposal; the connected C2/C3 checkpoint remains open.
 
 ## Dependencies
 
@@ -37,18 +37,52 @@ source review and the frozen integration build; the
 inputs and limits. C1 was retained and independently verified at
 `6d530614d426db3f31fd0e9fe1f01d12399f78c9` by
 [PR #160](https://github.com/dikini/ash-lang/pull/160); [C1 #71](https://github.com/dikini/ash-lang/issues/71)
-is closed. C2 store work is active. Internal fixtures exercise private root,
+is closed. The reviewed C2 store delivery was retained at
+`e12d4242a35ffe01ccd9d3e90342992e77f94613` by
+[PR #161](https://github.com/dikini/ash-lang/pull/161). Internal fixtures exercise private root,
 Retain and structural Continue through a store frame, including the current
 consumer's adapter and a running cleanup. Source-derived capture checks cover
 an imported continuation helper, enclosing and captured support, and actual
 interpreter conflicts. A separate focused control inspection checks saved
 cuts at Retain, including cuts never continued and later checkpoints; real
-restoration checks the current consumer's interpreter. This C2 work remains
-subject to independent review and the remaining acceptance checks.
+restoration checks the current consumer's interpreter. The original C2 and
+coupled C2/C3 acceptance criteria remain open.
 An ordinary Probe can be intercepted by a source handler; internal checks
 exercise its driver restriction and actual Store-provider selection. Image
-codecs preserve Store/Root/Retain carriers and generic Continue round-trips,
-while public Store release remains rejected until C3.
+codecs preserve Store/Root/Retain carriers and generic Continue round-trips.
+C3 develops the normal-return analysis and its bounded proof on
+`codex/m3-c3-drain` in
+[draft PR #162](https://github.com/dikini/ash-lang/pull/162). Focused checks
+exercise a drain before outer-discard close, and reject both a missing drain and
+new retained work after a drain. A branch that constructs a fresh answer under
+an allocator handler owned by its capture also passes the focused query. When
+the allocator handler is outside the capture, the cleanup's distinct forwarding
+handler changes the selected interpretation and admission rejects it under the
+accepted contract. Conservative case tracking can reject a safe program that
+matches an earlier branch result after another checkpoint.
+
+A source-derived linked Core fixture also checks reuse of an aggregate and its
+payload computation. Each case assignment now clears older aggregate origins
+before their payloads can be projected, and Resume drops the returned origin.
+The bounded correspondence passed independent source review, and its frozen
+[proof run](evidence/local-retained-control/c3-model/README.md) completed.
+Its receipt passed independent audit. Linked validation now runs the release
+analysis after the carrier, type and scope checks. Public source execution
+drains recursive and imported continuations and an outer-discard cleanup;
+undrained, stale, intercepted and unknown-result paths are refused. Identity
+and folding transformations and decoded images are revalidated. The image
+test also rejects a changed Probe match that would permit an undrained close.
+Linked validation rejects a same-typed cleanup callback replacement that leaves
+retained work, after both identity and folding transformations. Control
+dispatch separates its stack work without changing the limits or charges; the
+64 KiB, 384-level abandonment regression completes with 4,864 work units and
+preserves exact-budget failure and retry behavior.
+
+The standalone Core validator retains its 983,040 work limit. The public
+source driver's input-sized allowance admitted the outer-discard fixture at
+1,309,582 of 78,225,000 units. Its encoded image used 1,355,242 of 1,753,834
+startup units. These are measurements of those paths, not a general bound;
+the connected gate must still exercise the complete required corpus.
 C2–C5 and the connected full-workspace and Main gates remain open.
 
 ## Verification
@@ -73,13 +107,11 @@ drain argument is paper evidence, not a checked analysis or implementation.
 
 ## Deviations
 
-The reserved `retain` keyword requires renaming the existing recursion
-examples in [syntax](../../spec/syntax.md),
+The recursion examples in [syntax](../../spec/syntax.md),
 [name resolution](../../spec/name-resolution.md),
 [dynamic semantics](../../spec/dynamic-semantics.md), and the
-[tool guide](../tools/ash.md) when C5 updates current documentation. The
-executable recursion fixtures and their embedded mirrors are renamed with the
-parser change.
+[tool guide](../tools/ash.md) now use `saved` in place of the reserved
+`retain` keyword. Their executable fixtures use the same name.
 
 Return any semantic or proof gap to CP-0026 and DN-0056 before product
 delivery; keep original issue criteria open until their full scopes are retained

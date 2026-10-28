@@ -13577,14 +13577,6 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         self.validate_effect_abstraction_shapes(&authenticated_method_evidence)?;
         self.validate_scopes()?;
         self.validate_type_scopes()?;
-        // Local carrier and scope checks do not establish capture admission or
-        // the C3 release proof. No retained control is executable yet.
-        if let Some(id) = retained {
-            return Err(ValidationError::new(
-                ValidationReason::RetainedRelease,
-                Some(id),
-            ));
-        }
         // Ordinary authentication precedes dependency reconstruction. Generic
         // computations force that proof even in private provider preparations.
         let has_generic = self.cell_computations()?;
@@ -13597,6 +13589,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 super::effect::EffectExprKind::Operation(
                     super::effect::EffectOperation::Resource(_)
                         | super::effect::EffectOperation::Store(_)
+                        | super::effect::EffectOperation::RetainedRoot(_)
+                        | super::effect::EffectOperation::Retain(_)
                         | super::effect::EffectOperation::Region(_)
                         | super::effect::EffectOperation::Cleanup(_)
                         | super::effect::EffectOperation::Registration(_)
@@ -13616,13 +13610,17 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             super::effect::EffectExprKind::Operation(operation) => Some(operation),
             _ => None,
         };
-        let capture_result = super::capture::check_nodes(
-            &self.program.nodes,
-            &[],
-            &[],
-            operation,
-            &mut capture_work,
-        );
+        let capture_result = if retained.is_some() {
+            super::capture::check_nodes_with_release(
+                &self.program.nodes,
+                &[],
+                &[],
+                operation,
+                &mut capture_work,
+            )
+        } else {
+            super::capture::check_nodes(&self.program.nodes, &[], &[], operation, &mut capture_work)
+        };
         self.charge_type_work(capture_work.used())?;
         capture_result.map_err(|failure| match failure {
             super::capture::Failure::Resource => {
@@ -13636,6 +13634,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             }
             super::capture::Failure::RetainedInterpretation { .. } => {
                 ValidationError::new(ValidationReason::Handler, None)
+            }
+            super::capture::Failure::RetainedRelease => {
+                ValidationError::new(ValidationReason::RetainedRelease, retained)
             }
             super::capture::Failure::Escape {
                 source,
@@ -14355,6 +14356,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)] // Each operand row is independently reconstructed.
     fn continue_row(
         &self,
         id: NodeId,
@@ -21175,6 +21177,180 @@ mod tests {
     }
 
     #[test]
+    fn retained_drain_revalidates_and_runs_after_core_transforms() {
+        use super::super::effect::EffectOperation;
+        let (donor, sources, relation) = generic_cell_source_fixture(
+            include_str!("../../tests/fixtures/retained-drain/basic.ash"),
+            None,
+        );
+        let refs = sources.iter().collect::<Vec<_>>();
+        for transform in [identity_effect_traversal, fold_effect_literal_primitives] {
+            let copied = transform(&donor).unwrap();
+            assert!(copied.nodes.iter().any(|node| matches!(
+                &node.kind,
+                EffectExprKind::Operation(EffectOperation::Store(_))
+            )));
+            assert!(copied.nodes.iter().any(|node| matches!(
+                &node.kind,
+                EffectExprKind::Operation(EffectOperation::RetainedRoot(_))
+            )));
+            assert!(copied.nodes.iter().any(|node| matches!(
+                &node.kind,
+                EffectExprKind::Operation(EffectOperation::Retain(_))
+            )));
+            assert!(copied.nodes.iter().any(|node| matches!(
+                &node.kind,
+                EffectExprKind::Operation(EffectOperation::Continue(_))
+            )));
+            let valid = validate_effect_modules(copied, &refs, &relation)
+                .expect("the transformed Store and drain must be revalidated");
+            assert_eq!(
+                crate::eval::evaluate_effect(&valid)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
+            );
+        }
+    }
+
+    #[test]
+    fn retained_same_typed_cleanup_callback_substitution_rechecks_release() {
+        use super::super::effect::EffectOperation;
+
+        let original = include_str!("../../tests/fixtures/retained-drain/outer-discard.ash");
+        let anchor = "                    let action : Unit -> Unit ! {Control.Drive<N>, Control.Probe<N>} = fn(ignored) {";
+        assert_eq!(original.matches(anchor).count(), 1);
+        let alternate = concat!(
+            "                    let unsafe_action : Unit -> Unit ! {Control.Drive<N>, Control.Probe<N>} = fn(ignored) {\n",
+            "                        let quiet = perform Control.Probe<N>.quiescent ()\n",
+            "                        match quiet {\n",
+            "                            true => {\n",
+            "                                let _ = Control.advance_with_drive (store, key)\n",
+            "                                ()\n",
+            "                            }\n",
+            "                            false => ()\n",
+            "                        }\n",
+            "                    }\n",
+        );
+        let source = original.replacen(anchor, &format!("{alternate}{anchor}"), 1);
+        let tree = LinkedValidationDirectory::create();
+        let entry = tree.write("entry.ash", &source);
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the original drain callback must validate");
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "7"
+        );
+        let (donor, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let relation = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+
+        for fold in [false, true] {
+            let (name, copied) = if fold {
+                ("fold", fold_effect_literal_primitives(donor).unwrap())
+            } else {
+                ("identity", identity_effect_traversal(donor).unwrap())
+            };
+            let (mut work, _) = crate::compiler_work::resident_phase_work(
+                crate::compiler_work::CompilationPhase::IndependentCore,
+                &sources,
+            )
+            .unwrap();
+            let validated =
+                validate_effect_modules_with_work(copied, &sources, &relation, &mut work)
+                    .expect("the transformed donor must validate");
+            assert_eq!(
+                crate::eval::evaluate_effect(&validated)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "7"
+            );
+
+            let mut forged = identity_effect_traversal(&validated).unwrap();
+            let mut action = None;
+            let mut unsafe_action = None;
+            for node in &forged.nodes {
+                let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) =
+                    &node.kind
+                else {
+                    continue;
+                };
+                let span = binding.binder().origin().primary_span();
+                let source = sources
+                    .iter()
+                    .find(|source| source.id() == span.source())
+                    .unwrap();
+                match &source.text()[span.range().start() as usize..span.range().end() as usize] {
+                    "action" => {
+                        action = Some((binding.binder().id(), binding.binder().ty().clone()))
+                    }
+                    "unsafe_action" => {
+                        unsafe_action =
+                            Some((binding.binder().id(), binding.binder().ty().clone()));
+                    }
+                    _ => {}
+                }
+            }
+            let (action, action_type) = action.unwrap();
+            let (unsafe_action, unsafe_type) = unsafe_action.unwrap();
+            assert_eq!(action_type, unsafe_type, "{name}");
+            let initializers = forged
+                .nodes
+                .iter()
+                .filter_map(|node| match &node.kind {
+                    EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
+                        Some(scope.callback)
+                    }
+                    _ => None,
+                })
+                .filter_map(|callback| {
+                    forged.nodes.iter().find_map(|node| match &node.kind {
+                        EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                            binding,
+                        ))) if binding.binder().id() == callback => Some(binding.initializer()),
+                        _ => None,
+                    })
+                })
+                .filter(|initializer| {
+                    matches!(
+                        &forged.nodes[initializer.index().unwrap()].kind,
+                        EffectExprKind::Pure(PureExprKind::Variable(variable))
+                            if variable.binder() == action
+                    )
+                })
+                .collect::<Vec<_>>();
+            let [initializer] = initializers.as_slice() else {
+                panic!("{name}: expected the original action callback initializer");
+            };
+            let node = &mut forged.nodes[initializer.index().unwrap()];
+            assert_eq!(node.ty, unsafe_type, "{name}");
+            node.kind = EffectExprKind::Pure(PureExprKind::Variable(
+                crate::core::variable::VariableNode::new(unsafe_action),
+            ));
+
+            let (mut work, _) = crate::compiler_work::resident_phase_work(
+                crate::compiler_work::CompilationPhase::IndependentCore,
+                &sources,
+            )
+            .unwrap();
+            let error = validate_effect_modules_with_work(forged, &sources, &relation, &mut work)
+                .expect_err("the replacement leaves retained work at Store close");
+            assert_eq!(error.reason(), ValidationReason::RetainedRelease, "{name}");
+        }
+    }
+
+    #[test]
     fn retained_drive_rejects_raw_linked_requests_and_handlers() {
         use super::super::effect::EffectOperation;
         let source = concat!(
@@ -24235,7 +24411,185 @@ mod tests {
     }
 
     #[test]
-    fn private_root_core_keeps_actual_store_and_selected_owner_but_is_unadmitted() {
+    fn retained_shared_aggregate_origin_recheck() {
+        use super::super::{
+            data::{CoreMatchArm, MatchNode, TupleNode},
+            effect::{EffectExprKind, EffectOperation, RequestNode},
+        };
+
+        let source = include_str!("../../tests/fixtures/retained-drain/shared-origin.ash");
+        let mut fixture = LinkedCoreValidationFixture::compile("", source, &[]);
+        let core = &mut fixture.program;
+        let tuple_at = |core: &super::super::UnvalidatedEffectProgram, offset: usize| {
+            core.nodes
+                .iter()
+                .enumerate()
+                .find_map(|(id, node)| match &node.kind {
+                    EffectExprKind::Operation(EffectOperation::RegionTuple(tuple))
+                        if node.origin.as_ref().unwrap().primary_span().range().start()
+                            as usize
+                            == offset =>
+                    {
+                        Some((node_id(core.arena, id).unwrap(), tuple.fields.to_vec()))
+                    }
+                    _ => None,
+                })
+                .expect("the original source tuple remains available")
+        };
+        let root_of = |core: &super::super::UnvalidatedEffectProgram, body: NodeId| {
+            core.nodes
+                .iter()
+                .enumerate()
+                .find_map(|(id, node)| match &node.kind {
+                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        bind,
+                    ))) if bind.body() == body => Some(node_id(core.arena, id).unwrap()),
+                    _ => None,
+                })
+                .expect("the source tuple has its allocator binding")
+        };
+        let match_offset = "(match (perform Cell.Ops<R,Bool>.read flag)";
+        let (old_tuple, old_fields) = tuple_at(core, source.find(match_offset).unwrap());
+        let (later_tuple, _) = tuple_at(core, source.rfind(match_offset).unwrap());
+        let (write_tuple, write_fields) = tuple_at(core, source.find("(flag, true)").unwrap());
+        let old_root = root_of(core, old_tuple);
+        let later_root = root_of(core, later_tuple);
+        let write_root = root_of(core, write_tuple);
+        let matched = old_fields[0];
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(matching))) =
+            &core.nodes[matched.index().unwrap()].kind
+        else {
+            panic!("the tuple field is the source Bool match");
+        };
+        let patterns = matching
+            .arms()
+            .iter()
+            .map(|arm| (arm.pattern().clone(), arm.origin().clone()))
+            .collect::<Vec<_>>();
+        let truth = matching.arms()[0].body();
+        let mut add_tuple = |fields: Vec<NodeId>, template: NodeId| {
+            let template = &core.nodes[template.index().unwrap()];
+            let (dialect, ty, origin) = (
+                template.dialect,
+                template.ty.clone(),
+                template.origin.clone(),
+            );
+            let mut effects = EffectRow::empty();
+            for field in &fields {
+                effects = effects
+                    .union(&core.nodes[field.index().unwrap()].effects)
+                    .unwrap();
+            }
+            let result = node_id(core.arena, core.nodes.len()).unwrap();
+            core.nodes.push(StoredNode {
+                dialect,
+                ty,
+                effects,
+                origin,
+                kind: EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Tuple(
+                    TupleNode::new(fields),
+                ))),
+            });
+            result
+        };
+        let shared = add_tuple(old_fields, old_tuple);
+        let write = add_tuple(write_fields, write_tuple);
+        let mut guarded = |live: NodeId, parked: NodeId| {
+            let old = &core.nodes[parked.index().unwrap()];
+            let live_node = &core.nodes[live.index().unwrap()];
+            let effects = old.effects.union(&live_node.effects).unwrap();
+            let (dialect, ty, origin) = (old.dialect, old.ty.clone(), old.origin.clone());
+            let result = node_id(core.arena, core.nodes.len()).unwrap();
+            let arms = [live, parked]
+                .into_iter()
+                .zip(patterns.iter())
+                .map(|(body, (pattern, origin))| {
+                    CoreMatchArm::new(pattern.clone(), body, origin.clone())
+                })
+                .collect();
+            core.nodes.push(StoredNode {
+                dialect,
+                ty,
+                effects,
+                origin,
+                kind: EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(
+                    MatchNode::new(truth, arms),
+                ))),
+            });
+            result
+        };
+        let old_guard = guarded(shared, old_root);
+        let later_guard = guarded(shared, later_root);
+        let write_guard = guarded(write, write_root);
+        for (old, new) in [(old_root, old_guard), (later_root, later_guard)] {
+            let binding = core
+                .nodes
+                .iter_mut()
+                .find_map(|node| match &mut node.kind {
+                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        binding,
+                    ))) if binding.initializer() == old => Some(binding),
+                    _ => None,
+                })
+                .expect("the local value is bound once");
+            *binding = BindingNode::new(binding.binder().clone(), new, binding.body());
+        }
+        let request = core
+            .nodes
+            .iter_mut()
+            .find_map(|node| match &mut node.kind {
+                EffectExprKind::Operation(EffectOperation::Request(request))
+                    if request.operand() == write_root =>
+                {
+                    Some(request)
+                }
+                _ => None,
+            })
+            .expect("the direct native write has its source operand");
+        *request = RequestNode::new(request.effect().clone(), request.operation(), write_guard);
+
+        let sources = fixture
+            .graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let mut linked_work = TypeWorkBudget::unbounded();
+        let failure = check_ordinary_effect_modules_with_budget_for_test(
+            &fixture.program,
+            &sources,
+            &fixture.module_sources,
+            &mut linked_work,
+        )
+        .expect_err("the complete linked validator must reject the unsafe Store close");
+        assert_eq!(failure.reason(), ValidationReason::RetainedRelease);
+        eprintln!(
+            "shared tuple {shared:?}, matched field {matched:?}, linked work={}",
+            linked_work.used()
+        );
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+        let mut work = TypeWorkBudget::unbounded();
+        let result = super::super::capture::check_nodes_with_release(
+            &fixture.program.nodes,
+            &[],
+            &[],
+            operation,
+            &mut work,
+        );
+        eprintln!("shared-origin result={result:?}, work={}", work.used());
+        assert!(
+            matches!(result, Err(super::super::capture::Failure::RetainedRelease)),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn private_root_core_keeps_actual_store_and_selected_owner() {
         use super::super::effect::{EffectExprKind, EffectOperation};
         let fixture = retained_root_fixture();
         let root = fixture
@@ -24278,10 +24632,9 @@ mod tests {
                 .iter()
                 .any(|clause| clause.resume() == retain.1.owner)
         );
-        assert_eq!(
-            fixture.validate().unwrap_err().reason(),
-            ValidationReason::RetainedRelease
-        );
+        fixture
+            .validate()
+            .expect("a standalone generic private root may defer its Store to an actual caller");
     }
 
     #[test]
@@ -24355,10 +24708,15 @@ mod tests {
                 );
             }
             drop(validator);
-            let reason = fixture.validate().unwrap_err().reason();
             if mutation == 0 {
-                assert_eq!(reason, ValidationReason::RetainedRelease);
+                fixture
+                    .validate()
+                    .expect("the actual generic root is valid linked Core");
             } else {
+                let Err(failure) = fixture.validate() else {
+                    panic!("the forged root must be rejected");
+                };
+                let reason = failure.reason();
                 assert_ne!(
                     reason,
                     ValidationReason::RetainedRelease,
@@ -24472,10 +24830,15 @@ mod tests {
                 );
             }
             drop(validator);
-            let reason = fixture.validate().unwrap_err().reason();
             if mutation == 0 {
-                assert_eq!(reason, ValidationReason::RetainedRelease);
+                fixture
+                    .validate()
+                    .expect("the actual private clause contract is valid linked Core");
             } else {
+                let Err(failure) = fixture.validate() else {
+                    panic!("the forged private clause must be rejected");
+                };
+                let reason = failure.reason();
                 assert_ne!(
                     reason,
                     ValidationReason::RetainedRelease,
@@ -24613,10 +24976,9 @@ mod tests {
         validator.validate_scopes().unwrap();
         validator.validate_type_scopes().unwrap();
         drop(validator);
-        assert_eq!(
-            fixture.validate().unwrap_err().reason(),
-            ValidationReason::RetainedRelease
-        );
+        fixture
+            .validate()
+            .expect("the empty Store scope is valid linked Core");
     }
 
     #[test]
@@ -24796,10 +25158,15 @@ mod tests {
                 );
             }
             drop(validator);
-            let reason = fixture.validate().unwrap_err().reason();
             if mutation == 0 {
-                assert_eq!(reason, ValidationReason::RetainedRelease);
+                fixture
+                    .validate()
+                    .expect("the actual Store authority is valid linked Core");
             } else {
+                let Err(failure) = fixture.validate() else {
+                    panic!("the forged Store must be rejected");
+                };
+                let reason = failure.reason();
                 assert_ne!(
                     reason,
                     ValidationReason::RetainedRelease,
@@ -24890,10 +25257,15 @@ mod tests {
                 assert!(result.is_err(), "malformed descriptor mutation {mutation}");
             }
             drop(validator);
-            let reason = fixture.validate().unwrap_err().reason();
             if mutation == 0 {
-                assert_eq!(reason, ValidationReason::RetainedRelease);
+                fixture
+                    .validate()
+                    .expect("the source descriptor is valid linked Core");
             } else {
+                let Err(failure) = fixture.validate() else {
+                    panic!("the malformed descriptor must be rejected");
+                };
+                let reason = failure.reason();
                 assert_ne!(
                     reason,
                     ValidationReason::RetainedRelease,

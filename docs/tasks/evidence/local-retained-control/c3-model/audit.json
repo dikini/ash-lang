@@ -1,0 +1,52 @@
+{
+  "verdict": "pass",
+  "scope": "independent_frozen_C3_proof_gate_receipt_audit",
+  "product_head": "0f73745eeb897c9018638a210aa34c26ca53de9c",
+  "product_tree": "52216a71128b614c403ce7ad0341f9285a35fe9b",
+  "gate_evidence_sha256": "717fea322b63c90626938c0c98fadf3cbb2f4735a41959542fb1003ebafb3a90",
+  "configuration_sha256": "adb2c942c20e2d2e090659ecc8e7121732a3041f617fae3f4551f2533c537305",
+  "durable_bundle": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m3-evidence/c3-frozen-gate-0f737-v4-retry1",
+  "reviewed_source_sha256": "c676f253d761fe44dbf9d1d9240a6a6451affbfc410f60bbaaf6986d1fba6677",
+  "correspondence_sha256": "5cb5509061ae3e30f396a1584e6bc8097bff32569ddde91a88086ef3f59b12af",
+  "proof_source_review_sha256": "a508d2ddd2d5fc9bb76a13dc5a75e539634b3e72efe6132cf5e571166dc5697f",
+  "fresh_modules": [
+    "DrainSafety"
+  ],
+  "reused_modules": [
+    "Ownership",
+    "OwnershipExamples"
+  ],
+  "reports": 82,
+  "new_reports": 33,
+  "compiler_files_verified": 8,
+  "axioms": [
+    "Classical.choice",
+    "Quot.sound",
+    "propext"
+  ],
+  "compiler_seconds": 3.7977719080008683,
+  "peak_rss_kib": 558000,
+  "serial_host_checks_passed": true,
+  "detailed_checks": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m3-evidence/c3-frozen-gate-audit-0f73745e-v4-retry1-checks.json",
+  "detailed_checks_sha256": "6227776914d352d318f7b10076ff56802b1489715991c79832b6acb434c55471",
+  "report": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m3-evidence/c3-frozen-gate-audit-0f73745e-v4-retry1.md",
+  "report_sha256": "0174d718c60368fb06fe34b59de0ee609823f7a372d2c1ea2908b82d592be900",
+  "findings": [],
+  "reviewer_builds_run": false,
+  "minimal_linked_admission_work_prerequisite_cleared": true,
+  "public_release_admitted": false,
+  "c2_c3_acceptance": false,
+  "main_integration_permission": false,
+  "first_failed_attempt": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m3-evidence/c3-frozen-gate-0f737-v4.log",
+    "sha256": "2647a23da84306de38fc848abc65f6985039cc0351b011ed2b2dae69135ca29c",
+    "compiler_launched": false,
+    "counted_as_gate_success": false
+  },
+  "required_remaining": [
+    "retain exact reviewed proof sources registration and evidence",
+    "linked admission and transformed/image/source execution tests",
+    "full-pipeline budget decision",
+    "connected C2/C3 and remaining original gates"
+  ]
+}

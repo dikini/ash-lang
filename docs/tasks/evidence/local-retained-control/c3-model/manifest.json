@@ -1,0 +1,7 @@
+{
+  "Ownership.lean": "5103f2a5b155da16d98b75d8d65a8cb0edd9bf9056c2de033f35efe3e81b71ee",
+  "OwnershipExamples.lean": "0ca6f7915479fca02a8abc8099e845b27a6706e2030ea51a8350d44f7b194c99",
+  "DrainSafety.lean": "c676f253d761fe44dbf9d1d9240a6a6451affbfc410f60bbaaf6986d1fba6677",
+  "check.sh": "e93c7374d985d345e8a402f1ffadeaaa7fae0fb061cd9af84bf92a23473863ca",
+  "lean-toolchain": "3aac669c7a910ec2389f4e4f921b605adf6ebf2d1e0c9b9cd0be4d33f3f5db71"
+}

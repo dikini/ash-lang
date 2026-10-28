@@ -30,7 +30,7 @@ fn probe_is_an_ordinary_interceptable_request() {
 }
 
 #[test]
-fn store_probe_is_discharged_without_opening_release() {
+fn store_probe_reports_quiescence_before_release() {
     let source = concat!(
         "import @builtin.retained_control as Control\n",
         "main : Unit -> Int\n",
@@ -38,13 +38,9 @@ fn store_probe_is_discharged_without_opening_release() {
         "let empty = perform Control.Probe<N>.quiescent ()\n",
         "match empty {\ntrue => 42\nfalse => 0\n}\n}\n",
     );
-    let failure = support::run_module("store-probe.ash", source)
-        .expect_err("the probe does not itself prove public release");
-    assert_eq!(
-        failure.reason_code(),
-        "core.validation.retained-release",
-        "{failure:?}"
-    );
+    let observation = support::run_module("store-probe.ash", source)
+        .expect("the actual Store provider reports an empty fresh Store");
+    assert_eq!(observation.value_display(), "42");
 }
 
 #[test]
@@ -58,13 +54,9 @@ fn private_root_without_retain_still_requires_admission() {
         "} with Checkpoint<N> using store {\ncheckpoint ignored => resume ()\n}\n",
         "main : Unit -> Int\nmain () = 42\n",
     );
-    let failure = support::run_module("root-without-retain.ash", source)
-        .expect_err("a private root still requires its admission proof");
-    assert_eq!(
-        failure.reason_code(),
-        "core.validation.retained-release",
-        "{failure:?}"
-    );
+    let observation = support::run_module("root-without-retain.ash", source)
+        .expect("a generic root can be checked before its caller supplies a Store");
+    assert_eq!(observation.value_display(), "42");
 }
 
 #[test]
@@ -113,7 +105,7 @@ fn generic_continue_accepts_a_descriptor_that_already_contains_drive() {
 }
 
 #[test]
-fn fresh_store_answer_resolves_but_unproved_close_is_rejected() {
+fn fresh_store_answer_resolves_and_empty_close_is_admitted() {
     let source = concat!(
         "import @builtin.retained_control as Control\n",
         "type Step<N> =\nDone\n| Waiting(Control.Key<N>)\n",
@@ -121,13 +113,129 @@ fn fresh_store_answer_resolves_but_unproved_close_is_rejected() {
         "main () = resource Control.Store<N,(Unit -> Step<N>)> store = () {\n",
         "42\n}\n",
     );
-    let failure = support::run_module("fresh-store-answer.ash", source)
-        .expect_err("C3 has not yet established this public close");
-    assert!(
-        matches!(&failure, ash::driver::PipelineFailure::Validation(_)),
-        "frontend should resolve and elaborate before close admission: {failure:?}"
+    let observation = support::run_module("fresh-store-answer.ash", source)
+        .expect("the unused fresh Store has no outstanding work");
+    assert_eq!(observation.value_display(), "42");
+}
+
+#[test]
+fn retained_fresh_answer_needs_its_actual_allocator_handler() {
+    let source = include_str!("fixtures/retained-drain/fresh-answer.ash");
+    let observation = support::run_module("owned-answer-allocator.ash", source)
+        .expect("the owned allocator and drained cleanup are valid at release");
+    assert_eq!(observation.value_display(), "42");
+
+    let owned = "                using outer {\n                    let _ = perform Checkpoint<N>.checkpoint ()\n                    Done\n                }";
+    let external =
+        "                let _ = perform Checkpoint<N>.checkpoint ()\n                Done";
+    assert_eq!(source.matches(owned).count(), 1);
+    let failure = support::run_module(
+        "external-answer-allocator.ash",
+        &source.replace(owned, external),
+    )
+    .expect_err("the cleanup forwarder changes the external allocator handler");
+    assert_eq!(failure.reason_code(), "effect.retained-interpretation");
+}
+
+#[test]
+fn recursive_drains_and_outer_discard_run_to_completion() {
+    let fixtures =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/retained-drain");
+    for (name, answer) in [
+        ("basic.ash", "42"),
+        ("mutual.ash", "42"),
+        ("outer-discard.ash", "7"),
+    ] {
+        let compiled = ash::driver::compile_path(ash::driver::RunConfiguration {
+            entry: fixtures.join(name),
+            roots: ash::module::ModuleRoots::empty(),
+        })
+        .unwrap_or_else(|failure| panic!("{name}: {failure:?}"));
+        let cost = compiled.compilation_work().independent_core.unwrap();
+        eprintln!(
+            "{name}: Core work={}, allowance={:?}",
+            cost.used, cost.allowance
+        );
+        let observation =
+            ash::driver::execute(&compiled).unwrap_or_else(|failure| panic!("{name}: {failure:?}"));
+        assert_eq!(observation.value_display(), answer, "{name}");
+    }
+}
+
+#[test]
+fn imported_probe_alias_drains_through_the_public_driver() {
+    let entry = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/retained-drain/imported-alias.ash");
+    let compiled = ash::driver::compile_path(ash::driver::RunConfiguration {
+        entry,
+        roots: ash::module::ModuleRoots::empty(),
+    })
+    .expect("the imported Probe helper preserves its actual result");
+    let cost = compiled.compilation_work().independent_core.unwrap();
+    eprintln!(
+        "imported drain: Core work={}, allowance={:?}",
+        cost.used, cost.allowance
     );
-    assert_eq!(failure.reason_code(), "core.validation.retained-release");
+    let observation = ash::driver::execute(&compiled).expect("the imported drain must run");
+    assert_eq!(observation.value_display(), "42");
+}
+
+#[test]
+fn unproved_drain_paths_are_rejected_by_the_public_driver() {
+    let outer = include_str!("fixtures/retained-drain/outer-discard.ash");
+    let no_drain = outer.replace(
+        "let release_step = drain (store, key)",
+        "let release_step = ()",
+    );
+    let late = "let late_step = handle {\n                            let paused = perform Checkpoint<N>.checkpoint ()\n                            finished\n                        } with Checkpoint<N> using store {\n                            checkpoint ignored => {\n                                let late_key = retain\n                                finished\n                            }\n                        }";
+    let late_retain = outer.replace("let late_step = ()", late);
+    assert_ne!(outer, no_drain);
+    assert_ne!(outer, late_retain);
+    for (name, source) in [
+        (
+            "early-return.ash",
+            include_str!("fixtures/retained-drain/early-return.ash"),
+        ),
+        (
+            "intercepted.ash",
+            include_str!("fixtures/retained-drain/intercepted.ash"),
+        ),
+        (
+            "stale.ash",
+            include_str!("fixtures/retained-drain/stale.ash"),
+        ),
+        (
+            "unknown-external.ash",
+            include_str!("fixtures/retained-drain/unknown-external.ash"),
+        ),
+        (
+            "post-resume.ash",
+            include_str!("fixtures/retained-drain/post-resume.ash"),
+        ),
+        ("discard-without-drain.ash", no_drain.as_str()),
+        ("discard-after-retain.ash", late_retain.as_str()),
+    ] {
+        let failure = support::run_module(name, source)
+            .expect_err("the program must not abandon retained work");
+        assert_eq!(
+            failure.reason_code(),
+            "core.validation.retained-release",
+            "{name}: {failure:?}"
+        );
+    }
+    let entry = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/retained-drain/repeated-stale.ash");
+    let Err(failure) = ash::driver::compile_path(ash::driver::RunConfiguration {
+        entry,
+        roots: ash::module::ModuleRoots::empty(),
+    }) else {
+        panic!("a saved earlier Probe result cannot authorize release");
+    };
+    assert_eq!(
+        failure.pipeline_failure().unwrap().reason_code(),
+        "core.validation.retained-release",
+        "{failure:?}"
+    );
 }
 
 #[test]
@@ -193,13 +301,9 @@ fn generic_helper_can_forward_the_structural_continue() {
         "Control.Option<Int> ! {Control.Drive<N>} = forward\n",
         "42\n}\n",
     );
-    let failure = support::run_module("store-forward.ash", source)
-        .expect_err("C3 has not yet established this public close");
-    assert_eq!(
-        failure.reason_code(),
-        "core.validation.retained-release",
-        "{failure:?}"
-    );
+    let observation = support::run_module("store-forward.ash", source)
+        .expect("the imported generic continuation can be forwarded as a value");
+    assert_eq!(observation.value_display(), "42");
 }
 
 #[test]

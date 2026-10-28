@@ -9981,14 +9981,19 @@ mod tests {
         // Canonical DefaultAlloc makes export effect closure inspect the
         // effect-free payload: root1 and two scheduled children per Function.
         const EFFECT_INVENTORY_PAYLOAD_SCAN: usize = 1 + 2 * DEPTH;
-        // A complete normal defining-owner check/freeze donor uses245974.
-        // Its fixed metadata remainder excludes both depth tariffs and the
+        // The fixed metadata remainder excludes both depth tariffs and the
         // independently retained two-cell computational admission.
         const FIXED_METADATA_WORK: usize = 211;
+        // Rebuilt effectful provenance also visits the domain and result of
+        // the three imported region functions. The two Request -> Int schemes
+        // add two nodes each; from_backing adds its tuple domain and the
+        // Storage<R> application, constructor and argument.
+        const IMPORTED_REGION_PROVENANCE_WORK: usize = 2 + 2 + 4;
         const DEFINING_TYPE_WORK: usize = 13 * DEPTH
             + EFFECT_INVENTORY_PAYLOAD_SCAN
             + COMPUTATIONAL_ADMISSION_WORK
-            + FIXED_METADATA_WORK;
+            + FIXED_METADATA_WORK
+            + IMPORTED_REGION_PROVENANCE_WORK;
         const {
             assert!(DEFINING_TYPE_WORK < crate::types::TYPE_WORK_LIMIT);
             assert!(13 * (2 * DEPTH) + 29 > crate::types::TYPE_WORK_LIMIT);
