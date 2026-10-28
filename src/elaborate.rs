@@ -13687,7 +13687,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let api = crate::resolved::StoreApi::for_module(store.acquisition.builtin)
             .ok_or_else(invalid_state)?;
         let drive = EffectInstance::new(api.drive(), Box::new([Type::Variable(store.identity.id)]));
+        let probe = EffectInstance::new(api.probe(), Box::new([Type::Variable(store.identity.id)]));
         let outward = self.remove_cleanup_effect(&body_effects, &drive, span, true)?;
+        let outward = self.remove_cleanup_effect(&outward, &probe, span, true)?;
         let effects = self.union_effects(&initializer.effects, &outward, span)?;
         let row_type = IterativeTypeOwner::new(Type::function_computation(
             Type::Unit,

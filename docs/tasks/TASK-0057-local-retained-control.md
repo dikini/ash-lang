@@ -41,7 +41,10 @@ is closed. C2 store work is active. Internal fixtures exercise private root,
 Retain and structural Continue through a store frame, including the current
 consumer's result adapter. Linked Core still rejects store release: root and
 row admission, interpretation and support checks, higher-order instantiation,
-Probe and image support remain to be connected. C2–C5 and the connected
+and image support remain to be connected. An ordinary Probe can be intercepted
+by a source handler; internal checks exercise its driver restriction and
+store-state calculation. Store-provider selection and C3 freshness still need
+connected evidence. C2–C5 and the connected
 full-workspace and Main gates remain open.
 
 ## Verification

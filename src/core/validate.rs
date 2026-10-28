@@ -13885,22 +13885,31 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
     ) -> Result<EffectRow, ValidationError> {
         let api = crate::resolved::StoreApi::for_module(store.acquisition.builtin)
             .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, Some(id)))?;
-        self.charge_type_work(2)?;
+        self.charge_type_work(4)?;
         let drive = EffectInstance::new(
             api.drive(),
             Box::new([Type::Variable(store.acquisition.identity)]),
         );
-        let mut budget =
-            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
-        let result = body.remove_exact_with_budget(&drive, &mut budget);
-        self.charge_type_work(budget.used())?;
-        match result.map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))? {
-            Ok(row) => Ok(row),
-            Err(crate::types::EffectRowError::Missing) => {
-                self.union_effect_rows_charged(&EffectRow::empty(), body, id)
-            }
-            Err(error) => Err(ValidationError::row_removal_failure(error, id)),
+        let probe = EffectInstance::new(
+            api.probe(),
+            Box::new([Type::Variable(store.acquisition.identity)]),
+        );
+        let mut outward = self.union_effect_rows_charged(&EffectRow::empty(), body, id)?;
+        for instance in [drive, probe] {
+            let mut budget = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let result = outward.remove_exact_with_budget(&instance, &mut budget);
+            self.charge_type_work(budget.used())?;
+            outward = match result
+                .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?
+            {
+                Ok(row) => row,
+                Err(crate::types::EffectRowError::Missing) => outward,
+                Err(error) => return Err(ValidationError::row_removal_failure(error, id)),
+            };
         }
+        Ok(outward)
     }
 
     fn validate_resource_node(
@@ -20984,7 +20993,7 @@ mod tests {
     }
 
     #[test]
-    fn retained_store_effect_replay_discharges_only_its_own_drive() {
+    fn retained_store_effect_replay_discharges_only_its_own_drive_and_probe() {
         use super::super::effect::{
             EffectCoreBuilder, EffectOperation, HandlerId, ResumeUse, StoreScopeNode,
         };
@@ -21039,11 +21048,13 @@ mod tests {
         );
         let other = EffectInstance::new(EffectId::new(graph.entry(), 99), Box::new([]));
         let drive = EffectInstance::new(api.drive(), Box::new([Type::Variable(identity)]));
-        let expected = EffectRow::singleton(other.clone());
+        let probe = EffectInstance::new(api.probe(), Box::new([Type::Variable(identity)]));
+        let other_probe = EffectInstance::new(api.probe(), Box::new([Type::Int]));
+        let expected = EffectRow::closed(Box::new([other.clone(), other_probe.clone()]));
         let store = builder
             .store_scope(Box::new(scope), Type::Unit, expected.clone(), origin)
             .unwrap();
-        let output = EffectRow::closed(Box::new([other, drive]));
+        let output = EffectRow::closed(Box::new([other, other_probe, drive, probe]));
         builder
             .recompute_effect_rows_in_range(
                 0..store.index().unwrap() + 1,
@@ -23795,6 +23806,28 @@ mod tests {
             .find_map(|nominal| crate::resolved::StoreApi::for_module(nominal.id.module()))
             .unwrap();
         assert!(api.registry(&registry));
+        for mutation in 0..4 {
+            let mut effects = registry.effects().to_vec();
+            let probe = effects
+                .iter_mut()
+                .find(|effect| effect.id == api.probe())
+                .unwrap();
+            match mutation {
+                0 => probe.public = false,
+                1 => probe.parameters[0].id = crate::types::TypeVariableId::generated(77),
+                2 => probe.operations[0].spelling = "forged".into(),
+                3 => {
+                    probe.operations[0].annotation.ty =
+                        Type::Function(Box::new(Type::Unit), Box::new(Type::Unit));
+                }
+                _ => unreachable!(),
+            }
+            let forged = registry
+                .as_ref()
+                .clone()
+                .replace_effects_for_core_test(effects);
+            assert!(!api.registry(&forged), "mutation {mutation}");
+        }
         let sources = graph
             .modules()
             .iter()

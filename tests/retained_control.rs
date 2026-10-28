@@ -12,6 +12,42 @@ fn unused_store_api_does_not_block_an_unrelated_program() {
 }
 
 #[test]
+fn probe_is_an_ordinary_interceptable_request() {
+    let source = concat!(
+        "import @builtin.retained_control as Control\n",
+        "probe<N> : Unit -> Bool ! {Control.Probe<N>}\n",
+        "probe ignored = perform Control.Probe<N>.quiescent ()\n",
+        "main : Unit -> Bool\n",
+        "main () = {\n",
+        "let specialized : Unit -> Bool ! {Control.Probe<Int>} = probe\n",
+        "handle (specialized ()) with Control.Probe<Int> {\n",
+        "quiescent ignored => resume true\n}\n",
+        "}\n",
+    );
+    let observation = support::run_module("intercepted-probe.ash", source)
+        .expect("a nearer source handler can intercept the ordinary request");
+    assert_eq!(observation.value_display(), "true");
+}
+
+#[test]
+fn store_probe_is_discharged_without_opening_release() {
+    let source = concat!(
+        "import @builtin.retained_control as Control\n",
+        "main : Unit -> Int\n",
+        "main () = resource Control.Store<N,(Unit -> Int)> store = () {\n",
+        "let empty = perform Control.Probe<N>.quiescent ()\n",
+        "match empty {\ntrue => 42\nfalse => 0\n}\n}\n",
+    );
+    let failure = support::run_module("store-probe.ash", source)
+        .expect_err("the probe does not itself prove public release");
+    assert_eq!(
+        failure.reason_code(),
+        "core.validation.retained-release",
+        "{failure:?}"
+    );
+}
+
+#[test]
 fn public_option_and_same_spelled_user_constructors_remain_ordinary() {
     let source = concat!(
         "import @builtin.retained_control (Option, None, Some)\n",

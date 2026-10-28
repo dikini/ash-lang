@@ -2607,6 +2607,28 @@ impl<'runtime> Machine<'runtime> {
             &mut self.instantiation_work,
             Some(RuntimePhase::Access),
         )?;
+        // A source handler can intercept Probe, but it cannot grant the
+        // store's driver authority to an active branch. Check the actual
+        // live store before choosing any interpreter.
+        if let Some(api) = crate::resolved::StoreApi::for_module(effect.effect().module())
+            && effect.effect() == api.probe()
+            && let Some(key) = Instantiation::activation_at(&effect, 0)
+        {
+            charge_effect_work(
+                &mut self.instantiation_work,
+                self.frames.len(),
+                RuntimePhase::Access,
+            )?;
+            if self.frames.iter().any(|frame| {
+                matches!(frame, Frame::ResourceBoundary {
+                    key: found,
+                    payload: ResourcePayload::Store(_),
+                    ..
+                } if *found == key)
+            }) {
+                self.ensure_retained_driver(key)?;
+            }
+        }
         charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
         let source_symbol = self
             .program
@@ -2650,6 +2672,30 @@ impl<'runtime> Machine<'runtime> {
             }
             if let Frame::ResourceBoundary { node, key, payload } = frame {
                 if matches!(payload, ResourcePayload::Store(_)) {
+                    let Some(request_api) =
+                        crate::resolved::StoreApi::for_module(effect.effect().module())
+                    else {
+                        continue;
+                    };
+                    if effect.effect() != request_api.probe() {
+                        continue;
+                    }
+                    let Some(ExecutableNode::Effect(expression)) = handler_program.node(*node)
+                    else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    let EffectExprKind::Operation(EffectOperation::Store(store)) = &expression.kind
+                    else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    let api = crate::resolved::StoreApi::for_module(store.acquisition.builtin)
+                        .ok_or(RuntimeFailure::InvalidControlState)?;
+                    if effect.effect() == api.probe()
+                        && Instantiation::activation_at(&effect, 0) == Some(*key)
+                    {
+                        self.trace_effect(EffectTraceEvent::Request(operation));
+                        return self.interpret_store_probe(index, api, operation, value);
+                    }
                     continue;
                 }
                 let resource = self
@@ -2907,6 +2953,41 @@ impl<'runtime> Machine<'runtime> {
         };
         drop(retained);
         self.apply(Transition::direct(Control::Return(result)));
+        Ok(())
+    }
+
+    fn interpret_store_probe(
+        &mut self,
+        selected: usize,
+        api: crate::resolved::StoreApi,
+        operation: OperationId,
+        value: Value,
+    ) -> Result<(), RuntimeFailure> {
+        disposal::check()?;
+        if operation != OperationId::new(api.probe(), 0) || !matches!(value, Value::Unit) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let Frame::ResourceBoundary {
+            key,
+            payload: ResourcePayload::Store(store),
+            ..
+        } = &self.frames[selected]
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        if store.activation != *key {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        charge_effect_work(
+            &mut self.instantiation_work,
+            store.slots.len(),
+            RuntimePhase::Access,
+        )?;
+        let quiescent =
+            store.active_roots == 0 && store.slots.iter().all(|slot| slot.continuation.is_none());
+        self.apply(Transition::direct(Control::Return(Value::Boolean(
+            quiescent,
+        ))));
         Ok(())
     }
 

@@ -50,6 +50,7 @@ const RETAINED_CONTROL_SOURCE: &str = concat!(
     "pub opaque type Key<N> = HiddenKey\n",
     "pub type Option<A> = None\n| Some(A)\n",
     "pub effect Drive<N> {\ninternal : Unit -> Unit\n}\n",
+    "pub effect Probe<N> {\nquiescent : Unit -> Bool\n}\n",
     "pub advance<N,A,E : EffectRow> : (Store<N,(Unit -> A ! {| E})>, Key<N>) -> Option<A> ! {Drive<N> | E}\n",
     "advance pair = advance pair\n",
     "pub advance_with_drive<N,A,E : EffectRow> : (Store<N,(Unit -> A ! {Drive<N> | E})>, Key<N>) -> Option<A> ! {Drive<N> | E}\n",

@@ -231,6 +231,9 @@ drain's own running cleanup. The store probe is a separate ordinary effect
 request, so the nearest matching source handler retains its usual precedence.
 Only the selected authenticated store interpreter returns `Quiescent` exactly
 when `W(N)` is empty; an intercepted result grants no work or completion fact.
+The selected source realization uses `Probe<N>.quiescent : Unit -> Bool`:
+`true` represents `Quiescent`, and `false` represents pending work. A Boolean
+alone does not authenticate its provider or preserve a freshness fact.
 An empty ready queue is not enough. Normal release requires emptiness on every
 reachable normal predecessor of release, after actual handler and cleanup
 suffixes. Existing cleanup may

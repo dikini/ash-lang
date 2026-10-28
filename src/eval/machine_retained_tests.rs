@@ -1,6 +1,7 @@
 //! Focused ownership tests for the retained-control store's actual frame moves.
 
 use super::*;
+use crate::types::{Type, TypeVariableId};
 
 fn saved(value: i128) -> Frame {
     Frame::CleanupCompletion {
@@ -310,6 +311,211 @@ fn checkpoint_fixture() -> (ValidatedEffectProgram, NodeId, NodeId, NodeId) {
     let resume = resumes.into_iter().find(|id| matches!(&program.node(*id).unwrap().kind,
         EffectExprKind::Operation(EffectOperation::Resume(resume)) if resume.handler() == handler.id())).unwrap();
     (program, handler_node, request_node, resume)
+}
+
+fn probe_fixture() -> (ValidatedEffectProgram, NodeId, NodeId, TypeVariableId) {
+    let program = super::tests::effect_program(concat!(
+        "import @builtin.retained_control as Control\n",
+        "intercept<N> : Control.Store<N,(Unit -> Unit)> -> Bool\n",
+        "intercept store = handle (perform Control.Probe<N>.quiescent ()) ",
+        "with Control.Probe<N> {\nquiescent ignored => resume true\n}\n",
+        "main : Unit -> Int\nmain () = 42\n",
+    ));
+    let mut pending = vec![program.root()];
+    let mut seen = std::collections::HashSet::new();
+    let mut handler = None;
+    let mut request = None;
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let node = program.node(id).unwrap();
+        match &node.kind {
+            EffectExprKind::Operation(EffectOperation::Handler(candidate))
+                if program
+                    .registry()
+                    .effect(candidate.effect().effect())
+                    .is_some_and(|effect| effect.spelling == "Probe") =>
+            {
+                handler = Some(id)
+            }
+            EffectExprKind::Operation(EffectOperation::Request(candidate))
+                if program
+                    .registry()
+                    .effect(candidate.effect().effect())
+                    .is_some_and(|effect| effect.spelling == "Probe") =>
+            {
+                request = Some(id)
+            }
+            _ => {}
+        }
+        pending.extend((0..node.kind.child_count()).filter_map(|i| node.kind.child_at(i)));
+    }
+    let request = request.unwrap();
+    let EffectExprKind::Operation(EffectOperation::Request(candidate)) =
+        &program.node(request).unwrap().kind
+    else {
+        unreachable!()
+    };
+    let [crate::types::KindedArgument::TypeArg(Type::Variable(identity))] =
+        candidate.effect().arguments()
+    else {
+        panic!("generic probe identity")
+    };
+    let identity = *identity;
+    (program, handler.unwrap(), request, identity)
+}
+
+#[test]
+fn retained_probe_checks_driver_before_source_handler_selection() {
+    let (program, handler, request, identity) = probe_fixture();
+    let activation = ActivationKey(7);
+    let mut machine = Machine::new_effect(&program);
+    machine.control.take();
+    let instantiation = Instantiation::default()
+        .acquire(identity, activation, &mut machine.instantiation_work, None)
+        .unwrap();
+    let mut environment = Environment::new();
+    environment.instantiation = instantiation.clone();
+    machine.frames.push(Frame::ResourceBoundary {
+        node: program.root(),
+        key: activation,
+        payload: ResourcePayload::Store(Box::new(RetainedStore::new(activation))),
+    });
+    machine
+        .frames
+        .push(Frame::RetainedRootCompletion { key: activation });
+    machine.frames.push(Frame::HandlerBoundary {
+        node: handler,
+        environment: environment.clone(),
+        registration: None,
+        retained: None,
+    });
+    assert!(
+        machine
+            .return_request(request, &instantiation, Value::Unit)
+            .is_err()
+    );
+    assert!(matches!(
+        machine.frames.last(),
+        Some(Frame::HandlerBoundary { .. })
+    ));
+    machine.frames.remove(1);
+    machine
+        .return_request(request, &instantiation, Value::Unit)
+        .unwrap();
+    assert!(matches!(
+        machine.control.take(),
+        Some(Control::Evaluate(..))
+    ));
+    assert!(matches!(
+        machine.frames.last(),
+        Some(Frame::ClauseBoundary { .. })
+    ));
+
+    // A different, non-store identity remains an ordinary request even
+    // while this store's branch is active.
+    let mut other = Machine::new_effect(&program);
+    other.control.take();
+    let other_instantiation = Instantiation::default()
+        .acquire(
+            identity,
+            ActivationKey(8),
+            &mut other.instantiation_work,
+            None,
+        )
+        .unwrap();
+    environment.instantiation = other_instantiation.clone();
+    other.frames.push(Frame::ResourceBoundary {
+        node: program.root(),
+        key: activation,
+        payload: ResourcePayload::Store(Box::new(RetainedStore::new(activation))),
+    });
+    other
+        .frames
+        .push(Frame::RetainedRootCompletion { key: activation });
+    other.frames.push(Frame::HandlerBoundary {
+        node: handler,
+        environment,
+        registration: None,
+        retained: None,
+    });
+    other
+        .return_request(request, &other_instantiation, Value::Unit)
+        .unwrap();
+    assert!(matches!(other.control.take(), Some(Control::Evaluate(..))));
+}
+
+#[test]
+fn retained_probe_reads_the_actual_owned_work() {
+    let (program, _, request, _) = probe_fixture();
+    let EffectExprKind::Operation(EffectOperation::Request(request)) =
+        &program.node(request).unwrap().kind
+    else {
+        unreachable!()
+    };
+    let api = crate::resolved::StoreApi::for_module(request.effect().effect().module()).unwrap();
+    let operation = request.operation();
+    let activation = ActivationKey(7);
+    let mut machine = Machine::new_effect(&program);
+    machine.control.take();
+    machine.frames.push(Frame::ResourceBoundary {
+        node: program.root(),
+        key: activation,
+        payload: ResourcePayload::Store(Box::new(RetainedStore::new(activation))),
+    });
+    let probe = |machine: &mut Machine<'_>, expected| {
+        machine
+            .interpret_store_probe(0, api, operation, Value::Unit)
+            .unwrap();
+        assert!(
+            matches!(machine.control.take(), Some(Control::Return(Value::Boolean(actual))) if actual == expected)
+        );
+    };
+    probe(&mut machine, true);
+    let Frame::ResourceBoundary {
+        payload: ResourcePayload::Store(store),
+        ..
+    } = &mut machine.frames[0]
+    else {
+        unreachable!()
+    };
+    store.active_roots = 1;
+    probe(&mut machine, false);
+    let Frame::ResourceBoundary {
+        payload: ResourcePayload::Store(store),
+        ..
+    } = &mut machine.frames[0]
+    else {
+        unreachable!()
+    };
+    store.active_roots = 0;
+    store.slots.push(RetainedSlot {
+        generation: 0,
+        continuation: Some(live_capture()),
+    });
+    probe(&mut machine, false);
+    let Frame::ResourceBoundary {
+        payload: ResourcePayload::Store(store),
+        ..
+    } = &mut machine.frames[0]
+    else {
+        unreachable!()
+    };
+    store.slots[0].continuation = None;
+    probe(&mut machine, true);
+    assert!(
+        machine
+            .interpret_store_probe(0, api, operation, Value::Boolean(true))
+            .is_err()
+    );
+    machine.instantiation_work = TypeWorkBudget::with_limit(0);
+    assert!(
+        machine
+            .interpret_store_probe(0, api, operation, Value::Unit)
+            .is_err()
+    );
+    assert!(machine.control.is_none());
 }
 
 #[test]

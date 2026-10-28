@@ -1088,7 +1088,7 @@ impl CoreBuilder<EffectOperationFamily> {
             NativeInterpret(NodeId, Box<[NativeInterpretation]>),
             Handler(EffectInstance, usize, bool),
             Resource(EffectInstance, NodeId, NodeId),
-            Store(EffectInstance, NodeId, NodeId),
+            Store(EffectInstance, EffectInstance, NodeId, NodeId),
             Continue(NodeId, NodeId, NodeId, NodeId),
             RetainedRoot(NodeId, NodeId),
 
@@ -1165,11 +1165,15 @@ impl CoreBuilder<EffectOperationFamily> {
                         let api = crate::resolved::StoreApi::for_module(store.acquisition.builtin)
                             .ok_or(super::BuildError::InvalidPayload)?;
                         self.type_work
-                            .charge(2)
+                            .charge(4)
                             .map_err(|()| super::BuildError::TypeWorkExceeded)?;
                         Equation::Store(
                             EffectInstance::new(
                                 api.drive(),
+                                Box::new([Type::Variable(store.acquisition.identity)]),
+                            ),
+                            EffectInstance::new(
+                                api.probe(),
                                 Box::new([Type::Variable(store.acquisition.identity)]),
                             ),
                             store.initializer,
@@ -1393,7 +1397,7 @@ impl CoreBuilder<EffectOperationFamily> {
                             .map_err(|()| super::BuildError::TypeWorkExceeded)?
                             .map_err(|_| super::BuildError::InvalidPayload)?
                     }
-                    Equation::Store(instance, initializer, body) => {
+                    Equation::Store(drive, probe, initializer, body) => {
                         let initializer = &self
                             .nodes
                             .get(initializer.index()?)
@@ -1404,17 +1408,18 @@ impl CoreBuilder<EffectOperationFamily> {
                             .get(body.index()?)
                             .ok_or(super::BuildError::InvalidNodeId)?
                             .effects;
-                        let outward = match body
-                            .remove_exact_with_budget(&instance, &mut self.type_work)
-                            .map_err(|()| super::BuildError::TypeWorkExceeded)?
-                        {
-                            Ok(row) => row,
-                            Err(crate::types::EffectRowError::Missing) => {
-                                clone_effect_row_with_budget(body, &mut self.type_work)
-                                    .map_err(|()| super::BuildError::TypeWorkExceeded)?
-                            }
-                            Err(_) => return Err(super::BuildError::InvalidPayload),
-                        };
+                        let mut outward = clone_effect_row_with_budget(body, &mut self.type_work)
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+                        for instance in [drive, probe] {
+                            outward = match outward
+                                .remove_exact_with_budget(&instance, &mut self.type_work)
+                                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                            {
+                                Ok(row) => row,
+                                Err(crate::types::EffectRowError::Missing) => outward,
+                                Err(_) => return Err(super::BuildError::InvalidPayload),
+                            };
+                        }
                         initializer
                             .union_with_budget(&outward, &mut self.type_work)
                             .map_err(|()| super::BuildError::TypeWorkExceeded)?

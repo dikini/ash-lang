@@ -100,11 +100,15 @@ impl StoreApi {
         EffectId::new(self.module, 0)
     }
 
+    pub(crate) fn probe(self) -> EffectId {
+        EffectId::new(self.module, 1)
+    }
+
     pub(crate) fn hides_constructor(self, id: ConstructorId) -> bool {
         id.owner() == self.store() || id.owner() == self.key()
     }
 
-    /// Authenticate the fixed store, locator, answer and drive declarations.
+    /// Authenticate the fixed store, locator, answer and effect declarations.
     pub(crate) fn registry(self, registry: &ResolvedRegistry) -> bool {
         for (id, name, parameters, constructors) in [
             (
@@ -170,22 +174,31 @@ impl StoreApi {
                 }
             }
         }
-        let Some(effect) = registry.effect(self.drive()) else {
-            return false;
-        };
-        effect.id == self.drive()
-            && effect.public
-            && effect.spelling == "Drive"
-            && effect.native_contract.is_none()
-            && effect.parameters.len() == 1
-            && effect.parameters[0].id == TypeVariableId::resolved(self.module, 4)
-            && effect.parameters[0].kind == Kind::Type
-            && effect.parameters[0].spelling == "N"
-            && effect.operations.len() == 1
-            && effect.operations[0].id == OperationId::new(self.drive(), 0)
-            && effect.operations[0].spelling == "internal"
-            && matches!(&effect.operations[0].annotation.ty,
-                Type::Function(domain, value) if **domain == Type::Unit && **value == Type::Unit)
+        for (id, name, parameter, operation, result) in [
+            (self.drive(), "Drive", 4, "internal", Type::Unit),
+            (self.probe(), "Probe", 5, "quiescent", Type::Bool),
+        ] {
+            let Some(effect) = registry.effect(id) else {
+                return false;
+            };
+            if effect.id != id
+                || !effect.public
+                || effect.spelling != name
+                || effect.native_contract.is_some()
+                || effect.parameters.len() != 1
+                || effect.parameters[0].id != TypeVariableId::resolved(self.module, parameter)
+                || effect.parameters[0].kind != Kind::Type
+                || effect.parameters[0].spelling != "N"
+                || effect.operations.len() != 1
+                || effect.operations[0].id != OperationId::new(id, 0)
+                || effect.operations[0].spelling != operation
+                || !matches!(&effect.operations[0].annotation.ty,
+                    Type::Function(domain, value) if **domain == Type::Unit && **value == result)
+            {
+                return false;
+            }
+        }
+        true
     }
 }
 
