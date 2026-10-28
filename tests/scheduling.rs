@@ -91,3 +91,16 @@ fn losing_a_ready_key_does_not_authorize_store_release() {
         "{failure:?}"
     );
 }
+
+#[test]
+fn draining_the_key_before_release_completes_the_same_branch() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let observation = run_path(RunConfiguration {
+        entry: root.join("tests/fixtures/scheduling/restored-key.ash"),
+        roots: ModuleRoots::new([("ash", root.join("libraries"))])
+            .expect("the shipped library root is valid"),
+    })
+    .expect("draining the retained branch permits the Store to close");
+
+    assert_eq!(observation.value_display(), "42");
+}
