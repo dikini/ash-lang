@@ -48,6 +48,26 @@ fn store_probe_is_discharged_without_opening_release() {
 }
 
 #[test]
+fn private_root_without_retain_still_requires_admission() {
+    let source = concat!(
+        "import @builtin.retained_control as Control\n",
+        "effect Checkpoint<N> {\ncheckpoint : Unit -> Unit\n}\n",
+        "run<N> : (Control.Store<N,(Unit -> Int)>, Unit) -> Int\n",
+        "run (store, ignored) = handle {\n",
+        "let _ = perform Checkpoint<N>.checkpoint ()\n42\n",
+        "} with Checkpoint<N> using store {\ncheckpoint ignored => resume ()\n}\n",
+        "main : Unit -> Int\nmain () = 42\n",
+    );
+    let failure = support::run_module("root-without-retain.ash", source)
+        .expect_err("a private root still requires its admission proof");
+    assert_eq!(
+        failure.reason_code(),
+        "core.validation.retained-release",
+        "{failure:?}"
+    );
+}
+
+#[test]
 fn public_option_and_same_spelled_user_constructors_remain_ordinary() {
     let source = concat!(
         "import @builtin.retained_control (Option, None, Some)\n",

@@ -1798,6 +1798,9 @@ impl<'a, F: CoreOperationFamily> FunctionMetadataPreparation<'a, F> {
         let mut header = MetadataVariables::default();
         retain_type_variables(&mut header, &node.ty, budget)?;
         retain_row_variables(&mut header, F::effect_row(&node.effects), budget)?;
+        if let Some(EffectOperation::Store(store)) = (self.operation)(&node.kind) {
+            retain_type_variables(&mut header, store.handle.ty(), budget)?;
+        }
         if let Some(EffectOperation::Handler(handler)) = (self.operation)(&node.kind) {
             for argument in handler.effect().arguments() {
                 retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
@@ -1848,6 +1851,9 @@ impl NodeMetadataHeaders {
         let mut header = MetadataVariables::default();
         retain_type_variables(&mut header, &node.ty, budget)?;
         retain_row_variables(&mut header, F::effect_row(&node.effects), budget)?;
+        if let Some(EffectOperation::Store(store)) = operation(&node.kind) {
+            retain_type_variables(&mut header, store.handle.ty(), budget)?;
+        }
         if let Some(EffectOperation::Handler(handler)) = operation(&node.kind) {
             for argument in handler.effect().arguments() {
                 retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
@@ -3827,6 +3833,7 @@ mod tests {
     #[test]
     fn retained_store_metadata_binds_its_identity_and_keeps_outer_variables() {
         use super::super::effect::{EffectExprKind, StoreScopeNode};
+        use crate::types::{ComputationType, EffectRowVariable, NominalTypeId};
         let mut nodes = metadata_header_nodes();
         let EffectExprKind::Operation(EffectOperation::Resource(resource)) = &nodes[3].kind else {
             unreachable!()
@@ -3837,13 +3844,30 @@ mod tests {
             handle: resource.acquisition.handle,
             span: resource.acquisition.span,
         };
-        let store = StoreScopeNode::new(
-            acquisition,
-            resource.handle.clone(),
-            resource.initializer,
-            resource.body,
+        let mut handle = resource.handle.clone();
+        let descriptor = Type::EffectfulFunction(
+            Box::new(Type::Unit),
+            Box::new(ComputationType::new(
+                Type::Variable(TypeVariableId::generated(903)),
+                EffectRow::open(
+                    EffectRowVariable::Rigid(TypeVariableId::generated(905)),
+                    Box::new([]),
+                ),
+            )),
         );
+        handle.replace_type(Type::Application(
+            Box::new(Type::Application(
+                Box::new(Type::Nominal(NominalTypeId::new(acquisition.builtin, 0))),
+                Box::new(Type::Variable(acquisition.identity)),
+            )),
+            Box::new(descriptor),
+        ));
+        let store = StoreScopeNode::new(acquisition, handle, resource.initializer, resource.body);
         nodes[3].kind = EffectExprKind::Operation(EffectOperation::Store(Box::new(store)));
+        // The descriptor alone supplies A and E. The descendant type
+        // application uses unrelated identities.
+        nodes[0].ty = Type::Unit;
+        nodes[0].effects = EffectRow::empty();
         let mut owner = FunctionMetadataPreparation::new(&nodes, metadata_header_operation);
         let value = owner.collect(3, &mut TypeWorkBudget::unbounded()).unwrap();
         assert!(!value.identities.contains(&TypeVariableId::generated(900)));

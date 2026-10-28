@@ -3374,7 +3374,7 @@ struct ScopeRequirement {
 type ScopeRequirements = HashMap<ScopeRequirementKey, ScopeRequirement>;
 
 pub(super) trait ScopeFamily: CoreOperationFamily {
-    fn has_unproved_store(_kind: &Self::Kind) -> bool {
+    fn has_unchecked_retained_control(_kind: &Self::Kind) -> bool {
         false
     }
     fn has_raw_store_drive(_kind: &Self::Kind) -> bool {
@@ -3414,14 +3414,10 @@ pub(super) trait ScopeFamily: CoreOperationFamily {
 impl ScopeFamily for PureOperationFamily {}
 
 impl ScopeFamily for super::effect::EffectOperationFamily {
-    fn has_unproved_store(kind: &Self::Kind) -> bool {
+    fn has_unchecked_retained_control(kind: &Self::Kind) -> bool {
         matches!(
             kind,
-            super::effect::EffectExprKind::Operation(
-                super::effect::EffectOperation::Store(_)
-                    | super::effect::EffectOperation::RetainedRoot(_)
-                    | super::effect::EffectOperation::Retain(_)
-            )
+            super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Retain(_))
         )
     }
     fn has_raw_store_drive(kind: &Self::Kind) -> bool {
@@ -9819,9 +9815,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     Some(id),
                 ));
             }
-            // Until drain analysis is connected, no store has a release proof.
-            // Reuse the envelope pass so store-free programs need no extra scan.
-            if F::has_unproved_store(&node.kind) {
+            // Retain reconstruction is not yet connected. Store and root
+            // nodes undergo their local checks before the same refusal.
+            if F::has_unchecked_retained_control(&node.kind) {
                 return Err(ValidationError::new(
                     ValidationReason::RetainedRelease,
                     Some(id),
@@ -13946,6 +13942,82 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         Ok(outward)
     }
 
+    fn validate_store_node(
+        &self,
+        id: NodeId,
+        node: &StoredNode<super::effect::EffectOperationFamily>,
+        store: &super::effect::StoreScopeNode,
+    ) -> Result<(), ValidationError> {
+        let invalid = || ValidationError::new(ValidationReason::NodeType, Some(id));
+        let authority = store.acquisition;
+        let api = crate::resolved::StoreApi::for_module(authority.builtin)
+            .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+        if !api.registry(&self.program.registry) {
+            return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+        }
+        let (handle_api, identity, _) =
+            super::effect::store_ports(store.handle.ty()).ok_or_else(invalid)?;
+        let canonical = self
+            .program
+            .registry
+            .type_variable(authority.identity)
+            .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+        let initializer = self.node(store.initializer)?;
+        let body = self.node(store.body)?;
+        if handle_api.store() != api.store()
+            || authority.handle != store.handle.id()
+            || authority.identity.module().is_none()
+            || authority.identity.module() != authority.handle.module()
+            || canonical.kind != Kind::Type
+            || authority.span.cover(canonical.origin.primary_span()) != Some(authority.span)
+            || authority.span.cover(store.handle.origin().primary_span()) != Some(authority.span)
+            || Some(authority.span) != node.origin.as_ref().map(Origin::primary_span)
+            || !self.same_type_charged(identity, &Type::Variable(authority.identity))?
+            || !self.same_type_charged(&initializer.ty, &Type::Unit)?
+            || !self.same_type_charged(&body.ty, &node.ty)?
+        {
+            return Err(invalid());
+        }
+        let outward = self.store_outward_row(&body.effects, store, id)?;
+        let expected = self.union_effect_rows_charged(&initializer.effects, &outward, id)?;
+        if !self.same_effect_row_charged(&node.effects, &expected, id)? {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    fn validate_retained_root_node(
+        &self,
+        id: NodeId,
+        node: &StoredNode<super::effect::EffectOperationFamily>,
+        root: &super::effect::RetainedRootNode,
+    ) -> Result<(), ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation};
+        let invalid = || ValidationError::new(ValidationReason::NodeType, Some(id));
+        let store = self.node(root.store)?;
+        let handler_node = self.node(root.handler)?;
+        let (api, _, ports) = super::effect::store_ports(&store.ty).ok_or_else(invalid)?;
+        if !api.registry(&self.program.registry) {
+            return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+        }
+        let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &handler_node.kind
+        else {
+            return Err(invalid());
+        };
+        if handler.hook_root().is_some()
+            || handler.hook_registration().is_some()
+            || !self.same_type_charged(&handler_node.ty, ports.value())?
+            || !self.same_type_charged(&node.ty, ports.value())?
+        {
+            return Err(invalid());
+        }
+        let expected = self.union_effect_rows_charged(&store.effects, &handler_node.effects, id)?;
+        if !self.same_effect_row_charged(&node.effects, &expected, id)? {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
     fn validate_resource_node(
         &self,
         id: NodeId,
@@ -14718,11 +14790,21 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
                 self.validate_resource_node(id, node, resource)?;
             }
-            EffectExprKind::Operation(
-                EffectOperation::Store(_)
-                | EffectOperation::RetainedRoot(_)
-                | EffectOperation::Retain(_),
-            ) => {
+            EffectExprKind::Operation(EffectOperation::Store(store)) => {
+                self.validate_store_node(id, node, store)?;
+                return Err(ValidationError::new(
+                    ValidationReason::RetainedRelease,
+                    Some(id),
+                ));
+            }
+            EffectExprKind::Operation(EffectOperation::RetainedRoot(root)) => {
+                self.validate_retained_root_node(id, node, root)?;
+                return Err(ValidationError::new(
+                    ValidationReason::RetainedRelease,
+                    Some(id),
+                ));
+            }
+            EffectExprKind::Operation(EffectOperation::Retain(_)) => {
                 return Err(ValidationError::new(
                     ValidationReason::RetainedRelease,
                     Some(id),
@@ -24000,9 +24082,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn private_root_core_keeps_actual_store_and_selected_owner_but_is_unadmitted() {
-        use super::super::effect::{EffectExprKind, EffectOperation, EffectOperationFamily};
+    fn retained_root_fixture() -> LinkedCoreValidationFixture {
         let dependency = concat!(
             "import @builtin.retained_control as Control\n",
             "effect Checkpoint<N> {\ncheckpoint : Unit -> Unit\n}\n",
@@ -24013,7 +24093,13 @@ mod tests {
             "checkpoint ignored => {\nlet key = retain\n42\n}\n}\n",
         );
         let entry = "import dependency (branch)\nmain : Unit -> Int\nmain () = 42\n";
-        let fixture = LinkedCoreValidationFixture::compile(dependency, entry, &[]);
+        LinkedCoreValidationFixture::compile(dependency, entry, &[])
+    }
+
+    #[test]
+    fn private_root_core_keeps_actual_store_and_selected_owner_but_is_unadmitted() {
+        use super::super::effect::{EffectExprKind, EffectOperation, EffectOperationFamily};
+        let fixture = retained_root_fixture();
         let root = fixture
             .program
             .nodes
@@ -24054,12 +24140,94 @@ mod tests {
                 .iter()
                 .any(|clause| clause.resume() == retain.1.owner)
         );
-        assert!(EffectOperationFamily::has_unproved_store(&root.0.kind));
-        assert!(EffectOperationFamily::has_unproved_store(&retain.0.kind));
+        assert!(!EffectOperationFamily::has_unchecked_retained_control(
+            &root.0.kind
+        ));
+        assert!(EffectOperationFamily::has_unchecked_retained_control(
+            &retain.0.kind
+        ));
         assert_eq!(
             fixture.validate().unwrap_err().reason(),
             ValidationReason::RetainedRelease
         );
+    }
+
+    #[test]
+    fn retained_root_reconstructs_actual_store_handler_answer_and_row() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for mutation in 0..7 {
+            let mut fixture = retained_root_fixture();
+            let index = fixture
+                .program
+                .nodes
+                .iter()
+                .position(|node| {
+                    matches!(
+                        &node.kind,
+                        EffectExprKind::Operation(EffectOperation::RetainedRoot(_))
+                    )
+                })
+                .unwrap();
+            let EffectExprKind::Operation(EffectOperation::RetainedRoot(root)) =
+                &fixture.program.nodes[index].kind
+            else {
+                unreachable!()
+            };
+            let (store, handler) = (root.store, root.handler);
+            match mutation {
+                0 => {}
+                1 => {
+                    let EffectExprKind::Operation(EffectOperation::RetainedRoot(root)) =
+                        &mut fixture.program.nodes[index].kind
+                    else {
+                        unreachable!()
+                    };
+                    root.store = handler;
+                }
+                2 => {
+                    let EffectExprKind::Operation(EffectOperation::RetainedRoot(root)) =
+                        &mut fixture.program.nodes[index].kind
+                    else {
+                        unreachable!()
+                    };
+                    root.handler = store;
+                }
+                3 => fixture.program.nodes[index].ty = Type::Bool,
+                4 => fixture.program.nodes[index].effects = EffectRow::empty(),
+                5 => fixture.program.nodes[store.index().unwrap()].ty = Type::Unit,
+                6 => fixture.program.nodes[handler.index().unwrap()].ty = Type::Bool,
+                _ => unreachable!(),
+            }
+            let sources = fixture
+                .graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let validator =
+                Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                    .unwrap();
+            let node = &fixture.program.nodes[index];
+            let EffectExprKind::Operation(EffectOperation::RetainedRoot(root)) = &node.kind else {
+                unreachable!()
+            };
+            let id = node_id(fixture.program.arena, index).unwrap();
+            let result = validator.validate_retained_root_node(id, node, root);
+            if mutation == 0 {
+                result.expect("the source root has its actual Store, handler, answer and row");
+            } else {
+                assert_eq!(
+                    result.unwrap_err().reason(),
+                    ValidationReason::NodeType,
+                    "forged retained root mutation {mutation}"
+                );
+            }
+            drop(validator);
+            assert_eq!(
+                fixture.validate().unwrap_err().reason(),
+                ValidationReason::RetainedRelease
+            );
+        }
     }
 
     fn retained_store_scope_fixture() -> LinkedCoreValidationFixture {
@@ -24224,6 +24392,206 @@ mod tests {
             validator.validate_type_scopes().unwrap_err().cause_name(),
             Some("unbound-core-type-variables")
         );
+    }
+
+    #[test]
+    fn retained_store_node_reconstructs_its_actual_authority_ports_and_row() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for mutation in 0..7 {
+            let mut fixture = retained_store_scope_fixture();
+            let index = fixture
+                .program
+                .nodes
+                .iter()
+                .position(|node| {
+                    matches!(
+                        &node.kind,
+                        EffectExprKind::Operation(EffectOperation::Store(_))
+                    )
+                })
+                .unwrap();
+            let node = &mut fixture.program.nodes[index];
+            let EffectExprKind::Operation(EffectOperation::Store(store)) = &mut node.kind else {
+                unreachable!()
+            };
+            let api = crate::resolved::StoreApi::for_module(store.acquisition.builtin).unwrap();
+            match mutation {
+                0 => {}
+                1 => store.handle.replace_type(Type::Unit),
+                2 => store.acquisition.identity = crate::types::TypeVariableId::generated(999_999),
+                3 => store.acquisition.handle = BinderId::generated(999_999),
+                4 => node.ty = Type::Bool,
+                5 => store.initializer = store.body,
+                6 => {
+                    node.effects = EffectRow::singleton(EffectInstance::new(
+                        api.probe(),
+                        Box::new([Type::Variable(store.acquisition.identity)]),
+                    ));
+                }
+                _ => unreachable!(),
+            }
+            let sources = fixture
+                .graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let validator =
+                Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                    .unwrap();
+            let node = &fixture.program.nodes[index];
+            let EffectExprKind::Operation(EffectOperation::Store(store)) = &node.kind else {
+                unreachable!()
+            };
+            let id = node_id(fixture.program.arena, index).unwrap();
+            let result = validator.validate_store_node(id, node, store);
+            if mutation == 0 {
+                result.expect("the source-derived Store has exact authority, ports and row");
+            } else {
+                assert_eq!(
+                    result.unwrap_err().reason(),
+                    if mutation == 2 {
+                        ValidationReason::Registry
+                    } else {
+                        ValidationReason::NodeType
+                    },
+                    "forged Store mutation {mutation}"
+                );
+            }
+            drop(validator);
+            let reason = fixture.validate().unwrap_err().reason();
+            if mutation == 0 {
+                assert_eq!(reason, ValidationReason::RetainedRelease);
+            } else {
+                assert_ne!(
+                    reason,
+                    ValidationReason::RetainedRelease,
+                    "mutation {mutation}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn retained_store_identity_has_one_actual_scoped_introduction() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let mut fixture = LinkedCoreValidationFixture::compile(
+            concat!(
+                "import @builtin.retained_control as Control\n",
+                "pub branch : Unit -> Unit\n",
+                "branch ignored = resource Control.Store<N,(Unit -> Unit)> outer = () {\n",
+                "let _ = resource Control.Store<Q,(Unit -> Unit)> inner = () {\n()\n}\n",
+                "()\n}\n",
+            ),
+            "import dependency (branch)\nmain : Unit -> Int\nmain () = 42\n",
+            &[],
+        );
+        let stores = fixture
+            .program
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Store(store)) => {
+                    Some((index, (**store).clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(stores.len(), 2);
+        let (outer, inner) = if stores[0]
+            .1
+            .acquisition
+            .span
+            .cover(stores[1].1.acquisition.span)
+            == Some(stores[0].1.acquisition.span)
+        {
+            (&stores[0], &stores[1])
+        } else {
+            (&stores[1], &stores[0])
+        };
+        assert_eq!(
+            outer.1.acquisition.span.cover(inner.1.acquisition.span),
+            Some(outer.1.acquisition.span)
+        );
+
+        // Introducing the same canonical identity at both scopes is invalid.
+        let EffectExprKind::Operation(EffectOperation::Store(store)) =
+            &mut fixture.program.nodes[outer.0].kind
+        else {
+            unreachable!()
+        };
+        store.acquisition.identity = inner.1.acquisition.identity;
+        let mut handle_type = store.handle.ty().clone();
+        let Type::Application(applied, _) = &mut handle_type else {
+            unreachable!()
+        };
+        let Type::Application(_, identity) = &mut **applied else {
+            unreachable!()
+        };
+        **identity = Type::Variable(store.acquisition.identity);
+        store.handle.replace_type(handle_type);
+
+        {
+            let sources = fixture
+                .graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let mut validator =
+                Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                    .unwrap();
+            let (nominal_owners, _) = validator.authenticate_effect_registry_phase().unwrap();
+            let authenticated = validator.validate_method_evidence_authority().unwrap();
+            let abstractions = validator.collect_binders(&authenticated).unwrap();
+            assert_eq!(
+                validator
+                    .collect_type_binders(&nominal_owners, &abstractions)
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Registry
+            );
+        }
+
+        // If that inner introduction is removed, the same identity has one
+        // actual owner again. Keep both children so the graph stays intact.
+        let mut binder = inner.1.handle.clone();
+        binder.replace_type(Type::Unit);
+        fixture.program.nodes[inner.0].kind =
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                super::super::binding::BindingNode::new(binder, inner.1.initializer, inner.1.body),
+            )));
+        let sources = fixture
+            .graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let mut validator =
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources).unwrap();
+        let (nominal_owners, _) = validator.authenticate_effect_registry_phase().unwrap();
+        let authenticated = validator.validate_method_evidence_authority().unwrap();
+        validator.validate_envelopes(&authenticated).unwrap();
+        validator.validate_graph().unwrap();
+        let abstractions = validator.collect_binders(&authenticated).unwrap();
+        let type_binders = validator
+            .collect_type_binders(&nominal_owners, &abstractions)
+            .unwrap();
+        validator
+            .validate_method_evidence_type_owners(&type_binders)
+            .unwrap();
+        validator
+            .validate_node_types(&nominal_owners, &type_binders, &authenticated)
+            .unwrap();
+        validator.validate_scopes().unwrap();
+        validator.validate_type_scopes().unwrap();
+        let node = &fixture.program.nodes[outer.0];
+        let EffectExprKind::Operation(EffectOperation::Store(store)) = &node.kind else {
+            unreachable!()
+        };
+        let id = node_id(fixture.program.arena, outer.0).unwrap();
+        validator.validate_store_node(id, node, store).unwrap();
     }
 
     fn method_evidence_validation_fixture() -> LinkedCoreValidationFixture {
