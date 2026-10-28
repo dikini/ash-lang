@@ -750,8 +750,7 @@ enum ResourcePayload {
         value: Value,
         instance: EffectInstance,
     },
-    // Kept behind the existing uniquely owned resource boundary. Linked
-    // release remains closed until the admission analysis is connected.
+    // Kept behind the existing uniquely owned resource boundary.
     Store(Box<RetainedStore>),
 }
 
