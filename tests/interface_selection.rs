@@ -297,6 +297,10 @@ fn occurrences_in_expressions(
                 expressions.push(&resource.initializer);
                 expressions.push(&resource.body);
             }
+            ResolvedExprKind::Store(store) => {
+                expressions.push(&store.initializer);
+                expressions.push(&store.body);
+            }
             ResolvedExprKind::Region(region) => {
                 if let Some(provider) = &region.provider {
                     expressions.push(provider);
@@ -309,10 +313,13 @@ fn occurrences_in_expressions(
             }
             ResolvedExprKind::Handle(handler) => {
                 expressions.push(&handler.body);
+                if let Some(store) = &handler.store {
+                    expressions.push(store);
+                }
                 expressions.extend(handler.clauses.iter().map(|clause| &clause.body));
             }
             ResolvedExprKind::Resume(resume) => expressions.push(&resume.value),
-            ResolvedExprKind::Discard(_) => {}
+            ResolvedExprKind::Discard(_) | ResolvedExprKind::Retain(_) => {}
         }
     }
     occurrences
@@ -618,13 +625,13 @@ fn higher_kinded_concrete_candidate_retains_ordered_substitution_and_evidence() 
         "construct : Int -> F<Int>\n",
         "}\n\n",
         "interface Show<A> {\nshow : A -> Int\n}\n\n",
-        "interface Extract<A> {\nextract : A -> Int\nretain : A -> A\n}\n\n",
+        "interface Extract<A> {\nextract : A -> Int\nkeep : A -> A\n}\n\n",
         "impl Construct<Option> {\nconstruct value = Some(value)\n}\n\n",
         "impl Show<Int> {\nshow value = value\n}\n\n",
         "impl<F : Type -> Type, A : Type> Extract<Wrapped<F, A>> ",
         "where Construct<F>, Show<A> {\n",
         "extract value = 0\n",
-        "retain value = value\n",
+        "keep value = value\n",
         "}\n\n",
         "probe : Wrapped<Option, Int> -> Int\n",
         "probe value = extract value\n",
@@ -637,7 +644,7 @@ fn higher_kinded_concrete_candidate_retains_ordered_substitution_and_evidence() 
     let construct = MethodId::new(construct_interface, 0);
     let show = MethodId::new(show_interface, 0);
     let extract = MethodId::new(extract_interface, 0);
-    let retain = MethodId::new(extract_interface, 1);
+    let keep = MethodId::new(extract_interface, 1);
     let construct_implementation = ImplId::new(checked.module(), 0);
     let show_implementation = ImplId::new(checked.module(), 1);
     let extract_implementation = ImplId::new(checked.module(), 2);
@@ -688,7 +695,7 @@ fn higher_kinded_concrete_candidate_retains_ordered_substitution_and_evidence() 
         methods,
         &[
             ImplMethodId::new(extract_implementation, extract),
-            ImplMethodId::new(extract_implementation, retain),
+            ImplMethodId::new(extract_implementation, keep),
         ]
     );
 
