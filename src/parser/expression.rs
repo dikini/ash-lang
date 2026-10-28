@@ -98,6 +98,7 @@ fn parse_primary(parser: &mut Parser<'_>, forms: &[PrimaryForm]) -> CompletedExp
             | PrimaryForm::String
             | PrimaryForm::Boolean
             | PrimaryForm::Discard
+            | PrimaryForm::Retain
             | PrimaryForm::Identifier
             | PrimaryForm::UpperIdentifier,
         ) => {
@@ -208,6 +209,7 @@ fn primary_form(parser: &Parser<'_>, forms: &[PrimaryForm]) -> Option<PrimaryFor
             | (PrimaryForm::Parenthesized, Some(TokenKind::LeftParen)) => true,
             (PrimaryForm::Perform, Some(TokenKind::Perform)) => true,
             (PrimaryForm::Discard, Some(TokenKind::Discard)) => true,
+            (PrimaryForm::Retain, Some(TokenKind::Retain)) => true,
             (PrimaryForm::Hook, Some(TokenKind::Hook)) => true,
             (PrimaryForm::Registration, Some(TokenKind::Register)) => true,
             (PrimaryForm::Cleanup, Some(TokenKind::Cleanup)) => true,

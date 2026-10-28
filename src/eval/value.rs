@@ -323,6 +323,7 @@ impl ObservedValue {
                     Value::RegionView(_) => output.push_str("<region-view>"),
                     Value::RegionHostFunction { .. } => output.push_str("<function>"),
                     Value::ResourceHandle(_) => output.push_str("<resource-handle>"),
+                    Value::RetainedKey(_) => output.push_str("<retained-key>"),
 
                     Value::Intrinsic(_) => output.push_str("<function>"),
                     Value::Address(_) => output.push_str("<address>"),
@@ -600,6 +601,9 @@ pub enum Value {
     /// An opaque, non-owning access key for a live resource activation.
     ResourceHandle(ActivationKey),
 
+    /// A non-owning locator for one generation in a retained-control store.
+    RetainedKey(RetainedKey),
+
     /// A private genuinely inline mathematical integer representation.
     SmallInteger(i128),
     /// Sign and existing region-owned digit backing; aliases never copy digits.
@@ -656,6 +660,7 @@ impl fmt::Display for Value {
             Self::RegionView(_) => formatter.write_str("<region-view>"),
             Self::RegionHostFunction { .. } => formatter.write_str("<function>"),
             Self::ResourceHandle(_) => formatter.write_str("<resource-handle>"),
+            Self::RetainedKey(_) => formatter.write_str("<retained-key>"),
 
             Self::Intrinsic(_) => formatter.write_str("<function>"),
             Self::Address(_) => formatter.write_str("<address>"),
@@ -682,3 +687,11 @@ impl fmt::Display for Value {
 /// It carries no cell payload or ownership edge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ActivationKey(pub(super) u32);
+
+/// An evaluator-created locator. Copying it does not copy its owned control.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RetainedKey {
+    pub(super) activation: ActivationKey,
+    pub(super) slot: usize,
+    pub(super) generation: u64,
+}

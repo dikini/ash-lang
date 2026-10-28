@@ -1116,12 +1116,12 @@ fn inference_and_continuation_messages_preserve_source_locations_without_invente
         (TypeReason::InfiniteType, "main : Unit -> Int\nmain () = {\nlet omega = fn(value) {\nvalue(value)\n}\nomega\n}\n".to_owned(), "This expression would require an infinite type", "infinite_type"),
         (TypeReason::AmbiguousType, "main : Unit -> Unit\nmain () = {\nlet result = {\nlet constant = fn(ignored) {\n42\n}\nconstant\n}\n()\n}\n".to_owned(), "Ash cannot determine a complete type for this expression.", "ambiguous_type"),
         (TypeReason::UnguardedRecursiveUse, "type Stream =\nNext(Int, Stream)\nfn identity(value : Stream) -> Stream {\nvalue\n}\nmain : Unit -> Stream\nmain () = {\nlet rec stream : Stream = Next(1, identity stream)\nstream\n}\n".to_owned(), "This recursive value cannot be passed through this expression during initialization.", "recursive_use"),
-        (TypeReason::ResumeNotConsumed, handler("1"), "This path can finish without resuming or safely discarding the continuation.", "continuation_usage"),
-        (TypeReason::ResumeNotConsumed, handler("match true {\ntrue => resume 1\nfalse => 2\n}"), "This path can finish without resuming or safely discarding the continuation.", "continuation_usage"),
-        (TypeReason::ResumeAlreadyConsumed, handler("{\nlet first = resume 1\nresume 2\n}"), "This path has already resumed or discarded the continuation; it cannot do so again.", "continuation_usage"),
-        (TypeReason::ResumeAlreadyConsumed, handler("{\nlet _ = discard\nresume 1\n}"), "This path has already resumed or discarded the continuation; it cannot do so again.", "continuation_usage"),
-        (TypeReason::ResumeCapture, handler("{\nlet deferred : Unit -> Int = fn(ignored) {\nresume 1\n}\nresume 2\n}"), "This nested scope cannot capture the enclosing clause's right to resume or discard.", "continuation_capture"),
-        (TypeReason::ResumeCapture, handler("{\nlet rec deferred : Unit -> Unit = fn(ignored) {\ndiscard\n}\nresume 1\n}"), "This nested scope cannot capture the enclosing clause's right to resume or discard.", "continuation_capture"),
+        (TypeReason::ResumeNotConsumed, handler("1"), "This path can finish without resuming, retaining, or safely discarding the continuation.", "continuation_usage"),
+        (TypeReason::ResumeNotConsumed, handler("match true {\ntrue => resume 1\nfalse => 2\n}"), "This path can finish without resuming, retaining, or safely discarding the continuation.", "continuation_usage"),
+        (TypeReason::ResumeAlreadyConsumed, handler("{\nlet first = resume 1\nresume 2\n}"), "This path has already consumed the continuation; it cannot do so again.", "continuation_usage"),
+        (TypeReason::ResumeAlreadyConsumed, handler("{\nlet _ = discard\nresume 1\n}"), "This path has already consumed the continuation; it cannot do so again.", "continuation_usage"),
+        (TypeReason::ResumeCapture, handler("{\nlet deferred : Unit -> Int = fn(ignored) {\nresume 1\n}\nresume 2\n}"), "This nested scope cannot capture the enclosing clause's continuation capability.", "continuation_capture"),
+        (TypeReason::ResumeCapture, handler("{\nlet rec deferred : Unit -> Unit = fn(ignored) {\ndiscard\n}\nresume 1\n}"), "This nested scope cannot capture the enclosing clause's continuation capability.", "continuation_capture"),
     ] {
         let fixture = ModuleFixture::load("inference-continuation.ash", &text);
         let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else { panic!("expected source error: {text}"); };

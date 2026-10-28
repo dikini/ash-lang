@@ -66,6 +66,8 @@ pub enum TokenKind {
     Cleanup,
     /// The `discard` reserved word.
     Discard,
+    /// Clause-scoped transfer of a captured continuation.
+    Retain,
     /// The `import` reserved word.
     Import,
     /// The `as` reserved word.

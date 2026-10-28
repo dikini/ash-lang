@@ -22,7 +22,7 @@ fn typing_error(text: &str) -> Box<ash::elaborate::TypeDiagnostic> {
 #[test]
 fn global_presentations_share_recursive_scope_and_evaluate() {
     let observation = run(
-        "first : Unit -> Int\nfirst ignored = second ()\n\nfn second(ignored : Unit) -> Int {\nlet retain : Unit -> Int = fn(value) {\nfirst value\n}\n42\n}\n\nmain : Unit -> Int\nmain () = first ()\n",
+        "first : Unit -> Int\nfirst ignored = second ()\n\nfn second(ignored : Unit) -> Int {\nlet saved : Unit -> Int = fn(value) {\nfirst value\n}\n42\n}\n\nmain : Unit -> Int\nmain () = first ()\n",
     );
 
     assert_eq!(observation.value().to_string(), "42");
@@ -80,7 +80,7 @@ fn earlier_implementation_method_and_later_global_share_recursive_scope() {
 #[test]
 fn local_recursive_group_evaluates_through_the_same_core_form() {
     let observation = run(
-        "main : Unit -> Int\nmain () = {\nlet rec first : Unit -> Int = fn(ignored) {\nsecond ()\n}\nand second : Unit -> Int = fn(ignored) {\nlet retain : Unit -> Int = fn(value) {\nfirst value\n}\n42\n}\nfirst ()\n}\n",
+        "main : Unit -> Int\nmain () = {\nlet rec first : Unit -> Int = fn(ignored) {\nsecond ()\n}\nand second : Unit -> Int = fn(ignored) {\nlet saved : Unit -> Int = fn(value) {\nfirst value\n}\n42\n}\nfirst ()\n}\n",
     );
 
     assert_eq!(observation.value().to_string(), "42");

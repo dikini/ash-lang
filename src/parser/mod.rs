@@ -929,6 +929,7 @@ fn retained_token(kind: &TokenKind) -> FoundToken {
         TokenKind::Register => FoundToken::Spelling("register"),
         TokenKind::Cleanup => FoundToken::Spelling("cleanup"),
         TokenKind::Discard => FoundToken::Spelling("discard"),
+        TokenKind::Retain => FoundToken::Spelling("retain"),
         TokenKind::Import => FoundToken::Spelling("import"),
         TokenKind::As => FoundToken::Spelling("as"),
         TokenKind::Pub => FoundToken::Spelling("pub"),

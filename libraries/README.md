@@ -1,8 +1,27 @@
 # Source bindings
 
-This directory currently ships no source binding modules. The former Arena,
-native-buffer and SQLite libraries depended on the retired foreign policy API
-and have been removed for the implemented
+`scheduling.ash` is an ordinary Ash module for the retained-control store. Use
+`--root ash=libraries` and import `@ash.scheduling` to select a suspended branch
+and drain it. `finish` follows returned keys until that branch finishes or the
+selected key is absent. `drain` returns on a true Probe reply and follows a
+newly returned key when the branch yields again. A source handler can intercept
+the request; only a fresh reply from the selected Store can establish quiescence
+for release. If other work remains without an available key, it need not terminate.
+Neither operation adds cancellation, fairness or a termination guarantee.
+
+`ReadyQueue`, `enqueue`, `turn` and `run_ready` provide a cooperative FIFO
+policy. A turn removes the first key and appends the new key if that branch
+yields again. The driver returns on a true Probe reply; an empty queue alone
+does not establish that the Store is quiescent. The examples place an allocator
+handler outside the Store. The current release analysis conservatively refuses
+the empty-queue example when its only allocator is the host default; an
+enclosing `region` and `using` supplies the supported context.
+
+The module uses the accepted retained-control change on the M3 milestone; the
+current Main specification remains subject to the final C5 update.
+
+The former Arena, native-buffer and SQLite libraries depended on the retired
+foreign policy API and have been removed for the implemented
 [foreign-call boundary](../spec/static-semantics.md#source-foreign-declarations).
 
 The current [native declarations](../tests/fixtures/source-native/native.ash),

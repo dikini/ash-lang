@@ -48,6 +48,8 @@ pub enum RuntimeResource {
     EnvironmentBindings,
     /// Retained control frames.
     FrameStorage,
+    /// Slot entries owning retained control.
+    RetainedSlots,
     /// Effect trace events.
     EffectTrace,
     /// Ordinary evaluator trace events.
@@ -85,6 +87,7 @@ impl RuntimeResource {
             Self::ActivationKeys => "representable activation keys",
             Self::EnvironmentBindings => "representable environment bindings",
             Self::FrameStorage => "control frames",
+            Self::RetainedSlots => "retained control slots",
             Self::EffectTrace => "effect trace events",
             Self::EvaluationTrace => "evaluation trace events",
             Self::ResultHeapCells => "result heap cells",

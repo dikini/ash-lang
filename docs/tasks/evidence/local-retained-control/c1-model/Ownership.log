@@ -1,0 +1,18 @@
+'Ash.RetainedControl.step_accounting' depends on axioms: [propext]
+'Ash.RetainedControl.step_preserves_unique' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.trace_preserves_unique' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.trace_preserves_slot_ids' depends on axioms: [propext]
+'Ash.RetainedControl.trace_preserves_generation_bound' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.normal_step_preserves_capacity' depends on axioms: [propext]
+'Ash.RetainedControl.restore_cannot_replay' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.restore_requires_live_key' depends on axioms: [propext]
+'Ash.RetainedControl.source_release_predecessor' depends on axioms: [propext]
+'Ash.RetainedControl.actual_finish_requires_completion' depends on axioms: [propext]
+'Ash.RetainedControl.running_drain_is_not_skipped' depends on axioms: [propext]
+'Ash.RetainedControl.no_work_excludes_clause' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.no_work_excludes_active' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.no_work_excludes_slot' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.admission_excludes_self' does not depend on any axioms
+'Ash.RetainedControl.admission_keeps_outside_completion' does not depend on any axioms
+'Ash.RetainedControl.admission_rejects_local_escape' does not depend on any axioms
+'Ash.RetainedControl.trace_preserves_context' depends on axioms: [propext]

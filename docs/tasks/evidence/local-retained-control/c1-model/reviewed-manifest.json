@@ -1,0 +1,16 @@
+{
+  "scope": "C1 candidate model and proposed semantics; local compilation is development feedback, not frozen integration or acceptance",
+  "parent_head": "33af1ed1e9adfaa2efa73443a6c0709131b00ff6",
+  "source_files": {
+    "Ownership.lean": "5103f2a5b155da16d98b75d8d65a8cb0edd9bf9056c2de033f35efe3e81b71ee",
+    "OwnershipExamples.lean": "0ca6f7915479fca02a8abc8099e845b27a6706e2030ea51a8350d44f7b194c99",
+    "correspondence.md": "daef0a1616e1c4da0e12a4507bbdc2330c2b3420bb33f079340a9ae67c64d69a",
+    "README.md": "722dbba624e56d8939d758529bb46d44f2bfb593dda9025576f8c8aded9587cb",
+    "CP-0026-scoped-owned-continuation-storage.md": "29476af39aa7de8f939e61c57105a07706f745c8a918ab8183296332c4133731",
+    "DN-0056-scoped-continuation-retention-and-library-scheduling.md": "b16bb62c7019e1aca8a508a63bb81314465d67e0fc990096e55cc53f347e09ed"
+  },
+  "local_feedback": {
+    "ownership-local-v2.log": "729df22023784976e6a8fd3cf14db587677866b7ae37a20b9f532a757e877255",
+    "ownership-examples-local-v3.log": "e70c6dd746b77459488acec3ae1fe5198a24822fb91afdd5ed126ace542b2c3e"
+  }
+}

@@ -1,0 +1,2 @@
+{"module": "DrainSafety", "status": "compiled", "wall_seconds": 3.7977719080008683, "peak_rss_kib": 558000}
+{"modules": 3, "reports": 82, "changed_sources": 1, "affected_consumers": 1, "fresh_consumers": 1, "receipt_cache_hits": 0, "reused": 2, "timing": {"preparation_and_hash_checks_seconds": 0.7199333330027002, "batched_affected_compile_seconds": 4.7298389120005595}, "evidence": "/tmp/ash-m3/c3-frozen-0f737-retry1-evidence.json", "evidence_sha256": "717fea322b63c90626938c0c98fadf3cbb2f4735a41959542fb1003ebafb3a90"}

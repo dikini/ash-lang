@@ -19,11 +19,13 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-No proposed changes are listed.
+No proposed transitions are listed.
 
 ## Accepted changes
 
-No accepted transitions are listed. The [region specification](../../spec/README.md)
+No accepted transitions are listed.
+
+The [region specification](../../spec/README.md)
 records the lexical-region language rules; the bounded
 [model evidence](../design/lexical-regions/evidence.md) retains its separate proof
 scope. Proposal retirement prepares the product branch and does not replace

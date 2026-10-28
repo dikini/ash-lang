@@ -1,0 +1,3 @@
+{"module": "Ownership", "status": "compiled", "wall_seconds": 8.842375424999773, "peak_rss_kib": 578968}
+{"module": "OwnershipExamples", "status": "compiled", "wall_seconds": 1.501826957999583, "peak_rss_kib": 525500}
+{"modules": 2, "reports": 49, "changed_sources": 2, "affected_consumers": 2, "fresh_consumers": 2, "receipt_cache_hits": 0, "reused": 0, "timing": {"preparation_and_hash_checks_seconds": 0.4933391439999468, "batched_affected_compile_seconds": 11.065965433999736}, "evidence": "/tmp/ash-m3/c1-frozen-v3-evidence.json", "evidence_sha256": "fa3462c847fe90766c33ef6d069dceaf5a3febec0b1cb78d490efbf06d46ed0b"}

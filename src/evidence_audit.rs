@@ -135,6 +135,11 @@ where
                 [resource.initializer.as_ref(), resource.body.as_ref()],
                 budget,
             )?,
+            ResolvedExprKind::Store(store) => reserve_and_extend(
+                &mut pending,
+                [store.initializer.as_ref(), store.body.as_ref()],
+                budget,
+            )?,
             ResolvedExprKind::Cleanup(cleanup) => reserve_and_extend(
                 &mut pending,
                 [cleanup.body.as_ref(), cleanup.action.as_ref()],
@@ -148,9 +153,12 @@ where
                     budget,
                 )?;
                 reserve_and_extend(&mut pending, std::iter::once(handler.body.as_ref()), budget)?;
+                if let Some(store) = &handler.store {
+                    reserve_and_extend(&mut pending, std::iter::once(store.as_ref()), budget)?;
+                }
             }
             ResolvedExprKind::Resume(resume) => pending.push(&resume.value),
-            ResolvedExprKind::Discard(_) => {}
+            ResolvedExprKind::Discard(_) | ResolvedExprKind::Retain(_) => {}
         }
     }
     Ok(())

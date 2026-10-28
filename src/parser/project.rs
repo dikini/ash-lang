@@ -666,6 +666,10 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.expression()?;
             shape.token(&TokenKind::With)?;
             shape.node(NodeKind::EffectInstance)?;
+            if shape.peek_token_is(&TokenKind::Using) {
+                shape.token(&TokenKind::Using)?;
+                shape.node(NodeKind::PrimaryExpression)?;
+            }
             shape.token(&TokenKind::LeftBrace)?;
             shape.token(&TokenKind::LineEnd)?;
             shape.node(NodeKind::HandlerClause)?;
@@ -901,6 +905,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                         TokenKind::Integer(_)
                             | TokenKind::StringLiteral(_)
                             | TokenKind::Discard
+                            | TokenKind::Retain
                             | TokenKind::True
                             | TokenKind::False
                             | TokenKind::Identifier(_)
@@ -2125,7 +2130,23 @@ fn project_expression(
                     }
                 }
                 NodeKind::HandlerExpression => {
-                    let body = expression_child(node)?;
+                    let mut operands =
+                        child_nodes(node).filter(|child| is_expression_kind(child.kind));
+                    let body = operands.next().ok_or(ProjectionError::MalformedTree(
+                        InternalReason::UnexpectedShape,
+                    ))?;
+                    let store = if direct_tokens(node, tokens)
+                        .any(|token| token.kind == TokenKind::Using)
+                    {
+                        Some(operands.next().ok_or(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        ))?)
+                    } else {
+                        None
+                    };
+                    if operands.next().is_some() {
+                        return malformed(InternalReason::UnexpectedShape);
+                    }
                     let effect = project_effect_instance(
                         source,
                         only_child_of_kind(node, NodeKind::EffectInstance)?,
@@ -2154,6 +2175,7 @@ fn project_expression(
                         .collect::<Result<Vec<_>, ProjectionError>>()?;
                     tasks.push(ExpressionTask::FinishHandle {
                         effect,
+                        has_store: store.is_some(),
                         clauses: clauses
                             .iter()
                             .map(|(operation, pattern, _, span)| {
@@ -2169,6 +2191,9 @@ fn project_expression(
                             .map(|(_, _, body, _)| ExpressionTask::Visit(body)),
                     );
                     tasks.push(ExpressionTask::Visit(body));
+                    if let Some(store) = store {
+                        tasks.push(ExpressionTask::Visit(store));
+                    }
                 }
                 NodeKind::PrimaryExpression => {
                     if let Some(group) =
@@ -2447,16 +2472,24 @@ fn project_expression(
             }
             ExpressionTask::FinishHandle {
                 effect,
+                has_store,
                 clauses,
                 span,
             } => {
                 let split = projected
                     .len()
-                    .checked_sub(clauses.len().saturating_add(1))
+                    .checked_sub(clauses.len().saturating_add(1 + usize::from(has_store)))
                     .ok_or(ProjectionError::MalformedTree(
                         InternalReason::UnexpectedShape,
                     ))?;
                 let mut expressions = projected.split_off(split).into_iter();
+                let store = if has_store {
+                    Some(Box::new(expressions.next().ok_or(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+                    )?))
+                } else {
+                    None
+                };
                 let body = expressions.next().ok_or(ProjectionError::MalformedTree(
                     InternalReason::UnexpectedShape,
                 ))?;
@@ -2477,6 +2510,7 @@ fn project_expression(
                     kind: SurfaceExprKind::Handle(SurfaceHandleExpr {
                         body: Box::new(body),
                         effect,
+                        store,
                         clauses,
                     }),
                     span,
@@ -2648,6 +2682,7 @@ enum ExpressionTask<'a> {
     },
     FinishHandle {
         effect: SurfaceEffectInstance,
+        has_store: bool,
         clauses: Vec<(SurfaceName, SurfacePattern, Span)>,
         span: Span,
     },
@@ -2921,6 +2956,7 @@ fn project_primitive(
         TokenKind::True => SurfaceExprKind::Boolean(true),
         TokenKind::False => SurfaceExprKind::Boolean(false),
         TokenKind::Discard => SurfaceExprKind::Discard,
+        TokenKind::Retain => SurfaceExprKind::Retain,
         TokenKind::Identifier(text) => {
             SurfaceExprKind::Name(SurfaceReference::Unqualified(SurfaceName {
                 text: text.clone(),

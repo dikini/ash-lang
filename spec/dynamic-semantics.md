@@ -18,13 +18,15 @@ prospective/live/closing region activations, pending initialization and saved
 paired completion. These extend the same configuration, not another machine. A selected operation moves
 one suffix of that continuation into a clause-owned captured continuation. The
 suffix is moved, not copied. Its clause boundary records whether the unique
-resume capability still owns that captured control or has consumed it.
+resume capability still owns that captured control or has consumed it. A
+checked private clause may instead move that control into its scoped Store;
+the continuation itself never becomes a source value.
 
 Runtime values are arbitrary-precision integers, Booleans, unit, immutable
 byte sequences, validated UTF-8 strings, lexical
 functions, canonical builtin functions, internal lexical polymorphic functions,
-payload-constructor functions, opaque data-pointer Address values, opaque non-owning resource handles,
-or heap locations. A function
+payload-constructor functions, opaque data-pointer Address values, opaque
+non-owning resource handles and retained keys, or heap locations. A function
 template is code metadata. Effect execution stores the lexical callable once
 when its function expression or recursive member is materialized; lookup returns
 that stored callable. Pure execution retains its allocation-free template lookup. A location is an internal handle, not source-level
@@ -490,7 +492,7 @@ main () = {
         second ()
     }
     and second : Unit -> Int = fn(ignored) {
-        let retain : Unit -> Int = fn(value) {
+        let saved : Unit -> Int = fn(value) {
             first value
         }
         42
@@ -790,11 +792,12 @@ continuation boundary. `REQUEST(operation, instantiation)` and
 request retains its lexical instantiation. `CLAUSE(handler, owner, state)` is
 the selected clause boundary; its state is either `live(captured)` or
 `consumed`. The captured value owns the selected handler boundary and all
-intervening continuation entries up to the request. It contains no source
-value and cannot escape the clause.
+intervening continuation entries up to the request. The captured continuation
+is not a source value. Except for the checked Store transfer below, its owner
+remains in the clause until consumed.
 
-Entering a handler evaluates its body with a new innermost boundary. Ordinary
-completion removes that boundary and passes the value outward:
+Entering an ordinary handler evaluates its body with a new innermost boundary.
+Ordinary completion removes that boundary and passes the value outward:
 
 ```sequent
 family handler-boundary-steps:
@@ -892,9 +895,10 @@ E-Discard :=
   CONFIG(heap, environment, discard(handler, owner), continuation) -> CONFIG(heap, environment, (), closing ++ CLOSE :: remaining)
 ```
 
-Here `owned_close_control` retains cell, registration and armed cleanup owners
-in structural innermost-to-outermost order. A contained live clause contributes
-its capture recursively at that clause's position and is consumed once;
+Here `owned_close_control` retains cell, Store, registration and armed cleanup
+owners in structural innermost-to-outermost order. A contained live clause
+contributes its capture recursively at that clause's position and is consumed
+once;
 consumed clauses contribute no capture. Non-owning associations do not add
 owners. `CLOSE` denotes required completion of this close operation: after the
 last owner closes it returns `()` into the unchanged clause continuation.
@@ -923,6 +927,149 @@ boundary unreachable from accepted source. If one appears after successful
 validation, evaluation reports an internal malformed-Core or machine failure.
 Ash has no source-level
 unhandled-operation, abort, exception, cancellation, or unwind result.
+
+## Scoped retained-control execution
+
+A Store acquisition evaluates its `Unit` initializer once in the preceding
+environment. Successful preparation creates a fresh activation `a`, its opaque
+non-owning handle, an initially empty slot collection and its lexical identity
+binding. The Store boundary owns the slots and release; copying a handle or a
+key does not copy either owner. Failed preparation publishes no activation or
+handle. As with a cell, the body runs only after acquisition succeeds.
+
+For a private handler, the Store operand is evaluated once before its body.
+The actual handle must name the live authenticated Store and the driver must
+be outside every active root for that activation. After fallible preparation,
+the machine registers a root completion and enters the ordinary handler with
+that root immediately outside it. The handler association is non-owning. The
+root remains until the branch's actual clause suffix, cleanup and other required
+completion have returned; removing the selected handler while its clause runs
+does not remove the root.
+
+The following rules describe successful moves. `STORE(a, S)` is the unique
+live Store boundary for activation `a`; `S` contains its slots and active-root
+state. `STORE_INIT` saves the descriptor, body and preceding environment while
+the initializer runs. `bind_store` binds the fresh identity and handle without
+placing ownership in the ordinary value heap. `ROOT_INIT` saves the handler
+and its lexical environment while its Store operand is evaluated; `ROOT(a)` is
+its branch-completion marker. The handler identity is supplied by the static
+handler just as in `E-Handle-Enter`. A key
+`k` names `a`, a slot and a generation, without owning the slot. `store_at`
+finds the actual boundary in the continuation, and `replace_store` changes only
+that boundary's state.
+The helpers authenticate the selected private handler, owner, activation and
+interpreter context and perform all fallible preparation before the indicated
+commit. `register_root` adds one active root; `spend` empties the selected slot
+and registers the restored root; `retire_root` removes the matching active root.
+`restore` reinstalls the moved control in its original order. The
+`SOME_ADAPTER` frame and `none_adapter` control denote the ordinary result
+construction retained for the current consumer; they are not source values.
+
+```sequent
+E-Store-Initialize :=
+  ===>
+  CONFIG(heap, environment, resource Store<N,D> store = initializer { body }, continuation) -> CONFIG(heap, environment, initializer, STORE_INIT(N, D, store, body, environment) :: continuation)
+
+E-Store-Acquire :=
+  acquisition preparation succeeds with fresh activation a and empty state S
+  bind_store(store_environment, N, store, a) = body_environment
+  ===>
+  CONFIG(heap, environment_value, (), STORE_INIT(N, D, store, body, store_environment) :: continuation) -> CONFIG(heap, body_environment, body, STORE(a, S) :: continuation)
+
+E-Private-Operand :=
+  ===>
+  CONFIG(heap, environment, handle body with instance using store { clauses }, continuation) -> CONFIG(heap, environment, store, ROOT_INIT(handler, instance, clauses, body, environment) :: continuation)
+
+E-Private-Enter :=
+  value is the authenticated handle for activation a
+  store_at(continuation, a) = STORE(a, S)
+  driver admission and root preparation succeed
+  remaining = replace_store(continuation, a, register_root(S))
+  ===>
+  CONFIG(heap, environment_value, value, ROOT_INIT(handler, instance, clauses, body, handler_environment) :: continuation) -> CONFIG(heap, handler_environment, body, HANDLER(handler, instance, clauses, handler_environment) :: ROOT(a) :: remaining)
+
+E-Retain-Commit :=
+  split_owner(continuation, handler, owner) = prefix, live(captured), outer
+  owner belongs to the nearest private root for activation a
+  store_at(outer, a) = STORE(a, S)
+  reserve_slot_and_transfer(S, captured) = reserved, k
+  committed = commit_retention(reserved, captured)
+  remaining = prefix ++ CLAUSE(handler, owner, consumed) :: replace_store(outer, a, committed)
+  ===>
+  CONFIG(heap, environment, retain(handler, owner), continuation) -> CONFIG(heap, environment, k, remaining)
+
+E-Continue-Live :=
+  store_at(continuation, a) = STORE(a, S)
+  lookup(S, k) = live(captured)
+  driver and current interpreter are admitted for a
+  prepare_restore(S, k, captured) succeeds
+  remaining = replace_store(continuation, a, spend(S, k))
+  restored = restore(captured, ROOT(a) :: SOME_ADAPTER :: remaining)
+  ===>
+  CONFIG(heap, environment, continue(a, k), continuation) -> CONFIG(heap, environment, (), restored)
+
+E-Continue-Absent :=
+  store_at(continuation, a) = STORE(a, S)
+  driver is admitted for a
+  lookup(S, k) = absent-or-spent
+  ===>
+  CONFIG(heap, environment, continue(a, k), continuation) -> CONFIG(heap, environment, none_adapter, continuation)
+
+E-Retained-Root-Return :=
+  retire_root(continuation, a) = remaining
+  ===>
+  CONFIG(heap, environment, value, ROOT(a) :: continuation) -> CONFIG(heap, environment, value, remaining)
+
+E-Store-Return :=
+  active_roots(S) = 0
+  every slot in S is empty
+  ===>
+  CONFIG(heap, environment, value, STORE(a, S) :: continuation) -> CONFIG(heap, environment, value, continuation)
+```
+
+In `E-Retain-Commit`, the selected clause continues with `k` and its consumed
+owner; its suffix has not been skipped. The slot uniquely owns the captured
+control and its nested live or consumed owners. A failed reservation or move
+preparation leaves the clause's original owner intact and publishes no key.
+Slot reuse assigns a generation that cannot alias a previous key; exhaustion
+fails rather than wrapping into a live generation.
+
+Both source continue callables evaluate their Store operand before their key.
+For a live generation, the machine prepares every fallible part of restoration
+before spending the slot. It then installs the captured segment above a fresh
+`ROOT(a)`, the `SOME_ADAPTER` and the actual current consumer. The restored
+segment receives `()` as the checkpoint reply. When it returns an answer A,
+the adapter constructs `Some(A)` and delivers it to that consumer, including
+when A is an answer from a later checkpoint. It does not return to the earlier
+transferring clause. An absent or spent key runs the ordinary `None` adapter
+without executing captured control. Adapter allocation occurs on the selected
+path, after restored control returns on the live path, not during preparation.
+Failure before a live move commits leaves the slot intact.
+
+A checkpoint before an inner `resume` moves its live nested clause owner; one
+after `resume` preserves that owner's consumed state and remaining suffix. A
+checkpoint in running cleanup moves its saved body value and unfinished action
+completion without making the action eligible for another invocation. A
+subsequent checkpoint may move that same running completion again. A restored
+branch that yields returns its fresh key to the current consumer, which may
+continue it again.
+
+The Store-selected `Probe<N>.quiescent` returns `true` exactly when its active
+root count is zero and every slot is empty; otherwise it returns `false`.
+Driver admission is checked before ordinary nearest-handler selection, so an
+intercepting source handler does not authorize a branch to drive its own Store.
+At normal Store return, the boundary checks the same empty condition before
+release. A checked outer discard closes an owned Store only after its required
+actions and other closing control establish that condition. Empty library
+queues and answer constructors do not change the Store's ownership state.
+
+Internal failure disposal follows actual owned active and stored control
+iteratively, without releasing an owner twice. If teardown cannot obtain its
+required working storage, it reports incomplete teardown and may leave residual
+owners unreleased. It does not promise source cleanup or roll back already
+performed effects. Missing owners, forged associations or a nonempty normal
+close after successful validation are internal failures, not source recovery
+branches.
 
 ## Scoped cell execution
 
@@ -1178,6 +1325,7 @@ Successful observation retains no live resource scope, registration owner,
 cleanup obligation or captured continuation.
 The observed heap may retain copied values and unused non-owning handle
 entries, but owns no released cell payload.
+No live Store slot or branch-completion owner survives successful observation.
 
 A completed `newtype` value renders exactly as its representation value because
 no wrapper or constructor tag reaches the heap. The observation's separately

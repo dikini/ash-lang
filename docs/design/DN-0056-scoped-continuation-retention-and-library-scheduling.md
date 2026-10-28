@@ -11,8 +11,15 @@
   [AD-0008](../decisions/AD-0008-explicit-evaluator-machine.md)
 
 > This design note is informative. It defines no current Ash semantics,
-> accepts no architecture, and authorizes no implementation or prototype.
-> The rules below are candidate obligations, not an established soundness result.
+> accepts no architecture, and authorizes no product implementation. The
+> bounded proof assignment below is experimental evidence. The rules below are
+> candidate obligations, not an established soundness result.
+
+The local sequential subset is implemented and specified on the M3 milestone.
+The [retained product evidence](retained-control/README.md) records its bounded
+proofs and tests. The worker, migration and network discussions in this note
+remain design exploration, not implemented language contracts. Main delivery is
+separate from the retained milestone.
 
 ## Question
 
@@ -38,9 +45,10 @@ as its baseline. Migration is a separate ownership-transfer extension.
   return for the simple recursive drain below. A candidate finite analysis uses
   recursive normal-return summaries and authenticated, fresh probe facts,
   without a new gate primitive.
-- Current Ash cannot put its hidden continuation capability in storage. The
-  necessary semantic extension is ownership-bearing control storage, consuming
-  transfer into that storage, and restoration to an admitted current consumer.
+- At the start of this study, Ash could not put its hidden continuation
+  capability in storage. The retained local extension transfers owned control
+  into a Store and restores it to an admitted current consumer without exposing
+  that capability as a source value.
 - Branch authority, external support, exact interpretation, and completion
   must be checked through these transitions. Existing analyses provide the
   basis; they do not already establish concurrent isolation.
@@ -168,10 +176,10 @@ parallel; their local stores remain exclusive and their continuations pinned.
 | Owning resource, cleanup, checked drain | Preferred candidate. |
 | Cell of functions or explicit states | Cannot retain arbitrary control. |
 
-The preferred direction reuses the current resource and cleanup structure.
-The new store kind and its ownership contract remain a semantic extension.
-Whether the implementation uses a new authenticated resource payload, intrinsic
-operations, or a small operation family is not selected here.
+The study's preferred direction reused resource and cleanup structure. At that
+point, the Store representation and operation family were not selected here;
+the retained local implementation is described by the specification and product
+evidence linked above.
 
 ### Resource and cleanup composition
 
@@ -2192,11 +2200,63 @@ and during abandonment as well as on the ordinary return path.
 
 ## Evidence and experiments
 
-This note contains a paper derivation against the linked current specification.
-It includes the partial-correctness argument above under explicit premises,
-but supplies no executable retention implementation, machine-checked proof,
-benchmark, or new current-language example. Existing one-shot, cleanup, and
-resource evidence transfers only to the sequential invariants it actually tests.
+### C1 bounded ownership and completion proof assignment
+
+[C1 #71](https://github.com/dikini/ash-lang/issues/71) asked whether the local
+Store transitions could preserve one owner and its completion obligations. The
+assignment authorized a finite Lean model, not an evaluator implementation.
+The historical [CP-0026](https://github.com/dikini/ash-lang/blob/ea2a7ffadefb0f485a9c8e0009975a47db5c6865/docs/proposals/CP-0026-scoped-owned-continuation-storage.md)
+records the transition compared with that model. The [C5 handoff](https://github.com/dikini/ash-lang/issues/75#issuecomment-6476014597)
+and [Main handoff](https://github.com/dikini/ash-lang/issues/54#issuecomment-6476014971)
+track the remaining separate gates.
+
+Model a single store activation, finite branches and slots, and one executor.
+Include an active selected-clause capture, nested live and consumed owners,
+owned resource and cleanup completion, external support, exact consumer
+interpretation, slot generations, reserve refusal, committed transfer, restore,
+normal branch return and failure disposal. The model must represent the
+current consumer separately from the clause that transferred a capture. It
+must state how the store's owning boundary and outside completion relate to
+each capture, rather than assuming a successor is safe.
+
+Compare successful paths with self-capture, skipped outside completion,
+duplicate/stale keys, incompatible interpretation, branch-local dependency
+escape, and preparation failure. Check both armed and already-running cleanup
+and a second yield during drain. Show the actual premise that excludes each unsafe
+path. Include a finite trace where restored control returns to its current
+consumer, and an unrelated live slot remains unchanged. For this sequential
+fragment, compare shared access to a still-live outer cell with a branch-local
+owner; one scope/completion owner persists in each case. The earlier concurrent
+process isolation constraint remains future parallel pressure, not an added
+local disjoint-footprint requirement.
+
+Prove preservation of the selected ownership and completion invariants for
+each admitted transition and finite traces, no second restoration of the same
+generation, and no release with unfinished owned work. Preparation refusal
+must leave the original owner intact; post-commit teardown must distinguish
+successful disposal from reported incomplete teardown without double release
+or a claim that source cleanup ran. Prove these from local step
+premises, not by taking the successor invariant as a premise. State any
+provider, scheduler, runtime or admission assumptions explicitly. A separate
+proof of C3's recursive normal-return analysis is required before its release
+facts are used; this assignment does not prove it.
+
+Retain the model and a correspondence map only if the named examples and
+proof obligations are independently reviewed and pass the frozen scoped
+[AD-0012](../decisions/AD-0012-proof-development-feedback-and-build-reuse.md)
+integration gate. Otherwise retain the finding in this note and discard the
+prototype; revise the proposed contract if the comparison exposes a semantic
+gap. Neither outcome establishes compiler or runtime correctness, external
+provider laws, termination, or the wider network claims in this note.
+
+The [C1 model](retained-control/README.md) checks its selected ownership
+transitions under explicit premises; it does not prove the compiler or
+evaluator correspondence. This
+note's recursive drain argument remains a paper derivation against the linked
+current specification, with no checked drain proof, executable retention
+implementation, benchmark, or new current-language example. Existing one-shot,
+cleanup, and resource evidence transfers only to the sequential invariants it
+actually tests.
 
 The bidirectional accounting comparison draws on Dijkstra and Scholten's
 [termination detection for diffusing computations](https://www.cs.utexas.edu/~EWD/transcriptions/EWD06xx/EWD687a.html).

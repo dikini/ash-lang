@@ -139,13 +139,14 @@ match_expression ::=
   match_arm { line_end match_arm } [ line_end ] "}" ;
 match_arm ::= pattern "=>" expression ;
 handler_expression ::=
-  "handle" expression "with" effect_instance
+  "handle" expression "with" effect_instance [ "using" primary_expression ]
   "{" line_end
   handler_clause { line_end handler_clause } [ line_end ]
   "}" ;
 handler_clause ::= identifier pattern "=>" expression ;
 resume_expression ::= "resume" expression ;
 discard_expression ::= "discard" ;
+retain_expression ::= "retain" ;
 resource_expression ::=
     "resource" "cell" "<" upper_identifier ">" identifier
       "=" primary_expression block
@@ -185,6 +186,7 @@ primary_expression ::=
   | qualified_term_reference
   | perform_expression
   | discard_expression
+  | retain_expression
   | hook_expression
   | registration_expression
   | cleanup_expression
@@ -426,24 +428,29 @@ retain ordinary expression precedence and lexical scope.
 
 `perform` consumes one primary-expression operand. A non-primary operand must be
 parenthesized. A handler contains one or more clauses, each with one operation
-name, one pattern, and one expression body. `resume` consumes one expression;
-`discard` is a nullary primary expression. Name resolution and static semantics
-restrict both completion forms to their owning operation clause.
+name, one pattern, and one expression body. Its optional `using` operand is a
+primary expression associating the handler with a retained-control store.
+`resume` consumes one expression; `discard` and `retain` are nullary primary
+expressions. Name resolution and static semantics restrict these completion
+forms to their owning operation clause.
 
 A builtin resource expression selects `cell` and writes one fresh uppercase
-identity binder. The named form supports the canonical generic cell family,
-including through imports and re-exports:
-`resource Cell.Cell<R, T> c = initializer { body }`. It requires the complete
-two-argument application, with fresh identity R in position zero and ordinary
-Type actual T in position one. Nonbuiltin provider instantiation is unsupported.
+identity binder. The named form supports the canonical generic cell and
+retained-control Store families through imports and re-exports:
+`resource Cell.Cell<R, T> c = initializer { body }` and
+`resource Control.Store<N, D> store = initializer { body }`. Each requires its
+complete two-argument application, with a fresh identity in position zero.
+Other named provider instantiation is unsupported.
 
 Both forms write one ordinary value binder, one primary-expression initializer
 and a block body. The value binder is not a pattern or wildcard. A non-primary
 initializer, such as `40 + 1` or `make ()`, must be parenthesized. The initializer
-and T use the preceding scope; the fresh identity and value binder are visible
-only in the body. The builtin designator remains an ordinary identifier outside
-this position. [Static semantics](static-semantics.md#generic-cell-foundation)
-defines dependency admission.
+uses the preceding scope. A generic cell's T also uses that scope; a Store's D
+may refer to its fresh N. The identity and value binder are visible in the body.
+The builtin designator remains an ordinary identifier outside this position.
+[Static semantics](static-semantics.md#generic-cell-foundation) defines cell
+admission. Its [retained-control section](static-semantics.md#scoped-retained-control)
+defines the Store descriptor and admission.
 
 A hook expression names an exact effect instance followed by a block. A
 registration expression names an exact effect instance, one primary-expression
@@ -471,7 +478,7 @@ main () = {
         second ()
     }
     and second : Unit -> Int = fn(ignored) {
-        let retain : Unit -> Int = fn(value) {
+        let saved : Unit -> Int = fn(value) {
             first value
         }
         42

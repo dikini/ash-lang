@@ -185,7 +185,7 @@ struct PublicImplementationLocation {
 /// Owned identity locations into the checked facts retained by module groups.
 #[derive(Debug)]
 struct LinkedInterfaceRegistry {
-    region_owners: std::cell::RefCell<HashMap<TypeVariableId, (BinderId, Span)>>,
+    scoped_type_owners: std::cell::RefCell<HashMap<TypeVariableId, (LinkedBinderOwner, Span)>>,
     modules: HashMap<ModuleId, usize>,
     interfaces: HashMap<InterfaceId, FactLocation>,
     methods: HashMap<MethodId, MethodLocation>,
@@ -226,7 +226,7 @@ impl LinkedInterfaceRegistry {
         type_work: &mut TypeWorkBudget,
     ) -> Result<Self, EvidenceValidationFailure> {
         let mut registry = Self {
-            region_owners: std::cell::RefCell::new(HashMap::new()),
+            scoped_type_owners: std::cell::RefCell::new(HashMap::new()),
             modules: HashMap::new(),
             interfaces: HashMap::new(),
             methods: HashMap::new(),
@@ -2756,16 +2756,13 @@ pub(crate) fn validate_interface_evidence_with_budget(
         type_work,
     )?;
     drop(kind_environments);
-    for (identity, (handle, region_span)) in linked_interfaces.region_owners.borrow().iter() {
-        charge(constraint_work, 1, *region_span)?;
+    for (identity, (owner, owner_span)) in linked_interfaces.scoped_type_owners.borrow().iter() {
+        charge(constraint_work, 1, *owner_span)?;
         binder_owners
             .try_reserve(1)
-            .map_err(|_| resource(*region_span))?;
-        if binder_owners
-            .insert(*identity, LinkedBinderOwner::Region(*handle))
-            .is_some()
-        {
-            return Err(unknown(*region_span));
+            .map_err(|_| resource(*owner_span))?;
+        if binder_owners.insert(*identity, *owner).is_some() {
+            return Err(unknown(*owner_span));
         }
     }
     if has_contextual_parameters {
@@ -5349,6 +5346,16 @@ fn collect_method_evidence_expression_occurrences<'a>(
                 pending.push((&acquisition.body, row_head));
                 pending.push((&acquisition.initializer, row_head));
             }
+            ResolvedExprKind::Store(store) => {
+                reserve_method_context_expressions(
+                    &mut pending,
+                    2,
+                    constraint_work,
+                    expression.span,
+                )?;
+                pending.push((&store.body, row_head));
+                pending.push((&store.initializer, row_head));
+            }
             ResolvedExprKind::Cleanup(cleanup) => {
                 reserve_method_context_expressions(
                     &mut pending,
@@ -5361,7 +5368,10 @@ fn collect_method_evidence_expression_occurrences<'a>(
             }
             ResolvedExprKind::Perform(request) => pending.push((&request.operand, row_head)),
             ResolvedExprKind::Handle(handler) => {
-                let child_count = handler.clauses.len().saturating_add(1);
+                let child_count = handler
+                    .clauses
+                    .len()
+                    .saturating_add(1 + usize::from(handler.store.is_some()));
                 charge(constraint_work, child_count, expression.span)?;
                 pending
                     .try_reserve(child_count)
@@ -5374,9 +5384,12 @@ fn collect_method_evidence_expression_occurrences<'a>(
                         .map(|clause| (&clause.body, row_head)),
                 );
                 pending.push((&handler.body, row_head));
+                if let Some(store) = &handler.store {
+                    pending.push((store, row_head));
+                }
             }
             ResolvedExprKind::Resume(resume) => pending.push((&resume.value, row_head)),
-            ResolvedExprKind::Discard(_) => {}
+            ResolvedExprKind::Discard(_) | ResolvedExprKind::Retain(_) => {}
         }
     }
     Ok(())
@@ -5613,6 +5626,7 @@ fn authenticate_linked_constructor_payloads<'a>(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LinkedBinderOwner {
     Region(BinderId),
+    Store(BinderId),
     Resource(crate::interface::LexicalEvidenceId),
 
     LexicalMethod(crate::interface::LexicalEvidenceId, MethodId),
@@ -6254,6 +6268,7 @@ fn validate_pending_expressions<'a, 'body>(
                 charge(budget, usize::from(headers_only), expression.span)?;
                 if let Some(identity) = match local {
                     LinkedLocalScope::Resource(resource) => Some(resource.identity.id),
+                    LinkedLocalScope::Store(store) => Some(store.identity.id),
                     LinkedLocalScope::Region(region) => Some(region.identity.id),
 
                     _ => None,
@@ -6424,16 +6439,17 @@ fn validate_pending_expressions<'a, 'body>(
                 {
                     return Err(invalid_root(expression.span));
                 }
-                let mut owners = registry.region_owners.borrow_mut();
+                let mut owners = registry.scoped_type_owners.borrow_mut();
                 owners
                     .try_reserve(1)
                     .map_err(|_| resource(expression.span))?;
                 match owners.entry(region.identity.id) {
                     std::collections::hash_map::Entry::Vacant(slot) => {
-                        slot.insert((region.handle.id, expression.span));
+                        slot.insert((LinkedBinderOwner::Region(region.handle.id), expression.span));
                     }
                     std::collections::hash_map::Entry::Occupied(slot)
-                        if *slot.get() == (region.handle.id, expression.span) => {}
+                        if *slot.get()
+                            == (LinkedBinderOwner::Region(region.handle.id), expression.span) => {}
                     _ => return Err(invalid_root(expression.span)),
                 }
                 drop(owners);
@@ -6501,6 +6517,57 @@ fn validate_pending_expressions<'a, 'body>(
                 pending.push(&acquisition.initializer);
                 resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
             }
+            ResolvedExprKind::Store(store) => {
+                let canonical = program
+                    .registry()
+                    .type_variable(store.identity.id)
+                    .ok_or_else(|| invalid_root(expression.span))?;
+                charge(
+                    budget,
+                    canonical.spelling.len().saturating_add(2),
+                    expression.span,
+                )?;
+                if !store.acquisition.owns(store)
+                    || canonical.kind != Kind::Type
+                    || canonical.spelling != store.identity.spelling
+                    || canonical.origin.primary_span() != store.identity.origin.primary_span()
+                    || store.acquisition.span != expression.span
+                {
+                    return Err(invalid_root(expression.span));
+                }
+                let mut owners = registry.scoped_type_owners.borrow_mut();
+                owners
+                    .try_reserve(1)
+                    .map_err(|_| resource(expression.span))?;
+                match owners.entry(store.identity.id) {
+                    std::collections::hash_map::Entry::Vacant(slot) => {
+                        slot.insert((LinkedBinderOwner::Store(store.handle.id), expression.span));
+                    }
+                    std::collections::hash_map::Entry::Occupied(slot)
+                        if *slot.get()
+                            == (LinkedBinderOwner::Store(store.handle.id), expression.span) => {}
+                    _ => return Err(invalid_root(expression.span)),
+                }
+                drop(owners);
+                reserve_expressions(pending, 2, budget, expression.span)?;
+                resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
+                charge(budget, 1, expression.span)?;
+                method_scopes
+                    .try_reserve(1)
+                    .map_err(|_| resource(expression.span))?;
+                let body_scope = Some(method_scopes.len());
+                method_scopes.push((LinkedLocalScope::Store(store), head.1));
+                pending.push(&store.body);
+                resize_lexical_heads(
+                    &mut heads,
+                    pending.len(),
+                    (head.0, body_scope),
+                    budget,
+                    expression.span,
+                )?;
+                pending.push(&store.initializer);
+                resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
+            }
             ResolvedExprKind::Cleanup(cleanup) => {
                 reserve_expressions(pending, 2, budget, expression.span)?;
                 resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
@@ -6509,13 +6576,19 @@ fn validate_pending_expressions<'a, 'body>(
             }
             ResolvedExprKind::Perform(request) => pending.push(request.operand.as_ref()),
             ResolvedExprKind::Handle(handler) => {
-                let additional = handler.clauses.len().saturating_add(1);
+                let additional = handler
+                    .clauses
+                    .len()
+                    .saturating_add(1 + usize::from(handler.store.is_some()));
                 reserve_expressions(pending, additional, budget, expression.span)?;
                 pending.extend(handler.clauses.iter().rev().map(|clause| &clause.body));
                 pending.push(handler.body.as_ref());
+                if let Some(store) = &handler.store {
+                    pending.push(store);
+                }
             }
             ResolvedExprKind::Resume(resume) => pending.push(resume.value.as_ref()),
-            ResolvedExprKind::Discard(_) => {}
+            ResolvedExprKind::Discard(_) | ResolvedExprKind::Retain(_) => {}
         }
         if !sources.is_empty() || !method_scopes.is_empty() {
             resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
@@ -8001,6 +8074,7 @@ enum LinkedLocalScope<'a> {
     Method(&'a crate::resolved::ResolvedImplementationMethodGroup),
     Nominal(NominalTypeId),
     Resource(&'a crate::resolved::ResolvedResourceExpr),
+    Store(&'a crate::resolved::ResolvedStoreExpr),
     Region(&'a crate::resolved::ResolvedRegionExpr),
 }
 
@@ -9907,14 +9981,19 @@ mod tests {
         // Canonical DefaultAlloc makes export effect closure inspect the
         // effect-free payload: root1 and two scheduled children per Function.
         const EFFECT_INVENTORY_PAYLOAD_SCAN: usize = 1 + 2 * DEPTH;
-        // A complete normal defining-owner check/freeze donor uses245974.
-        // Its fixed metadata remainder excludes both depth tariffs and the
+        // The fixed metadata remainder excludes both depth tariffs and the
         // independently retained two-cell computational admission.
         const FIXED_METADATA_WORK: usize = 211;
+        // Rebuilt effectful provenance also visits the domain and result of
+        // the three imported region functions. The two Request -> Int schemes
+        // add two nodes each; from_backing adds its tuple domain and the
+        // Storage<R> application, constructor and argument.
+        const IMPORTED_REGION_PROVENANCE_WORK: usize = 2 + 2 + 4;
         const DEFINING_TYPE_WORK: usize = 13 * DEPTH
             + EFFECT_INVENTORY_PAYLOAD_SCAN
             + COMPUTATIONAL_ADMISSION_WORK
-            + FIXED_METADATA_WORK;
+            + FIXED_METADATA_WORK
+            + IMPORTED_REGION_PROVENANCE_WORK;
         const {
             assert!(DEFINING_TYPE_WORK < crate::types::TYPE_WORK_LIMIT);
             assert!(13 * (2 * DEPTH) + 29 > crate::types::TYPE_WORK_LIMIT);

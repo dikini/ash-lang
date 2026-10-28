@@ -1,0 +1,69 @@
+{
+  "status": "Root-verified independent source/correspondence review; authorized frozen C3 integration only; no public admission or C3 acceptance",
+  "proof_directory": "docs/design/retained-control",
+  "worktree": "/home/dikini/Projects/ash-lang/.worktree/m3-retained-control",
+  "parent_head": "0f73745eeb897c9018638a210aa34c26ca53de9c",
+  "parent_evidence": "/home/dikini/Projects/ash-lang/.worktree/m3-retained-control/docs/tasks/evidence/local-retained-control/c1-model/evidence.json",
+  "parent_evidence_sha256": "fa3462c847fe90766c33ef6d069dceaf5a3febec0b1cb78d490efbf06d46ed0b",
+  "compiler": "/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/bin/lean",
+  "module_cache": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache",
+  "jobs": 1,
+  "memory_mb": 4096,
+  "headroom_mb": 4096,
+  "output_prefix": "/tmp/ash-m3/c3-frozen-0f737-retry1",
+  "new_registered_order": [
+    "DrainSafety"
+  ],
+  "components": [
+    {
+      "name": "local-retained-control-c3",
+      "root_verified_review_pass": true,
+      "checkpoint": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m3-evidence/c3-gate-preparation/c3-gate-review-manifest-v4.json",
+      "checkpoint_sha256": "fad2a73c870e57c8387741f073600f30aea9b33b9427d2641e3867ccf6485150",
+      "review": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m3-evidence/c3-proof-source-review-0f73745e-v4.json",
+      "review_sha256": "a508d2ddd2d5fc9bb76a13dc5a75e539634b3e72efe6132cf5e571166dc5697f",
+      "sources": [
+        {
+          "module": "DrainSafety",
+          "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m3-evidence/c3-exploration/DrainSafety-v4.lean",
+          "source_sha256": "c676f253d761fe44dbf9d1d9240a6a6451affbfc410f60bbaaf6986d1fba6677",
+          "reports": [
+            "Ash.RetainedControl.PortCases.enter_root_sound",
+            "Ash.RetainedControl.PortCases.finish_root_sound",
+            "Ash.RetainedControl.PortCases.retain_sound",
+            "Ash.RetainedControl.PortCases.selected_probe_sound",
+            "Ash.RetainedControl.PortCases.mutation_expires_probe_facts",
+            "Ash.RetainedControl.PortCases.case_construction_sound",
+            "Ash.RetainedControl.PortCases.forget_facts_sound",
+            "Ash.RetainedControl.PortCases.forget_origins_sound",
+            "Ash.RetainedControl.PortCases.selected_probe_forget_origins_sound",
+            "Ash.RetainedControl.PortCases.ordered_selection_sound",
+            "Ash.RetainedControl.PortCases.c1_launch_projection_sound",
+            "Ash.RetainedControl.PortCases.c1_finish_projection_sound",
+            "Ash.RetainedControl.PortCases.c1_retain_projection_sound",
+            "Ash.RetainedControl.PortCases.c1_step_preserves_active_clause_separation",
+            "Ash.RetainedControl.PortCases.c1_launch_matches_root_entry",
+            "Ash.RetainedControl.PortCases.c1_finish_matches_root_return",
+            "Ash.RetainedControl.PortCases.c1_retain_adds_saved_work",
+            "Ash.RetainedControl.PortCases.c1_quiet_has_no_work",
+            "Ash.RetainedControl.PortCases.c1_no_work_is_quiet",
+            "Ash.RetainedControl.PortCases.Routing.snapshot_formal_assign_sound",
+            "Ash.RetainedControl.PortCases.Routing.absent_snapshot_formal_sound",
+            "Ash.RetainedControl.PortCases.Routing.read_assign_sound",
+            "Ash.RetainedControl.PortCases.Routing.read_return_sound",
+            "Ash.RetainedControl.PortCases.Routing.absent_read_assign_sound",
+            "Ash.RetainedControl.PortCases.Routing.read_sound",
+            "Ash.RetainedControl.PortCases.Worklist.finite_reach_converges",
+            "Ash.RetainedControl.PortCases.Worklist.converged_reach_closed",
+            "Ash.RetainedControl.PortCases.Worklist.path_at_convergence",
+            "Ash.RetainedControl.PortCases.Worklist.matching_return_is_visited",
+            "Ash.RetainedControl.PortCases.Worklist.normal_return_is_approximated",
+            "Ash.RetainedControl.PortCases.Worklist.finite_return_bound",
+            "Ash.RetainedControl.PortCases.Worklist.checked_close_is_quiet",
+            "Ash.RetainedControl.PortCases.Worklist.checked_c1_close_has_no_work"
+          ]
+        }
+      ]
+    }
+  ]
+}

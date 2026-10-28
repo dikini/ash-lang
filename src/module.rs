@@ -43,6 +43,20 @@ const GENERIC_CELL_SOURCE: &str = concat!(
     "pub interface Provider<R,T> {\nread : Cell<R,T> -> T ! {Ops<R,T>}\nwrite : (Cell<R,T>, T) -> Unit ! {Ops<R,T>}\n}\n",
 );
 
+// These types identify a local store and its non-owning locators. The
+// compiler authenticates the complete source before granting either role.
+const RETAINED_CONTROL_SOURCE: &str = concat!(
+    "pub opaque type Store<N,D> = HiddenStore\n",
+    "pub opaque type Key<N> = HiddenKey\n",
+    "pub type Option<A> = None\n| Some(A)\n",
+    "pub effect Drive<N> {\ninternal : Unit -> Unit\n}\n",
+    "pub effect Probe<N> {\nquiescent : Unit -> Bool\n}\n",
+    "pub advance<N,A,E : EffectRow> : (Store<N,(Unit -> A ! {| E})>, Key<N>) -> Option<A> ! {Drive<N> | E}\n",
+    "advance pair = advance pair\n",
+    "pub advance_with_drive<N,A,E : EffectRow> : (Store<N,(Unit -> A ! {Drive<N> | E})>, Key<N>) -> Option<A> ! {Drive<N> | E}\n",
+    "advance_with_drive pair = advance_with_drive pair\n",
+);
+
 // One authenticated identity supplies the public binding facade and private
 // generated allocation service. Importing the facade never exposes ownership.
 const REGION_SOURCE: &str = concat!(
@@ -218,6 +232,7 @@ enum ModuleIdNamespace {
     Admitted,
     BuiltinCell,
     BuiltinGenericCell,
+    BuiltinRetainedControl,
     BuiltinRegion,
     BuiltinRegionFacade,
     BuiltinBytes,
@@ -258,6 +273,10 @@ impl ModuleId {
 
     pub(crate) const fn is_builtin_generic_cell(self) -> bool {
         matches!(self.namespace, ModuleIdNamespace::BuiltinGenericCell)
+    }
+
+    pub(crate) const fn is_builtin_retained_control(self) -> bool {
+        matches!(self.namespace, ModuleIdNamespace::BuiltinRetainedControl)
     }
 
     pub(crate) const fn is_builtin_region_facade(self) -> bool {
@@ -330,6 +349,13 @@ impl fmt::Display for ModuleId {
                 write!(
                     formatter,
                     "builtin.generic_cell:{}:{}",
+                    self.graph, self.value
+                )
+            }
+            ModuleIdNamespace::BuiltinRetainedControl => {
+                write!(
+                    formatter,
+                    "builtin.retained_control:{}:{}",
                     self.graph, self.value
                 )
             }
@@ -1441,6 +1467,7 @@ pub fn load_module_graph(
         let mut dependency_order = Vec::new();
         let mut builtin_cell = None;
         let mut builtin_generic_cell = None;
+        let mut builtin_retained_control = None;
         let mut builtin_bytes = None;
         let mut builtin_string = None;
         let mut builtin_foreign = None;
@@ -1523,7 +1550,13 @@ pub fn load_module_graph(
                 if segments.len() != 1
                     || !matches!(
                         segments[0].text.as_str(),
-                        "cell" | "generic_cell" | "bytes" | "string" | "foreign" | "regions"
+                        "cell"
+                            | "generic_cell"
+                            | "retained_control"
+                            | "bytes"
+                            | "string"
+                            | "foreign"
+                            | "regions"
                     )
                 {
                     return Err(ModuleFailure::source(
@@ -1544,6 +1577,8 @@ pub fn load_module_graph(
                     &mut builtin_foreign
                 } else if segments[0].text == "generic_cell" {
                     &mut builtin_generic_cell
+                } else if segments[0].text == "retained_control" {
+                    &mut builtin_retained_control
                 } else {
                     &mut builtin_cell
                 };
@@ -1566,6 +1601,16 @@ pub fn load_module_graph(
                         admit_builtin_foreign(
                             graph_identity,
                             import.span,
+                            &mut budget,
+                            &mut staged,
+                            &mut dependency_order,
+                        )?
+                    } else if segments[0].text == "retained_control" {
+                        admit_builtin_retained_control(
+                            graph_identity,
+                            import.span,
+                            builtin_region
+                                .ok_or_else(|| ModuleFailure::resource(ModuleResource::Sources))?,
                             &mut budget,
                             &mut staged,
                             &mut dependency_order,
@@ -1954,6 +1999,55 @@ fn admit_builtin_resource(
         source,
         surface,
         dependencies: Vec::new(),
+        relative_edges: Vec::new(),
+        state: VisitState::Finished,
+    });
+    dependency_order.push(id);
+    Ok(id)
+}
+
+fn admit_builtin_retained_control(
+    graph: u32,
+    import_span: Span,
+    region: ModuleId,
+    budget: &mut GraphBudget,
+    staged: &mut Vec<StagedModule>,
+    dependency_order: &mut Vec<ModuleId>,
+) -> Result<ModuleId, LoadGraphError> {
+    budget.charge_sources()?;
+    staged
+        .try_reserve(1)
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    dependency_order
+        .try_reserve(1)
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    let path = PathBuf::from("@builtin.retained_control");
+    let (source, surface) = parse_surface_module(
+        &path,
+        RETAINED_CONTROL_SOURCE.to_owned(),
+        Some(import_span),
+        &mut budget.syntax_work,
+    )?;
+    let value = u32::try_from(staged.len())
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    let id = ModuleId {
+        namespace: ModuleIdNamespace::BuiltinRetainedControl,
+        graph,
+        value,
+    };
+    budget.charge_edge()?;
+    let service_span = surface.span;
+    staged.push(StagedModule {
+        id,
+        canonical_path: path,
+        owners: OwnerSet::from_paths(&[], budget)?,
+        source,
+        surface,
+        dependencies: vec![ModuleDependency {
+            target: region,
+            import_span: service_span,
+            region_service: true,
+        }],
         relative_edges: Vec::new(),
         state: VisitState::Finished,
     });
@@ -2599,6 +2693,7 @@ pub(crate) enum ImageModuleRole {
     BuiltinForeign,
     BuiltinCell,
     BuiltinGenericCell,
+    BuiltinRetainedControl,
     BuiltinString,
     BuiltinBytes,
 }
@@ -2621,6 +2716,7 @@ pub(crate) fn restore_image_module(
         | ImageModuleRole::BuiltinRegion
         | ImageModuleRole::BuiltinRegionFacade
         | ImageModuleRole::BuiltinGenericCell
+        | ImageModuleRole::BuiltinRetainedControl
         | ImageModuleRole::BuiltinCell
         | ImageModuleRole::BuiltinString
         | ImageModuleRole::BuiltinBytes => {
@@ -2635,6 +2731,10 @@ pub(crate) fn restore_image_module(
                 ImageModuleRole::BuiltinGenericCell => {
                     (GENERIC_CELL_SOURCE, ModuleIdNamespace::BuiltinGenericCell)
                 }
+                ImageModuleRole::BuiltinRetainedControl => (
+                    RETAINED_CONTROL_SOURCE,
+                    ModuleIdNamespace::BuiltinRetainedControl,
+                ),
                 ImageModuleRole::BuiltinCell => (CELL_SOURCE, ModuleIdNamespace::BuiltinCell),
                 ImageModuleRole::BuiltinString => (STRING_SOURCE, ModuleIdNamespace::BuiltinString),
                 ImageModuleRole::BuiltinBytes => (BYTES_SOURCE, ModuleIdNamespace::BuiltinBytes),
@@ -2662,6 +2762,10 @@ pub(crate) fn restore_image_module(
 
 pub(crate) fn foreign_builtin_source_text() -> &'static str {
     FOREIGN_SOURCE
+}
+
+pub(crate) fn retained_control_builtin_source_text() -> &'static str {
+    RETAINED_CONTROL_SOURCE
 }
 
 pub(crate) fn region_facade_builtin_source_text() -> &'static str {

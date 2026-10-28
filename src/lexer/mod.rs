@@ -537,6 +537,7 @@ fn classify_word(word: &str) -> Option<TokenKind> {
         "register" => Some(TokenKind::Register),
         "cleanup" => Some(TokenKind::Cleanup),
         "discard" => Some(TokenKind::Discard),
+        "retain" => Some(TokenKind::Retain),
         "import" => Some(TokenKind::Import),
         "as" => Some(TokenKind::As),
         "pub" => Some(TokenKind::Pub),

@@ -44,9 +44,9 @@ synthesis as described below.
 Effect declarations also produce no runtime declaration node. A checked module
 summary retains each body-free effect identity, ordered fixed-kinded
 parameters, visibility, and ordered operation identities and types. `perform`,
-`handle`, handler clauses, `resume`, and `discard` remain typed semantic
-operations with their exact effect, operation, handler, and resume-owner
-identities. A row tail
+`handle`, handler clauses, `resume`, `discard`, and `retain` remain typed
+semantic operations with their exact effect, operation, handler, and
+resume-owner identities. A row tail
 or effect argument is zonked before a checked summary or Core node is retained.
 
 Foreign symbols retain immutable defining library, effect, operation, profile,
@@ -365,11 +365,23 @@ Pure Core families. Effect Core also retains these effect/control operation-fami
 - `Resume(handler, owner, value)` remains a clause-scoped Core operation rather
   than a value or function;
 - `Discard(handler, owner)` is a clause-scoped, childless operation with value
-  type `Unit` and empty immediate row;
+  type `Unit` and the least residual row of owned close execution;
 - `Resource(acquisition, handle, initializer, body)` retains the authenticated
   builtin relation, evaluates the initializer outside the acquired scope, and
   removes exactly its `Ops<R>` instance from the body row before union with
   the initializer row;
+- `Store(acquisition, handle, initializer, body)` retains its fresh identity,
+  actual handle and fixed descriptor. It evaluates the Unit initializer in the
+  preceding scope and discharges that Store's exact Drive and Probe instances
+  from the body row before union with the initializer row;
+- `RetainedRoot(store, handler)` evaluates the actual Store operand before
+  entering its private Handler. Its answer is the Store descriptor's answer,
+  and its row combines the operand and handler rows;
+- `Retain(handler, owner)` is a childless structural completion of that
+  private clause, producing its Store's `Key<N>` with `Drive<N>`;
+- `Continue(store, key, adapter)` evaluates the actual Store and key in that
+  order. Its deferred adapter retains an answer binder and distinct Some and
+  None bodies; only the selected body runs after restoration or absence;
 - `Registration(handler, callback, body)` retains the non-interpreting
   registration owner and its relation to the evaluated callback and generated
   handler; and
@@ -383,6 +395,13 @@ contains no provider choice or machine-global registration registry. Lowering do
 encode continuations as Rust closures or expose evaluator frames as Core data.
 The final generated root/native-interpreted expression is retained only with an
 empty row; the enclosed entry application retains its complete computation row.
+
+The two canonical advance callables lower to `Continue` through ordinary
+imports, aliases and calls. Lowering obtains the fixed Unit reply, answer and
+resumed row from the actual typed Store operand. The private root association
+does not become an ordinary closure capture, a scheduler node or a value that
+owns a continuation. Its Handler and each Retain retain their real structural
+owner relationships for independent checking.
 
 A hook root lowers to an authenticated identity clause, `publish input =>
 resume input`. A registration first binds its transformer in the preceding
@@ -785,6 +804,16 @@ rejects every effect operation. Effect Core validation independently checks:
 - each resource's builtin origin, unique acquisition identity and handle,
   sealed provider and operation relation, initializer scope and `Int` type,
   body scope, exact row discharge and result contract;
+- each Store's authenticated builtin identity, fresh owner, actual handle,
+  Unit initializer, descriptor kinds and effect instances, body scope and
+  exact Drive/Probe discharge, including when the handle is unused;
+- each private root's actual Store operand, fixed answer and row, unique
+  Handler edge and clause owners; each Retain's nearest private owner and Unit
+  reply; and each Continue's actual Store/key identities, ports, row and
+  distinct deferred adapter bodies;
+- actual retained capture, support and interpreter requirements, structural
+  driver authority, completion and converged normal-release relationships,
+  including source-handler interception and actual callback control;
 - each hook API's declaration-level endomorphic shape, exact target and
   authenticated scope-discharge relation;
 - each registration's unique owner, preceding callback binding, callback
@@ -796,9 +825,9 @@ rejects every effect operation. Effect Core validation independently checks:
 - each abandoned action's structural closing position and actual transitive
   interpreter requirements, preserving exact-instance precedence and lexical
   type/row authority without restoring removed handlers;
-- exactly-once structural completion through resume or discard, and barriers
-  against escape into functions, recursive members, supplied methods, or nested
-  clauses;
+- exactly-once structural completion through resume, discard or admitted
+  retain, and barriers against escape into functions, recursive members,
+  supplied methods, or nested clauses;
 - handler nesting, dialect membership, provenance, child handles, and
   reachability; and
 - exact region/API and prospective/live activation relationships, complete paired
