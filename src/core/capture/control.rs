@@ -1028,7 +1028,18 @@ impl DrainProjection {
         fact: Option<super::value::CaseFact>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        charge(budget, self.facts.len() + 1)?;
+        let units = self
+            .facts
+            .len()
+            .checked_mul(2)
+            .and_then(|count| count.checked_add(1))
+            .ok_or(Failure::Resource)?;
+        charge(budget, units)?;
+        // A port can be reevaluated in the same context. Older aggregate
+        // snapshots must not follow its new payload through a shared origin.
+        for (_, previous) in &mut self.facts {
+            previous.origin = None;
+        }
         match self.facts.binary_search_by_key(&port, |(port, _)| *port) {
             Ok(index) => match fact {
                 Some(fact) => self.facts[index].1 = fact,
@@ -6593,7 +6604,14 @@ impl<'a> Analysis<'a> {
                 let data = self.data.as_mut().ok_or(Failure::Invalid)?;
                 let operand =
                     data.case_resume_operand(state.position.code, state.value_context, budget)?;
-                let fact = data.case_of(operand, &drain.facts, budget)?;
+                let fact = data
+                    .case_of(operand, &drain.facts, budget)?
+                    .map(|mut fact| {
+                        // The captured request port can also be part of this
+                        // aggregate's earlier payload in a reused context.
+                        fact.origin = None;
+                        fact
+                    });
                 drain.facts.clear();
                 drain.assign(port, fact, budget)?;
             }
@@ -6833,6 +6851,51 @@ impl<'a> Analysis<'a> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn retained_drain_forgets_origins_when_an_unknown_result_is_assigned() {
+        use super::super::value::{CaseFact, ValueCase};
+
+        let saved = CaseFact {
+            value: ValueCase::Tuple,
+            fresh_probe: false,
+            origin: Some(7),
+        };
+        let scalar = CaseFact {
+            value: ValueCase::Boolean(false),
+            fresh_probe: false,
+            origin: None,
+        };
+        let mut drain = DrainProjection {
+            work: DrainWork::Pending,
+            facts: vec![(3, saved), (8, scalar)],
+            witness: DrainWitness::default(),
+        };
+        assert!(matches!(
+            drain.assign(20, None, &mut TypeWorkBudget::with_limit(4)),
+            Err(Failure::Resource)
+        ));
+        assert_eq!(drain.facts, [(3, saved), (8, scalar)]);
+
+        let mut exact = TypeWorkBudget::with_limit(5);
+        drain.assign(20, None, &mut exact).unwrap();
+        assert_eq!(exact.used(), 5);
+        assert_eq!(drain.facts[0].1.origin, None);
+        assert_eq!(drain.facts[1], (8, scalar));
+        drain
+            .assign(
+                20,
+                Some(CaseFact {
+                    value: ValueCase::Boolean(true),
+                    fresh_probe: false,
+                    origin: None,
+                }),
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        assert_eq!(drain.facts[0].1.origin, None);
+        assert_eq!(drain.work, DrainWork::Pending);
+    }
+
     #[test]
     fn retained_drain_actual_owner_missing_from_its_root_is_rejected() {
         use super::super::tests::retained_drain_fixture;

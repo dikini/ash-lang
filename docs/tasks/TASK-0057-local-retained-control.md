@@ -62,9 +62,15 @@ accepted contract. Source execution and public release remain gated. The
 current conservative case tracking can reject a safe program that matches an
 earlier branch result after another checkpoint.
 
+A source-derived linked Core fixture also checks reuse of an aggregate and its
+payload computation. Each case assignment now clears older aggregate origins
+before their payloads can be projected, and Resume drops the returned origin.
+The bounded correspondence still needs independent review before it can
+justify the release gate.
+
 A cleanup-drain fixture's linked validation prefix and focused query use
-1,054,674 work units against the current 983,040 limit, before later validation.
-The outer-discard positive uses 1,282,582 units for the focused query alone.
+1,054,814 work units against the current 983,040 limit, before later validation.
+The outer-discard positive uses 1,282,722 units for the focused query alone.
 Both measurements used an unbounded test budget; the connected gate must
 address the budget gap with the complete pipeline measured.
 C2–C5 and the connected full-workspace and Main gates remain open.

@@ -24238,6 +24238,184 @@ mod tests {
     }
 
     #[test]
+    fn retained_shared_aggregate_origin_recheck() {
+        use super::super::{
+            data::{CoreMatchArm, MatchNode, TupleNode},
+            effect::{EffectExprKind, EffectOperation, RequestNode},
+        };
+
+        let source = include_str!("../../tests/fixtures/retained-drain/shared-origin.ash");
+        let mut fixture = LinkedCoreValidationFixture::compile("", source, &[]);
+        let core = &mut fixture.program;
+        let tuple_at = |core: &super::super::UnvalidatedEffectProgram, offset: usize| {
+            core.nodes
+                .iter()
+                .enumerate()
+                .find_map(|(id, node)| match &node.kind {
+                    EffectExprKind::Operation(EffectOperation::RegionTuple(tuple))
+                        if node.origin.as_ref().unwrap().primary_span().range().start()
+                            as usize
+                            == offset =>
+                    {
+                        Some((node_id(core.arena, id).unwrap(), tuple.fields.to_vec()))
+                    }
+                    _ => None,
+                })
+                .expect("the original source tuple remains available")
+        };
+        let root_of = |core: &super::super::UnvalidatedEffectProgram, body: NodeId| {
+            core.nodes
+                .iter()
+                .enumerate()
+                .find_map(|(id, node)| match &node.kind {
+                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        bind,
+                    ))) if bind.body() == body => Some(node_id(core.arena, id).unwrap()),
+                    _ => None,
+                })
+                .expect("the source tuple has its allocator binding")
+        };
+        let match_offset = "(match (perform Cell.Ops<R,Bool>.read flag)";
+        let (old_tuple, old_fields) = tuple_at(core, source.find(match_offset).unwrap());
+        let (later_tuple, _) = tuple_at(core, source.rfind(match_offset).unwrap());
+        let (write_tuple, write_fields) = tuple_at(core, source.find("(flag, true)").unwrap());
+        let old_root = root_of(core, old_tuple);
+        let later_root = root_of(core, later_tuple);
+        let write_root = root_of(core, write_tuple);
+        let matched = old_fields[0];
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(matching))) =
+            &core.nodes[matched.index().unwrap()].kind
+        else {
+            panic!("the tuple field is the source Bool match");
+        };
+        let patterns = matching
+            .arms()
+            .iter()
+            .map(|arm| (arm.pattern().clone(), arm.origin().clone()))
+            .collect::<Vec<_>>();
+        let truth = matching.arms()[0].body();
+        let mut add_tuple = |fields: Vec<NodeId>, template: NodeId| {
+            let template = &core.nodes[template.index().unwrap()];
+            let (dialect, ty, origin) = (
+                template.dialect,
+                template.ty.clone(),
+                template.origin.clone(),
+            );
+            let mut effects = EffectRow::empty();
+            for field in &fields {
+                effects = effects
+                    .union(&core.nodes[field.index().unwrap()].effects)
+                    .unwrap();
+            }
+            let result = node_id(core.arena, core.nodes.len()).unwrap();
+            core.nodes.push(StoredNode {
+                dialect,
+                ty,
+                effects,
+                origin,
+                kind: EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Tuple(
+                    TupleNode::new(fields),
+                ))),
+            });
+            result
+        };
+        let shared = add_tuple(old_fields, old_tuple);
+        let write = add_tuple(write_fields, write_tuple);
+        let mut guarded = |live: NodeId, parked: NodeId| {
+            let old = &core.nodes[parked.index().unwrap()];
+            let live_node = &core.nodes[live.index().unwrap()];
+            let effects = old.effects.union(&live_node.effects).unwrap();
+            let (dialect, ty, origin) = (old.dialect, old.ty.clone(), old.origin.clone());
+            let result = node_id(core.arena, core.nodes.len()).unwrap();
+            let arms = [live, parked]
+                .into_iter()
+                .zip(patterns.iter())
+                .map(|(body, (pattern, origin))| {
+                    CoreMatchArm::new(pattern.clone(), body, origin.clone())
+                })
+                .collect();
+            core.nodes.push(StoredNode {
+                dialect,
+                ty,
+                effects,
+                origin,
+                kind: EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(
+                    MatchNode::new(truth, arms),
+                ))),
+            });
+            result
+        };
+        let old_guard = guarded(shared, old_root);
+        let later_guard = guarded(shared, later_root);
+        let write_guard = guarded(write, write_root);
+        for (old, new) in [(old_root, old_guard), (later_root, later_guard)] {
+            let binding = core
+                .nodes
+                .iter_mut()
+                .find_map(|node| match &mut node.kind {
+                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        binding,
+                    ))) if binding.initializer() == old => Some(binding),
+                    _ => None,
+                })
+                .expect("the local value is bound once");
+            *binding = BindingNode::new(binding.binder().clone(), new, binding.body());
+        }
+        let request = core
+            .nodes
+            .iter_mut()
+            .find_map(|node| match &mut node.kind {
+                EffectExprKind::Operation(EffectOperation::Request(request))
+                    if request.operand() == write_root =>
+                {
+                    Some(request)
+                }
+                _ => None,
+            })
+            .expect("the direct native write has its source operand");
+        *request = RequestNode::new(request.effect().clone(), request.operation(), write_guard);
+
+        let sources = fixture
+            .graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let mut work = TypeWorkBudget::unbounded();
+        let prefix = check_ordinary_effect_modules_with_budget_for_test(
+            &fixture.program,
+            &sources,
+            &fixture.module_sources,
+            &mut work,
+        )
+        .expect_err("the public Store release gate remains closed");
+        assert_eq!(prefix.reason(), ValidationReason::RetainedRelease);
+        eprintln!(
+            "shared tuple {shared:?}, matched field {matched:?}, prefix={}",
+            work.used()
+        );
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+        let mut work = TypeWorkBudget::unbounded();
+        let result = super::super::capture::check_nodes_with_release(
+            &fixture.program.nodes,
+            &[],
+            &[],
+            operation,
+            &mut work,
+        );
+        eprintln!("shared-origin result={result:?}, work={}", work.used());
+        assert!(
+            matches!(result, Err(super::super::capture::Failure::RetainedRelease)),
+            "{result:?}"
+        );
+    }
+
+    #[test]
     fn private_root_core_keeps_actual_store_and_selected_owner_but_is_unadmitted() {
         use super::super::effect::{EffectExprKind, EffectOperation};
         let fixture = retained_root_fixture();
