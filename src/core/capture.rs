@@ -1643,6 +1643,13 @@ impl<'a, F: CoreOperationFamily> FunctionMetadataPreparation<'a, F> {
                     .map_err(|_| Failure::Resource)?;
                 preparation.bound.push(resource.acquisition.identity);
             }
+            if let Some(EffectOperation::Store(store)) = (self.operation)(&node.kind) {
+                preparation
+                    .bound
+                    .try_reserve(1)
+                    .map_err(|_| Failure::Resource)?;
+                preparation.bound.push(store.acquisition.identity);
+            }
             if let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
                 F::pure(&node.kind)
             {
@@ -1910,6 +1917,10 @@ fn retain_function_metadata<F: CoreOperationFamily>(
         if let Some(EffectOperation::Resource(resource)) = operation(&node.kind) {
             bound.try_reserve(1).map_err(|_| Failure::Resource)?;
             bound.push(resource.acquisition.identity);
+        }
+        if let Some(EffectOperation::Store(store)) = operation(&node.kind) {
+            bound.try_reserve(1).map_err(|_| Failure::Resource)?;
+            bound.push(store.acquisition.identity);
         }
         if let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
             F::pure(&node.kind)
@@ -3811,6 +3822,34 @@ mod tests {
             .unwrap();
         assert_eq!(actual.variables, expected.variables);
         assert_eq!(actual.identities, expected.identities);
+    }
+
+    #[test]
+    fn retained_store_metadata_binds_its_identity_and_keeps_outer_variables() {
+        use super::super::effect::{EffectExprKind, StoreScopeNode};
+        let mut nodes = metadata_header_nodes();
+        let EffectExprKind::Operation(EffectOperation::Resource(resource)) = &nodes[3].kind else {
+            unreachable!()
+        };
+        let acquisition = crate::resolved::StoreAcquisition {
+            builtin: resource.acquisition.builtin,
+            identity: resource.acquisition.identity,
+            handle: resource.acquisition.handle,
+            span: resource.acquisition.span,
+        };
+        let store = StoreScopeNode::new(
+            acquisition,
+            resource.handle.clone(),
+            resource.initializer,
+            resource.body,
+        );
+        nodes[3].kind = EffectExprKind::Operation(EffectOperation::Store(Box::new(store)));
+        let mut owner = FunctionMetadataPreparation::new(&nodes, metadata_header_operation);
+        let value = owner.collect(3, &mut TypeWorkBudget::unbounded()).unwrap();
+        assert!(!value.identities.contains(&TypeVariableId::generated(900)));
+        assert!(value.identities.contains(&TypeVariableId::generated(903)));
+        assert!(value.identities.contains(&TypeVariableId::generated(905)));
+        requested_metadata_matches(&mut owner, 3, &[]);
     }
 
     #[test]

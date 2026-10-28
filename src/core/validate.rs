@@ -3386,6 +3386,9 @@ pub(super) trait ScopeFamily: CoreOperationFamily {
     fn resource_scope(_kind: &Self::Kind) -> Option<&super::effect::ResourceScopeNode> {
         None
     }
+    fn store_scope(_kind: &Self::Kind) -> Option<&super::effect::StoreScopeNode> {
+        None
+    }
 
     fn resume_capability(
         _kind: &Self::Kind,
@@ -3459,6 +3462,15 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
         }
     }
 
+    fn store_scope(kind: &Self::Kind) -> Option<&super::effect::StoreScopeNode> {
+        match kind {
+            super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Store(
+                store,
+            )) => Some(store),
+            _ => None,
+        }
+    }
+
     fn resume_capability(
         kind: &Self::Kind,
     ) -> Option<(super::effect::HandlerId, crate::resolved::ResumeId)> {
@@ -3523,6 +3535,11 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
             && let Some(resource) = Self::resource_scope(kind)
         {
             visit(resource.handle.id());
+        }
+        if child == 1
+            && let Some(store) = Self::store_scope(kind)
+        {
+            visit(store.handle.id());
         }
         let (handler, offset) = match kind {
             super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Handler(
@@ -10145,6 +10162,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         for (index, node) in self.program.nodes.iter().enumerate() {
             if let Some(parameter) = F::resource_scope(&node.kind)
                 .map(|resource| resource.acquisition.identity)
+                .or_else(|| F::store_scope(&node.kind).map(|store| store.acquisition.identity))
                 .or_else(|| F::region_scope(&node.kind).map(|scope| scope.identity))
             {
                 let id = node_id(self.program.arena, index)?;
@@ -11856,6 +11874,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         {
                             child_free.remove(&resource.acquisition.identity);
                         }
+                        if child_index == 1
+                            && let Some(store) = F::store_scope(&node.kind)
+                        {
+                            child_free.remove(&store.acquisition.identity);
+                        }
 
                         if child_index >= 1
                             && let Some(scope) = F::region_scope(&node.kind)
@@ -11976,6 +11999,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         None => {}
                     }
                     let mut metadata_error = None;
+                    let store = F::store_scope(&node.kind);
+                    let mut store_metadata = HashSet::new();
+                    let metadata_free = if store.is_some() {
+                        &mut store_metadata
+                    } else {
+                        &mut free
+                    };
                     F::visit_operation_type_metadata(&node.kind, &mut |metadata| {
                         // The resource handle's exact type is authenticated at
                         // its node; its sole variable is owned by that node.
@@ -11985,27 +12015,31 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         metadata_error = match metadata {
                             super::dialect::OperationTypeMetadata::Type(ty) => self
                                 .charge_type_structure(ty)
-                                .and_then(|()| self.collect_free_type_variables(ty, &mut free))
+                                .and_then(|()| self.collect_free_type_variables(ty, metadata_free))
                                 .err(),
                             super::dialect::OperationTypeMetadata::Argument(argument) => self
-                                .collect_owner_argument_type_variables(argument, &mut free)
+                                .collect_owner_argument_type_variables(argument, metadata_free)
                                 .err(),
                             super::dialect::OperationTypeMetadata::Row(row) => self
                                 .charge_row_structure(row)
                                 .and_then(|()| {
-                                    self.collect_effect_row_type_variables(row, &mut free)
+                                    self.collect_effect_row_type_variables(row, metadata_free)
                                 })
                                 .err(),
                             super::dialect::OperationTypeMetadata::Pattern(pattern) => self
                                 .charge_pattern_type_structure(pattern)
                                 .and_then(|()| {
-                                    self.collect_pattern_type_variables(pattern, &mut free)
+                                    self.collect_pattern_type_variables(pattern, metadata_free)
                                 })
                                 .err(),
                         };
                     });
                     if let Some(error) = metadata_error {
                         return Err(error);
+                    }
+                    if let Some(store) = store {
+                        store_metadata.remove(&store.acquisition.identity);
+                        self.merge_type_scope_requirements(&mut free, store_metadata)?;
                     }
 
                     requirements[self.index(id)?] = Some(free);
@@ -24025,6 +24059,170 @@ mod tests {
         assert_eq!(
             fixture.validate().unwrap_err().reason(),
             ValidationReason::RetainedRelease
+        );
+    }
+
+    fn retained_store_scope_fixture() -> LinkedCoreValidationFixture {
+        let dependency = concat!(
+            "import @builtin.retained_control as Control\n",
+            "pub hold<A,E : EffectRow> : (A, Unit -> Unit ! {| E}) -> A\n",
+            "hold (value, ignored) = resource Control.Store<N,(Unit -> (Control.Key<N>, A) ! {| E})> store = () {\n",
+            "let held = store\nvalue\n}\n",
+        );
+        LinkedCoreValidationFixture::compile(
+            dependency,
+            "import dependency (hold)\nmain : Unit -> Int\nmain () = 42\n",
+            &[],
+        )
+    }
+
+    #[test]
+    fn retained_store_scope_binds_its_handle_and_identity_only_in_the_body() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let fixture = retained_store_scope_fixture();
+        let identity = fixture
+            .program
+            .nodes
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Store(store)) => {
+                    Some(store.acquisition.identity)
+                }
+                _ => None,
+            })
+            .expect("the actual Store scope remains in linked Core");
+        let sources = fixture
+            .graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let mut validator =
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources).unwrap();
+        let nominal_owners = validator.validate_registry().unwrap();
+        let abstraction_owners = validator.collect_binders(&HashSet::new()).unwrap();
+        let binders = validator
+            .collect_type_binders(&nominal_owners, &abstraction_owners)
+            .unwrap();
+        assert!(binders.contains_key(&identity));
+        validator.validate_scopes().unwrap();
+        validator.validate_type_scopes().unwrap();
+        drop(validator);
+        assert_eq!(
+            fixture.validate().unwrap_err().reason(),
+            ValidationReason::RetainedRelease
+        );
+    }
+
+    #[test]
+    fn retained_store_scope_does_not_hide_initializer_result_or_metadata_escapes() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let mut fixture = retained_store_scope_fixture();
+        let (index, identity, initializer, body, api) = fixture
+            .program
+            .nodes
+            .iter()
+            .enumerate()
+            .find_map(|(index, node)| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Store(store)) => Some((
+                    index,
+                    store.acquisition.identity,
+                    store.initializer,
+                    store.body,
+                    crate::resolved::StoreApi::for_module(store.acquisition.builtin).unwrap(),
+                )),
+                _ => None,
+            })
+            .unwrap();
+        let sources = fixture
+            .graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let EffectExprKind::Operation(EffectOperation::Store(store)) =
+            &mut fixture.program.nodes[index].kind
+        else {
+            unreachable!()
+        };
+        store.initializer = body;
+        store.body = initializer;
+        let validator =
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources).unwrap();
+        assert_eq!(
+            validator.validate_scopes().unwrap_err().cause_name(),
+            Some("unbound-core-binder")
+        );
+        assert_eq!(
+            validator.validate_type_scopes().unwrap_err().cause_name(),
+            Some("unbound-core-type-variables")
+        );
+        drop(validator);
+        let EffectExprKind::Operation(EffectOperation::Store(store)) =
+            &mut fixture.program.nodes[index].kind
+        else {
+            unreachable!()
+        };
+        store.initializer = initializer;
+        store.body = body;
+
+        let previous = std::mem::replace(
+            &mut fixture.program.nodes[index].ty,
+            Type::Variable(identity),
+        );
+        let validator =
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources).unwrap();
+        assert_eq!(
+            validator.validate_type_scopes().unwrap_err().cause_name(),
+            Some("unbound-core-type-variables")
+        );
+        drop(validator);
+        fixture.program.nodes[index].ty = previous;
+
+        let probe = EffectInstance::new(api.probe(), Box::new([Type::Variable(identity)]));
+        let previous = std::mem::replace(
+            &mut fixture.program.nodes[index].effects,
+            EffectRow::singleton(probe),
+        );
+        let validator =
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources).unwrap();
+        assert_eq!(
+            validator.validate_type_scopes().unwrap_err().cause_name(),
+            Some("unbound-core-type-variables")
+        );
+        drop(validator);
+        fixture.program.nodes[index].effects = previous;
+
+        let probe = EffectInstance::new(api.probe(), Box::new([Type::Variable(identity)]));
+        let initializer_index = initializer.index().unwrap();
+        let previous = std::mem::replace(
+            &mut fixture.program.nodes[initializer_index].effects,
+            EffectRow::singleton(probe),
+        );
+        let validator =
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources).unwrap();
+        assert_eq!(
+            validator.validate_type_scopes().unwrap_err().cause_name(),
+            Some("unbound-core-type-variables")
+        );
+        drop(validator);
+        fixture.program.nodes[initializer_index].effects = previous;
+
+        let EffectExprKind::Operation(EffectOperation::Store(store)) =
+            &mut fixture.program.nodes[index].kind
+        else {
+            unreachable!()
+        };
+        store
+            .handle
+            .replace_type(Type::Variable(crate::types::TypeVariableId::generated(
+                999_999,
+            )));
+        let validator =
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources).unwrap();
+        assert_eq!(
+            validator.validate_type_scopes().unwrap_err().cause_name(),
+            Some("unbound-core-type-variables")
         );
     }
 
