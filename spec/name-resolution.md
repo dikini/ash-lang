@@ -41,9 +41,9 @@ select the first reported failure deterministically.
 or filesystem source. `builtin` is a reserved root name: configuring it as a
 filesystem root fails with `invocation.reserved-root` before filesystem
 inspection. The modules specified beneath that root are `@builtin.cell`,
-`@builtin.generic_cell`, `@builtin.bytes`, `@builtin.string` and
-`@builtin.foreign`. Unknown paths, including
-`@builtin.cell.extra`, fail
+`@builtin.generic_cell`, `@builtin.retained_control`, `@builtin.bytes`,
+`@builtin.string`, `@builtin.foreign` and `@builtin.regions`. Unknown paths,
+including `@builtin.cell.extra`, fail
 with `module.unknown-builtin`.
 
 The module exports exactly `Handle`, `Provider`, `Ops`, `read` and `write`.
@@ -78,6 +78,26 @@ do not acquire a resource may use the ordinary re-exported API.
 local `with` declarations cannot introduce the exact builtin `Provider`
 relation. Acquisition introduces its authenticated lexical evidence; ordinary
 name resolution or copied signatures cannot grant that authority.
+
+### Compiler-owned retained control module
+
+`@builtin.retained_control` is a canonical passive module. It exports opaque
+`Store<N,D>` and `Key<N>`, transparent `Option<A>` with `None` and `Some`,
+the effects `Drive<N>` and `Probe<N>`, and the callables `advance` and
+`advance_with_drive`. Imports, aliases and public re-exports preserve their
+defining identities. Neither opaque type has a source-accessible constructor.
+An ordinary same-spelled declaration supplies no store or control authority.
+
+Named acquisition recognizes the canonical `Store` family through those
+routes. Its first argument is a fresh unqualified identity binder and its
+second is a descriptor in that identity's scope. The initializer still resolves
+in the preceding scope. The handle and identity scope over the body and do not
+escape their lexical owner. The
+[retained-control rules](static-semantics.md#scoped-retained-control)
+authenticate the descriptor and the actual association, not the import route.
+`Drive<N>` may occur in a row, but direct `perform`, `handle`, `hook` or
+`register` of that canonical effect is rejected, including through an alias.
+`Probe<N>` is an ordinary effect and retains normal handler precedence.
 
 ### Independent byte and string modules
 
@@ -465,8 +485,9 @@ The nominal itself is a rigid declaration identity, not a type-variable binder.
 
 A resource acquisition allocates its identity binder in the same module-wide
 type-variable sequence after resolving its initializer. The binder has kind
-`Type` and scopes over the resource body only. It is distinct from enclosing
-type parameters and other acquisition binders, regardless of spelling.
+`Type` and scopes over the resource body. A retained-control Store also scopes
+that binder over its descriptor. It is distinct from enclosing type parameters
+and other acquisition binders, regardless of spelling.
 
 Nominal and ordinary effect parameters use their written set and order and may be
 phantom. Effect parameters scope over all operation signatures in their
@@ -815,10 +836,11 @@ acquisition's identity and handle binders then enter scope together for its
 body block and may shadow earlier names. Neither binder is visible in its own
 initializer or after the resource expression. Closing the body restores the
 preceding scopes. The handle is an ordinary term binder, not a release owner.
-For a source family, resolution checks the complete written argument vector
+For a generic cell, resolution checks the complete written argument vector
 against the retained header and identifies the fresh binder at the explicit
-owned position. Every other Type or Row actual resolves in the preceding type
-scope. The fresh identity cannot occur in those actuals or in its initializer.
+owned position. Its other actual resolves in the preceding type scope. For a
+retained-control Store, the descriptor instead resolves with the fresh identity
+in scope. Neither initializer sees the new identity or handle.
 
 The target of `hook` or `register` resolves as an exact effect instance in the
 preceding type scope. A registration's transformer resolves in the preceding
@@ -860,6 +882,9 @@ Each handler clause receives one hidden `ResumeId` owned by that clause. The
 clause's operation pattern and resume capability scope only over its body;
 `resume` or `discard` outside such a scope is
 `effect.resume-outside-clause`. Both forms name that same hidden capability.
+`retain` names the nearest clause's capability only when that clause belongs to
+a private handler associated with a Store; otherwise it is
+`effect.retain-outside-root`. It cannot search past an intervening clause.
 A nested handler's handled expression remains in the outer clause scope.
 Each nested handler clause receives its own resume scope and cannot use the
 outer capability. Nested functions, recursive members, and supplied local

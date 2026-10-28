@@ -5,8 +5,8 @@
 - Related: [DN-0056](../design/DN-0056-scoped-continuation-retention-and-library-scheduling.md),
   [CP-0026](../proposals/CP-0026-scoped-owned-continuation-storage.md)
 
-> This task organizes work. It does not define Ash semantics. C4 is active
-> under the accepted proposal; C2 and C3 are retained and accepted.
+> This task organizes work. It does not define Ash semantics. C5 is active
+> under the accepted proposal; C1 through C4 are retained and accepted.
 
 ## Dependencies
 
@@ -86,7 +86,7 @@ its tree was independently verified at retained milestone commit
 [C2 #72](https://github.com/dikini/ash-lang/issues/72) and
 [C3 #73](https://github.com/dikini/ash-lang/issues/73) criteria are accepted.
 
-C4 is developing ordinary scheduling policy in
+C4 delivers ordinary scheduling policy in
 [`libraries/scheduling.ash`](../../libraries/scheduling.ash). The first named-root
 coroutine case selects P while Q remains retained, observes R's continuation,
 and drains Q before the store closes. Its public-driver result records P's
@@ -103,21 +103,27 @@ yields so Q can observe the committed value before P resumes. Two further public
 cases checkpoint on both sides of an inner resume and suspend a running cleanup
 twice while Q completes. Their event order checks the returned keys and a single
 cleanup invocation; the cleanup's saved body result reaches its current
-consumer. The complete C4 candidate awaits independent review and its workspace
-checkpoint. C4, C5 and the final integrated and Main gates remain open.
+consumer. [PR #163](https://github.com/dikini/ash-lang/pull/163) retained the
+reviewed result at `73f6304a69183682a94d85aa81f9b1a88c21ef5e`; its fresh
+seven-stage [checkpoint](https://github.com/dikini/ash-lang/pull/163#issuecomment-6475295972)
+and [retained result](https://github.com/dikini/ash-lang/pull/163#issuecomment-6475359212)
+passed independent audit. [C4 #74](https://github.com/dikini/ash-lang/issues/74)
+is accepted. C5 updates the specification and retained evidence; its final
+integrated checkpoint and the separate Main gate remain open.
 
 ## Verification
 
 Use focused positive, negative and regression checks for each changed behavior
 and affected callers. The model and C3 analysis each require a reviewed frozen
 scoped [AD-0012](../decisions/AD-0012-proof-development-feedback-and-build-reuse.md)
-gate. The connected C2/C3 workspace checkpoint is complete. Because C4 changes
-shared capture analysis, the product developer owns a fresh seven-stage Cargo
-checkpoint for the complete C4 candidate before its integration. The final
-integrated C5 checkpoint remains required and may serve as the pre-Main gate
-only while inputs remain equal. Record exact refs, source/configuration/tool
-pins and receipts; transfer evidence only with demonstrated equality. Main
-merge remains a separate human gate.
+gate. The connected C2/C3 and C4 workspace checkpoints are complete. The C5
+specification delivery requires affected example and documentation checks,
+independent review and retained-result verification. After the authorized
+artifact cleanup, the product developer owns one fresh seven-stage final C5
+checkpoint. It may serve as the pre-Main gate only while inputs remain equal.
+Record exact refs, source/configuration/tool pins and receipts; transfer
+evidence only with demonstrated equality. Main merge remains a separate human
+gate.
 
 ## Discoveries
 
@@ -144,6 +150,5 @@ The recursion examples in [syntax](../../spec/syntax.md),
 [tool guide](../tools/ash.md) now use `saved` in place of the reserved
 `retain` keyword. Their executable fixtures use the same name.
 
-Return any semantic or proof gap to CP-0026 and DN-0056 before product
-delivery; keep original issue criteria open until their full scopes are retained
-and verified.
+Return any semantic or proof gap to the governing design work; keep original
+issue criteria open until their full scopes are retained and verified.

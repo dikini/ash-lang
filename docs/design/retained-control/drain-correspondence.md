@@ -3,9 +3,10 @@
 This map relates the [bounded proof](DrainSafety.lean) to the reviewed
 implementation of one focused Store query. The independently reviewed source
 completed the frozen [AD-0012 gate](../../tasks/evidence/local-retained-control/c3-model/README.md).
-The linked validator now runs this analysis for retained carriers. The
-connected C2/C3 checkpoint and complete acceptance criteria remain open. This
-map is not a mechanized proof of the Rust compiler.
+The linked validator runs this analysis for retained carriers. The connected
+C2/C3 checkpoint was independently verified at milestone commit
+`d256bef288ac6b828e475c9dcaaf710812405b7a`; C2 and C3 are accepted. This map
+is not a mechanized proof of the Rust compiler.
 
 ## Focused analysis and closure
 
@@ -136,8 +137,9 @@ Resume as the transfer without a syntactic destination condition; the current
 candidate drops that origin. The local forgetting lemma does not itself prove
 payload stability: the ordinary scope and graph conditions above are part of the
 concrete correspondence independently reviewed at `0f73745e`. The linked
-admission routing above is the current candidate. This is not a Rust
-mechanization. The connected C2/C3 checkpoint remains to be completed.
+admission routing above is retained product behavior. The later C4 strict-call
+readiness repair preserves the recorded revision replay and was independently
+reviewed with its affected tests. This is not a Rust mechanization.
 
 ## Evidence and remaining gates
 
@@ -154,7 +156,11 @@ exercise both drains. The recursive drain also runs after linked identity and
 folding transforms. Fresh allocation under an allocator handler owned by the
 capture passes; the distinct external cleanup forwarder is rejected under the
 accepted interpreter-identity contract. Full C2/C3 acceptance and the connected
-checkpoint remain open.
+checkpoint are recorded in [PR #162](https://github.com/dikini/ash-lang/pull/162).
+The later [C4 library delivery](https://github.com/dikini/ash-lang/pull/163)
+was retained at `73f6304a69183682a94d85aa81f9b1a88c21ef5e` after its own
+fresh workspace checkpoint. C5 specification and final integration remain
+separate.
 
 The standalone Core validation allowance remains 983,040 units. In the public
 source driver, the outer-discard fixture used 1,309,582 of 78,225,000 units; its
