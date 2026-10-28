@@ -1,9 +1,9 @@
 # C1 model correspondence and limits
 
-This map is part of the candidate [DN-0056 proof assignment](../DN-0056-scoped-continuation-retention-and-library-scheduling.md#c1-bounded-ownership-and-completion-proof-assignment).
-[CP-0026](../../proposals/CP-0026-scoped-owned-continuation-storage.md) is
-accepted as a prospective contract. The model is evidence for its selected
-transitions, not current language truth or a proof of the compiler or evaluator.
+This map is part of the [DN-0056 proof assignment](../DN-0056-scoped-continuation-retention-and-library-scheduling.md#c1-bounded-ownership-and-completion-proof-assignment).
+[CP-0026](../../proposals/CP-0026-scoped-owned-continuation-storage.md) records
+the accepted transition implemented on the M3 milestone. The model is evidence
+for its selected transitions, not a proof of the compiler or evaluator.
 
 ## Representation and assumptions
 
@@ -24,42 +24,40 @@ outside support and completion are still represented, requires disjointness
 from every fixed outside owner even when it is not referenced by the capture,
 checks the fixed interpreter, and rejects an exported
 branch-local owner. This is a local structural premise, not a new source
-permission algebra. The future source and linked Core checks must derive these
-facts from actual captures, values, evidence, control, and enclosing scopes.
+permission algebra. Source and linked Core checks derive these facts from
+actual captures, values, evidence, control, and enclosing scopes.
 `adminSuffixClear` is a local premise on the retain macro-step: the authenticated
 private checkpoint clause has no skipped required suffix. It is not a source
-assertion or a runtime permission. A product must establish that premise from
-actual control before consuming the hidden owner.
+assertion or a runtime permission. The implementation checks actual control
+before consuming the hidden owner.
 
 The store and consumer interpretation numbers stand for complete exact
 contexts: the actual selected enclosing handler/provider frames, activation,
 instantiation and precedence. Equality is a model assumption; the proof does
 not show that same-typed effects, handler IDs or arbitrary runtime activations
-are interchangeable. A product must reconstruct selection at each actual
-consumer and prove its external frames survive, including possible nearer
-interception. It may use structural enclosure of `N`; no new occurrence
+are interchangeable. The implementation reconstructs selection at each actual
+consumer and checks surviving external frames and possible nearer interception.
+Structural enclosure of `N` supplies the support boundary; no new occurrence
 identity follows from this model.
 
 Restore has implicit unit input and a single model answer family. `Delivery`
 distinguishes a fresh root's answer from a continued consumer's `Some` answer
 and a missing key's `None`. The model does not formalize general `A<N>`, rows,
 source spelling or elaboration. In particular, the answer may contain
-`Key<N>` in CP-0026, while existing generic-cell payloads are checked before
-the fresh owner scope. Product elaboration and independent validation must
-bind the store identity before checking that answer contract without moving
-the initializer into the new scope.
+`Key<N>`, while generic-cell payloads are checked before the fresh owner scope.
+Elaboration and independent validation bind the Store identity before checking
+that answer contract without moving the initializer into the new scope.
 
 `Step.retain` combines the atomic owner move and the administrative checkpoint
 clause's return. Its explicit `adminSuffixClear` and `Admit` premises cover the
-model boundary; the product must prove their correspondence to the actual
-clause and its completion. Existing ordinary private-clause `resume` and
-checked inner-handler discard are inherited current behavior and are not
-modelled by a new transition. The private checkpoint owner cannot use discard
-to abandon its branch under the proposed contract.
+model boundary. The product checks the actual clause and its completion; the
+root remains active until the clause suffix returns. Ordinary private-clause
+`resume` and checked inner-handler discard are not modelled by a new transition.
+The private checkpoint owner cannot use discard to abandon its branch.
 `Step.refuse` records the unchanged ownership state at failed preparation; it
 does not add a source-level success or recovery result.
 
-## Proved candidate claims
+## Proved model claims
 
 | Obligation | Named result and scope |
 | --- | --- |
@@ -82,32 +80,24 @@ sharing or synchronization result. The outer-close trace supplies actual
 empty work as a premise of its final drain step. It does not prove an arbitrary
 library drain returns empty; that is C3's separate analysis and proof.
 
-## Product correspondence still required
+## Product correspondence
 
-- Relate the abstract inventory, structural disjointness and administrative
-  suffix premise to the selected [current effect and resource rules](../../../spec/static-semantics.md#effects),
-  their actual linked Core validation and the [evaluator machine](../../../src/eval/machine.rs).
-  The current `CapturedContinuation`, clause owner, resource/cleanup boundaries,
-  capture accounting and preflight logic are evidence to reuse, not a proof
-  that the proposed store is implemented.
-- Authenticate the fixed Unit/answer/row/interpreter ports and owner-indexed
-  answer type through source, imports, linked Core and transformations. Check
-  exact selected interpreters and all external support at each use and close.
-- Implement preparation before committed transfer and restoration, generation
-  exhaustion without wrap, and the new current-consumer answer adapter.
-  Extend iterative teardown for slot-to-capture edges. If teardown itself
-  exhausts its work storage, retain the current incomplete-teardown report;
-  neither this model nor current teardown promises every residual release.
-- Demonstrate that branch and cleanup completion accounting follows actual
-  roots and captured owners rather than ordinary answer constructors or ready
-  queue contents. Preserve the private-root association while its handler is
-  temporarily absent and through any existing frame coalescing.
-- Mechanize and implement the separate C3 normal-return relation, including
-  authentic fresh probes, actual handler and cleanup suffixes, imported and
-  recursive control, conservative unknowns and exhaustion. Model emptiness at
-  a closing predecessor does not establish that analysis.
-- Test the real source/Core/runtime transitions, transformed validation,
-  region support and libraries against the full C1–C5 criteria. Verify the
-  retained proof and its review, and complete the later checkpoint gates.
-  No termination, fairness, native-provider, migration, multithreaded safety
-  or whole-compiler claim follows here.
+The retained [C2 delivery](https://github.com/dikini/ash-lang/pull/161) checks
+actual Store ports, capture support, interpreter selection and structural
+owners through source and linked Core. The
+[evaluator](../../../src/eval/machine.rs) prepares retention and restoration
+before moving ownership, keeps generation-qualified slots and returns restored
+answers to the current consumer. Its iterative failure disposal can report
+incomplete teardown; neither that behavior nor this model promises every
+residual release.
+
+The retained [C3 delivery](https://github.com/dikini/ash-lang/pull/162) checks
+normal release after real root, clause and cleanup completion. The separate
+[drain correspondence](drain-correspondence.md) records its concrete finite
+analysis and the limits of the proof. The
+[C4 library corpus](../../../tests/scheduling.rs) exercises current-consumer
+return, repeated yields and running cleanup with the same Store mechanism.
+The [proof-root evidence map](README.md#retained-product-evidence) links the
+retained reviews and checks. These are reviewed implementation correspondence
+and tests, not a mechanized proof of Rust or a termination, fairness,
+native-provider, migration or multithreaded-safety claim.

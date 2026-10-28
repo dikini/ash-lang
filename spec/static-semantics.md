@@ -1101,8 +1101,8 @@ T-Perform :=
 row does not already exclude the requested instance, inferred union is
 ambiguous; checking may use a lacks fact already present in its expected row.
 
-A handler targets one exact well-kinded instance and contains exactly one
-clause for every operation of that effect, in any source order. Each clause
+An ordinary handler targets one exact well-kinded instance and contains exactly
+one clause for every operation of that effect, in any source order. Each clause
 pattern checks against the substituted operation domain and must be
 irrefutable. Handling removes the target from the body row. Requirements of
 other identities remain, while requirements introduced by clause evaluation,
@@ -1138,6 +1138,7 @@ T-Resume :=
 T-Discard :=
   active-resume = resume(Q, A, epsilon_out)
   active-resume is available
+  active-resume is not associated with a private Store root
   owned closure includes the selected capture and its contained live captures
   closing that closure preserves every outside and running completion owner
   each action is compatible with its surviving interpreter context
@@ -1187,8 +1188,10 @@ same resulting state, and requires equal outgoing states from all arms. A
 form with no completion occurrence otherwise preserves its incoming state. A
 `resume` first checks its value expression under the incoming state, then
 requires that result to remain `available` and changes it to `consumed`.
-`discard` requires `available` and changes it directly to `consumed`. Match
-arms may choose different completion forms if their outgoing states agree.
+`discard` requires `available` and changes it directly to `consumed`. In a
+private Store-associated clause, `retain` also consumes the available owner;
+that clause may use `resume` or `retain` but not `discard`. Match arms may
+choose different permitted completion forms if their outgoing states agree.
 Use in `consumed` is `effect.resume-already-consumed`. A normally completing
 clause left in `available` is `effect.resume-not-consumed`. Divergence before a
 syntactic completion remains ordinary divergence; this structural judgment does
@@ -1199,9 +1202,11 @@ and nested handler clauses are
 barriers for an enclosing resume capability. An occurrence beyond one of those
 barriers is `effect.resume-capture`; a nested handler clause receives only its
 own capability. Resolution rejects `resume` or `discard` outside an operation
-clause as `effect.resume-outside-clause`. A capability has no source type or
-binder and cannot be placed in a tuple, constructor, argument, result,
-local binding, scheme, or stored function body.
+clause as `effect.resume-outside-clause` and restricts `retain` to the nearest
+private clause. A capability has no source type or binder and cannot be placed
+in a tuple, constructor, argument, result, local binding, scheme, or stored
+function body. The checked Store operation moves its owned control without
+exposing that capability as a value.
 
 Discard permission is distinct from duplication permission. Ordinary values
 and their stored closure captures are duplicable, subject to the resource
@@ -1251,6 +1256,93 @@ consumption and barriers. `written_duplicate_effect_row_has_exact_reason_code`
 checks `effect.duplicate`, while
 `effect_examples_have_exact_observations_and_reasons` checks the complete
 handled example plus `entry.main-effects` and `effect.resume-not-consumed`.
+
+## Scoped retained control
+
+The canonical `@builtin.retained_control` API supplies opaque `Store<N,D>` and
+`Key<N>`, ordinary `Option<A>` alternatives `None` and `Some(A)`, effects
+`Drive<N>` and `Probe<N>`, and the callables `advance` and
+`advance_with_drive`. The source-visible key is a duplicable, non-owning
+locator; copying it grants no additional ownership or lifetime. These roles
+depend on authenticated defining identities, not matching spellings or types.
+
+In `resource Control.Store<N,D> store = initializer { body }`, the initializer
+checks as `Unit` in the preceding scope. N is a fresh rigid kind-`Type` identity
+for this scope and D checks as a function computation `Unit -> A ! rho` in
+N's scope. A may mention N, including in `Key<N>`. The body sees
+`store : Store<N,D>`. Its value type is the expression's type, and its outward
+row combines the initializer row with the body row after discharging the exact
+`Drive<N>` and `Probe<N>` instances supplied by this Store. The result, outward
+row, escaping schemes and retained dependencies cannot expose N or its owner.
+Other identities and effects retain their existing rules.
+
+`handle body with E<arguments> using store { clauses }` evaluates and checks
+the Store operand as well as the ordinary handler. The actual operand fixes N,
+A and `rho`; the handler's answer must be A and retained control must satisfy
+that descriptor. Each selected private clause may consume its available owner
+by `resume` or `retain`, not `discard`. A clause using `retain` must have a
+`Unit` operation reply. At the nearest such clause, `retain` produces
+`Key<N> ! {Drive<N>}` and consumes that clause's hidden owner. An intervening
+clause, nested function or other capability barrier cannot reach an older owner.
+The Store association is administrative and non-owning; it is not a general
+exception for capturing the Store as an ordinary value.
+
+Admission checks the actual callable, evidence and value captures, dependencies,
+effects and completion control. The Store boundary itself cannot move into its
+own slot. Every required external dependency, provider, region backing and
+interpreter outside the owned capture must structurally enclose N and remain
+valid through its last use and completion. Actual selected handler identity and
+activation, lexical instantiation, precedence and relevant provider context
+must agree at admission and again at restoration. A same-typed or same-instance
+outer handler does not establish that agreement. Handlers owned inside the
+captured segment move with it in their existing order.
+
+For a row variable E, `advance` accepts `Store<N,(Unit -> A ! {| E})>` when
+the existing row contract establishes that E lacks `Drive<N>`.
+`advance_with_drive` accepts `Store<N,(Unit -> A ! {Drive<N> | E})>`. Each
+takes the matching `Key<N>` and returns `Option<A> ! {Drive<N> | E}`. The
+ordinary source value-function allocation defaults also apply to the descriptor
+and result rows. Actual
+operand and result-adapter effects are combined under the existing partial row
+union and lacks rules; an ambiguous open tail is not made admissible by these
+callables. They lower to structural continuation control, not an overridable
+request. The canonical `Drive<N>` may be named in rows but cannot be performed
+or handled directly.
+
+Fresh roots, continue and probe are driver operations outside every active root
+for the same N. A branch may checkpoint through its private root but may not
+drive that Store, even through a helper or an intercepting handler. A selected
+private clause remains part of its branch invocation until its actual suffix
+returns; removal of its handler during clause execution does not grant driver
+authority. Ordinary duplicable access to a still-live outer cell or region may
+be shared sequentially by the driver and branches without transferring its
+owner.
+
+For release, the work of N comprises retained captures, active admitted branch
+control and unfinished branch cleanup or close work. A root starts an
+obligation; only its actual completion after required suffixes and cleanup
+retires it. A later retain transfers that obligation into the new capture.
+Constructing an answer or losing a ready-queue entry neither creates nor
+removes work. `Probe<N>.quiescent : Unit -> Bool` is an ordinary request: only
+the selected authenticated Store interpreter relates `true` to empty work and
+`false` to pending work. An intercepted or stale Boolean alone grants no
+release fact. A normal Store close requires empty work on every reachable normal
+predecessor after actual handler and cleanup suffixes. An outer discard that
+owns the Store must establish the same fact at its structural close; it cannot
+abandon retained work or running completion.
+
+Checking relates the possible normal returns and observable result cases to
+their input and output work states. Recursive call groups use a finite
+ascending least fixed point; an empty initial relation is not permission, and
+absence of a finite return is not a termination claim. Unknown calls and joins
+include their possible returns and changes. A genuine observation may be
+forwarded only while intervening control preserves the relevant Store state;
+a possible change invalidates that fact. Completion, interpreter or work
+requirements that cannot be proved reject the relevant transfer or close.
+Exhaustion publishes no partial release permission. Independent linked Core
+validation reconstructs these relationships after transforms or image decoding;
+source summaries, same-typed callbacks and claimed producer facts do not grant
+permission.
 
 ## Synchronous typed hooks
 
@@ -1368,6 +1460,8 @@ A discard may invoke an armed action in its owned closure. Skipping a running
 action or unfinished close operation is `effect.discard-unsafe`; an
 action-local discard may complete when the action, close operation and outside
 owners still complete. Outward requests may capture and resume running cleanup.
+The [retained-control rules](#scoped-retained-control) also admit a checked move
+of that running state, with its saved body result and unfinished completion.
 
 Interpreter compatibility is checked at each action's structural closing
 position. Lookup includes the action's own handlers, still-enclosing captured
@@ -2582,7 +2676,8 @@ Lexing owns the reserved effect keywords. Parsing owns malformed effect
 declarations, rows, requests, handlers, clauses, and completion forms.
 Resolution owns unknown effects or operations, namespace and visibility
 failures, stable identity assignment, row-tail scope, and `resume` or `discard`
-outside a clause.
+outside a clause. Resolution also owns `effect.retain-outside-root` and the
+sealed Drive identity restriction before retained-control checking.
 Effect instance arity precedes positional kind checking. Kind checking owns
 an invalid effect argument, row tail, or forbidden use of `EffectRow`.
 Within a written type, an arity-invalid effect instance reports

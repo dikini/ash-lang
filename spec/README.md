@@ -100,11 +100,24 @@ An effect declaration defines one module-owned API with one or more operations.
 Function computations carry rows of exact, parameterized effect identities.
 `perform` requests an operation, and an exhaustive lexical `handle` removes one
 exact instance. Each selected clause must consume its non-escaping continuation
-capability exactly once on every normally completing path, with `resume` or
-checked `discard`. Discard closes the selected capture and recursively owned
-live captures in structural order, then continues the clause with `Unit`.
-Inference proves safe closure without skipping outside or running completion
-owners. Its effect row includes invoked cleanup actions.
+capability exactly once on every normally completing path. An ordinary clause
+uses `resume` or checked `discard`. Discard closes the selected capture and
+recursively owned live captures in structural order, then continues the clause
+with `Unit`. Inference proves safe closure without skipping outside or running
+completion owners. Its effect row includes invoked cleanup actions.
+
+`@builtin.retained_control` provides a scoped Store and opaque non-owning keys.
+A private handler associated with that Store may consume its selected clause
+owner by `retain` or `resume`. A later admitted consumer can continue a live key
+once; the restored branch returns to that consumer and may yield a fresh key.
+Actual captured support and interpreter identity remain checked. Store release
+requires its retained and active branch work, including cleanup, to be complete;
+an observation from Probe establishes quiescence only when the Store is selected
+and the observation remains current. Ordinary library code can choose and drain
+work without adding a scheduler primitive or a fairness or termination
+guarantee. The [static](static-semantics.md#scoped-retained-control)
+and [dynamic](dynamic-semantics.md#scoped-retained-control-execution) rules
+specify these relationships.
 
 A passive `foreign library` declares a target profile and symbols with source
 signatures and C link names. Each symbol is an ordinary effect with one `call`
