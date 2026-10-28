@@ -39,16 +39,29 @@ use crate::{
 thread_local! {
     // A single test observation; the production projection carries no trace.
     static DRAIN_WITNESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static DRAIN_DISCARD_CLOSE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
 pub(super) fn reset_drain_witness() {
     DRAIN_WITNESS.set(false);
+    DRAIN_DISCARD_CLOSE.set(0);
 }
 
 #[cfg(test)]
 pub(super) fn drain_witnessed() -> bool {
     DRAIN_WITNESS.get()
+}
+
+#[cfg(test)]
+pub(super) fn drain_discard_close_witnessed(unsafe_release: bool) -> bool {
+    let bit = if unsafe_release { 2 } else { 1 };
+    DRAIN_DISCARD_CLOSE.get() & bit != 0
+}
+
+#[cfg(test)]
+pub(super) fn drain_discard_late_retain_witnessed() -> bool {
+    DRAIN_DISCARD_CLOSE.get() & 4 != 0
 }
 
 /// Potential coincidence differs from equality: a rigid row formal may be
@@ -967,7 +980,12 @@ enum DrainWork {
 // never combine observations from different representatives.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default)]
-struct DrainWitness(u8);
+struct DrainWitness {
+    progress: u8,
+    closing_cleanup_returned: bool,
+    closing_store: Option<Address>,
+    late_retain_after_drain: bool,
+}
 
 #[cfg(test)]
 impl PartialEq for DrainWitness {
@@ -1149,6 +1167,14 @@ impl State {
                 *capture = map.get(capture).copied().unwrap_or(*capture);
             }
         }
+        #[cfg(test)]
+        if let Some(drain) = &mut self.drain
+            && let Some(address) = drain.witness.closing_store
+            && let Some(renamed) = map.get(&address)
+        {
+            drain.witness.closing_store =
+                matches!(renamed, Address::Slot { old: false, .. }).then_some(*renamed);
+        }
         Ok(())
     }
 
@@ -1249,7 +1275,25 @@ impl State {
             moved_stores.try_reserve(1).map_err(|_| Failure::Resource)?;
             moved_stores.push((index, store, destinations.get(&retained.baseline).copied()));
         }
+        #[cfg(test)]
+        let copied_closing_store = self
+            .drain
+            .as_ref()
+            .and_then(|drain| drain.witness.closing_store)
+            .and_then(|address| {
+                destinations.get(&address).map(|destination| {
+                    (matches!(address, Address::Slot { old: false, .. })
+                        && matches!(destination, Address::Slot { old: false, .. }))
+                    .then_some(*destination)
+                })
+            });
         self.rename(&renaming, budget)?;
+        #[cfg(test)]
+        if let Some(address) = copied_closing_store
+            && let Some(drain) = &mut self.drain
+        {
+            drain.witness.closing_store = address;
+        }
         for (index, store, baseline) in moved_stores {
             self.retained[index].store = store;
             if let Some(baseline) = baseline {
@@ -3880,8 +3924,8 @@ impl<'a> Analysis<'a> {
                 drain.changed(DrainWork::Unknown, budget)?;
                 drain.facts.clear();
                 #[cfg(test)]
-                if drain.witness.0 == 2 {
-                    drain.witness.0 = 3;
+                if drain.witness.progress == 2 {
+                    drain.witness.progress = 3;
                 }
             }
             // Older addresses summarize multiple occurrences. Restoring one
@@ -4789,9 +4833,21 @@ impl<'a> Analysis<'a> {
                 #[cfg(test)]
                 if let Some(drain) = &state.drain
                     && drain.work == DrainWork::Empty
-                    && drain.witness.0 == 4
+                    && drain.witness.progress == 4
                 {
                     DRAIN_WITNESS.set(true);
+                }
+                #[cfg(test)]
+                if let Some(drain) = &state.drain
+                    && drain.witness.closing_cleanup_returned
+                    && drain.witness.closing_store == Some(state.stack)
+                    && (drain.work != DrainWork::Empty || drain.witness.progress == 4)
+                {
+                    let mut bit = if drain.work == DrainWork::Empty { 1 } else { 2 };
+                    if drain.work != DrainWork::Empty && drain.witness.late_retain_after_drain {
+                        bit |= 4;
+                    }
+                    DRAIN_DISCARD_CLOSE.set(DRAIN_DISCARD_CLOSE.get() | bit);
                 }
                 continue;
             }
@@ -4836,6 +4892,13 @@ impl<'a> Analysis<'a> {
                     running,
                     closing,
                 } => {
+                    #[cfg(test)]
+                    if running
+                        && closing.is_some()
+                        && let Some(drain) = &mut next.drain
+                    {
+                        drain.witness.closing_cleanup_returned = true;
+                    }
                     next.context = context;
                     next.value_context = value_context;
                     next.position = if running {
@@ -5887,9 +5950,9 @@ impl<'a> Analysis<'a> {
                     let mut next = state.copy(budget)?;
                     let drain = next.drain.as_mut().ok_or(Failure::Invalid)?;
                     #[cfg(test)]
-                    match (*answer, drain.witness.0) {
-                        (false, 1) => drain.witness.0 = 2,
-                        (true, 3) => drain.witness.0 = 4,
+                    match (*answer, drain.witness.progress) {
+                        (false, 1) => drain.witness.progress = 2,
+                        (true, 3) => drain.witness.progress = 4,
                         _ => {}
                     }
                     drain.work = if *answer {
@@ -6139,6 +6202,7 @@ impl<'a> Analysis<'a> {
         charge(budget, count.checked_add(1).ok_or(Failure::Resource)?)?;
         retained.try_reserve(count).map_err(|_| Failure::Resource)?;
         for resource in resources {
+            let store = self.is_store(resource.boundary.frame);
             let Frame::Resource { code, context, .. } = resource.boundary.frame else {
                 return Err(Failure::Invalid);
             };
@@ -6148,6 +6212,19 @@ impl<'a> Analysis<'a> {
                     crate::core::effect::clone_effect_instance_with_budget(effect, budget)
                         .map_err(|_| Failure::Resource)?,
                 );
+                if store {
+                    let api = crate::resolved::StoreApi::for_module(effect.effect().module())
+                        .filter(|api| effect.effect() == api.probe())
+                        .ok_or(Failure::Invalid)?;
+                    let [crate::types::KindedArgument::TypeArg(owner)] = effect.arguments() else {
+                        return Err(Failure::Invalid);
+                    };
+                    charge(budget, 1)?;
+                    retained.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    let owner =
+                        clone_type_with_budget(owner, budget).map_err(|_| Failure::Resource)?;
+                    retained.push(EffectInstance::new(api.drive(), Box::new([owner])));
+                }
             }
         }
         charge(budget, requests.len())?;
@@ -6306,6 +6383,19 @@ impl<'a> Analysis<'a> {
                 edges.push(edge);
                 pending.try_reserve(1).map_err(|_| Failure::Resource)?;
                 pending.push(edge.next);
+            }
+        }
+        #[cfg(test)]
+        if self.focusing && !self.inspecting {
+            let mut focused = edges.iter().filter_map(|edge| {
+                matches!(edge.frame, Frame::Resource { focused: true, .. }).then_some(edge.address)
+            });
+            if let Some(first) = focused.next()
+                && let Some(drain) = &mut target.drain
+            {
+                drain.witness.closing_store = (matches!(first, Address::Slot { old: false, .. })
+                    && focused.all(|address| address == first))
+                .then_some(first);
             }
         }
         target.stack = target.copy_segment(
@@ -6511,10 +6601,14 @@ impl<'a> Analysis<'a> {
                 && matches!(owner.frame, Frame::Resource { focused: true, .. })
                 && let Some(drain) = &mut next.drain
             {
+                #[cfg(test)]
+                if drain.witness.progress == 4 && drain.work == DrainWork::ActiveOnly {
+                    drain.witness.late_retain_after_drain = true;
+                }
                 drain.changed(DrainWork::Pending, budget)?;
                 #[cfg(test)]
                 {
-                    drain.witness.0 = 1;
+                    drain.witness.progress = 1;
                 }
             }
             // Replacing this occurrence does not mutate an older activation

@@ -5412,6 +5412,74 @@ mod tests {
         );
     }
 
+    fn retained_drain_outer_discard_check(source: &str, accepted: bool, late_retain: bool) {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+
+        let core = retained_drain_fixture(source);
+        let mut work = TypeWorkBudget::unbounded();
+        control::reset_drain_witness();
+        let result = check_nodes_with_release(&core.nodes, &[], &[], operation, &mut work);
+        eprintln!("outer discard: work={}, result={result:?}", work.used());
+        if accepted {
+            assert!(result.is_ok(), "{result:?}");
+            assert!(
+                control::drain_discard_close_witnessed(false),
+                "no drain and completed cleanup reached the discarded Store close"
+            );
+        } else {
+            assert!(
+                matches!(result, Err(Failure::RetainedRelease)),
+                "{result:?}"
+            );
+            assert!(
+                control::drain_discard_close_witnessed(true),
+                "retained work was not observed at the discarded Store close"
+            );
+            if late_retain {
+                assert!(
+                    control::drain_discard_late_retain_witnessed(),
+                    "no new retain followed the completed drain before the discarded Store close"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn retained_drain_outer_discard_drains_before_close() {
+        retained_drain_outer_discard_check(
+            include_str!("../../tests/fixtures/retained-drain/outer-discard.ash"),
+            true,
+            false,
+        );
+    }
+
+    #[test]
+    fn retained_drain_outer_discard_without_drain_is_refused() {
+        let source = include_str!("../../tests/fixtures/retained-drain/outer-discard.ash");
+        let marker = "let release_step = drain (store, key)";
+        assert_eq!(source.matches(marker).count(), 1);
+        retained_drain_outer_discard_check(
+            &source.replace(marker, "let release_step = ()"),
+            false,
+            false,
+        );
+    }
+
+    #[test]
+    fn retained_drain_outer_discard_retain_after_drain_is_refused() {
+        let source = include_str!("../../tests/fixtures/retained-drain/outer-discard.ash");
+        let marker = "let late_step = ()";
+        assert_eq!(source.matches(marker).count(), 1);
+        let late = "let late_step = handle {\n                            let paused = perform Checkpoint<N>.checkpoint ()\n                            finished\n                        } with Checkpoint<N> using store {\n                            checkpoint ignored => {\n                                let late_key = retain\n                                finished\n                            }\n                        }";
+        retained_drain_outer_discard_check(&source.replace(marker, late), false, true);
+    }
+
     #[test]
     fn retained_drain_mutual_linked_prefix_and_query_share_the_work_budget() {
         use super::super::effect::EffectExprKind;
