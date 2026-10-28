@@ -117,3 +117,29 @@ fn gas_safe_points_commit_accounting_before_the_selected_yield() {
 
     assert_eq!(observation.value_display(), "(42, 123456)");
 }
+
+#[test]
+fn checkpoints_before_and_after_resume_keep_the_inner_clause() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let observation = run_path(RunConfiguration {
+        entry: root.join("tests/fixtures/scheduling/resume.ash"),
+        roots: ModuleRoots::new([("ash", root.join("libraries"))])
+            .expect("the shipped library root is valid"),
+    })
+    .expect("both sides of the inner resume survive suspension");
+
+    assert_eq!(observation.value_display(), "123415678");
+}
+
+#[test]
+fn repeatedly_suspended_cleanup_returns_the_saved_result_after_other_work() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let observation = run_path(RunConfiguration {
+        entry: root.join("tests/fixtures/scheduling/suspended-cleanup.ash"),
+        roots: ModuleRoots::new([("ash", root.join("libraries"))])
+            .expect("the shipped library root is valid"),
+    })
+    .expect("the cleanup and its saved result survive suspension");
+
+    assert_eq!(observation.value_display(), "(42, 1234156178)");
+}

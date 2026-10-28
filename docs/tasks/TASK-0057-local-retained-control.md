@@ -99,9 +99,12 @@ variant remains a conservative release refusal. Calls now defer control entry
 until their strict arguments have value alternatives, preserving the existing
 delivery prefix for value-revision replay. The gas example writes its accounting
 before each explicit guard: the false guard continues, and the true guard
-yields so Q can observe the committed value before P resumes. Suspended cleanup
-and checkpoints around resume remain.
-C4, C5 and the final integrated and Main gates remain open.
+yields so Q can observe the committed value before P resumes. Two further public
+cases checkpoint on both sides of an inner resume and suspend a running cleanup
+twice while Q completes. Their event order checks the returned keys and a single
+cleanup invocation; the cleanup's saved body result reaches its current
+consumer. The complete C4 candidate awaits independent review and its workspace
+checkpoint. C4, C5 and the final integrated and Main gates remain open.
 
 ## Verification
 
