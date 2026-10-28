@@ -3,9 +3,10 @@
 `scheduling.ash` is an ordinary Ash module for the retained-control store. Use
 `--root ash=libraries` and import `@ash.scheduling` to select a suspended branch
 and drain it. `finish` follows returned keys until that branch finishes or the
-selected key is absent. `drain` returns only when the store's authenticated
-Probe reports quiescence; it follows a newly returned key when the branch yields
-again. If other work remains without an available key, it need not terminate.
+selected key is absent. `drain` returns on a true Probe reply and follows a
+newly returned key when the branch yields again. A source handler can intercept
+the request; only a fresh reply from the selected Store can establish quiescence
+for release. If other work remains without an available key, it need not terminate.
 Neither operation adds cancellation, fairness or a termination guarantee.
 
 The module uses the accepted retained-control change on the M3 milestone; the

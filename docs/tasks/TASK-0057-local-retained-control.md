@@ -90,8 +90,10 @@ C4 is developing ordinary scheduling policy in
 [`libraries/scheduling.ash`](../../libraries/scheduling.ash). The first named-root
 coroutine case selects P while Q remains retained, observes R's continuation,
 and drains Q before the store closes. Its public-driver result records P's
-answer and the event order. Cooperative queues, repeated yielding, suspended
-cleanup, checkpoints around resume, gas guards and lost-key refusal remain.
+answer and the event order. A second case yields repeatedly during drain; its
+event order requires each new key to resume the next suffix and complete the
+branch. Cooperative queues, suspended cleanup, checkpoints around resume, gas
+guards and lost-key refusal remain.
 C4, C5 and the final integrated and Main gates remain open.
 
 ## Verification
