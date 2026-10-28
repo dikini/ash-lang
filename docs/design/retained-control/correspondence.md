@@ -1,8 +1,8 @@
 # C1 model correspondence and limits
 
 This map is part of the [DN-0056 proof assignment](../DN-0056-scoped-continuation-retention-and-library-scheduling.md#c1-bounded-ownership-and-completion-proof-assignment).
-[CP-0026](../../proposals/CP-0026-scoped-owned-continuation-storage.md) records
-the accepted transition implemented on the M3 milestone. The model is evidence
+The historical [CP-0026](https://github.com/dikini/ash-lang/blob/ea2a7ffadefb0f485a9c8e0009975a47db5c6865/docs/proposals/CP-0026-scoped-owned-continuation-storage.md)
+records the transition implemented on the M3 milestone. The model is evidence
 for its selected transitions, not a proof of the compiler or evaluator.
 
 ## Representation and assumptions
