@@ -107,13 +107,11 @@ drain argument is paper evidence, not a checked analysis or implementation.
 
 ## Deviations
 
-The reserved `retain` keyword requires renaming the existing recursion
-examples in [syntax](../../spec/syntax.md),
+The recursion examples in [syntax](../../spec/syntax.md),
 [name resolution](../../spec/name-resolution.md),
 [dynamic semantics](../../spec/dynamic-semantics.md), and the
-[tool guide](../tools/ash.md) when C5 updates current documentation. The
-executable recursion fixtures and their embedded mirrors are renamed with the
-parser change.
+[tool guide](../tools/ash.md) now use `saved` in place of the reserved
+`retain` keyword. Their executable fixtures use the same name.
 
 Return any semantic or proof gap to CP-0026 and DN-0056 before product
 delivery; keep original issue criteria open until their full scopes are retained
