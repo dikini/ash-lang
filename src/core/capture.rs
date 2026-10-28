@@ -4684,11 +4684,22 @@ mod tests {
         CapturedSupport,
         PreexistingSlot,
         SelfCapture,
+        ShortLivedRegion,
+        ShortLivedRegionAggregate,
+        OuterRegionBacking,
+        CapturedRegionBacking,
     }
 
     pub(super) fn retained_context_core(
         fixture: RetainedContextFixture,
     ) -> Result<super::super::UnvalidatedEffectProgram, crate::elaborate::TypeError> {
+        retained_context_fixture(fixture).map(|(core, _)| core)
+    }
+
+    fn retained_context_fixture(
+        fixture: RetainedContextFixture,
+    ) -> Result<(super::super::UnvalidatedEffectProgram, Option<usize>), crate::elaborate::TypeError>
+    {
         use crate::{
             elaborate::{EffectElaborator, check_module, link_modules},
             evidence_validation::validate_interface_evidence,
@@ -4803,7 +4814,55 @@ mod tests {
             "resource Control.Store<N,(Unit -> Step<N> ! {{{row}}})> store = () {{\n\
              let step = {branch}\n{consume}\n}}"
         );
-        let program = if inner_cell {
+        let program = if matches!(
+            fixture,
+            RetainedContextFixture::ShortLivedRegion
+                | RetainedContextFixture::ShortLivedRegionAggregate
+                | RetainedContextFixture::OuterRegionBacking
+                | RetainedContextFixture::CapturedRegionBacking
+        ) {
+            let action = if matches!(fixture, RetainedContextFixture::OuterRegionBacking) {
+                "let action : Unit -> Int = using outer {\n\
+                 let function : Unit -> Int = fn(ignored) {\n41\n}\n\
+                 function\n}\n"
+            } else if matches!(fixture, RetainedContextFixture::ShortLivedRegionAggregate) {
+                "let action : Unit -> Int = fn(ignored) {\n41\n}\n\
+                 let saved = using outer {\n(action, ())\n}\n"
+            } else {
+                "let action : Unit -> Int = fn(ignored) {\n41\n}\n"
+            };
+            let result = if matches!(fixture, RetainedContextFixture::ShortLivedRegionAggregate) {
+                "match saved {\n(function, ignored) => using outer {\nDone(function ())\n}\n}\n"
+            } else {
+                "using outer {\nDone(action ())\n}\n"
+            };
+            let body = format!(
+                "let _ = perform Checkpoint<N>.checkpoint ()\n\
+                 let _ = perform Marker.emit ()\n{result}"
+            );
+            let clause = "checkpoint ignored => {\n\
+                          let key = retain\n\
+                          using outer {\nPending(key)\n}\n}\n";
+            let step = if matches!(fixture, RetainedContextFixture::CapturedRegionBacking) {
+                format!(
+                    "handle {{\nregion<I> inner {{\n{action}{body}}}\n}} \
+                     with Checkpoint<N> using store {{\n{clause}}}"
+                )
+            } else {
+                format!(
+                    "region<I> inner {{\n{action}handle {{\n{body}}} \
+                     with Checkpoint<N> using store {{\n{clause}}}\n}}"
+                )
+            };
+            format!(
+                "region<O> outer {{\n\
+                 resource Control.Store<N,(Unit -> Step<N> ! {{Control.Drive<N>,Marker}})> store = () {{\n\
+                 let step = {step}\n\
+                 {consume}\n\
+                 }}\n\
+                 }}"
+            )
+        } else if inner_cell {
             store
         } else {
             format!("resource cell<R> c = 41 {{\n{store}\n}}")
@@ -4838,7 +4897,39 @@ mod tests {
             .synthesize_effect_module_program(&linked)
             .unwrap()
             .node;
-        Ok(elaborator.finish(root).unwrap())
+        let core = elaborator.finish(root).unwrap();
+        let pre_release_work = if matches!(
+            fixture,
+            RetainedContextFixture::OuterRegionBacking
+                | RetainedContextFixture::CapturedRegionBacking
+        ) {
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let module_sources = graph
+                .modules()
+                .iter()
+                .map(|module| (module.id(), module.source().id()))
+                .collect::<Vec<_>>();
+            let mut work = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
+            let error = crate::core::check_ordinary_effect_modules_with_budget_for_test(
+                &core,
+                &sources,
+                &module_sources,
+                &mut work,
+            )
+            .expect_err("the separate drain proof still gates Store release");
+            assert_eq!(
+                error.reason(),
+                crate::core::ValidationReason::RetainedRelease
+            );
+            Some(work.used())
+        } else {
+            None
+        };
+        Ok((core, pre_release_work))
     }
 
     #[test]
@@ -4938,6 +5029,68 @@ mod tests {
             ),
             Err(other) => panic!("expected a self-capture rejection, got {other:?}"),
             Ok(_) => panic!("a Store cannot own a continuation that captures its handle"),
+        }
+    }
+
+    #[test]
+    fn retained_capture_requires_region_backing_to_survive_the_store() {
+        for fixture in [
+            RetainedContextFixture::ShortLivedRegion,
+            RetainedContextFixture::ShortLivedRegionAggregate,
+        ] {
+            match retained_context_core(fixture) {
+                Err(crate::elaborate::TypeError::Source(diagnostic)) => assert_eq!(
+                    diagnostic.reason,
+                    crate::elaborate::TypeReason::ResourceEscape,
+                ),
+                Err(other) => panic!("expected a region-support rejection, got {other:?}"),
+                Ok(_) => panic!("a retained closure cannot outlive its backing region"),
+            }
+        }
+    }
+
+    #[test]
+    fn retained_capture_allows_enclosing_and_owned_region_backing() {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+        for fixture in [
+            RetainedContextFixture::OuterRegionBacking,
+            RetainedContextFixture::CapturedRegionBacking,
+        ] {
+            let (core, pre_release_work) = retained_context_fixture(fixture)
+                .expect("the backing region encloses the Store or moves with the captured work");
+            let mut budget = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
+            check_nodes(&core.nodes, &[], &[], operation, &mut budget)
+                .expect("linked control must reconstruct region backing");
+            let used = budget.used();
+            let prefix = pre_release_work.expect("the ordinary Core prefix was checked");
+            let limit = 3 * crate::types::TYPE_WORK_LIMIT;
+            eprintln!(
+                "retained region Core work: prefix={prefix}, capture={used}, subtotal={}",
+                prefix + used
+            );
+            let mut remaining = TypeWorkBudget::with_limit(limit - prefix);
+            check_nodes(&core.nodes, &[], &[], operation, &mut remaining)
+                .expect("the Core prefix and capture proof must fit the shared budget");
+            if matches!(fixture, RetainedContextFixture::CapturedRegionBacking) {
+                let mut exact = TypeWorkBudget::with_limit(used);
+                check_nodes(&core.nodes, &[], &[], operation, &mut exact)
+                    .expect("the measured budget must admit the same capture proof");
+                assert_eq!(exact.used(), used);
+                let mut short = TypeWorkBudget::with_limit(used - 1);
+                assert!(matches!(
+                    check_nodes(&core.nodes, &[], &[], operation, &mut short),
+                    Err(Failure::Resource)
+                ));
+                let mut retry = TypeWorkBudget::with_limit(used);
+                check_nodes(&core.nodes, &[], &[], operation, &mut retry)
+                    .expect("a fresh exact-budget retry must succeed");
+            }
         }
     }
 

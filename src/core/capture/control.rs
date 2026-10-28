@@ -3554,10 +3554,14 @@ impl<'a> Analysis<'a> {
                     value_context: next.value_context,
                     focused: false,
                 };
-                if self.is_store(frame) {
-                    // A retained cut can capture the Store without its final
-                    // body result depending on the handle. Check every Store
-                    // occurrence actually entered by control.
+                let region = matches!(&self.graph.code[code], Control::Resource { effect, .. }
+                    if effect.effect.as_ref().is_some_and(|instance|
+                        crate::resolved::RegionApi::for_module(instance.effect().module())
+                            .is_some_and(|api| instance.effect() == api.default_alloc())));
+                if self.is_store(frame) || (self.has_retained_root && region) {
+                    // A retained cut can depend on an owner without the
+                    // final body result carrying it. Check these Store and
+                    // region occurrences actually entered by control.
                     let owner = self.data.as_ref().ok_or(Failure::Invalid)?.resource_key(
                         code,
                         next.value_context,
