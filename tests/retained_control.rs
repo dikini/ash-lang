@@ -131,6 +131,25 @@ fn fresh_store_answer_resolves_but_unproved_close_is_rejected() {
 }
 
 #[test]
+fn retained_fresh_answer_needs_its_actual_allocator_handler() {
+    let source = include_str!("fixtures/retained-drain/fresh-answer.ash");
+    let failure = support::run_module("owned-answer-allocator.ash", source)
+        .expect_err("the owned handler passes source checks but public release remains closed");
+    assert_eq!(failure.reason_code(), "core.validation.retained-release");
+
+    let owned = "                using outer {\n                    let _ = perform Checkpoint<N>.checkpoint ()\n                    Done\n                }";
+    let external =
+        "                let _ = perform Checkpoint<N>.checkpoint ()\n                Done";
+    assert_eq!(source.matches(owned).count(), 1);
+    let failure = support::run_module(
+        "external-answer-allocator.ash",
+        &source.replace(owned, external),
+    )
+    .expect_err("the cleanup forwarder changes the external allocator handler");
+    assert_eq!(failure.reason_code(), "effect.retained-interpretation");
+}
+
+#[test]
 fn store_descriptor_requires_a_unit_domain_function() {
     for descriptor in ["Int", "(Int -> Int)"] {
         let source = format!(

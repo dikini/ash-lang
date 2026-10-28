@@ -51,13 +51,22 @@ An ordinary Probe can be intercepted by a source handler; internal checks
 exercise its driver restriction and actual Store-provider selection. Image
 codecs preserve Store/Root/Retain carriers and generic Continue round-trips,
 while public Store release remains rejected. C3 is developing the normal-return
-analysis and its bounded proof on `codex/m3-c3-drain`. Its current conservative
-case tracking can reject a safe program that matches an earlier branch result
-after another checkpoint. A cleanup fixture that constructs its answer inside
-the captured branch still fails the interpreter check; that refusal has not
-been resolved. A cleanup-drain fixture's linked validation prefix and focused
-query use 1,054,674 work units against the current 983,040 limit, before later
-validation; the connected gate must address that budget gap.
+analysis and its bounded proof on `codex/m3-c3-drain` in
+[draft PR #162](https://github.com/dikini/ash-lang/pull/162). Focused checks
+exercise a drain before outer-discard close, and reject both a missing drain and
+new retained work after a drain. A branch that constructs a fresh answer under
+an allocator handler owned by its capture also passes the focused query. When
+the allocator handler is outside the capture, the cleanup's distinct forwarding
+handler changes the selected interpretation and admission rejects it under the
+accepted contract. Source execution and public release remain gated. The
+current conservative case tracking can reject a safe program that matches an
+earlier branch result after another checkpoint.
+
+A cleanup-drain fixture's linked validation prefix and focused query use
+1,054,674 work units against the current 983,040 limit, before later validation.
+The outer-discard positive uses 1,282,582 units for the focused query alone.
+Both measurements used an unbounded test budget; the connected gate must
+address the budget gap with the complete pipeline measured.
 C2–C5 and the connected full-workspace and Main gates remain open.
 
 ## Verification

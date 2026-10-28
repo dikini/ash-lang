@@ -5412,6 +5412,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn retained_drain_cleanup_restores_an_owned_fresh_answer_handler() {
+        use super::super::effect::EffectExprKind;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+
+        let core = retained_drain_fixture(include_str!(
+            "../../tests/fixtures/retained-drain/fresh-answer.ash"
+        ));
+        let mut work = TypeWorkBudget::unbounded();
+        control::reset_drain_witness();
+        let result = check_nodes_with_release(&core.nodes, &[], &[], operation, &mut work);
+        eprintln!(
+            "owned fresh answer: work={}, result={result:?}",
+            work.used()
+        );
+        result.expect("the owned allocator and cleanup must reach a drained Store close");
+        assert!(
+            control::drain_witnessed(),
+            "the fresh answer must follow a real retained restoration before Store close"
+        );
+    }
+
     fn retained_drain_outer_discard_check(source: &str, accepted: bool, late_retain: bool) {
         use super::super::effect::EffectExprKind;
         fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
