@@ -4683,6 +4683,7 @@ mod tests {
         InnerUnused,
         CapturedSupport,
         PreexistingSlot,
+        SelfCapture,
     }
 
     pub(super) fn retained_context_core(
@@ -4725,10 +4726,13 @@ mod tests {
                 | RetainedContextFixture::InnerUnused
                 | RetainedContextFixture::CapturedSupport
                 | RetainedContextFixture::PreexistingSlot
+                | RetainedContextFixture::SelfCapture
         );
         let (row, read) = if matches!(
             fixture,
-            RetainedContextFixture::InnerUnused | RetainedContextFixture::PreexistingSlot
+            RetainedContextFixture::InnerUnused
+                | RetainedContextFixture::PreexistingSlot
+                | RetainedContextFixture::SelfCapture
         ) {
             ("Control.Drive<N>,Marker", "41")
         } else if matches!(fixture, RetainedContextFixture::CapturedSupport) {
@@ -4748,12 +4752,19 @@ mod tests {
         };
         let prefix = if matches!(fixture, RetainedContextFixture::ShortLivedAlias) {
             "let saved = c\n"
+        } else if matches!(fixture, RetainedContextFixture::SelfCapture) {
+            "let saved = store\n"
+        } else {
+            ""
+        };
+        let suffix = if matches!(fixture, RetainedContextFixture::SelfCapture) {
+            "let _ = saved\n"
         } else {
             ""
         };
         let body = format!(
             "{prefix}let _ = perform Checkpoint<N>.checkpoint ()\n\
-             let _ = perform Marker.emit ()\nDone({read})"
+             {suffix}let _ = perform Marker.emit ()\nDone({read})"
         );
         let body = if matches!(fixture, RetainedContextFixture::CapturedSupport) {
             format!("resource cell<R> c = 41 {{\n{body}\n}}")
@@ -4767,7 +4778,9 @@ mod tests {
         let branch = if inner_cell
             && !matches!(
                 fixture,
-                RetainedContextFixture::CapturedSupport | RetainedContextFixture::PreexistingSlot
+                RetainedContextFixture::CapturedSupport
+                    | RetainedContextFixture::PreexistingSlot
+                    | RetainedContextFixture::SelfCapture
             ) {
             format!("resource cell<R> c = 41 {{\n{branch}\n}}")
         } else {
@@ -4914,6 +4927,18 @@ mod tests {
         let mut budget = TypeWorkBudget::with_limit(3 * crate::types::TYPE_WORK_LIMIT);
         check_nodes(&core.nodes, &[], &[], operation, &mut budget)
             .expect("focused replay restores the slot to its current consumer");
+    }
+
+    #[test]
+    fn retained_capture_rejects_an_actual_store_handle_in_its_saved_values() {
+        match retained_context_core(RetainedContextFixture::SelfCapture) {
+            Err(crate::elaborate::TypeError::Source(diagnostic)) => assert_eq!(
+                diagnostic.reason,
+                crate::elaborate::TypeReason::ResourceEscape,
+            ),
+            Err(other) => panic!("expected a self-capture rejection, got {other:?}"),
+            Ok(_) => panic!("a Store cannot own a continuation that captures its handle"),
+        }
     }
 
     fn checked_core() -> (

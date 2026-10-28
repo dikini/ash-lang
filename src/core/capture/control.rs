@@ -1430,6 +1430,7 @@ struct CellRetention {
 
 struct RetainedSupport {
     target: (usize, usize),
+    store_owner: bool,
     inputs: super::value::SavedInputs,
     source: Span,
     acquisition: Span,
@@ -3169,32 +3170,32 @@ impl<'a> Analysis<'a> {
         let [store_edge] = store_edges else {
             return Err(Failure::Invalid);
         };
-        // N's ordinary type and locator dependencies are not Store ownership.
-        // The separate self-capture admission remains a distinct obligation.
-        if matches!(store_edge.frame, Frame::Resource { focused: true, .. }) {
-            return Ok(());
-        }
+        // N's type and locator dependencies do not own its Store. Actual
+        // Store handles still need to be absent from this captured cut.
+        let store_owner = matches!(store_edge.frame, Frame::Resource { focused: true, .. });
         let select_focus = |frame| {
             let found = matches!(frame, Frame::Resource { focused: true, .. });
             Ok((found, !found))
         };
-        for root in [capture, baseline] {
-            let (selected, escaped) = selections(state, root, select_focus, budget)?;
-            if !selected.is_empty() {
-                if !escaped
-                    && selected.len() == 1
-                    && matches!(
-                        selected[0].boundary.address,
-                        Address::Slot { old: false, .. }
-                    )
-                {
-                    // The owner either moves with this cut or encloses N.
-                    return Ok(());
+        if !store_owner {
+            for root in [capture, baseline] {
+                let (selected, escaped) = selections(state, root, select_focus, budget)?;
+                if !selected.is_empty() {
+                    if !escaped
+                        && selected.len() == 1
+                        && matches!(
+                            selected[0].boundary.address,
+                            Address::Slot { old: false, .. }
+                        )
+                    {
+                        // The owner either moves with this cut or encloses N.
+                        return Ok(());
+                    }
+                    return Err(Failure::Invalid);
                 }
-                return Err(Failure::Invalid);
-            }
-            if !escaped {
-                return Err(Failure::Invalid);
+                if !escaped {
+                    return Err(Failure::Invalid);
+                }
             }
         }
 
@@ -3369,6 +3370,7 @@ impl<'a> Analysis<'a> {
             .map_err(|_| Failure::Resource)?;
         self.retained_support.push(RetainedSupport {
             target,
+            store_owner,
             inputs,
             source,
             acquisition,
@@ -3383,6 +3385,7 @@ impl<'a> Analysis<'a> {
             charge(budget, 1)?;
             data.check_retained_support(
                 support.target,
+                support.store_owner,
                 &support.inputs,
                 support.source,
                 support.acquisition,
@@ -3545,6 +3548,27 @@ impl<'a> Analysis<'a> {
         } else if matches!(self.graph.code[code], Control::Resource { .. }) {
             self.initialize_cell(&mut next, code, budget)?;
             if !self.focusing {
+                let frame = Frame::Resource {
+                    code,
+                    context: next.context,
+                    value_context: next.value_context,
+                    focused: false,
+                };
+                if self.is_store(frame) {
+                    // A retained cut can capture the Store without its final
+                    // body result depending on the handle. Check every Store
+                    // occurrence actually entered by control.
+                    let owner = self.data.as_ref().ok_or(Failure::Invalid)?.resource_key(
+                        code,
+                        next.value_context,
+                        budget,
+                    )?;
+                    charge(budget, 1)?;
+                    self.candidates
+                        .try_reserve(1)
+                        .map_err(|_| Failure::Resource)?;
+                    self.candidates.insert(owner);
+                }
                 charge(budget, 1)?;
                 self.entries.try_reserve(1).map_err(|_| Failure::Resource)?;
                 self.entries.push(next.copy(budget)?);
