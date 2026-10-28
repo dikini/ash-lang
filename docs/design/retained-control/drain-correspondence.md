@@ -31,9 +31,13 @@ processes its pending queue. After the queue empties, it closes the value graph.
 If the graph revision grew, it directly requeues recorded call States and
 explicit-owner/retained request States, bypassing `visited` suppression. A
 call's delivered prefix is published only after its new successor and value
-work succeeds. New Store/key operands remain unresolved until their replay
-succeeds; any still unresolved after both queues stabilize fails. A work or
-allocation refusal returns failure, not a partial release result.
+work succeeds. A call waits for a value alternative at every strict argument
+port before delivering any callee or opaque-return successor, as the value
+transfer already does. An absent argument keeps the earlier prefix for replay;
+an unknown argument remains an alternative. New Store/key operands remain
+unresolved until their replay succeeds; any still unresolved after both
+queues stabilize fails. A work or allocation refusal returns failure, not a
+partial release result.
 
 This replay list does not omit a value-dependent Change to a prior Choice or
 Bind: `case_of` reads the borrowed immutable graph and a path-local facts map,

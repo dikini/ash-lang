@@ -4488,18 +4488,41 @@ impl<'a> Analysis<'a> {
         let port = self.port(code, context, budget)?;
         self.close(budget)?;
         let (expression, _) = self.slots[port].key;
-        let Expr::Call { function, .. } = self.graph.expressions[expression] else {
+        let graph = self.graph;
+        let Expr::Call {
+            function,
+            arguments,
+            ..
+        } = &graph.expressions[expression]
+        else {
             return Err(Failure::Invalid);
         };
-        let function = self.slot(function, context, budget)?;
+        let function = self.slot(*function, context, budget)?;
         // Snapshot BEFORE successor processing can install further live routes.
         // Phase dispatch and the retained endpoint read are bounded scalar work.
         charge(budget, 2)?;
-        let end = self.slots[function].atoms.len();
         let (start, mut opaque) = match delivered {
             Some(prefix) => (prefix.end, prefix.opaque),
             None => (0, 0),
         };
+        let mut ready = true;
+        for &argument in arguments {
+            let argument = self.slot(argument, context, budget)?;
+            ready &= !self.slots[argument].atoms.is_empty();
+        }
+        if !ready {
+            // Strict application cannot enter its callee until every actual
+            // argument has a value. Keep the prior prefix for revision replay.
+            return Ok((
+                CallSuccessors {
+                    targets: Vec::new(),
+                    unknown: false,
+                    returns: false,
+                },
+                PendingCallPrefix(DeliveredCallPrefix { end: start, opaque }),
+            ));
+        }
+        let end = self.slots[function].atoms.len();
         let mut targets = Vec::new();
         for atom in copy_slice(&self.slots[function].atoms[start..end], budget)? {
             match atom {
@@ -7937,6 +7960,46 @@ mod tests {
             Err(Failure::Invalid)
         ));
         assert!(malformed.callable_transfers.is_empty());
+    }
+
+    #[test]
+    fn control_call_waits_for_its_strict_argument_before_delivering_targets() {
+        let mut graph = call_transfer_graph();
+        graph.positions.insert(6, 6);
+        graph.targets.insert(5, 50);
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+        let function = analysis.slot(0, 0, &mut work).unwrap();
+        analysis
+            .atom(function, Atom::Closure(5, 0), &mut work)
+            .unwrap();
+        analysis.atom(function, Atom::Unknown, &mut work).unwrap();
+        let argument = analysis.slot(1, 0, &mut work).unwrap();
+        let capture = analysis.slot(3, 0, &mut work).unwrap();
+        analysis.atom(capture, Atom::Free, &mut work).unwrap();
+
+        let (blocked, publication) = analysis.calls_after(6, 0, None, &mut work).unwrap();
+        assert!(blocked.targets.is_empty());
+        assert!(!blocked.unknown && !blocked.returns);
+        let delivered = publication.publish(&mut work).unwrap();
+        assert_eq!(delivered.end, 0);
+        assert_eq!(delivered.opaque, 0);
+
+        let revision = analysis.revision();
+        analysis.atom(argument, Atom::Free, &mut work).unwrap();
+        assert!(analysis.revision() > revision);
+        let (ready, publication) = analysis
+            .calls_after(6, 0, Some(&delivered), &mut work)
+            .unwrap();
+        assert_eq!(ready.targets.len(), 1);
+        assert_eq!(ready.targets[0].0, 50);
+        assert!(ready.unknown && !ready.returns);
+        let delivered = publication.publish(&mut work).unwrap();
+        let (replayed, _) = analysis
+            .calls_after(6, 0, Some(&delivered), &mut work)
+            .unwrap();
+        assert!(replayed.targets.is_empty());
+        assert!(replayed.unknown && !replayed.returns);
     }
 
     #[test]

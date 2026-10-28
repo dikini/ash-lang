@@ -9,6 +9,14 @@ the request; only a fresh reply from the selected Store can establish quiescence
 for release. If other work remains without an available key, it need not terminate.
 Neither operation adds cancellation, fairness or a termination guarantee.
 
+`ReadyQueue`, `enqueue`, `turn` and `run_ready` provide a cooperative FIFO
+policy. A turn removes the first key and appends the new key if that branch
+yields again. The driver returns on a true Probe reply; an empty queue alone
+does not establish that the Store is quiescent. The examples place an allocator
+handler outside the Store. The current release analysis conservatively refuses
+the empty-queue example when its only allocator is the host default; an
+enclosing `region` and `using` supplies the supported context.
+
 The module uses the accepted retained-control change on the M3 milestone; the
 current Main specification remains subject to the final C5 update.
 

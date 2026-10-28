@@ -92,8 +92,13 @@ coroutine case selects P while Q remains retained, observes R's continuation,
 and drains Q before the store closes. Its public-driver result records P's
 answer and the event order. A second case yields repeatedly during drain; its
 event order requires each new key to resume the next suffix and complete the
-branch. Cooperative queues, suspended cleanup, checkpoints around resume, gas
-guards and lost-key refusal remain.
+branch. The cooperative queue requeues each fresh key behind the other ready
+work, and a lost-key fixture reaches the retained-release refusal. An empty
+queue runs with an allocator handler enclosing the Store. The host-default-only
+variant remains a conservative release refusal. Calls now defer control entry
+until their strict arguments have value alternatives, preserving the existing
+delivery prefix for value-revision replay. Suspended cleanup, checkpoints
+around resume and gas guards remain.
 C4, C5 and the final integrated and Main gates remain open.
 
 ## Verification
@@ -101,11 +106,13 @@ C4, C5 and the final integrated and Main gates remain open.
 Use focused positive, negative and regression checks for each changed behavior
 and affected callers. The model and C3 analysis each require a reviewed frozen
 scoped [AD-0012](../decisions/AD-0012-proof-development-feedback-and-build-reuse.md)
-gate. The connected C2/C3 workspace checkpoint is complete. The next full Cargo
-checkpoint is the final integrated C5 gate, owned by the product developer; it
-may serve as the pre-Main gate only while inputs remain equal. Record
-exact refs, source/configuration/tool pins and receipts; transfer evidence only
-with demonstrated equality. Main merge remains a separate human gate.
+gate. The connected C2/C3 workspace checkpoint is complete. Because C4 changes
+shared capture analysis, the product developer owns a fresh seven-stage Cargo
+checkpoint for the complete C4 candidate before its integration. The final
+integrated C5 checkpoint remains required and may serve as the pre-Main gate
+only while inputs remain equal. Record exact refs, source/configuration/tool
+pins and receipts; transfer evidence only with demonstrated equality. Main
+merge remains a separate human gate.
 
 ## Discoveries
 
