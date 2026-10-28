@@ -13,6 +13,7 @@ fn live_capture() -> CapturedContinuation {
         frames: vec![
             saved(77),
             Frame::ClauseBoundary {
+                retained: None,
                 handler: HandlerId::new(1),
                 owner: ResumeId::new(1),
                 continuation: Some(CapturedContinuation {
@@ -22,6 +23,7 @@ fn live_capture() -> CapturedContinuation {
                 completion_count: 1,
             },
             Frame::ClauseBoundary {
+                retained: None,
                 handler: HandlerId::new(2),
                 owner: ResumeId::new(2),
                 continuation: None,
@@ -164,6 +166,7 @@ fn retained_adapter_uses_the_current_consumer_region_after_restoration() {
             records: Vec::new(),
         });
         machine.frames.push(Frame::HandlerBoundary {
+            retained: None,
             node: handler,
             environment: environment.clone(),
             registration: None,
@@ -259,6 +262,548 @@ fn retained_adapter_uses_the_current_consumer_region_after_restoration() {
     );
 }
 
+fn checkpoint_fixture() -> (ValidatedEffectProgram, NodeId, NodeId, NodeId) {
+    let program = super::tests::effect_program(concat!(
+        "effect Checkpoint {\nwait : Unit -> Unit\n}\n",
+        "main : Unit -> Unit\n",
+        "main () = handle (perform Checkpoint.wait ()) with Checkpoint {\n",
+        "wait ignored => resume ()\n}\n",
+    ));
+    let mut pending = vec![program.root()];
+    let mut seen = std::collections::HashSet::new();
+    let mut handler_node = None;
+    let mut request_node = None;
+    let mut resumes = Vec::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let node = program.node(id).unwrap();
+        match &node.kind {
+            EffectExprKind::Operation(EffectOperation::Handler(handler))
+                if program
+                    .registry()
+                    .effect(handler.effect().effect())
+                    .is_some_and(|effect| effect.spelling == "Checkpoint") =>
+            {
+                handler_node = Some(id)
+            }
+            EffectExprKind::Operation(EffectOperation::Request(request))
+                if program
+                    .registry()
+                    .effect(request.effect().effect())
+                    .is_some_and(|effect| effect.spelling == "Checkpoint") =>
+            {
+                request_node = Some(id)
+            }
+            EffectExprKind::Operation(EffectOperation::Resume(_)) => resumes.push(id),
+            _ => {}
+        }
+        pending.extend((0..node.kind.child_count()).filter_map(|i| node.kind.child_at(i)));
+    }
+    let (handler_node, request_node) = (handler_node.unwrap(), request_node.unwrap());
+    let EffectExprKind::Operation(EffectOperation::Handler(handler)) =
+        &program.node(handler_node).unwrap().kind
+    else {
+        unreachable!()
+    };
+    let resume = resumes.into_iter().find(|id| matches!(&program.node(*id).unwrap().kind,
+        EffectExprKind::Operation(EffectOperation::Resume(resume)) if resume.handler() == handler.id())).unwrap();
+    (program, handler_node, request_node, resume)
+}
+
+#[test]
+fn retained_root_moves_only_the_nearest_associated_clause_owner() {
+    let (program, handler_node, request_node, _) = checkpoint_fixture();
+    let mut machine = Machine::new_effect(&program);
+    machine.control.take();
+    let activation = ActivationKey(7);
+    machine.frames.push(Frame::ResourceBoundary {
+        node: program.root(),
+        key: activation,
+        payload: ResourcePayload::Store(Box::new(RetainedStore::new(activation))),
+    });
+    machine.live_resources = 1;
+    machine
+        .begin_retained_root(handler_node, activation, Environment::new())
+        .unwrap();
+    assert!(matches!(
+        machine.control.take(),
+        Some(Control::Evaluate(..))
+    ));
+    let handler = machine.handler(handler_node).unwrap().id();
+    let owner = machine.handler(handler_node).unwrap().clauses()[0].resume();
+    machine
+        .return_request(request_node, &Instantiation::default(), Value::Unit)
+        .unwrap();
+    assert!(matches!(
+        machine.control.take(),
+        Some(Control::Evaluate(..))
+    ));
+    assert!(machine.ensure_retained_driver(activation).is_err());
+    assert!(matches!(machine.frames.last(), Some(Frame::ClauseBoundary {
+        handler: found, owner: selected, retained: Some(key), continuation: Some(_), ..
+    }) if *found == handler && *selected == owner && *key == activation));
+
+    machine.frames.push(Frame::ClauseBoundary {
+        handler,
+        owner: ResumeId::new(owner.value() + 1),
+        continuation: None,
+        registration: None,
+        retained: None,
+        completion_count: 1,
+    });
+    assert!(machine.retain_selected(handler, owner).is_err());
+    assert!(matches!(
+        machine.frames[machine.frames.len() - 2],
+        Frame::ClauseBoundary {
+            continuation: Some(_),
+            ..
+        }
+    ));
+    machine.frames.pop();
+    machine_test_hooks::FAIL_CONTROL_RESERVATION.set(Some(ResourceFailureCause::AllocatorRefused));
+    assert!(machine.retain_selected(handler, owner).is_err());
+    machine_test_hooks::reset();
+    assert!(matches!(
+        machine.frames.last(),
+        Some(Frame::ClauseBoundary {
+            continuation: Some(_),
+            ..
+        })
+    ));
+    machine.retain_selected(handler, owner).unwrap();
+    let Some(Control::Return(Value::RetainedKey(key))) = machine.control.take() else {
+        panic!("retain must return its newly published locator");
+    };
+    assert_eq!(key.activation, activation);
+    assert!(machine.ensure_retained_driver(activation).is_err());
+    let clause = machine.frames.pop().unwrap();
+    machine.return_from(clause, Value::Unit).unwrap();
+    machine.control.take();
+    assert!(machine.ensure_retained_driver(activation).is_err());
+    let completion = machine.frames.pop().unwrap();
+    machine.return_from(completion, Value::Unit).unwrap();
+    machine.control.take();
+    assert!(machine.ensure_retained_driver(activation).is_ok());
+    let Frame::ResourceBoundary {
+        payload: ResourcePayload::Store(store),
+        ..
+    } = &machine.frames[0]
+    else {
+        panic!("store")
+    };
+    assert_eq!(store.active_roots, 0);
+    assert!(store.slots[key.slot].continuation.is_some());
+}
+
+#[test]
+fn retained_resume_reyield_preserves_each_suffix_and_unrelated_work() {
+    let (program, handler_node, request_node, resume_node) = checkpoint_fixture();
+    let activation = ActivationKey(7);
+    let mut store = RetainedStore::new(activation);
+    let mut unrelated = Some(CapturedContinuation {
+        frames: vec![Frame::CloseCompletion],
+    });
+    let other_key = store
+        .retain(&mut unrelated, &mut TypeWorkBudget::default())
+        .unwrap();
+    let mut machine = Machine::new_effect(&program);
+    machine.control.take();
+    machine.frames.push(Frame::ResourceBoundary {
+        node: program.root(),
+        key: activation,
+        payload: ResourcePayload::Store(Box::new(store)),
+    });
+    machine.live_resources = 1;
+    machine.captured_cells = 1;
+    machine
+        .begin_retained_root(handler_node, activation, Environment::new())
+        .unwrap();
+    machine.control.take();
+    let handler = machine.handler(handler_node).unwrap().id();
+    let owner = machine.handler(handler_node).unwrap().clauses()[0].resume();
+    for _ in 0..2 {
+        machine
+            .return_request(request_node, &Instantiation::default(), Value::Unit)
+            .unwrap();
+        machine.control.take();
+        machine.return_resume(resume_node, Value::Unit).unwrap();
+        machine.control.take();
+    }
+    let clauses = machine.frames.iter().filter(|frame| matches!(frame,
+        Frame::ClauseBoundary { retained: Some(key), continuation: None, completion_count: 1, .. } if *key == activation)).count();
+    assert_eq!(
+        clauses, 2,
+        "same static identities do not merge associated suffixes"
+    );
+    assert_eq!(machine.captured_cells, 1);
+    machine
+        .return_request(request_node, &Instantiation::default(), Value::Unit)
+        .unwrap();
+    machine.control.take();
+    machine.retain_selected(handler, owner).unwrap();
+    let Some(Control::Return(Value::RetainedKey(key))) = machine.control.take() else {
+        panic!("key")
+    };
+    assert_ne!(key.slot, other_key.slot);
+    assert_eq!(machine.captured_cells, 2);
+    for _ in 0..3 {
+        assert!(machine.ensure_retained_driver(activation).is_err());
+        let clause = machine.frames.pop().unwrap();
+        assert!(matches!(
+            clause,
+            Frame::ClauseBoundary {
+                retained: Some(_),
+                ..
+            }
+        ));
+        machine.return_from(clause, Value::Unit).unwrap();
+        machine.control.take();
+    }
+    assert!(machine.ensure_retained_driver(activation).is_err());
+    let completion = machine.frames.pop().unwrap();
+    machine.return_from(completion, Value::Unit).unwrap();
+    machine.control.take();
+    assert!(machine.ensure_retained_driver(activation).is_ok());
+    let Frame::ResourceBoundary {
+        payload: ResourcePayload::Store(store),
+        ..
+    } = &machine.frames[0]
+    else {
+        panic!("store")
+    };
+    assert_eq!(store.active_roots, 0);
+    assert!(store.slots[key.slot].continuation.is_some());
+    assert!(store.slots[other_key.slot].continuation.is_some());
+    assert_eq!(machine.captured_cells, 2);
+}
+
+#[test]
+fn retained_root_in_owned_service_segment_keeps_driver_blocked() {
+    let (program, _, _, _) = checkpoint_fixture();
+    let key = ActivationKey(7);
+    for region_segment in [false, true] {
+        let mut machine = Machine::new_effect(&program);
+        machine.control.take();
+        let mut store = RetainedStore::new(key);
+        store.active_roots = 1;
+        machine.frames.push(Frame::ResourceBoundary {
+            node: program.root(),
+            key,
+            payload: ResourcePayload::Store(Box::new(store)),
+        });
+        let segment = CapturedContinuation {
+            frames: vec![Frame::RetainedRootCompletion { key }],
+        };
+        machine.frames.push(if region_segment {
+            Frame::RegionAllocated {
+                segment,
+                invocation: super::super::value::RegionInvocation {
+                    owner: key,
+                    serial: 0,
+                },
+                registered: false,
+            }
+        } else {
+            Frame::ClauseBoundary {
+                handler: HandlerId::new(0),
+                owner: ResumeId::new(0),
+                continuation: Some(segment),
+                registration: None,
+                retained: None,
+                completion_count: 1,
+            }
+        });
+        assert!(machine.ensure_retained_driver(key).is_err());
+        let Frame::ResourceBoundary {
+            payload: ResourcePayload::Store(store),
+            ..
+        } = &machine.frames[0]
+        else {
+            panic!("store")
+        };
+        assert_eq!(store.active_roots, 1, "moving a frame is not completion");
+    }
+}
+
+#[test]
+fn retained_outer_discard_refuses_to_abandon_a_root_completion() {
+    let (program, handler_node, _, _) = checkpoint_fixture();
+    let key = ActivationKey(7);
+    let mut machine = Machine::new_effect(&program);
+    machine.control.take();
+    let handler = machine.handler(handler_node).unwrap().id();
+    let owner = machine.handler(handler_node).unwrap().clauses()[0].resume();
+    let mut store = RetainedStore::new(key);
+    store.active_roots = 1;
+    machine.frames.push(Frame::ResourceBoundary {
+        node: program.root(),
+        key,
+        payload: ResourcePayload::Store(Box::new(store)),
+    });
+    machine.frames.push(Frame::ClauseBoundary {
+        handler,
+        owner,
+        continuation: Some(CapturedContinuation {
+            frames: vec![
+                Frame::HandlerBoundary {
+                    node: handler_node,
+                    environment: Environment::new(),
+                    registration: None,
+                    retained: None,
+                },
+                Frame::RetainedRootCompletion { key },
+            ],
+        }),
+        registration: None,
+        retained: None,
+        completion_count: 1,
+    });
+    machine.captured_cells = 2;
+    assert_eq!(
+        machine.discard(handler, owner),
+        Err(RuntimeFailure::InvalidControlState)
+    );
+    assert_eq!(machine.captured_cells, 2);
+    assert!(
+        matches!(&machine.frames[1], Frame::ClauseBoundary { continuation: Some(capture), .. } if capture.frames.len() == 2)
+    );
+    let Frame::ResourceBoundary {
+        payload: ResourcePayload::Store(store),
+        ..
+    } = &machine.frames[0]
+    else {
+        panic!("store")
+    };
+    assert_eq!(store.active_roots, 1);
+}
+
+#[test]
+fn retained_continue_carrier_runs_the_restored_branch_for_its_current_consumer() {
+    let source = concat!(
+        "import @builtin.retained_control as Control\n",
+        "effect Checkpoint {\nwait : Unit -> Unit\n}\n",
+        "forward<N,A,E : EffectRow> : ",
+        "(Control.Store<N,(Unit -> A ! {| E})>, Control.Key<N>) -> ",
+        "Control.Option<A> ! {Control.Drive<N> | E}\n",
+        "forward pair = Control.advance pair\n",
+        "main : Unit -> Int\n",
+        "main () = handle ({\nlet _ = perform Checkpoint.wait ()\n42\n}) with Checkpoint {\n",
+        "wait ignored => resume ()\n}\n",
+    );
+    let (program, _, _) = crate::core::validate::generic_cell_source_fixture_for_test(source, None);
+    let mut pending = vec![program.root()];
+    let mut seen = std::collections::HashSet::new();
+    let (mut region, mut carrier, mut handler, mut request, mut branch) =
+        (None, None, None, None, None);
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let node = program.node(id).unwrap();
+        match &node.kind {
+            EffectExprKind::Operation(EffectOperation::Region(scope)) if scope.entry => {
+                region = Some(id)
+            }
+            EffectExprKind::Operation(EffectOperation::Continue(continuation)) => {
+                carrier = Some((id, continuation.clone()))
+            }
+            EffectExprKind::Operation(EffectOperation::Handler(candidate))
+                if program
+                    .registry()
+                    .effect(candidate.effect().effect())
+                    .is_some_and(|e| e.spelling == "Checkpoint") =>
+            {
+                handler = Some(id)
+            }
+            EffectExprKind::Operation(EffectOperation::Request(candidate))
+                if program
+                    .registry()
+                    .effect(candidate.effect().effect())
+                    .is_some_and(|e| e.spelling == "Checkpoint") =>
+            {
+                request = Some(id)
+            }
+            EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(integer)))
+                if integer.value().to_i128() == Some(42) =>
+            {
+                branch = Some(id)
+            }
+            _ => {}
+        }
+        pending.extend((0..node.kind.child_count()).filter_map(|i| node.kind.child_at(i)));
+    }
+    let (region, (carrier_node, carrier), handler, request, branch) = (
+        region.unwrap(),
+        carrier.unwrap(),
+        handler.unwrap(),
+        request.unwrap(),
+        branch.unwrap(),
+    );
+    let EffectExprKind::Pure(PureExprKind::Variable(store_variable)) =
+        &program.node(carrier.store).unwrap().kind
+    else {
+        panic!("store variable")
+    };
+    let EffectExprKind::Pure(PureExprKind::Variable(key_variable)) =
+        &program.node(carrier.key).unwrap().kind
+    else {
+        panic!("key variable")
+    };
+    let (store_binder, key_binder) = (store_variable.binder(), key_variable.binder());
+    let activation = ActivationKey(7);
+    let consumer = || {
+        let mut machine = Machine::new_effect(&program);
+        let scope = machine.region_scope(region).unwrap();
+        let (identity, access, default_handler) =
+            (scope.identity(), scope.access().id(), scope.body());
+        let selected = ActivationKey(9);
+        let mut environment = Environment::new();
+        environment.instantiation = environment
+            .instantiation
+            .acquire(identity, selected, &mut machine.instantiation_work, None)
+            .unwrap();
+        environment = environment
+            .extend(access, Value::RegionView(selected))
+            .unwrap();
+        machine.frames.push(Frame::RegionBoundary {
+            node: region,
+            key: selected,
+            allocate: Value::RegionHostFunction {
+                owner: selected,
+                release: false,
+            },
+            release: Value::RegionHostFunction {
+                owner: selected,
+                release: true,
+            },
+            preceding: Value::Unit,
+            records: Vec::new(),
+        });
+        machine.frames.push(Frame::HandlerBoundary {
+            node: default_handler,
+            environment: environment.clone(),
+            registration: None,
+            retained: None,
+        });
+        machine.frames.push(Frame::ResourceBoundary {
+            node: program.root(),
+            key: activation,
+            payload: ResourcePayload::Store(Box::new(RetainedStore::new(activation))),
+        });
+        machine.live_resources = 1;
+        (machine, environment, access)
+    };
+    let (mut machine, environment, access) = consumer();
+    machine.control.take();
+    let branch_environment = environment
+        .clone()
+        .extend(access, Value::RegionView(ActivationKey(99)))
+        .unwrap();
+    machine
+        .begin_retained_root(handler, activation, branch_environment.clone())
+        .unwrap();
+    machine.control.take();
+    machine.frames.push(Frame::Bind {
+        binder: carrier.adapter.answer.id(),
+        body: branch,
+        environment: branch_environment,
+    });
+    let handler_id = machine.handler(handler).unwrap().id();
+    let owner = machine.handler(handler).unwrap().clauses()[0].resume();
+    machine
+        .return_request(request, &Instantiation::default(), Value::Unit)
+        .unwrap();
+    machine.control.take();
+    machine.retain_selected(handler_id, owner).unwrap();
+    let Some(Control::Return(Value::RetainedKey(key))) = machine.control.take() else {
+        panic!("key")
+    };
+    let clause = machine.frames.pop().unwrap();
+    machine.return_from(clause, Value::Unit).unwrap();
+    machine.control.take();
+    let completion = machine.frames.pop().unwrap();
+    machine.return_from(completion, Value::Unit).unwrap();
+    machine.control.take();
+    assert_eq!(machine.captured_cells, 2);
+
+    let caller = environment
+        .clone()
+        .extend(store_binder, Value::ResourceHandle(activation))
+        .unwrap()
+        .extend(key_binder, Value::RetainedKey(key))
+        .unwrap();
+    machine_test_hooks::FAIL_CONTROL_RESERVATION.set(Some(ResourceFailureCause::AllocatorRefused));
+    assert!(
+        machine
+            .continue_retained(carrier_node, caller.clone(), activation, key)
+            .is_err()
+    );
+    machine_test_hooks::reset();
+    assert_eq!(machine.captured_cells, 2);
+    let Frame::ResourceBoundary {
+        payload: ResourcePayload::Store(store),
+        ..
+    } = &machine.frames[2]
+    else {
+        panic!("store")
+    };
+    assert!(store.slots[key.slot].continuation.is_some());
+    assert_eq!(store.active_roots, 0);
+    machine.control = Some(Control::Evaluate(carrier_node, caller));
+    let result = machine.run_loop().unwrap();
+    assert_eq!(result.value.to_string(), "Some(42)");
+    assert_eq!(machine.captured_cells, 0);
+    assert_eq!(machine.live_resources, 0);
+    assert_eq!(machine.next_region_invocation, 1);
+    let entered = |node| {
+        result
+            .trace
+            .iter()
+            .position(|event| *event == TraceEvent::Enter(node))
+    };
+    assert!(entered(carrier.store).unwrap() < entered(carrier.key).unwrap());
+    assert!(entered(carrier.key).unwrap() < entered(branch).unwrap());
+    assert!(entered(branch).unwrap() < entered(carrier.adapter.some).unwrap());
+    assert!(entered(carrier.adapter.none).is_none());
+
+    let (mut missing, environment, _) = consumer();
+    let Frame::ResourceBoundary {
+        payload: ResourcePayload::Store(store),
+        ..
+    } = &mut missing.frames[2]
+    else {
+        panic!("store")
+    };
+    store.slots.push(RetainedSlot {
+        generation: key.generation,
+        continuation: None,
+    });
+    let caller = environment
+        .extend(store_binder, Value::ResourceHandle(activation))
+        .unwrap()
+        .extend(key_binder, Value::RetainedKey(key))
+        .unwrap();
+    missing.control = Some(Control::Evaluate(carrier_node, caller));
+    let result = missing.run_loop().unwrap();
+    assert_eq!(result.value.to_string(), "None");
+    assert_eq!(missing.next_region_invocation, 1);
+    assert!(
+        result
+            .trace
+            .iter()
+            .any(|event| *event == TraceEvent::Enter(carrier.adapter.none))
+    );
+    assert!(
+        !result
+            .trace
+            .iter()
+            .any(|event| *event == TraceEvent::Enter(branch)
+                || *event == TraceEvent::Enter(carrier.adapter.some))
+    );
+}
+
 #[test]
 fn retained_move_prepares_storage_before_taking_either_owner() {
     let mut store = RetainedStore::new(ActivationKey(3));
@@ -319,6 +864,7 @@ fn retained_move_rejects_its_owner_inside_nested_captures() {
     };
     let mut owner = Some(CapturedContinuation {
         frames: vec![Frame::ClauseBoundary {
+            retained: None,
             handler: HandlerId::new(1),
             owner: ResumeId::new(1),
             continuation: Some(nested),
@@ -343,6 +889,7 @@ fn retained_store_edges_are_disposed_without_recursive_stack_growth() {
             for index in 0..10_000_u32 {
                 let key = ActivationKey(index);
                 let store = RetainedStore {
+                    active_roots: 0,
                     activation: key,
                     slots: vec![RetainedSlot {
                         generation: 0,
@@ -385,6 +932,7 @@ fn retained_store_disposal_reports_incomplete_without_retrying_growth() {
                 node,
                 key: ActivationKey(3),
                 payload: ResourcePayload::Store(Box::new(RetainedStore {
+                    active_roots: 0,
                     activation: ActivationKey(3),
                     slots,
                 })),

@@ -447,6 +447,14 @@ impl StoreScopeNode {
             body,
         }
     }
+
+    pub(crate) const fn initializer(&self) -> NodeId {
+        self.initializer
+    }
+
+    pub(crate) const fn body(&self) -> NodeId {
+        self.body
+    }
 }
 
 /// A structural continue evaluates the actual store before its locator.
