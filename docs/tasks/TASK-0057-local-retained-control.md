@@ -5,8 +5,8 @@
 - Related: [DN-0056](../design/DN-0056-scoped-continuation-retention-and-library-scheduling.md),
   [CP-0026](../proposals/CP-0026-scoped-owned-continuation-storage.md)
 
-> This task organizes work. It does not define Ash semantics. C3 is active
-> under the accepted proposal; the connected C2/C3 checkpoint remains open.
+> This task organizes work. It does not define Ash semantics. C4 is active
+> under the accepted proposal; C2 and C3 are retained and accepted.
 
 ## Dependencies
 
@@ -45,14 +45,12 @@ consumer's adapter and a running cleanup. Source-derived capture checks cover
 an imported continuation helper, enclosing and captured support, and actual
 interpreter conflicts. A separate focused control inspection checks saved
 cuts at Retain, including cuts never continued and later checkpoints; real
-restoration checks the current consumer's interpreter. The original C2 and
-coupled C2/C3 acceptance criteria remain open.
+restoration checks the current consumer's interpreter.
 An ordinary Probe can be intercepted by a source handler; internal checks
 exercise its driver restriction and actual Store-provider selection. Image
 codecs preserve Store/Root/Retain carriers and generic Continue round-trips.
-C3 develops the normal-return analysis and its bounded proof on
-`codex/m3-c3-drain` in
-[draft PR #162](https://github.com/dikini/ash-lang/pull/162). Focused checks
+C3's normal-return analysis and bounded proof were retained by
+[PR #162](https://github.com/dikini/ash-lang/pull/162). Focused checks
 exercise a drain before outer-discard close, and reject both a missing drain and
 new retained work after a drain. A branch that constructs a fresh answer under
 an allocator handler owned by its capture also passes the focused query. When
@@ -81,18 +79,29 @@ preserves exact-budget failure and retry behavior.
 The standalone Core validator retains its 983,040 work limit. The public
 source driver's input-sized allowance admitted the outer-discard fixture at
 1,309,582 of 78,225,000 units. Its encoded image used 1,355,242 of 1,753,834
-startup units. These are measurements of those paths, not a general bound;
-the connected gate must still exercise the complete required corpus.
-C2–C5 and the connected full-workspace and Main gates remain open.
+startup units. These are measurements of those paths, not a general bound.
+The connected seven-stage workspace gate passed on reviewed `12df10ef`, and
+its tree was independently verified at retained milestone commit
+`d256bef288ac6b828e475c9dcaaf710812405b7a`. The original
+[C2 #72](https://github.com/dikini/ash-lang/issues/72) and
+[C3 #73](https://github.com/dikini/ash-lang/issues/73) criteria are accepted.
+
+C4 is developing ordinary scheduling policy in
+[`libraries/scheduling.ash`](../../libraries/scheduling.ash). The first named-root
+coroutine case selects P while Q remains retained, observes R's continuation,
+and drains Q before the store closes. Its public-driver result records P's
+answer and the event order. Cooperative queues, repeated yielding, suspended
+cleanup, checkpoints around resume, gas guards and lost-key refusal remain.
+C4, C5 and the final integrated and Main gates remain open.
 
 ## Verification
 
 Use focused positive, negative and regression checks for each changed behavior
 and affected callers. The model and C3 analysis each require a reviewed frozen
 scoped [AD-0012](../decisions/AD-0012-proof-development-feedback-and-build-reuse.md)
-gate. The next full Cargo workspace checkpoint is the connected C2/C3 runtime
-ready for C4; the product developer owns it. A final integrated gate precedes
-Main and may serve as the pre-Main gate only while inputs remain equal. Record
+gate. The connected C2/C3 workspace checkpoint is complete. The next full Cargo
+checkpoint is the final integrated C5 gate, owned by the product developer; it
+may serve as the pre-Main gate only while inputs remain equal. Record
 exact refs, source/configuration/tool pins and receipts; transfer evidence only
 with demonstrated equality. Main merge remains a separate human gate.
 
@@ -102,8 +111,8 @@ Current control already moves one-shot captures and tracks cleanup completion;
 generic cells do not own them. Current region support determines storage
 validity and release, not completion transfer. Existing outer resource aliases
 can remain shared across sequential branches while their scope owner stays
-unique. DN-0056's
-drain argument is paper evidence, not a checked analysis or implementation.
+unique. DN-0056's drain argument is paper evidence; the C3 model and reviewed
+correspondence above check the selected bounded analysis.
 
 ## Deviations
 
