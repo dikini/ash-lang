@@ -6,7 +6,7 @@
   [CP-0026](../proposals/CP-0026-scoped-owned-continuation-storage.md)
 
 > This task organizes work. It does not define Ash semantics. C3 is active
-> under the accepted proposal; public release remains closed pending its proof.
+> under the accepted proposal; the connected C2/C3 checkpoint remains open.
 
 ## Dependencies
 
@@ -49,31 +49,35 @@ restoration checks the current consumer's interpreter. The original C2 and
 coupled C2/C3 acceptance criteria remain open.
 An ordinary Probe can be intercepted by a source handler; internal checks
 exercise its driver restriction and actual Store-provider selection. Image
-codecs preserve Store/Root/Retain carriers and generic Continue round-trips,
-while public Store release remains rejected. C3 is developing the normal-return
-analysis and its bounded proof on `codex/m3-c3-drain` in
+codecs preserve Store/Root/Retain carriers and generic Continue round-trips.
+C3 develops the normal-return analysis and its bounded proof on
+`codex/m3-c3-drain` in
 [draft PR #162](https://github.com/dikini/ash-lang/pull/162). Focused checks
 exercise a drain before outer-discard close, and reject both a missing drain and
 new retained work after a drain. A branch that constructs a fresh answer under
 an allocator handler owned by its capture also passes the focused query. When
 the allocator handler is outside the capture, the cleanup's distinct forwarding
 handler changes the selected interpretation and admission rejects it under the
-accepted contract. Source execution and public release remain gated. The
-current conservative case tracking can reject a safe program that matches an
-earlier branch result after another checkpoint.
+accepted contract. Conservative case tracking can reject a safe program that
+matches an earlier branch result after another checkpoint.
 
 A source-derived linked Core fixture also checks reuse of an aggregate and its
 payload computation. Each case assignment now clears older aggregate origins
 before their payloads can be projected, and Resume drops the returned origin.
 The bounded correspondence passed independent source review, and its frozen
 [proof run](evidence/local-retained-control/c3-model/README.md) completed.
-Its receipt passed independent audit. Real linked release admission remains open.
+Its receipt passed independent audit. Linked validation now runs the release
+analysis after the carrier, type and scope checks. Public source execution
+drains recursive and imported continuations and an outer-discard cleanup;
+undrained, stale, intercepted and unknown-result paths are refused. Identity
+and folding transformations and decoded images are revalidated. The image
+test also rejects a changed Probe match that would permit an undrained close.
 
-A cleanup-drain fixture's linked validation prefix and focused query use
-1,054,814 work units against the current 983,040 limit, before later validation.
-The outer-discard positive uses 1,282,722 units for the focused query alone.
-Both measurements used an unbounded test budget; the connected gate must
-address the budget gap with the complete pipeline measured.
+The standalone Core validator retains its 983,040 work limit. The public
+source driver's input-sized allowance admitted the outer-discard fixture at
+1,309,582 of 78,225,000 units. Its encoded image used 1,355,242 of 1,753,834
+startup units. These are measurements of those paths, not a general bound;
+the connected gate must still exercise the complete required corpus.
 C2–C5 and the connected full-workspace and Main gates remain open.
 
 ## Verification

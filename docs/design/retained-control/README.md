@@ -22,4 +22,5 @@ tracks the remaining implementation and gates.
 The C3 [drain correspondence](drain-correspondence.md) records the concrete
 control, value and completion premises used by the bounded analysis. Its
 reviewed source completed a separate frozen [gate](../../tasks/evidence/local-retained-control/c3-model/README.md);
-its receipt passed independent audit. Connected public validation remains open.
+its receipt passed independent audit. Linked validation uses the drain analysis;
+the connected C2/C3 checkpoint remains open.

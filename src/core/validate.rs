@@ -13577,14 +13577,6 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         self.validate_effect_abstraction_shapes(&authenticated_method_evidence)?;
         self.validate_scopes()?;
         self.validate_type_scopes()?;
-        // Local carrier and scope checks do not establish capture admission or
-        // the C3 release proof. No retained control is executable yet.
-        if let Some(id) = retained {
-            return Err(ValidationError::new(
-                ValidationReason::RetainedRelease,
-                Some(id),
-            ));
-        }
         // Ordinary authentication precedes dependency reconstruction. Generic
         // computations force that proof even in private provider preparations.
         let has_generic = self.cell_computations()?;
@@ -13597,6 +13589,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 super::effect::EffectExprKind::Operation(
                     super::effect::EffectOperation::Resource(_)
                         | super::effect::EffectOperation::Store(_)
+                        | super::effect::EffectOperation::RetainedRoot(_)
+                        | super::effect::EffectOperation::Retain(_)
                         | super::effect::EffectOperation::Region(_)
                         | super::effect::EffectOperation::Cleanup(_)
                         | super::effect::EffectOperation::Registration(_)
@@ -13616,13 +13610,17 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             super::effect::EffectExprKind::Operation(operation) => Some(operation),
             _ => None,
         };
-        let capture_result = super::capture::check_nodes(
-            &self.program.nodes,
-            &[],
-            &[],
-            operation,
-            &mut capture_work,
-        );
+        let capture_result = if retained.is_some() {
+            super::capture::check_nodes_with_release(
+                &self.program.nodes,
+                &[],
+                &[],
+                operation,
+                &mut capture_work,
+            )
+        } else {
+            super::capture::check_nodes(&self.program.nodes, &[], &[], operation, &mut capture_work)
+        };
         self.charge_type_work(capture_work.used())?;
         capture_result.map_err(|failure| match failure {
             super::capture::Failure::Resource => {
@@ -21178,6 +21176,44 @@ mod tests {
     }
 
     #[test]
+    fn retained_drain_revalidates_and_runs_after_core_transforms() {
+        use super::super::effect::EffectOperation;
+        let (donor, sources, relation) = generic_cell_source_fixture(
+            include_str!("../../tests/fixtures/retained-drain/basic.ash"),
+            None,
+        );
+        let refs = sources.iter().collect::<Vec<_>>();
+        for transform in [identity_effect_traversal, fold_effect_literal_primitives] {
+            let copied = transform(&donor).unwrap();
+            assert!(copied.nodes.iter().any(|node| matches!(
+                &node.kind,
+                EffectExprKind::Operation(EffectOperation::Store(_))
+            )));
+            assert!(copied.nodes.iter().any(|node| matches!(
+                &node.kind,
+                EffectExprKind::Operation(EffectOperation::RetainedRoot(_))
+            )));
+            assert!(copied.nodes.iter().any(|node| matches!(
+                &node.kind,
+                EffectExprKind::Operation(EffectOperation::Retain(_))
+            )));
+            assert!(copied.nodes.iter().any(|node| matches!(
+                &node.kind,
+                EffectExprKind::Operation(EffectOperation::Continue(_))
+            )));
+            let valid = validate_effect_modules(copied, &refs, &relation)
+                .expect("the transformed Store and drain must be revalidated");
+            assert_eq!(
+                crate::eval::evaluate_effect(&valid)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
+            );
+        }
+    }
+
+    #[test]
     fn retained_drive_rejects_raw_linked_requests_and_handlers() {
         use super::super::effect::EffectOperation;
         let source = concat!(
@@ -24381,18 +24417,18 @@ mod tests {
             .iter()
             .map(|module| module.source())
             .collect::<Vec<_>>();
-        let mut work = TypeWorkBudget::unbounded();
-        let prefix = check_ordinary_effect_modules_with_budget_for_test(
+        let mut linked_work = TypeWorkBudget::unbounded();
+        let failure = check_ordinary_effect_modules_with_budget_for_test(
             &fixture.program,
             &sources,
             &fixture.module_sources,
-            &mut work,
+            &mut linked_work,
         )
-        .expect_err("the public Store release gate remains closed");
-        assert_eq!(prefix.reason(), ValidationReason::RetainedRelease);
+        .expect_err("the complete linked validator must reject the unsafe Store close");
+        assert_eq!(failure.reason(), ValidationReason::RetainedRelease);
         eprintln!(
-            "shared tuple {shared:?}, matched field {matched:?}, prefix={}",
-            work.used()
+            "shared tuple {shared:?}, matched field {matched:?}, linked work={}",
+            linked_work.used()
         );
         fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
             match kind {
@@ -24416,7 +24452,7 @@ mod tests {
     }
 
     #[test]
-    fn private_root_core_keeps_actual_store_and_selected_owner_but_is_unadmitted() {
+    fn private_root_core_keeps_actual_store_and_selected_owner() {
         use super::super::effect::{EffectExprKind, EffectOperation};
         let fixture = retained_root_fixture();
         let root = fixture
@@ -24459,10 +24495,9 @@ mod tests {
                 .iter()
                 .any(|clause| clause.resume() == retain.1.owner)
         );
-        assert_eq!(
-            fixture.validate().unwrap_err().reason(),
-            ValidationReason::RetainedRelease
-        );
+        fixture
+            .validate()
+            .expect("a standalone generic private root may defer its Store to an actual caller");
     }
 
     #[test]
@@ -24536,10 +24571,16 @@ mod tests {
                 );
             }
             drop(validator);
-            let reason = fixture.validate().unwrap_err().reason();
             if mutation == 0 {
-                assert_eq!(reason, ValidationReason::RetainedRelease);
+                fixture
+                    .validate()
+                    .expect("the actual generic root is valid linked Core");
             } else {
+                let reason = fixture
+                    .validate()
+                    .err()
+                    .expect("the forged root must be rejected")
+                    .reason();
                 assert_ne!(
                     reason,
                     ValidationReason::RetainedRelease,
@@ -24653,10 +24694,16 @@ mod tests {
                 );
             }
             drop(validator);
-            let reason = fixture.validate().unwrap_err().reason();
             if mutation == 0 {
-                assert_eq!(reason, ValidationReason::RetainedRelease);
+                fixture
+                    .validate()
+                    .expect("the actual private clause contract is valid linked Core");
             } else {
+                let reason = fixture
+                    .validate()
+                    .err()
+                    .expect("the forged private clause must be rejected")
+                    .reason();
                 assert_ne!(
                     reason,
                     ValidationReason::RetainedRelease,
@@ -24794,10 +24841,9 @@ mod tests {
         validator.validate_scopes().unwrap();
         validator.validate_type_scopes().unwrap();
         drop(validator);
-        assert_eq!(
-            fixture.validate().unwrap_err().reason(),
-            ValidationReason::RetainedRelease
-        );
+        fixture
+            .validate()
+            .expect("the empty Store scope is valid linked Core");
     }
 
     #[test]
@@ -24977,10 +25023,16 @@ mod tests {
                 );
             }
             drop(validator);
-            let reason = fixture.validate().unwrap_err().reason();
             if mutation == 0 {
-                assert_eq!(reason, ValidationReason::RetainedRelease);
+                fixture
+                    .validate()
+                    .expect("the actual Store authority is valid linked Core");
             } else {
+                let reason = fixture
+                    .validate()
+                    .err()
+                    .expect("the forged Store must be rejected")
+                    .reason();
                 assert_ne!(
                     reason,
                     ValidationReason::RetainedRelease,
@@ -25071,10 +25123,16 @@ mod tests {
                 assert!(result.is_err(), "malformed descriptor mutation {mutation}");
             }
             drop(validator);
-            let reason = fixture.validate().unwrap_err().reason();
             if mutation == 0 {
-                assert_eq!(reason, ValidationReason::RetainedRelease);
+                fixture
+                    .validate()
+                    .expect("the source descriptor is valid linked Core");
             } else {
+                let reason = fixture
+                    .validate()
+                    .err()
+                    .expect("the malformed descriptor must be rejected")
+                    .reason();
                 assert_ne!(
                     reason,
                     ValidationReason::RetainedRelease,

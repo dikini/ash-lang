@@ -3,9 +3,9 @@
 This map relates the [bounded proof](DrainSafety.lean) to the reviewed
 implementation of one focused Store query. The independently reviewed source
 completed the frozen [AD-0012 gate](../../tasks/evidence/local-retained-control/c3-model/README.md).
-The linked validator still refuses every Store release; connected validation
-and the complete C2/C3 acceptance criteria remain open. This map is not a
-mechanized proof of the Rust compiler.
+The linked validator now runs this analysis for retained carriers. The
+connected C2/C3 checkpoint and complete acceptance criteria remain open. This
+map is not a mechanized proof of the Rust compiler.
 
 ## Focused analysis and closure
 
@@ -17,6 +17,14 @@ This seed describes a freshly acquired Store, not an arbitrary old summary.
 The focused query calls `discover` and tests `release_unsafe` only after that
 query has returned successfully. Each focused Resource return inspects the
 work on that actual predecessor; any value except Empty latches refusal.
+
+The linked validator authenticates the registry, carrier ports, types and
+scopes before reconstructing capture control. Its census selects
+`check_nodes_with_release` when the actual Core contains Store, RetainedRoot or
+Retain; other programs keep the ordinary capture check. Both paths charge the
+remaining shared Core work budget, including failed work. The capture graph's
+own fast path also recognizes RetainedRoot and Retain, including a generic
+root without a local Store. Subsequent checks must still succeed for admission.
 
 `discover` retains normalized complete control States in `visited` and
 processes its pending queue. After the queue empties, it closes the value graph.
@@ -123,9 +131,9 @@ or control transition in the v2 mapping. Its incoming-origin review identified
 Resume as the transfer without a syntactic destination condition; the current
 candidate drops that origin. The local forgetting lemma does not itself prove
 payload stability: the ordinary scope and graph conditions above are part of the
-concrete correspondence independently reviewed at this exact candidate. This is
-not a Rust mechanization. Linked release admission and connected validation
-remain to be completed.
+concrete correspondence independently reviewed at `0f73745e`. The linked
+admission routing above is the current candidate. This is not a Rust
+mechanization. The connected C2/C3 checkpoint remains to be completed.
 
 ## Evidence and remaining gates
 
@@ -136,13 +144,16 @@ receipts. The shared-Core regression reached the existing linked release gate
 after 23,857 work units; the focused query then refused the unsafe close.
 The retained regression family passed 94 tests at that checkpoint.
 
-Still required are the real linked release admission, transformed and
-executable source/image cases, the full required negative corpus, the
-full-pipeline budget decision and the connected C2/C3 checkpoint. Fresh
-allocation under an allocator handler owned by the captured cut passes the
-focused query. The distinct external cleanup forwarder is rejected under the
-accepted interpreter-identity contract.
+The linked validator now admits the checked recursive and cleanup drains and
+refuses the corresponding undrained paths. Public source and image execution
+exercise both drains. The recursive drain also runs after linked identity and
+folding transforms. Fresh allocation under an allocator handler owned by the
+capture passes; the distinct external cleanup forwarder is rejected under the
+accepted interpreter-identity contract. Full C2/C3 acceptance and the connected
+checkpoint remain open.
 
-The outer-discard positive used 1,282,722 work units for its focused query
-alone against the current 983,040 total limit. This is not a full-pipeline
-measurement.
+The standalone Core validation allowance remains 983,040 units. In the public
+source driver, the outer-discard fixture used 1,309,582 of 78,225,000 units; its
+image startup used 1,355,242 of 1,753,834 units. Those allowances are computed
+from their inputs, and these measurements do not establish a bound for every
+program.
