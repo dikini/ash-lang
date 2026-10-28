@@ -97,8 +97,10 @@ work, and a lost-key fixture reaches the retained-release refusal. An empty
 queue runs with an allocator handler enclosing the Store. The host-default-only
 variant remains a conservative release refusal. Calls now defer control entry
 until their strict arguments have value alternatives, preserving the existing
-delivery prefix for value-revision replay. Suspended cleanup, checkpoints
-around resume and gas guards remain.
+delivery prefix for value-revision replay. The gas example writes its accounting
+before each explicit guard: the false guard continues, and the true guard
+yields so Q can observe the committed value before P resumes. Suspended cleanup
+and checkpoints around resume remain.
 C4, C5 and the final integrated and Main gates remain open.
 
 ## Verification
@@ -122,6 +124,14 @@ validity and release, not completion transfer. Existing outer resource aliases
 can remain shared across sequential branches while their scope owner stays
 unique. DN-0056's drain argument is paper evidence; the C3 model and reviewed
 correspondence above check the selected bounded analysis.
+
+An optional imported Cell guard returned `type.internal` during source checking
+in the connected P/Q gas specimen; a one-branch comparator passed. The specimen
+and helper are `c4-gas-guard-v1.ash` and `c4-gas-guard-library-v1.ash` in the
+shared C4 evidence directory. Its `c4-gas-guard-v1.log` has SHA-256
+`d5dcc8c6acb6d89d18d1cff61cff9dcab85ce8c0101a1ac13134cb1eb5519b47`.
+The delivered gas policy uses inline accounting and makes no general claim
+about imported Cell helpers.
 
 ## Deviations
 

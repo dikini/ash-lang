@@ -104,3 +104,16 @@ fn draining_the_key_before_release_completes_the_same_branch() {
 
     assert_eq!(observation.value_display(), "42");
 }
+
+#[test]
+fn gas_safe_points_commit_accounting_before_the_selected_yield() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let observation = run_path(RunConfiguration {
+        entry: root.join("tests/fixtures/scheduling/gas.ash"),
+        roots: ModuleRoots::new([("ash", root.join("libraries"))])
+            .expect("the shipped library root is valid"),
+    })
+    .expect("the selected gas yield leaves committed accounting visible");
+
+    assert_eq!(observation.value_display(), "(42, 123456)");
+}
