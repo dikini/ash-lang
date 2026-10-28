@@ -72,6 +72,11 @@ drains recursive and imported continuations and an outer-discard cleanup;
 undrained, stale, intercepted and unknown-result paths are refused. Identity
 and folding transformations and decoded images are revalidated. The image
 test also rejects a changed Probe match that would permit an undrained close.
+Linked validation rejects a same-typed cleanup callback replacement that leaves
+retained work, after both identity and folding transformations. Control
+dispatch separates its stack work without changing the limits or charges; the
+64 KiB, 384-level abandonment regression completes with 4,864 work units and
+preserves exact-budget failure and retry behavior.
 
 The standalone Core validator retains its 983,040 work limit. The public
 source driver's input-sized allowance admitted the outer-discard fixture at

@@ -1470,6 +1470,8 @@ struct Selection {
     prefix: Vec<Edge>,
 }
 
+type RetainedRootSite = (Address, Address, usize, usize, usize);
+
 #[derive(Clone, Copy)]
 enum Completion {
     Resume,
@@ -2899,217 +2901,14 @@ impl<'a> Analysis<'a> {
                 let code = state.position.code;
                 match &self.graph.code[code] {
                     Control::Return => self.returned(state, &mut pending, &mut visited, budget)?,
-                    Control::Unavailable => return Err(Failure::Invalid),
-                    Control::Sequence(children) => {
-                        self.discover_sequence(
-                            state,
-                            children,
-                            &mut pending,
-                            &mut visited,
-                            budget,
-                        )?;
-                    }
-                    Control::Choice(children) => {
-                        let cases = if let Some(drain) = &state.drain {
-                            let data = self.data.as_mut().ok_or(Failure::Invalid)?;
-                            if let Some((scrutinee, result_case, patterns)) =
-                                data.case_choice(code, state.value_context, budget)?
-                            {
-                                if patterns.len() != children.len() {
-                                    return Err(Failure::Invalid);
-                                }
-                                let fact = data.case_of(scrutinee, &drain.facts, budget)?;
-                                Some((result_case, patterns, fact))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-                        for (ordinal, child) in children.iter().enumerate() {
-                            let (possible, decisive) = if let Some((_, patterns, fact)) = &cases {
-                                match (patterns[ordinal], fact.map(|fact| fact.value)) {
-                                    (super::value::CasePattern::Any, _) => (true, true),
-                                    (super::value::CasePattern::Opaque, _) => (true, false),
-                                    (super::value::CasePattern::Case(_, _), None) => (true, false),
-                                    (
-                                        super::value::CasePattern::Case(expected, total),
-                                        Some(actual),
-                                    ) => (expected == actual, expected == actual && total),
-                                }
-                            } else {
-                                (true, false)
-                            };
-                            if !possible {
-                                continue;
-                            }
-                            let mut next = state.copy(budget)?;
-                            let mut pushed = false;
-                            if let (Some(drain), Some((result_case, _, _))) =
-                                (&mut next.drain, &cases)
-                            {
-                                let data = self.data.as_mut().ok_or(Failure::Invalid)?;
-                                for (binder, value) in data.case_arm_bindings(
-                                    code,
-                                    ordinal,
-                                    state.value_context,
-                                    budget,
-                                )? {
-                                    let fact = data.case_of(value, &drain.facts, budget)?;
-                                    drain.assign(binder, fact, budget)?;
-                                }
-                                if *result_case {
-                                    next.push(
-                                        Frame::CaseReturn {
-                                            code,
-                                            ordinal,
-                                            context: state.context,
-                                            value_context: state.value_context,
-                                        },
-                                        budget,
-                                    )?;
-                                    pushed = true;
-                                }
-                            }
-                            next.position = Position {
-                                code: *child,
-                                next: 0,
-                            };
-                            if pushed {
-                                Self::enqueue(next, &mut pending, &mut visited, budget)?;
-                            } else {
-                                Self::enqueue_normalized(next, &mut pending, &mut visited, budget)?;
-                            }
-                            if decisive {
-                                break;
-                            }
-                        }
-                    }
-                    Control::Handler { body, .. }
-                    | Control::Cleanup { body, .. }
-                    | Control::Resource { body, .. }
-                    | Control::Registration { body, .. }
-                    | Control::NativeInterpret { body, .. } => {
-                        self.discover_boundary(state, *body, &mut pending, &mut visited, budget)?;
-                    }
-                    Control::RetainedRoot { body, store } => {
-                        let (body, store) = (*body, *store);
-                        state.charge_key(budget)?;
-                        if !value_requests.contains(&state) {
-                            value_requests
-                                .try_reserve(1)
-                                .map_err(|_| Failure::Resource)?;
-                            value_requests.insert(state.copy(budget)?);
-                        }
-                        self.discover_retained_root(
-                            state,
-                            body,
-                            store,
-                            &mut unresolved_retained,
-                            &mut pending,
-                            &mut visited,
-                            budget,
-                        )?;
-                    }
-                    Control::Continue {
-                        store,
-                        key,
-                        some,
-                        none,
-                    } => {
-                        let (store, key, some, none) = (*store, *key, *some, *none);
-                        state.charge_key(budget)?;
-                        if !value_requests.contains(&state) {
-                            value_requests
-                                .try_reserve(1)
-                                .map_err(|_| Failure::Resource)?;
-                            value_requests.insert(state.copy(budget)?);
-                        }
-                        self.discover_continue(
-                            state,
-                            store,
-                            key,
-                            some,
-                            none,
-                            &mut unresolved_retained,
-                            &mut pending,
-                            &mut visited,
-                            budget,
-                        )?;
-                    }
-                    Control::Request(request) => {
-                        if request.region_service
-                            || request.effect.as_ref().is_some_and(|effect| {
-                                effect.effect().module().is_builtin_resource()
-                            })
-                        {
-                            state.charge_key(budget)?;
-                            if !value_requests.contains(&state) {
-                                value_requests
-                                    .try_reserve(1)
-                                    .map_err(|_| Failure::Resource)?;
-                                let saved = state.copy(budget)?;
-                                state.charge_key(budget)?;
-                                value_requests.insert(saved);
-                            }
-                        }
-                        let label = self.label(code, state.context, budget)?;
-                        let port = self
-                            .data
-                            .as_mut()
-                            .map(|data| data.port(code, state.value_context, budget))
-                            .transpose()?;
-                        self.requested(
-                            &state,
-                            Event {
-                                code,
-                                label,
-                                unknown: false,
-                                port,
-                            },
-                            &mut pending,
-                            &mut visited,
-                            budget,
-                        )?;
-                    }
-                    Control::Call { .. } => {
-                        self.discover_call(
-                            state,
-                            &mut calls,
-                            &mut observed_calls,
-                            &mut pending,
-                            &mut visited,
-                            budget,
-                        )?;
-                    }
-                    Control::Resume { owner, value } => {
-                        if state.position.next == 0 {
-                            let value = *value;
-                            let mut next = state;
-                            next.push(
-                                Frame::Next {
-                                    position: Position { code, next: 1 },
-                                    context: next.context,
-                                    value_context: next.value_context,
-                                },
-                                budget,
-                            )?;
-                            next.position = Position {
-                                code: value,
-                                next: 0,
-                            };
-                            Self::enqueue(next, &mut pending, &mut visited, budget)?;
-                        } else {
-                            self.completed(
-                                state,
-                                *owner,
-                                Completion::Resume,
-                                &mut pending,
-                                &mut visited,
-                                budget,
-                            )?;
-                        }
-                    }
+                    Control::Resume { owner, .. } if state.position.next != 0 => self.completed(
+                        state,
+                        *owner,
+                        Completion::Resume,
+                        &mut pending,
+                        &mut visited,
+                        budget,
+                    )?,
                     Control::Discard { owner, .. } => self.completed(
                         state,
                         *owner,
@@ -3122,6 +2921,16 @@ impl<'a> Analysis<'a> {
                         state,
                         *owner,
                         Completion::Retain,
+                        &mut pending,
+                        &mut visited,
+                        budget,
+                    )?,
+                    _ => self.discover_step(
+                        state,
+                        &mut calls,
+                        &mut observed_calls,
+                        &mut value_requests,
+                        &mut unresolved_retained,
                         &mut pending,
                         &mut visited,
                         budget,
@@ -3161,8 +2970,225 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
+    // Keep unrelated dispatch work off completion's bounded stack path.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)] // Existing queues and work authority remain separate.
+    fn discover_step(
+        &mut self,
+        state: State,
+        calls: &mut Vec<ObservedCall>,
+        observed_calls: &mut HashMap<State, usize>,
+        value_requests: &mut HashSet<State>,
+        unresolved_retained: &mut HashSet<State>,
+        pending: &mut VecDeque<State>,
+        visited: &mut HashSet<State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let code = state.position.code;
+        match &self.graph.code[code] {
+            Control::Unavailable => return Err(Failure::Invalid),
+            Control::Sequence(children) => {
+                self.discover_sequence(state, children, pending, visited, budget)?;
+            }
+            Control::Choice(children) => {
+                self.discover_choice(state, children, pending, visited, budget)?;
+            }
+            Control::Handler { body, .. }
+            | Control::Cleanup { body, .. }
+            | Control::Resource { body, .. }
+            | Control::Registration { body, .. }
+            | Control::NativeInterpret { body, .. } => {
+                self.discover_boundary(state, *body, pending, visited, budget)?;
+            }
+            Control::RetainedRoot { body, store } => {
+                let (body, store) = (*body, *store);
+                state.charge_key(budget)?;
+                if !value_requests.contains(&state) {
+                    value_requests
+                        .try_reserve(1)
+                        .map_err(|_| Failure::Resource)?;
+                    value_requests.insert(state.copy(budget)?);
+                }
+                self.discover_retained_root(
+                    state,
+                    body,
+                    store,
+                    unresolved_retained,
+                    pending,
+                    visited,
+                    budget,
+                )?;
+            }
+            Control::Continue {
+                store,
+                key,
+                some,
+                none,
+            } => {
+                let (store, key, some, none) = (*store, *key, *some, *none);
+                state.charge_key(budget)?;
+                if !value_requests.contains(&state) {
+                    value_requests
+                        .try_reserve(1)
+                        .map_err(|_| Failure::Resource)?;
+                    value_requests.insert(state.copy(budget)?);
+                }
+                self.discover_continue(
+                    state,
+                    store,
+                    key,
+                    some,
+                    none,
+                    unresolved_retained,
+                    pending,
+                    visited,
+                    budget,
+                )?;
+            }
+            Control::Request(request) => {
+                if request.region_service
+                    || request
+                        .effect
+                        .as_ref()
+                        .is_some_and(|effect| effect.effect().module().is_builtin_resource())
+                {
+                    state.charge_key(budget)?;
+                    if !value_requests.contains(&state) {
+                        value_requests
+                            .try_reserve(1)
+                            .map_err(|_| Failure::Resource)?;
+                        let saved = state.copy(budget)?;
+                        state.charge_key(budget)?;
+                        value_requests.insert(saved);
+                    }
+                }
+                let label = self.label(code, state.context, budget)?;
+                let port = self
+                    .data
+                    .as_mut()
+                    .map(|data| data.port(code, state.value_context, budget))
+                    .transpose()?;
+                self.requested(
+                    &state,
+                    Event {
+                        code,
+                        label,
+                        unknown: false,
+                        port,
+                    },
+                    pending,
+                    visited,
+                    budget,
+                )?;
+            }
+            Control::Call { .. } => {
+                self.discover_call(state, calls, observed_calls, pending, visited, budget)?;
+            }
+            Control::Resume { value, .. } => {
+                let value = *value;
+                let mut next = state;
+                next.push(
+                    Frame::Next {
+                        position: Position { code, next: 1 },
+                        context: next.context,
+                        value_context: next.value_context,
+                    },
+                    budget,
+                )?;
+                next.position = Position {
+                    code: value,
+                    next: 0,
+                };
+                Self::enqueue(next, pending, visited, budget)?;
+            }
+            _ => return Err(Failure::Invalid),
+        }
+        Ok(())
+    }
+
     // Dispatch-specific owned temporaries must not remain live while a different
     // control branch copies continuation graphs on a bounded thread stack.
+    #[inline(never)]
+    fn discover_choice(
+        &mut self,
+        state: State,
+        children: &[usize],
+        pending: &mut VecDeque<State>,
+        visited: &mut HashSet<State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let code = state.position.code;
+        let cases = if let Some(drain) = &state.drain {
+            let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+            if let Some((scrutinee, result_case, patterns)) =
+                data.case_choice(code, state.value_context, budget)?
+            {
+                if patterns.len() != children.len() {
+                    return Err(Failure::Invalid);
+                }
+                let fact = data.case_of(scrutinee, &drain.facts, budget)?;
+                Some((result_case, patterns, fact))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        for (ordinal, child) in children.iter().enumerate() {
+            let (possible, decisive) = if let Some((_, patterns, fact)) = &cases {
+                match (patterns[ordinal], fact.map(|fact| fact.value)) {
+                    (super::value::CasePattern::Any, _) => (true, true),
+                    (super::value::CasePattern::Opaque, _) => (true, false),
+                    (super::value::CasePattern::Case(_, _), None) => (true, false),
+                    (super::value::CasePattern::Case(expected, total), Some(actual)) => {
+                        (expected == actual, expected == actual && total)
+                    }
+                }
+            } else {
+                (true, false)
+            };
+            if !possible {
+                continue;
+            }
+            let mut next = state.copy(budget)?;
+            let mut pushed = false;
+            if let (Some(drain), Some((result_case, _, _))) = (&mut next.drain, &cases) {
+                let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+                for (binder, value) in
+                    data.case_arm_bindings(code, ordinal, state.value_context, budget)?
+                {
+                    let fact = data.case_of(value, &drain.facts, budget)?;
+                    drain.assign(binder, fact, budget)?;
+                }
+                if *result_case {
+                    next.push(
+                        Frame::CaseReturn {
+                            code,
+                            ordinal,
+                            context: state.context,
+                            value_context: state.value_context,
+                        },
+                        budget,
+                    )?;
+                    pushed = true;
+                }
+            }
+            next.position = Position {
+                code: *child,
+                next: 0,
+            };
+            if pushed {
+                Self::enqueue(next, pending, visited, budget)?;
+            } else {
+                Self::enqueue_normalized(next, pending, visited, budget)?;
+            }
+            if decisive {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     #[inline(never)]
     fn discover_sequence(
         &mut self,
@@ -5494,52 +5520,12 @@ impl<'a> Analysis<'a> {
         }
         for selected in selected {
             if matches!(selected.boundary.frame, Frame::NativeInterpret { .. }) {
-                self.check_payload(state, event, &selected.prefix, budget)?;
-                if let (Some(data), Some(port)) = (&mut self.data, event.port) {
-                    data.external_result(port, budget)?;
-                }
-                let mut next = state.copy(budget)?;
-                if let Some(drain) = &mut next.drain {
-                    drain.changed(DrainWork::Unknown, budget)?;
-                    drain.facts.clear();
-                }
-                self.returned(next, pending, visited, budget)?;
+                self.requested_interpreter(state, event, &selected, pending, visited, budget)?;
                 continue;
             }
-            if let Frame::RemovedHandler { code, .. } = selected.boundary.frame {
-                if self.infer_cleanup_rows && !self.authenticate_actual_captures {
-                    self.returned(state.copy(budget)?, pending, visited, budget)?;
-                    continue;
-                }
-                let Control::Handler { effect, .. } = &self.graph.code[code] else {
-                    return Err(Failure::Invalid);
-                };
-                let Some((discard, _)) = state.abandoned else {
-                    return Err(Failure::Invalid);
-                };
-                let Control::Discard { source, .. } = self.graph.code[discard] else {
-                    return Err(Failure::Invalid);
-                };
-                let action = selected
-                    .prefix
-                    .iter()
-                    .find_map(|edge| match edge.frame {
-                        Frame::Cleanup {
-                            code,
-                            running: true,
-                            ..
-                        } => match self.graph.code[code] {
-                            Control::Cleanup { source, .. } => Some(source),
-                            _ => None,
-                        },
-                        _ => None,
-                    })
-                    .unwrap_or(self.source(event));
-                return Err(Failure::CleanupContext {
-                    discard: source,
-                    action,
-                    handler: effect.source,
-                });
+            if matches!(selected.boundary.frame, Frame::RemovedHandler { .. }) {
+                self.requested_removed_handler(state, event, &selected, pending, visited, budget)?;
+                continue;
             }
             if matches!(selected.boundary.frame, Frame::Resource { .. }) {
                 self.requested_native(state, event, &selected, pending, visited, budget)?;
@@ -5572,6 +5558,77 @@ impl<'a> Analysis<'a> {
             }
         }
         Ok(())
+    }
+
+    #[inline(never)]
+    fn requested_interpreter(
+        &mut self,
+        state: &State,
+        event: Event,
+        selected: &Selection,
+        pending: &mut VecDeque<State>,
+        visited: &mut HashSet<State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        self.check_payload(state, event, &selected.prefix, budget)?;
+        if let (Some(data), Some(port)) = (&mut self.data, event.port) {
+            data.external_result(port, budget)?;
+        }
+        let mut next = state.copy(budget)?;
+        if let Some(drain) = &mut next.drain {
+            drain.changed(DrainWork::Unknown, budget)?;
+            drain.facts.clear();
+        }
+        self.returned(next, pending, visited, budget)?;
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn requested_removed_handler(
+        &mut self,
+        state: &State,
+        event: Event,
+        selected: &Selection,
+        pending: &mut VecDeque<State>,
+        visited: &mut HashSet<State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if self.infer_cleanup_rows && !self.authenticate_actual_captures {
+            self.returned(state.copy(budget)?, pending, visited, budget)?;
+            return Ok(());
+        }
+        let Frame::RemovedHandler { code, .. } = selected.boundary.frame else {
+            return Err(Failure::Invalid);
+        };
+        let Control::Handler { effect, .. } = &self.graph.code[code] else {
+            return Err(Failure::Invalid);
+        };
+        let Some((discard, _)) = state.abandoned else {
+            return Err(Failure::Invalid);
+        };
+        let Control::Discard { source, .. } = self.graph.code[discard] else {
+            return Err(Failure::Invalid);
+        };
+        let action = selected
+            .prefix
+            .iter()
+            .find_map(|edge| match edge.frame {
+                Frame::Cleanup {
+                    code,
+                    running: true,
+                    ..
+                } => match self.graph.code[code] {
+                    Control::Cleanup { source, .. } => Some(source),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .unwrap_or(self.source(event));
+        Err(Failure::CleanupContext {
+            discard: source,
+            action,
+            handler: effect.source,
+        })
     }
 
     #[inline(never)]
@@ -6432,8 +6489,6 @@ impl<'a> Analysis<'a> {
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        let resume = matches!(completion, Completion::Resume);
-        let discard = matches!(completion, Completion::Discard);
         let retain = matches!(completion, Completion::Retain);
         let (selected, escaped) = selections(
             &state,
@@ -6452,327 +6507,376 @@ impl<'a> Analysis<'a> {
         if escaped || (retain && selected.is_empty()) {
             return Err(Failure::Invalid);
         }
-        for mut selected in selected {
-            let Frame::Clause {
-                capture,
-                event,
-                consumed,
+        for selected in selected {
+            self.completed_selection(
+                &state, owner, completion, selected, pending, visited, budget,
+            )?;
+        }
+        Ok(())
+    }
+
+    // Selection is complete before allocating the per-branch completion workspace.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)] // Independent owner, state and work authorities stay explicit.
+    fn completed_selection(
+        &mut self,
+        state: &State,
+        owner: usize,
+        completion: Completion,
+        mut selected: Selection,
+        pending: &mut VecDeque<State>,
+        visited: &mut HashSet<State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let resume = matches!(completion, Completion::Resume);
+        let discard = matches!(completion, Completion::Discard);
+        let retain = matches!(completion, Completion::Retain);
+        let Frame::Clause {
+            capture,
+            event,
+            consumed,
+            handler,
+            value_context,
+            ..
+        } = selected.boundary.frame
+        else {
+            return Err(Failure::Invalid);
+        };
+        if consumed {
+            return Err(Failure::Invalid);
+        }
+        if resume && let (Some(data), Some(port)) = (&mut self.data, event.port) {
+            data.resume(
+                port,
+                state.position.code,
+                state.value_context,
                 handler,
                 value_context,
-                ..
-            } = selected.boundary.frame
-            else {
-                return Err(Failure::Invalid);
-            };
-            if consumed {
-                return Err(Failure::Invalid);
-            }
-            if resume && let (Some(data), Some(port)) = (&mut self.data, event.port) {
-                data.resume(
-                    port,
-                    state.position.code,
-                    state.value_context,
-                    handler,
-                    value_context,
-                    budget,
-                )?;
-            }
-            if discard
-                && event.unknown
-                && (!self.infer_cleanup_rows || self.authenticate_actual_captures)
+                budget,
+            )?;
+        }
+        if discard
+            && event.unknown
+            && (!self.infer_cleanup_rows || self.authenticate_actual_captures)
+        {
+            return Err(self.unsafe_discard(state.position.code, event, None));
+        }
+        if discard && self.authenticate_actual_captures {
+            let label = self.labels.get(event.label).ok_or(Failure::Invalid)?;
+            if event.unknown
+                || label.ambiguous_instance
+                || label.effect.is_none()
+                || event.port.is_none()
             {
                 return Err(self.unsafe_discard(state.position.code, event, None));
             }
-            if discard && self.authenticate_actual_captures {
-                let label = self.labels.get(event.label).ok_or(Failure::Invalid)?;
-                if event.unknown
-                    || label.ambiguous_instance
-                    || label.effect.is_none()
-                    || event.port.is_none()
-                {
-                    return Err(self.unsafe_discard(state.position.code, event, None));
-                }
-                if !self.inspecting {
-                    let occurrence = super::ActualDiscardCapture {
-                        code: state.position.code,
-                        context: state.context,
-                        request: super::ActualRequestContext {
-                            code: event.code,
-                            label: event.label,
-                            port: event.port,
-                            value_context: state.value_context,
-                        },
-                    };
-                    charge(
-                        budget,
-                        self.actual_captures
-                            .len()
-                            .checked_add(1)
-                            .ok_or(Failure::Resource)?,
-                    )?;
-                    if !self.actual_captures.contains(&occurrence) {
-                        self.actual_captures
-                            .try_reserve(1)
-                            .map_err(|_| Failure::Resource)?;
-                        self.actual_captures.push(occurrence);
-                    }
+            if !self.inspecting {
+                let occurrence = super::ActualDiscardCapture {
+                    code: state.position.code,
+                    context: state.context,
+                    request: super::ActualRequestContext {
+                        code: event.code,
+                        label: event.label,
+                        port: event.port,
+                        value_context: state.value_context,
+                    },
+                };
+                charge(
+                    budget,
+                    self.actual_captures
+                        .len()
+                        .checked_add(1)
+                        .ok_or(Failure::Resource)?,
+                )?;
+                if !self.actual_captures.contains(&occurrence) {
+                    self.actual_captures
+                        .try_reserve(1)
+                        .map_err(|_| Failure::Resource)?;
+                    self.actual_captures.push(occurrence);
                 }
             }
-            let mut inspection = None;
-            let retained_root = if retain {
-                if !matches!(selected.boundary.address, Address::Slot { old: false, .. }) {
-                    return Err(Failure::Invalid);
+        }
+        let (retained_root, inspection) = if retain {
+            let (root, inspection) = self.prepare_retained_completion(
+                state,
+                selected.boundary,
+                capture,
+                event,
+                handler,
+                budget,
+            )?;
+            (Some(root), inspection)
+        } else {
+            (None, None)
+        };
+        let mut next = state.copy(budget)?;
+        if resume && let (Some(drain), Some(port)) = (&mut next.drain, event.port) {
+            let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+            let operand =
+                data.case_resume_operand(state.position.code, state.value_context, budget)?;
+            let fact = data
+                .case_of(operand, &drain.facts, budget)?
+                .map(|mut fact| {
+                    // The captured request port can also be part of this
+                    // aggregate's earlier payload in a reused context.
+                    fact.origin = None;
+                    fact
+                });
+            drain.facts.clear();
+            drain.assign(port, fact, budget)?;
+        }
+        if let Some((store, ..)) = retained_root
+            && let [owner] = state.edges(store, budget)?
+            && matches!(owner.frame, Frame::Resource { focused: true, .. })
+            && let Some(drain) = &mut next.drain
+        {
+            #[cfg(test)]
+            if drain.witness.progress == 4 && drain.work == DrainWork::ActiveOnly {
+                drain.witness.late_retain_after_drain = true;
+            }
+            drain.changed(DrainWork::Pending, budget)?;
+            #[cfg(test)]
+            {
+                drain.witness.progress = 1;
+            }
+        }
+        // Replacing this occurrence does not mutate an older activation
+        // sharing the static owner identity.
+        if let Frame::Clause {
+            consumed, capture, ..
+        } = &mut selected.boundary.frame
+        {
+            *consumed = true;
+            *capture = Address::End;
+        }
+        let last = selected.prefix.last_mut().ok_or(Failure::Invalid)?;
+        *last = selected.boundary;
+        let continuation = if resume && selected.prefix.len() == 1 {
+            // Tail resume has no remaining clause computation. Its
+            // consumed owner is an empty return step, not an outside
+            // completion obligation. Keep the captured owners intact.
+            selected.boundary.next
+        } else if matches!(selected.boundary.address, Address::Slot { old: false, .. }) {
+            // A recent address denotes one occurrence. Consuming it is
+            // a move, not a fresh allocation of all its ordinary frames.
+            let address = Address::Slot {
+                region: Region::Active,
+                site: selected.boundary.frame.site(),
+                allocation_context: match selected.boundary.address {
+                    Address::Slot {
+                        allocation_context, ..
+                    } => allocation_context,
+                    _ => return Err(Failure::Invalid),
+                },
+                old: false,
+            };
+            let mut rename = HashMap::new();
+            rename.try_reserve(1).map_err(|_| Failure::Resource)?;
+            rename.insert(address, address.older());
+            next.rename(&rename, budget)?;
+            let mut rename_owner = HashMap::new();
+            rename_owner.try_reserve(1).map_err(|_| Failure::Resource)?;
+            rename_owner.insert(selected.boundary.address, address);
+            charge(budget, next.heap.len())?;
+            for edge in &mut next.heap {
+                if edge.address == selected.boundary.address {
+                    edge.frame = selected.boundary.frame;
                 }
-                let (roots, escaped) = selections(
-                    &state,
-                    selected.boundary.next,
-                    |frame| {
-                        Ok(match frame {
-                            Frame::RetainedRoot { .. } => (true, false),
-                            _ => (false, true),
-                        })
-                    },
+            }
+            next.rename(&rename_owner, budget)?;
+            next.stack
+        } else {
+            next.copy_segment(
+                state.stack,
+                &selected.prefix,
+                Some(selected.boundary),
+                selected.boundary.next,
+                // The rebound older prefix must not retain the live
+                // original prefix's tail. Repeated completions at this
+                // fixed site still join conservatively within a region.
+                Region::Completion(state.position.code, owner),
+                budget,
+            )?
+        };
+        next.stack = continuation;
+        if resume {
+            Self::resume_completed_capture(state, &mut next, capture, continuation, budget)?;
+        } else if discard {
+            next.abandoned = Some((state.position.code, event));
+            next.push(
+                Frame::Closing {
+                    code: state.position.code,
+                    site: Site::Closing(state.position.code, false),
+                    context: state.context,
+                    value_context: state.value_context,
+                    capture: None,
+                    event,
+                },
+                budget,
+            )?;
+            self.close_segment(
+                state,
+                &mut next,
+                capture,
+                state.position.code,
+                event,
+                budget,
+            )?;
+        } else {
+            let (store, baseline, root, root_context, root_value_context) =
+                retained_root.ok_or(Failure::Invalid)?;
+            charge(budget, 1)?;
+            next.retained
+                .try_reserve(1)
+                .map_err(|_| Failure::Resource)?;
+            let key = self.data.as_mut().ok_or(Failure::Invalid)?.retained_key(
+                state.position.code,
+                state.value_context,
+                budget,
+            )?;
+            next.retained.push(RetainedCapture {
+                store,
+                key,
+                capture: Some(capture),
+                baseline,
+                root,
+                root_context,
+                root_value_context,
+                handler,
+                handler_context: value_context,
+                event,
+            });
+        }
+        next.position = Position { code: 0, next: 0 };
+        Self::enqueue(next, pending, visited, budget)?;
+        if let Some(inspection) = inspection {
+            Self::enqueue(inspection, pending, visited, budget)?;
+        }
+        Ok(())
+    }
+
+    // Discard does not need the traversal workspace used to restore a resume.
+    #[inline(never)]
+    fn resume_completed_capture(
+        state: &State,
+        next: &mut State,
+        capture: Address,
+        continuation: Address,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        // The capture reference may have been aged by copying the
+        // active prefix; the copied clause's old capture is immutable.
+        let mut captured = Vec::new();
+        let mut todo = Vec::new();
+        let mut seen = HashSet::new();
+        todo.try_reserve(1).map_err(|_| Failure::Resource)?;
+        todo.push(capture);
+        while let Some(address) = todo.pop() {
+            if address == Address::End || seen.contains(&address) {
+                continue;
+            }
+            seen.try_reserve(1).map_err(|_| Failure::Resource)?;
+            seen.insert(address);
+            for edge in state.edges(address, budget)? {
+                captured.try_reserve(1).map_err(|_| Failure::Resource)?;
+                captured.push(*edge);
+                todo.try_reserve(1).map_err(|_| Failure::Resource)?;
+                todo.push(edge.next);
+            }
+        }
+        next.stack = next.copy_segment(
+            capture,
+            &captured,
+            None,
+            continuation,
+            Region::Active,
+            budget,
+        )?;
+        Ok(())
+    }
+
+    // Ordinary discard does not need the retained-owner inspection workspace.
+    #[inline(never)]
+    fn prepare_retained_completion(
+        &mut self,
+        state: &State,
+        boundary: Edge,
+        capture: Address,
+        event: Event,
+        handler: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(RetainedRootSite, Option<State>), Failure> {
+        if !matches!(boundary.address, Address::Slot { old: false, .. }) {
+            return Err(Failure::Invalid);
+        }
+        let (roots, escaped) = selections(
+            state,
+            boundary.next,
+            |frame| {
+                Ok(match frame {
+                    Frame::RetainedRoot { .. } => (true, false),
+                    _ => (false, true),
+                })
+            },
+            budget,
+        )?;
+        let [root] = roots.as_slice() else {
+            return Err(Failure::Invalid);
+        };
+        if escaped {
+            return Err(Failure::Invalid);
+        }
+        let Frame::RetainedRoot {
+            code,
+            context,
+            value_context,
+            store,
+            baseline,
+            ..
+        } = root.boundary.frame
+        else {
+            return Err(Failure::Invalid);
+        };
+        if !matches!(self.graph.code[code], Control::RetainedRoot { body, .. } if body == handler) {
+            return Err(Failure::Invalid);
+        }
+        self.check_retained_capture(state, capture, store, budget)?;
+        let mut inspection = None;
+        if self.has_intervening_interpreter(state, root.boundary.next, store, budget)? {
+            if self.inspecting {
+                inspection = Some(self.inspect_retained_capture(
+                    state,
+                    root.boundary,
+                    capture,
+                    event,
                     budget,
-                )?;
-                let [root] = roots.as_slice() else {
+                )?);
+            } else if !self.focusing {
+                let [owner] = state.edges(store, budget)? else {
                     return Err(Failure::Invalid);
                 };
-                if escaped {
-                    return Err(Failure::Invalid);
-                }
-                let Frame::RetainedRoot {
+                let Frame::Resource {
                     code,
-                    context,
                     value_context,
-                    store,
-                    baseline,
                     ..
-                } = root.boundary.frame
+                } = owner.frame
                 else {
                     return Err(Failure::Invalid);
                 };
-                if !matches!(self.graph.code[code], Control::RetainedRoot { body, .. } if body == handler)
-                {
-                    return Err(Failure::Invalid);
-                }
-                self.check_retained_capture(&state, capture, store, budget)?;
-                if self.has_intervening_interpreter(&state, root.boundary.next, store, budget)? {
-                    if self.inspecting {
-                        inspection = Some(self.inspect_retained_capture(
-                            &state,
-                            root.boundary,
-                            capture,
-                            event,
-                            budget,
-                        )?);
-                    } else if !self.focusing {
-                        let [owner] = state.edges(store, budget)? else {
-                            return Err(Failure::Invalid);
-                        };
-                        let Frame::Resource {
-                            code,
-                            value_context,
-                            ..
-                        } = owner.frame
-                        else {
-                            return Err(Failure::Invalid);
-                        };
-                        let key = self.data.as_ref().ok_or(Failure::Invalid)?.resource_key(
-                            code,
-                            value_context,
-                            budget,
-                        )?;
-                        charge(budget, 1)?;
-                        self.inspect_stores
-                            .try_reserve(1)
-                            .map_err(|_| Failure::Resource)?;
-                        self.inspect_stores.insert(key);
-                    }
-                }
-                self.record_retained_support(
-                    &state,
-                    capture,
-                    store,
-                    baseline,
-                    state.position.code,
+                let key = self.data.as_ref().ok_or(Failure::Invalid)?.resource_key(
+                    code,
+                    value_context,
                     budget,
                 )?;
-                Some((store, baseline, code, context, value_context))
-            } else {
-                None
-            };
-            let mut next = state.copy(budget)?;
-            if resume && let (Some(drain), Some(port)) = (&mut next.drain, event.port) {
-                let data = self.data.as_mut().ok_or(Failure::Invalid)?;
-                let operand =
-                    data.case_resume_operand(state.position.code, state.value_context, budget)?;
-                let fact = data
-                    .case_of(operand, &drain.facts, budget)?
-                    .map(|mut fact| {
-                        // The captured request port can also be part of this
-                        // aggregate's earlier payload in a reused context.
-                        fact.origin = None;
-                        fact
-                    });
-                drain.facts.clear();
-                drain.assign(port, fact, budget)?;
-            }
-            if let Some((store, ..)) = retained_root
-                && let [owner] = state.edges(store, budget)?
-                && matches!(owner.frame, Frame::Resource { focused: true, .. })
-                && let Some(drain) = &mut next.drain
-            {
-                #[cfg(test)]
-                if drain.witness.progress == 4 && drain.work == DrainWork::ActiveOnly {
-                    drain.witness.late_retain_after_drain = true;
-                }
-                drain.changed(DrainWork::Pending, budget)?;
-                #[cfg(test)]
-                {
-                    drain.witness.progress = 1;
-                }
-            }
-            // Replacing this occurrence does not mutate an older activation
-            // sharing the static owner identity.
-            if let Frame::Clause {
-                consumed, capture, ..
-            } = &mut selected.boundary.frame
-            {
-                *consumed = true;
-                *capture = Address::End;
-            }
-            let last = selected.prefix.last_mut().ok_or(Failure::Invalid)?;
-            *last = selected.boundary;
-            let continuation = if resume && selected.prefix.len() == 1 {
-                // Tail resume has no remaining clause computation. Its
-                // consumed owner is an empty return step, not an outside
-                // completion obligation. Keep the captured owners intact.
-                selected.boundary.next
-            } else if matches!(selected.boundary.address, Address::Slot { old: false, .. }) {
-                // A recent address denotes one occurrence. Consuming it is
-                // a move, not a fresh allocation of all its ordinary frames.
-                let address = Address::Slot {
-                    region: Region::Active,
-                    site: selected.boundary.frame.site(),
-                    allocation_context: match selected.boundary.address {
-                        Address::Slot {
-                            allocation_context, ..
-                        } => allocation_context,
-                        _ => return Err(Failure::Invalid),
-                    },
-                    old: false,
-                };
-                let mut rename = HashMap::new();
-                rename.try_reserve(1).map_err(|_| Failure::Resource)?;
-                rename.insert(address, address.older());
-                next.rename(&rename, budget)?;
-                let mut rename_owner = HashMap::new();
-                rename_owner.try_reserve(1).map_err(|_| Failure::Resource)?;
-                rename_owner.insert(selected.boundary.address, address);
-                charge(budget, next.heap.len())?;
-                for edge in &mut next.heap {
-                    if edge.address == selected.boundary.address {
-                        edge.frame = selected.boundary.frame;
-                    }
-                }
-                next.rename(&rename_owner, budget)?;
-                next.stack
-            } else {
-                next.copy_segment(
-                    state.stack,
-                    &selected.prefix,
-                    Some(selected.boundary),
-                    selected.boundary.next,
-                    // The rebound older prefix must not retain the live
-                    // original prefix's tail. Repeated completions at this
-                    // fixed site still join conservatively within a region.
-                    Region::Completion(state.position.code, owner),
-                    budget,
-                )?
-            };
-            next.stack = continuation;
-            if resume {
-                // The capture reference may have been aged by copying the
-                // active prefix; the copied clause's old capture is immutable.
-                let mut captured = Vec::new();
-                let mut todo = Vec::new();
-                let mut seen = HashSet::new();
-                todo.try_reserve(1).map_err(|_| Failure::Resource)?;
-                todo.push(capture);
-                while let Some(address) = todo.pop() {
-                    if address == Address::End || seen.contains(&address) {
-                        continue;
-                    }
-                    seen.try_reserve(1).map_err(|_| Failure::Resource)?;
-                    seen.insert(address);
-                    for edge in state.edges(address, budget)? {
-                        captured.try_reserve(1).map_err(|_| Failure::Resource)?;
-                        captured.push(*edge);
-                        todo.try_reserve(1).map_err(|_| Failure::Resource)?;
-                        todo.push(edge.next);
-                    }
-                }
-                next.stack = next.copy_segment(
-                    capture,
-                    &captured,
-                    None,
-                    continuation,
-                    Region::Active,
-                    budget,
-                )?;
-            } else if discard {
-                next.abandoned = Some((state.position.code, event));
-                next.push(
-                    Frame::Closing {
-                        code: state.position.code,
-                        site: Site::Closing(state.position.code, false),
-                        context: state.context,
-                        value_context: state.value_context,
-                        capture: None,
-                        event,
-                    },
-                    budget,
-                )?;
-                self.close_segment(
-                    &state,
-                    &mut next,
-                    capture,
-                    state.position.code,
-                    event,
-                    budget,
-                )?;
-            } else {
-                let (store, baseline, root, root_context, root_value_context) =
-                    retained_root.ok_or(Failure::Invalid)?;
                 charge(budget, 1)?;
-                next.retained
+                self.inspect_stores
                     .try_reserve(1)
                     .map_err(|_| Failure::Resource)?;
-                let key = self.data.as_mut().ok_or(Failure::Invalid)?.retained_key(
-                    state.position.code,
-                    state.value_context,
-                    budget,
-                )?;
-                next.retained.push(RetainedCapture {
-                    store,
-                    key,
-                    capture: Some(capture),
-                    baseline,
-                    root,
-                    root_context,
-                    root_value_context,
-                    handler,
-                    handler_context: value_context,
-                    event,
-                });
-            }
-            next.position = Position { code: 0, next: 0 };
-            Self::enqueue(next, pending, visited, budget)?;
-            if let Some(inspection) = inspection {
-                Self::enqueue(inspection, pending, visited, budget)?;
+                self.inspect_stores.insert(key);
             }
         }
-        Ok(())
+        self.record_retained_support(state, capture, store, baseline, state.position.code, budget)?;
+        Ok(((store, baseline, code, context, value_context), inspection))
     }
 
     fn check_payload(

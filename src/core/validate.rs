@@ -21215,6 +21215,142 @@ mod tests {
     }
 
     #[test]
+    fn retained_same_typed_cleanup_callback_substitution_rechecks_release() {
+        use super::super::effect::EffectOperation;
+
+        let original = include_str!("../../tests/fixtures/retained-drain/outer-discard.ash");
+        let anchor = "                    let action : Unit -> Unit ! {Control.Drive<N>, Control.Probe<N>} = fn(ignored) {";
+        assert_eq!(original.matches(anchor).count(), 1);
+        let alternate = concat!(
+            "                    let unsafe_action : Unit -> Unit ! {Control.Drive<N>, Control.Probe<N>} = fn(ignored) {\n",
+            "                        let quiet = perform Control.Probe<N>.quiescent ()\n",
+            "                        match quiet {\n",
+            "                            true => {\n",
+            "                                let _ = Control.advance_with_drive (store, key)\n",
+            "                                ()\n",
+            "                            }\n",
+            "                            false => ()\n",
+            "                        }\n",
+            "                    }\n",
+        );
+        let source = original.replacen(anchor, &format!("{alternate}{anchor}"), 1);
+        let tree = LinkedValidationDirectory::create();
+        let entry = tree.write("entry.ash", &source);
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the original drain callback must validate");
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "7"
+        );
+        let (donor, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let relation = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+
+        for fold in [false, true] {
+            let (name, copied) = if fold {
+                ("fold", fold_effect_literal_primitives(donor).unwrap())
+            } else {
+                ("identity", identity_effect_traversal(donor).unwrap())
+            };
+            let (mut work, _) = crate::compiler_work::resident_phase_work(
+                crate::compiler_work::CompilationPhase::IndependentCore,
+                &sources,
+            )
+            .unwrap();
+            let validated =
+                validate_effect_modules_with_work(copied, &sources, &relation, &mut work)
+                    .expect("the transformed donor must validate");
+            assert_eq!(
+                crate::eval::evaluate_effect(&validated)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "7"
+            );
+
+            let mut forged = identity_effect_traversal(&validated).unwrap();
+            let mut action = None;
+            let mut unsafe_action = None;
+            for node in &forged.nodes {
+                let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) =
+                    &node.kind
+                else {
+                    continue;
+                };
+                let span = binding.binder().origin().primary_span();
+                let source = sources
+                    .iter()
+                    .find(|source| source.id() == span.source())
+                    .unwrap();
+                match &source.text()[span.range().start() as usize..span.range().end() as usize] {
+                    "action" => {
+                        action = Some((binding.binder().id(), binding.binder().ty().clone()))
+                    }
+                    "unsafe_action" => {
+                        unsafe_action =
+                            Some((binding.binder().id(), binding.binder().ty().clone()));
+                    }
+                    _ => {}
+                }
+            }
+            let (action, action_type) = action.unwrap();
+            let (unsafe_action, unsafe_type) = unsafe_action.unwrap();
+            assert_eq!(action_type, unsafe_type, "{name}");
+            let initializers = forged
+                .nodes
+                .iter()
+                .filter_map(|node| match &node.kind {
+                    EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
+                        Some(scope.callback)
+                    }
+                    _ => None,
+                })
+                .filter_map(|callback| {
+                    forged.nodes.iter().find_map(|node| match &node.kind {
+                        EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                            binding,
+                        ))) if binding.binder().id() == callback => Some(binding.initializer()),
+                        _ => None,
+                    })
+                })
+                .filter(|initializer| {
+                    matches!(
+                        &forged.nodes[initializer.index().unwrap()].kind,
+                        EffectExprKind::Pure(PureExprKind::Variable(variable))
+                            if variable.binder() == action
+                    )
+                })
+                .collect::<Vec<_>>();
+            let [initializer] = initializers.as_slice() else {
+                panic!("{name}: expected the original action callback initializer");
+            };
+            let node = &mut forged.nodes[initializer.index().unwrap()];
+            assert_eq!(node.ty, unsafe_type, "{name}");
+            node.kind = EffectExprKind::Pure(PureExprKind::Variable(
+                crate::core::variable::VariableNode::new(unsafe_action),
+            ));
+
+            let (mut work, _) = crate::compiler_work::resident_phase_work(
+                crate::compiler_work::CompilationPhase::IndependentCore,
+                &sources,
+            )
+            .unwrap();
+            let error = validate_effect_modules_with_work(forged, &sources, &relation, &mut work)
+                .expect_err("the replacement leaves retained work at Store close");
+            assert_eq!(error.reason(), ValidationReason::RetainedRelease, "{name}");
+        }
+    }
+
+    #[test]
     fn retained_drive_rejects_raw_linked_requests_and_handlers() {
         use super::super::effect::EffectOperation;
         let source = concat!(
