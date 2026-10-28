@@ -18,6 +18,8 @@ use crate::{
 
 type CellOperand = (Vec<(usize, usize)>, Option<usize>);
 type RegionTargets = (Vec<(usize, usize)>, bool, bool);
+type CaseArm = (Vec<(usize, usize)>, usize, CasePattern);
+type CaseCallPorts = (usize, usize, Vec<(usize, usize)>);
 
 /// Cases observed by the Store-focused normal-return projection. These are
 /// value cases only; neither a constructor nor a Boolean grants authority.
@@ -126,7 +128,7 @@ enum Expr {
     Match {
         scrutinee: usize,
         // Preserve source order and whether a constructor payload can fail.
-        arms: Vec<(Vec<(usize, usize)>, usize, CasePattern)>,
+        arms: Vec<CaseArm>,
         result_case: bool,
     },
     Resource {
@@ -4443,7 +4445,7 @@ impl<'a> Analysis<'a> {
         target: usize,
         callee: usize,
         budget: &mut TypeWorkBudget,
-    ) -> Result<(usize, usize, Vec<(usize, usize)>), Failure> {
+    ) -> Result<CaseCallPorts, Failure> {
         let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
         let Expr::Call { arguments, .. } = &self.graph.expressions[expression] else {
             return Err(Failure::Invalid);

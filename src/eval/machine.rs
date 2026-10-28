@@ -2053,10 +2053,9 @@ impl<'runtime> Machine<'runtime> {
                 ..
             } = frame
                 && *candidate == key
+                && (store.activation != key || found.replace(index).is_some())
             {
-                if store.activation != key || found.replace(index).is_some() {
-                    return Err(RuntimeFailure::InvalidControlState);
-                }
+                return Err(RuntimeFailure::InvalidControlState);
             }
         }
         found.ok_or(RuntimeFailure::InvalidControlState)

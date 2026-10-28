@@ -12214,6 +12214,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
 
     /// Checks actual operation clauses without requiring a handled client body.
     /// Resume rows remain provisional until the caller replays the shared output.
+    #[allow(clippy::too_many_arguments)] // Clause context, result and retained owner are separate inputs.
     fn check_effect_clauses(
         &mut self,
         effect: &EffectInstance,

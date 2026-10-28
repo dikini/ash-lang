@@ -14356,6 +14356,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)] // Each operand row is independently reconstructed.
     fn continue_row(
         &self,
         id: NodeId,
@@ -24576,11 +24577,10 @@ mod tests {
                     .validate()
                     .expect("the actual generic root is valid linked Core");
             } else {
-                let reason = fixture
-                    .validate()
-                    .err()
-                    .expect("the forged root must be rejected")
-                    .reason();
+                let Err(failure) = fixture.validate() else {
+                    panic!("the forged root must be rejected");
+                };
+                let reason = failure.reason();
                 assert_ne!(
                     reason,
                     ValidationReason::RetainedRelease,
@@ -24699,11 +24699,10 @@ mod tests {
                     .validate()
                     .expect("the actual private clause contract is valid linked Core");
             } else {
-                let reason = fixture
-                    .validate()
-                    .err()
-                    .expect("the forged private clause must be rejected")
-                    .reason();
+                let Err(failure) = fixture.validate() else {
+                    panic!("the forged private clause must be rejected");
+                };
+                let reason = failure.reason();
                 assert_ne!(
                     reason,
                     ValidationReason::RetainedRelease,
@@ -25028,11 +25027,10 @@ mod tests {
                     .validate()
                     .expect("the actual Store authority is valid linked Core");
             } else {
-                let reason = fixture
-                    .validate()
-                    .err()
-                    .expect("the forged Store must be rejected")
-                    .reason();
+                let Err(failure) = fixture.validate() else {
+                    panic!("the forged Store must be rejected");
+                };
+                let reason = failure.reason();
                 assert_ne!(
                     reason,
                     ValidationReason::RetainedRelease,
@@ -25128,11 +25126,10 @@ mod tests {
                     .validate()
                     .expect("the source descriptor is valid linked Core");
             } else {
-                let reason = fixture
-                    .validate()
-                    .err()
-                    .expect("the malformed descriptor must be rejected")
-                    .reason();
+                let Err(failure) = fixture.validate() else {
+                    panic!("the malformed descriptor must be rejected");
+                };
+                let reason = failure.reason();
                 assert_ne!(
                     reason,
                     ValidationReason::RetainedRelease,

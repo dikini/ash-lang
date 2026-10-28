@@ -1477,6 +1477,8 @@ enum Completion {
     Retain,
 }
 
+// Keeping the edge inline avoids introducing an allocation into Store selection.
+#[allow(clippy::large_enum_variant)]
 enum StoreBoundary {
     Found(Edge),
     Pending,

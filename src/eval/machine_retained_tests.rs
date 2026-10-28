@@ -248,12 +248,7 @@ fn retained_adapter_uses_the_current_consumer_region_after_restoration() {
     let result = missing.run_loop().unwrap();
     assert_eq!(result.value.to_string(), "None");
     assert_eq!(missing.next_region_invocation, 1);
-    assert!(
-        result
-            .trace
-            .iter()
-            .any(|event| *event == TraceEvent::Enter(adapter.none))
-    );
+    assert!(result.trace.contains(&TraceEvent::Enter(adapter.none)));
     assert!(
         !result
             .trace
@@ -1102,8 +1097,7 @@ fn retained_continue_carrier_runs_the_restored_branch_for_its_current_consumer()
     assert!(
         result
             .trace
-            .iter()
-            .any(|event| *event == TraceEvent::Enter(carrier.adapter.none))
+            .contains(&TraceEvent::Enter(carrier.adapter.none))
     );
     assert!(
         !result

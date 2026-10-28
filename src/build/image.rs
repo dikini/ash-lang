@@ -4281,15 +4281,15 @@ mod tests {
                 image.arms[first].pattern = image.arms[first + 1].pattern;
                 image.arms[first + 1].pattern = first_pattern;
                 let changed = image.encode_bytes(&mut preparation).unwrap();
-                let failure = super::super::__run_private_effect_image(
+                let Err(failure) = super::super::__run_private_effect_image(
                     &super::super::runtime_fingerprint(),
                     &changed,
                     facts,
                     &[],
                     None,
-                )
-                .err()
-                .expect("a decoded image cannot authorize an undrained Store");
+                ) else {
+                    panic!("a decoded image cannot authorize an undrained Store");
+                };
                 assert!(matches!(
                     failure,
                     super::super::PrivateProgramFailure(super::super::PrivateFailure::Image(

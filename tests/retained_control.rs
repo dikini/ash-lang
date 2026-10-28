@@ -225,12 +225,12 @@ fn unproved_drain_paths_are_rejected_by_the_public_driver() {
     }
     let entry = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/retained-drain/repeated-stale.ash");
-    let failure = ash::driver::compile_path(ash::driver::RunConfiguration {
+    let Err(failure) = ash::driver::compile_path(ash::driver::RunConfiguration {
         entry,
         roots: ash::module::ModuleRoots::empty(),
-    })
-    .err()
-    .expect("a saved earlier Probe result cannot authorize release");
+    }) else {
+        panic!("a saved earlier Probe result cannot authorize release");
+    };
     assert_eq!(
         failure.pipeline_failure().unwrap().reason_code(),
         "core.validation.retained-release",
