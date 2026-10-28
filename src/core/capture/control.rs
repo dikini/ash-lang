@@ -691,6 +691,7 @@ enum Frame {
         value_context: usize,
         store: Address,
         baseline: Address,
+        exclusions: usize,
     },
     Clause {
         handler: usize,
@@ -774,12 +775,30 @@ struct RetainedCapture {
     key: (usize, usize),
     capture: Option<Address>,
     baseline: Address,
+    exclusions: usize,
     root: usize,
     root_context: usize,
     root_value_context: usize,
     handler: usize,
     handler_context: usize,
     event: Event,
+}
+
+/// An original interpreter between a branch root and its Store. This is
+/// negative evidence only: it must never keep an owner live or prove support.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct ExcludedInterpreter {
+    frame: Frame,
+    old: bool,
+    cell_owner: Option<(usize, usize)>,
+}
+
+const NO_EXCLUDED_INTERPRETERS: usize = usize::MAX;
+
+#[derive(Default)]
+struct BoundaryInputs {
+    cell_operands: Option<Vec<(Vec<(usize, usize)>, Option<usize>)>>,
+    region_targets: Option<(Vec<(usize, usize)>, bool, bool)>,
 }
 
 // A Store in an owned cut also owns every live capture in its slots. Locator
@@ -1452,6 +1471,7 @@ pub(super) struct Analysis<'a> {
     payloads: Vec<(usize, usize, usize)>,
     cell_retentions: Vec<CellRetention>,
     retained_support: Vec<RetainedSupport>,
+    excluded_interpreters: Vec<Box<[ExcludedInterpreter]>>,
     pub(super) infer_cleanup_rows: bool,
     pub(super) collect_cleanup_rows: bool,
     pub(super) authenticate_actual_captures: bool,
@@ -1923,6 +1943,7 @@ impl<'a> Analysis<'a> {
             payloads: Vec::new(),
             cell_retentions: Vec::new(),
             retained_support: Vec::new(),
+            excluded_interpreters: Vec::new(),
             infer_cleanup_rows: false,
             collect_cleanup_rows: false,
             authenticate_actual_captures: false,
@@ -3023,6 +3044,151 @@ impl<'a> Analysis<'a> {
         Ok(StoreBoundary::Found(*store))
     }
 
+    // Preserve only the interpreter candidates on paths from the original
+    // branch control to N. These are exclusions consulted at a later reached
+    // request, never additional owners or positive interpreter evidence.
+    fn retained_exclusions(
+        &mut self,
+        state: &State,
+        start: Address,
+        store: Address,
+        inherited: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        let mut excluded = if inherited == NO_EXCLUDED_INTERPRETERS {
+            Vec::new()
+        } else {
+            copy_slice(
+                self.excluded_interpreters
+                    .get(inherited)
+                    .ok_or(Failure::Invalid)?,
+                budget,
+            )?
+        };
+        let mut pending = copy_slice(&[start], budget)?;
+        let mut seen = HashSet::new();
+        let mut reached = false;
+        while let Some(address) = pending.pop() {
+            charge(budget, 1)?;
+            if address == store {
+                reached = true;
+                continue;
+            }
+            if matches!(address, Address::Empty | Address::End) {
+                return Err(Failure::Invalid);
+            }
+            if seen.contains(&address) {
+                continue;
+            }
+            seen.try_reserve(1).map_err(|_| Failure::Resource)?;
+            seen.insert(address);
+            let edges = state.edges(address, budget)?;
+            if edges.is_empty() {
+                return Err(Failure::Invalid);
+            }
+            for edge in edges {
+                charge(budget, 1)?;
+                let frame = edge.frame;
+                if matches!(
+                    frame,
+                    Frame::Handler { .. }
+                        | Frame::RemovedHandler { .. }
+                        | Frame::Resource { .. }
+                        | Frame::NativeInterpret { .. }
+                ) {
+                    let mut cell_owner = None;
+                    if self.is_cell(frame) {
+                        let Frame::Resource {
+                            code,
+                            value_context,
+                            ..
+                        } = frame
+                        else {
+                            return Err(Failure::Invalid);
+                        };
+                        let occurrence = ProviderResourceOccurrence {
+                            code,
+                            value_context,
+                        };
+                        charge(budget, state.cells.len())?;
+                        for cell in &state.cells {
+                            if cell.occurrence == occurrence {
+                                if cell_owner.is_some_and(|owner| owner != cell.owner) {
+                                    cell_owner = None;
+                                    break;
+                                }
+                                cell_owner = Some(cell.owner);
+                            }
+                        }
+                    }
+                    let region_handler = match frame {
+                        Frame::Handler { code, .. } | Frame::RemovedHandler { code, .. } => {
+                            matches!(&self.graph.code[code], Control::Handler { effect, .. } if effect.region_service)
+                        }
+                        _ => false,
+                    };
+                    let needs_owner = self.is_cell_handler(frame) || region_handler;
+                    if needs_owner {
+                        let (Frame::Handler {
+                            code,
+                            value_context,
+                            ..
+                        }
+                        | Frame::RemovedHandler {
+                            code,
+                            value_context,
+                            ..
+                        }) = frame
+                        else {
+                            return Err(Failure::Invalid);
+                        };
+                        // Prepare the actual original input while this frame
+                        // is still live; later checks only read its snapshot.
+                        self.data
+                            .as_mut()
+                            .ok_or(Failure::Invalid)?
+                            .handler_cell_owners(code, value_context, budget)?;
+                    }
+                    excluded.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    excluded.push(ExcludedInterpreter {
+                        frame,
+                        old: matches!(address, Address::Slot { old: true, .. }),
+                        cell_owner,
+                    });
+                }
+                pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+                pending.push(edge.next);
+            }
+        }
+        if !reached {
+            return Err(Failure::Invalid);
+        }
+        charge(
+            budget,
+            excluded
+                .len()
+                .saturating_mul(excluded.len().max(1).ilog2() as usize + 1),
+        )?;
+        excluded.sort_unstable();
+        excluded.dedup();
+        if excluded.is_empty() {
+            return Ok(NO_EXCLUDED_INTERPRETERS);
+        }
+        for (index, previous) in self.excluded_interpreters.iter().enumerate() {
+            charge(budget, previous.len().max(excluded.len()) + 1)?;
+            if previous.as_ref() == excluded.as_slice() {
+                return Ok(index);
+            }
+        }
+        charge(budget, excluded.len() + 1)?;
+        self.excluded_interpreters
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        let index = self.excluded_interpreters.len();
+        self.excluded_interpreters.push(excluded.into_boxed_slice());
+        Ok(index)
+    }
+
     fn require_driver(
         &self,
         state: &State,
@@ -3041,7 +3207,12 @@ impl<'a> Analysis<'a> {
             for edge in state.edges(address, budget)? {
                 if matches!(edge.frame, Frame::RetainedRoot { store: owner, .. } if owner == store)
                 {
-                    return Err(Failure::Invalid);
+                    let source = self
+                        .data
+                        .as_ref()
+                        .ok_or(Failure::Invalid)?
+                        .control_source(state.position.code, budget)?;
+                    return Err(Failure::RetainedDriver { source });
                 }
                 pending.try_reserve(2).map_err(|_| Failure::Resource)?;
                 pending.push(edge.next);
@@ -3086,6 +3257,13 @@ impl<'a> Analysis<'a> {
         state.charge_key(budget)?;
         unresolved.remove(&state);
         self.require_driver(&state, selected.address, budget)?;
+        let exclusions = self.retained_exclusions(
+            &state,
+            state.stack,
+            selected.address,
+            NO_EXCLUDED_INTERPRETERS,
+            budget,
+        )?;
         let mut next = state;
         next.push(
             Frame::RetainedRoot {
@@ -3094,6 +3272,7 @@ impl<'a> Analysis<'a> {
                 value_context: next.value_context,
                 store: selected.address,
                 baseline: selected.next,
+                exclusions,
             },
             budget,
         )?;
@@ -3498,6 +3677,7 @@ impl<'a> Analysis<'a> {
                     value_context: retained.root_value_context,
                     store: retained.store,
                     baseline: retained.baseline,
+                    exclusions: retained.exclusions,
                 },
                 budget,
             )?;
@@ -4488,7 +4668,9 @@ impl<'a> Analysis<'a> {
                     };
                     let target = self.label(code, context, budget)?;
                     if self.match_labels(event.label, target, budget)?.0 {
-                        return Err(Failure::Invalid);
+                        return Err(Failure::RetainedDriver {
+                            source: self.source(event),
+                        });
                     }
                 }
                 pending.try_reserve(2).map_err(|_| Failure::Resource)?;
@@ -4521,9 +4703,14 @@ impl<'a> Analysis<'a> {
         for selected in &boundaries.0 {
             for edge in &selected.prefix {
                 charge(budget, 1)?;
-                if let Frame::RetainedRoot { baseline, .. } = edge.frame {
+                if let Frame::RetainedRoot {
+                    baseline,
+                    exclusions,
+                    ..
+                } = edge.frame
+                {
                     checks.try_reserve(1).map_err(|_| Failure::Resource)?;
-                    checks.push((baseline, Some(selected.boundary)));
+                    checks.push((baseline, exclusions, Some(selected.boundary)));
                 }
             }
         }
@@ -4537,14 +4724,46 @@ impl<'a> Analysis<'a> {
                 budget,
             )?;
             for root in roots {
-                let Frame::RetainedRoot { baseline, .. } = root.boundary.frame else {
+                let Frame::RetainedRoot {
+                    baseline,
+                    exclusions,
+                    ..
+                } = root.boundary.frame
+                else {
                     return Err(Failure::Invalid);
                 };
                 checks.try_reserve(1).map_err(|_| Failure::Resource)?;
-                checks.push((baseline, None));
+                checks.push((baseline, exclusions, None));
             }
         }
-        for (baseline, actual) in checks {
+        let mut inputs = BoundaryInputs::default();
+        for (baseline, exclusions, actual) in checks {
+            if exclusions != NO_EXCLUDED_INTERPRETERS {
+                let candidates = copy_slice(
+                    self.excluded_interpreters
+                        .get(exclusions)
+                        .ok_or(Failure::Invalid)?,
+                    budget,
+                )?;
+                for candidate in candidates {
+                    charge(budget, 1)?;
+                    if self
+                        .interpreter_relation(
+                            state,
+                            event,
+                            candidate.frame,
+                            Some(candidate),
+                            &mut inputs,
+                            budget,
+                        )?
+                        .0
+                    {
+                        return Err(Failure::RetainedInterpretation {
+                            source: self.source(event),
+                        });
+                    }
+                }
+            }
             if !matches!(baseline, Address::Empty | Address::End)
                 && state.edges(baseline, budget)?.is_empty()
             {
@@ -4569,6 +4788,182 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
+    fn interpreter_relation(
+        &mut self,
+        state: &State,
+        event: Event,
+        frame: Frame,
+        excluded: Option<ExcludedInterpreter>,
+        inputs: &mut BoundaryInputs,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(bool, bool), Failure> {
+        let (code, context) = match frame {
+            Frame::Handler { code, context, .. }
+            | Frame::Resource { code, context, .. }
+            | Frame::RemovedHandler { code, context, .. }
+            | Frame::NativeInterpret { code, context, .. } => (code, context),
+            _ => return Err(Failure::Invalid),
+        };
+        if let (Frame::NativeInterpret { .. }, Control::NativeInterpret { effects, .. }) =
+            (&frame, &self.graph.code[code])
+        {
+            charge(budget, effects.len())?;
+            let mut possible = false;
+            let mut outward = true;
+            for request in effects {
+                let target = self.specialize_label(request, context, budget)?;
+                let relation = self.match_labels(event.label, target, budget)?;
+                possible |= relation.0;
+                outward &= relation.1;
+            }
+            return Ok((possible, outward));
+        }
+        let explicit_region = matches!(&self.graph.code[event.code], Control::Request(request) if request.region_service);
+        let region_handler = matches!(&self.graph.code[code], Control::Handler { effect, .. } if effect.region_service);
+        if explicit_region || region_handler {
+            if !explicit_region || !region_handler {
+                return Ok((false, true));
+            }
+            if excluded.is_some_and(|candidate| candidate.old) {
+                return Ok((true, true));
+            }
+            if inputs.region_targets.is_none() {
+                inputs.region_targets = Some(
+                    self.data
+                        .as_mut()
+                        .ok_or(Failure::Invalid)?
+                        .region_targets(event.port.ok_or(Failure::Invalid)?, budget)?,
+                );
+            }
+            let (Frame::Handler { value_context, .. }
+            | Frame::RemovedHandler { value_context, .. }) = frame
+            else {
+                return Err(Failure::Invalid);
+            };
+            let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+            let owners = if excluded.is_some() {
+                data.existing_handler_cell_owners(code, value_context, budget)?
+            } else {
+                data.handler_cell_owners(code, value_context, budget)?
+            };
+            let (targets, unknown, host) =
+                inputs.region_targets.as_ref().ok_or(Failure::Invalid)?;
+            let Some(owners) = owners else {
+                return Ok((true, true));
+            };
+            let mut relation = (
+                *unknown || (excluded.is_some() && targets.is_empty() && !host),
+                *unknown || *host || targets.is_empty(),
+            );
+            for target in targets {
+                charge(budget, owners.len() + 1)?;
+                let matches = owners.contains(target);
+                relation.0 |= matches;
+                relation.1 |= !matches;
+            }
+            return Ok(relation);
+        }
+        let target = self.label(code, context, budget)?;
+        let relation = self.match_labels(event.label, target, budget)?;
+        if relation.0 && excluded.is_some_and(|candidate| candidate.old) {
+            return Ok((true, true));
+        }
+        let operation = match &self.graph.code[event.code] {
+            Control::Request(request) => request.operation,
+            _ => None,
+        };
+        let Some(operation) =
+            operation.filter(|operation| operation.owner().module().is_builtin_resource())
+        else {
+            return Ok(relation);
+        };
+        if !self.is_cell(frame) && !self.is_cell_handler(frame) {
+            return Ok(relation);
+        }
+        let handler_owners = if self.is_cell_handler(frame) {
+            let (Frame::Handler { value_context, .. }
+            | Frame::RemovedHandler { value_context, .. }) = frame
+            else {
+                return Err(Failure::Invalid);
+            };
+            let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+            let owners = if excluded.is_some() {
+                data.existing_handler_cell_owners(code, value_context, budget)?
+            } else {
+                data.handler_cell_owners(code, value_context, budget)?
+            };
+            let Some(owners) = owners else {
+                return Ok(relation);
+            };
+            Some(owners)
+        } else {
+            None
+        };
+        if inputs.cell_operands.is_none() {
+            inputs.cell_operands =
+                Some(self.data.as_mut().ok_or(Failure::Invalid)?.cell_operands(
+                    event.port.ok_or(Failure::Invalid)?,
+                    operation == crate::types::OperationId::new(operation.owner(), 1),
+                    budget,
+                )?);
+        }
+        let operands = inputs.cell_operands.as_ref().ok_or(Failure::Invalid)?;
+        let mut possible = false;
+        let mut outward = false;
+        if self.is_cell(frame) {
+            let Frame::Resource {
+                code,
+                value_context,
+                ..
+            } = frame
+            else {
+                return Err(Failure::Invalid);
+            };
+            let occurrence = ProviderResourceOccurrence {
+                code,
+                value_context,
+            };
+            for (targets, _) in operands {
+                if excluded.is_some() && targets.is_empty() {
+                    possible = true;
+                    outward = true;
+                }
+                for target in targets {
+                    charge(budget, state.cells.len() + 1)?;
+                    let matches = if let Some(excluded) = excluded {
+                        excluded.cell_owner.is_none_or(|owner| owner == *target)
+                    } else {
+                        state
+                            .cells
+                            .iter()
+                            .any(|cell| cell.occurrence == occurrence && cell.owner == *target)
+                    };
+                    possible |= matches;
+                    outward |= !matches;
+                }
+            }
+        } else {
+            let owners = handler_owners.as_ref().ok_or(Failure::Invalid)?;
+            for (targets, _) in operands {
+                if excluded.is_some() && targets.is_empty() {
+                    possible = true;
+                    outward = true;
+                }
+                for target in targets {
+                    charge(budget, owners.len() + 1)?;
+                    let matches = owners.contains(target);
+                    possible |= matches;
+                    outward |= !matches;
+                }
+            }
+        }
+        if excluded.is_some() && operands.is_empty() {
+            possible = true;
+            outward = true;
+        }
+        Ok((relation.0 && possible, relation.1 || outward))
+    }
+
     fn requested_boundaries(
         &mut self,
         state: &State,
@@ -4579,158 +4974,19 @@ impl<'a> Analysis<'a> {
         // Resolve labels first so selection's callback does not borrow the
         // shared structural work counter a second time.
         let mut matching = HashMap::new();
-        let mut cell_operands = None;
-        let mut region_targets = None;
-        let explicit_region = matches!(&self.graph.code[event.code], Control::Request(request) if request.region_service);
+        let mut inputs = BoundaryInputs::default();
         charge(budget, state.heap.len())?;
         for edge in &state.heap {
-            if let Frame::Handler { code, context, .. }
-            | Frame::Resource { code, context, .. }
-            | Frame::RemovedHandler { code, context, .. }
-            | Frame::NativeInterpret { code, context, .. } = edge.frame
-                && !matching.contains_key(&self.boundary_match_key(edge.frame))
+            if matches!(
+                edge.frame,
+                Frame::Handler { .. }
+                    | Frame::Resource { .. }
+                    | Frame::RemovedHandler { .. }
+                    | Frame::NativeInterpret { .. }
+            ) && !matching.contains_key(&self.boundary_match_key(edge.frame))
             {
-                if let (Frame::NativeInterpret { .. }, Control::NativeInterpret { effects, .. }) =
-                    (&edge.frame, &self.graph.code[code])
-                {
-                    charge(budget, effects.len())?;
-                    let mut possible = false;
-                    let mut outward = true;
-                    for request in effects {
-                        let target = self.specialize_label(request, context, budget)?;
-                        let relation = self.match_labels(event.label, target, budget)?;
-                        possible |= relation.0;
-                        outward &= relation.1;
-                    }
-                    matching.try_reserve(1).map_err(|_| Failure::Resource)?;
-                    matching.insert(self.boundary_match_key(edge.frame), (possible, outward));
-                    continue;
-                }
-                let region_handler = matches!(&self.graph.code[code], Control::Handler { effect, .. } if effect.region_service);
-                if explicit_region || region_handler {
-                    let mut relation = (false, true);
-                    if explicit_region && region_handler {
-                        if region_targets.is_none() {
-                            region_targets = Some(
-                                self.data
-                                    .as_mut()
-                                    .ok_or(Failure::Invalid)?
-                                    .region_targets(event.port.ok_or(Failure::Invalid)?, budget)?,
-                            );
-                        }
-                        let (Frame::Handler { value_context, .. }
-                        | Frame::RemovedHandler { value_context, .. }) = edge.frame
-                        else {
-                            return Err(Failure::Invalid);
-                        };
-                        let owners = self
-                            .data
-                            .as_mut()
-                            .ok_or(Failure::Invalid)?
-                            .handler_cell_owners(code, value_context, budget)?;
-                        let (targets, unknown, host) =
-                            region_targets.as_ref().ok_or(Failure::Invalid)?;
-                        if let Some(owners) = owners {
-                            relation = (*unknown, *unknown || *host || targets.is_empty());
-                            for target in targets {
-                                charge(budget, owners.len() + 1)?;
-                                let matches = owners.contains(target);
-                                relation.0 |= matches;
-                                relation.1 |= !matches;
-                            }
-                        } else {
-                            // Unresolved symbolic views retain every candidate
-                            // and outward obligation; they never select nearest.
-                            relation = (true, true);
-                        }
-                    }
-                    matching.try_reserve(1).map_err(|_| Failure::Resource)?;
-                    matching.insert(self.boundary_match_key(edge.frame), relation);
-                    continue;
-                }
-                let target = self.label(code, context, budget)?;
-                let relation = self.match_labels(event.label, target, budget)?;
-                let relation = if self.is_cell(edge.frame)
-                    && let Control::Request(request) = &self.graph.code[event.code]
-                    && let Some(operation) = request.operation
-                    && operation.owner().module().is_builtin_resource()
-                {
-                    let port = event.port.ok_or(Failure::Invalid)?;
-                    if cell_operands.is_none() {
-                        cell_operands =
-                            Some(self.data.as_mut().ok_or(Failure::Invalid)?.cell_operands(
-                                port,
-                                operation == crate::types::OperationId::new(operation.owner(), 1),
-                                budget,
-                            )?);
-                    }
-                    let operands = cell_operands.as_ref().ok_or(Failure::Invalid)?;
-                    let Frame::Resource {
-                        code,
-                        value_context,
-                        ..
-                    } = edge.frame
-                    else {
-                        return Err(Failure::Invalid);
-                    };
-                    let occurrence = ProviderResourceOccurrence {
-                        code,
-                        value_context,
-                    };
-                    let mut possible = false;
-                    let mut outward = false;
-                    for (targets, _) in operands {
-                        for target in targets {
-                            charge(budget, state.cells.len() + 1)?;
-                            let matches = state
-                                .cells
-                                .iter()
-                                .any(|cell| cell.occurrence == occurrence && cell.owner == *target);
-                            possible |= matches;
-                            outward |= !matches;
-                        }
-                    }
-                    // Label matching may conservatively equate distinct rigid
-                    // owner variables. Actual access targets select the live
-                    // builtin occurrence; every other possible target continues
-                    // outward. Empty operands await the value-queue replay.
-                    (relation.0 && possible, relation.1 || outward)
-                } else if self.is_cell_handler(edge.frame)
-                    && let Control::Request(request) = &self.graph.code[event.code]
-                    && let Some(operation) = request.operation
-                    && operation.owner().module().is_builtin_resource()
-                {
-                    let (Frame::Handler { value_context, .. }
-                    | Frame::RemovedHandler { value_context, .. }) = edge.frame
-                    else {
-                        return Err(Failure::Invalid);
-                    };
-                    let data = self.data.as_mut().ok_or(Failure::Invalid)?;
-                    if let Some(owners) = data.handler_cell_owners(code, value_context, budget)? {
-                        if cell_operands.is_none() {
-                            cell_operands = Some(data.cell_operands(
-                                event.port.ok_or(Failure::Invalid)?,
-                                operation == crate::types::OperationId::new(operation.owner(), 1),
-                                budget,
-                            )?);
-                        }
-                        let mut possible = false;
-                        let mut outward = false;
-                        for (targets, _) in cell_operands.as_ref().ok_or(Failure::Invalid)? {
-                            for target in targets {
-                                charge(budget, owners.len() + 1)?;
-                                let matches = owners.contains(target);
-                                possible |= matches;
-                                outward |= !matches;
-                            }
-                        }
-                        (relation.0 && possible, relation.1 || outward)
-                    } else {
-                        relation
-                    }
-                } else {
-                    relation
-                };
+                let relation =
+                    self.interpreter_relation(state, event, edge.frame, None, &mut inputs, budget)?;
                 matching.try_reserve(1).map_err(|_| Failure::Resource)?;
                 matching.insert(self.boundary_match_key(edge.frame), relation);
             }
@@ -5710,6 +5966,7 @@ impl<'a> Analysis<'a> {
                     value_context,
                     store,
                     baseline,
+                    exclusions,
                 } = root.boundary.frame
                 else {
                     return Err(Failure::Invalid);
@@ -5719,6 +5976,13 @@ impl<'a> Analysis<'a> {
                     return Err(Failure::Invalid);
                 }
                 self.check_retained_capture(&state, capture, store, budget)?;
+                let exclusions = self.retained_exclusions(
+                    &state,
+                    root.boundary.next,
+                    store,
+                    exclusions,
+                    budget,
+                )?;
                 self.record_retained_support(
                     &state,
                     capture,
@@ -5727,7 +5991,7 @@ impl<'a> Analysis<'a> {
                     state.position.code,
                     budget,
                 )?;
-                Some((store, baseline, code, context, value_context))
+                Some((store, baseline, exclusions, code, context, value_context))
             } else {
                 None
             };
@@ -5842,7 +6106,7 @@ impl<'a> Analysis<'a> {
                     budget,
                 )?;
             } else {
-                let (store, baseline, root, root_context, root_value_context) =
+                let (store, baseline, exclusions, root, root_context, root_value_context) =
                     retained_root.ok_or(Failure::Invalid)?;
                 charge(budget, 1)?;
                 next.retained
@@ -5858,6 +6122,7 @@ impl<'a> Analysis<'a> {
                     key,
                     capture: Some(capture),
                     baseline,
+                    exclusions,
                     root,
                     root_context,
                     root_value_context,
@@ -6059,6 +6324,7 @@ mod tests {
             key: (0, 0),
             capture,
             baseline: Address::End,
+            exclusions: NO_EXCLUDED_INTERPRETERS,
             root: 0,
             root_context: 0,
             root_value_context: 0,

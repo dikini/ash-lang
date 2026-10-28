@@ -4382,14 +4382,27 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
+    pub(super) fn control_source(
+        &self,
+        code: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Span, Failure> {
+        charge(budget, 1)?;
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        self.graph
+            .sources
+            .get(expression)
+            .copied()
+            .ok_or(Failure::Invalid)
+    }
+
     pub(super) fn retained_support_site(
         &self,
         code: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<(Span, Span), Failure> {
-        charge(budget, 2)?;
-        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
-        let source = *self.graph.sources.get(expression).ok_or(Failure::Invalid)?;
+        let source = self.control_source(code, budget)?;
+        charge(budget, 1)?;
         let (focus, _) = self.focus.ok_or(Failure::Invalid)?;
         let Expr::Resource {
             source: acquisition,
@@ -4761,6 +4774,27 @@ impl<'a> Analysis<'a> {
         context: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<Option<Vec<(usize, usize)>>, Failure> {
+        self.handler_cell_owners_inner(code, context, false, budget)
+    }
+
+    /// Read an original interpreter's owner without creating a missing
+    /// historical input in a later or focused control context.
+    pub(super) fn existing_handler_cell_owners(
+        &mut self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<Vec<(usize, usize)>>, Failure> {
+        self.handler_cell_owners_inner(code, context, true, budget)
+    }
+
+    fn handler_cell_owners_inner(
+        &mut self,
+        code: usize,
+        context: usize,
+        existing_only: bool,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<Vec<(usize, usize)>>, Failure> {
         let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
         let Expr::Handler { cell_owner, .. } = self.graph.expressions[expression] else {
             return Err(Failure::Invalid);
@@ -4768,7 +4802,15 @@ impl<'a> Analysis<'a> {
         let Some(owner) = cell_owner else {
             return Ok(None);
         };
-        let port = self.slot(owner, context, budget)?;
+        let port = if existing_only {
+            charge(budget, 1)?;
+            let Some(port) = self.indices.get(&(owner, context)).copied() else {
+                return Ok(None);
+            };
+            port
+        } else {
+            self.slot(owner, context, budget)?
+        };
         self.close(budget)?;
         let mut owners = Vec::new();
 

@@ -88,6 +88,8 @@ pub enum TypeReason {
     RetainReply,
     /// The private root's outstanding completion cannot be discarded.
     RetainedRootDiscard,
+    /// A store was driven before its active branch completed.
+    RetainedDriver,
     /// A restored branch would use a different external interpreter.
     RetainedInterpretation,
     /// An application argument did not match the function domain.
@@ -405,6 +407,7 @@ impl TypeReason {
             Self::RetainedRootDiscard => {
                 (Message::retained_root_discard(), "continuation_use", None)
             }
+            Self::RetainedDriver => (Message::retained_driver(), "retained_driver", None),
             Self::RetainedInterpretation => (
                 Message::retained_interpretation(),
                 "retained_interpretation",
@@ -577,6 +580,7 @@ impl fmt::Display for TypeReason {
             Self::StoreDescriptor => formatter.write_str("type.store-descriptor"),
             Self::RetainReply => formatter.write_str("effect.retain-reply"),
             Self::RetainedRootDiscard => formatter.write_str("effect.retained-root-discard"),
+            Self::RetainedDriver => formatter.write_str("effect.retained-driver"),
             Self::RetainedInterpretation => formatter.write_str("effect.retained-interpretation"),
             Self::Argument => formatter.write_str("type.argument"),
             Self::BindingInitializer => formatter.write_str("type.binding-initializer"),
@@ -27311,6 +27315,10 @@ fn capture_failure(
             TypeError::source(diagnostic)
         }
         Failure::Invalid => invalid_state(),
+        Failure::RetainedDriver { source } => TypeError::source(Diagnostic::new(
+            TypeReason::RetainedDriver,
+            SourceLabel::new(source, "this Store still has an active branch"),
+        )),
         Failure::RetainedInterpretation { source } => TypeError::source(Diagnostic::new(
             TypeReason::RetainedInterpretation,
             SourceLabel::new(

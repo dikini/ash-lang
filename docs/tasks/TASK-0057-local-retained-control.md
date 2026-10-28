@@ -39,15 +39,16 @@ inputs and limits. C1 was retained and independently verified at
 [PR #160](https://github.com/dikini/ash-lang/pull/160); [C1 #71](https://github.com/dikini/ash-lang/issues/71)
 is closed. C2 store work is active. Internal fixtures exercise private root,
 Retain and structural Continue through a store frame, including the current
-consumer's result adapter. Linked Core still rejects store release: root and
-row admission, interpretation and support checks, higher-order instantiation,
-and image support remain to be connected. An ordinary Probe can be intercepted
-by a source handler; internal checks exercise its driver restriction and
-actual Store-provider selection and state calculation. C3 freshness still needs
-connected evidence. Independent scope checks now bind the store identity and
-handle only in its body and preserve outer descriptor variables; they do not
-admit the store. C2–C5 and the connected
-full-workspace and Main gates remain open.
+consumer's adapter and a running cleanup. Source-derived capture checks cover
+an imported continuation helper, enclosing and captured support, and actual
+interpreter conflicts reached after restoration. Reached requests also reject
+intervening original interpreters; the saved cut still needs an independent
+interpreter-admission check at Retain, including when it is never continued.
+An ordinary Probe can be intercepted by a source handler; internal checks
+exercise its driver restriction and actual Store-provider selection. Image
+codecs preserve Store/Root/Retain carriers and generic Continue round-trips,
+while public Store release remains rejected until C3.
+C2–C5 and the connected full-workspace and Main gates remain open.
 
 ## Verification
 

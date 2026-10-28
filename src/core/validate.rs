@@ -13631,6 +13631,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             super::capture::Failure::Invalid => {
                 ValidationError::new(ValidationReason::Handler, None)
             }
+            super::capture::Failure::RetainedDriver { .. } => {
+                ValidationError::new(ValidationReason::Handler, None)
+            }
             super::capture::Failure::RetainedInterpretation { .. } => {
                 ValidationError::new(ValidationReason::Handler, None)
             }

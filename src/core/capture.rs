@@ -881,6 +881,9 @@ pub(crate) enum Failure {
         causes: Box<[Option<Span>; 2]>,
     },
     Invalid,
+    RetainedDriver {
+        source: Span,
+    },
     RetainedInterpretation {
         source: Span,
     },
@@ -4678,6 +4681,10 @@ mod tests {
     pub(super) enum RetainedContextFixture {
         Outer,
         ConflictingHandler,
+        RemovedInterpreter,
+        UnusedInnerInterpreter,
+        CapturedInnerInterpreter,
+        DeclaredPureInterpreter,
         ShortLivedSupport,
         ShortLivedAlias,
         InnerUnused,
@@ -4688,6 +4695,11 @@ mod tests {
         ShortLivedRegionAggregate,
         OuterRegionBacking,
         CapturedRegionBacking,
+        DriverAfterSuffix,
+        DriverInSuffix,
+        DriverInterceptedInSuffix,
+        DriverNestedRoot,
+        DriverContinueInBranch,
     }
 
     pub(super) fn retained_context_core(
@@ -4738,12 +4750,18 @@ mod tests {
                 | RetainedContextFixture::CapturedSupport
                 | RetainedContextFixture::PreexistingSlot
                 | RetainedContextFixture::SelfCapture
+                | RetainedContextFixture::UnusedInnerInterpreter
+                | RetainedContextFixture::CapturedInnerInterpreter
+                | RetainedContextFixture::DeclaredPureInterpreter
         );
         let (row, read) = if matches!(
             fixture,
             RetainedContextFixture::InnerUnused
                 | RetainedContextFixture::PreexistingSlot
                 | RetainedContextFixture::SelfCapture
+                | RetainedContextFixture::UnusedInnerInterpreter
+                | RetainedContextFixture::CapturedInnerInterpreter
+                | RetainedContextFixture::DeclaredPureInterpreter
         ) {
             ("Control.Drive<N>,Marker", "41")
         } else if matches!(fixture, RetainedContextFixture::CapturedSupport) {
@@ -4773,10 +4791,19 @@ mod tests {
         } else {
             ""
         };
-        let body = format!(
-            "{prefix}let _ = perform Checkpoint<N>.checkpoint ()\n\
-             {suffix}let _ = perform Marker.emit ()\nDone({read})"
-        );
+        let result = if matches!(fixture, RetainedContextFixture::UnusedInnerInterpreter) {
+            format!("Done({read})")
+        } else if matches!(fixture, RetainedContextFixture::DeclaredPureInterpreter) {
+            "Done(pure_marker ())".to_owned()
+        } else if matches!(fixture, RetainedContextFixture::CapturedInnerInterpreter) {
+            format!(
+                "handle {{\nlet _ = perform Marker.emit ()\nDone({read})\n}} \
+                 with Marker {{\nemit ignored => resume ()\n}}"
+            )
+        } else {
+            format!("let _ = perform Marker.emit ()\nDone({read})")
+        };
+        let body = format!("{prefix}let _ = perform Checkpoint<N>.checkpoint ()\n{suffix}{result}");
         let body = if matches!(fixture, RetainedContextFixture::CapturedSupport) {
             format!("resource cell<R> c = 41 {{\n{body}\n}}")
         } else {
@@ -4786,12 +4813,29 @@ mod tests {
             "handle {{\n{body}\n}} with Checkpoint<N> using store {{\n\
              checkpoint ignored => {{\nlet key = retain\nPending(key)\n}}\n}}"
         );
+        let branch = if matches!(fixture, RetainedContextFixture::RemovedInterpreter) {
+            format!("handle ({branch}) with Marker {{\nemit ignored => resume ()\n}}")
+        } else if matches!(
+            fixture,
+            RetainedContextFixture::UnusedInnerInterpreter
+                | RetainedContextFixture::DeclaredPureInterpreter
+        ) {
+            format!(
+                "handle {{\nlet saved = {branch}\n\
+                 let _ = perform Marker.emit ()\nsaved\n}} with Marker {{\nemit ignored => resume ()\n}}"
+            )
+        } else {
+            branch
+        };
         let branch = if inner_cell
             && !matches!(
                 fixture,
                 RetainedContextFixture::CapturedSupport
                     | RetainedContextFixture::PreexistingSlot
                     | RetainedContextFixture::SelfCapture
+                    | RetainedContextFixture::UnusedInnerInterpreter
+                    | RetainedContextFixture::CapturedInnerInterpreter
+                    | RetainedContextFixture::DeclaredPureInterpreter
             ) {
             format!("resource cell<R> c = 41 {{\n{branch}\n}}")
         } else {
@@ -4814,7 +4858,89 @@ mod tests {
             "resource Control.Store<N,(Unit -> Step<N> ! {{{row}}})> store = () {{\n\
              let step = {branch}\n{consume}\n}}"
         );
-        let program = if matches!(
+        let driver_fixture = matches!(
+            fixture,
+            RetainedContextFixture::DriverAfterSuffix
+                | RetainedContextFixture::DriverInSuffix
+                | RetainedContextFixture::DriverInterceptedInSuffix
+                | RetainedContextFixture::DriverNestedRoot
+                | RetainedContextFixture::DriverContinueInBranch
+        );
+        let program = if matches!(fixture, RetainedContextFixture::DriverNestedRoot) {
+            let inner = "handle {\n\
+                         let _ = perform Checkpoint<N>.pause ()\n\
+                         Done(41)\n\
+                         } with Checkpoint<N> using store {\n\
+                         start ignored => resume ()\n\
+                         pause ignored => {\nlet key = retain\nPending(key)\n}\n}\n";
+            format!(
+                "resource Control.Store<N,(Unit -> Step<N> ! {{Control.Drive<N>,Marker}})> store = () {{\n\
+                 let step = handle {{\n\
+                 let inner = {inner}\n\
+                 let _ = perform Checkpoint<N>.start ()\n\
+                 let _ = perform Marker.emit ()\n\
+                 inner\n\
+                 }} with Checkpoint<N> using store {{\n\
+                 start ignored => resume ()\n\
+                 pause ignored => {{\nlet key = retain\nPending(key)\n}}\n\
+                 }}\n42\n}}"
+            )
+        } else if matches!(fixture, RetainedContextFixture::DriverContinueInBranch) {
+            let checkpoint = "pause ignored => {\nlet key = retain\nPending(key)\n}";
+            format!(
+                "resource Control.Store<N,(Unit -> Step<N> ! {{Control.Drive<N>,Marker}})> store = () {{\n\
+                 let first = handle {{\n\
+                 let _ = perform Checkpoint<N>.pause ()\n\
+                 let _ = perform Marker.emit ()\n\
+                 Done(41)\n\
+                 }} with Checkpoint<N> using store {{\n\
+                 start ignored => resume ()\n{checkpoint}\n}}\n\
+                 match first {{\nDone(value) => value\nPending(key) => {{\n\
+                 let second = handle {{\n\
+                 let _ = relay (store,key)\n\
+                 let _ = perform Checkpoint<N>.pause ()\n\
+                 let _ = perform Marker.emit ()\n\
+                 Done(41)\n\
+                 }} with Checkpoint<N> using store {{\n\
+                 start ignored => resume ()\n{checkpoint}\n}}\n42\n}}\n}}\n}}"
+            )
+        } else if driver_fixture {
+            let in_suffix = match fixture {
+                RetainedContextFixture::DriverInSuffix => {
+                    "let _ = perform Control.Probe<N>.quiescent ()\n"
+                }
+                RetainedContextFixture::DriverInterceptedInSuffix => {
+                    "let _ = handle (perform Control.Probe<N>.quiescent ()) with Control.Probe<N> {\n\
+                     quiescent ignored => resume true\n}\n"
+                }
+                _ => "",
+            };
+            let after_root = if matches!(fixture, RetainedContextFixture::DriverAfterSuffix) {
+                "let _ = perform Control.Probe<N>.quiescent ()\n"
+            } else {
+                ""
+            };
+            format!(
+                "resource Control.Store<N,(Unit -> Step<N> ! {{Control.Drive<N>,Control.Probe<N>,Marker}})> store = () {{\n\
+                 let step = handle {{\n\
+                 let _ = perform Checkpoint<N>.start ()\n\
+                 let _ = perform Checkpoint<N>.pause ()\n\
+                 let _ = perform Marker.emit ()\n\
+                 Done(41)\n\
+                 }} with Checkpoint<N> using store {{\n\
+                 start ignored => {{\n\
+                 let answer = resume ()\n\
+                 {in_suffix}answer\n\
+                 }}\n\
+                 pause ignored => {{\n\
+                 let key = retain\n\
+                 Pending(key)\n\
+                 }}\n\
+                 }}\n\
+                 {after_root}42\n\
+                 }}"
+            )
+        } else if matches!(
             fixture,
             RetainedContextFixture::ShortLivedRegion
                 | RetainedContextFixture::ShortLivedRegionAggregate
@@ -4872,12 +4998,23 @@ mod tests {
         } else {
             "import helper (relay)\n"
         };
+        let checkpoint = if driver_fixture {
+            "start : Unit -> Unit\npause : Unit -> Unit"
+        } else {
+            "checkpoint : Unit -> Unit"
+        };
+        let pure_marker = if matches!(fixture, RetainedContextFixture::DeclaredPureInterpreter) {
+            "pure_marker : Unit -> Int ! {Marker}\npure_marker ignored = 41\n"
+        } else {
+            ""
+        };
         let source = format!(
             "import @builtin.cell as Cell\n\
              import @builtin.retained_control as Control\n\
              {helper_import}\
              effect Marker {{\nemit : Unit -> Unit\n}}\n\
-             effect Checkpoint<N> {{\ncheckpoint : Unit -> Unit\n}}\n\
+             {pure_marker}\
+             effect Checkpoint<N> {{\n{checkpoint}\n}}\n\
              type Step<N> = Done(Int)\n| Pending(Control.Key<N>)\n\
              main : Unit -> Int\n\
              main () = handle ({program}) with Marker {{\nemit ignored => resume ()\n}}\n"
@@ -4952,6 +5089,23 @@ mod tests {
                 crate::elaborate::TypeReason::RetainedInterpretation,
             ),
             _ => panic!("a nearer Marker handler must reject the restored interpreter"),
+        }
+        for fixture in [
+            RetainedContextFixture::UnusedInnerInterpreter,
+            RetainedContextFixture::CapturedInnerInterpreter,
+            RetainedContextFixture::DeclaredPureInterpreter,
+        ] {
+            retained_context_core(fixture).expect(
+                "an unrelated or captured handler does not change the external interpreter",
+            );
+        }
+        match retained_context_core(RetainedContextFixture::RemovedInterpreter) {
+            Err(crate::elaborate::TypeError::Source(diagnostic)) => assert_eq!(
+                diagnostic.reason,
+                crate::elaborate::TypeReason::RetainedInterpretation,
+            ),
+            Err(other) => panic!("expected an interpreter rejection, got {other:?}"),
+            Ok(_) => panic!("a removed Marker handler cannot interpret the retained suffix"),
         }
     }
 
@@ -5090,6 +5244,42 @@ mod tests {
                 let mut retry = TypeWorkBudget::with_limit(used);
                 check_nodes(&core.nodes, &[], &[], operation, &mut retry)
                     .expect("a fresh exact-budget retry must succeed");
+            }
+        }
+    }
+
+    #[test]
+    fn retained_driver_waits_for_the_post_resume_clause_suffix() {
+        retained_context_core(RetainedContextFixture::DriverAfterSuffix)
+            .expect("a Probe after the private root returns is driver control");
+        for fixture in [
+            RetainedContextFixture::DriverInSuffix,
+            RetainedContextFixture::DriverInterceptedInSuffix,
+        ] {
+            match retained_context_core(fixture) {
+                Err(crate::elaborate::TypeError::Source(diagnostic)) => assert_eq!(
+                    diagnostic.reason,
+                    crate::elaborate::TypeReason::RetainedDriver,
+                ),
+                Err(other) => panic!("expected a driver-context diagnostic, got {other:?}"),
+                Ok(_) => panic!("a clause suffix cannot drive its active Store"),
+            }
+        }
+    }
+
+    #[test]
+    fn retained_driver_rejects_nested_root_and_imported_continue() {
+        for fixture in [
+            RetainedContextFixture::DriverNestedRoot,
+            RetainedContextFixture::DriverContinueInBranch,
+        ] {
+            match retained_context_core(fixture) {
+                Err(crate::elaborate::TypeError::Source(diagnostic)) => assert_eq!(
+                    diagnostic.reason,
+                    crate::elaborate::TypeReason::RetainedDriver,
+                ),
+                Err(other) => panic!("expected a driver-context diagnostic, got {other:?}"),
+                Ok(_) => panic!("an active branch cannot drive the same Store"),
             }
         }
     }

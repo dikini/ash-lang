@@ -887,8 +887,7 @@ fn retained_continue_carrier_runs_the_restored_branch_for_its_current_consumer()
     let (program, _, _) = crate::core::validate::generic_cell_source_fixture_for_test(source, None);
     let mut pending = vec![program.root()];
     let mut seen = std::collections::HashSet::new();
-    let (mut region, mut carrier, mut handler, mut request, mut branch) =
-        (None, None, None, None, None);
+    let (mut region, mut carrier, mut handler, mut request) = (None, None, None, None);
     while let Some(id) = pending.pop() {
         if !seen.insert(id) {
             continue;
@@ -917,22 +916,22 @@ fn retained_continue_carrier_runs_the_restored_branch_for_its_current_consumer()
             {
                 request = Some(id)
             }
-            EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(integer)))
-                if integer.value().to_i128() == Some(42) =>
-            {
-                branch = Some(id)
-            }
             _ => {}
         }
         pending.extend((0..node.kind.child_count()).filter_map(|i| node.kind.child_at(i)));
     }
-    let (region, (carrier_node, carrier), handler, request, branch) = (
+    let (region, (carrier_node, carrier), handler, request) = (
         region.unwrap(),
         carrier.unwrap(),
         handler.unwrap(),
         request.unwrap(),
-        branch.unwrap(),
     );
+    let EffectExprKind::Operation(EffectOperation::Request(checkpoint)) =
+        &program.node(request).unwrap().kind
+    else {
+        panic!("checkpoint request")
+    };
+    let branch = checkpoint.operand();
     let EffectExprKind::Pure(PureExprKind::Variable(store_variable)) =
         &program.node(carrier.store).unwrap().kind
     else {
@@ -1000,6 +999,10 @@ fn retained_continue_carrier_runs_the_restored_branch_for_its_current_consumer()
         .begin_retained_root(handler, activation, branch_environment.clone())
         .unwrap();
     machine.control.take();
+    // The checkpoint occurs in an already running cleanup. Its continuation
+    // must finish that action once and then return the saved body result.
+    machine.frames.push(saved(77));
+    machine.live_cleanups = 1;
     machine.frames.push(Frame::Bind {
         binder: carrier.adapter.answer.id(),
         body: branch,
@@ -1021,7 +1024,8 @@ fn retained_continue_carrier_runs_the_restored_branch_for_its_current_consumer()
     let completion = machine.frames.pop().unwrap();
     machine.return_from(completion, Value::Unit).unwrap();
     machine.control.take();
-    assert_eq!(machine.captured_cells, 2);
+    assert_eq!(machine.captured_cells, 3);
+    assert_eq!(machine.live_cleanups, 1);
 
     let caller = environment
         .clone()
@@ -1036,7 +1040,8 @@ fn retained_continue_carrier_runs_the_restored_branch_for_its_current_consumer()
             .is_err()
     );
     machine_test_hooks::reset();
-    assert_eq!(machine.captured_cells, 2);
+    assert_eq!(machine.captured_cells, 3);
+    assert_eq!(machine.live_cleanups, 1);
     let Frame::ResourceBoundary {
         payload: ResourcePayload::Store(store),
         ..
@@ -1048,8 +1053,9 @@ fn retained_continue_carrier_runs_the_restored_branch_for_its_current_consumer()
     assert_eq!(store.active_roots, 0);
     machine.control = Some(Control::Evaluate(carrier_node, caller));
     let result = machine.run_loop().unwrap();
-    assert_eq!(result.value.to_string(), "Some(42)");
+    assert_eq!(result.value.to_string(), "Some(77)");
     assert_eq!(machine.captured_cells, 0);
+    assert_eq!(machine.live_cleanups, 0);
     assert_eq!(machine.live_resources, 0);
     assert_eq!(machine.next_region_invocation, 1);
     let entered = |node| {
@@ -1062,6 +1068,15 @@ fn retained_continue_carrier_runs_the_restored_branch_for_its_current_consumer()
     assert!(entered(carrier.key).unwrap() < entered(branch).unwrap());
     assert!(entered(branch).unwrap() < entered(carrier.adapter.some).unwrap());
     assert!(entered(carrier.adapter.none).is_none());
+    assert_eq!(
+        result
+            .trace
+            .iter()
+            .filter(|event| **event == TraceEvent::Enter(branch))
+            .count(),
+        1,
+        "restoration completes the running cleanup exactly once"
+    );
 
     let (mut missing, environment, _) = consumer();
     let Frame::ResourceBoundary {
