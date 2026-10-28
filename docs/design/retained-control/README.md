@@ -1,9 +1,10 @@
 # Local retained-control model
 
 These bounded C1 ownership and C3 drain models support
-[DN-0056](../DN-0056-scoped-continuation-retention-and-library-scheduling.md)
-and [CP-0026](../../proposals/CP-0026-scoped-owned-continuation-storage.md).
-They do not define language semantics. The
+[DN-0056](../DN-0056-scoped-continuation-retention-and-library-scheduling.md).
+The historical [CP-0026](https://github.com/dikini/ash-lang/blob/ea2a7ffadefb0f485a9c8e0009975a47db5c6865/docs/proposals/CP-0026-scoped-owned-continuation-storage.md)
+records the transition; the [specification](../../../spec/README.md) defines
+language semantics. The models do not. The
 [C1 correspondence map](correspondence.md) states its premises, proved claims
 and reviewed product correspondence.
 
@@ -17,9 +18,7 @@ The C1 candidate passed independent source review and a frozen scoped
 [AD-0012](../../decisions/AD-0012-proof-development-feedback-and-build-reuse.md)
 integration build. The [gate record](../../tasks/evidence/local-retained-control/c1-model/README.md)
 pins its sources, compiler, review and reports. C1's retained result was
-independently verified; the
-[active task](../../tasks/TASK-0057-local-retained-control.md) tracks the
-remaining specification and final gates.
+independently verified.
 
 The C3 [drain correspondence](drain-correspondence.md) records the concrete
 control, value and completion premises used by the bounded analysis. Its
@@ -61,5 +60,8 @@ cleanup callback substitution and recheck transformed control. The runtime
 preparation and retry without a partial move. Images are independently decoded
 and validated before execution. These tests and reviewed correspondences
 connect the bounded models to the implementation; the Lean results do not
-mechanically prove the compiler or evaluator. C5 and the separate Main gate
+mechanically prove the compiler or evaluator. [Issue #165](https://github.com/dikini/ash-lang/issues/165)
+records two analysis limitations and their reproductions. The
+[C5 checkpoint](https://github.com/dikini/ash-lang/issues/75#issuecomment-6476014597)
+and [separate Main handoff](https://github.com/dikini/ash-lang/issues/54#issuecomment-6476014971)
 remain open.

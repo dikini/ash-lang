@@ -1,6 +1,6 @@
 # C3 bounded drain proof gate record
 
-This record belongs to [TASK-0057](../../../TASK-0057-local-retained-control.md).
+This record belongs to the historical [TASK-0057](https://github.com/dikini/ash-lang/blob/ea2a7ffadefb0f485a9c8e0009975a47db5c6865/docs/tasks/TASK-0057-local-retained-control.md).
 It covers the bounded normal-return and drain analysis and its reviewed
 implementation correspondence. It does not establish public Store admission,
 the complete C2/C3 implementation, or current language semantics.

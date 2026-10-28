@@ -15,6 +15,12 @@
 > bounded proof assignment below is experimental evidence. The rules below are
 > candidate obligations, not an established soundness result.
 
+The local sequential subset is implemented and specified on the M3 milestone.
+The [retained product evidence](retained-control/README.md) records its bounded
+proofs and tests. The worker, migration and network discussions in this note
+remain design exploration, not implemented language contracts. Main delivery is
+separate from the retained milestone.
+
 ## Question
 
 Can existing resource scopes and cleanup express the lifetime and completion
@@ -39,9 +45,10 @@ as its baseline. Migration is a separate ownership-transfer extension.
   return for the simple recursive drain below. A candidate finite analysis uses
   recursive normal-return summaries and authenticated, fresh probe facts,
   without a new gate primitive.
-- Current Ash cannot put its hidden continuation capability in storage. The
-  necessary semantic extension is ownership-bearing control storage, consuming
-  transfer into that storage, and restoration to an admitted current consumer.
+- At the start of this study, Ash could not put its hidden continuation
+  capability in storage. The retained local extension transfers owned control
+  into a Store and restores it to an admitted current consumer without exposing
+  that capability as a source value.
 - Branch authority, external support, exact interpretation, and completion
   must be checked through these transitions. Existing analyses provide the
   basis; they do not already establish concurrent isolation.
@@ -169,10 +176,10 @@ parallel; their local stores remain exclusive and their continuations pinned.
 | Owning resource, cleanup, checked drain | Preferred candidate. |
 | Cell of functions or explicit states | Cannot retain arbitrary control. |
 
-The preferred direction reuses the current resource and cleanup structure.
-The new store kind and its ownership contract remain a semantic extension.
-Whether the implementation uses a new authenticated resource payload, intrinsic
-operations, or a small operation family is not selected here.
+The study's preferred direction reused resource and cleanup structure. At that
+point, the Store representation and operation family were not selected here;
+the retained local implementation is described by the specification and product
+evidence linked above.
 
 ### Resource and cleanup composition
 
@@ -2195,13 +2202,13 @@ and during abandonment as well as on the ordinary return path.
 
 ### C1 bounded ownership and completion proof assignment
 
-[C1 #71](https://github.com/dikini/ash-lang/issues/71) asks whether the local
-store transitions can preserve one owner and its completion obligations. This
-assignment authorizes a finite Lean model, not an evaluator implementation.
-[CP-0026](../proposals/CP-0026-scoped-owned-continuation-storage.md) is the
-accepted prospective contract compared with that model. The
-[active task](../tasks/TASK-0057-local-retained-control.md) records the proof
-and the remaining product gates.
+[C1 #71](https://github.com/dikini/ash-lang/issues/71) asked whether the local
+Store transitions could preserve one owner and its completion obligations. The
+assignment authorized a finite Lean model, not an evaluator implementation.
+The historical [CP-0026](https://github.com/dikini/ash-lang/blob/ea2a7ffadefb0f485a9c8e0009975a47db5c6865/docs/proposals/CP-0026-scoped-owned-continuation-storage.md)
+records the transition compared with that model. The [C5 handoff](https://github.com/dikini/ash-lang/issues/75#issuecomment-6476014597)
+and [Main handoff](https://github.com/dikini/ash-lang/issues/54#issuecomment-6476014971)
+track the remaining separate gates.
 
 Model a single store activation, finite branches and slots, and one executor.
 Include an active selected-clause capture, nested live and consumed owners,

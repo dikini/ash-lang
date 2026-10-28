@@ -23,9 +23,7 @@ No proposed transitions are listed.
 
 ## Accepted changes
 
-- [CP-0026: Scoped owned continuation storage](CP-0026-scoped-owned-continuation-storage.md)
-  accepts a local ownership-transfer and checked-release contract. C1 through
-  C4 are retained and accepted; C5 updates the specification and final evidence.
+No accepted transitions are listed.
 
 The [region specification](../../spec/README.md)
 records the lexical-region language rules; the bounded

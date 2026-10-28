@@ -9,9 +9,14 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-- [TASK-0057: Local retained control](TASK-0057-local-retained-control.md) has
-  retained and accepted C1 through C4; C5 specifies the completed behavior and
-  owns the remaining final checkpoint and separate Main handoff.
+No active task files are listed.
+
+The retained-control [specification](../../spec/README.md) and
+[bounded evidence](../design/retained-control/README.md) are retained on the M3
+milestone. The [C5 handoff](https://github.com/dikini/ash-lang/issues/75#issuecomment-6476014597)
+owns the final checkpoint; the [Main handoff](https://github.com/dikini/ash-lang/issues/54#issuecomment-6476014971)
+is separate. [Issue #165](https://github.com/dikini/ash-lang/issues/165) records
+two analysis limitations without adding language restrictions.
 
 The lexical-region product's language rules are in the
 [specification](../../spec/README.md); its existing
