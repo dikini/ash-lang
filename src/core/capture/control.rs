@@ -35,6 +35,22 @@ use crate::{
     },
 };
 
+#[cfg(test)]
+thread_local! {
+    // A single test observation; the production projection carries no trace.
+    static DRAIN_WITNESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(super) fn reset_drain_witness() {
+    DRAIN_WITNESS.set(false);
+}
+
+#[cfg(test)]
+pub(super) fn drain_witnessed() -> bool {
+    DRAIN_WITNESS.get()
+}
+
 /// Potential coincidence differs from equality: a rigid row formal may be
 /// instantiated at a call site. Closed rows preserve their defining families;
 /// ordinary exact equality is checked before this conservative relation.
@@ -573,6 +589,8 @@ enum Site {
     Registration(usize),
     NativeInterpret(usize),
     Next(Position),
+    CaseReturn(usize, usize),
+    CallReturn(usize),
     Handler(usize),
     Resource(usize),
     RetainedRoot(usize),
@@ -673,6 +691,21 @@ enum Frame {
         context: usize,
         value_context: usize,
     },
+    // Analysis-only result routing. Neither frame owns a source value or a
+    // continuation; ordinary capture/close frames remain authoritative.
+    CaseReturn {
+        code: usize,
+        ordinal: usize,
+        context: usize,
+        value_context: usize,
+    },
+    CallReturn {
+        code: usize,
+        result: usize,
+        body: usize,
+        context: usize,
+        value_context: usize,
+    },
     Handler {
         code: usize,
         context: usize,
@@ -711,6 +744,8 @@ impl Frame {
     fn allocation_context(self) -> usize {
         match self {
             Self::Next { value_context, .. }
+            | Self::CaseReturn { value_context, .. }
+            | Self::CallReturn { value_context, .. }
             | Self::Closing { value_context, .. }
             | Self::RemovedHandler { value_context, .. }
             | Self::Cleanup { value_context, .. }
@@ -729,6 +764,8 @@ impl Frame {
             Self::RemovedHandler { code, .. } => Site::RemovedHandler(code),
             Self::Cleanup { code, running, .. } => Site::Cleanup(code, running),
             Self::Next { position, .. } => Site::Next(position),
+            Self::CaseReturn { code, ordinal, .. } => Site::CaseReturn(code, ordinal),
+            Self::CallReturn { code, .. } => Site::CallReturn(code),
             Self::Registration { code, .. } => Site::Registration(code),
             Self::NativeInterpret { code, .. } => Site::NativeInterpret(code),
             Self::Handler { code, .. } => Site::Handler(code),
@@ -915,6 +952,92 @@ fn share_cell_birth_slice<T: Copy>(
     Ok(Arc::from(values))
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum DrainWork {
+    Empty,
+    // The only work was the currently executing fresh root.
+    ActiveOnly,
+    Pending,
+    Unknown,
+}
+
+// Test-only path observation. Equality and hashing deliberately ignore this
+// field, so the visited set makes exactly the same decisions as production.
+// A witness follows one retained representative and may miss a path; it can
+// never combine observations from different representatives.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default)]
+struct DrainWitness(u8);
+
+#[cfg(test)]
+impl PartialEq for DrainWitness {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+#[cfg(test)]
+impl Eq for DrainWitness {}
+
+#[cfg(test)]
+impl std::hash::Hash for DrainWitness {
+    fn hash<H: Hasher>(&self, _: &mut H) {}
+}
+
+/// A path-local projection for one focused Store. Facts identify actual
+/// value ports; they never change ownership or grant a continuation move.
+#[derive(Debug, Eq, Hash, PartialEq)]
+struct DrainProjection {
+    work: DrainWork,
+    facts: Vec<(usize, super::value::CaseFact)>,
+    #[cfg(test)]
+    witness: DrainWitness,
+}
+
+impl DrainProjection {
+    fn copy(&self, budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
+        Ok(Self {
+            work: self.work,
+            facts: copy_slice(&self.facts, budget)?,
+            #[cfg(test)]
+            witness: self.witness,
+        })
+    }
+
+    fn assign(
+        &mut self,
+        port: usize,
+        fact: Option<super::value::CaseFact>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, self.facts.len() + 1)?;
+        match self.facts.binary_search_by_key(&port, |(port, _)| *port) {
+            Ok(index) => match fact {
+                Some(fact) => self.facts[index].1 = fact,
+                None => {
+                    self.facts.remove(index);
+                }
+            },
+            Err(index) => {
+                if let Some(fact) = fact {
+                    self.facts.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    self.facts.insert(index, (port, fact));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn changed(&mut self, work: DrainWork, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        charge(budget, self.facts.len() + 1)?;
+        self.work = work;
+        for (_, fact) in &mut self.facts {
+            fact.fresh_probe = false;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Eq, Hash, PartialEq)]
 struct State {
     position: Position,
@@ -925,6 +1048,11 @@ struct State {
     retained: Vec<RetainedCapture>,
     cells: Vec<CellContents>,
     abandoned: Option<(usize, Event)>,
+    drain: Option<DrainProjection>,
+    // This control starts at a standalone callable seed, rather than an
+    // actual linked caller. Its missing enclosing Store is an obligation for
+    // the actual call, not authority to perform a move.
+    symbolic_seed: bool,
 }
 
 impl State {
@@ -949,9 +1077,12 @@ impl State {
     fn charge_key(&self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
         charge(
             budget,
-            self.heap.len().checked_add(1).ok_or(Failure::Resource)?,
+            self.heap.len().checked_add(2).ok_or(Failure::Resource)?,
         )?;
         charge(budget, self.retained.len())?;
+        if let Some(drain) = &self.drain {
+            charge(budget, drain.facts.len() + 1)?;
+        }
         self.charge_cells(budget)
     }
 
@@ -982,11 +1113,17 @@ impl State {
             position: self.position,
             context: self.context,
             value_context: self.value_context,
+            symbolic_seed: self.symbolic_seed,
             stack: self.stack,
             heap: copy_slice(&self.heap, budget)?,
             retained: copy_slice(&self.retained, budget)?,
             cells,
             abandoned: self.abandoned,
+            drain: self
+                .drain
+                .as_ref()
+                .map(|drain| drain.copy(budget))
+                .transpose()?,
         })
     }
 
@@ -1455,6 +1592,10 @@ pub(super) struct Analysis<'a> {
     retained_support: Vec<RetainedSupport>,
     inspect_stores: HashSet<(usize, usize)>,
     inspecting: bool,
+    // Release checks run only for a designated Store focus. No result is
+    // published until its control and value discovery have converged.
+    pub(super) check_retained_release: bool,
+    release_unsafe: bool,
     pub(super) infer_cleanup_rows: bool,
     pub(super) collect_cleanup_rows: bool,
     pub(super) authenticate_actual_captures: bool,
@@ -1928,6 +2069,8 @@ impl<'a> Analysis<'a> {
             retained_support: Vec::new(),
             inspect_stores: HashSet::new(),
             inspecting: false,
+            check_retained_release: false,
+            release_unsafe: false,
             infer_cleanup_rows: false,
             collect_cleanup_rows: false,
             authenticate_actual_captures: false,
@@ -2662,14 +2805,15 @@ impl<'a> Analysis<'a> {
             Self::enqueue(seed.copy(budget)?, &mut pending, &mut visited, budget)?;
         }
         for root in roots {
-            let value_context = if let Some(data) = &mut self.data {
-                let context = data.root_context(*root, budget)?;
+            let (value_context, symbolic_seed) = if let Some(data) = &mut self.data {
+                let callable = data.callable_root_context(*root, budget)?;
+                let context = callable.unwrap_or(0);
                 // Linked Core retains globals as ordinary outer bindings. Demand
                 // the actual root so its lexical initializers feed callable ports.
                 data.port(*root, context, budget)?;
-                context
+                (context, callable.is_some())
             } else {
-                0
+                (0, false)
             };
             Self::enqueue(
                 State {
@@ -2679,8 +2823,10 @@ impl<'a> Analysis<'a> {
                     },
                     context: 0,
                     value_context,
+                    symbolic_seed,
                     stack: Address::Empty,
                     heap: Vec::new(),
+                    drain: None,
                     retained: Vec::new(),
                     cells: Vec::new(),
                     abandoned: None,
@@ -2707,13 +2853,79 @@ impl<'a> Analysis<'a> {
                         )?;
                     }
                     Control::Choice(children) => {
-                        for child in children {
+                        let cases = if let Some(drain) = &state.drain {
+                            let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+                            if let Some((scrutinee, result_case, patterns)) =
+                                data.case_choice(code, state.value_context, budget)?
+                            {
+                                if patterns.len() != children.len() {
+                                    return Err(Failure::Invalid);
+                                }
+                                let fact = data.case_of(scrutinee, &drain.facts, budget)?;
+                                Some((result_case, patterns, fact))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                        for (ordinal, child) in children.iter().enumerate() {
+                            let (possible, decisive) = if let Some((_, patterns, fact)) = &cases {
+                                match (patterns[ordinal], fact.map(|fact| fact.value)) {
+                                    (super::value::CasePattern::Any, _) => (true, true),
+                                    (super::value::CasePattern::Opaque, _) => (true, false),
+                                    (super::value::CasePattern::Case(_, _), None) => (true, false),
+                                    (
+                                        super::value::CasePattern::Case(expected, total),
+                                        Some(actual),
+                                    ) => (expected == actual, expected == actual && total),
+                                }
+                            } else {
+                                (true, false)
+                            };
+                            if !possible {
+                                continue;
+                            }
                             let mut next = state.copy(budget)?;
+                            let mut pushed = false;
+                            if let (Some(drain), Some((result_case, _, _))) =
+                                (&mut next.drain, &cases)
+                            {
+                                let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+                                for (binder, value) in data.case_arm_bindings(
+                                    code,
+                                    ordinal,
+                                    state.value_context,
+                                    budget,
+                                )? {
+                                    let fact = data.case_of(value, &drain.facts, budget)?;
+                                    drain.assign(binder, fact, budget)?;
+                                }
+                                if *result_case {
+                                    next.push(
+                                        Frame::CaseReturn {
+                                            code,
+                                            ordinal,
+                                            context: state.context,
+                                            value_context: state.value_context,
+                                        },
+                                        budget,
+                                    )?;
+                                    pushed = true;
+                                }
+                            }
                             next.position = Position {
                                 code: *child,
                                 next: 0,
                             };
-                            Self::enqueue_normalized(next, &mut pending, &mut visited, budget)?;
+                            if pushed {
+                                Self::enqueue(next, &mut pending, &mut visited, budget)?;
+                            } else {
+                                Self::enqueue_normalized(next, &mut pending, &mut visited, budget)?;
+                            }
+                            if decisive {
+                                break;
+                            }
                         }
                     }
                     Control::Handler { body, .. }
@@ -2897,13 +3109,22 @@ impl<'a> Analysis<'a> {
     #[inline(never)]
     fn discover_sequence(
         &mut self,
-        state: State,
+        mut state: State,
         children: &[usize],
         pending: &mut VecDeque<State>,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
         let code = state.position.code;
+        let binding = if state.drain.is_some() {
+            self.data.as_mut().ok_or(Failure::Invalid)?.case_binding(
+                code,
+                state.value_context,
+                budget,
+            )?
+        } else {
+            None
+        };
         let mut ordinal = state.position.next;
         while children
             .get(ordinal)
@@ -2911,6 +3132,13 @@ impl<'a> Analysis<'a> {
         {
             charge(budget, 1)?;
             ordinal += 1;
+        }
+        if ordinal > 0
+            && let (Some((binder, initializer)), Some(drain)) = (binding, &mut state.drain)
+        {
+            let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+            let fact = data.case_of(initializer, &drain.facts, budget)?;
+            drain.assign(binder, fact, budget)?;
         }
         if let Some(child) = children.get(ordinal).copied() {
             let mut next = state;
@@ -2923,6 +3151,11 @@ impl<'a> Analysis<'a> {
             {
                 charge(budget, 1)?;
                 following += 1;
+            }
+            if binding.is_some() && ordinal == 0 && children.len() > 1 {
+                // Even a pure tail can return the initializer's case through
+                // this binder. Observe it after the initializer completes.
+                following = 1;
             }
             let position = Position {
                 code,
@@ -2979,11 +3212,46 @@ impl<'a> Analysis<'a> {
         let (targets, unknown) = data.store_targets(operand, state.value_context, budget)?;
         if targets.is_empty() && stores.is_empty() {
             // A generic callable is checked before its actual caller supplies
-            // a Store. Its graph is retained for that later invocation.
-            return Ok(StoreBoundary::Symbolic);
+            // a Store. Only its standalone root may defer this obligation.
+            if state.symbolic_seed
+                && !self.focusing
+                && !self.inspecting
+                && data.standalone_root(state.value_context, budget)?.is_some()
+            {
+                return Ok(StoreBoundary::Symbolic);
+            }
+            return if unknown {
+                Err(Failure::Invalid)
+            } else {
+                Ok(StoreBoundary::Pending)
+            };
         }
         if targets.is_empty() && !unknown {
             return Ok(StoreBoundary::Pending);
+        }
+        if stores.is_empty()
+            && state.symbolic_seed
+            && !self.focusing
+            && !self.inspecting
+            && !unknown
+            && let Some(callable) = data.standalone_root(state.value_context, budget)?
+            && let Some(first) = targets.first()
+        {
+            let mut external = true;
+            for target in &targets {
+                charge(budget, 1)?;
+                if target.0 != first.0
+                    || !data.outside_standalone_root(target.1, callable, budget)?
+                {
+                    external = false;
+                    break;
+                }
+            }
+            if external {
+                // These coordinates summarize one external Store site, not
+                // one activation. Only an actual caller can resolve it.
+                return Ok(StoreBoundary::Symbolic);
+            }
         }
         if unknown || targets.len() != 1 {
             return Err(Failure::Invalid);
@@ -3149,6 +3417,16 @@ impl<'a> Analysis<'a> {
         unresolved.remove(&state);
         self.require_driver(&state, selected.address, budget)?;
         let mut next = state;
+        if matches!(selected.frame, Frame::Resource { focused: true, .. })
+            && let Some(drain) = &mut next.drain
+        {
+            let work = match drain.work {
+                DrainWork::Empty => DrainWork::ActiveOnly,
+                DrainWork::Pending => DrainWork::Pending,
+                DrainWork::ActiveOnly | DrainWork::Unknown => DrainWork::Unknown,
+            };
+            drain.changed(work, budget)?;
+        }
         next.push(
             Frame::RetainedRoot {
                 code: next.position.code,
@@ -3342,6 +3620,10 @@ impl<'a> Analysis<'a> {
                     push_store_captures(state, edge.address, &mut pending, budget)?;
                 }
                 match edge.frame {
+                    Frame::CaseReturn { .. } | Frame::CallReturn { .. } => {
+                        // These projection frames own no source control or
+                        // captured values; the underlying frames below do.
+                    }
                     Frame::Next {
                         position,
                         value_context,
@@ -3570,6 +3852,12 @@ impl<'a> Analysis<'a> {
         // the miss path unless the value domain can prove a particular live
         // generation; a miss never consumes or executes a stored capture.
         let mut missed = state.copy(budget)?;
+        if matches!(store.frame, Frame::Resource { focused: true, .. })
+            && let Some(drain) = &mut missed.drain
+        {
+            drain.changed(DrainWork::Unknown, budget)?;
+            drain.facts.clear();
+        }
         missed.position = Position {
             code: none,
             next: 0,
@@ -3586,6 +3874,16 @@ impl<'a> Analysis<'a> {
             }
             let request = retained.event.port.ok_or(Failure::Invalid)?;
             let mut next = state.copy(budget)?;
+            if matches!(store.frame, Frame::Resource { focused: true, .. })
+                && let Some(drain) = &mut next.drain
+            {
+                drain.changed(DrainWork::Unknown, budget)?;
+                drain.facts.clear();
+                #[cfg(test)]
+                if drain.witness.0 == 2 {
+                    drain.witness.0 = 3;
+                }
+            }
             // Older addresses summarize multiple occurrences. Restoring one
             // cannot prove that all represented slots have been spent.
             if matches!(capture, Address::Slot { old: false, .. }) {
@@ -3790,7 +4088,7 @@ impl<'a> Analysis<'a> {
             targets
                 .try_reserve(value.targets.len())
                 .map_err(|_| Failure::Resource)?;
-            targets.extend(value.targets.iter().map(|target| (*target, 0)));
+            targets.extend(value.targets.iter().map(|target| (*target, 0, usize::MAX)));
             (
                 super::value::CallSuccessors {
                     targets,
@@ -3811,21 +4109,67 @@ impl<'a> Analysis<'a> {
             .transpose()?;
         let ty = *ty;
         let source = *source;
-        for (target, value_context) in targets {
+        for (target, value_context, expression) in targets {
             let context = self.call_context(code, target, state.context, budget)?;
             let mut next = state.copy(budget)?;
+            let mut pushed = false;
+            if let Some(drain) = &mut next.drain {
+                let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+                let (result, body, pairs) = data.case_call_ports(
+                    code,
+                    state.value_context,
+                    expression,
+                    value_context,
+                    budget,
+                )?;
+                let mut transferred = Vec::new();
+                transferred
+                    .try_reserve(pairs.len())
+                    .map_err(|_| Failure::Resource)?;
+                for (formal, actual) in pairs {
+                    let fact = data.case_of(actual, &drain.facts, budget)?.map(|mut fact| {
+                        fact.origin = None;
+                        fact
+                    });
+                    transferred.push((formal, fact));
+                }
+                drain.facts.clear();
+                for (formal, fact) in transferred {
+                    drain.assign(formal, fact, budget)?;
+                }
+                next.push(
+                    Frame::CallReturn {
+                        code,
+                        result,
+                        body,
+                        context: state.context,
+                        value_context: state.value_context,
+                    },
+                    budget,
+                )?;
+                pushed = true;
+            }
             next.context = context;
             next.value_context = value_context;
             next.position = Position {
                 code: self.graph.callables.get(target, budget)?.body,
                 next: 0,
             };
-            Self::enqueue_normalized(next, pending, visited, budget)?;
+            if pushed {
+                Self::enqueue(next, pending, visited, budget)?;
+            } else {
+                Self::enqueue_normalized(next, pending, visited, budget)?;
+            }
         }
         if returns || unknown {
             // The opaque call may return now or request again. No
             // uncertainty marker survives its normal return.
-            self.returned(state.copy(budget)?, pending, visited, budget)?;
+            let mut next = state.copy(budget)?;
+            if unknown && let Some(drain) = &mut next.drain {
+                drain.changed(DrainWork::Unknown, budget)?;
+                drain.facts.clear();
+            }
+            self.returned(next, pending, visited, budget)?;
         }
         if unknown {
             if let Some(prefix) = prefix {
@@ -3947,9 +4291,27 @@ impl<'a> Analysis<'a> {
                 self.data = Some(query);
                 self.cell_retentions.clear();
                 self.retained_support.clear();
-                let seed = self.restore_entry(entry, context, budget)?;
+                let mut seed = self.restore_entry(entry, context, budget)?;
+                let focused_store = self.is_store(Frame::Resource {
+                    code: entry.position.code,
+                    context: entry.context,
+                    value_context: entry.value_context,
+                    focused: true,
+                });
+                if self.check_retained_release && focused_store {
+                    seed.drain = Some(DrainProjection {
+                        work: DrainWork::Empty,
+                        facts: Vec::new(),
+                        #[cfg(test)]
+                        witness: DrainWitness::default(),
+                    });
+                    self.release_unsafe = false;
+                }
                 self.payloads.clear();
                 self.discover(&[], Some(&seed), budget)?;
+                if self.check_retained_release && focused_store && self.release_unsafe {
+                    return Err(Failure::RetainedRelease);
+                }
                 self.check_cell_retentions(budget)?;
                 self.check_payloads(budget)?;
                 self.check_retained_support(budget)?;
@@ -4037,6 +4399,11 @@ impl<'a> Analysis<'a> {
                 _ => None,
             };
             let cut = match &mut edge.frame {
+                Frame::CaseReturn { .. } | Frame::CallReturn { .. } => {
+                    // Focus seeds are reconstructed from normal discovery,
+                    // before any Store-focused projection frames exist.
+                    return Err(Failure::Invalid);
+                }
                 Frame::Closing {
                     code,
                     value_context,
@@ -4414,6 +4781,18 @@ impl<'a> Analysis<'a> {
                 // This query ends with its designated activation. The final
                 // converged body-result check owns the exit obligation; later
                 // caller execution cannot acquire this fresh marker again.
+                if let Some(drain) = &state.drain
+                    && drain.work != DrainWork::Empty
+                {
+                    self.release_unsafe = true;
+                }
+                #[cfg(test)]
+                if let Some(drain) = &state.drain
+                    && drain.work == DrainWork::Empty
+                    && drain.witness.0 == 4
+                {
+                    DRAIN_WITNESS.set(true);
+                }
                 continue;
             }
             let mut next = state.copy(budget)?;
@@ -4495,22 +4874,78 @@ impl<'a> Analysis<'a> {
                     next.context = context;
                     next.value_context = value_context;
                 }
-                Frame::Handler {
+                Frame::CaseReturn {
+                    code,
+                    ordinal,
+                    context,
+                    value_context,
+                } => {
+                    if let Some(drain) = &mut next.drain {
+                        let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+                        let (result, body) = data.case_arm(code, ordinal, value_context, budget)?;
+                        let fact = data.case_of(body, &drain.facts, budget)?;
+                        drain.assign(result, fact, budget)?;
+                    }
+                    next.position = Position { code: 0, next: 0 };
+                    next.context = context;
+                    next.value_context = value_context;
+                }
+                Frame::CallReturn {
+                    result,
+                    body,
                     context,
                     value_context,
                     ..
+                } => {
+                    if let Some(drain) = &mut next.drain {
+                        let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+                        let fact = data.case_of(body, &drain.facts, budget)?.map(|mut fact| {
+                            // A returned discriminant is exact, but joined
+                            // creation contexts do not preserve its payload.
+                            fact.origin = None;
+                            fact
+                        });
+                        // Caller-local facts are not reconstructed from joined
+                        // value edges, which can contain an older invocation.
+                        drain.facts.clear();
+                        drain.assign(result, fact, budget)?;
+                    }
+                    next.position = Position { code: 0, next: 0 };
+                    next.context = context;
+                    next.value_context = value_context;
                 }
-                | Frame::RemovedHandler {
+                Frame::Handler {
+                    code,
+                    context,
+                    value_context,
+                    ..
+                } => {
+                    if let Some(drain) = &mut next.drain {
+                        let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+                        let (result, body) = data.case_handler_result(
+                            code,
+                            None,
+                            value_context,
+                            value_context,
+                            budget,
+                        )?;
+                        let fact = data.case_of(body, &drain.facts, budget)?.map(|mut fact| {
+                            fact.origin = None;
+                            fact
+                        });
+                        drain.facts.clear();
+                        drain.assign(result, fact, budget)?;
+                    }
+                    next.position = Position { code: 0, next: 0 };
+                    next.context = context;
+                    next.value_context = value_context;
+                }
+                Frame::RemovedHandler {
                     context,
                     value_context,
                     ..
                 }
                 | Frame::Resource {
-                    context,
-                    value_context,
-                    ..
-                }
-                | Frame::RetainedRoot {
                     context,
                     value_context,
                     ..
@@ -4529,11 +4964,43 @@ impl<'a> Analysis<'a> {
                     next.context = context;
                     next.value_context = value_context;
                 }
+                Frame::RetainedRoot {
+                    code,
+                    store,
+                    context,
+                    value_context,
+                    ..
+                } => {
+                    if let Some(drain) = &mut next.drain {
+                        let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+                        let result = data.port(code, value_context, budget)?;
+                        let fact = data.case_of(result, &drain.facts, budget)?.map(|mut fact| {
+                            fact.origin = None;
+                            fact
+                        });
+                        drain.facts.clear();
+                        drain.assign(result, fact, budget)?;
+                    }
+                    if let [owner] = state.edges(store, budget)?
+                        && matches!(owner.frame, Frame::Resource { focused: true, .. })
+                        && let Some(drain) = &mut next.drain
+                    {
+                        let work = match drain.work {
+                            DrainWork::ActiveOnly => DrainWork::Empty,
+                            other => other,
+                        };
+                        drain.changed(work, budget)?;
+                    }
+                    next.position = Position { code: 0, next: 0 };
+                    next.context = context;
+                    next.value_context = value_context;
+                }
                 Frame::Clause {
                     handler,
                     ordinal,
                     context,
                     value_context,
+                    clause_context,
                     consumed,
                     ..
                 } => {
@@ -4550,6 +5017,22 @@ impl<'a> Analysis<'a> {
                             ),
                             None => Failure::Invalid,
                         });
+                    }
+                    if let Some(drain) = &mut next.drain {
+                        let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+                        let (result, body) = data.case_handler_result(
+                            handler,
+                            Some(ordinal),
+                            value_context,
+                            clause_context,
+                            budget,
+                        )?;
+                        let fact = data.case_of(body, &drain.facts, budget)?.map(|mut fact| {
+                            fact.origin = None;
+                            fact
+                        });
+                        drain.facts.clear();
+                        drain.assign(result, fact, budget)?;
                     }
                     next.position = Position { code: 0, next: 0 };
                     next.context = context;
@@ -4608,6 +5091,15 @@ impl<'a> Analysis<'a> {
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
+        let mut opaque_state = None;
+        if event.unknown && state.drain.is_some() {
+            let mut next = state.copy(budget)?;
+            let drain = next.drain.as_mut().ok_or(Failure::Invalid)?;
+            drain.changed(DrainWork::Unknown, budget)?;
+            drain.facts.clear();
+            opaque_state = Some(next);
+        }
+        let state = opaque_state.as_ref().unwrap_or(state);
         if self.has_retained_root {
             self.check_probe_driver(state, event, budget)?;
         }
@@ -4930,7 +5422,12 @@ impl<'a> Analysis<'a> {
                 if let (Some(data), Some(port)) = (&mut self.data, event.port) {
                     data.external_result(port, budget)?;
                 }
-                self.returned(state.copy(budget)?, pending, visited, budget)?;
+                let mut next = state.copy(budget)?;
+                if let Some(drain) = &mut next.drain {
+                    drain.changed(DrainWork::Unknown, budget)?;
+                    drain.facts.clear();
+                }
+                self.returned(next, pending, visited, budget)?;
                 continue;
             }
             if let Frame::RemovedHandler { code, .. } = selected.boundary.frame {
@@ -5025,10 +5522,15 @@ impl<'a> Analysis<'a> {
         for owner in owners {
             self.check_payload(state, event, &[owner], budget)?;
         }
+        let mut next = state.copy(budget)?;
+        if let Some(drain) = &mut next.drain {
+            drain.changed(DrainWork::Unknown, budget)?;
+            drain.facts.clear();
+        }
         if event.unknown {
-            Self::enqueue(state.copy(budget)?, pending, visited, budget)?;
+            Self::enqueue(next, pending, visited, budget)?;
         } else {
-            self.returned(state.copy(budget)?, pending, visited, budget)?;
+            self.returned(next, pending, visited, budget)?;
         }
         Ok(())
     }
@@ -5357,6 +5859,58 @@ impl<'a> Analysis<'a> {
         if let (Some(data), Some(port)) = (&mut self.data, event.port) {
             data.external_result(port, budget)?;
         }
+        if let (
+            Some(drain),
+            Some(port),
+            Frame::Resource {
+                code,
+                context,
+                focused: true,
+                ..
+            },
+        ) = (&state.drain, event.port, selected.boundary.frame)
+            && !event.unknown
+            && matches!(selected.boundary.address, Address::Slot { old: false, .. })
+            && let Control::Request(request) = &self.graph.code[event.code]
+            && let Some(operation) = request.operation
+            && let Some(api) = crate::resolved::StoreApi::for_module(operation.owner().module())
+            && operation == crate::types::OperationId::new(api.probe(), 0)
+        {
+            let target = self.label(code, context, budget)?;
+            if self.match_labels(event.label, target, budget)? == (true, false) {
+                let answers: &[bool] = match drain.work {
+                    DrainWork::Empty => &[true],
+                    DrainWork::ActiveOnly | DrainWork::Pending => &[false],
+                    DrainWork::Unknown => &[true, false],
+                };
+                for answer in answers {
+                    let mut next = state.copy(budget)?;
+                    let drain = next.drain.as_mut().ok_or(Failure::Invalid)?;
+                    #[cfg(test)]
+                    match (*answer, drain.witness.0) {
+                        (false, 1) => drain.witness.0 = 2,
+                        (true, 3) => drain.witness.0 = 4,
+                        _ => {}
+                    }
+                    drain.work = if *answer {
+                        DrainWork::Empty
+                    } else {
+                        DrainWork::Pending
+                    };
+                    drain.assign(
+                        port,
+                        Some(super::value::CaseFact {
+                            value: super::value::ValueCase::Boolean(*answer),
+                            fresh_probe: true,
+                            origin: None,
+                        }),
+                        budget,
+                    )?;
+                    self.returned(next, pending, visited, budget)?;
+                }
+                return Ok(());
+            }
+        }
         // The trusted interpreter completes this operation without
         // transferring its operand outside the owning scope.
         self.returned(state.copy(budget)?, pending, visited, budget)?;
@@ -5401,6 +5955,11 @@ impl<'a> Analysis<'a> {
             value_context
         };
         let mut next = state.copy(budget)?;
+        if let Some(drain) = &mut next.drain {
+            // A source clause is executed in its own dynamic environment.
+            // Preserve work but forget caller-local case observations.
+            drain.facts.clear();
+        }
         next.stack = selected.boundary.next;
         let mut prefix = copy_slice(&selected.prefix, budget)?;
         // An opaque request resumes at the same call position.
@@ -5705,6 +6264,16 @@ impl<'a> Analysis<'a> {
                         value_context,
                         ..
                     }
+                    | Frame::CaseReturn {
+                        context,
+                        value_context,
+                        ..
+                    }
+                    | Frame::CallReturn {
+                        context,
+                        value_context,
+                        ..
+                    }
                     | Frame::Clause {
                         context,
                         value_context,
@@ -5929,6 +6498,25 @@ impl<'a> Analysis<'a> {
                 None
             };
             let mut next = state.copy(budget)?;
+            if resume && let (Some(drain), Some(port)) = (&mut next.drain, event.port) {
+                let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+                let operand =
+                    data.case_resume_operand(state.position.code, state.value_context, budget)?;
+                let fact = data.case_of(operand, &drain.facts, budget)?;
+                drain.facts.clear();
+                drain.assign(port, fact, budget)?;
+            }
+            if let Some((store, ..)) = retained_root
+                && let [owner] = state.edges(store, budget)?
+                && matches!(owner.frame, Frame::Resource { focused: true, .. })
+                && let Some(drain) = &mut next.drain
+            {
+                drain.changed(DrainWork::Pending, budget)?;
+                #[cfg(test)]
+                {
+                    drain.witness.0 = 1;
+                }
+            }
             // Replacing this occurrence does not mutate an older activation
             // sharing the static owner identity.
             if let Frame::Clause {
@@ -6151,6 +6739,105 @@ impl<'a> Analysis<'a> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn retained_drain_actual_owner_missing_from_its_root_is_rejected() {
+        use super::super::tests::retained_drain_fixture;
+        use crate::core::effect::{EffectExprKind, EffectOperationFamily};
+        fn operation(kind: &EffectExprKind) -> Option<&crate::core::effect::EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+
+        let core = retained_drain_fixture(include_str!(
+            "../../../tests/fixtures/retained-drain/basic.ash"
+        ));
+        let mut work = TypeWorkBudget::unbounded();
+        let built = super::super::build_capture_graph::<EffectOperationFamily>(
+            &core.nodes,
+            &[],
+            &[],
+            operation,
+            &[],
+            &[],
+            None,
+            &mut work,
+        )
+        .unwrap()
+        .unwrap();
+        let continues: Vec<_> = built
+            .graph
+            .code
+            .iter()
+            .enumerate()
+            .filter_map(|(code, node)| match node {
+                Control::Continue { store, .. } => Some((code, *store)),
+                _ => None,
+            })
+            .collect();
+        let mut analysis = Analysis::new(&built.graph, None, &mut work).unwrap();
+        let mut queries = Vec::new();
+        for root in &built.roots {
+            if query_required(&built.graph, *root, &mut work).unwrap() {
+                queries.push(*root);
+            }
+        }
+        analysis.discover(&queries, None, &mut work).unwrap();
+        let mut known_checked = false;
+        let mut unknown_checked = false;
+        for (code, store) in continues {
+            let contexts = analysis.data.as_ref().unwrap().contexts_for_code(store);
+            for value_context in contexts {
+                let data = analysis.data.as_mut().unwrap();
+                let root = data.standalone_root(value_context, &mut work).unwrap();
+                if root.is_none() || !data.context_has_invoke(value_context) {
+                    continue;
+                }
+                let (targets, unknown) =
+                    data.store_targets(store, value_context, &mut work).unwrap();
+                let known_same_root = !unknown
+                    && matches!(targets.as_slice(), [target]
+                        if data.standalone_root(target.1, &mut work).unwrap() == root);
+                let unknown_operand = unknown && targets.is_empty();
+                if !known_same_root && !unknown_operand {
+                    continue;
+                }
+                // Preserve the actual Root→Invoke context but remove its
+                // Store frame. This is not a standalone callable seed.
+                let state = State {
+                    position: Position { code, next: 0 },
+                    context: 0,
+                    value_context,
+                    stack: Address::Empty,
+                    heap: Vec::new(),
+                    retained: Vec::new(),
+                    cells: Vec::new(),
+                    abandoned: None,
+                    drain: None,
+                    symbolic_seed: false,
+                };
+                assert!(matches!(
+                    analysis.store_boundary(&state, store, &mut work),
+                    Err(Failure::Invalid)
+                ));
+                known_checked |= known_same_root;
+                unknown_checked |= unknown_operand;
+                if known_checked && unknown_checked {
+                    break;
+                }
+            }
+        }
+        assert!(
+            known_checked,
+            "the fixture must supply an actual same-root Store target"
+        );
+        assert!(
+            unknown_checked,
+            "the fixture must supply an unknown Root→Invoke operand"
+        );
+    }
+
+    #[test]
     fn retained_existing_slot_replays_its_request_and_handler_in_the_focused_context() {
         use super::super::tests::{RetainedContextFixture, retained_context_core};
         use crate::core::effect::{EffectExprKind, EffectOperationFamily};
@@ -6274,6 +6961,8 @@ mod tests {
             heap: Vec::new(),
             cells: Vec::new(),
             abandoned: None,
+            drain: None,
+            symbolic_seed: false,
             retained: vec![
                 retained(owner, Some(capture)),
                 retained(owner, None),
@@ -6300,6 +6989,8 @@ mod tests {
             stack: Address::Empty,
             heap: Vec::new(),
             abandoned: None,
+            drain: None,
+            symbolic_seed: false,
             retained: Vec::new(),
             cells: vec![CellContents {
                 occurrence: ProviderResourceOccurrence {
@@ -6380,6 +7071,8 @@ mod tests {
                         next: Address::Empty,
                     })
                     .collect(),
+                drain: None,
+                symbolic_seed: false,
                 retained: Vec::new(),
                 cells: vec![CellContents {
                     occurrence: ProviderResourceOccurrence {
@@ -6431,6 +7124,8 @@ mod tests {
             stack: Address::Empty,
             heap: Vec::new(),
             abandoned: None,
+            drain: None,
+            symbolic_seed: false,
             retained: Vec::new(),
             cells: vec![CellContents {
                 occurrence: ProviderResourceOccurrence {
@@ -6578,6 +7273,8 @@ mod tests {
                 context: 0,
                 value_context: 0,
                 stack: address,
+                drain: None,
+                symbolic_seed: false,
                 retained: Vec::new(),
                 cells: Vec::new(),
                 heap: vec![Edge {
@@ -6639,6 +7336,8 @@ mod tests {
                 context: 0,
                 value_context: 0,
                 stack: address,
+                drain: None,
+                symbolic_seed: false,
                 retained: Vec::new(),
                 cells: Vec::new(),
                 heap: vec![Edge {
@@ -6694,6 +7393,8 @@ mod tests {
             context: 0,
             value_context: 0,
             stack: address(removed),
+            drain: None,
+            symbolic_seed: false,
             retained: Vec::new(),
             cells: Vec::new(),
             heap: vec![
@@ -6916,6 +7617,8 @@ mod tests {
             stack: Address::Empty,
             heap: Vec::new(),
             abandoned: None,
+            drain: None,
+            symbolic_seed: false,
             retained: Vec::new(),
             cells: vec![CellContents {
                 occurrence: ProviderResourceOccurrence {
@@ -7147,6 +7850,8 @@ mod tests {
                     value_context: 0,
                     stack: inner,
                     abandoned: None,
+                    drain: None,
+                    symbolic_seed: false,
                     retained: Vec::new(),
                     cells: Vec::new(),
                     heap: vec![
@@ -7274,6 +7979,8 @@ mod tests {
                 value_context: 0,
                 stack: root,
                 abandoned: None,
+                drain: None,
+                symbolic_seed: false,
                 retained: Vec::new(),
                 cells: Vec::new(),
                 heap: vec![
@@ -7383,6 +8090,8 @@ mod tests {
                             context: 3,
                             value_context: 4,
                             stack: address,
+                            drain: None,
+                            symbolic_seed: false,
                             retained: Vec::new(),
                             cells: Vec::new(),
                             heap: vec![Edge {
@@ -7442,6 +8151,8 @@ mod tests {
                 value_context: 0,
                 stack: heap[0].address,
                 heap,
+                drain: None,
+                symbolic_seed: false,
                 retained: Vec::new(),
                 cells: Vec::new(),
                 abandoned: Some((7, event)),
@@ -7522,6 +8233,8 @@ mod tests {
                 context: 2,
                 value_context: 3,
                 stack,
+                drain: None,
+                symbolic_seed: false,
                 retained: Vec::new(),
                 cells: Vec::new(),
                 heap: vec![
@@ -7560,6 +8273,8 @@ mod tests {
                         value_context: 5,
                         stack: Address::Empty,
                         heap: Vec::new(),
+                        drain: None,
+                        symbolic_seed: false,
                         retained: Vec::new(),
                         cells: Vec::new(),
                         abandoned: port.map(|port| {
@@ -7620,6 +8335,8 @@ mod tests {
                 context: 4,
                 value_context: 5,
                 stack: root,
+                drain: None,
+                symbolic_seed: false,
                 retained: Vec::new(),
                 cells: Vec::new(),
                 heap: vec![Edge {
@@ -7672,6 +8389,8 @@ mod tests {
                 value_context: 0,
                 stack: Address::Empty,
                 heap: Vec::new(),
+                drain: None,
+                symbolic_seed: false,
                 retained: Vec::new(),
                 cells: Vec::new(),
                 abandoned: None,
@@ -7746,6 +8465,8 @@ mod tests {
                 context: 0,
                 value_context: 0,
                 stack: root,
+                drain: None,
+                symbolic_seed: false,
                 retained: Vec::new(),
                 cells: Vec::new(),
                 heap: vec![
@@ -7832,6 +8553,8 @@ mod tests {
                 value_context: 0,
                 stack: Address::Empty,
                 heap: Vec::new(),
+                drain: None,
+                symbolic_seed: false,
                 retained: Vec::new(),
                 cells: Vec::new(),
                 abandoned: None,
@@ -7931,6 +8654,8 @@ mod tests {
             value_context: 0,
             stack: Address::Empty,
             heap: Vec::new(),
+            drain: None,
+            symbolic_seed: false,
             retained: Vec::new(),
             cells: Vec::new(),
             abandoned: None,
@@ -8029,6 +8754,8 @@ mod tests {
                 value_context: 0,
                 stack: Address::Empty,
                 heap: Vec::new(),
+                drain: None,
+                symbolic_seed: false,
                 retained: Vec::new(),
                 cells: Vec::new(),
                 abandoned: None,
@@ -8154,6 +8881,8 @@ mod tests {
                 value_context: 0,
                 stack: root,
                 heap,
+                drain: None,
+                symbolic_seed: false,
                 retained: Vec::new(),
                 cells: Vec::new(),
                 abandoned: None,
@@ -8216,6 +8945,8 @@ mod tests {
                 value_context: 0,
                 stack: Address::Empty,
                 heap,
+                drain: None,
+                symbolic_seed: false,
                 retained: Vec::new(),
                 cells: Vec::new(),
                 abandoned: None,
@@ -8361,6 +9092,8 @@ mod tests {
                 value_context: 0,
                 stack: root,
                 heap: heap.clone(),
+                drain: None,
+                symbolic_seed: false,
                 retained: Vec::new(),
                 cells: Vec::new(),
                 abandoned: None,
@@ -9050,6 +9783,7 @@ mod tests {
                     &graph,
                     vec![usize::MAX],
                     true,
+                    false,
                     &mut short
                 ),
                 Err(Failure::Resource)
@@ -9062,6 +9796,7 @@ mod tests {
                         &graph,
                         vec![usize::MAX],
                         true,
+                        false,
                         &mut exact
                     )
                     .unwrap()
@@ -9203,6 +9938,7 @@ mod tests {
             super::super::check_control_roots_with_rows(
                 &graph,
                 vec![0],
+                false,
                 false,
                 &mut TypeWorkBudget::unbounded()
             ),

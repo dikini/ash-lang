@@ -27314,7 +27314,8 @@ fn capture_failure(
             ));
             TypeError::source(diagnostic)
         }
-        Failure::Invalid => invalid_state(),
+        // The source capture pass does not issue the linked release query.
+        Failure::Invalid | Failure::RetainedRelease => invalid_state(),
         Failure::RetainedDriver { source } => TypeError::source(Diagnostic::new(
             TypeReason::RetainedDriver,
             SourceLabel::new(source, "this Store still has an active branch"),

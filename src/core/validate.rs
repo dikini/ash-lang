@@ -13637,6 +13637,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             super::capture::Failure::RetainedInterpretation { .. } => {
                 ValidationError::new(ValidationReason::Handler, None)
             }
+            super::capture::Failure::RetainedRelease => {
+                ValidationError::new(ValidationReason::RetainedRelease, retained)
+            }
             super::capture::Failure::Escape {
                 source,
                 acquisition,
