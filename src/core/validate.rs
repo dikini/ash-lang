@@ -23777,6 +23777,31 @@ mod tests {
     }
 
     #[test]
+    fn integer_split_survives_supported_core_transforms() {
+        let source = concat!(
+            "import @builtin.integer as I\n",
+            "main : Unit -> Bool\nmain () = match I.split_base256 257 {\n",
+            "I.Parts((q, r)) => q == 1\nI.Negative => false\n}\n",
+        );
+        let (original, sources, relation) = generic_cell_source_fixture(source, None);
+        let refs = sources.iter().collect::<Vec<_>>();
+        for transformed in [
+            crate::core::transform::identity_effect_traversal(&original).unwrap(),
+            crate::core::transform::fold_effect_literal_primitives(&original).unwrap(),
+        ] {
+            let valid =
+                super::super::validate_effect_modules(transformed, &refs, &relation).unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&valid)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "true"
+            );
+        }
+    }
+
+    #[test]
     fn integer_region_core_rejects_legacy_producers_and_missing_rows() {
         use super::super::effect::{EffectExprKind, EffectOperation};
         use super::super::region::RegionBufferOperation;

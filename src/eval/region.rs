@@ -1618,6 +1618,126 @@ mod tests {
         }
     }
 
+    #[test]
+    fn integer_split_tuple_storage_failure_is_terminal() {
+        use super::*;
+        use crate::core::{packed::Intrinsic, region::RegionBufferOperation};
+        use crate::integer::Integer;
+        let program = super::super::tests::effect_program(concat!(
+            "import @builtin.integer as I\n",
+            "main : Unit -> Bool\nmain () = match I.split_base256 257 {\n",
+            "I.Parts((q, r)) => q == 1\nI.Negative => false\n}\n",
+        ));
+        let mut pending = vec![program.root()];
+        let node = loop {
+            let id = pending.pop().expect("find actual split buffer");
+            let kind = &program.node(id).unwrap().kind;
+            if matches!(kind, EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer))
+                if matches!(&buffer.operation, RegionBufferOperation::Intrinsic(intrinsic)
+                    if matches!(intrinsic.operation(), Intrinsic::IntegerSplit256 { .. })))
+            {
+                break id;
+            }
+            pending.extend((0..kind.child_count()).filter_map(|index| kind.child_at(index)));
+        };
+        let mut machine = Machine::new_effect(&program);
+        let owner = ActivationKey(9);
+        machine.frames.push(Frame::RegionBoundary {
+            node: program.root(),
+            key: owner,
+            allocate: Value::Unit,
+            release: Value::Unit,
+            preceding: Value::Unit,
+            records: Vec::new(),
+        });
+        let mut prepared = machine.prepare_buffer(node, Value::Integer(Integer::parse_decimal(
+            "115792089237316195423570985008687907853269984665640564039457584007913129639936"
+        ).unwrap()), None).unwrap();
+        let bytes = prepared.bytes.take().expect("large quotient backing");
+        let invocation = RegionInvocation { owner, serial: 5 };
+        machine.frames.push(Frame::RegionAllocated {
+            segment: CapturedContinuation { frames: Vec::new() },
+            invocation,
+            registered: false,
+        });
+        let Value::RegionStorage(digits_storage) = machine
+            .allocate_host_region_storage(
+                owner,
+                Value::RegionRequest(RegionRequest {
+                    usable_bytes: bytes.len(),
+                    alignment: 1,
+                    invocation: Some(invocation),
+                }),
+            )
+            .unwrap()
+        else {
+            panic!("digits storage")
+        };
+        let Value::Location(digits) = machine
+            .initialize_region_bytes(digits_storage, &bytes, false)
+            .unwrap()
+        else {
+            panic!("initialized quotient")
+        };
+        machine.frames.pop();
+        prepared.payload = Some(Value::RegionInteger {
+            digits,
+            negative: prepared.integer_sign.unwrap(),
+        });
+        let invocation = RegionInvocation { owner, serial: 6 };
+        machine.frames.push(Frame::RegionAllocated {
+            segment: CapturedContinuation { frames: Vec::new() },
+            invocation,
+            registered: false,
+        });
+        let tuple_storage = machine
+            .allocate_host_region_storage(
+                owner,
+                Value::RegionRequest(RegionRequest {
+                    usable_bytes: 2 * core::mem::size_of::<Value>(),
+                    alignment: core::mem::align_of::<Value>(),
+                    invocation: Some(invocation),
+                }),
+            )
+            .unwrap();
+        machine.frames.pop();
+        machine.frames.push(Frame::RegionBuffer(BufferProgress {
+            node,
+            environment: Environment::new(),
+            owner: Some(owner),
+            step: 5,
+            prepared: Some(prepared),
+            left: None,
+        }));
+        machine.control = Some(Control::Return(tuple_storage));
+        machine_test_hooks::FAIL_CONTROL_RESERVATION
+            .set(Some(ResourceFailureCause::StorageReservationFailed));
+        let failure = machine.run_loop().unwrap_err();
+        machine_test_hooks::reset();
+        let RuntimeFailure::Report(report) = failure else {
+            panic!("terminal resource report")
+        };
+        let resource = report.primary.resource().unwrap();
+        assert_eq!(
+            resource.cause,
+            ResourceFailureCause::StorageReservationFailed
+        );
+        assert_eq!(resource.resource, RuntimeResource::HeapCells);
+        let Frame::RegionBoundary { records, .. } = &machine.frames[0] else {
+            panic!("owner retained")
+        };
+        assert_eq!(records.len(), 2);
+        assert!(
+            records[0].initialized,
+            "completed quotient remains accounted"
+        );
+        assert!(
+            !records[1].initialized,
+            "tuple and Parts were not published"
+        );
+        assert!(machine.control.is_none(), "no normal result returned");
+    }
+
     use std::sync::Arc;
 
     use super::super::{
