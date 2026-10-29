@@ -19,7 +19,8 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-No proposed transitions are listed.
+- [CP-0029: Exact base-256 integer split](CP-0029-exact-base-256-integer-split.md)
+- [CP-0030: Checked network codec](CP-0030-checked-network-codec.md)
 
 ## Accepted changes
 

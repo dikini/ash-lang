@@ -21,7 +21,11 @@ independently reviewed at `94c0be0375d19f8e60900d5d77be2f5caa746eb0` and the
 transition is accepted. Its proof and actual Core reconstruction gate precede
 N4/N5 release reasoning. N4 also requires a separately accepted, sound codec
 extension before codec-dependent completion or release permission. Main
-integration requires separate authorization.
+integration requires separate authorization. Proposed [CP-0029](../proposals/CP-0029-exact-base-256-integer-split.md)
+and [CP-0030](../proposals/CP-0030-checked-network-codec.md) prepare the narrow
+N4 codec dependency for independent review. They do not authorize product
+implementation unless separately accepted; N3 and the N4 driver obligations
+remain in force.
 
 ## Work
 
