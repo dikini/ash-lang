@@ -13,6 +13,7 @@ and reviewed product correspondence.
 | [Ownership](Ownership.lean) | Finite owner inventories, transfer and restore transitions, completion, support, generations and failure accounting. |
 | [OwnershipExamples](OwnershipExamples.lean) | Concrete positive and negative traces over those transitions. |
 | [DrainSafety](DrainSafety.lean) | Finite focused-State normal returns, port cases and the checked Store-close predecessor. |
+| [WorkerChannel](WorkerChannel.lean) | Bounded two-worker ownership, copied FIFO channels, held-delivery completion, endpoint closure and registration accounting. |
 
 The C1 candidate passed independent source review and a frozen scoped
 [AD-0012](../../decisions/AD-0012-proof-development-feedback-and-build-reuse.md)
@@ -25,6 +26,13 @@ control, value and completion premises used by the bounded analysis. Its
 reviewed source completed a separate frozen [gate](../../tasks/evidence/local-retained-control/c3-model/README.md);
 its receipt passed independent audit. Linked validation uses the drain analysis;
 the connected C2/C3 checkpoint is retained and accepted.
+
+The conditional M4 worker/channel model has a reviewed frozen
+[source gate](../../tasks/evidence/pinned-worker-channel-proof/README.md).
+Its [correspondence map](worker-channel-correspondence.md) states the runtime,
+C3, native binding and transport premises that remain outside the model proof.
+This prerequisite does not establish successful native shutdown, full N2
+acceptance or current Ash language semantics.
 
 ## Retained product evidence
 
