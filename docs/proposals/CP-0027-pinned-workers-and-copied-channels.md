@@ -252,6 +252,65 @@ permission from an ordinary Boolean or a runtime claim that processing finished:
 the actual local Store and required suffixes must have completed under the
 accepted completion analysis.
 
+#### One-way receive completion refinement
+
+This refinement was independently reviewed at
+`1e336f6c0c292b48696e5bf61a24408d7a98268f` and is accepted as a contract.
+Its bounded proof and actual implementation correspondence remain pending
+before product reliance. It supplies a sufficient one-way N2 fragment; N3/N4
+retain their separate full ledger and bidirectional obligations. The checked
+caller cut requires allocation-free Core forwarding nodes.
+
+A sealed successful receive commits a fresh internal obligation for the actual
+network activation `N`, receiving side and delivery identity. Only its actual
+`Message` result branch introduces that obligation. It stays associated with
+the receiver-held entry after dequeue. A source value, byte contents, position
+in a loop or ordinary Boolean cannot create or clear it. The actual `End` branch
+likewise supplies a control fact for that same activation and side only when
+the sealed interpreter reports genuine End. A constructed result or intercepted
+request supplies neither fact.
+
+The checker accepts a deliberately narrow receive loop. On `Message`
+it runs a checked processing computation to its actual local completion before
+calling the loop again. That computation may use the message but must not make
+it, a derived value, a capture, callback, Store entry or cleanup escape into a
+caller, mutable cell, returned value or later work. The matching C1 root marker,
+selected handler and clause suffixes and owned cleanup must actually return;
+the existing C3 retained-control judgment for that same Store must exclude
+pending or unknown work at the cut. Native operations are synchronous only
+under the binding's documented assumptions, and their effect is complete only
+on actual return. The marker is a modeled correspondence obligation, not a new
+source annotation or an assertion that the implementation already provides it.
+
+Before recursion, the checker must also establish that every remaining caller
+suffix for this Message arm is inert: after the recursive call it only forwards
+the authenticated End-success return through checked allocation-free Core
+aliases, construction or projection and matching returns. No suffix node may
+allocate, invoke a provider, perform an effect, use a message-derived value or
+run a callback, cleanup, endpoint operation or retained capture. The checker
+examines actual linked nodes and transitive captures; source-level constructor
+syntax and tail position do not establish these properties. Effectful allocation
+or provider control needs a separately reviewed nonreentry rule. Processing
+inside the completed root may allocate under its own checked rules.
+The `Empty` arm may retry through the same checked loop. The `End` arm returns
+a distinct End-success path; the caller may perform `finish_receive` only on
+that path. A normal return of a helper or a new receive alone does not discharge
+an older Message. Any unsupported escape, suffix, target, operation or failure
+case yields no completion permission.
+
+The analysis and proof are specified in the
+[one-way completion assignment](../design/retained-control/one-way-completion-proof-assignment.md).
+It defines the finite abstract state, authenticated facts, transfers, joins,
+matched call/return summaries and recursive least fixed point. It requires an
+acceptance-to-control-step argument for every rule, including actual C1/C3
+completion and the identified `WorkerChannel` held-entry and finish transitions.
+The finite worklist starts with no possible normal returns, rechecks actual
+linked bodies and their selected evidence, and refuses unresolved work,
+unsupported transformations or budget exhaustion. Its evidence is not a
+runtime ledger and it grants no release authority by itself. Receive polarity
+completion still requires genuine End and all earlier obligations discharged;
+endpoint, worker, watch, callback and backing settlement remain separate.
+
 Lower acquisition to an explicit Core network owner carrying the fresh identity,
 resolved entry binders and instantiations, capacity and startup operands. Lower
 operations to sealed, identity-indexed Core operations with the actual
