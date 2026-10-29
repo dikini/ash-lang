@@ -1,0 +1,35 @@
+'Ash.RetainedControl.PortCases.enter_root_sound' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.finish_root_sound' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.retain_sound' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.selected_probe_sound' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.mutation_expires_probe_facts' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.case_construction_sound' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.forget_facts_sound' does not depend on any axioms
+'Ash.RetainedControl.PortCases.forget_origins_sound' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.selected_probe_forget_origins_sound' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.ordered_selection_sound' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.c1_launch_projection_sound' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.c1_finish_projection_sound' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.c1_retain_projection_sound' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.c1_step_preserves_active_clause_separation' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.c1_launch_matches_root_entry' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.c1_finish_matches_root_return' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.c1_retain_adds_saved_work' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.c1_quiet_has_no_work' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.PortCases.c1_no_work_is_quiet' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.PortCases.Routing.snapshot_formal_assign_sound' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.Routing.absent_snapshot_formal_sound' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.Routing.read_assign_sound' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.Routing.read_return_sound' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.Routing.absent_read_assign_sound' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.Routing.read_sound' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.Worklist.finite_reach_converges' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.RetainedControl.PortCases.Worklist.converged_reach_closed' does not depend on any axioms
+'Ash.RetainedControl.PortCases.Worklist.path_at_convergence' does not depend on any axioms
+'Ash.RetainedControl.PortCases.Worklist.matching_return_is_visited' does not depend on any axioms
+'Ash.RetainedControl.PortCases.Worklist.normal_return_is_approximated' does not depend on any axioms
+'Ash.RetainedControl.PortCases.Worklist.finite_return_bound' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.RetainedControl.PortCases.Worklist.checked_close_is_quiet' depends on axioms: [propext]
+'Ash.RetainedControl.PortCases.Worklist.checked_c1_close_has_no_work' depends on axioms: [propext, Quot.sound]
