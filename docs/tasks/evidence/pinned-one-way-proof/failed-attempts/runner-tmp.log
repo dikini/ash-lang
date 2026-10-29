@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/home/dikini/.codex/worktrees/m4-n3-contract-delivery/ash-lang/tools/lean/integrate.py", line 195, in <module>
+    module_result = build(
+                    ^^^^^^
+  File "/home/dikini/.codex/worktrees/m4-n3-contract-delivery/ash-lang/tools/lean/module_build.py", line 207, in build
+    with lock_path.open("a") as lock:
+         ^^^^^^^^^^^^^^^^^^^
+  File "/home/dikini/miniforge3/lib/python3.12/pathlib.py", line 1013, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: [Errno 30] Read-only file system: '/home/dikini/.cache/ash/lean-build.lock'

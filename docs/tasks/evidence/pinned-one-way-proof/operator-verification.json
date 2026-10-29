@@ -1,0 +1,36 @@
+{
+  "kind": "operator-check-not-independent-review",
+  "scope": "Reviewed modeled one-way source integration only; no Rust, Core/runtime correspondence or full N2 acceptance.",
+  "evidence_sha256": "f9856027f5a6828cb19bac639a79291fd1a4c6d6cfc538f11b54ed2194208dd2",
+  "approved_config_sha256": "044221e63016a3d2ea4a29a8d0b837fb360c9da68213a87cc2c5d8893fd8d1ba",
+  "executed_config_sha256": "2c77e423dc8a3b908abc8e9821b7154902dd8b76ffba30d934837ba676fdb663",
+  "configuration_delta": "output_prefix only; adjusted to /tmp for parent-cache hardlinks",
+  "source_checkpoint_sha256": "5ade9c1dc739e18dba4c67053eed1b54a98c4f5ee109c06dbffe0b2f46f0f745",
+  "independent_source_review_sha256": "058fda713b36536277a0f1af7300968c4dcef9712b715648cb5d6a8e8e2d4582",
+  "runner_exit": 0,
+  "modules": 5,
+  "ordered_reports": 283,
+  "oneway_reports": 130,
+  "oneway_unique_reports": 129,
+  "duplicate": "Ash.OneWayCompletion.Processing.normalized_frame_sites_sound",
+  "fresh_modules": [
+    "OneWayCompletion"
+  ],
+  "reused_parent_modules": [
+    "Ownership",
+    "OwnershipExamples",
+    "DrainSafety",
+    "WorkerChannel"
+  ],
+  "parent_evidence_sha256": "7912a3af94493e8e9d91f22e39e88f9e9f2011421067e2f52b917a770e0fa3c7",
+  "compiler_library_hashes_match": true,
+  "source_artifact_log_and_report_hashes_match": true,
+  "allowed_axioms_only": true,
+  "registration_and_toolchain_hashes_match": true,
+  "failed_attempts": [
+    "runner.log: EXDEV before compilation",
+    "runner-tmp.log: sandbox shared-lock read-only before compilation"
+  ],
+  "runner_log_sha256": "0f10a4d37474c669911c71a67f58f1e1ab363778388c0fb78717db034ecd30b4",
+  "module_progress_sha256": "b7ad6d6ce3d9ae5cb26bff2ebae62a5e3c75021971f5a9365f0512e544a42237"
+}
