@@ -10755,6 +10755,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             _ => return Err(ValidationError::new(ValidationReason::Registry, Some(id))),
         }
         let result = match intrinsic.operation() {
+            Intrinsic::IntegerSplit256 { parts, negative } => Some((
+                parts,
+                negative,
+                Type::Tuple(Box::new([Type::Int, Type::Int])),
+                0,
+            )),
             Intrinsic::BytesAppendByte { appended, invalid } => {
                 Some((appended, invalid, Type::Bytes, 0))
             }
@@ -23730,6 +23736,68 @@ mod tests {
             let failure =
                 super::super::validate_effect_modules(copied, &refs, &relation).unwrap_err();
             assert_eq!((failure.reason, failure.node), expected, "{mutation}");
+        }
+    }
+
+    #[test]
+    fn integer_split_accepts_negative_validated_core_input() {
+        use super::super::effect::EffectExprKind;
+        let source = concat!(
+            "import @builtin.integer as I\n",
+            "main : Unit -> Bool\nmain () = match I.split_base256 101 {\n",
+            "I.Parts((q, r)) => false\nI.Negative => true\n}\n",
+        );
+        let (donor, sources, relation) = generic_cell_source_fixture(source, None);
+        let mut copied = crate::core::transform::identity_effect_traversal(&donor).unwrap();
+        let indices: Vec<_> = copied
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| {
+                matches!(&node.kind,
+                EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(value)))
+                    if value.value().to_string() == "101")
+                .then_some(index)
+            })
+            .collect();
+        assert_eq!(indices.len(), 1, "identify the actual caller argument");
+        copied.nodes[indices[0]].kind =
+            EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(
+                crate::core::literal::IntegerNode::new(crate::integer::Integer::from_i64(-1)),
+            )));
+        let refs = sources.iter().collect::<Vec<_>>();
+        let valid = super::super::validate_effect_modules(copied, &refs, &relation).unwrap();
+        assert_eq!(
+            crate::eval::evaluate_effect(&valid)
+                .unwrap()
+                .value
+                .to_string(),
+            "true"
+        );
+    }
+
+    #[test]
+    fn integer_split_survives_supported_core_transforms() {
+        let source = concat!(
+            "import @builtin.integer as I\n",
+            "main : Unit -> Bool\nmain () = match I.split_base256 257 {\n",
+            "I.Parts((q, r)) => q == 1\nI.Negative => false\n}\n",
+        );
+        let (original, sources, relation) = generic_cell_source_fixture(source, None);
+        let refs = sources.iter().collect::<Vec<_>>();
+        for transformed in [
+            crate::core::transform::identity_effect_traversal(&original).unwrap(),
+            crate::core::transform::fold_effect_literal_primitives(&original).unwrap(),
+        ] {
+            let valid =
+                super::super::validate_effect_modules(transformed, &refs, &relation).unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&valid)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "true"
+            );
         }
     }
 

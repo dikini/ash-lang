@@ -7133,6 +7133,31 @@ fn apply_intrinsic(
         {
             Value::integer(crate::integer::Integer::from_usize(request.alignment))
         }
+        (Intrinsic::IntegerSplit256 { parts, negative }, value) => {
+            let integer = read_integer(&value, heap, work)?;
+            let size = usize::try_from(integer.magnitude_byte_length())
+                .map_err(|_| RuntimeFailure::HeapCapacity)?;
+            let cost = size
+                .checked_mul(2)
+                .and_then(|n| n.checked_add(1))
+                .ok_or(RuntimeFailure::HeapCapacity)?;
+            charge_runtime_work(work, cost, RuntimePhase::Evaluation)?;
+            let (constructor, payload) = match integer.split_base256() {
+                None => (negative, None),
+                Some((quotient, remainder)) => {
+                    let fields = Box::new([
+                        Value::integer(quotient),
+                        Value::SmallInteger(i128::from(remainder)),
+                    ]);
+                    let tuple = allocate_heap(heap, HeapCell::Tuple(fields))?;
+                    (parts, Some(Value::Location(tuple)))
+                }
+            };
+            Value::Location(allocate_heap(
+                heap,
+                HeapCell::Constructor(constructor, payload),
+            )?)
+        }
         (Intrinsic::BytesAt { found, invalid }, Value::Location(location)) => {
             return apply_byte_lookup(found, invalid, location, heap, work);
         }
@@ -8373,6 +8398,52 @@ mod tests {
         .expect("Effect Core should validate");
         let _ = std::fs::remove_file(path);
         program
+    }
+
+    #[test]
+    fn integer_split_queries_context_after_the_actual_argument() {
+        for (handler, expected_queries) in
+            [("resume 257", 1), ("{\nlet done = discard\nfalse\n}", 0)]
+        {
+            let source = format!(
+                r#"import @builtin.integer as I
+effect Read {{
+value : Unit -> Int
+}}
+main : Unit -> Bool
+main () = handle (match I.split_base256 (perform Read.value ()) {{
+I.Parts((q, r)) => q == 1
+I.Negative => false
+}}) with Read {{
+value ignored => {handler}
+}}
+"#
+            );
+            let program = effect_program(&source);
+            let default = program
+                .registry()
+                .effects()
+                .iter()
+                .find_map(|effect| crate::resolved::RegionApi::for_module(effect.id.module()))
+                .unwrap()
+                .default_alloc();
+            let read = program
+                .registry()
+                .effects()
+                .iter()
+                .find(|effect| effect.spelling == "Read")
+                .unwrap()
+                .id;
+            let evaluation = Machine::new_effect(&program).run().unwrap();
+            let trace = evaluation.effect_trace();
+            let argument = trace.iter().position(|event|
+                matches!(event, EffectTraceEvent::Request(operation) if *operation == OperationId::new(read, 0)))
+                .expect("the actual argument effect is reached");
+            let queries = trace[argument + 1..].iter().filter(|event|
+                matches!(event, EffectTraceEvent::Request(operation) if *operation == OperationId::new(default, 1)))
+                .count();
+            assert_eq!(queries, expected_queries, "handler {handler}");
+        }
     }
 
     #[test]

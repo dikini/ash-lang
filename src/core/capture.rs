@@ -2504,8 +2504,18 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
         Some(EffectOperation::RegionBuffer(buffer)) => {
             use crate::core::{packed::Intrinsic, region::RegionBufferOperation};
             let api = crate::resolved::RegionApi::for_module(buffer.api).ok_or(Failure::Invalid)?;
-            charge(budget, 3)?;
-            graph.code.try_reserve(3).map_err(|_| Failure::Resource)?;
+            let nodes = if matches!(&buffer.operation, RegionBufferOperation::Intrinsic(intrinsic)
+                if matches!(intrinsic.operation(), Intrinsic::IntegerSplit256 { .. }))
+            {
+                4
+            } else {
+                3
+            };
+            charge(budget, nodes)?;
+            graph
+                .code
+                .try_reserve(nodes)
+                .map_err(|_| Failure::Resource)?;
             let service = graph.code.len();
             data.position_region_request(service, id, index(buffer.context), budget)?;
             let mut request = Request::effect(
@@ -2542,6 +2552,26 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
                     join,
                     budget,
                 )?
+            } else if matches!(&buffer.operation, RegionBufferOperation::Intrinsic(intrinsic) if matches!(intrinsic.operation(), Intrinsic::IntegerSplit256 { .. }))
+            {
+                let twice = graph.code.len();
+                data.position(twice, id, budget)?;
+                graph
+                    .code
+                    .push(Control::Sequence(copy_slice(&[service, service], budget)?));
+                let thrice = graph.code.len();
+                data.position(thrice, id, budget)?;
+                graph.code.push(Control::Sequence(copy_slice(
+                    &[service, service, service],
+                    budget,
+                )?));
+                let either = graph.code.len();
+                data.position(either, id, budget)?;
+                graph.code.push(Control::Choice(copy_slice(
+                    &[service, twice, thrice],
+                    budget,
+                )?));
+                either
             } else if matches!(&buffer.operation,RegionBufferOperation::Intrinsic(intrinsic) if matches!(intrinsic.operation(),Intrinsic::BytesAppendByte {..}|Intrinsic::StringFromUtf8 {..}))
             {
                 let twice = graph.code.len();

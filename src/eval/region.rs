@@ -66,6 +66,7 @@ struct PreparedBuffer {
     constructor: Option<crate::types::ConstructorId>,
     payload: Option<Value>,
     integer_sign: Option<bool>,
+    tuple_tail: Option<Value>,
 }
 
 impl Machine<'_> {
@@ -180,6 +181,7 @@ impl Machine<'_> {
             constructor: None,
             payload: None,
             integer_sign: None,
+            tuple_tail: None,
         };
         fn copy(
             bytes: &[u8],
@@ -255,6 +257,35 @@ impl Machine<'_> {
                 prepared.string = true;
             }
             RegionBufferOperation::Intrinsic(intrinsic) => match intrinsic.operation() {
+                Intrinsic::IntegerSplit256 { parts, negative } => {
+                    let integer =
+                        read_integer(&argument, &self.heap, &mut self.instantiation_work)?;
+                    let size = usize::try_from(integer.magnitude_byte_length())
+                        .map_err(|_| RuntimeFailure::HeapCapacity)?;
+                    let work = size
+                        .checked_mul(3)
+                        .and_then(|n| n.checked_add(1))
+                        .ok_or(RuntimeFailure::HeapCapacity)?;
+                    charge_effect_work(
+                        &mut self.instantiation_work,
+                        work,
+                        RuntimePhase::Evaluation,
+                    )?;
+                    match integer.split_base256() {
+                        None => prepared.constructor = Some(negative),
+                        Some((quotient, remainder)) => {
+                            prepared.constructor = Some(parts);
+                            prepared.tuple_tail = Some(Value::SmallInteger(i128::from(remainder)));
+                            if let Some(value) = quotient.to_i128() {
+                                prepared.payload = Some(Value::SmallInteger(value));
+                            } else {
+                                let (negative, bytes) = quotient.sign_magnitude();
+                                prepared.bytes = Some(bytes);
+                                prepared.integer_sign = Some(negative);
+                            }
+                        }
+                    }
+                }
                 Intrinsic::BytesEmpty => prepared.bytes = Some(Vec::new()),
                 Intrinsic::StringToUtf8 => {
                     let (bytes, string) =
@@ -447,6 +478,20 @@ impl Machine<'_> {
                     return Ok(());
                 }
                 prepared.payload = Some(initialized);
+            } else if progress.step == 5 {
+                let quotient = prepared
+                    .payload
+                    .take()
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                let remainder = prepared
+                    .tuple_tail
+                    .take()
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                let mut fields = Vec::new();
+                reserve_control(&mut fields, 2, RuntimeResource::HeapCells, true)?;
+                fields.push(quotient);
+                fields.push(remainder);
+                prepared.payload = Some(self.initialize_region_tuple(storage, fields)?);
             } else {
                 let mut fields = Vec::new();
                 reserve_control(&mut fields, 2, RuntimeResource::HeapCells, true)?;
@@ -477,6 +522,12 @@ impl Machine<'_> {
         }
         let (usable_bytes, alignment, step) = if let Some(bytes) = &prepared.bytes {
             (bytes.len().max(1), 1, 2)
+        } else if prepared.tuple_tail.is_some() {
+            (
+                2 * core::mem::size_of::<Value>(),
+                core::mem::align_of::<Value>(),
+                5,
+            )
         } else {
             (
                 (1 + usize::from(prepared.payload.is_some())) * core::mem::size_of::<Value>(),
@@ -1509,6 +1560,184 @@ impl Machine<'_> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn integer_split_work_budget_refuses_before_result_publication() {
+        use super::*;
+        use crate::core::{packed::Intrinsic, region::RegionBufferOperation};
+        use crate::integer::Integer;
+        use crate::types::TypeWorkBudget;
+        let program = super::super::tests::effect_program(concat!(
+            "import @builtin.integer as I\n",
+            "main : Unit -> Bool\nmain () = match I.split_base256 257 {\n",
+            "I.Parts((q, r)) => q == 1\nI.Negative => false\n}\n",
+        ));
+        let mut pending = vec![program.root()];
+        let node = loop {
+            let id = pending.pop().expect("find actual split buffer");
+            let kind = &program.node(id).unwrap().kind;
+            if matches!(kind, EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer))
+                if matches!(&buffer.operation, RegionBufferOperation::Intrinsic(intrinsic)
+                    if matches!(intrinsic.operation(), Intrinsic::IntegerSplit256 { .. })))
+            {
+                break id;
+            }
+            pending.extend((0..kind.child_count()).filter_map(|index| kind.child_at(index)));
+        };
+        let argument = Value::Integer(
+            Integer::parse_decimal(
+                "115792089237316195423570985008687907853269984665640564039457584007913129639936",
+            )
+            .unwrap(),
+        );
+        let mut measured = Machine::new_effect(&program);
+        let prepared = measured
+            .prepare_buffer(node, argument.clone(), None)
+            .unwrap();
+        assert!(prepared.bytes.is_some(), "large quotient uses backing");
+        let required = measured.instantiation_work.used();
+        assert!(required > 0);
+        for prefix in [0, 7] {
+            let mut short = Machine::new_effect(&program);
+            short.instantiation_work = TypeWorkBudget::with_limit(prefix + required - 1);
+            short.instantiation_work.charge(prefix).unwrap();
+            let failure = short
+                .prepare_buffer(node, argument.clone(), None)
+                .unwrap_err();
+            assert!(matches!(failure, RuntimeFailure::Report(report)
+                if report.primary.resource().is_some_and(|resource|
+                    resource.cause == ResourceFailureCause::WorkBudgetExhausted)));
+            assert!(short.heap.is_empty(), "no partial result was published");
+            for _ in 0..2 {
+                let mut exact = Machine::new_effect(&program);
+                exact.instantiation_work = TypeWorkBudget::with_limit(prefix + required);
+                exact.instantiation_work.charge(prefix).unwrap();
+                assert!(exact.prepare_buffer(node, argument.clone(), None).is_ok());
+                assert_eq!(exact.instantiation_work.used(), prefix + required);
+                assert!(exact.heap.is_empty(), "preparation does not publish");
+            }
+        }
+    }
+
+    #[test]
+    fn integer_split_tuple_storage_failure_is_terminal() {
+        use super::*;
+        use crate::core::{packed::Intrinsic, region::RegionBufferOperation};
+        use crate::integer::Integer;
+        let program = super::super::tests::effect_program(concat!(
+            "import @builtin.integer as I\n",
+            "main : Unit -> Bool\nmain () = match I.split_base256 257 {\n",
+            "I.Parts((q, r)) => q == 1\nI.Negative => false\n}\n",
+        ));
+        let mut pending = vec![program.root()];
+        let node = loop {
+            let id = pending.pop().expect("find actual split buffer");
+            let kind = &program.node(id).unwrap().kind;
+            if matches!(kind, EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer))
+                if matches!(&buffer.operation, RegionBufferOperation::Intrinsic(intrinsic)
+                    if matches!(intrinsic.operation(), Intrinsic::IntegerSplit256 { .. })))
+            {
+                break id;
+            }
+            pending.extend((0..kind.child_count()).filter_map(|index| kind.child_at(index)));
+        };
+        let mut machine = Machine::new_effect(&program);
+        let owner = ActivationKey(9);
+        machine.frames.push(Frame::RegionBoundary {
+            node: program.root(),
+            key: owner,
+            allocate: Value::Unit,
+            release: Value::Unit,
+            preceding: Value::Unit,
+            records: Vec::new(),
+        });
+        let mut prepared = machine.prepare_buffer(node, Value::Integer(Integer::parse_decimal(
+            "115792089237316195423570985008687907853269984665640564039457584007913129639936"
+        ).unwrap()), None).unwrap();
+        let bytes = prepared.bytes.take().expect("large quotient backing");
+        let invocation = RegionInvocation { owner, serial: 5 };
+        machine.frames.push(Frame::RegionAllocated {
+            segment: CapturedContinuation { frames: Vec::new() },
+            invocation,
+            registered: false,
+        });
+        let Value::RegionStorage(digits_storage) = machine
+            .allocate_host_region_storage(
+                owner,
+                Value::RegionRequest(RegionRequest {
+                    usable_bytes: bytes.len(),
+                    alignment: 1,
+                    invocation: Some(invocation),
+                }),
+            )
+            .unwrap()
+        else {
+            panic!("digits storage")
+        };
+        let Value::Location(digits) = machine
+            .initialize_region_bytes(digits_storage, &bytes, false)
+            .unwrap()
+        else {
+            panic!("initialized quotient")
+        };
+        machine.frames.pop();
+        prepared.payload = Some(Value::RegionInteger {
+            digits,
+            negative: prepared.integer_sign.unwrap(),
+        });
+        let invocation = RegionInvocation { owner, serial: 6 };
+        machine.frames.push(Frame::RegionAllocated {
+            segment: CapturedContinuation { frames: Vec::new() },
+            invocation,
+            registered: false,
+        });
+        let tuple_storage = machine
+            .allocate_host_region_storage(
+                owner,
+                Value::RegionRequest(RegionRequest {
+                    usable_bytes: 2 * core::mem::size_of::<Value>(),
+                    alignment: core::mem::align_of::<Value>(),
+                    invocation: Some(invocation),
+                }),
+            )
+            .unwrap();
+        machine.frames.pop();
+        machine.frames.push(Frame::RegionBuffer(BufferProgress {
+            node,
+            environment: Environment::new(),
+            owner: Some(owner),
+            step: 5,
+            prepared: Some(prepared),
+            left: None,
+        }));
+        machine.control = Some(Control::Return(tuple_storage));
+        machine_test_hooks::FAIL_CONTROL_RESERVATION
+            .set(Some(ResourceFailureCause::StorageReservationFailed));
+        let failure = machine.run_loop().unwrap_err();
+        machine_test_hooks::reset();
+        let RuntimeFailure::Report(report) = failure else {
+            panic!("terminal resource report")
+        };
+        let resource = report.primary.resource().unwrap();
+        assert_eq!(
+            resource.cause,
+            ResourceFailureCause::StorageReservationFailed
+        );
+        assert_eq!(resource.resource, RuntimeResource::HeapCells);
+        let Frame::RegionBoundary { records, .. } = &machine.frames[0] else {
+            panic!("owner retained")
+        };
+        assert_eq!(records.len(), 2);
+        assert!(
+            records[0].initialized,
+            "completed quotient remains accounted"
+        );
+        assert!(
+            !records[1].initialized,
+            "tuple and Parts were not published"
+        );
+        assert!(machine.control.is_none(), "no normal result returned");
+    }
+
     use std::sync::Arc;
 
     use super::super::{

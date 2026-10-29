@@ -1266,6 +1266,9 @@ impl Graph {
                 let parameter = self.push(Expr::Slot, source, budget)?;
                 let scalar = self.push(Expr::Scalar, source, budget)?;
                 let constructors = match intrinsic.operation() {
+                    crate::core::packed::Intrinsic::IntegerSplit256 { parts, negative } => {
+                        Some((parts, negative))
+                    }
                     crate::core::packed::Intrinsic::BytesAppendByte { appended, invalid } => {
                         Some((appended, invalid))
                     }
@@ -1278,11 +1281,23 @@ impl Graph {
                     _ => None,
                 };
                 let body = if let Some((success, invalid)) = constructors {
+                    let value = if matches!(
+                        intrinsic.operation(),
+                        crate::core::packed::Intrinsic::IntegerSplit256 { .. }
+                    ) {
+                        self.push(
+                            Expr::Tuple(copy_slice(&[scalar, scalar], budget)?),
+                            source,
+                            budget,
+                        )?
+                    } else {
+                        scalar
+                    };
                     let function = self.push(Expr::Constructor(success), source, budget)?;
                     let success = self.push(
                         Expr::Call {
                             function,
-                            arguments: copy_slice(&[scalar], budget)?,
+                            arguments: copy_slice(&[value], budget)?,
                             scalar: false,
                             type_application: false,
                         },
@@ -1782,6 +1797,21 @@ impl Graph {
             } else {
                 let alternatives = match buffer.operation {
                     RegionBufferOperation::Intrinsic(intrinsic) => match intrinsic.operation() {
+                        Intrinsic::IntegerSplit256 { parts, negative } => {
+                            // The quotient conservatively retains the selected owner even
+                            // for an immediate runtime value; the remainder is bounded.
+                            let remainder = self.push(Expr::Scalar, source, budget)?;
+                            let pair = self.push(
+                                Expr::ResidentTuple {
+                                    constructor: None,
+                                    fields: copy_slice(&[payload, remainder], budget)?,
+                                    owner,
+                                },
+                                source,
+                                budget,
+                            )?;
+                            Some((parts, negative, pair))
+                        }
                         Intrinsic::BytesAppendByte { appended, invalid } => {
                             Some((appended, invalid, payload))
                         }

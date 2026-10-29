@@ -346,6 +346,15 @@ at its structural owner position under its saved preceding selection, including
 during required close. Body-local handlers do not become callback interpreters.
 No younger field/capture is transported through the independent request.
 
+The canonical integer split lowers to an authenticated intrinsic retaining its
+defining module and result constructors. Ordinary application evaluates the
+function and argument first. At builtin entry, Effect Core queries and saves the
+selected context, then its `RegionBuffer` reads the argument and constructs the
+quotient backing if needed, ordered tuple and constructor in that saved context.
+Linked validation checks the module, result identity, operand and allocation
+control; imports and supported transformations preserve or revalidate these
+facts. A same-typed replacement is not the canonical intrinsic.
+
 Private immediate Request descriptors encode checked usable bytes/alignment
 without recursively allocating a tuple or BigInt to formulate that request.
 Host startup/control storage supplies the first default pair before ordinary

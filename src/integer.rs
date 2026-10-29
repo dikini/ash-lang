@@ -37,6 +37,18 @@ impl Integer {
         ))
     }
 
+    /// Exact quotient and remainder for nonnegative integers. The caller pays
+    /// for traversal before invoking this operation.
+    pub(crate) fn split_base256(&self) -> Option<(Self, u8)> {
+        let (negative, bytes) = self.sign_magnitude();
+        if negative {
+            return None;
+        }
+        let remainder = bytes.first().copied().unwrap_or(0);
+        let quotient = Self::from_sign_magnitude(false, bytes.get(1..).unwrap_or(&[]));
+        Some((quotient, remainder))
+    }
+
     /// Returns the byte length of the unsigned magnitude encoding.
     /// This is a codec work metric, not a native ABI or memory-layout promise.
     #[must_use]
@@ -141,5 +153,32 @@ mod tests {
         let oversized = Integer(num_bigint::BigInt::from(usize::MAX) + 1u8);
         assert_eq!(oversized.to_usize(), None);
         assert_eq!(oversized.to_u8(), None);
+    }
+}
+
+#[cfg(test)]
+mod split_base256_tests {
+    use super::Integer;
+
+    #[test]
+    fn exact_sign_and_unbounded_magnitude() {
+        assert!(Integer::from_i64(-1).split_base256().is_none());
+        for (input, quotient, remainder) in [
+            ("0", "0", 0),
+            ("1", "0", 1),
+            ("255", "0", 255),
+            ("256", "1", 0),
+            ("257", "1", 1),
+            (
+                "340282366920938463463374607431768211456",
+                "1329227995784915872903807060280344576",
+                0,
+            ),
+        ] {
+            let n = Integer::parse_decimal(input).unwrap();
+            let (q, r) = n.split_base256().unwrap();
+            assert_eq!(q.to_string(), quotient);
+            assert_eq!(r, remainder);
+        }
     }
 }
