@@ -9,7 +9,7 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-No active task files are listed.
+- [TASK-0058: Pinned worker network](TASK-0058-pinned-worker-network.md)
 
 The retained-control [specification](../../spec/README.md) and
 [bounded evidence](../design/retained-control/README.md) are retained on the M3
