@@ -144,6 +144,22 @@ cases in CP-0027. Native tests observe actual host behavior but do not prove
 all schedules or the correctness of external code. Record independent review,
 fixed source/configuration pins and residual assumptions before adoption.
 
+## Terminal failure holder
+
+AD-0017 specifies a nonexecuting, process-lifetime holder on the original
+carrier when checked local completion cannot be established. The coordinator
+receives an incomplete-teardown report and retains transport support, but does
+not receive the evaluator, heap, Store, frames or their authority. Host waiting
+is ordinary carrier waiting; no Ash or native continuation is moved or made
+resumable. The holder grants no disposal or successful settlement permission.
+
+For reported runtime failure, verify the actual holder and binding lifetimes,
+including a committed receive followed by provider or callback failure. State
+the native binding's unwind assumption. Unknown panic grants no completion or
+settlement; catching it after protected frames or guards have already been
+dropped does not establish their preservation. The failure holder is not a
+recovery mechanism and remains until process exit.
+
 ## Implementation correspondence
 
 Implementation must verify CP-0027's entry and operation signatures, private
