@@ -104,6 +104,21 @@ and release remain the fixed ordinary pair of one successful region setup.
 | CloseBegin | Require that an ordinary result does not depend on the closing region; finish inner cleanup/dependent uses while backing is live. Root observation completes before root close. Begin the saved original release once; its unfinished completion remains required. |
 | CloseFinish | After successful release completion, revoke access and bulk-retire that region's records; restore enclosing control. Other regions/shared allocator state remain valid. Copies of access own no close. |
 
+The canonical `@builtin.integer.split_base256` uses ordinary call-by-value:
+the function and strict `Int` argument evaluate once before builtin entry. It
+then queries and saves the live caller-selected allocation context before
+reading the evaluated integer. For `n < 0`, it constructs `Negative` in that
+context. For `n >= 0`, it returns
+`Parts((q, r))` for the unique mathematical integers `n = 256*q + r`, `q >= 0`
+and `0 <= r < 256`; zero yields `(0, 0)`, and positive `n` has `q < n`.
+There is no native-word cutoff. It charges work and size before proportional
+traversal and allocation. For `Parts`, it initializes any needed quotient digit
+backing, the ordered pair and then the constructor in the saved context; the
+remainder is an immediate byte-valued integer. Each supplied record is fresh,
+compatible and fully initialized before publication. Input storage is unchanged.
+Declared allocation refusal follows ordinary effect/discard rules. Internal
+work, control or storage exhaustion is terminal and produces no normal result.
+
 A successful supplied layout includes the object's complete persistent
 representation: tuple fields, nominal discriminant/payload, actual closure
 captures, and persistent Bytes/String/large-Int backing where applicable.

@@ -419,7 +419,9 @@ constructor/intrinsic value, or known immediate literal has row `{}`. Persistent
 construction adds the canonical allocation requirement to its strict-child rows;
 this includes tuples, nominal records, buffers, large integers and materialized
 ordinary function records. Potentially large arithmetic carries that requirement
-even when a particular result is immediate. Erased newtype conversions add no
+even when a particular result is immediate. The canonical integer split call
+adds that same allocation requirement for its arithmetic and result construction.
+Erased newtype conversions add no
 allocation. Generated wrappers allocate only when lowered to ordinary Function.
 An ordinary strict form with evaluated expression children `e_1` through `e_n`
 otherwise has the partial union of their rows, accumulated in the existing
@@ -1583,7 +1585,10 @@ Known immediate literals and intrinsically bounded leaves are independent only
 when their complete persistent representation is immediate. Large literals
 retain digit-backing residency. Unknown results, potentially large addition and
 multiplication conservatively retain selected residency even for a small runtime
-result; aliases, projections, calls and Cell reads preserve actual facts. Thus
+result. The quotient of `@builtin.integer.split_base256` also retains selected
+residency even if immediate; its byte-valued remainder is independent. Its tuple
+and nominal result retain their actual field dependencies and their own selected
+residency. Aliases, projections, calls and Cell reads preserve actual facts. Thus
 literal `42` may leave an inner region, while `20 + 22` cannot acquire independence
 from its numeric result. Selecting an outer region before arithmetic can make
 that result survive an inner close without relocation. No range propagation or

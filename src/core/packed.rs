@@ -50,6 +50,11 @@ pub enum Intrinsic {
     AddressIsNull,
     /// Compares raw data-pointer values, without interpreting their lifetime.
     AddressEqual,
+    /// Splits a nonnegative mathematical integer into quotient and byte remainder.
+    IntegerSplit256 {
+        parts: ConstructorId,
+        negative: ConstructorId,
+    },
     /// Constructs empty bytes.
     BytesEmpty,
     /// Appends a checked byte and returns an ordinary constructor result.
@@ -97,7 +102,8 @@ impl IntrinsicNode {
     pub(crate) const fn constructs_buffer_or_reply(self) -> bool {
         matches!(
             self.operation,
-            Intrinsic::BytesEmpty
+            Intrinsic::IntegerSplit256 { .. }
+                | Intrinsic::BytesEmpty
                 | Intrinsic::BytesAppendByte { .. }
                 | Intrinsic::BytesAt { .. }
                 | Intrinsic::StringToUtf8
@@ -162,6 +168,7 @@ impl IntrinsicNode {
                 )
             }
 
+            Intrinsic::IntegerSplit256 { parts, .. } => (Type::Int, Type::Nominal(parts.owner())),
             Intrinsic::BytesEmpty => (Type::Unit, Type::Bytes),
             Intrinsic::BytesAppendByte { appended, .. } => (
                 Type::Tuple(Box::new([Type::Bytes, Type::Int])),
@@ -221,6 +228,7 @@ impl IntrinsicNode {
                 self.module.is_builtin_foreign()
             }
 
+            Intrinsic::IntegerSplit256 { .. } => self.module.is_builtin_integer(),
             Intrinsic::BytesEmpty
             | Intrinsic::BytesAppendByte { .. }
             | Intrinsic::BytesAt { .. }

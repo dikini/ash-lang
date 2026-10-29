@@ -10724,14 +10724,24 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 _ => return Err(invalid_state()),
             }));
         }
-        if !module.is_builtin_bytes() && !module.is_builtin_string() {
+        if !module.is_builtin_bytes() && !module.is_builtin_string() && !module.is_builtin_integer()
+        {
             return Ok(None);
         }
         let result_owner = || match ty.function_view().map(|f| f.value()) {
             Some(Type::Nominal(owner)) if owner.module() == module => Ok(*owner),
             _ => Err(invalid_state()),
         };
-        let operation = if module.is_builtin_bytes() {
+        let operation = if module.is_builtin_integer() {
+            if name.spelling != "split_base256" {
+                return Err(invalid_state());
+            }
+            let owner = result_owner()?;
+            Intrinsic::IntegerSplit256 {
+                parts: crate::types::ConstructorId::new(owner, 0),
+                negative: crate::types::ConstructorId::new(owner, 1),
+            }
+        } else if module.is_builtin_bytes() {
             match name.spelling.as_str() {
                 "empty" => Intrinsic::BytesEmpty,
                 "append_byte" => {
