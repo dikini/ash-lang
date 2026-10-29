@@ -1,22 +1,35 @@
 //! Independent reconstruction of worker entry bodies.
 
-use super::*;
-use crate::core::effect::{EffectOperationFamily, NetworkScopeNode};
+#[cfg(test)]
+use super::node_id;
+use super::{
+    AuthenticatedNativeRegistry, NetworkLinkedSpine, ScopeFamily, ValidationError,
+    ValidationReason, Validator,
+};
+use crate::{
+    core::{
+        dialect::{CoreOperationFamily, NodeId, PureComputation, PureExprKind, PureValue},
+        effect::{EffectOperationFamily, NetworkScopeNode},
+    },
+    resolved::BinderId,
+    types::{Kind, OperationId, Type, TypeWorkBudget},
+};
+use std::collections::{HashMap, HashSet};
 
 pub(super) struct WorkerEntryFact {
-    pub(super) binder: BinderId,
-    pub(super) initializer: NodeId,
+    pub(super) binder: crate::resolved::BinderId,
+    pub(super) initializer: crate::core::dialect::NodeId,
     pub(super) parameter: crate::types::TypeVariableId,
-    pub(super) native_effects: Vec<EffectInstance>,
+    pub(super) native_effects: Vec<crate::types::EffectInstance>,
 }
 
 pub(super) struct NetworkBodyFacts {
-    pub(super) entry_region: NodeId,
-    pub(super) linked_result: NodeId,
+    pub(super) entry_region: crate::core::dialect::NodeId,
+    pub(super) linked_result: crate::core::dialect::NodeId,
     pub(super) entries: [WorkerEntryFact; 2],
     /// Same-arena called closures whose mandatory parameter requires the sealed Worker.
     /// These identities are inputs to an all-owner check, not release permission.
-    pub(super) direct_worker_calls: Vec<NodeId>,
+    pub(super) direct_worker_calls: Vec<crate::core::dialect::NodeId>,
     /// A called entry can reach the authenticated finish-receive operation.
     pub(super) requests_completion: bool,
 }
