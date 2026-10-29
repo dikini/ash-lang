@@ -49,13 +49,14 @@ requirement for potentially large arithmetic and persistent construction under
 the existing row-lifting and provider-discharge rules. An empty outward row
 does not erase the actual allocation operations or establish provider safety.
 
-Use one definite M2 construction sequence. The generated call queries and
-saves the actual caller-selected live allocation context, then evaluates the
-strict `Int` operand exactly once. It reads the operand under its existing live
-owner, charges work and size before proportional traversal or allocation, and
-computes the exact sign and quotient/remainder. For a nonnegative input, it
-constructs any needed persistent quotient digit backing, the ordered `(q, r)`
-payload tuple and the `Parts` constructor in that saved selected context; the
+Use one definite M2 construction sequence. Ordinary application evaluates the
+function and strict `Int` argument once in the existing call-by-value order.
+On entry to the canonical builtin, it queries and saves the actual
+caller-selected live allocation context. It then reads the evaluated argument
+under its existing live owner, charges work and size before proportional
+traversal or allocation, and computes the exact sign and quotient/remainder.
+For a nonnegative input, it constructs any needed persistent quotient digit
+backing, the ordered `(q, r)` payload tuple and the `Parts` constructor in that saved selected context; the
 bounded remainder `r` is an immediate byte-valued `Int`. The quotient retains
 the conservative selected residency required for potentially large arithmetic
 even when its runtime representation is immediate. The result constructor
@@ -87,6 +88,14 @@ intrinsic identities. It does not add division or ordering operators or alter
 `Int` representation. The declared empty outward row and the call-site
 allocation requirement above are both part of this proposal.
 
+The call-order revision replaces the original requirement to query the context
+before evaluating the actual argument. Argument effects now occur before that
+query; if argument evaluation does not return normally, the builtin does not
+query the context or construct a result. The query still precedes reading the
+evaluated integer, computation and result allocation. This ordering is
+observable for an effectful argument. It preserves ordinary callable, alias,
+import, provider, failure and dependency rules.
+
 ## Affected specification areas
 
 Update [name resolution](../../spec/name-resolution.md) for the module,
@@ -108,8 +117,10 @@ intrinsic normal result. Adoption alone makes none of these rules current.
 [CP-0030](CP-0030-checked-network-codec.md) depends on this separately
 accepted, implemented and verified operation. It relies on actual selected
 provider and control evidence, not merely the function's empty outward row.
-No ledger representation changes. If this dependency cannot meet its resource
-or semantic requirements, return to proposal review.
+No ledger representation changes. CP-0030 applies the split to an already
+bound scalar; the call-order revision does not change its framing or contextual
+codec law. If this dependency cannot meet its resource or semantic requirements,
+return to proposal review.
 
 ## Non-goals
 
@@ -120,9 +131,10 @@ new parser primitive, automatic protocol trust or change to ledger state.
 
 Implement the actual canonical module, intrinsic and normal-return mapping;
 check identity, imports, reexports, supported transformations, strictness,
-selected context, provider control, lifetime, work and failure. At frozen
-linked inputs cover zero, 1, 255, 256, 257, negative values and values beyond
-host word size, alias/import and same-typed replacement, allocation refusal,
+selected context, provider control, lifetime, work and failure, including
+argument effects before the query and argument failure before builtin entry.
+At frozen linked inputs cover zero, 1, 255, 256, 257, negative values and values
+beyond host word size, alias/import and same-typed replacement, allocation refusal,
 terminal work/storage failure and budget boundaries. Independently review the
 runtime-to-model mapping and applicable focused and integrated checks; update
 the affected specification with the retained implementation. None of this
