@@ -10,6 +10,8 @@ The checked FFI, region and local-control exploration is retained in
 [DN-0057](DN-0057-checked-ffi-module-boundaries.md),
 [DN-0055](DN-0055-algebra-of-regions-lifetimes-and-ownership.md) and
 [DN-0056](DN-0056-scoped-continuation-retention-and-library-scheduling.md).
+The proposed pinned-worker host and channel choice is in
+[DN-0058](DN-0058-pinned-worker-host-and-channel.md); it awaits review.
 The implemented [foreign-call boundary](../../spec/static-semantics.md#source-foreign-declarations)
 does not accept the wider region and control designs; these notes remain informative.
 

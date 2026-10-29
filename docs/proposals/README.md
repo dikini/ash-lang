@@ -19,7 +19,7 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-No proposed transitions are listed.
+- [CP-0027: Pinned workers and copied channels](CP-0027-pinned-workers-and-copied-channels.md)
 
 ## Accepted changes
 
