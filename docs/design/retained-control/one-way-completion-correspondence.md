@@ -103,9 +103,9 @@ Network transitions. `normal_run_observes_end` derives a quiet held list and
 Store from a safe, quiet entry for every finite `Run`. Its Message constructor
 requires a checked region path, exact held entry and matching selected C1 root.
 
-## Missing proof and correspondence
+## Model limits and implementation evidence
 
-These results do not yet form acceptance-to-completion. `Loop.Run` is already
+These modeled results do not constitute a mechanized proof of the implementation. `Loop.Run` is already
 filtered by acceptance premises and is not derived from `Execution`. Its frame
 fields are not connected to the actual control steps that created and returned
 those frames. The unified execution includes a dispatch transition linking the current
@@ -113,16 +113,18 @@ Message entry to a capture constructed from a finite root graph and to the
 selected root consumer. A rejected capture graph and a mismatched actual root
 have explicit tainted successors. The selected-root projection checks the
 concrete branch, held entry, owner, cleanup shape and consumer. The relation
-between this graph and actual linked Core is unproved. Unsupported control nodes
+between this graph and actual linked Core is a trusted, independently reviewed
+implementation mapping rather than a mechanized Rust refinement proof. Unsupported control nodes
 and paths reaching an unverified
 processing operation invalidate the fact and taint the state. The unified
 execution retains control continuations after Network failure. Permanent
 failure prevents the concrete finish predicate from succeeding. Solver admission
 rejects the modeled unsupported processing, rejected capture and mismatched
 capture alternatives. Their coverage of actual linked Core and runtime
-successors remains unproved. The modeled finish theorem is not authority for
-an actual `finish_receive` or release: the actual analysis and runtime
-correspondence are still missing.
+successors is checked through the implementation mapping and connected tests
+below. The modeled finish theorem alone grants no actual `finish_receive` or
+release authority. The implemented validator and runtime enforce their own
+authenticated routes, cuts, observations and settlement checks.
 
 The modeled call transfer uses simultaneous reads of finite argument and
 capture ports, a saved caller dependency vector, and a
@@ -139,7 +141,7 @@ work; its cost coverage is not proved.
 
 The accepted [C3 correspondence](drain-correspondence.md) already covers the
 focused full-state closure, matched call and return, fresh root and marker
-completion. This extension must relate the new worker, delivery, End and native
+completion. The implementation mapping relates worker, delivery, End and native
 evidence to that same focused query; it does not require a second general
 evaluator proof. C3's ordinary Unknown native result remains conservative.
 
@@ -151,8 +153,10 @@ evaluator proof. C3's ordinary Unknown native result remains conservative.
 | End and driver | C3's normal return and suffix evidence | Bind the genuine End reply to the correct activation, outer return destination and `finish_receive` predecessor. |
 | Budget | The focused analysis charges its work to the existing Core budget | Charge the added collector, identity checks and replay; establish the actual linked positive within its applicable source-derived allowance. |
 
-The narrow `requested_interpreter` extension is under development in the
-private scoped worker query; its final tests and independent review are pending.
+The narrow `requested_interpreter` extension is implemented in the
+private scoped worker query. Its bounded source mapping has independent review
+and focused evidence; final assembled workspace verification and delivery
+acceptance remain separate gates.
 It retains boundary selection, the payload check, external-result handling and
 the return edge. The conditional transfer applies to the current request at
 the selected native boundary and focused Store, with the instantiated effect,

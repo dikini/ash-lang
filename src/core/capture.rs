@@ -2327,6 +2327,10 @@ fn network_control_event(
 
 // Preserve host observations and successful replies as distinct control
 // points. The event's arena is a candidate until linked validation checks it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Lowering retains the original node, route and budget inputs"
+)]
 fn network_control_paths(
     graph: &mut SummaryGraph,
     data: &mut value::Graph,
@@ -3431,6 +3435,10 @@ fn network_worker_processing_facts_in_query(
 
 /// Stage End provenance together with Message processing using the same final
 /// worker trace. These private facts do not discharge the lifecycle gate.
+#[expect(
+    clippy::type_complexity,
+    reason = "The same focused query returns route, cut and End candidates"
+)]
 pub(super) fn network_worker_admission_facts(
     scope: &super::validate::NetworkNativeIdentityScope<'_>,
     side: usize,
@@ -3623,6 +3631,10 @@ pub(super) fn linked_worker_functions(
 
 /// Add only the runtime-owned input-allocation request to a private worker
 /// query graph. It is dispatched through the actual entry Region access.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The worker bootstrap retains its exact linked inputs and budget"
+)]
 fn append_worker_input_control(
     graph: &mut SummaryGraph,
     entry_region: usize,
@@ -4373,6 +4385,10 @@ fn check_control_roots_with_rows(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The focused root check keeps its independent analysis options explicit"
+)]
 fn check_control_roots_with_rows_workers(
     graph: &SummaryGraph,
     roots: Vec<usize>,

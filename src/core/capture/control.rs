@@ -1225,6 +1225,10 @@ pub(super) enum CompletionTransition {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Copy trace details avoid allocation during bounded analysis"
+)]
 pub(super) enum CompletionDetail {
     Return(Edge),
     EnterRoot {
@@ -4191,15 +4195,15 @@ impl<'a> Analysis<'a> {
         self.check_retained_release = true;
         self.worker_tracing = true;
         let result = (|| {
-            self.check_payloads(budget).map_err(|error| {
+            self.check_payloads(budget).inspect_err(|error| {
                 #[cfg(test)]
                 eprintln!("worker focus: payload check {error:?}");
-                error
+                let _ = error;
             })?;
-            self.check_cell_retentions(budget).map_err(|error| {
+            self.check_cell_retentions(budget).inspect_err(|error| {
                 #[cfg(test)]
                 eprintln!("worker focus: cell check {error:?}");
-                error
+                let _ = error;
             })?;
             let data = self.data.as_mut().ok_or(Failure::Invalid)?;
             data.close(budget)?;
@@ -4215,10 +4219,10 @@ impl<'a> Analysis<'a> {
                 incomplete.as_deref_mut(),
                 budget,
             )
-            .map_err(|error| {
+            .inspect_err(|error| {
                 #[cfg(test)]
                 eprintln!("worker focus: focused C3 check {error:?}");
-                error
+                let _ = error;
             })?;
             Ok(())
         })();
@@ -4502,10 +4506,9 @@ impl<'a> Analysis<'a> {
                         && scope
                             .authenticates(interpretation, budget)
                             .map_err(|_| Failure::Resource)?
+                        && matching.replace(interpretation).is_some()
                     {
-                        if matching.replace(interpretation).is_some() {
-                            return Err(Failure::Invalid);
-                        }
+                        return Err(Failure::Invalid);
                     }
                 }
                 let interpretation = matching.ok_or(Failure::Invalid)?;
@@ -6513,7 +6516,7 @@ impl<'a> Analysis<'a> {
                 covered.insert(key);
                 let (query, context) = normal
                     .focused(entry.position.code, entry.value_context, budget)
-                    .map_err(|error| {
+                    .inspect_err(|error| {
                         #[cfg(test)]
                         if worker_trace.is_some() {
                             eprintln!(
@@ -6521,7 +6524,7 @@ impl<'a> Analysis<'a> {
                                 entry.position.code, entry.value_context
                             );
                         }
-                        error
+                        let _ = error;
                     })?;
                 self.data = Some(query);
                 let covered_worker_root = worker_trace.is_none()
@@ -6533,9 +6536,9 @@ impl<'a> Analysis<'a> {
                 {
                     startup.restored_calls.clear();
                 }
-                let mut seed = self.restore_entry_with_trace(entry, context, worker_trace, Some(&normal), budget).map_err(|error| {
+                let mut seed = self.restore_entry_with_trace(entry, context, worker_trace, Some(&normal), budget).inspect_err(|error| {
                     #[cfg(test)] if worker_trace.is_some() { eprintln!("worker focus: restore entry={} context={} value_context={} {error:?}", entry.position.code, entry.context, entry.value_context); }
-                    error
+                    let _ = error;
                 })?;
                 let focused_store = self.is_store(Frame::Resource {
                     code: entry.position.code,
@@ -6605,11 +6608,10 @@ impl<'a> Analysis<'a> {
                             && !covered_worker_root
                         {
                             #[cfg(test)]
-                            if let Some(traces) = &trace {
-                                if let Some(trace) = traces.first() {
-                                    let _ =
-                                        Self::log_worker_release_path(self.graph, trace, budget);
-                                }
+                            if let Some(traces) = &trace
+                                && let Some(trace) = traces.first()
+                            {
+                                let _ = Self::log_worker_release_path(self.graph, trace, budget);
                             }
                             if let (Some(incomplete), Some(mut trace)) =
                                 (incomplete.as_deref_mut(), trace)
@@ -6764,12 +6766,12 @@ impl<'a> Analysis<'a> {
                             &[*preceding, *provider],
                             budget,
                         )
-                        .map_err(|error| {
+                        .inspect_err(|error| {
                             #[cfg(test)]
                             eprintln!(
                                 "worker focus: entry Region frame={original_frame:?} {error:?}"
                             );
-                            error
+                            let _ = error;
                         })?;
                     *value_context = cut.context;
                     cut
@@ -6791,10 +6793,10 @@ impl<'a> Analysis<'a> {
                     let body = *arms.get(*ordinal).ok_or(Failure::Invalid)?;
                     let cut = data
                         .restore_worker_case(*value_context, *code, *ordinal, body, budget)
-                        .map_err(|error| {
+                        .inspect_err(|error| {
                             #[cfg(test)]
                             eprintln!("worker focus: match frame={original_frame:?} {error:?}");
-                            error
+                            let _ = error;
                         })?;
                     *value_context = cut.context;
                     cut
@@ -6812,15 +6814,16 @@ impl<'a> Analysis<'a> {
                     let trace = worker_trace.ok_or(Failure::Invalid)?;
                     let call = trace
                         .entered_call_for_frame(original_frame, budget)
-                        .map_err(|error| {
+                        .inspect_err(|error| {
                             #[cfg(test)]
                             eprintln!("worker focus: call edge frame={original_frame:?} {error:?}");
-                            error
+                            let _ = error;
                         })?;
                     let (cut, restored) = data.restore_worker_call(
                         *witness, call, normal.ok_or(Failure::Invalid)?, budget,
-                    ).map_err(|error| {
-                        #[cfg(test)] eprintln!("worker focus: call port rebind witness={witness} call={call:?} {error:?}"); error
+                    ).inspect_err(|error| {
+                        #[cfg(test)] eprintln!("worker focus: call port rebind witness={witness} call={call:?} {error:?}");
+                        let _ = error;
                     })?;
                     let startup = self
                         .worker_startup
@@ -8038,10 +8041,9 @@ impl<'a> Analysis<'a> {
                 && scope
                     .authenticates(candidate, budget)
                     .map_err(|_| Failure::Resource)?
+                && interpretation.replace(candidate).is_some()
             {
-                if interpretation.replace(candidate).is_some() {
-                    return Err(Failure::Invalid);
-                }
+                return Err(Failure::Invalid);
             }
         }
         let interpretation = interpretation.ok_or(Failure::Invalid)?;
@@ -9738,11 +9740,8 @@ mod tests {
                 assert!(drain.facts.is_empty());
             }
         }
-        assert_eq!(native_route_eligibility(Ok(())).unwrap(), true);
-        assert_eq!(
-            native_route_eligibility(Err(Failure::Invalid)).unwrap(),
-            false
-        );
+        assert!(native_route_eligibility(Ok(())).unwrap());
+        assert!(!native_route_eligibility(Err(Failure::Invalid)).unwrap());
         assert!(matches!(
             native_route_eligibility(Err(Failure::Resource)),
             Err(Failure::Resource)

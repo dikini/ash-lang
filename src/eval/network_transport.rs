@@ -495,11 +495,11 @@ impl NetworkTransport {
         Ok(None)
     }
     pub(super) fn fail(&self) {
-        if let Ok(mut state) = self.lock() {
-            if !state.settled {
-                state.failed = true;
-                self.refresh(&mut state);
-            }
+        if let Ok(mut state) = self.lock()
+            && !state.settled
+        {
+            state.failed = true;
+            self.refresh(&mut state);
         }
     }
     /// A synchronized observation, not permission to release worker-owned state.

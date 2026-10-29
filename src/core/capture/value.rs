@@ -4373,13 +4373,13 @@ impl<'a> Analysis<'a> {
             return Err(Failure::Invalid);
         }
         let cut = self.restore_cut(creation, code, usize::MAX - 6, body, completed, true, budget)
-            .map_err(|error| {
+            .inspect_err(|error| {
                 #[cfg(test)] eprintln!("worker entry Region: cut code={code} creation={creation} body={body} completed={completed:?} {error:?}");
-                error
+                let _ = error;
             })?;
-        self.freeze_slot(binder, creation, cut.context, budget).map_err(|error| {
+        self.freeze_slot(binder, creation, cut.context, budget).inspect_err(|error| {
             #[cfg(test)] eprintln!("worker entry Region: access binder={binder} creation={creation} restored={} {error:?}", cut.context);
-            error
+            let _ = error;
         })?;
         Ok(cut)
     }
@@ -4419,22 +4419,22 @@ impl<'a> Analysis<'a> {
         // slots are completed values and which one receives the pending result.
         for root in [expression, input] {
             for value in self.graph.free_inputs(root, budget)? {
-                self.freeze_slot(value, creation, context, budget).map_err(|error| {
+                self.freeze_slot(value, creation, context, budget).inspect_err(|error| {
                     #[cfg(test)] if position == usize::MAX - 6 { eprintln!("worker entry Region: free input={value} root={root} creation={creation} {error:?}"); }
-                    error
+                    let _ = error;
                 })?;
             }
         }
         for code in completed {
             charge(budget, 1)?;
             if let Some(&value) = self.graph.positions.get(code) {
-                self.freeze_slot(value, creation, context, budget).map_err(|error| {
+                self.freeze_slot(value, creation, context, budget).inspect_err(|error| {
                     #[cfg(test)] if position == usize::MAX - 6 {
                         let source = self.indices.get(&(value, creation)).and_then(|id| self.slots.get(*id));
                         let target = self.indices.get(&(value, context)).and_then(|id| self.slots.get(*id));
                         eprintln!("worker entry Region: completed code={code} expression={value} creation={creation} source_present={} target={:?} {error:?}", source.is_some(), target.map(|slot| (slot.terminal, slot.atoms.len(), slot.edges.len())));
                     }
-                    error
+                    let _ = error;
                 })?;
             }
         }
@@ -5142,6 +5142,10 @@ impl<'a> Analysis<'a> {
 
     /// Read the already settled ordered fields of an original generated
     /// Bind/RegionTuple without creating slots or merging alternatives.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The tuple identity and scoped value provenance are distinct checked inputs"
+    )]
     pub(super) fn existing_original_tuple_worker_origin(
         &self,
         binding: crate::core::NodeId,
@@ -5463,6 +5467,10 @@ impl<'a> Analysis<'a> {
         Ok(result)
     }
 
+    #[expect(
+        clippy::type_complexity,
+        reason = "The ordered result, body, arguments and captures are one matched call"
+    )]
     pub(super) fn existing_call_ports(
         &self,
         code: usize,

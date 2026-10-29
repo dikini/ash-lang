@@ -109,7 +109,8 @@ impl NetworkApi {
             Registration(u32),
         }
         use Payload::{Failure, Message, None as Empty, Registration};
-        let declarations: &[(&str, Option<u32>, &[(&str, Payload)])] = &[
+        type Declaration<'a> = (&'a str, Option<u32>, &'a [(&'a str, Payload)]);
+        let declarations: &[Declaration<'_>] = &[
             ("Pair", Some(0), &[("HiddenPair", Empty)]),
             ("Worker", Some(1), &[("HiddenWorker", Empty)]),
             ("Registration", Some(2), &[("HiddenRegistration", Empty)]),

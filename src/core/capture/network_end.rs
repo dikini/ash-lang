@@ -493,6 +493,10 @@ fn context_query(
 
 /// State facts are local to this exact final trace and value snapshot.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Copy facts avoid allocation during bounded predecessor traversal"
+)]
 enum EndFact {
     None,
     Receive {
@@ -1073,10 +1077,10 @@ pub(super) fn worker_end_route(
         .get(side)
         .ok_or_else(|| end_invalid(line!()))?;
     let (finish, contexts) =
-        finish_contexts(scope, side, graph, focus, budget).map_err(|error| {
+        finish_contexts(scope, side, graph, focus, budget).inspect_err(|error| {
             #[cfg(test)]
             eprintln!("End finish contexts side={side}: {error:?}");
-            error
+            let _ = error;
         })?;
     #[cfg(test)]
     eprintln!("End side={side} finish={finish:?}, contexts={contexts:?}");
@@ -1206,9 +1210,9 @@ pub(super) fn worker_end_route(
                 )?
                 .0
             };
-            let (end_arm, recursion) = checked_loop_result(scope, body, binder, budget).map_err(|error| {
+            let (end_arm, recursion) = checked_loop_result(scope, body, binder, budget).inspect_err(|error| {
                 #[cfg(test)] eprintln!("End loop side={side} body={body:?} binder={binder:?} witness={witness}: {error:?}");
-                error
+                let _ = error;
             })?;
             let candidate = WorkerEndRoute {
                 owner: scope.owner(),
@@ -1406,10 +1410,12 @@ pub(super) fn worker_end_route(
     {
         return Err(end_invalid(line!()));
     }
-    check_end_return_paths(scope, graph, focus, route, &return_index, budget).map_err(|error| {
-        #[cfg(test)]
-        eprintln!("End predecessors side={side}, route={route:?}: {error:?}");
-        error
-    })?;
+    check_end_return_paths(scope, graph, focus, route, &return_index, budget).inspect_err(
+        |error| {
+            #[cfg(test)]
+            eprintln!("End predecessors side={side}, route={route:?}: {error:?}");
+            let _ = error;
+        },
+    )?;
     Ok(Some(route))
 }

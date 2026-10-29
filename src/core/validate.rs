@@ -3314,6 +3314,10 @@ struct NetworkLinkedSpine {
 /// Reconstruct diagnostic inputs with the same registry and linked-spine
 /// checks as the validator. This does not admit a worker or authorize release.
 #[cfg(test)]
+#[expect(
+    clippy::type_complexity,
+    reason = "The diagnostic returns the linked bindings and exact entry spine"
+)]
 pub(super) fn network_spine_for_completion_diagnostic(
     program: &super::UnvalidatedEffectProgram,
     sources: &[(ModuleId, SourceFile)],
@@ -3357,9 +3361,7 @@ pub(super) fn network_spine_for_completion_diagnostic(
         let spine = validator.check_network_linked_spine(owner, network)?;
         validator.check_network_initializer_effects(owner, network, &spine, &native)?;
         let facts = network::check_entry_bodies(&validator, owner, network, &spine, &native)?;
-        let _scope =
-            validator.network_native_identity_scope(owner, network, &spine, &facts, &native)?;
-        drop(_scope);
+        validator.network_native_identity_scope(owner, network, &spine, &facts, &native)?;
         let [Some(first), Some(second)] = spine.entries else {
             return Err(invalid());
         };

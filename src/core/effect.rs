@@ -1106,10 +1106,10 @@ impl CoreBuilder<EffectOperationFamily> {
         let result_index = linked_result.index()?;
         self.node_at_ordinal(linked_result, result_index)?;
         for node in &mut self.nodes {
-            if let EffectExprKind::Operation(EffectOperation::Network(network)) = &mut node.kind {
-                if network.linked_result.replace(linked_result).is_some() {
-                    return Err(super::BuildError::InvalidPayload);
-                }
+            if let EffectExprKind::Operation(EffectOperation::Network(network)) = &mut node.kind
+                && network.linked_result.replace(linked_result).is_some()
+            {
+                return Err(super::BuildError::InvalidPayload);
             }
         }
         Ok(())

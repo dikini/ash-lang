@@ -1393,6 +1393,10 @@ struct WorkerFailure {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::result_large_err,
+    reason = "The test preserves the owned worker exit on failure"
+)]
 fn finish_worker_exit(
     disposal: &disposal::Scope,
     execution: Result<(), RuntimeFailure>,
@@ -1429,6 +1433,11 @@ impl fmt::Debug for WorkerStartup {
 // local root teardown has run. A failure terminates the shared transport; it
 // does not itself attest that endpoints or backing have settled.
 #[cfg(test)]
+#[expect(
+    clippy::result_large_err,
+    clippy::too_many_arguments,
+    reason = "The test retains each worker startup input and owned failure report"
+)]
 fn run_network_worker(
     program: Arc<crate::core::dialect::CoreProgram<crate::core::EffectOperationFamily>>,
     root: NodeId,
@@ -2007,6 +2016,10 @@ impl<'runtime> Machine<'runtime> {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Worker startup requires the exact activation and entry inputs"
+    )]
     fn new_network_worker(
         program: Arc<crate::core::dialect::CoreProgram<crate::core::EffectOperationFamily>>,
         root: NodeId,
@@ -6853,6 +6866,10 @@ fn return_match(
     return_match_selected(arms, environment, value, heap).map(|(transition, _)| transition)
 }
 
+#[expect(
+    clippy::boxed_local,
+    reason = "The frame owns these boxed arms to keep the evaluator stack bounded"
+)]
 fn return_match_selected(
     arms: Box<[crate::core::data::CoreMatchArm]>,
     environment: Environment,
@@ -9214,6 +9231,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "Both test threads preserve their owned worker failure reports"
+    )]
     fn worker_capacity_one_feedback_allows_producing_cleanup() {
         use crate::eval::network_transport::{Failure, NetworkTransport, Side};
         let common = concat!(
@@ -10118,7 +10139,7 @@ mod tests {
                 .cells_for_test()
                 .iter()
                 .find_map(|cell| match cell {
-                    HeapCell::Bytes(bytes, len, false) if &bytes[..*len] == [42_u8] => {
+                    HeapCell::Bytes(bytes, len, false) if bytes[..*len] == [42_u8] => {
                         Some(bytes.as_ptr() as usize)
                     }
                     _ => None,
@@ -10129,7 +10150,7 @@ mod tests {
                 "worker storage is copied while source is live"
             );
             assert_eq!(result.heap.cells_for_test().iter().filter(|cell|
-                matches!(cell, HeapCell::Bytes(bytes, len, false) if &bytes[..*len] == [42_u8])
+                matches!(cell, HeapCell::Bytes(bytes, len, false) if bytes[..*len] == [42_u8])
             ).count(), 1, "received bytes in the selected inner region must be released there");
             let Receive::Message(mut message) = transport.reserve_receive(receiver) else {
                 panic!("the worker published a message");

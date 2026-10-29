@@ -110,6 +110,10 @@ mod tests {
 
 /// Transfer argument and capture dependencies simultaneously on one actual
 /// traced call edge. All reads use the caller snapshot before any write.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The actual edge, witness, focus and budget are distinct checked inputs"
+)]
 pub(super) fn enter_call<'focus, 'graph>(
     graph: &SummaryGraph,
     focus: &'focus CompletionFocus<'graph>,
@@ -720,6 +724,10 @@ pub(super) fn generated_tuple_fields(
 
 /// Authenticate one actual ordered `(Worker, Bytes)` call and its callee's
 /// outer tuple destructuring in the same converged value focus.
+#[expect(
+    clippy::type_complexity,
+    reason = "The checked tuple carries its actual node, parameter binders and ordered fields"
+)]
 pub(super) fn checked_worker_tuple_call(
     scope: &super::super::validate::NetworkNativeIdentityScope<'_>,
     side: usize,
@@ -804,10 +812,10 @@ pub(super) fn checked_worker_tuple_call(
             call.caller_value_context,
             budget,
         )
-        .map_err(|error| {
+        .inspect_err(|error| {
             #[cfg(test)]
             eprintln!("tuple call: original fields: {error:?}");
-            error
+            let _ = error;
         })?;
     if arguments[0].1 != argument_port {
         return Err(Failure::Invalid);
@@ -830,10 +838,10 @@ pub(super) fn checked_worker_tuple_call(
         values.existing_worker_projection_context(call, budget)?;
     let bindings = values
         .existing_arm_bindings(outer_code, 0, projection_context, budget)
-        .map_err(|error| {
+        .inspect_err(|error| {
             #[cfg(test)]
             eprintln!("tuple call: arm bindings: {error:?}");
-            error
+            let _ = error;
         })?;
     if bindings.len() != 2 {
         return Err(Failure::Invalid);
@@ -846,10 +854,10 @@ pub(super) fn checked_worker_tuple_call(
         .ok_or(Failure::Resource)?;
     let (scrutinee, parameter) = values
         .existing_forward_ports(scrutinee_code, projection_context, budget)
-        .map_err(|error| {
+        .inspect_err(|error| {
             #[cfg(test)]
             eprintln!("tuple call: scrutinee ports: {error:?}");
-            error
+            let _ = error;
         })?;
     if parameter != formal_port {
         return Err(Failure::Invalid);
@@ -1622,10 +1630,10 @@ fn checked_global_worker_call(
             application.argument(),
             budget,
         )
-        .map_err(|error| {
+        .inspect_err(|error| {
             #[cfg(test)]
             eprintln!("pure tail: tuple port relation: {error:?}");
-            error
+            let _ = error;
         })?;
         if body != route.message_match || binders != [fragment.worker, expected] {
             reject_processing!();
@@ -2003,10 +2011,9 @@ fn check_message_root_paths(
             && state.value_context == 0
             && state.stack == Address::Empty
             && state.heap.is_empty()
+            && initial.replace(id).is_some()
         {
-            if initial.replace(id).is_some() {
-                return Err(Failure::Invalid);
-            }
+            return Err(Failure::Invalid);
         }
     }
     // 0: no selected Message, 1: its direct prefix, 2: marker entered,
@@ -2186,10 +2193,10 @@ pub(super) fn worker_store_exit_coverage(
         return Err(Failure::Invalid);
     }
     let body = store.body.index().map_err(|_| Failure::Invalid)?;
-    let fragment = worker_processing_fragment(scope, route, budget).map_err(|error| {
+    let fragment = worker_processing_fragment(scope, route, budget).inspect_err(|error| {
         #[cfg(test)]
         eprintln!("pure cut: source fragment rejected: {error:?}");
-        error
+        let _ = error;
     })?;
     #[cfg(test)]
     if fragment.expected.is_some() {
@@ -2212,13 +2219,12 @@ pub(super) fn worker_store_exit_coverage(
         if original != fragment.tail_call.index().map_err(|_| Failure::Invalid)? {
             return Ok(());
         }
-        checked_global_worker_call(scope, route, fragment, whole.values(), call, budget).map_err(
-            |error| {
+        checked_global_worker_call(scope, route, fragment, whole.values(), call, budget)
+            .inspect_err(|error| {
                 #[cfg(test)]
                 eprintln!("pure cut: tail call rejected {call:?}: {error:?}");
-                error
-            },
-        )?;
+                let _ = error;
+            })?;
         charge(budget, 1)?;
         tail_targets.try_reserve(1).map_err(|_| Failure::Resource)?;
         tail_targets.insert((call.target, call.expression));
@@ -2256,9 +2262,9 @@ pub(super) fn worker_store_exit_coverage(
                 Err(error) => return Err(error),
             };
             if target_matches || source_matches {
-                checked_global_worker_call(scope, route, fragment, whole.values(), call, budget).map_err(|error| {
+                checked_global_worker_call(scope, route, fragment, whole.values(), call, budget).inspect_err(|error| {
                     #[cfg(test)] eprintln!("pure cut: loop call rejected {call:?}: {error:?}");
-                    error
+                    let _ = error;
                 })?;
             }
             Ok(())
@@ -2297,10 +2303,10 @@ pub(super) fn worker_store_exit_coverage(
             }
             let kind = if fragment.expected.is_some() {
                 let (recursive, equal, equal_target) =
-                    checked_pure_unit_helper(scope, call, budget).map_err(|error| {
+                    checked_pure_unit_helper(scope, call, budget).inspect_err(|error| {
                         #[cfg(test)]
                         eprintln!("pure cut: helper rejected {call:?}: {error:?}");
-                        error
+                        let _ = error;
                     })?;
                 ProcessingHelper::Pure {
                     recursive,
@@ -2382,9 +2388,9 @@ pub(super) fn worker_store_exit_coverage(
                         == route.store.index().map_err(|_| Failure::Invalid)?)
                 || !matches!(state.drain.as_ref().map(|drain| drain.work), Some(DrainWork::Empty))
             { return Err(Failure::Invalid); }
-            check_worker_tail_suffix(focus, scope, route, fragment, &tail_targets, state, edge.next, budget).map_err(|error| {
+            check_worker_tail_suffix(focus, scope, route, fragment, &tail_targets, state, edge.next, budget).inspect_err(|error| {
                 #[cfg(test)] eprintln!("pure cut: suffix focus={focuses} from={from}: {error:?}");
-                error
+                let _ = error;
             })?;
             charge(budget, 1)?;
             exit_states.try_reserve(1).map_err(|_| Failure::Resource)?;
