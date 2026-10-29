@@ -24,6 +24,7 @@ No proposed transitions are listed.
 ## Accepted changes
 
 - [CP-0027: Pinned workers and copied channels](CP-0027-pinned-workers-and-copied-channels.md)
+- [CP-0028: Checked functional network ledger](CP-0028-checked-functional-network-ledger.md)
 
 The [region specification](../../spec/README.md)
 records the lexical-region language rules; the bounded

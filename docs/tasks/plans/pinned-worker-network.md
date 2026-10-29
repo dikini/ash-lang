@@ -2,20 +2,21 @@
 
 Owned by [TASK-0058](../TASK-0058-pinned-worker-network.md). This plan orders
 work and does not define semantics or authorize implementation. Original issue
-acceptance remains authoritative for scope; no criterion is complete here.
+acceptance remains authoritative for scope; N1's issue acceptance is complete.
 
 ## Deliveries and acceptance
 
 1. **N1 — [#76](https://github.com/dikini/ash-lang/issues/76).** Reviewed at
-   `b296e17ce9e4f1760ce73df4f4716ef0c0fb2093`: CP-0027 and DN-0058 cover entry and capture admission, endpoint authority,
+   `b296e17ce9e4f1760ce73df4f4716ef0c0fb2093`: CP-0027 and DN-0058 cover
+   entry and capture admission, endpoint authority,
    resource-free copies, FIFO, commit/failure ownership, visibility, wait races,
-   stale notifications, genuine End and backing settlement. Specify actual
-   source/Core admission and control-envelope provenance. CP-0027 and AD-0017
-   record the accepted transition and host/channel decision. Review and verify
-   this adoption on its retaining branch before N2 implementation.
-   Preserve assumptions and terminal failure limits. No worker recovery,
-   silent transfer or native-stack suspension. Record retained verification and
-   acceptance readback before closing N1.
+   stale notifications, genuine End, backing settlement, actual source/Core
+   admission and control-envelope provenance. CP-0027 and AD-0017
+   record the accepted transition and host/channel decision. GitHub retained
+   the reviewed contract at `993be1e7c932d1db20e62a706df5dab26698fa99` on the
+   M4 milestone branch; issue acceptance was read back and closed. Preserve its
+   assumptions and terminal failure limits, including no worker recovery,
+   silent transfer or native-stack suspension.
 2. **N2 — [#77](https://github.com/dikini/ash-lang/issues/77).** With accepted
    N1, build admitted pinned workers, copied channels, notifications and
    one-way completion. Construct local resources on their owner; only it drives
@@ -27,10 +28,14 @@ acceptance remains authoritative for scope; no criterion is complete here.
    with N2 only when assigned, freeze the finite-list model and prove
    registration, retirement, acknowledgement, whole-entry and order-preserving
    RemoveById, freshness and successor state, and restricted checking-rule
-   soundness. Adopt checker semantics and any verifier decision before product
-   work. Bind untrusted plans to actual linked definitions; check induction,
-   dependencies and all reachable branches. Unsupported transforms preserve a
-   checkable form or reject; exhaustion grants no permission. Test mutations,
+   soundness. [CP-0028](../../proposals/CP-0028-checked-functional-network-ledger.md)
+   and its bounded proof assignment were independently reviewed at
+   `94c0be0375d19f8e60900d5d77be2f5caa746eb0`; the transition is accepted,
+   without proof or product acceptance. Adopt any required verifier decision
+   before product work. Bind untrusted plans to actual linked definitions;
+   check induction, dependencies and all reachable branches. Unsupported
+   transforms preserve a checkable form or reject; exhaustion grants no
+   permission. Test mutations,
    imports and transformed Core. No general source proof language.
 4. **N4 — [#79](https://github.com/dikini/ash-lang/issues/79).** After reviewed
    N2 and the N3 proof/checker gate, compose verified ledger transitions,
@@ -38,7 +43,9 @@ acceptance remains authoritative for scope; no criterion is complete here.
    summaries. Register children before publication; cover parents until
    authentic acknowledgement. Reject stale emptiness, forged completion,
    obsolete state, raw publication and envelope confusion; revalidate after
-   transformations and through imports. Exercise adversarial and budget cases.
+   transformations and through imports. A separately accepted codec extension
+   and its actual-definition soundness are required before any codec-dependent
+   completion or release permission. Exercise adversarial and budget cases.
 5. **N5 — [#80](https://github.com/dikini/ash-lang/issues/80).** With connected
    N2–N4 and adopted normal/abandonment obligations, seal new roots but allow
    covered descendants; keep both workers and notifications serviceable for
