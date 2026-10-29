@@ -454,6 +454,20 @@ fn native_bindings_require_exact_symbols_and_unique_registration() {
     );
     assert!(bindings.invoke(&fixture.donor(), &[]).is_err());
     admit_source_native_program(&program, &bindings, &mut TypeWorkBudget::default()).unwrap();
+    assert!(
+        bindings
+            .try_copy_for_worker(&mut TypeWorkBudget::with_limit(0))
+            .is_err()
+    );
+    let worker = bindings
+        .try_copy_for_worker(&mut TypeWorkBudget::default())
+        .unwrap();
+    admit_source_native_program(&program, &worker, &mut TypeWorkBudget::default()).unwrap();
+    assert_eq!(
+        worker.invoke(&fixture.make, &[]).unwrap(),
+        NativeReply::Address(core::ptr::null_mut())
+    );
+    assert!(worker.invoke(&fixture.donor(), &[]).is_err());
     let mut foreign = SourceNativeBindings::default();
     foreign
         .insert(fixture.donor(), callback, &mut TypeWorkBudget::default())

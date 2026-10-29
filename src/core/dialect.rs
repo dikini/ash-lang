@@ -1804,6 +1804,59 @@ impl<F: CoreOperationFamily> Drop for UnvalidatedCoreProgram<F> {
     }
 }
 
+/// Network launch authority reconstructed from linked Core for this arena.
+#[derive(Debug)]
+pub(crate) struct NetworkAdmission {
+    pub(crate) owner: NodeId,
+    pub(crate) linked_result: NodeId,
+    pub(crate) entries: [NetworkEntryAdmission; 2],
+}
+
+// Constructed only from a complete linked Message-to-root judgment. A route
+// identifies a candidate correlation and is not completion or release proof.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NetworkProcessingRoute {
+    pub(crate) owner: NodeId,
+    pub(crate) entry: crate::resolved::BinderId,
+    pub(crate) side: usize,
+    pub(crate) receive: NodeId,
+    pub(crate) message_match: NodeId,
+    pub(crate) arm: usize,
+    pub(crate) root: NodeId,
+    pub(crate) handler: NodeId,
+    pub(crate) store: NodeId,
+}
+
+// Separate from route correlation: issued only after the actual Store-return
+// cut has checked all dependent cleanup, C3 work and caller suffixes.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NetworkProcessingCut {
+    pub(crate) route: NetworkProcessingRoute,
+}
+
+// Static End-to-finish provenance only. Dynamic End observation and the
+// lifecycle and held-delivery obligations remain separate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NetworkEndRoute {
+    pub(crate) owner: NodeId,
+    pub(crate) entry: crate::resolved::BinderId,
+    pub(crate) side: usize,
+    pub(crate) receive: NodeId,
+    pub(crate) end_match: NodeId,
+    pub(crate) arm: usize,
+    pub(crate) finish: NodeId,
+}
+
+#[derive(Debug)]
+pub(crate) struct NetworkEntryAdmission {
+    pub(crate) binder: crate::resolved::BinderId,
+    pub(crate) parameter: crate::types::TypeVariableId,
+    pub(crate) native_effects: Vec<crate::types::EffectInstance>,
+    pub(crate) processing_route: Option<NetworkProcessingRoute>,
+    pub(crate) processing_cut: Option<NetworkProcessingCut>,
+    pub(crate) end_route: Option<NetworkEndRoute>,
+}
+
 /// A pure Core arena whose graph, types, scope, dialect, and provenance hold.
 #[derive(Debug)]
 pub struct CoreProgram<F: CoreOperationFamily> {
@@ -1813,6 +1866,7 @@ pub struct CoreProgram<F: CoreOperationFamily> {
     arena: ArenaId,
     nodes: Box<[CoreTypedExpr<F>]>,
     root: NodeId,
+    network_admissions: Vec<NetworkAdmission>,
 }
 
 /// A validated pure Core arena.
@@ -1834,7 +1888,18 @@ impl<F: CoreOperationFamily> CoreProgram<F> {
             arena,
             nodes: nodes.into_boxed_slice(),
             root,
+            network_admissions: Vec::new(),
         }
+    }
+
+    pub(super) fn set_network_admissions(&mut self, admissions: Vec<NetworkAdmission>) {
+        self.network_admissions = admissions;
+    }
+
+    pub(crate) fn network_admission(&self, owner: NodeId) -> Option<&NetworkAdmission> {
+        self.network_admissions
+            .iter()
+            .find(|admission| admission.owner == owner)
     }
 
     /// Returns the root expression.
@@ -2117,6 +2182,7 @@ pub struct CoreBuilder<F: CoreOperationFamily = PureOperationFamily> {
     requires_type_rewrite: bool,
     pub(super) settled_zonk_nodes: Vec<bool>,
     pub(super) source_resource_finalization_start: Option<usize>,
+    pub(super) contains_network: bool,
     deferred_cleanup_rows: HashSet<crate::types::InferenceVariableId>,
 }
 
@@ -2214,6 +2280,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             requires_type_rewrite: false,
             settled_zonk_nodes: Vec::new(),
             source_resource_finalization_start: None,
+            contains_network: false,
             deferred_cleanup_rows: HashSet::new(),
         }
     }

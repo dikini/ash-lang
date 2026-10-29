@@ -73,6 +73,289 @@ pub(crate) struct StoreApi {
     module: ModuleId,
 }
 
+/// Fixed identities belonging to the compiler-owned network module.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NetworkApi {
+    module: ModuleId,
+}
+
+impl NetworkApi {
+    pub(crate) fn for_module(module: ModuleId) -> Option<Self> {
+        module.is_builtin_network().then_some(Self { module })
+    }
+
+    pub(crate) fn pair(self) -> NominalTypeId {
+        NominalTypeId::new(self.module, 0)
+    }
+
+    pub(crate) fn worker(self) -> NominalTypeId {
+        NominalTypeId::new(self.module, 1)
+    }
+
+    pub(crate) fn hides_constructor(self, constructor: ConstructorId) -> bool {
+        constructor.owner() == self.pair()
+            || constructor.owner() == self.worker()
+            || constructor.owner() == NominalTypeId::new(self.module, 2)
+    }
+
+    /// Authenticate the fixed capability, result and service representations.
+    /// The caller charges the bounded registry lookup work before invoking this.
+    pub(crate) fn registry(self, registry: &ResolvedRegistry) -> bool {
+        #[derive(Clone, Copy)]
+        enum Payload {
+            None,
+            Failure,
+            Message,
+            Registration(u32),
+        }
+        use Payload::{Failure, Message, None as Empty, Registration};
+        let declarations: &[(&str, Option<u32>, &[(&str, Payload)])] = &[
+            ("Pair", Some(0), &[("HiddenPair", Empty)]),
+            ("Worker", Some(1), &[("HiddenWorker", Empty)]),
+            ("Registration", Some(2), &[("HiddenRegistration", Empty)]),
+            (
+                "EnvelopeKind",
+                None,
+                &[("Application", Empty), ("Control", Empty)],
+            ),
+            (
+                "Failure",
+                None,
+                &[
+                    ("Refused", Empty),
+                    ("Uncertain", Empty),
+                    ("WorkerFailed", Empty),
+                    ("IncompleteTeardown", Empty),
+                ],
+            ),
+            (
+                "SendResult",
+                None,
+                &[
+                    ("Sent", Empty),
+                    ("Full", Empty),
+                    ("Closed", Empty),
+                    ("SendFailed", Failure),
+                ],
+            ),
+            (
+                "ReceiveResult",
+                None,
+                &[
+                    ("Message", Message),
+                    ("Empty", Empty),
+                    ("End", Empty),
+                    ("ReceiveFailed", Failure),
+                ],
+            ),
+            ("FinishResult", None, &[("Ok", Empty), ("Failed", Failure)]),
+            (
+                "Interest",
+                None,
+                &[("Readable", Empty), ("Writable", Empty)],
+            ),
+            (
+                "WatchResult",
+                Some(3),
+                &[("Watching", Registration(3)), ("WatchFailed", Failure)],
+            ),
+            (
+                "WakeResult",
+                Some(4),
+                &[
+                    ("Wake", Registration(4)),
+                    ("NoWake", Empty),
+                    ("WakeFailed", Failure),
+                ],
+            ),
+        ];
+        for (ordinal, (name, parameter, constructors)) in declarations.iter().enumerate() {
+            let id = NominalTypeId::new(self.module, ordinal as u32);
+            let (Some(nominal), Some(parameters)) =
+                (registry.nominal(id), registry.nominal_parameters(id))
+            else {
+                return false;
+            };
+            if nominal.id != id
+                || nominal.spelling != *name
+                || nominal.declaration_kind != ResolvedNominalDeclarationKind::Data
+                || nominal.representation.is_some()
+                || nominal.representation_provenance.is_some()
+                || nominal.constructors.len() != constructors.len()
+            {
+                return false;
+            }
+            match (parameter, parameters) {
+                (None, []) => {}
+                (Some(expected), [actual])
+                    if actual.id == TypeVariableId::resolved(self.module, *expected)
+                        && actual.kind == Kind::Type
+                        && actual.spelling == "N" => {}
+                _ => return false,
+            }
+            for (index, (name, payload)) in constructors.iter().enumerate() {
+                let id = ConstructorId::new(id, index as u32);
+                let Some(actual) = registry.constructor(id) else {
+                    return false;
+                };
+                if nominal.constructors[index] != id
+                    || actual.id != id
+                    || actual.owner != id.owner()
+                    || actual.spelling != *name
+                {
+                    return false;
+                }
+                let valid = match (payload, actual.payload.as_ref()) {
+                    (Empty, None) => true,
+                    (Failure, Some(Type::Nominal(owner))) => {
+                        *owner == NominalTypeId::new(self.module, 4)
+                    }
+                    (Message, Some(Type::Tuple(fields))) => {
+                        matches!(fields.as_ref(), [Type::Nominal(kind), Type::Bytes] if *kind == NominalTypeId::new(self.module, 3))
+                    }
+                    (Registration(parameter), Some(Type::Application(owner, argument))) => {
+                        matches!((&**owner, &**argument), (Type::Nominal(nominal), Type::Variable(variable)) if *nominal == NominalTypeId::new(self.module, 2) && *variable == TypeVariableId::resolved(self.module, *parameter))
+                    }
+                    _ => false,
+                };
+                if !valid {
+                    return false;
+                }
+            }
+        }
+        for (id, name, parameter) in [(self.io(), "IO", 5), (self.join(), "Join", 6)] {
+            let Some(effect) = registry.effect(id) else {
+                return false;
+            };
+            if effect.id != id
+                || !effect.public
+                || effect.spelling != name
+                || effect.native_contract.is_some()
+                || effect.parameters.len() != 1
+                || effect.parameters[0].id != TypeVariableId::resolved(self.module, parameter)
+                || effect.parameters[0].kind != Kind::Type
+                || effect.parameters[0].spelling != "N"
+                || effect.operations.len() != if id == self.io() { 8 } else { 2 }
+                || effect.operations[0].id != OperationId::new(id, 0)
+                || effect.operations[0].spelling != "internal"
+                || !matches!(&effect.operations[0].annotation.ty, Type::Function(domain, value) if **domain == Type::Unit && **value == Type::Unit)
+            {
+                return false;
+            }
+            if id == self.join() {
+                let settle = &effect.operations[1];
+                if settle.id != OperationId::new(id, 1)
+                    || settle.spelling != "settle_internal"
+                    || !matches!(&settle.annotation.ty,
+                        Type::Function(domain, result)
+                            if matches!(&**domain, Type::Application(pair, owner)
+                                if matches!((&**pair, &**owner), (Type::Nominal(pair), Type::Variable(variable))
+                                    if *pair == self.pair() && *variable == effect.parameters[0].id))
+                            && matches!(&**result, Type::Nominal(result) if *result == NominalTypeId::new(self.module, 7)))
+                {
+                    return false;
+                }
+            }
+            if id == self.io() {
+                let operation = &effect.operations[1];
+                if operation.id != OperationId::new(id, 1)
+                    || operation.spelling != "send"
+                    || !matches!(&operation.annotation.ty,
+                        Type::Function(domain, result)
+                            if matches!(&**domain, Type::Tuple(fields)
+                                if matches!(fields.as_ref(), [Type::Application(worker, owner), Type::Bytes]
+                                    if matches!((&**worker, &**owner), (Type::Nominal(worker), Type::Variable(variable))
+                                        if *worker == self.worker() && *variable == effect.parameters[0].id)))
+                            && matches!(&**result, Type::Nominal(result) if *result == NominalTypeId::new(self.module, 5)))
+                {
+                    return false;
+                }
+                let receive = &effect.operations[2];
+                if receive.id != OperationId::new(id, 2)
+                    || receive.spelling != "receive"
+                    || !matches!(&receive.annotation.ty,
+                        Type::Function(domain, result)
+                            if matches!(&**domain, Type::Application(worker, owner)
+                                if matches!((&**worker, &**owner), (Type::Nominal(worker), Type::Variable(variable))
+                                    if *worker == self.worker() && *variable == effect.parameters[0].id))
+                            && matches!(&**result, Type::Nominal(result) if *result == NominalTypeId::new(self.module, 6)))
+                {
+                    return false;
+                }
+                let finish = &effect.operations[3];
+                if finish.id != OperationId::new(id, 3)
+                    || finish.spelling != "finish"
+                    || !matches!(&finish.annotation.ty,
+                        Type::Function(domain, result)
+                            if matches!(&**domain, Type::Application(worker, owner)
+                                if matches!((&**worker, &**owner), (Type::Nominal(worker), Type::Variable(variable))
+                                    if *worker == self.worker() && *variable == effect.parameters[0].id))
+                            && matches!(&**result, Type::Nominal(result) if *result == NominalTypeId::new(self.module, 7)))
+                {
+                    return false;
+                }
+                let is_worker = |ty: &Type| {
+                    matches!(ty, Type::Application(worker, owner)
+                    if matches!((&**worker, &**owner), (Type::Nominal(worker), Type::Variable(variable))
+                        if *worker == self.worker() && *variable == effect.parameters[0].id))
+                };
+                let is_registration = |ty: &Type| {
+                    matches!(ty, Type::Application(registration, owner)
+                    if matches!((&**registration, &**owner), (Type::Nominal(registration), Type::Variable(variable))
+                        if *registration == NominalTypeId::new(self.module, 2) && *variable == effect.parameters[0].id))
+                };
+                for (ordinal, name) in [
+                    (4, "watch_internal"),
+                    (5, "cancel_internal"),
+                    (6, "poll_internal"),
+                    (7, "finish_receive_internal"),
+                ] {
+                    let operation = &effect.operations[ordinal];
+                    if operation.id != OperationId::new(id, ordinal as u32)
+                        || operation.spelling != name
+                    {
+                        return false;
+                    }
+                    let Type::Function(domain, result) = &operation.annotation.ty else {
+                        return false;
+                    };
+                    let valid = match ordinal {
+                        4 => {
+                            matches!(&**domain, Type::Tuple(fields) if matches!(fields.as_ref(), [worker, Type::Nominal(interest)] if is_worker(worker) && *interest == NominalTypeId::new(self.module, 8)))
+                                && matches!(&**result, Type::Application(result, owner) if matches!((&**result, &**owner), (Type::Nominal(result), Type::Variable(variable)) if *result == NominalTypeId::new(self.module, 9) && *variable == effect.parameters[0].id))
+                        }
+                        5 => {
+                            matches!(&**domain, Type::Tuple(fields) if matches!(fields.as_ref(), [worker, registration] if is_worker(worker) && is_registration(registration)))
+                                && matches!(&**result, Type::Nominal(result) if *result == NominalTypeId::new(self.module, 7))
+                        }
+                        6 => {
+                            is_worker(domain)
+                                && matches!(&**result, Type::Application(result, owner) if matches!((&**result, &**owner), (Type::Nominal(result), Type::Variable(variable)) if *result == NominalTypeId::new(self.module, 10) && *variable == effect.parameters[0].id))
+                        }
+                        7 => {
+                            is_worker(domain)
+                                && matches!(&**result, Type::Nominal(result) if *result == NominalTypeId::new(self.module, 7))
+                        }
+                        _ => unreachable!(),
+                    };
+                    if !valid {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    pub(crate) fn io(self) -> EffectId {
+        EffectId::new(self.module, 0)
+    }
+
+    pub(crate) fn join(self) -> EffectId {
+        EffectId::new(self.module, 1)
+    }
+}
+
 impl StoreApi {
     pub(crate) fn for_module(module: ModuleId) -> Option<Self> {
         module
@@ -23016,6 +23299,13 @@ pub(crate) fn lexical_method_capture_occurrences<'a>(
                 pending.push(&store.initializer);
                 pending.push(&store.body);
             }
+            ResolvedExprKind::Network(network) => {
+                budget.charge(1)?;
+                bound.try_reserve(1).map_err(|_| ())?;
+                bound.insert(network.handle.id);
+                pending.push(&network.initializer);
+                pending.push(&network.body);
+            }
             ResolvedExprKind::Perform(request) => pending.push(&request.operand),
             ResolvedExprKind::Cleanup(cleanup) => {
                 pending.push(&cleanup.body);
@@ -23148,6 +23438,8 @@ pub enum ResolvedExprKind {
     Resource(Box<ResolvedResourceExpr>),
     /// A local retained-control store with a fresh scoped identity.
     Store(Box<ResolvedStoreExpr>),
+    /// A two-worker network with a fresh scoped identity.
+    Network(Box<ResolvedNetworkExpr>),
     /// A prospective region identity, prepared before its access binder is live.
     Region(Box<ResolvedRegionExpr>),
     /// Explicit fresh-allocation selection with a restoration boundary.
@@ -23409,6 +23701,44 @@ pub struct ResolvedStoreExpr {
     /// The initializer in the preceding term and type scope.
     pub initializer: Box<ResolvedExpr>,
     /// The store-scoped computation.
+    pub body: Box<ResolvedExpr>,
+}
+
+/// Authenticated source coordinates for a network owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct NetworkAcquisition {
+    pub(crate) builtin: ModuleId,
+    pub(crate) identity: TypeVariableId,
+    pub(crate) handle: BinderId,
+    pub(crate) span: Span,
+}
+
+impl NetworkAcquisition {
+    pub(crate) fn owns(self, network: &ResolvedNetworkExpr) -> bool {
+        self.builtin.is_builtin_network()
+            && self == network.acquisition
+            && self.identity == network.identity.id
+            && self.handle == network.handle.id
+            && network.identity.kind == Kind::Type
+            && self.identity.module().is_some()
+            && self.identity.module() == self.handle.module()
+            && self.span.cover(network.identity.origin.primary_span()) == Some(self.span)
+            && self.span.cover(network.handle.origin.primary_span()) == Some(self.span)
+    }
+}
+
+/// The network initializer is resolved in the preceding scope. Its entry
+/// positions are designators and must not be evaluated as closure values.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedNetworkExpr {
+    pub(crate) acquisition: NetworkAcquisition,
+    /// The fresh rigid network identity.
+    pub identity: ResolvedTypeVariable,
+    /// The coordinator's non-owning handle binder.
+    pub handle: Binder,
+    /// Capacity, entry designators and copied startup inputs.
+    pub initializer: Box<ResolvedExpr>,
+    /// The identity-scoped coordinator body.
     pub body: Box<ResolvedExpr>,
 }
 
@@ -23923,6 +24253,12 @@ fn discard_resolved_body_work(
                 store.descriptor.discard_iteratively();
                 expressions.push(*store.initializer);
                 expressions.push(*store.body);
+            }
+            ResolvedExprKind::Network(network) => {
+                discard_resolved_type_variable(network.identity);
+                discard_binder(network.handle);
+                expressions.push(*network.initializer);
+                expressions.push(*network.body);
             }
             ResolvedExprKind::Cleanup(cleanup) => {
                 expressions.push(*cleanup.body);

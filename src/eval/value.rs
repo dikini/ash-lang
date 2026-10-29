@@ -203,6 +203,13 @@ impl Drop for NativeTupleStorage {
     }
 }
 
+/// An opaque non-owning registration issued by a worker's network transport.
+#[derive(Clone, Copy, Debug)]
+pub struct NetworkRegistration {
+    pub(super) network: ActivationKey,
+    pub(super) token: super::network_transport::Registration,
+}
+
 /// A heap-backed tuple or nominal observation.
 #[derive(Clone)]
 pub struct ObservedValue {
@@ -324,6 +331,7 @@ impl ObservedValue {
                     Value::RegionHostFunction { .. } => output.push_str("<function>"),
                     Value::ResourceHandle(_) => output.push_str("<resource-handle>"),
                     Value::RetainedKey(_) => output.push_str("<retained-key>"),
+                    Value::NetworkRegistration(_) => output.push_str("<network-registration>"),
 
                     Value::Intrinsic(_) => output.push_str("<function>"),
                     Value::Address(_) => output.push_str("<address>"),
@@ -604,6 +612,9 @@ pub enum Value {
     /// A non-owning locator for one generation in a retained-control store.
     RetainedKey(RetainedKey),
 
+    /// A private registration for one network activation and transport lane.
+    NetworkRegistration(NetworkRegistration),
+
     /// A private genuinely inline mathematical integer representation.
     SmallInteger(i128),
     /// Sign and existing region-owned digit backing; aliases never copy digits.
@@ -661,6 +672,7 @@ impl fmt::Display for Value {
             Self::RegionHostFunction { .. } => formatter.write_str("<function>"),
             Self::ResourceHandle(_) => formatter.write_str("<resource-handle>"),
             Self::RetainedKey(_) => formatter.write_str("<retained-key>"),
+            Self::NetworkRegistration(_) => formatter.write_str("<network-registration>"),
 
             Self::Intrinsic(_) => formatter.write_str("<function>"),
             Self::Address(_) => formatter.write_str("<address>"),

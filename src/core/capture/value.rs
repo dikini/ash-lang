@@ -76,6 +76,8 @@ enum Expr {
         action: usize,
     },
     Scalar,
+    // A synthetic value used only in a validated worker bootstrap graph.
+    WorkerEntryRegion(usize),
     Boolean(bool),
     IndependentCallable,
     Slot,
@@ -206,6 +208,7 @@ impl Expr {
         charge(budget, 1)?;
         Ok(match self {
             Self::Scalar => Self::Scalar,
+            Self::WorkerEntryRegion(entry) => Self::WorkerEntryRegion(entry + offset),
             Self::Boolean(value) => Self::Boolean(*value),
             Self::IndependentCallable => Self::IndependentCallable,
             Self::Slot => Self::Slot,
@@ -389,6 +392,10 @@ struct EvidenceIndex {
 #[derive(Debug)]
 pub(super) struct Graph {
     expressions: Vec<Expr>,
+    // The builder reserves this entire original-node prefix before it adds
+    // adapters, imported expressions, or query-local synthetic expressions.
+    original_nodes: usize,
+    original_base: usize,
     // Declaration bindings retain their original control initializer through
     // import relocation. Alias/opaque bindings have no initializer to execute.
     globals: Vec<(usize, usize, Option<usize>)>,
@@ -437,6 +444,8 @@ pub(super) fn observed_control_call_graph_for_test() -> Graph {
                 captures: Vec::new(),
             },
         ],
+        original_nodes: 0,
+        original_base: 0,
         globals: vec![(2, 1, None)],
         method_proxies: Vec::new(),
         sources: vec![span; 5],
@@ -450,8 +459,9 @@ pub(super) fn observed_control_call_graph_for_test() -> Graph {
 }
 
 pub(super) struct CallSuccessors {
-    // Actual control target, invocation context, and source Function port.
-    pub(super) targets: Vec<(usize, usize, usize)>,
+    // Actual control target, invocation context, source Function, and its
+    // exact creation context. A projected callee context cannot replace it.
+    pub(super) targets: Vec<(usize, usize, usize, usize)>,
     pub(super) unknown: bool,
     pub(super) returns: bool,
 }
@@ -723,6 +733,7 @@ impl Graph {
                     children.extend(evidence.iter().map(|(_, _, argument)| *argument));
                 }
                 Expr::Scalar
+                | Expr::WorkerEntryRegion(_)
                 | Expr::Boolean(_)
                 | Expr::IndependentCallable
                 | Expr::Unknown
@@ -1666,45 +1677,185 @@ impl Graph {
                     source,
                     budget,
                 )?;
-                let alternatives = match buffer.operation {
-                    RegionBufferOperation::Intrinsic(intrinsic) => match intrinsic.operation() {
-                        Intrinsic::BytesAppendByte { appended, invalid } => {
-                            Some((appended, invalid, payload))
+                if let RegionBufferOperation::Network { effect, operation } = &buffer.operation {
+                    let module = effect.effect().module();
+                    let network =
+                        crate::resolved::NetworkApi::for_module(module).ok_or(Failure::Invalid)?;
+                    let join = if effect.effect() == network.join() {
+                        if operation.operation() != 1 {
+                            return Err(Failure::Invalid);
                         }
-                        Intrinsic::StringFromUtf8 { decoded, invalid } => {
-                            Some((decoded, invalid, payload))
+                        true
+                    } else if effect.effect() == network.io() {
+                        false
+                    } else {
+                        return Err(Failure::Invalid);
+                    };
+                    let result_type = match (join, operation.operation()) {
+                        (true, 1) => 7,
+                        (false, 1) => 5,
+                        (false, 2) => 6,
+                        (false, 3) => 7,
+                        (false, 4) => 9,
+                        (false, 5) => 7,
+                        (false, 6) => 10,
+                        (false, 7) => 7,
+                        _ => return Err(Failure::Invalid),
+                    };
+                    // Both envelope kinds and all failure tags are possible
+                    // observations. Keep their selected-region residency and
+                    // full projectable payloads through ordinary matches.
+                    let mut kinds = Vec::new();
+                    charge(budget, 2)?;
+                    kinds.try_reserve_exact(2).map_err(|_| Failure::Resource)?;
+                    for case in 0..2 {
+                        kinds.push(self.push(
+                            Expr::ResidentTuple {
+                                constructor: Some(ConstructorId::new(
+                                    crate::types::NominalTypeId::new(module, 3),
+                                    case,
+                                )),
+                                fields: Vec::new(),
+                                owner,
+                            },
+                            source,
+                            budget,
+                        )?);
+                    }
+                    let kind = self.push(Expr::Merge(kinds), source, budget)?;
+                    let pair = self.push(
+                        Expr::ResidentTuple {
+                            constructor: None,
+                            fields: copy_slice(&[kind, payload], budget)?,
+                            owner,
+                        },
+                        source,
+                        budget,
+                    )?;
+                    let mut failures = Vec::new();
+                    charge(budget, 4)?;
+                    failures
+                        .try_reserve_exact(4)
+                        .map_err(|_| Failure::Resource)?;
+                    for case in 0..4 {
+                        failures.push(self.push(
+                            Expr::ResidentTuple {
+                                constructor: Some(ConstructorId::new(
+                                    crate::types::NominalTypeId::new(module, 4),
+                                    case,
+                                )),
+                                fields: Vec::new(),
+                                owner,
+                            },
+                            source,
+                            budget,
+                        )?);
+                    }
+                    let failure = self.push(Expr::Merge(failures), source, budget)?;
+                    // A registration is a non-owning capability of this same
+                    // network activation; preserve the worker dependency.
+                    let registration = if operation.operation() == 4 {
+                        let operand = buffer.operand.ok_or(Failure::Invalid)?;
+                        self.push(
+                            Expr::Project {
+                                value: index(operand),
+                                field: 0,
+                                constructor: None,
+                            },
+                            source,
+                            budget,
+                        )?
+                    } else if operation.operation() == 6 {
+                        index(buffer.operand.ok_or(Failure::Invalid)?)
+                    } else {
+                        payload
+                    };
+                    let mut results = Vec::new();
+                    let count = match (join, operation.operation()) {
+                        (true, 1) => 2,
+                        (false, 3 | 4 | 5 | 7) => 2,
+                        (false, 6) => 3,
+                        _ => 4,
+                    };
+                    charge(budget, count)?;
+                    results
+                        .try_reserve_exact(count)
+                        .map_err(|_| Failure::Resource)?;
+                    for case in 0..count as u32 {
+                        if join && case == 0 {
+                            continue;
                         }
-                        Intrinsic::BytesAt { found, invalid } => {
-                            let scalar = self.push(Expr::Scalar, source, budget)?;
-                            Some((found, invalid, scalar))
+                        let failure_case = match (join, operation.operation()) {
+                            (true, 1) | (false, 3 | 4 | 5 | 7) => 1,
+                            (false, 6) => 2,
+                            _ => 3,
+                        };
+                        let fields = if case == failure_case {
+                            copy_slice(&[failure], budget)?
+                        } else if matches!(operation.operation(), 4 | 6) && case == 0 {
+                            copy_slice(&[registration], budget)?
+                        } else if operation.operation() == 2 && case == 0 {
+                            copy_slice(&[pair], budget)?
+                        } else {
+                            Vec::new()
+                        };
+                        results.push(self.push(
+                            Expr::ResidentTuple {
+                                constructor: Some(ConstructorId::new(
+                                    crate::types::NominalTypeId::new(module, result_type),
+                                    case,
+                                )),
+                                fields,
+                                owner,
+                            },
+                            source,
+                            budget,
+                        )?);
+                    }
+                    Expr::Merge(results)
+                } else {
+                    let alternatives = match buffer.operation {
+                        RegionBufferOperation::Intrinsic(intrinsic) => {
+                            match intrinsic.operation() {
+                                Intrinsic::BytesAppendByte { appended, invalid } => {
+                                    Some((appended, invalid, payload))
+                                }
+                                Intrinsic::StringFromUtf8 { decoded, invalid } => {
+                                    Some((decoded, invalid, payload))
+                                }
+                                Intrinsic::BytesAt { found, invalid } => {
+                                    let scalar = self.push(Expr::Scalar, source, budget)?;
+                                    Some((found, invalid, scalar))
+                                }
+                                _ => None,
+                            }
                         }
                         _ => None,
-                    },
-                    _ => None,
-                };
-                if let Some((success, invalid, payload)) = alternatives {
-                    let fields = copy_slice(&[payload], budget)?;
-                    let success = self.push(
-                        Expr::ResidentTuple {
-                            constructor: Some(success),
-                            fields,
-                            owner,
-                        },
-                        source,
-                        budget,
-                    )?;
-                    let invalid = self.push(
-                        Expr::ResidentTuple {
-                            constructor: Some(invalid),
-                            fields: Vec::new(),
-                            owner,
-                        },
-                        source,
-                        budget,
-                    )?;
-                    Expr::Merge(copy_slice(&[success, invalid], budget)?)
-                } else {
-                    Expr::Forward(payload)
+                    };
+                    if let Some((success, invalid, payload)) = alternatives {
+                        let fields = copy_slice(&[payload], budget)?;
+                        let success = self.push(
+                            Expr::ResidentTuple {
+                                constructor: Some(success),
+                                fields,
+                                owner,
+                            },
+                            source,
+                            budget,
+                        )?;
+                        let invalid = self.push(
+                            Expr::ResidentTuple {
+                                constructor: Some(invalid),
+                                fields: Vec::new(),
+                                owner,
+                            },
+                            source,
+                            budget,
+                        )?;
+                        Expr::Merge(copy_slice(&[success, invalid], budget)?)
+                    } else {
+                        Expr::Forward(payload)
+                    }
                 }
             }
             Some(EffectOperation::RegionTuple(tuple)) => {
@@ -1772,6 +1923,36 @@ impl Graph {
                     initializer: index(store.initializer),
                     body: index(store.body),
                     source: store.acquisition.span,
+                }
+            }
+            Some(EffectOperation::Network(network)) => {
+                crate::resolved::NetworkApi::for_module(network.acquisition.builtin)
+                    .ok_or(Failure::Invalid)?;
+                // The owner is created only after all three caller operands
+                // are available. They are preparation inputs; copied bytes do
+                // not become aliases in the fresh worker roots.
+                let inputs = self.push(
+                    Expr::Tuple(copy_slice(
+                        &[
+                            index(network.capacity),
+                            index(network.inputs[0]),
+                            index(network.inputs[1]),
+                        ],
+                        budget,
+                    )?),
+                    source,
+                    budget,
+                )?;
+                Expr::Resource {
+                    store: false,
+                    success: None,
+                    failure: None,
+                    failure_payload: None,
+                    handle: self.symbol(symbols, network.handle.id(), source, budget)?,
+                    identity: self.symbol(types, network.acquisition.identity, source, budget)?,
+                    initializer: inputs,
+                    body: index(network.body),
+                    source: network.acquisition.span,
                 }
             }
             Some(EffectOperation::RetainedRoot(root)) => Expr::RetainedRoot {
@@ -1928,6 +2109,8 @@ impl Graph {
         let mut headers = FunctionMetadataPreparation::new(nodes, operation);
         let mut graph = Self {
             expressions: Vec::new(),
+            original_nodes: nodes.len(),
+            original_base: nodes.as_ptr() as usize,
             globals: Vec::new(),
             method_proxies: Vec::new(),
             sources: Vec::new(),
@@ -2370,6 +2553,97 @@ impl Graph {
         self.position(code, request, budget)
     }
 
+    /// Represent the runtime's copied-input allocation using the actual
+    /// entry Region access binder and selected provider, not a caller value.
+    pub(super) fn position_worker_input_request(
+        &mut self,
+        code: usize,
+        entry_region: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let Expr::Bind {
+            binder,
+            initializer,
+            ..
+        } = self.expressions.get(entry_region).ok_or(Failure::Invalid)?
+        else {
+            return Err(Failure::Invalid);
+        };
+        let binder = *binder;
+        let initializer = *initializer;
+        charge(budget, 1)?;
+        let value = self
+            .expressions
+            .get_mut(initializer)
+            .ok_or(Failure::Invalid)?;
+        if !matches!(value, Expr::Scalar) {
+            return Err(Failure::Invalid);
+        }
+        *value = Expr::WorkerEntryRegion(entry_region);
+        let source = *self.sources.get(entry_region).ok_or(Failure::Invalid)?;
+        let descriptor = self.push(Expr::Scalar, source, budget)?;
+        let request = self.push(
+            Expr::Request {
+                operand: binder,
+                scalar: false,
+                region_view: false,
+                descriptor: Some(descriptor),
+            },
+            source,
+            budget,
+        )?;
+        self.position(code, request, budget)
+    }
+
+    /// Build the two runtime-owned applications from the actual initializer.
+    /// The argument slot is populated only after the selected input allocation returns.
+    pub(super) fn position_worker_invocation(
+        &mut self,
+        metadata_code: usize,
+        call_code: usize,
+        initializer: usize,
+        owner_identity: crate::types::TypeVariableId,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        let source = *self.sources.get(initializer).ok_or(Failure::Invalid)?;
+        // The metadata argument is the actual generative owner type. Retain all
+        // matching symbol slots, since contexts may have distinct occurrences.
+        charge(budget, self.metadata.capacity())?;
+        let mut symbols = Vec::new();
+        for (&slot, &identity) in &self.metadata {
+            if identity == owner_identity {
+                charge(budget, 1)?;
+                symbols.try_reserve(1).map_err(|_| Failure::Resource)?;
+                symbols.push(slot);
+            }
+        }
+        let metadata = self.push(Expr::MetadataMerge(symbols), source, budget)?;
+        let applied = self.push(
+            Expr::Call {
+                function: initializer,
+                arguments: copy_slice(&[metadata], budget)?,
+                scalar: false,
+                type_application: true,
+            },
+            source,
+            budget,
+        )?;
+        self.position(metadata_code, applied, budget)?;
+        let argument = self.push(Expr::Slot, source, budget)?;
+        let invocation = self.push(
+            Expr::Call {
+                function: applied,
+                arguments: copy_slice(&[argument], budget)?,
+                scalar: false,
+                type_application: false,
+            },
+            source,
+            budget,
+        )?;
+        self.position(call_code, invocation, budget)?;
+        Ok(argument)
+    }
+
     pub(super) fn position(
         &mut self,
         code: usize,
@@ -2420,7 +2694,51 @@ impl Graph {
     }
 
     pub(super) fn start(&self, budget: &mut TypeWorkBudget) -> Result<Analysis<'_>, Failure> {
+        self.start_with_worker_entry(None, budget)
+            .map(|(analysis, _)| analysis)
+    }
+
+    /// Start only the linked initializer environment. The worker entry is
+    /// reached later through its actual closure, never a standalone root.
+    pub(super) fn start_worker_bootstrap(
+        &self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Analysis<'_>, Failure> {
         let mut analysis = Analysis::new(self, budget)?;
+        for &(binder, value, _) in &self.globals {
+            let initializer = analysis.slot(value, 0, budget)?;
+            let binder = analysis.slot(binder, 0, budget)?;
+            analysis.edge(binder, initializer, budget)?;
+        }
+        analysis.close(budget)?;
+        Ok(analysis)
+    }
+
+    /// A fresh analysis for one validated linked worker entry. This is a
+    /// symbolic origin query, not Store-release or runtime-activation authority.
+    #[cfg(test)]
+    pub(super) fn start_worker_entry(
+        &self,
+        function: usize,
+        owner: crate::core::NodeId,
+        side: u8,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(Analysis<'_>, (usize, usize)), Failure> {
+        if side > 1 {
+            return Err(Failure::Invalid);
+        }
+        let (analysis, entry) =
+            self.start_with_worker_entry(Some((function, owner, side)), budget)?;
+        Ok((analysis, entry.ok_or(Failure::Invalid)?))
+    }
+
+    fn start_with_worker_entry(
+        &self,
+        selected: Option<(usize, crate::core::NodeId, u8)>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(Analysis<'_>, Option<(usize, usize)>), Failure> {
+        let mut analysis = Analysis::new(self, budget)?;
+        let mut entry = None;
         for &(binder, value, _) in &self.globals {
             let initializer = analysis.slot(value, 0, budget)?;
             let binder = analysis.slot(binder, 0, budget)?;
@@ -2429,6 +2747,12 @@ impl Graph {
         // Every source function body has a symbolic entry, including functions
         // that are only exported. Actual calls receive separate contexts.
         for (id, expression) in self.expressions.iter().enumerate() {
+            // A worker query begins only at its authenticated entry. Other
+            // functions are reached through actual call edges, not separate
+            // Unknown-seeded standalone executions.
+            if selected.is_some_and(|(function, _, _)| function != id) {
+                continue;
+            }
             if let Expr::Function {
                 parameters,
                 body,
@@ -2441,9 +2765,20 @@ impl Graph {
                     .try_reserve(1)
                     .map_err(|_| Failure::Resource)?;
                 analysis.roots.insert(*body, context);
+                if selected.is_some_and(|(function, _, _)| function == id) && parameters.len() != 1
+                {
+                    return Err(Failure::Invalid);
+                }
                 for parameter in parameters {
                     let slot = analysis.slot(*parameter, context, budget)?;
-                    analysis.atom(slot, Atom::Unknown, budget)?;
+                    let atom = match selected {
+                        Some((function, owner, side)) if function == id => {
+                            entry = Some((*body, context));
+                            Atom::WorkerArguments(owner, side)
+                        }
+                        _ => Atom::Unknown,
+                    };
+                    analysis.atom(slot, atom, budget)?;
                 }
                 for capture in captures {
                     let source = analysis.slot(*capture, 0, budget)?;
@@ -2461,7 +2796,7 @@ impl Graph {
             }
         }
         analysis.close(budget)?;
-        Ok(analysis)
+        Ok((analysis, entry))
     }
 }
 
@@ -2486,6 +2821,13 @@ enum Atom {
     MetadataNeutral,
     IndependentCallable,
     Unknown,
+    // A query-local symbolic entry input and its projected worker. Neither
+    // represents a dynamic runtime activation or a release certificate.
+    WorkerArguments(crate::core::NodeId, u8),
+    Worker(crate::core::NodeId, u8),
+    // The runtime-owned entry Region, seeded only at worker bootstrap. This
+    // is distinct from arbitrary Free and opaque RegionView values.
+    WorkerEntryRegion(usize),
     // An authenticated context query returns this opaque, non-owning runtime
     // value. Its region support remains unknown, but it is not a Store handle.
     RegionView,
@@ -2540,11 +2882,12 @@ enum Transition {
     Dispatch(usize, usize, usize, usize), // Request/handler/clause and finite creation class.
     Focus,
     Restore(usize, usize, usize),
+    WorkerCallRestore(usize, usize, usize), // Original value context, trace witness, role.
 }
 
 // Every nonempty canonical path shares its already published prefix. These
 // nodes own no recursive storage, values, environments or execution authority.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ContextPath {
     Empty,
     Step {
@@ -2672,7 +3015,10 @@ impl ContextPaths {
         {
             match transition {
                 Transition::Root(id) if parent == 0 && root.is_none() => root = Some(id),
-                Transition::Root(_) | Transition::Focus | Transition::Restore(..) => {
+                Transition::Root(_)
+                | Transition::Focus
+                | Transition::Restore(..)
+                | Transition::WorkerCallRestore(..) => {
                     return Ok(None);
                 }
                 Transition::Call(_) | Transition::Invoke(..) | Transition::Dispatch(..) => {}
@@ -2699,7 +3045,10 @@ impl ContextPaths {
         {
             match transition {
                 Transition::Root(id) if parent == 0 => return Ok(id != callable),
-                Transition::Root(_) | Transition::Focus | Transition::Restore(..) => {
+                Transition::Root(_)
+                | Transition::Focus
+                | Transition::Restore(..)
+                | Transition::WorkerCallRestore(..) => {
                     return Ok(false);
                 }
                 Transition::Call(_) | Transition::Invoke(..) | Transition::Dispatch(..) => {}
@@ -3829,6 +4178,212 @@ pub(super) struct Analysis<'a> {
 }
 
 impl<'a> Analysis<'a> {
+    fn require_copied_port(
+        &self,
+        normal: &Analysis<'_>,
+        original: usize,
+        copied: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let source = normal.slots.get(original).ok_or(Failure::Invalid)?;
+        let target = self.slots.get(copied).ok_or(Failure::Invalid)?;
+        charge(
+            budget,
+            source.atoms.len().checked_add(1).ok_or(Failure::Resource)?,
+        )?;
+        if source.key != target.key || source.atoms != target.atoms || !target.terminal {
+            return Err(Failure::Invalid);
+        }
+        Ok(())
+    }
+
+    /// Rebind one actual saved call alternative into a focused snapshot.
+    /// Both original ports and every argument/capture coordinate must already
+    /// exist in the copied frozen analysis; no target is inferred by name.
+    pub(super) fn restore_worker_call(
+        &mut self,
+        witness: usize,
+        call: super::control::CompletionCall,
+        normal: &Analysis<'_>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(Cut, super::control::CompletionCall), Failure> {
+        self.close(budget)?;
+        if !std::ptr::eq(self.graph, normal.graph) {
+            return Err(Failure::Invalid);
+        }
+        for mut context in [
+            call.caller_value_context,
+            call.callee_value_context,
+            call.creation,
+        ] {
+            loop {
+                charge(budget, 1)?;
+                let original = *normal.contexts.paths.get(context).ok_or(Failure::Invalid)?;
+                let copied = *self.contexts.paths.get(context).ok_or(Failure::Invalid)?;
+                if original != copied {
+                    return Err(Failure::Invalid);
+                }
+                match original {
+                    ContextPath::Empty => break,
+                    ContextPath::Step { parent, .. } => context = parent,
+                }
+            }
+        }
+        let (original_result, original_body, original_arguments, original_captures) = normal
+            .existing_call_ports(
+                call.code,
+                call.caller_value_context,
+                call.expression,
+                call.callee_value_context,
+                call.creation,
+                budget,
+            )?;
+        let (old_result, old_body, arguments, captures) = self.existing_call_ports(
+            call.code,
+            call.caller_value_context,
+            call.expression,
+            call.callee_value_context,
+            call.creation,
+            budget,
+        )?;
+        if (original_result, original_body) != (call.result, call.body)
+            || self.graph.targets.get(&call.expression) != Some(&call.target)
+            || original_arguments.len() != arguments.len()
+            || original_captures.len() != captures.len()
+        {
+            return Err(Failure::Invalid);
+        }
+        self.require_copied_port(normal, original_result, old_result, budget)?;
+        self.require_copied_port(normal, original_body, old_body, budget)?;
+        for ((a, b), (x, y)) in original_arguments
+            .iter()
+            .chain(&original_captures)
+            .zip(arguments.iter().chain(&captures))
+        {
+            self.require_copied_port(normal, *a, *x, budget)?;
+            self.require_copied_port(normal, *b, *y, budget)?;
+        }
+        let (result_expression, caller) = self.slots.get(old_result).ok_or(Failure::Invalid)?.key;
+        let (body_expression, callee) = self.slots.get(old_body).ok_or(Failure::Invalid)?.key;
+        if caller != call.caller_value_context || callee != call.callee_value_context {
+            return Err(Failure::Invalid);
+        }
+        let (_, focus) = self.focus.ok_or(Failure::Invalid)?;
+        let caller_context = self.context(
+            focus,
+            Transition::WorkerCallRestore(caller, witness, 0),
+            budget,
+        )?;
+        let callee_context = self.context(
+            focus,
+            Transition::WorkerCallRestore(callee, witness, 1),
+            budget,
+        )?;
+        for expression in self.graph.free_inputs(result_expression, budget)? {
+            self.freeze_slot(expression, caller, caller_context, budget)?;
+        }
+        for expression in self.graph.free_inputs(body_expression, budget)? {
+            self.freeze_slot(expression, callee, callee_context, budget)?;
+        }
+        for (formal, actual) in arguments {
+            let formal = self.slots.get(formal).ok_or(Failure::Invalid)?.key.0;
+            let actual = self.slots.get(actual).ok_or(Failure::Invalid)?.key.0;
+            self.freeze_slot(formal, callee, callee_context, budget)?;
+            self.freeze_slot(actual, caller, caller_context, budget)?;
+        }
+        for (destination, _) in captures {
+            let expression = self.slots.get(destination).ok_or(Failure::Invalid)?.key.0;
+            self.freeze_slot(expression, callee, callee_context, budget)?;
+        }
+        let result = self.slot(result_expression, caller_context, budget)?;
+        let body = self.slot(body_expression, callee_context, budget)?;
+        self.slots[result].terminal = true;
+        self.slots[body].terminal = true;
+        self.edge(result, body, budget)?;
+        let restored = super::control::CompletionCall {
+            result,
+            body,
+            caller_value_context: caller_context,
+            callee_value_context: callee_context,
+            ..call
+        };
+        Ok((
+            Cut {
+                context: caller_context,
+                input: body,
+                result,
+            },
+            restored,
+        ))
+    }
+
+    /// Reconstruct the result edge for the actual selected match arm.
+    /// Its already-bound arm inputs are frozen from the original context.
+    pub(super) fn restore_worker_case(
+        &mut self,
+        creation: usize,
+        code: usize,
+        ordinal: usize,
+        body: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Cut, Failure> {
+        charge(budget, 3)?;
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let pending = *self.graph.positions.get(&body).ok_or(Failure::Invalid)?;
+        let Expr::Match { arms, .. } = &self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        if arms.get(ordinal).ok_or(Failure::Invalid)?.1 != pending {
+            return Err(Failure::Invalid);
+        }
+        let position = usize::MAX
+            .checked_sub(7)
+            .and_then(|n| n.checked_sub(ordinal))
+            .ok_or(Failure::Resource)?;
+        self.restore_cut(creation, code, position, body, &[], true, budget)
+    }
+
+    /// Restore the already entered worker Region. Its selected access was
+    /// constructed before the cut; copy that exact frozen value instead of
+    /// reevaluating the provider or synthesizing a handler.
+    pub(super) fn restore_worker_entry_region(
+        &mut self,
+        creation: usize,
+        code: usize,
+        body: usize,
+        completed: &[usize],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Cut, Failure> {
+        charge(budget, 2)?;
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let pending = *self.graph.positions.get(&body).ok_or(Failure::Invalid)?;
+        let Expr::Bind {
+            binder,
+            body: actual_body,
+            ..
+        } = self.graph.expressions[expression]
+        else {
+            return Err(Failure::Invalid);
+        };
+        if pending != actual_body {
+            #[cfg(test)]
+            eprintln!(
+                "worker entry Region: body mismatch code={code} control={body} pending={pending} actual={actual_body}"
+            );
+            return Err(Failure::Invalid);
+        }
+        let cut = self.restore_cut(creation, code, usize::MAX - 6, body, completed, true, budget)
+            .map_err(|error| {
+                #[cfg(test)] eprintln!("worker entry Region: cut code={code} creation={creation} body={body} completed={completed:?} {error:?}");
+                error
+            })?;
+        self.freeze_slot(binder, creation, cut.context, budget).map_err(|error| {
+            #[cfg(test)] eprintln!("worker entry Region: access binder={binder} creation={creation} restored={} {error:?}", cut.context);
+            error
+        })?;
+        Ok(cut)
+    }
+
     #[allow(clippy::too_many_arguments)] // Static cut identity and its terminal contract are separate inputs.
     pub(super) fn restore_cut(
         &mut self,
@@ -3864,13 +4419,23 @@ impl<'a> Analysis<'a> {
         // slots are completed values and which one receives the pending result.
         for root in [expression, input] {
             for value in self.graph.free_inputs(root, budget)? {
-                self.freeze_slot(value, creation, context, budget)?;
+                self.freeze_slot(value, creation, context, budget).map_err(|error| {
+                    #[cfg(test)] if position == usize::MAX - 6 { eprintln!("worker entry Region: free input={value} root={root} creation={creation} {error:?}"); }
+                    error
+                })?;
             }
         }
         for code in completed {
             charge(budget, 1)?;
             if let Some(&value) = self.graph.positions.get(code) {
-                self.freeze_slot(value, creation, context, budget)?;
+                self.freeze_slot(value, creation, context, budget).map_err(|error| {
+                    #[cfg(test)] if position == usize::MAX - 6 {
+                        let source = self.indices.get(&(value, creation)).and_then(|id| self.slots.get(*id));
+                        let target = self.indices.get(&(value, context)).and_then(|id| self.slots.get(*id));
+                        eprintln!("worker entry Region: completed code={code} expression={value} creation={creation} source_present={} target={:?} {error:?}", source.is_some(), target.map(|slot| (slot.terminal, slot.atoms.len(), slot.edges.len())));
+                    }
+                    error
+                })?;
             }
         }
         let input = self.slot(input, context, budget)?;
@@ -4142,7 +4707,9 @@ impl<'a> Analysis<'a> {
                 }
                 // Actual c is reconstructed from original entry paths before
                 // any focused resource query or restored continuation replay.
-                Transition::Focus | Transition::Restore(..) => return Err(Failure::Invalid),
+                Transition::Focus | Transition::Restore(..) | Transition::WorkerCallRestore(..) => {
+                    return Err(Failure::Invalid);
+                }
             });
         }
         Ok((request, output))
@@ -4169,6 +4736,34 @@ impl<'a> Analysis<'a> {
             .get(&code)
             .and_then(|expression| self.roots.get(expression))
             .copied())
+    }
+
+    // Only a standalone-root ancestry qualifies; focused, restored and nested
+    // root contexts refuse. The prefix belongs to the authenticated node slice.
+    pub(super) fn original_standalone_callable_root(
+        &self,
+        context: usize,
+        original_base: usize,
+        original_nodes: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<usize>, Failure> {
+        charge(budget, 1)?;
+        if self.graph.original_base != original_base || self.graph.original_nodes != original_nodes
+        {
+            return Err(Failure::Invalid);
+        }
+        let Some(root) = self.contexts.standalone_root(context, budget)? else {
+            return Ok(None);
+        };
+        if root >= original_nodes
+            || !matches!(
+                self.graph.expressions.get(root),
+                Some(Expr::Function { .. })
+            )
+        {
+            return Ok(None);
+        }
+        Ok(Some(root))
     }
 
     pub(super) fn standalone_root(
@@ -4198,6 +4793,728 @@ impl<'a> Analysis<'a> {
         charge(budget, 1)?;
         let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
         self.slot(expression, context, budget)
+    }
+
+    // Completion queries may only read an already closed focus. Unlike
+    // `slot`, these lookups never create a port, enqueue work or add watches.
+    fn existing_slot(
+        &self,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        charge(budget, 1)?;
+        if self.current.is_some() || !self.pending.is_empty() {
+            return Err(Failure::Invalid);
+        }
+        let slot = *self
+            .indices
+            .get(&(expression, context))
+            .ok_or(Failure::Invalid)?;
+        if self.slots.get(slot).is_none_or(|value| value.queued) {
+            return Err(Failure::Invalid);
+        }
+        Ok(slot)
+    }
+
+    pub(super) fn existing_port(
+        &self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        charge(budget, 1)?;
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        self.existing_slot(expression, context, budget)
+    }
+
+    /// Seed the runtime-created argument after the copied input returns.
+    pub(super) fn enter_worker_argument(
+        &mut self,
+        expression: usize,
+        context: usize,
+        owner: crate::core::NodeId,
+        side: u8,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if side > 1 || !matches!(self.graph.expressions.get(expression), Some(Expr::Slot)) {
+            return Err(Failure::Invalid);
+        }
+        let slot = self.slot(expression, context, budget)?;
+        self.atom(slot, Atom::WorkerArguments(owner, side), budget)
+    }
+
+    /// Install the actual entry Region access only after its preceding value
+    /// and provider have completed. Do not demand its body or linked result.
+    pub(super) fn enter_worker_entry_region(
+        &mut self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, 1)?;
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let Expr::Bind {
+            binder,
+            initializer,
+            ..
+        } = self.graph.expressions[expression]
+        else {
+            return Err(Failure::Invalid);
+        };
+        let binder = self.slot(binder, context, budget)?;
+        let initializer = self.slot(initializer, context, budget)?;
+        self.edge(binder, initializer, budget)
+    }
+
+    /// The expression coordinate belongs to this exact focused graph. The
+    /// completion consumer must still verify that it denotes an original node
+    /// in the authenticated linked arena, rather than an imported or generated
+    /// value expression.
+    pub(super) fn existing_position_expression(
+        &self,
+        code: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        charge(budget, 1)?;
+        if self.current.is_some() || !self.pending.is_empty() {
+            return Err(Failure::Invalid);
+        }
+        self.graph
+            .positions
+            .get(&code)
+            .copied()
+            .ok_or(Failure::Invalid)
+    }
+
+    /// Read a single symbolic worker origin from the settled focus-local
+    /// operand. Any unknown, non-worker or differing origin refuses it.
+    #[cfg(test)]
+    pub(super) fn existing_worker_origin(
+        &self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(crate::core::NodeId, u8), Failure> {
+        let port = self.existing_port(code, context, budget)?;
+        self.worker_origin_at_port(port, budget)
+    }
+
+    pub(super) fn existing_original_worker_origin(
+        &self,
+        node: crate::core::NodeId,
+        arena: crate::core::dialect::ArenaId,
+        nodes: &[StoredNode<super::super::effect::EffectOperationFamily>],
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(crate::core::NodeId, u8), Failure> {
+        charge(budget, 1)?;
+        if node.arena() != arena
+            || self.graph.original_nodes != nodes.len()
+            || self.graph.original_base != nodes.as_ptr() as usize
+        {
+            return Err(Failure::Invalid);
+        }
+        let expression = node.index().map_err(|_| Failure::Invalid)?;
+        if expression >= self.graph.original_nodes {
+            return Err(Failure::Invalid);
+        }
+        let port = self.existing_slot(expression, context, budget)?;
+        self.worker_origin_at_port(port, budget)
+    }
+
+    fn worker_origin_at_port(
+        &self,
+        port: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(crate::core::NodeId, u8), Failure> {
+        let atoms = &self.slots.get(port).ok_or(Failure::Invalid)?.atoms;
+        charge(budget, atoms.len())?;
+        let mut origin = None;
+        for atom in atoms {
+            let Atom::Worker(owner, side) = *atom else {
+                return Err(Failure::Invalid);
+            };
+            if origin.is_some_and(|prior| prior != (owner, side)) {
+                return Err(Failure::Invalid);
+            }
+            origin = Some((owner, side));
+        }
+        origin.ok_or(Failure::Invalid)
+    }
+
+    /// Read closure alternatives already materialized for a linked initializer
+    /// in this exact bootstrap analysis. Empty and opaque alternatives refuse.
+    #[cfg(test)]
+    pub(super) fn existing_initializer_closures(
+        &self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<(usize, usize)>, Failure> {
+        let port = self.existing_port(code, context, budget)?;
+        self.existing_closures_at_port(port, budget)
+    }
+
+    #[cfg(test)]
+    pub(super) fn existing_closures_at_port(
+        &self,
+        port: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<(usize, usize)>, Failure> {
+        if self.current.is_some() || !self.pending.is_empty() {
+            return Err(Failure::Invalid);
+        }
+        let atoms = &self.slots.get(port).ok_or(Failure::Invalid)?.atoms;
+        charge(budget, atoms.len())?;
+        let mut closures = Vec::new();
+        closures
+            .try_reserve_exact(atoms.len())
+            .map_err(|_| Failure::Resource)?;
+        for atom in atoms {
+            let Atom::Closure(target, creation) = *atom else {
+                return Err(Failure::Invalid);
+            };
+            closures.push((target, creation));
+        }
+        if closures.is_empty() {
+            return Err(Failure::Invalid);
+        }
+        Ok(closures)
+    }
+
+    /// Resolve each actual stored-closure capture to its existing creation
+    /// port in this focus. Unknown or omitted captures refuse the relation.
+    #[cfg(test)]
+    pub(super) fn existing_stored_capture_ports(
+        &self,
+        target: usize,
+        creation: usize,
+        capture_codes: &[usize],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<usize>, Failure> {
+        let Some(Expr::Function { captures, .. }) = self.graph.expressions.get(target) else {
+            return Err(Failure::Invalid);
+        };
+        charge(budget, capture_codes.len())?;
+        let mut ports = Vec::new();
+        ports
+            .try_reserve_exact(capture_codes.len())
+            .map_err(|_| Failure::Resource)?;
+        for code in capture_codes {
+            let expression = self.existing_position_expression(*code, budget)?;
+            let Some(Expr::Alias(symbol)) = self.graph.expressions.get(expression) else {
+                return Err(Failure::Invalid);
+            };
+            charge(budget, captures.len())?;
+            if !captures.contains(symbol) {
+                return Err(Failure::Invalid);
+            }
+            ports.push(self.existing_slot(*symbol, creation, budget)?);
+        }
+        Ok(ports)
+    }
+
+    /// Check every actual function capture against original linked captures,
+    /// its saved Region context, or an authenticated type parameter. The
+    /// caller owns the source and bootstrap proofs for those categories.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn check_closed_global_capture_ports(
+        &self,
+        target: usize,
+        creation: usize,
+        callee: usize,
+        capture_nodes: &[crate::core::NodeId],
+        context_node: crate::core::NodeId,
+        parameters: &[crate::types::TypeVariableId],
+        arena: crate::core::dialect::ArenaId,
+        nodes: &[StoredNode<super::super::effect::EffectOperationFamily>],
+        pairs: &[(usize, usize)],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if self.graph.original_nodes != nodes.len()
+            || self.graph.original_base != nodes.as_ptr() as usize
+            || context_node.arena() != arena
+        {
+            return Err(Failure::Invalid);
+        }
+        let context = context_node.index().map_err(|_| Failure::Invalid)?;
+        if context >= self.graph.original_nodes {
+            return Err(Failure::Invalid);
+        }
+        let Some(Expr::Function { captures, .. }) = self.graph.expressions.get(target) else {
+            return Err(Failure::Invalid);
+        };
+        if captures.len() != pairs.len() {
+            return Err(Failure::Invalid);
+        }
+        charge(
+            budget,
+            capture_nodes
+                .len()
+                .checked_add(captures.len())
+                .ok_or(Failure::Resource)?,
+        )?;
+        let mut symbols = Vec::new();
+        symbols
+            .try_reserve_exact(capture_nodes.len())
+            .map_err(|_| Failure::Resource)?;
+        for node in capture_nodes {
+            if node.arena() != arena {
+                return Err(Failure::Invalid);
+            }
+            let expression = node.index().map_err(|_| Failure::Invalid)?;
+            if expression >= self.graph.original_nodes {
+                return Err(Failure::Invalid);
+            }
+            let Some(Expr::Alias(symbol)) = self.graph.expressions.get(expression) else {
+                return Err(Failure::Invalid);
+            };
+            symbols.push(*symbol);
+        }
+        let mut represented = Vec::new();
+        represented
+            .try_reserve_exact(symbols.len())
+            .map_err(|_| Failure::Resource)?;
+        represented.resize(symbols.len(), false);
+        for (&expression, &(destination, source)) in captures.iter().zip(pairs) {
+            charge(
+                budget,
+                symbols
+                    .len()
+                    .checked_add(parameters.len())
+                    .and_then(|n| n.checked_add(2))
+                    .ok_or(Failure::Resource)?,
+            )?;
+            let mut global = false;
+            for (index, &symbol) in symbols.iter().enumerate() {
+                if symbol == expression {
+                    represented[index] = true;
+                    global = true;
+                }
+            }
+            let metadata = self
+                .graph
+                .metadata
+                .get(&expression)
+                .is_some_and(|id| parameters.contains(id));
+            if !global && !metadata && expression != context {
+                return Err(Failure::Invalid);
+            }
+            if self.existing_slot(expression, creation, budget)? != source
+                || self.existing_slot(expression, callee, budget)? != destination
+            {
+                return Err(Failure::Invalid);
+            }
+        }
+        if represented.iter().any(|present| !present) {
+            return Err(Failure::Invalid);
+        }
+        Ok(())
+    }
+
+    /// Read an already-settled pattern projection without inventing a slot.
+    pub(super) fn existing_pattern_projection(
+        &self,
+        port: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, usize, Option<ConstructorId>), Failure> {
+        charge(budget, 1)?;
+        let slot = self.slots.get(port).ok_or(Failure::Invalid)?;
+        if slot.queued {
+            return Err(Failure::Invalid);
+        }
+        let (expression, context) = slot.key;
+        let Some(Expr::Project {
+            value,
+            field,
+            constructor,
+        }) = self.graph.expressions.get(expression)
+        else {
+            return Err(Failure::Invalid);
+        };
+        Ok((
+            self.existing_slot(*value, context, budget)?,
+            *field,
+            *constructor,
+        ))
+    }
+
+    /// Read the already settled ordered fields of an original generated
+    /// Bind/RegionTuple without creating slots or merging alternatives.
+    pub(super) fn existing_original_tuple_worker_origin(
+        &self,
+        binding: crate::core::NodeId,
+        tuple: crate::core::NodeId,
+        fields: [crate::core::NodeId; 2],
+        arena: crate::core::dialect::ArenaId,
+        nodes: &[StoredNode<super::super::effect::EffectOperationFamily>],
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, (crate::core::NodeId, u8)), Failure> {
+        charge(budget, 4)?;
+        if [binding, tuple, fields[0], fields[1]]
+            .iter()
+            .any(|id| id.arena() != arena)
+            || self.graph.original_nodes != nodes.len()
+            || self.graph.original_base != nodes.as_ptr() as usize
+        {
+            return Err(Failure::Invalid);
+        }
+        let binding = binding.index().map_err(|_| Failure::Invalid)?;
+        let tuple = tuple.index().map_err(|_| Failure::Invalid)?;
+        let fields = [
+            fields[0].index().map_err(|_| Failure::Invalid)?,
+            fields[1].index().map_err(|_| Failure::Invalid)?,
+        ];
+        let Some(Expr::Bind { body, .. }) = self.graph.expressions.get(binding) else {
+            return Err(Failure::Invalid);
+        };
+        let Some(Expr::ResidentTuple {
+            constructor: None,
+            fields: actual,
+            ..
+        }) = self.graph.expressions.get(tuple)
+        else {
+            return Err(Failure::Invalid);
+        };
+        if *body != tuple || actual.as_slice() != fields {
+            return Err(Failure::Invalid);
+        }
+        let port = self.existing_slot(binding, context, budget)?;
+        let atoms = &self.slots.get(port).ok_or(Failure::Invalid)?.atoms;
+        charge(budget, atoms.len())?;
+        let mut origin = None;
+        for atom in atoms {
+            let Atom::Aggregate(actual, creation) = *atom else {
+                return Err(Failure::Invalid);
+            };
+            if actual != tuple {
+                return Err(Failure::Invalid);
+            }
+            // The restored argument is a frozen tuple value. Its fields live
+            // at the tuple's actual creation context, not the restored caller
+            // context; do not invent copied field slots.
+            let worker = self.existing_slot(fields[0], creation, budget)?;
+            self.existing_slot(fields[1], creation, budget)?;
+            let actual = self.worker_origin_at_port(worker, budget)?;
+            if origin.is_some_and(|prior| prior != actual) {
+                return Err(Failure::Invalid);
+            }
+            origin = Some(actual);
+        }
+        Ok((port, origin.ok_or(Failure::Invalid)?))
+    }
+
+    /// Locate the original callee projection context for an actual saved
+    /// worker call. Restore copies the formal and capture values, not every
+    /// intermediate projection slot, so verify its paired restore witness and
+    /// frozen ports before reading those existing original projections.
+    pub(super) fn existing_worker_projection_context(
+        &self,
+        call: super::control::CompletionCall,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, usize), Failure> {
+        charge(budget, 2)?;
+        let caller = *self
+            .contexts
+            .paths
+            .get(call.caller_value_context)
+            .ok_or(Failure::Invalid)?;
+        let callee = *self
+            .contexts
+            .paths
+            .get(call.callee_value_context)
+            .ok_or(Failure::Invalid)?;
+        let (source_caller, source_callee) = match (caller, callee) {
+            (
+                ContextPath::Step {
+                    parent: a,
+                    transition: Transition::WorkerCallRestore(caller, left, 0),
+                    ..
+                },
+                ContextPath::Step {
+                    parent: b,
+                    transition: Transition::WorkerCallRestore(callee, right, 1),
+                    ..
+                },
+            ) if a == b
+                && left == right
+                && caller < self.frozen_contexts
+                && callee < self.frozen_contexts =>
+            {
+                (caller, callee)
+            }
+            (
+                ContextPath::Step {
+                    transition: Transition::WorkerCallRestore(..),
+                    ..
+                },
+                _,
+            )
+            | (
+                _,
+                ContextPath::Step {
+                    transition: Transition::WorkerCallRestore(..),
+                    ..
+                },
+            ) => return Err(Failure::Invalid),
+            _ => (call.caller_value_context, call.callee_value_context),
+        };
+        let (_, _, actual_arguments, actual_captures) = self.existing_call_ports(
+            call.code,
+            call.caller_value_context,
+            call.expression,
+            call.callee_value_context,
+            call.creation,
+            budget,
+        )?;
+        if actual_arguments.len() != 1 {
+            return Err(Failure::Invalid);
+        }
+        if (source_caller, source_callee) == (call.caller_value_context, call.callee_value_context)
+        {
+            return Ok((source_callee, actual_arguments[0].0));
+        }
+        let (_, _, source_arguments, source_captures) = self.existing_call_ports(
+            call.code,
+            source_caller,
+            call.expression,
+            source_callee,
+            call.creation,
+            budget,
+        )?;
+        if source_arguments.len() != actual_arguments.len()
+            || source_captures.len() != actual_captures.len()
+        {
+            return Err(Failure::Invalid);
+        }
+        for ((source_left, source_right), (actual_left, actual_right)) in source_arguments
+            .iter()
+            .chain(&source_captures)
+            .zip(actual_arguments.iter().chain(&actual_captures))
+        {
+            for (source, actual) in [(*source_left, *actual_left), (*source_right, *actual_right)] {
+                let source = self.slots.get(source).ok_or(Failure::Invalid)?;
+                let actual = self.slots.get(actual).ok_or(Failure::Invalid)?;
+                charge(budget, source.atoms.len().saturating_add(1))?;
+                if source.key.0 != actual.key.0 || source.atoms != actual.atoms || !actual.terminal
+                {
+                    return Err(Failure::Invalid);
+                }
+            }
+        }
+        Ok((source_callee, source_arguments[0].0))
+    }
+
+    /// Check the existing value result of an authenticated canonical Bind.
+    /// The caller must authenticate the source Bind and its completed call.
+    pub(super) fn existing_bind_body_port(
+        &self,
+        bind_port: usize,
+        body: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        charge(budget, 1)?;
+        let slot = self.slots.get(bind_port).ok_or(Failure::Invalid)?;
+        if slot.queued {
+            return Err(Failure::Invalid);
+        }
+        let (expression, context) = slot.key;
+        let Some(Expr::Bind { body: actual, .. }) = self.graph.expressions.get(expression) else {
+            return Err(Failure::Invalid);
+        };
+        if *actual != body {
+            return Err(Failure::Invalid);
+        }
+        self.existing_slot(body, context, budget)
+    }
+
+    /// Return the exact existing result and operand slots of a transparent
+    /// alias or conversion. No operand is inferred from a value atom.
+    pub(super) fn existing_forward_ports(
+        &self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, usize), Failure> {
+        let expression = self.existing_position_expression(code, budget)?;
+        let operand = match self.graph.expressions.get(expression) {
+            Some(Expr::Alias(operand) | Expr::Forward(operand)) => *operand,
+            _ => return Err(Failure::Invalid),
+        };
+        Ok((
+            self.existing_slot(expression, context, budget)?,
+            self.existing_slot(operand, context, budget)?,
+        ))
+    }
+
+    /// Read a branch of the actual resident network result. The caller must
+    /// authenticate the operation and successful reply edge separately.
+    pub(super) fn existing_network_result(
+        &self,
+        code: usize,
+        context: usize,
+        constructor: ConstructorId,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, usize, Vec<usize>), Failure> {
+        charge(budget, 1)?;
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let Expr::Merge(alternatives) = self
+            .graph
+            .expressions
+            .get(expression)
+            .ok_or(Failure::Invalid)?
+        else {
+            return Err(Failure::Invalid);
+        };
+        charge(budget, alternatives.len())?;
+        let mut selected = None;
+        for &alternative in alternatives {
+            let Some(Expr::ResidentTuple {
+                constructor: Some(actual),
+                fields,
+                ..
+            }) = self.graph.expressions.get(alternative)
+            else {
+                return Err(Failure::Invalid);
+            };
+            if *actual == constructor {
+                if selected.is_some() {
+                    return Err(Failure::Invalid);
+                }
+                selected = Some((alternative, fields));
+            }
+        }
+        let (alternative, fields) = selected.ok_or(Failure::Invalid)?;
+        charge(budget, fields.len())?;
+        let mut field_ports = Vec::new();
+        field_ports
+            .try_reserve_exact(fields.len())
+            .map_err(|_| Failure::Resource)?;
+        for &field in fields {
+            field_ports.push(self.existing_slot(field, context, budget)?);
+        }
+        Ok((
+            self.existing_slot(expression, context, budget)?,
+            self.existing_slot(alternative, context, budget)?,
+            field_ports,
+        ))
+    }
+
+    pub(super) fn existing_choice(
+        &self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<(usize, bool, Vec<CasePattern>)>, Failure> {
+        charge(budget, 1)?;
+        if self.current.is_some() || !self.pending.is_empty() {
+            return Err(Failure::Invalid);
+        }
+        let Some(&expression) = self.graph.positions.get(&code) else {
+            return Ok(None);
+        };
+        let Expr::Match {
+            scrutinee,
+            arms,
+            result_case,
+        } = &self.graph.expressions[expression]
+        else {
+            return Ok(None);
+        };
+        charge(budget, arms.len())?;
+        let mut cases = Vec::new();
+        cases
+            .try_reserve(arms.len())
+            .map_err(|_| Failure::Resource)?;
+        cases.extend(arms.iter().map(|(_, _, case)| *case));
+        Ok(Some((
+            self.existing_slot(*scrutinee, context, budget)?,
+            *result_case,
+            cases,
+        )))
+    }
+
+    pub(super) fn existing_arm_bindings(
+        &self,
+        code: usize,
+        ordinal: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<(usize, usize)>, Failure> {
+        charge(budget, 1)?;
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let Expr::Match { arms, .. } = &self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        let bindings = &arms.get(ordinal).ok_or(Failure::Invalid)?.0;
+        charge(budget, bindings.len())?;
+        let mut result = Vec::new();
+        result
+            .try_reserve(bindings.len())
+            .map_err(|_| Failure::Resource)?;
+        for &(binder, value) in bindings {
+            result.push((
+                self.existing_slot(binder, context, budget)?,
+                self.existing_slot(value, context, budget)?,
+            ));
+        }
+        Ok(result)
+    }
+
+    pub(super) fn existing_call_ports(
+        &self,
+        code: usize,
+        caller: usize,
+        target: usize,
+        callee: usize,
+        creation: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, usize, Vec<(usize, usize)>, Vec<(usize, usize)>), Failure> {
+        charge(budget, 2)?;
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let Expr::Call { arguments, .. } = &self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        let Expr::Function {
+            parameters,
+            body,
+            captures,
+        } = self.graph.expressions.get(target).ok_or(Failure::Invalid)?
+        else {
+            return Err(Failure::Invalid);
+        };
+        if arguments.len() != parameters.len() {
+            return Err(Failure::Invalid);
+        }
+        charge(budget, arguments.len() + captures.len())?;
+        let mut pairs = Vec::new();
+        pairs
+            .try_reserve(arguments.len())
+            .map_err(|_| Failure::Resource)?;
+        for (&parameter, &argument) in parameters.iter().zip(arguments) {
+            pairs.push((
+                self.existing_slot(parameter, callee, budget)?,
+                self.existing_slot(argument, caller, budget)?,
+            ));
+        }
+        let mut captured = Vec::new();
+        captured
+            .try_reserve(captures.len())
+            .map_err(|_| Failure::Resource)?;
+        for &capture in captures {
+            captured.push((
+                self.existing_slot(capture, callee, budget)?,
+                self.existing_slot(capture, creation, budget)?,
+            ));
+        }
+        Ok((
+            self.existing_slot(expression, caller, budget)?,
+            self.existing_slot(*body, callee, budget)?,
+            pairs,
+            captured,
+        ))
     }
 
     /// Read the actual scrutinee and ordered tests for a control choice.
@@ -4531,7 +5848,7 @@ impl<'a> Analysis<'a> {
                         self.invocation_context(context, expression, target, creation, budget)?;
                     let control = *self.graph.targets.get(&target).ok_or(Failure::Invalid)?;
                     targets.try_reserve(1).map_err(|_| Failure::Resource)?;
-                    targets.push((control, context, target));
+                    targets.push((control, context, target, creation));
                 }
                 Atom::Unknown => opaque |= 1,
                 Atom::Constructor(_) | Atom::IndependentCallable => opaque |= 2,
@@ -4898,6 +6215,32 @@ impl<'a> Analysis<'a> {
             .get(expression)
             .copied()
             .ok_or(Failure::Invalid)
+    }
+
+    /// Resolve a control coordinate through the graph's original-node prefix.
+    /// A caller must still bind that prefix to its validated arena and inspect
+    /// the actual node; imported and synthetic positions are not accepted.
+    pub(super) fn original_control_node(
+        &self,
+        code: usize,
+        actual_nodes: &[StoredNode<super::super::effect::EffectOperationFamily>],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        charge(budget, 1)?;
+        if self.graph.original_nodes != actual_nodes.len()
+            || self.graph.original_base != actual_nodes.as_ptr() as usize
+        {
+            return Err(Failure::Invalid);
+        }
+        let node = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        if node >= self.graph.original_nodes {
+            return Err(Failure::Invalid);
+        }
+        Ok(node)
+    }
+
+    pub(super) fn belongs_to(&self, graph: &Graph) -> bool {
+        std::ptr::eq(self.graph, graph)
     }
 
     pub(super) fn retained_support_site(
@@ -5322,7 +6665,7 @@ impl<'a> Analysis<'a> {
             if let Atom::Resource(owner, creation) = atom {
                 targets.try_reserve(1).map_err(|_| Failure::Resource)?;
                 targets.push((*owner, *creation));
-            } else if matches!(atom, Atom::Free) {
+            } else if matches!(atom, Atom::Free | Atom::WorkerEntryRegion(_)) {
                 // The authenticated entry's independent RegionView has no
                 // lexical Resource owner. Other symbolic views stay unknown.
                 host = true;
@@ -5331,6 +6674,33 @@ impl<'a> Analysis<'a> {
             }
         }
         Ok((targets, unknown, host))
+    }
+
+    /// Require the settled request operand to be exactly the bootstrapped
+    /// entry Region. Generic free, opaque, local and mixed values refuse.
+    pub(super) fn worker_entry_region_request(
+        &mut self,
+        request: usize,
+        entry_region: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, 1)?;
+        let (expression, context) = self.slots.get(request).ok_or(Failure::Invalid)?.key;
+        let Expr::Request { operand, .. } = self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        let operand = self.slot(operand, context, budget)?;
+        self.close(budget)?;
+        let atoms = &self.slots.get(operand).ok_or(Failure::Invalid)?.atoms;
+        charge(budget, atoms.len())?;
+        #[cfg(test)]
+        eprintln!("worker entry Region request: expected={entry_region}, atoms={atoms:?}");
+        if matches!(atoms.as_slice(), [Atom::WorkerEntryRegion(actual)] if *actual == entry_region)
+        {
+            Ok(())
+        } else {
+            Err(Failure::Invalid)
+        }
     }
 
     pub(super) fn cell_operands(
@@ -5969,6 +7339,10 @@ impl<'a> Analysis<'a> {
                 self.atom(slot, Atom::Free, budget)?;
                 SetupOutcome::NeedsInputsOrDynamic
             }
+            Expr::WorkerEntryRegion(entry) => {
+                self.atom(slot, Atom::WorkerEntryRegion(*entry), budget)?;
+                SetupOutcome::NeedsInputsOrDynamic
+            }
             Expr::IndependentCallable => {
                 self.atom(slot, Atom::IndependentCallable, budget)?;
                 SetupOutcome::FixedSetupReady
@@ -6141,6 +7515,15 @@ impl<'a> Analysis<'a> {
                 for atom_index in 0..atom_count {
                     let atom = self.slots[value].atoms[atom_index];
                     match atom {
+                        Atom::WorkerArguments(owner, side) if constructor.is_none() => {
+                            match *field {
+                                0 => self.atom(slot, Atom::Worker(owner, side), budget)?,
+                                // The validated worker-entry contract supplies
+                                // separately copied, portable input Bytes.
+                                1 => self.atom(slot, Atom::Free, budget)?,
+                                _ => return Err(Failure::Invalid),
+                            }
+                        }
                         Atom::Aggregate(target, creation) => {
                             match &self.graph.expressions[target] {
                                 Expr::ResidentTuple {
@@ -6812,6 +8195,8 @@ mod tests {
         Graph {
             sources: vec![span; expressions.len()],
             expressions,
+            original_nodes: 0,
+            original_base: 0,
             globals: Vec::new(),
             method_proxies: Vec::new(),
             exports: Vec::new(),
@@ -8072,12 +9457,22 @@ mod tests {
         analysis
             .atom(function, Atom::Closure(5, creation), &mut work)
             .unwrap();
+        let other_creation = analysis
+            .context(0, Transition::Root(21), &mut work)
+            .unwrap();
+        let other_capture = analysis.slot(3, other_creation, &mut work).unwrap();
+        analysis.atom(other_capture, Atom::Free, &mut work).unwrap();
+        analysis
+            .atom(function, Atom::Closure(5, other_creation), &mut work)
+            .unwrap();
         let opaque = publication.publish(&mut work).unwrap();
         let (late, publication) = analysis
             .calls_after(6, 0, Some(&opaque), &mut work)
             .unwrap();
-        assert_eq!(late.targets.len(), 1);
-        assert_eq!(late.targets[0].0, 50);
+        assert_eq!(late.targets.len(), 2);
+        assert!(late.targets.iter().all(|target| target.0 == 50));
+        assert!(late.targets.iter().any(|target| target.3 == creation));
+        assert!(late.targets.iter().any(|target| target.3 == other_creation));
         assert!(late.unknown && late.returns);
         let opaque = publication.publish(&mut work).unwrap();
         assert_ne!(opaque.opaque, 0);

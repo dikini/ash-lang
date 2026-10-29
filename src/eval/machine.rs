@@ -40,7 +40,7 @@ use crate::{
         ValidatedProgram,
     },
     resolved::{BinderId, ResumeId},
-    types::{EffectInstance, OperationId, TypeWorkBudget},
+    types::{EffectInstance, OperationId, TypeVariableId, TypeWorkBudget},
 };
 
 /// Inspectable lexical values available while evaluating one expression.
@@ -570,6 +570,88 @@ impl Error for RuntimeFailure {}
 
 #[derive(Debug)]
 enum Frame {
+    NetworkCapacity {
+        node: NodeId,
+        environment: Environment,
+    },
+    NetworkInputA {
+        node: NodeId,
+        environment: Environment,
+        capacity: usize,
+    },
+    NetworkInputB {
+        node: NodeId,
+        environment: Environment,
+        capacity: usize,
+        first: Value,
+    },
+    NetworkBoundary {
+        key: ActivationKey,
+        group: CarrierGroup,
+    },
+    NetworkReceiveBytes {
+        owner: ActivationKey,
+        pending: NetworkReceivePending,
+    },
+    NetworkReceiveKind {
+        owner: ActivationKey,
+        pending: NetworkReceivePending,
+        bytes: Value,
+    },
+    NetworkReceiveTuple {
+        owner: ActivationKey,
+        pending: NetworkReceivePending,
+        kind: Value,
+        bytes: Value,
+    },
+    NetworkReceiveMessage {
+        owner: ActivationKey,
+        pending: NetworkReceivePending,
+    },
+    NetworkReceiveCommit {
+        owner: ActivationKey,
+        pending: NetworkReceivePending,
+    },
+    // A sealed-and-empty observation is tentative until its selected-region
+    // reply is actually constructed and returned on this worker.
+    NetworkEndCommit {
+        network: ActivationKey,
+        side: super::network_transport::Side,
+        receive_site: NodeId,
+        generation: u64,
+        module: crate::module::ModuleId,
+    },
+    NetworkWatchCommit {
+        owner: ActivationKey,
+        module: crate::module::ModuleId,
+        pending: PendingNetworkWatch,
+    },
+    NetworkReply {
+        owner: ActivationKey,
+        fields: Vec<Value>,
+    },
+    NetworkFailureReply {
+        owner: ActivationKey,
+        result: crate::types::ConstructorId,
+    },
+    WorkerInput {
+        entry: BinderId,
+        parameter: TypeVariableId,
+        environment: Environment,
+        input: Vec<u8>,
+        owner: ActivationKey,
+        network: ActivationKey,
+    },
+    WorkerTuple {
+        entry: BinderId,
+        parameter: TypeVariableId,
+        environment: Environment,
+        input: Value,
+        network: ActivationKey,
+    },
+    WorkerApply {
+        argument: Value,
+    },
     RegionBuffer(region::BufferProgress),
     RegionForwarding {
         abstraction: NodeId,
@@ -671,6 +753,7 @@ enum Frame {
     // only its actual return retires the store's outstanding root count.
     RetainedRootCompletion {
         key: ActivationKey,
+        origin: RetainedRootOrigin,
     },
     Bind {
         binder: BinderId,
@@ -700,6 +783,7 @@ enum Frame {
         environment: Environment,
     },
     Match {
+        site: NodeId,
         arms: Box<[CoreMatchArm]>,
         environment: Environment,
     },
@@ -1060,6 +1144,7 @@ type WorkTrace = Arc<std::sync::Mutex<Vec<(NodeId, usize)>>>;
 /// The retained explicit evaluator machine shared by pure and effect Core.
 #[derive(Debug)]
 pub struct Machine<'runtime> {
+    worker: Option<WorkerStartup>,
     source_bindings: Option<&'runtime crate::foreign::source_bindings::SourceNativeBindings>,
     cleanup_limit: usize,
     live_cleanups: usize,
@@ -1087,6 +1172,755 @@ pub struct Machine<'runtime> {
     allocation_frames: AllocationFrameObservations,
 }
 
+// A restored continuation is a separate root occurrence. Only a freshly
+// entered root carries the actual linked root and handler coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RetainedRootOrigin {
+    Entered {
+        root: NodeId,
+        handler: NodeId,
+        delivery: Option<DeliveryRootIdentity>,
+    },
+    Restored,
+}
+
+// A route is only a future consumer of the checker's all-context relation.
+// Startup currently installs none; it never grants completion or retirement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ProcessingRoute {
+    entry: BinderId,
+    side: super::network_transport::Side,
+    receive: NodeId,
+    message_match: NodeId,
+    arm: usize,
+    root: NodeId,
+    handler: NodeId,
+    store: NodeId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DeliveryRootIdentity {
+    network: ActivationKey,
+    side: super::network_transport::Side,
+    identity: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeliveryRootProgress {
+    Unlinked,
+    Active { store: ActivationKey, root: NodeId },
+    MarkerReturned { store: ActivationKey, root: NodeId },
+}
+
+struct WorkerStartup {
+    result: NodeId,
+    entry: BinderId,
+    parameter: TypeVariableId,
+    network: ActivationKey,
+    side: super::network_transport::Side,
+    transport: super::network_transport::NetworkTransport,
+    input: Option<Vec<u8>>,
+    deliveries: Vec<HeldDelivery>,
+    processing_route: Option<ProcessingRoute>,
+    processing_cut: Option<crate::core::dialect::NetworkProcessingCut>,
+    end_route: Option<crate::core::dialect::NetworkEndRoute>,
+    report_buffer: Vec<ReportedDelivery>,
+    next_delivery: u64,
+    receive_generation: Option<u64>,
+    end_observation: Option<EndObservation>,
+}
+
+// These coordinates remain worker-local observations. They do not grant
+// completion or authorize finish_receive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EndObservation {
+    network: ActivationKey,
+    side: super::network_transport::Side,
+    receive_site: NodeId,
+    result_location: Location,
+    matched: DeliveryMatch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HeldDelivery {
+    identity: u64,
+    network: ActivationKey,
+    side: super::network_transport::Side,
+    receive_site: NodeId,
+    // Worker-local only. Cleared before the record crosses to its owner.
+    result_location: Option<Location>,
+    matched: DeliveryMatch,
+    root_progress: DeliveryRootProgress,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeliveryMatch {
+    Unobserved,
+    Observed { site: NodeId, arm: usize },
+    Ambiguous,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ReportedDelivery {
+    identity: u64,
+    network: ActivationKey,
+    side: super::network_transport::Side,
+    receive_site: NodeId,
+}
+
+impl WorkerStartup {
+    // The cut is a separate checked input, not inferred from the route or
+    // from an empty Store. Ambiguity leaves every delivery held.
+    fn processing_cut_candidate(&self, store_node: NodeId, store: ActivationKey) -> Option<usize> {
+        let cut = self.processing_cut?;
+        let route = self.processing_route?;
+        let expected = cut.route;
+        let side = match self.side {
+            super::network_transport::Side::A => 0,
+            super::network_transport::Side::B => 1,
+        };
+        if expected.entry != self.entry
+            || expected.side != side
+            || expected.store != store_node
+            || route.entry != expected.entry
+            || route.side != self.side
+            || route.receive != expected.receive
+            || route.message_match != expected.message_match
+            || route.arm != expected.arm
+            || route.root != expected.root
+            || route.handler != expected.handler
+            || route.store != expected.store
+            || self.input.is_some()
+        {
+            return None;
+        }
+        let mut found = None;
+        for (index, held) in self.deliveries.iter().enumerate() {
+            if held.network == self.network
+                && held.side == self.side
+                && held.receive_site == expected.receive
+                && held.matched
+                    == (DeliveryMatch::Observed {
+                        site: expected.message_match,
+                        arm: expected.arm,
+                    })
+                && held.root_progress
+                    == (DeliveryRootProgress::MarkerReturned {
+                        store,
+                        root: expected.root,
+                    })
+            {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(index);
+            }
+        }
+        found
+    }
+
+    fn delivery_report(&mut self) -> Vec<ReportedDelivery> {
+        debug_assert!(self.report_buffer.is_empty());
+        debug_assert!(self.report_buffer.capacity() >= self.deliveries.len());
+        for held in &self.deliveries {
+            self.report_buffer.push(ReportedDelivery {
+                identity: held.identity,
+                network: held.network,
+                side: held.side,
+                receive_site: held.receive_site,
+            });
+        }
+        std::mem::take(&mut self.report_buffer)
+    }
+}
+
+struct NetworkReceivePending {
+    guard: super::network_transport::ReceiveGuard,
+    module: crate::module::ModuleId,
+    kind: super::network_transport::EnvelopeKind,
+    site: NodeId,
+}
+
+struct PendingNetworkWatch {
+    transport: super::network_transport::NetworkTransport,
+    side: super::network_transport::Side,
+    token: super::network_transport::Registration,
+    published: bool,
+}
+
+impl fmt::Debug for PendingNetworkWatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PendingNetworkWatch")
+            .field("published", &self.published)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for PendingNetworkWatch {
+    fn drop(&mut self) {
+        if !self.published {
+            let _ = self.transport.cancel_watch(self.side, self.token);
+        }
+    }
+}
+
+// The owner must retain this report and its backing until independently
+// checked delivery completion and endpoint settlement are established.
+#[cfg(test)]
+struct WorkerExit {
+    network: ActivationKey,
+    side: super::network_transport::Side,
+    transport: super::network_transport::NetworkTransport,
+    deliveries: Vec<ReportedDelivery>,
+}
+
+#[cfg(test)]
+impl fmt::Debug for WorkerExit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WorkerExit")
+            .field("network", &self.network)
+            .field("side", &self.side)
+            .field("deliveries", &self.deliveries)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
+#[cfg(test)]
+struct WorkerFailure {
+    failure: RuntimeFailure,
+    exit: WorkerExit,
+}
+
+#[cfg(test)]
+fn finish_worker_exit(
+    disposal: &disposal::Scope,
+    execution: Result<(), RuntimeFailure>,
+    exit: WorkerExit,
+) -> Result<WorkerExit, WorkerFailure> {
+    match disposal.finish(execution) {
+        Ok(()) => Ok(exit),
+        Err(failure) => {
+            exit.transport.fail();
+            Err(WorkerFailure { failure, exit })
+        }
+    }
+}
+
+impl fmt::Debug for NetworkReceivePending {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NetworkReceivePending")
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for WorkerStartup {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WorkerStartup")
+            .field("result", &self.result)
+            .field("side", &self.side)
+            .finish_non_exhaustive()
+    }
+}
+
+// This is entered only after the owner has committed both prepared carriers.
+// The binding table and all evaluation results stay on this carrier until
+// local root teardown has run. A failure terminates the shared transport; it
+// does not itself attest that endpoints or backing have settled.
+#[cfg(test)]
+fn run_network_worker(
+    program: Arc<crate::core::dialect::CoreProgram<crate::core::EffectOperationFamily>>,
+    root: NodeId,
+    result: NodeId,
+    entry: BinderId,
+    parameter: TypeVariableId,
+    network: ActivationKey,
+    side: super::network_transport::Side,
+    transport: super::network_transport::NetworkTransport,
+    input: Vec<u8>,
+    bindings: Option<crate::foreign::source_bindings::SourceNativeBindings>,
+) -> Result<WorkerExit, WorkerFailure> {
+    let disposal = disposal::Scope::enter();
+    let mut deliveries = Vec::new();
+    let execution = (|| {
+        let mut machine = Machine::new_network_worker(
+            program,
+            root,
+            result,
+            entry,
+            parameter,
+            network,
+            side,
+            transport.clone(),
+            input,
+        )?;
+        machine.source_bindings = bindings.as_ref();
+        let evaluation = machine.run_loop();
+        if evaluation.is_err() {
+            machine.rollback_pending_network_watches();
+        }
+        let worker = machine
+            .worker
+            .as_mut()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        deliveries = worker.delivery_report();
+        drop(machine);
+        let evaluation = evaluation?;
+        if !matches!(evaluation.value, Value::Unit) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        drop(evaluation);
+        Ok(())
+    })();
+    let exit = WorkerExit {
+        network,
+        side,
+        transport: transport.clone(),
+        deliveries,
+    };
+    finish_worker_exit(&disposal, execution, exit)
+}
+
+// Carrier preparation is separate from admission. No Ash entry runs until the
+// coordinator publishes the one joint commit after both threads exist.
+struct CarrierInput {
+    program: Arc<crate::core::dialect::CoreProgram<crate::core::EffectOperationFamily>>,
+    root: NodeId,
+    result: NodeId,
+    entry: BinderId,
+    parameter: TypeVariableId,
+    network: ActivationKey,
+    side: super::network_transport::Side,
+    processing_route: Option<ProcessingRoute>,
+    processing_cut: Option<crate::core::dialect::NetworkProcessingCut>,
+    end_route: Option<crate::core::dialect::NetworkEndRoute>,
+    transport: super::network_transport::NetworkTransport,
+    input: Vec<u8>,
+    bindings: Option<crate::foreign::source_bindings::SourceNativeBindings>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum CarrierPhase {
+    Preparing,
+    Committed,
+    Aborted,
+    Terminal,
+}
+
+enum CarrierReport {
+    Returned(Vec<ReportedDelivery>),
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "terminal failure retains its report and delivery support on the carrier"
+        )
+    )]
+    Failed(RuntimeFailure, Vec<ReportedDelivery>),
+}
+
+struct CarrierState {
+    phase: CarrierPhase,
+    reports: [Option<CarrierReport>; 2],
+    release_requested: bool,
+    teardown_done: [bool; 2],
+}
+
+struct CarrierGate {
+    state: std::sync::Mutex<CarrierState>,
+    changed: std::sync::Condvar,
+}
+
+impl CarrierGate {
+    fn lock(&self) -> std::sync::MutexGuard<'_, CarrierState> {
+        match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => {
+                let mut state = poisoned.into_inner();
+                state.phase = match state.phase {
+                    CarrierPhase::Committed | CarrierPhase::Terminal => CarrierPhase::Terminal,
+                    CarrierPhase::Preparing | CarrierPhase::Aborted => CarrierPhase::Aborted,
+                };
+                self.changed.notify_all();
+                state
+            }
+        }
+    }
+
+    fn await_commit(&self) -> CarrierPhase {
+        let mut state = self.lock();
+        while state.phase == CarrierPhase::Preparing {
+            state = match self.changed.wait(state) {
+                Ok(state) => state,
+                Err(poisoned) => {
+                    let mut state = poisoned.into_inner();
+                    state.phase = match state.phase {
+                        CarrierPhase::Committed | CarrierPhase::Terminal => CarrierPhase::Terminal,
+                        CarrierPhase::Preparing | CarrierPhase::Aborted => CarrierPhase::Aborted,
+                    };
+                    self.changed.notify_all();
+                    state
+                }
+            };
+        }
+        state.phase
+    }
+
+    fn wait_for_release(&self) -> bool {
+        let mut state = self.lock();
+        while state.phase == CarrierPhase::Committed && !state.release_requested {
+            state = match self.changed.wait(state) {
+                Ok(state) => state,
+                Err(poisoned) => {
+                    let mut state = poisoned.into_inner();
+                    state.phase = CarrierPhase::Terminal;
+                    self.changed.notify_all();
+                    state
+                }
+            };
+        }
+        state.phase == CarrierPhase::Committed && state.release_requested
+    }
+
+    fn report_teardown(&self, side: super::network_transport::Side, success: bool) {
+        let mut state = self.lock();
+        let index = match side {
+            super::network_transport::Side::A => 0,
+            super::network_transport::Side::B => 1,
+        };
+        if success && state.phase == CarrierPhase::Committed && state.release_requested {
+            state.teardown_done[index] = true;
+        } else {
+            state.phase = CarrierPhase::Terminal;
+        }
+        self.changed.notify_all();
+    }
+
+    fn report(&self, side: super::network_transport::Side, report: CarrierReport, failed: bool) {
+        let mut state = self.lock();
+        let slot = match side {
+            super::network_transport::Side::A => 0,
+            super::network_transport::Side::B => 1,
+        };
+        if failed || state.reports[slot].is_some() {
+            state.phase = CarrierPhase::Terminal;
+        }
+        if state.reports[slot].is_none() {
+            state.reports[slot] = Some(report);
+        }
+        self.changed.notify_all();
+    }
+}
+
+struct CarrierGroup {
+    gate: triomphe::Arc<CarrierGate>,
+    transport: super::network_transport::NetworkTransport,
+    threads: [Option<std::thread::JoinHandle<()>>; 2],
+    settled: bool,
+}
+
+impl fmt::Debug for CarrierGroup {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CarrierGroup").finish_non_exhaustive()
+    }
+}
+
+impl CarrierGroup {
+    fn prepare(a: CarrierInput, b: CarrierInput) -> Result<Self, RuntimeFailure> {
+        use super::network_transport::Side;
+        if a.side != Side::A
+            || b.side != Side::B
+            || a.network != b.network
+            || a.root != b.root
+            || a.result != b.result
+            || !a.transport.same_activation(&b.transport)
+            || !Arc::ptr_eq(&a.program, &b.program)
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let gate = triomphe::Arc::try_new(CarrierGate {
+            state: std::sync::Mutex::new(CarrierState {
+                phase: CarrierPhase::Preparing,
+                reports: [None, None],
+                release_requested: false,
+                teardown_done: [false; 2],
+            }),
+            changed: std::sync::Condvar::new(),
+        })
+        .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+        let transport = a.transport.clone();
+        let first_gate = gate.clone();
+        let first = std::thread::Builder::new()
+            .spawn(move || run_network_carrier(a, first_gate))
+            .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+        let second_gate = gate.clone();
+        let second =
+            match std::thread::Builder::new().spawn(move || run_network_carrier(b, second_gate)) {
+                Ok(thread) => thread,
+                Err(_) => {
+                    gate.lock().phase = CarrierPhase::Aborted;
+                    gate.changed.notify_all();
+                    if first.join().is_err() {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    return Err(RuntimeFailure::ResourceCapacity);
+                }
+            };
+        Ok(Self {
+            gate,
+            transport,
+            threads: [Some(first), Some(second)],
+            settled: false,
+        })
+    }
+
+    // Both carriers retain their local roots until the owner has observed
+    // completed endpoints, empty delivery reports and no transport users.
+    fn settle(&mut self) -> Result<(), super::network_transport::Failure> {
+        use super::network_transport::Failure;
+        let mut state = self.gate.lock();
+        while state.phase == CarrierPhase::Committed && state.reports.iter().any(Option::is_none) {
+            state = self
+                .gate
+                .changed
+                .wait(state)
+                .map_err(|_| Failure::IncompleteTeardown)?;
+        }
+        if state.phase != CarrierPhase::Committed || state.release_requested
+            || state.reports.iter().any(|report| !matches!(report, Some(CarrierReport::Returned(deliveries)) if deliveries.is_empty()))
+        { return Err(Failure::IncompleteTeardown); }
+        self.transport.ready_for_settlement()?;
+        state.release_requested = true;
+        self.gate.changed.notify_all();
+        while state.phase == CarrierPhase::Committed
+            && !state.teardown_done.iter().all(|done| *done)
+        {
+            state = self
+                .gate
+                .changed
+                .wait(state)
+                .map_err(|_| Failure::IncompleteTeardown)?;
+        }
+        if state.phase != CarrierPhase::Committed {
+            return Err(Failure::IncompleteTeardown);
+        }
+        drop(state);
+        for thread in &mut self.threads {
+            if thread
+                .take()
+                .ok_or(Failure::IncompleteTeardown)?
+                .join()
+                .is_err()
+            {
+                self.transport.fail();
+                return Err(Failure::IncompleteTeardown);
+            }
+        }
+        self.transport.settle()?;
+        self.settled = true;
+        Ok(())
+    }
+
+    fn commit(&mut self) -> Result<(), RuntimeFailure> {
+        let mut state = self.gate.lock();
+        if state.phase != CarrierPhase::Preparing {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        state.phase = CarrierPhase::Committed;
+        self.gate.changed.notify_all();
+        Ok(())
+    }
+}
+
+impl Drop for CarrierGroup {
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+        let preparing = {
+            let mut state = self.gate.lock();
+            let preparing = state.phase == CarrierPhase::Preparing;
+            if preparing {
+                state.phase = CarrierPhase::Aborted;
+            } else {
+                state.phase = CarrierPhase::Terminal;
+                self.transport.fail();
+            }
+            self.gate.changed.notify_all();
+            preparing
+        };
+        if preparing {
+            for thread in &mut self.threads {
+                if let Some(thread) = thread.take() {
+                    let _ = thread.join();
+                }
+            }
+        }
+        // A committed, unproved teardown stays on its carriers. Dropping a
+        // join handle detaches it; the parked worker still owns its support.
+    }
+}
+
+#[cfg(test)]
+static TEST_NATIVE_FAILURE_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+static TEST_NATIVE_FAILURE_REPORT: std::sync::Mutex<Option<(usize, usize, bool, bool)>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+std::thread_local! {
+    static TEST_NETWORK_SIDE: std::cell::Cell<Option<super::network_transport::Side>> = const { std::cell::Cell::new(None) };
+    static TEST_NATIVE_CALLBACK_FAILED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn run_network_carrier(input: CarrierInput, gate: triomphe::Arc<CarrierGate>) {
+    #[cfg(test)]
+    TEST_NETWORK_SIDE.with(|side| side.set(Some(input.side)));
+    match gate.await_commit() {
+        CarrierPhase::Committed => {}
+        CarrierPhase::Aborted => return,
+        CarrierPhase::Terminal => {
+            input.transport.fail();
+            gate.report(
+                input.side,
+                CarrierReport::Failed(RuntimeFailure::InvalidControlState, Vec::new()),
+                true,
+            );
+            loop {
+                std::thread::park();
+                std::hint::black_box((&input, &gate));
+            }
+        }
+        CarrierPhase::Preparing => unreachable!("the gate waits until entry resolves"),
+    }
+    let CarrierInput {
+        program,
+        root,
+        result,
+        entry,
+        parameter,
+        network,
+        side,
+        processing_route,
+        processing_cut,
+        end_route,
+        transport,
+        input,
+        bindings,
+    } = input;
+    let disposal = disposal::Scope::enter();
+    let mut machine = match Machine::new_network_worker(
+        program,
+        root,
+        result,
+        entry,
+        parameter,
+        network,
+        side,
+        transport.clone(),
+        input,
+    ) {
+        Ok(machine) => machine,
+        Err(failure) => {
+            transport.fail();
+            gate.report(side, CarrierReport::Failed(failure, Vec::new()), true);
+            return;
+        }
+    };
+    machine.source_bindings = bindings.as_ref();
+    if let Some(worker) = machine.worker.as_mut() {
+        worker.processing_route = processing_route;
+        worker.processing_cut = processing_cut;
+        worker.end_route = end_route;
+    }
+    let evaluation = machine.run_loop();
+    if evaluation.is_err() {
+        machine.rollback_pending_network_watches();
+    }
+    let deliveries = match machine.worker.as_mut() {
+        Some(worker) => worker.delivery_report(),
+        None => {
+            transport.fail();
+            gate.report(
+                side,
+                CarrierReport::Failed(RuntimeFailure::InvalidControlState, Vec::new()),
+                true,
+            );
+            loop {
+                std::thread::park();
+                std::hint::black_box((&machine, &bindings));
+            }
+        }
+    };
+    let evaluation = match evaluation {
+        Ok(evaluation) if matches!(evaluation.value, Value::Unit) => Some(evaluation),
+        Ok(evaluation) => {
+            transport.fail();
+            gate.report(
+                side,
+                CarrierReport::Failed(RuntimeFailure::InvalidControlState, deliveries),
+                true,
+            );
+            loop {
+                std::thread::park();
+                std::hint::black_box((&machine, &bindings, &evaluation));
+            }
+        }
+        Err(failure) => {
+            transport.fail();
+            let failure = disposal.finish::<()>(Err(failure)).unwrap_err();
+            #[cfg(test)]
+            if TEST_NATIVE_CALLBACK_FAILED.with(|failed| failed.get()) {
+                let held = machine
+                    .worker
+                    .as_ref()
+                    .and_then(|worker| worker.deliveries.first());
+                let local = machine
+                    .worker
+                    .as_ref()
+                    .map_or(0, |worker| worker.deliveries.len());
+                let same = held.zip(deliveries.first()).is_some_and(|(held, report)| {
+                    held.identity == report.identity
+                        && held.network == report.network
+                        && held.side == report.side
+                        && held.receive_site == report.receive_site
+                        && held.result_location.is_some()
+                });
+                *TEST_NATIVE_FAILURE_REPORT.lock().unwrap() = Some((
+                    local,
+                    deliveries.len(),
+                    matches!(failure, RuntimeFailure::ForeignBinding),
+                    same,
+                ));
+            }
+            gate.report(side, CarrierReport::Failed(failure, deliveries), true);
+            loop {
+                std::thread::park();
+                std::hint::black_box((&machine, &bindings));
+            }
+        }
+    };
+    gate.report(side, CarrierReport::Returned(deliveries), false);
+    if !gate.wait_for_release() {
+        loop {
+            std::thread::park();
+            std::hint::black_box((&machine, &bindings, &evaluation, &disposal));
+        }
+    }
+    // Disposal is performed by this carrier only after the owner has checked
+    // both reports and the endpoint/backing-user conditions.
+    drop(evaluation);
+    drop(machine);
+    drop(bindings);
+    let success = disposal.finish(Ok(())).is_ok();
+    if !success {
+        transport.fail();
+    }
+    gate.report_teardown(side, success);
+}
+
 impl Drop for Machine<'_> {
     fn drop(&mut self) {
         if let Some(root) = &mut self.root_completion {
@@ -1098,6 +1932,7 @@ impl Drop for Machine<'_> {
 impl<'runtime> Machine<'runtime> {
     fn new(program: &ValidatedProgram) -> Self {
         Self {
+            worker: None,
             source_bindings: None,
             program: ExecutableProgram::Pure(program.shared()),
             cleanup_limit: 0,
@@ -1134,12 +1969,21 @@ impl<'runtime> Machine<'runtime> {
         program: &ValidatedEffectProgram,
         capture_limit: usize,
     ) -> Self {
+        Self::new_effect_from_shared(program.shared(), program.root(), capture_limit)
+    }
+
+    fn new_effect_from_shared(
+        program: Arc<crate::core::dialect::CoreProgram<crate::core::EffectOperationFamily>>,
+        root: NodeId,
+        capture_limit: usize,
+    ) -> Self {
         Self {
+            worker: None,
             source_bindings: None,
-            program: ExecutableProgram::Effect(program.shared()),
+            program: ExecutableProgram::Effect(program),
             cleanup_limit: MAX_CAPTURED_FRAME_CELLS,
             live_cleanups: 0,
-            control: Some(Control::Evaluate(program.root(), Environment::new())),
+            control: Some(Control::Evaluate(root, Environment::new())),
             frames: Vec::new(),
             max_frame_depth: 0,
             trace: Vec::new(),
@@ -1163,7 +2007,52 @@ impl<'runtime> Machine<'runtime> {
         }
     }
 
+    fn new_network_worker(
+        program: Arc<crate::core::dialect::CoreProgram<crate::core::EffectOperationFamily>>,
+        root: NodeId,
+        result: NodeId,
+        entry: BinderId,
+        parameter: TypeVariableId,
+        network: ActivationKey,
+        side: super::network_transport::Side,
+        transport: super::network_transport::NetworkTransport,
+        input: Vec<u8>,
+    ) -> Result<Self, RuntimeFailure> {
+        let next = network
+            .0
+            .checked_add(1)
+            .ok_or(RuntimeFailure::ResourceCapacity)?;
+        // The worker's entry region needs its own fresh activation and must
+        // be able to advance the allocator before it publishes that owner.
+        next.checked_add(1)
+            .ok_or(RuntimeFailure::ResourceCapacity)?;
+        let mut machine = Self::new_effect_from_shared(program, root, MAX_CAPTURED_FRAME_CELLS);
+        machine.next_activation = next;
+        machine.worker = Some(WorkerStartup {
+            result,
+            entry,
+            parameter,
+            network,
+            side,
+            transport,
+            input: Some(input),
+            deliveries: Vec::new(),
+            processing_route: None,
+            processing_cut: None,
+            end_route: None,
+            report_buffer: Vec::new(),
+            next_delivery: 0,
+            receive_generation: Some(0),
+            end_observation: None,
+        });
+        Ok(machine)
+    }
+
     fn run(mut self) -> Result<Evaluation, RuntimeFailure> {
+        // Worker exits must preserve receiver-held obligations for the owner.
+        if self.worker.is_some() {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
         let scope = disposal::Scope::enter();
         let result = self.run_loop();
         // Dispose all retained ordinary control/heap values inside the same
@@ -1181,6 +2070,14 @@ impl<'runtime> Machine<'runtime> {
                 .ok_or(RuntimeFailure::InvalidControlState)?;
             match control {
                 Control::Evaluate(node, environment) => {
+                    if self
+                        .worker
+                        .as_ref()
+                        .is_some_and(|worker| worker.result == node && worker.input.is_some())
+                    {
+                        self.begin_worker_entry(environment)?;
+                        continue;
+                    }
                     #[cfg(test)]
                     if let Some(trace) = &mut self.work_trace {
                         trace
@@ -1262,6 +2159,14 @@ impl<'runtime> Machine<'runtime> {
                         // release frames. Reserve before moving that owner.
                         reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, true)?;
                     }
+                    // A failed worker must retain ownership-bearing frames
+                    // on this carrier. Check fallible completion work before
+                    // moving any of these owners out of the Machine.
+                    let preflighted = if self.worker.is_some() {
+                        self.preflight_worker_owner_return(&value)?
+                    } else {
+                        false
+                    };
                     let Some(frame) = self.frames.pop() else {
                         if self.live_resources != 0
                             || self.live_cleanups != 0
@@ -1303,7 +2208,7 @@ impl<'runtime> Machine<'runtime> {
                             allocation_frames: self.allocation_frames,
                         });
                     };
-                    self.return_from(frame, value)?;
+                    self.return_from_preflighted(frame, value, preflighted)?;
                 }
                 Control::Discard(handler, owner) => self.discard(handler, owner)?,
             }
@@ -1319,15 +2224,1493 @@ impl<'runtime> Machine<'runtime> {
         self.control = Some(transition.control);
     }
 
+    fn network_scope(
+        &self,
+        node: NodeId,
+    ) -> Result<&crate::core::effect::NetworkScopeNode, RuntimeFailure> {
+        match self.program.node(node) {
+            Some(ExecutableNode::Effect(expression)) => match &expression.kind {
+                EffectExprKind::Operation(EffectOperation::Network(network)) => Ok(network),
+                _ => Err(RuntimeFailure::InvalidControlState),
+            },
+            _ => Err(RuntimeFailure::InvalidControlState),
+        }
+    }
+
+    fn copy_network_input(&mut self, value: &Value) -> Result<Vec<u8>, RuntimeFailure> {
+        let (bytes, string) = borrowed_bytes(value, &self.heap, &mut self.instantiation_work)?;
+        if string {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        charge_runtime_work(
+            &mut self.instantiation_work,
+            bytes.len(),
+            RuntimePhase::Acquisition,
+        )?;
+        let mut copy = Vec::new();
+        copy.try_reserve_exact(bytes.len())
+            .map_err(|_| RuntimeFailure::HeapCapacity)?;
+        copy.extend_from_slice(bytes);
+        Ok(copy)
+    }
+
+    fn check_network_native_support(
+        &mut self,
+        program: &crate::core::dialect::CoreProgram<crate::core::EffectOperationFamily>,
+        entry: &crate::core::dialect::NetworkEntryAdmission,
+        network: ActivationKey,
+    ) -> Result<(), RuntimeFailure> {
+        if entry.native_effects.is_empty() {
+            return Ok(());
+        }
+        let bindings = self.source_bindings.ok_or(RuntimeFailure::ForeignBinding)?;
+        let expression = program
+            .node(program.root())
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) =
+            &expression.kind
+        else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        let instance = Instantiation::default().acquire(
+            entry.parameter,
+            network,
+            &mut self.instantiation_work,
+            Some(RuntimePhase::Acquisition),
+        )?;
+        for requested in &entry.native_effects {
+            let requested = instance.effect(
+                requested,
+                &mut self.instantiation_work,
+                Some(RuntimePhase::Access),
+            )?;
+            let symbol = program
+                .registry()
+                .native_symbol(OperationId::new(requested.effect(), 0))
+                .ok_or(RuntimeFailure::ForeignBinding)?;
+            if !bindings.contains_checked_symbol(symbol) {
+                return Err(RuntimeFailure::ForeignBinding);
+            }
+            let mut found = false;
+            for candidate in boundary.interpretations() {
+                charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
+                if Arc::ptr_eq(candidate.symbol(), symbol)
+                    && same_effect_instance(
+                        candidate.effect(),
+                        &requested,
+                        &mut self.instantiation_work,
+                    )?
+                {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return Err(RuntimeFailure::ForeignBinding);
+            }
+        }
+        Ok(())
+    }
+
+    fn prepare_network_owner(
+        &mut self,
+        node: NodeId,
+        mut environment: Environment,
+        capacity: usize,
+        first: Value,
+        second: Value,
+    ) -> Result<(), RuntimeFailure> {
+        let program = match &self.program {
+            ExecutableProgram::Effect(program) => Arc::clone(program),
+            _ => return Err(RuntimeFailure::InvalidControlState),
+        };
+        let network = self.network_scope(node)?;
+        let (identity, handle, body, result) = (
+            network.acquisition.identity,
+            network.acquisition.handle,
+            network.body,
+            network
+                .linked_result
+                .ok_or(RuntimeFailure::InvalidControlState)?,
+        );
+        let admission = program
+            .network_admission(node)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if admission.linked_result != result {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let next = self
+            .next_activation
+            .checked_add(1)
+            .ok_or(RuntimeFailure::ResourceCapacity)?;
+        next.checked_add(1)
+            .ok_or(RuntimeFailure::ResourceCapacity)?;
+        let activation = ActivationKey(self.next_activation);
+        let live = self
+            .live_resources
+            .checked_add(1)
+            .filter(|live| *live <= self.resource_limit)
+            .ok_or(RuntimeFailure::ResourceCapacity)?;
+        let input_a = self.copy_network_input(&first)?;
+        let input_b = self.copy_network_input(&second)?;
+        for (side, entry) in admission.entries.iter().enumerate() {
+            if let Some(cut) = entry.processing_cut
+                && entry.processing_route != Some(cut.route)
+            {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            if let Some(route) = entry.processing_route {
+                charge_effect_work(&mut self.instantiation_work, 9, RuntimePhase::Acquisition)?;
+                if route.owner != node
+                    || route.entry != entry.binder
+                    || route.side != side
+                    || [
+                        route.owner,
+                        route.receive,
+                        route.message_match,
+                        route.root,
+                        route.handler,
+                        route.store,
+                    ]
+                    .into_iter()
+                    .any(|site| program.node(site).is_none())
+                {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+            }
+            if let Some(end) = entry.end_route {
+                charge_effect_work(&mut self.instantiation_work, 6, RuntimePhase::Acquisition)?;
+                if end.owner != node
+                    || end.entry != entry.binder
+                    || end.side != side
+                    || [end.owner, end.receive, end.end_match, end.finish]
+                        .into_iter()
+                        .any(|site| program.node(site).is_none())
+                {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+            }
+            self.check_network_native_support(&program, entry, activation)?;
+        }
+        let bindings_a = self
+            .source_bindings
+            .map(|bindings| bindings.try_copy_for_worker(&mut self.instantiation_work))
+            .transpose()?;
+        let bindings_b = self
+            .source_bindings
+            .map(|bindings| bindings.try_copy_for_worker(&mut self.instantiation_work))
+            .transpose()?;
+        let transport = super::network_transport::NetworkTransport::prepare(capacity)
+            .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+        environment.instantiation = environment.instantiation.acquire(
+            identity,
+            activation,
+            &mut self.instantiation_work,
+            Some(RuntimePhase::Acquisition),
+        )?;
+        environment = environment.extend_in_phase(
+            handle,
+            Value::ResourceHandle(activation),
+            RuntimePhase::Acquisition,
+        )?;
+        reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+        let input = |side, index: usize, bytes, bindings| CarrierInput {
+            program: Arc::clone(&program),
+            root: program.root(),
+            result,
+            entry: admission.entries[index].binder,
+            parameter: admission.entries[index].parameter,
+            network: activation,
+            side,
+            processing_route: admission.entries[index].processing_route.map(|route| {
+                ProcessingRoute {
+                    entry: route.entry,
+                    side,
+                    receive: route.receive,
+                    message_match: route.message_match,
+                    arm: route.arm,
+                    root: route.root,
+                    handler: route.handler,
+                    store: route.store,
+                }
+            }),
+            processing_cut: admission.entries[index].processing_cut,
+            end_route: admission.entries[index].end_route,
+            transport: transport.clone(),
+            input: bytes,
+            bindings,
+        };
+        let mut group = CarrierGroup::prepare(
+            input(super::network_transport::Side::A, 0, input_a, bindings_a),
+            input(super::network_transport::Side::B, 1, input_b, bindings_b),
+        )?;
+        group.commit()?;
+        self.frames.push(Frame::NetworkBoundary {
+            key: activation,
+            group,
+        });
+        self.live_resources = live;
+        self.next_activation = next;
+        self.apply(Transition::direct(Control::Evaluate(body, environment)));
+        Ok(())
+    }
+
+    fn begin_worker_entry(&mut self, environment: Environment) -> Result<(), RuntimeFailure> {
+        let owner = self.worker_entry_owner()?;
+        let worker = self
+            .worker
+            .as_mut()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let input = worker
+            .input
+            .take()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let (entry, parameter, network) = (worker.entry, worker.parameter, worker.network);
+        let len = input.len().max(1);
+        reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+        self.frames.push(Frame::WorkerInput {
+            entry,
+            parameter,
+            environment,
+            input,
+            owner,
+            network,
+        });
+        self.invoke_region_allocate(
+            Value::RegionView(owner),
+            Value::RegionRequest(super::value::RegionRequest {
+                usable_bytes: len,
+                alignment: 1,
+                invocation: None,
+            }),
+        )
+    }
+
+    // This root-only path is exercised by the private startup fixture. Before
+    // admitting network owners, operation results must use the actual selected
+    // default-allocation context, including nested local providers.
+    fn worker_entry_owner(&mut self) -> Result<ActivationKey, RuntimeFailure> {
+        charge_effect_work(
+            &mut self.instantiation_work,
+            self.frames.len(),
+            RuntimePhase::Access,
+        )?;
+        self.frames
+            .iter()
+            .rev()
+            .find_map(|frame| match frame {
+                Frame::RegionBoundary { node, key, .. }
+                    if self.region_scope(*node).is_some_and(|scope| scope.entry) =>
+                {
+                    Some(*key)
+                }
+                _ => None,
+            })
+            .ok_or(RuntimeFailure::InvalidControlState)
+    }
+
+    fn begin_network_reply(
+        &mut self,
+        owner: ActivationKey,
+        constructor: crate::types::ConstructorId,
+        payload: Option<Value>,
+    ) -> Result<(), RuntimeFailure> {
+        let count = 1 + usize::from(payload.is_some());
+        let mut fields = Vec::new();
+        reserve_control(&mut fields, count, RuntimeResource::HeapCells, true)?;
+        fields.push(Value::ConstructorTag(constructor));
+        fields.extend(payload);
+        reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+        self.frames.push(Frame::NetworkReply { owner, fields });
+        self.invoke_region_allocate(
+            Value::RegionView(owner),
+            Value::RegionRequest(super::value::RegionRequest {
+                usable_bytes: count * core::mem::size_of::<Value>(),
+                alignment: core::mem::align_of::<Value>(),
+                invocation: None,
+            }),
+        )
+    }
+
+    fn begin_network_failure(
+        &mut self,
+        owner: ActivationKey,
+        module: crate::module::ModuleId,
+        result_type: u32,
+        failure: super::network_transport::Failure,
+    ) -> Result<(), RuntimeFailure> {
+        use super::network_transport::Failure;
+        let failure = match failure {
+            Failure::Refused => 0,
+            Failure::WorkerFailed => 2,
+            Failure::IncompleteTeardown => 3,
+        };
+        let result_case = match result_type {
+            6 => 3,  // ReceiveResult.ReceiveFailed
+            7 => 1,  // FinishResult.Failed
+            9 => 1,  // WatchResult.WatchFailed
+            10 => 2, // WakeResult.WakeFailed
+            _ => return Err(RuntimeFailure::InvalidControlState),
+        };
+        let result = crate::types::ConstructorId::new(
+            crate::types::NominalTypeId::new(module, result_type),
+            result_case,
+        );
+        reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+        self.frames
+            .push(Frame::NetworkFailureReply { owner, result });
+        let failure =
+            crate::types::ConstructorId::new(crate::types::NominalTypeId::new(module, 4), failure);
+        self.begin_network_reply(owner, failure, None)
+    }
+
+    pub(super) fn interpret_network_receive(
+        &mut self,
+        site: NodeId,
+        owner: ActivationKey,
+        effect: &EffectInstance,
+        operation: OperationId,
+        value: Value,
+    ) -> Result<(), RuntimeFailure> {
+        use super::network_transport::{Failure, Receive, Side};
+        let api = crate::resolved::NetworkApi::for_module(effect.effect().module())
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if effect.effect() != api.io() || operation != OperationId::new(api.io(), 2) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let activation =
+            Instantiation::activation_at(effect, 0).ok_or(RuntimeFailure::InvalidControlState)?;
+        let worker = self
+            .worker
+            .as_ref()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if worker.network != activation
+            || worker.input.is_some()
+            || !matches!(value, Value::ResourceHandle(found) if found == activation)
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let (side, transport) = (worker.side, worker.transport.clone());
+        let module = effect.effect().module();
+        charge_runtime_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
+        let worker = self
+            .worker
+            .as_mut()
+            .expect("authenticated worker remains present");
+        worker.end_observation = None;
+        let Some(generation) = worker
+            .receive_generation
+            .and_then(|current| current.checked_add(1))
+        else {
+            // Exhaustion permanently invalidates every pending observation.
+            worker.receive_generation = None;
+            return self.begin_network_failure(owner, module, 6, Failure::Refused);
+        };
+        worker.receive_generation = Some(generation);
+        match transport.reserve_receive(side) {
+            Receive::Message(mut guard) => {
+                let sender = match side {
+                    Side::A => Side::B,
+                    Side::B => Side::A,
+                };
+                if guard.sender() != sender {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let len = guard.byte_len();
+                charge_runtime_work(&mut self.instantiation_work, len, RuntimePhase::Access)?;
+                if let Err(failure) = guard.snapshot() {
+                    drop(guard);
+                    return self.begin_network_failure(owner, module, 6, failure);
+                }
+                let kind = guard.kind();
+                reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+                self.frames.push(Frame::NetworkReceiveBytes {
+                    owner,
+                    pending: NetworkReceivePending {
+                        guard,
+                        module,
+                        kind,
+                        site,
+                    },
+                });
+                self.invoke_region_allocate(
+                    Value::RegionView(owner),
+                    Value::RegionRequest(super::value::RegionRequest {
+                        usable_bytes: len.max(1),
+                        alignment: 1,
+                        invocation: None,
+                    }),
+                )
+            }
+            Receive::Empty => self.begin_network_reply(
+                owner,
+                crate::types::ConstructorId::new(crate::types::NominalTypeId::new(module, 6), 1),
+                None,
+            ),
+            Receive::End => {
+                reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+                self.frames.push(Frame::NetworkEndCommit {
+                    network: activation,
+                    side,
+                    receive_site: site,
+                    generation,
+                    module,
+                });
+                self.begin_network_reply(
+                    owner,
+                    crate::types::ConstructorId::new(
+                        crate::types::NominalTypeId::new(module, 6),
+                        2,
+                    ),
+                    None,
+                )
+            }
+            Receive::Busy => self.begin_network_failure(owner, module, 6, Failure::Refused),
+            Receive::Failed(failure) => self.begin_network_failure(owner, module, 6, failure),
+        }
+    }
+
+    pub(super) fn interpret_network_finish_send(
+        &mut self,
+        owner: ActivationKey,
+        effect: &EffectInstance,
+        operation: OperationId,
+        value: Value,
+    ) -> Result<(), RuntimeFailure> {
+        let api = crate::resolved::NetworkApi::for_module(effect.effect().module())
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if effect.effect() != api.io() || operation != OperationId::new(api.io(), 3) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let activation =
+            Instantiation::activation_at(effect, 0).ok_or(RuntimeFailure::InvalidControlState)?;
+        let worker = self
+            .worker
+            .as_ref()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if worker.network != activation
+            || worker.input.is_some()
+            || !matches!(value, Value::ResourceHandle(found) if found == activation)
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let (side, transport) = (worker.side, worker.transport.clone());
+        let module = effect.effect().module();
+        match transport.finish_send(side) {
+            Ok(()) => self.begin_network_reply(
+                owner,
+                crate::types::ConstructorId::new(crate::types::NominalTypeId::new(module, 7), 0),
+                None,
+            ),
+            Err(failure) => self.begin_network_failure(owner, module, 7, failure),
+        }
+    }
+
+    pub(super) fn interpret_network_settle(
+        &mut self,
+        owner: ActivationKey,
+        effect: &EffectInstance,
+        operation: OperationId,
+        value: Value,
+    ) -> Result<(), RuntimeFailure> {
+        let api = crate::resolved::NetworkApi::for_module(effect.effect().module())
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let activation =
+            Instantiation::activation_at(effect, 0).ok_or(RuntimeFailure::InvalidControlState)?;
+        if effect.effect() != api.join()
+            || operation != OperationId::new(api.join(), 1)
+            || self.worker.is_some()
+            || !matches!(value, Value::ResourceHandle(found) if found == activation)
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        charge_effect_work(
+            &mut self.instantiation_work,
+            self.frames.len(),
+            RuntimePhase::Access,
+        )?;
+        let group = self
+            .frames
+            .iter_mut()
+            .find_map(|frame| match frame {
+                Frame::NetworkBoundary { key, group } if *key == activation => Some(group),
+                _ => None,
+            })
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        match group.settle() {
+            Ok(()) => self.begin_network_reply(
+                owner,
+                crate::types::ConstructorId::new(
+                    crate::types::NominalTypeId::new(effect.effect().module(), 7),
+                    0,
+                ),
+                None,
+            ),
+            Err(failure) => self.begin_network_failure(owner, effect.effect().module(), 7, failure),
+        }
+    }
+
+    pub(super) fn interpret_network_finish_receive(
+        &mut self,
+        site: NodeId,
+        owner: ActivationKey,
+        effect: &EffectInstance,
+        operation: OperationId,
+        value: Value,
+    ) -> Result<(), RuntimeFailure> {
+        let api = crate::resolved::NetworkApi::for_module(effect.effect().module())
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let activation =
+            Instantiation::activation_at(effect, 0).ok_or(RuntimeFailure::InvalidControlState)?;
+        charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
+        let actual_site = matches!(
+            self.program.node(site),
+            Some(ExecutableNode::Effect(expression))
+                if matches!(&expression.kind,
+                    EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer))
+                    if matches!(&buffer.operation,
+                        crate::core::region::RegionBufferOperation::Network {
+                            effect: actual_effect, operation: actual_operation,
+                        } if actual_effect.effect() == api.io() && *actual_operation == operation))
+        );
+        let worker = self
+            .worker
+            .as_ref()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if !actual_site
+            || effect.effect() != api.io()
+            || operation != OperationId::new(api.io(), 7)
+            || worker.network != activation
+            || worker.input.is_some()
+            || !matches!(value, Value::ResourceHandle(found) if found == activation)
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let side_index = match worker.side {
+            super::network_transport::Side::A => 0,
+            super::network_transport::Side::B => 1,
+        };
+        let admitted = worker.end_route.is_some_and(|route| {
+            route.entry == worker.entry
+                && route.side == side_index
+                && route.finish == site
+                && worker.receive_generation.is_some()
+                && worker.deliveries.is_empty()
+                && worker.end_observation.is_some_and(|end| {
+                    end.network == activation
+                        && end.side == worker.side
+                        && end.receive_site == route.receive
+                        && end.matched
+                            == (DeliveryMatch::Observed {
+                                site: route.end_match,
+                                arm: route.arm,
+                            })
+                })
+        });
+        if !admitted {
+            return self.begin_network_failure(
+                owner,
+                effect.effect().module(),
+                7,
+                super::network_transport::Failure::Refused,
+            );
+        }
+        let (side, transport) = (worker.side, worker.transport.clone());
+        match transport.finish_receive(side) {
+            Ok(()) => {
+                self.worker
+                    .as_mut()
+                    .ok_or(RuntimeFailure::InvalidControlState)?
+                    .end_observation = None;
+                self.begin_network_reply(
+                    owner,
+                    crate::types::ConstructorId::new(
+                        crate::types::NominalTypeId::new(effect.effect().module(), 7),
+                        0,
+                    ),
+                    None,
+                )
+            }
+            Err(failure) => self.begin_network_failure(owner, effect.effect().module(), 7, failure),
+        }
+    }
+
+    pub(super) fn interpret_network_readiness(
+        &mut self,
+        owner: ActivationKey,
+        effect: &EffectInstance,
+        operation: OperationId,
+        value: Value,
+    ) -> Result<(), RuntimeFailure> {
+        use super::network_transport::Interest;
+        let api = crate::resolved::NetworkApi::for_module(effect.effect().module())
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let ordinal = operation.operation();
+        if effect.effect() != api.io() || operation.owner() != api.io() || !matches!(ordinal, 4..=6)
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let activation =
+            Instantiation::activation_at(effect, 0).ok_or(RuntimeFailure::InvalidControlState)?;
+        let worker = self
+            .worker
+            .as_ref()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if worker.network != activation || worker.input.is_some() {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let (side, transport) = (worker.side, worker.transport.clone());
+        let module = effect.effect().module();
+        let nominal = |ordinal| crate::types::NominalTypeId::new(module, ordinal);
+        let constructor = |ty, case| crate::types::ConstructorId::new(nominal(ty), case);
+        if ordinal == 6 {
+            if !matches!(value, Value::ResourceHandle(found) if found == activation) {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            charge_runtime_work(
+                &mut self.instantiation_work,
+                super::network_transport::MAX_WATCHES,
+                RuntimePhase::Access,
+            )?;
+            return match transport.poll_wake(side) {
+                Ok(Some(token)) => self.begin_network_reply(
+                    owner,
+                    constructor(10, 0),
+                    Some(Value::NetworkRegistration(
+                        super::value::NetworkRegistration {
+                            network: activation,
+                            token,
+                        },
+                    )),
+                ),
+                Ok(None) => self.begin_network_reply(owner, constructor(10, 1), None),
+                Err(failure) => self.begin_network_failure(owner, module, 10, failure),
+            };
+        }
+        let Value::Location(location) = value else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let location = packed_tuple_location(&self.heap, location, &mut self.instantiation_work)?;
+        let fields = self
+            .heap
+            .get(location)
+            .and_then(HeapCell::tuple_fields)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let [Value::ResourceHandle(handle), argument] = fields else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        if *handle != activation {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let argument = argument.clone();
+        if ordinal == 5 {
+            let Value::NetworkRegistration(registration) = argument else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            if registration.network != activation {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            charge_runtime_work(
+                &mut self.instantiation_work,
+                super::network_transport::MAX_WATCHES,
+                RuntimePhase::Access,
+            )?;
+            return match transport.cancel_watch(side, registration.token) {
+                Ok(()) => self.begin_network_reply(owner, constructor(7, 0), None),
+                Err(failure) => self.begin_network_failure(owner, module, 7, failure),
+            };
+        }
+        let Value::Location(location) = argument else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let location = packed_tuple_location(&self.heap, location, &mut self.instantiation_work)?;
+        let (tag, payload) = self
+            .heap
+            .get(location)
+            .and_then(HeapCell::constructor_fields)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if tag.owner() != nominal(8) || payload.is_some() {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let interest = match tag.constructor() {
+            0 => Interest::Readable,
+            1 => Interest::Writable,
+            _ => return Err(RuntimeFailure::InvalidControlState),
+        };
+        // Pay the bounded registration, publication and cancellation scans
+        // before creating a tentative host registration.
+        charge_runtime_work(
+            &mut self.instantiation_work,
+            3 * super::network_transport::MAX_WATCHES,
+            RuntimePhase::Access,
+        )?;
+        match transport.watch_pending(side, interest) {
+            Ok(token) => {
+                let pending = PendingNetworkWatch {
+                    transport,
+                    side,
+                    token,
+                    published: false,
+                };
+                reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+                self.frames.push(Frame::NetworkWatchCommit {
+                    owner,
+                    module,
+                    pending,
+                });
+                self.begin_network_reply(
+                    owner,
+                    constructor(9, 0),
+                    Some(Value::NetworkRegistration(
+                        super::value::NetworkRegistration {
+                            network: activation,
+                            token,
+                        },
+                    )),
+                )
+            }
+            Err(failure) => self.begin_network_failure(owner, module, 9, failure),
+        }
+    }
+
+    fn rollback_pending_network_watches(&mut self) {
+        if let Some(worker) = &mut self.worker {
+            let _ = worker.transport.cancel_unpublished(worker.side);
+        }
+    }
+
+    pub(super) fn interpret_network_send(
+        &mut self,
+        owner: ActivationKey,
+        effect: &EffectInstance,
+        operation: OperationId,
+        value: Value,
+    ) -> Result<(), RuntimeFailure> {
+        use super::network_transport::{EnvelopeKind, Failure, Send};
+        let api = crate::resolved::NetworkApi::for_module(effect.effect().module())
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if effect.effect() != api.io() || operation != OperationId::new(api.io(), 1) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let activation =
+            Instantiation::activation_at(effect, 0).ok_or(RuntimeFailure::InvalidControlState)?;
+        let worker = self
+            .worker
+            .as_ref()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if worker.network != activation || worker.input.is_some() {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let (side, transport) = (worker.side, worker.transport.clone());
+        let Value::Location(argument) = value else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let argument = packed_tuple_location(&self.heap, argument, &mut self.instantiation_work)?;
+        let fields = self
+            .heap
+            .get(argument)
+            .and_then(HeapCell::tuple_fields)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let [Value::ResourceHandle(handle), bytes] = fields else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        if *handle != activation {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let bytes = bytes.clone();
+        let (bytes, string) = borrowed_bytes(&bytes, &self.heap, &mut self.instantiation_work)?;
+        if string {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        charge_runtime_work(
+            &mut self.instantiation_work,
+            bytes.len(),
+            RuntimePhase::Access,
+        )?;
+        let outcome = transport.try_send(side, EnvelopeKind::Application, bytes);
+        let result = crate::types::NominalTypeId::new(effect.effect().module(), 5);
+        let (case, failure) = match outcome {
+            Send::Sent => (0, None),
+            Send::Full => (1, None),
+            Send::Closed => (2, None),
+            Send::Failed(failure) => (
+                3,
+                Some(match failure {
+                    Failure::Refused => 0,
+                    Failure::WorkerFailed => 2,
+                    Failure::IncompleteTeardown => 3,
+                }),
+            ),
+        };
+        let result = crate::types::ConstructorId::new(result, case);
+        if let Some(failure) = failure {
+            reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+            self.frames
+                .push(Frame::NetworkFailureReply { owner, result });
+            let failure = crate::types::ConstructorId::new(
+                crate::types::NominalTypeId::new(effect.effect().module(), 4),
+                failure,
+            );
+            self.begin_network_reply(owner, failure, None)
+        } else {
+            self.begin_network_reply(owner, result, None)
+        }
+    }
+
+    fn apply_worker_entry(
+        &mut self,
+        value: Value,
+        parameter: TypeVariableId,
+        network: ActivationKey,
+        argument: Value,
+    ) -> Result<(), RuntimeFailure> {
+        match value {
+            Value::Polymorphic {
+                abstraction,
+                mut environment,
+            } => {
+                let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                    pure_expression(&self.program, abstraction)?
+                else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                if abstraction.parameters() != [(parameter, crate::types::Kind::Type)] {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                environment.instantiation = environment.instantiation.acquire(
+                    parameter,
+                    network,
+                    &mut self.instantiation_work,
+                    Some(RuntimePhase::Acquisition),
+                )?;
+                let body = abstraction.body();
+                reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+                self.frames.push(Frame::WorkerApply { argument });
+                self.apply(Transition::direct(Control::Evaluate(body, environment)));
+            }
+            value @ (Value::RegionFunction(_) | Value::Location(_)) => {
+                let (code, environment, abstraction) = self.read_stored_callable(&value)?;
+                let abstraction = abstraction.ok_or(RuntimeFailure::InvalidControlState)?;
+                let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                    pure_expression(&code.program, abstraction)?
+                else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                if abstraction.parameters() != [(parameter, crate::types::Kind::Type)] {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let instantiation = environment.instantiation.acquire(
+                    parameter,
+                    network,
+                    &mut self.instantiation_work,
+                    Some(RuntimePhase::Acquisition),
+                )?;
+                let record = match value {
+                    Value::RegionFunction(function) => function.record,
+                    Value::Location(location) => location,
+                    _ => unreachable!(),
+                };
+                reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+                self.frames.push(Frame::ApplyArgument {
+                    function: Value::RegionFunction(super::value::RegionFunction {
+                        record,
+                        instantiation: Some(instantiation),
+                        abstraction: None,
+                    }),
+                });
+                self.apply(Transition::direct(Control::Return(argument)));
+            }
+            _ => return Err(RuntimeFailure::InvalidControlState),
+        }
+        Ok(())
+    }
+
     fn trace_effect(&mut self, event: EffectTraceEvent) {
         if let Some(trace) = &mut self.effect_trace {
             trace.push(event);
         }
     }
 
+    pub(super) fn preflight_worker_owner_return(
+        &mut self,
+        value: &Value,
+    ) -> Result<bool, RuntimeFailure> {
+        match self.frames.last() {
+            Some(Frame::Match { .. }) if matches!(value, Value::Location(_)) => {
+                let worker = self
+                    .worker
+                    .as_ref()
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                let count = worker
+                    .deliveries
+                    .len()
+                    .saturating_mul(2)
+                    .saturating_add(usize::from(worker.end_observation.is_some()));
+                charge_runtime_work(
+                    &mut self.instantiation_work,
+                    count,
+                    RuntimePhase::Evaluation,
+                )?;
+                Ok(true)
+            }
+            Some(Frame::NetworkEndCommit {
+                network,
+                side,
+                module,
+                ..
+            }) => {
+                let network = *network;
+                let side = *side;
+                let module = *module;
+                charge_runtime_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
+                let worker = self
+                    .worker
+                    .as_ref()
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                let Value::Location(location) = value else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                let expected = crate::types::ConstructorId::new(
+                    crate::types::NominalTypeId::new(module, 6),
+                    2,
+                );
+                let fields = self
+                    .heap
+                    .get(*location)
+                    .and_then(|cell| cell.stored_fields());
+                if worker.network != network
+                    || worker.side != side
+                    || !matches!(fields, Some([Value::ConstructorTag(tag)]) if *tag == expected)
+                {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                Ok(true)
+            }
+            Some(Frame::RetainedRootCompletion { key, origin }) => {
+                let key = *key;
+                let origin = *origin;
+                // The marker remains owned by the worker until every
+                // fallible lookup and the later scan have been paid for.
+                charge_effect_work(
+                    &mut self.instantiation_work,
+                    self.frames.len(),
+                    RuntimePhase::Access,
+                )?;
+                let index = self.retained_store_index(key)?;
+                let Frame::ResourceBoundary {
+                    payload: ResourcePayload::Store(store),
+                    ..
+                } = &self.frames[index]
+                else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                store
+                    .active_roots
+                    .checked_sub(1)
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                if let RetainedRootOrigin::Entered {
+                    root,
+                    delivery: Some(identity),
+                    ..
+                } = origin
+                {
+                    let worker = self
+                        .worker
+                        .as_ref()
+                        .ok_or(RuntimeFailure::InvalidControlState)?;
+                    let count = worker.deliveries.len();
+                    charge_runtime_work(
+                        &mut self.instantiation_work,
+                        count.saturating_mul(2),
+                        RuntimePhase::Access,
+                    )?;
+                    let worker = self.worker.as_ref().expect("worker remains in place");
+                    let matches = worker
+                        .deliveries
+                        .iter()
+                        .filter(|held| {
+                            held.identity == identity.identity
+                                && held.network == identity.network
+                                && held.side == identity.side
+                                && held.root_progress
+                                    == (DeliveryRootProgress::Active { store: key, root })
+                        })
+                        .count();
+                    if worker.network != identity.network
+                        || worker.side != identity.side
+                        || matches != 1
+                    {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                }
+                Ok(true)
+            }
+            Some(Frame::RegionAllocated {
+                segment,
+                invocation,
+                registered,
+            }) => {
+                let Value::RegionStorage(storage) = value else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                if !registered || storage.invocation != *invocation {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let count = segment.frames.len();
+                self.captured_cells
+                    .checked_sub(count)
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                let frames = self
+                    .frames
+                    .len()
+                    .checked_sub(1)
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                self.validate_region_storage_with_frame_count(*storage, frames)?;
+                self.frames
+                    .try_reserve(count.saturating_sub(1))
+                    .map_err(|_| RuntimeFailure::EnvironmentCapacity)?;
+                Ok(true)
+            }
+            Some(Frame::RegionCompletion { node, records, .. }) => {
+                if !matches!(value, Value::Unit) {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let entry = self
+                    .region_scope(*node)
+                    .ok_or(RuntimeFailure::InvalidControlState)?
+                    .entry;
+                if !entry {
+                    charge_effect_work(
+                        &mut self.instantiation_work,
+                        records.len(),
+                        RuntimePhase::Cleanup,
+                    )?;
+                    if records
+                        .iter()
+                        .filter_map(|record| record.location)
+                        .any(|location| location >= self.heap.len())
+                    {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                }
+                Ok(true)
+            }
+            Some(Frame::ResourceBoundary { node, key, payload }) => {
+                let node = *node;
+                let key = *key;
+                if let ResourcePayload::Store(store) = payload {
+                    charge_effect_work(
+                        &mut self.instantiation_work,
+                        store.slots.len(),
+                        RuntimePhase::Cleanup,
+                    )?;
+                    if store.activation != key
+                        || store.active_roots != 0
+                        || store.slots.iter().any(|slot| slot.continuation.is_some())
+                    {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    if let Some(worker) = self.worker.as_ref()
+                        && worker.processing_cut.is_some()
+                    {
+                        let count = worker.deliveries.len();
+                        charge_runtime_work(
+                            &mut self.instantiation_work,
+                            count.saturating_mul(3),
+                            RuntimePhase::Cleanup,
+                        )?;
+                        let _ = self
+                            .worker
+                            .as_ref()
+                            .expect("worker remains in place")
+                            .processing_cut_candidate(node, key);
+                    }
+                }
+                self.live_resources
+                    .checked_sub(1)
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                Ok(true)
+            }
+            Some(Frame::CleanupBoundary { .. }) => {
+                charge_effect_work(&mut self.instantiation_work, 2, RuntimePhase::Cleanup)?;
+                self.frames.try_reserve(1).map_err(|_| {
+                    legacy_failure(
+                        RuntimeFailure::ResourceCapacity,
+                        ResourceFailureCause::StorageReservationFailed,
+                        RuntimePhase::Cleanup,
+                        RuntimeResource::FrameStorage,
+                        Some(1),
+                        None,
+                    )
+                })?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    #[cfg(test)]
     fn return_from(&mut self, frame: Frame, value: Value) -> Result<(), RuntimeFailure> {
+        self.return_from_preflighted(frame, value, false)
+    }
+
+    fn return_from_preflighted(
+        &mut self,
+        frame: Frame,
+        value: Value,
+        preflighted: bool,
+    ) -> Result<(), RuntimeFailure> {
         disposal::check()?;
         match frame {
+            Frame::NetworkCapacity { node, environment } => {
+                let capacity = read_integer(&value, &self.heap, &mut self.instantiation_work)?
+                    .to_usize()
+                    .filter(|capacity| *capacity > 0)
+                    .ok_or(RuntimeFailure::ResourceCapacity)?;
+                let network = self.network_scope(node)?;
+                let next = network.inputs[0];
+                reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+                self.frames.push(Frame::NetworkInputA {
+                    node,
+                    environment: environment.clone(),
+                    capacity,
+                });
+                self.apply(Transition::direct(Control::Evaluate(next, environment)));
+            }
+            Frame::NetworkInputA {
+                node,
+                environment,
+                capacity,
+            } => {
+                let next = self.network_scope(node)?.inputs[1];
+                reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+                self.frames.push(Frame::NetworkInputB {
+                    node,
+                    environment: environment.clone(),
+                    capacity,
+                    first: value,
+                });
+                self.apply(Transition::direct(Control::Evaluate(next, environment)));
+            }
+            Frame::NetworkInputB {
+                node,
+                environment,
+                capacity,
+                first,
+            } => {
+                self.prepare_network_owner(node, environment, capacity, first, value)?;
+            }
+            Frame::NetworkBoundary { group, .. } => {
+                if !group.settled {
+                    drop(group);
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                self.live_resources = self
+                    .live_resources
+                    .checked_sub(1)
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                drop(group);
+                self.apply(Transition::direct(Control::Return(value)));
+            }
+            Frame::NetworkReceiveBytes { owner, mut pending } => {
+                let Value::RegionStorage(storage) = value else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                if storage.invocation.owner != owner {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let bytes = self.initialize_region_bytes(
+                    storage,
+                    pending
+                        .guard
+                        .snapshot()
+                        .map_err(|_| RuntimeFailure::InvalidControlState)?,
+                    false,
+                )?;
+                let kind = match pending.kind {
+                    super::network_transport::EnvelopeKind::Application => 0,
+                    super::network_transport::EnvelopeKind::Control => 1,
+                };
+                let constructor = crate::types::ConstructorId::new(
+                    crate::types::NominalTypeId::new(pending.module, 3),
+                    kind,
+                );
+                reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+                self.frames.push(Frame::NetworkReceiveKind {
+                    owner,
+                    pending,
+                    bytes,
+                });
+                self.begin_network_reply(owner, constructor, None)?;
+            }
+            Frame::NetworkReceiveKind {
+                owner,
+                pending,
+                bytes,
+            } => {
+                reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+                self.frames.push(Frame::NetworkReceiveTuple {
+                    owner,
+                    pending,
+                    kind: value,
+                    bytes,
+                });
+                self.invoke_region_allocate(
+                    Value::RegionView(owner),
+                    Value::RegionRequest(super::value::RegionRequest {
+                        usable_bytes: 2 * core::mem::size_of::<Value>(),
+                        alignment: core::mem::align_of::<Value>(),
+                        invocation: None,
+                    }),
+                )?;
+            }
+            Frame::NetworkReceiveTuple {
+                owner,
+                pending,
+                kind,
+                bytes,
+            } => {
+                let Value::RegionStorage(storage) = value else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                if storage.invocation.owner != owner {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let mut fields = Vec::new();
+                reserve_control(&mut fields, 2, RuntimeResource::HeapCells, true)?;
+                fields.push(kind);
+                fields.push(bytes);
+                let tuple = self.initialize_region_tuple(storage, fields)?;
+                reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+                self.frames
+                    .push(Frame::NetworkReceiveMessage { owner, pending });
+                self.apply(Transition::direct(Control::Return(tuple)));
+            }
+            Frame::NetworkReceiveMessage { owner, pending } => {
+                let result = crate::types::ConstructorId::new(
+                    crate::types::NominalTypeId::new(pending.module, 6),
+                    0,
+                );
+                reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+                self.frames
+                    .push(Frame::NetworkReceiveCommit { owner, pending });
+                self.begin_network_reply(owner, result, Some(value))?;
+            }
+            Frame::NetworkReceiveCommit { owner, pending } => {
+                let Value::Location(result_location) = &value else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                // Pay both the local record and its later owner-safe report
+                // projection before the transport head can be committed.
+                charge_runtime_work(&mut self.instantiation_work, 10, RuntimePhase::Access)?;
+                let module = pending.module;
+                let worker = self
+                    .worker
+                    .as_mut()
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                let Some(next) = worker.next_delivery.checked_add(1) else {
+                    drop(pending);
+                    return self.begin_network_failure(
+                        owner,
+                        module,
+                        6,
+                        super::network_transport::Failure::Refused,
+                    );
+                };
+                let Some(report_capacity) = worker.deliveries.len().checked_add(1) else {
+                    drop(pending);
+                    return self.begin_network_failure(
+                        owner,
+                        module,
+                        6,
+                        super::network_transport::Failure::Refused,
+                    );
+                };
+                if !worker.report_buffer.is_empty()
+                    || worker.deliveries.try_reserve(1).is_err()
+                    || worker.report_buffer.try_reserve(report_capacity).is_err()
+                {
+                    drop(pending);
+                    return self.begin_network_failure(
+                        owner,
+                        module,
+                        6,
+                        super::network_transport::Failure::Refused,
+                    );
+                }
+                // Reserve receiver-held responsibility before removing the FIFO
+                // head. A failed commit removes this unpublished reservation.
+                worker.deliveries.push(HeldDelivery {
+                    identity: next,
+                    network: worker.network,
+                    side: worker.side,
+                    receive_site: pending.site,
+                    result_location: Some(*result_location),
+                    matched: DeliveryMatch::Unobserved,
+                    root_progress: DeliveryRootProgress::Unlinked,
+                });
+                if let Err(failure) = pending.guard.commit() {
+                    worker.deliveries.pop();
+                    return self.begin_network_failure(owner, module, 6, failure);
+                }
+                worker.next_delivery = next;
+                self.apply(Transition::direct(Control::Return(value)));
+            }
+            Frame::NetworkEndCommit {
+                network,
+                side,
+                receive_site,
+                generation,
+                ..
+            } => {
+                if !preflighted {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let Value::Location(result_location) = value else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                let worker = self.worker.as_mut().expect("preflight checked worker");
+                worker.end_observation = if worker.receive_generation == Some(generation) {
+                    Some(EndObservation {
+                        network,
+                        side,
+                        receive_site,
+                        result_location,
+                        matched: DeliveryMatch::Unobserved,
+                    })
+                } else {
+                    None
+                };
+                self.apply(Transition::direct(Control::Return(Value::Location(
+                    result_location,
+                ))));
+            }
+            Frame::NetworkWatchCommit {
+                owner,
+                module,
+                mut pending,
+            } => match pending.transport.publish_watch(pending.side, pending.token) {
+                Ok(()) => {
+                    pending.published = true;
+                    self.apply(Transition::direct(Control::Return(value)));
+                }
+                Err(failure) => {
+                    drop(pending);
+                    self.begin_network_failure(owner, module, 9, failure)?;
+                }
+            },
+            Frame::NetworkReply { owner, fields } => {
+                let Value::RegionStorage(storage) = value else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                if storage.invocation.owner != owner {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let result = self.initialize_region_tuple(storage, fields)?;
+                self.apply(Transition::direct(Control::Return(result)));
+            }
+            Frame::NetworkFailureReply { owner, result } => {
+                self.begin_network_reply(owner, result, Some(value))?
+            }
+            Frame::Match {
+                site,
+                arms,
+                environment,
+            } if self.worker.is_some() => {
+                let location = match &value {
+                    Value::Location(location) => Some(*location),
+                    _ => None,
+                };
+                let (transition, arm) =
+                    return_match_selected(arms, environment, value, &self.heap)?;
+                if let Some(location) = location {
+                    let worker = self
+                        .worker
+                        .as_mut()
+                        .ok_or(RuntimeFailure::InvalidControlState)?;
+                    let matches = worker
+                        .deliveries
+                        .iter()
+                        .filter(|held| held.result_location == Some(location))
+                        .count();
+                    if let Some(end) = &mut worker.end_observation
+                        && end.result_location == location
+                    {
+                        end.matched = if matches == 0 && end.matched == DeliveryMatch::Unobserved {
+                            DeliveryMatch::Observed { site, arm }
+                        } else {
+                            DeliveryMatch::Ambiguous
+                        };
+                    }
+                    for held in &mut worker.deliveries {
+                        if held.result_location == Some(location) {
+                            held.matched =
+                                if matches == 1 && held.matched == DeliveryMatch::Unobserved {
+                                    DeliveryMatch::Observed { site, arm }
+                                } else {
+                                    DeliveryMatch::Ambiguous
+                                };
+                        }
+                    }
+                }
+                self.apply(transition);
+            }
+            Frame::WorkerInput {
+                entry,
+                parameter,
+                environment,
+                input,
+                owner,
+                network,
+            } => {
+                let Value::RegionStorage(storage) = value else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                if storage.invocation.owner != owner {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let input = self.initialize_region_bytes(storage, &input, false)?;
+                reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+                self.frames.push(Frame::WorkerTuple {
+                    entry,
+                    parameter,
+                    environment,
+                    input,
+                    network,
+                });
+                self.invoke_region_allocate(
+                    Value::RegionView(owner),
+                    Value::RegionRequest(super::value::RegionRequest {
+                        usable_bytes: 2 * core::mem::size_of::<Value>(),
+                        alignment: core::mem::align_of::<Value>(),
+                        invocation: None,
+                    }),
+                )?;
+            }
+            Frame::WorkerTuple {
+                entry,
+                parameter,
+                environment,
+                input,
+                network,
+            } => {
+                let Value::RegionStorage(storage) = value else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                let mut fields = Vec::new();
+                reserve_control(&mut fields, 2, RuntimeResource::HeapCells, true)?;
+                fields.push(Value::ResourceHandle(network));
+                fields.push(input);
+                let argument = self.initialize_region_tuple(storage, fields)?;
+                let function = environment
+                    .lookup(entry, &self.program)
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                self.apply_worker_entry(function, parameter, network, argument)?;
+            }
+            Frame::WorkerApply { argument } => {
+                self.frames.push(Frame::ApplyArgument { function: value });
+                self.apply(Transition::direct(Control::Return(argument)));
+            }
             Frame::RegionBuffer(progress) => self.return_region_buffer(progress, value)?,
             Frame::ApplyFunction {
                 argument,
@@ -1448,19 +3831,23 @@ impl<'runtime> Machine<'runtime> {
                 records,
                 ..
             } => {
-                if !matches!(value, Value::Unit) {
-                    return Err(RuntimeFailure::InvalidControlState);
-                }
                 let entry = self
                     .region_scope(node)
                     .ok_or(RuntimeFailure::InvalidControlState)?
                     .entry;
+                if !preflighted {
+                    if !matches!(value, Value::Unit) {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    if !entry {
+                        charge_effect_work(
+                            &mut self.instantiation_work,
+                            records.len(),
+                            RuntimePhase::Cleanup,
+                        )?;
+                    }
+                }
                 if !entry {
-                    charge_effect_work(
-                        &mut self.instantiation_work,
-                        records.len(),
-                        RuntimePhase::Cleanup,
-                    )?;
                     for record in records {
                         if let Some(location) = record.location {
                             let cell = self
@@ -1487,15 +3874,17 @@ impl<'runtime> Machine<'runtime> {
                 invocation,
                 registered,
             } => {
-                if !registered
-                    || !matches!(value, Value::RegionStorage(storage) if storage.invocation == invocation)
-                {
-                    return Err(RuntimeFailure::InvalidControlState);
+                if !preflighted {
+                    if !registered
+                        || !matches!(value, Value::RegionStorage(storage) if storage.invocation == invocation)
+                    {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    let Value::RegionStorage(storage) = &value else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    self.validate_region_storage(*storage)?;
                 }
-                let Value::RegionStorage(storage) = &value else {
-                    return Err(RuntimeFailure::InvalidControlState);
-                };
-                self.validate_region_storage(*storage)?;
                 self.captured_cells = self
                     .captured_cells
                     .checked_sub(segment.frames.len())
@@ -1543,17 +3932,19 @@ impl<'runtime> Machine<'runtime> {
                 action,
                 environment,
             } => {
-                charge_effect_work(&mut self.instantiation_work, 2, RuntimePhase::Cleanup)?;
-                self.frames.try_reserve(1).map_err(|_| {
-                    legacy_failure(
-                        RuntimeFailure::ResourceCapacity,
-                        ResourceFailureCause::StorageReservationFailed,
-                        RuntimePhase::Cleanup,
-                        RuntimeResource::FrameStorage,
-                        Some(1),
-                        None,
-                    )
-                })?;
+                if !preflighted {
+                    charge_effect_work(&mut self.instantiation_work, 2, RuntimePhase::Cleanup)?;
+                    self.frames.try_reserve(1).map_err(|_| {
+                        legacy_failure(
+                            RuntimeFailure::ResourceCapacity,
+                            ResourceFailureCause::StorageReservationFailed,
+                            RuntimePhase::Cleanup,
+                            RuntimeResource::FrameStorage,
+                            Some(1),
+                            None,
+                        )
+                    })?;
+                }
                 self.frames.push(Frame::CleanupCompletion { saved: value });
                 self.apply(Transition::direct(Control::Evaluate(action, environment)));
             }
@@ -1601,7 +3992,7 @@ impl<'runtime> Machine<'runtime> {
                     },
                     _ => return Err(RuntimeFailure::InvalidControlState),
                 };
-                self.begin_retained_root(handler, key, environment)?;
+                self.begin_retained_root(node, handler, key, environment)?;
             }
             Frame::ContinueStore { node, environment } => {
                 let Value::ResourceHandle(store) = value else {
@@ -1634,8 +4025,8 @@ impl<'runtime> Machine<'runtime> {
                 };
                 self.continue_retained(node, environment, store, key)?;
             }
-            Frame::ResourceBoundary { key, payload, .. } => {
-                if let ResourcePayload::Store(store) = &payload {
+            Frame::ResourceBoundary { node, key, payload } => {
+                if !preflighted && let ResourcePayload::Store(store) = &payload {
                     charge_effect_work(
                         &mut self.instantiation_work,
                         store.slots.len(),
@@ -1652,13 +4043,36 @@ impl<'runtime> Machine<'runtime> {
                     .live_resources
                     .checked_sub(1)
                     .ok_or(RuntimeFailure::InvalidControlState)?;
+                let candidate = if preflighted && matches!(&payload, ResourcePayload::Store(_)) {
+                    self.worker
+                        .as_ref()
+                        .and_then(|worker| worker.processing_cut_candidate(node, key))
+                } else {
+                    None
+                };
                 drop(payload);
+                if let Some(index) = candidate {
+                    self.worker
+                        .as_mut()
+                        .expect("candidate belongs to a worker")
+                        .deliveries
+                        .remove(index);
+                }
                 let result = value;
                 self.trace_effect(EffectTraceEvent::ResourceReleased(key.0));
                 self.apply(Transition::direct(Control::Return(result)));
             }
-            Frame::RetainedRootCompletion { key } => {
-                let index = self.retained_store_index(key)?;
+            Frame::RetainedRootCompletion { key, origin } => {
+                let index = if preflighted {
+                    // Preflight checked the unique Store and paid this scan;
+                    // no frame between it and this pop can mutate the Store.
+                    self.frames.iter().position(|frame| matches!(frame,
+                        Frame::ResourceBoundary { key: found, payload: ResourcePayload::Store(_), .. }
+                            if *found == key
+                    )).expect("preflighted Store remains in place")
+                } else {
+                    self.retained_store_index(key)?
+                };
                 let Frame::ResourceBoundary {
                     payload: ResourcePayload::Store(store),
                     ..
@@ -1670,6 +4084,28 @@ impl<'runtime> Machine<'runtime> {
                     .active_roots
                     .checked_sub(1)
                     .ok_or(RuntimeFailure::InvalidControlState)?;
+                if let RetainedRootOrigin::Entered {
+                    root,
+                    delivery: Some(identity),
+                    ..
+                } = origin
+                {
+                    // The worker preflight checked and prepaid this exact lookup
+                    // before the owner marker was moved. This is only a marker
+                    // observation; cleanup and C3 do not follow from it.
+                    assert!(preflighted, "delivery marker requires worker preflight");
+                    let worker = self.worker.as_mut().expect("delivery marker has a worker");
+                    let held = worker
+                        .deliveries
+                        .iter_mut()
+                        .find(|held| {
+                            held.identity == identity.identity
+                                && held.network == identity.network
+                                && held.side == identity.side
+                        })
+                        .expect("preflighted delivery remains in place");
+                    held.root_progress = DeliveryRootProgress::MarkerReturned { store: key, root };
+                }
                 self.apply(Transition::direct(Control::Return(value)));
             }
             Frame::NativeInterpretBoundary { .. } => {
@@ -2075,7 +4511,7 @@ impl<'runtime> Machine<'runtime> {
             )?;
             for frame in frames {
                 match frame {
-                    Frame::RetainedRootCompletion { key: found } if *found == key => {
+                    Frame::RetainedRootCompletion { key: found, .. } if *found == key => {
                         return Ok(true);
                     }
                     Frame::RegionAllocated { segment, .. } => {
@@ -2114,8 +4550,67 @@ impl<'runtime> Machine<'runtime> {
         Ok(())
     }
 
+    // This only associates a held record with the actual marker; it is not a
+    // completion fact. The route must eventually come from linked validation.
+    fn processing_candidate(
+        &mut self,
+        root: NodeId,
+        handler: NodeId,
+        store_node: NodeId,
+    ) -> Result<Option<(usize, DeliveryRootIdentity)>, RuntimeFailure> {
+        let Some((route, count)) = self.worker.as_ref().and_then(|worker| {
+            worker
+                .processing_route
+                .map(|route| (route, worker.deliveries.len()))
+        }) else {
+            return Ok(None);
+        };
+        let worker = self.worker.as_ref().expect("route belongs to a worker");
+        if route.entry != worker.entry
+            || route.side != worker.side
+            || route.root != root
+            || route.handler != handler
+            || route.store != store_node
+        {
+            return Ok(None);
+        }
+        charge_runtime_work(
+            &mut self.instantiation_work,
+            count.saturating_mul(2),
+            RuntimePhase::Access,
+        )?;
+        let worker = self.worker.as_ref().expect("worker remains in place");
+        let mut found = None;
+        for (index, held) in worker.deliveries.iter().enumerate() {
+            if held.network == worker.network
+                && held.side == worker.side
+                && held.receive_site == route.receive
+                && held.matched
+                    == (DeliveryMatch::Observed {
+                        site: route.message_match,
+                        arm: route.arm,
+                    })
+                && held.root_progress == DeliveryRootProgress::Unlinked
+            {
+                if found.is_some() {
+                    return Ok(None);
+                }
+                found = Some((
+                    index,
+                    DeliveryRootIdentity {
+                        network: held.network,
+                        side: held.side,
+                        identity: held.identity,
+                    },
+                ));
+            }
+        }
+        Ok(found)
+    }
+
     fn begin_retained_root(
         &mut self,
+        root: NodeId,
         node: NodeId,
         key: ActivationKey,
         environment: Environment,
@@ -2128,12 +4623,14 @@ impl<'runtime> Machine<'runtime> {
             .ok_or(RuntimeFailure::InvalidControlState)?;
         let (body, handler_id) = (handler.body(), handler.id());
         let Frame::ResourceBoundary {
+            node: store_node,
             payload: ResourcePayload::Store(store),
             ..
         } = &self.frames[index]
         else {
             return Err(RuntimeFailure::InvalidControlState);
         };
+        let store_node = *store_node;
         let active = store.active_roots.checked_add(1).ok_or_else(|| {
             control_failure(
                 ResourceFailureCause::ConfiguredCapacity,
@@ -2142,6 +4639,7 @@ impl<'runtime> Machine<'runtime> {
                 Some(0),
             )
         })?;
+        let candidate = self.processing_candidate(root, node, store_node)?;
         reserve_control(&mut self.frames, 2, RuntimeResource::FrameStorage, false)?;
         reserve_control(&mut self.trace, 1, RuntimeResource::EffectTrace, false)?;
         if let Some(trace) = &mut self.effect_trace {
@@ -2155,7 +4653,19 @@ impl<'runtime> Machine<'runtime> {
             unreachable!("the checked store remains in place");
         };
         store.active_roots = active;
-        self.frames.push(Frame::RetainedRootCompletion { key });
+        if let Some((delivery_index, _)) = candidate {
+            let worker = self.worker.as_mut().expect("candidate belongs to a worker");
+            worker.deliveries[delivery_index].root_progress =
+                DeliveryRootProgress::Active { store: key, root };
+        }
+        self.frames.push(Frame::RetainedRootCompletion {
+            key,
+            origin: RetainedRootOrigin::Entered {
+                root,
+                handler: node,
+                delivery: candidate.map(|(_, identity)| identity),
+            },
+        });
         self.frames.push(Frame::HandlerBoundary {
             node,
             environment: environment.clone(),
@@ -2348,8 +4858,10 @@ impl<'runtime> Machine<'runtime> {
             body: some,
             environment,
         });
-        self.frames
-            .push(Frame::RetainedRootCompletion { key: activation });
+        self.frames.push(Frame::RetainedRootCompletion {
+            key: activation,
+            origin: RetainedRootOrigin::Restored,
+        });
         for frame in &captured.frames {
             if let Frame::HandlerBoundary { node, .. } = frame {
                 let handler = self
@@ -2617,6 +5129,12 @@ impl<'runtime> Machine<'runtime> {
             &mut self.instantiation_work,
             Some(RuntimePhase::Access),
         )?;
+        // Network calls use an authenticated structural node, never a raw request.
+        if crate::resolved::NetworkApi::for_module(effect.effect().module())
+            .is_some_and(|api| effect.effect() == api.io())
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
         // A source handler can intercept Probe, but it cannot grant the
         // store's driver authority to an active branch. Check the actual
         // live store before choosing any interpreter.
@@ -3832,6 +6350,10 @@ fn dispatch_entry(
             EffectExprKind::Pure(kind) => (kind, &expression.origin),
             EffectExprKind::Operation(operation) => {
                 return Ok(match operation {
+                    EffectOperation::Network(network) => Transition::suspend(
+                        Control::Evaluate(network.capacity, environment.clone()),
+                        Frame::NetworkCapacity { node, environment },
+                    ),
                     EffectOperation::Region(_)
                     | EffectOperation::RegionAllocate(_)
                     | EffectOperation::RegionTuple(_)
@@ -3927,7 +6449,7 @@ fn dispatch_entry(
             enter_tuple(tuple, environment)?
         }
         PureExprKind::Computation(PureComputation::Match(match_node)) => {
-            enter_match(match_node, environment)
+            enter_match(node, match_node, environment)
         }
         PureExprKind::Computation(PureComputation::NewtypeConversion(operation)) => {
             Transition::direct(Control::Evaluate(operation.child(), environment))
@@ -4050,10 +6572,15 @@ fn enter_tuple(
     ))
 }
 
-fn enter_match(match_node: &crate::core::data::MatchNode, environment: Environment) -> Transition {
+fn enter_match(
+    site: NodeId,
+    match_node: &crate::core::data::MatchNode,
+    environment: Environment,
+) -> Transition {
     Transition::suspend(
         Control::Evaluate(match_node.scrutinee(), environment.clone()),
         Frame::Match {
+            site,
             arms: match_node.arms().to_vec().into_boxed_slice(),
             environment,
         },
@@ -4277,7 +6804,9 @@ fn dispatch_return(
             values,
             environment,
         } => return_tuple(elements, next, values, environment, value, heap),
-        Frame::Match { arms, environment } => return_match(arms, environment, value, heap),
+        Frame::Match {
+            arms, environment, ..
+        } => return_match(arms, environment, value, heap),
         Frame::InitializeRecursive {
             pending,
             next,
@@ -4321,13 +6850,25 @@ fn return_match(
     value: Value,
     heap: &[HeapCell],
 ) -> Result<Transition, RuntimeFailure> {
-    for arm in &arms {
+    return_match_selected(arms, environment, value, heap).map(|(transition, _)| transition)
+}
+
+fn return_match_selected(
+    arms: Box<[crate::core::data::CoreMatchArm]>,
+    environment: Environment,
+    value: Value,
+    heap: &[HeapCell],
+) -> Result<(Transition, usize), RuntimeFailure> {
+    for (ordinal, arm) in arms.iter().enumerate() {
         let mut bindings = Vec::new();
         if matches_pattern(arm.pattern(), &value, heap, &mut bindings)? {
-            return Ok(Transition::direct(Control::Evaluate(
-                arm.body(),
-                environment.extend_many(bindings)?,
-            )));
+            return Ok((
+                Transition::direct(Control::Evaluate(
+                    arm.body(),
+                    environment.extend_many(bindings)?,
+                )),
+                ordinal,
+            ));
         }
     }
     Err(RuntimeFailure::ImpossibleMatch)
@@ -5052,7 +7593,7 @@ mod tests {
             literal::UnitNode,
             primitive::PrimitiveNode,
             type_ops::{TypeAbstractionNode, TypeApplicationNode},
-            validate, validate_effect, validate_effect_modules,
+            validate, validate_effect,
             variable::VariableNode,
         },
         elaborate::{EffectElaborator, check_module, link_modules},
@@ -5805,10 +8346,1823 @@ mod tests {
             .iter()
             .map(|module| (module.id(), module.source().id()))
             .collect::<Vec<_>>();
-        let program = validate_effect_modules(unchecked, &sources, &module_sources)
-            .expect("Effect Core should validate");
+        let program = crate::core::validate::validate_effect_modules_linked_with_work(
+            unchecked,
+            &sources,
+            &module_sources,
+            &linked,
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .expect("Effect Core should validate");
         let _ = std::fs::remove_file(path);
         program
+    }
+
+    #[test]
+    fn linked_one_way_fixture_reaches_effect_core() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/pinned-network/one-way.ash");
+        let graph = load_module_graph(&path, &ModuleRoots::empty()).expect("fixture should load");
+        let mut checked: Vec<crate::resolved::CheckedModule> = Vec::new();
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    crate::resolve::DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|module| module.module() == edge.target())
+                            .expect("dependency checked first")
+                            .exports(),
+                    )
+                    .expect("dependency exports")
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(module, &dependencies).expect("fixture should resolve");
+            checked.push(check_module(resolved).expect("fixture should type-check"));
+        }
+        let linked = link_modules(checked, graph.entry()).expect("fixture should link");
+        let linked = validate_interface_evidence(linked).expect("evidence should authenticate");
+        let mut elaborator = EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .expect("fixture should lower");
+        elaborator.finish(typed.node).expect("Core should finish");
+    }
+
+    #[test]
+    fn linked_native_one_way_completes_workers_and_settles() {
+        run_linked_native_one_way(false, false);
+    }
+
+    #[test]
+    fn linked_native_one_way_multiple_messages_and_empty() {
+        run_linked_native_one_way(true, false);
+    }
+
+    #[test]
+    fn linked_native_one_way_callback_failure_retains_delivery() {
+        run_linked_native_one_way(false, true);
+    }
+
+    fn run_linked_native_one_way(multiple: bool, fail_message: bool) {
+        use crate::foreign::{
+            source_bindings::{SourceNativeBindings, admit_source_native_program},
+            source_runtime::{NativeArgument, NativeCallError, NativeReply},
+        };
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        static MESSAGES: AtomicUsize = AtomicUsize::new(0);
+        static WAITS: AtomicUsize = AtomicUsize::new(0);
+        static EMPTY_BEFORE: AtomicBool = AtomicBool::new(false);
+        static EMPTY_BETWEEN: AtomicBool = AtomicBool::new(false);
+        let _test_guard = TEST_LOCK.lock().unwrap();
+        fn native_call(args: &[NativeArgument]) -> Result<NativeReply, NativeCallError> {
+            if args.len() != 1 {
+                return Err(NativeCallError);
+            }
+            CALLS.fetch_add(1, Ordering::SeqCst);
+            TEST_NETWORK_SIDE.with(|side| {
+                if side.get() == Some(super::super::network_transport::Side::B) {
+                    MESSAGES.fetch_add(1, Ordering::SeqCst);
+                    if TEST_NATIVE_FAILURE_ENABLED.load(Ordering::SeqCst) {
+                        TEST_NATIVE_CALLBACK_FAILED.with(|failed| failed.set(true));
+                        return Err(NativeCallError);
+                    }
+                }
+                Ok(NativeReply::Void)
+            })
+        }
+        fn coordinate(args: &[NativeArgument]) -> Result<NativeReply, NativeCallError> {
+            use super::super::network_transport::Side;
+            if args.len() != 1 {
+                return Err(NativeCallError);
+            }
+            TEST_NETWORK_SIDE.with(|side| match side.get() {
+                Some(Side::A) => {
+                    let wait = WAITS.fetch_add(1, Ordering::SeqCst);
+                    let flag = match wait {
+                        0 => &EMPTY_BEFORE,
+                        1 => &EMPTY_BETWEEN,
+                        _ => return Err(NativeCallError),
+                    };
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                    while !flag.load(Ordering::SeqCst) {
+                        if std::time::Instant::now() >= deadline {
+                            return Err(NativeCallError);
+                        }
+                        std::thread::yield_now();
+                    }
+                    Ok(NativeReply::Void)
+                }
+                Some(Side::B) => {
+                    match MESSAGES.load(Ordering::SeqCst) {
+                        0 => EMPTY_BEFORE.store(true, Ordering::SeqCst),
+                        1 => EMPTY_BETWEEN.store(true, Ordering::SeqCst),
+                        _ => {}
+                    }
+                    Ok(NativeReply::Void)
+                }
+                None => Ok(NativeReply::Void),
+            })
+        }
+        struct FixtureDir(std::path::PathBuf);
+        impl Drop for FixtureDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let base = std::env::temp_dir();
+        let mut directory = None;
+        for suffix in 0..1000 {
+            let path = base.join(format!(
+                "ash-native-one-way-{}-{suffix}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&path) {
+                Ok(()) => {
+                    directory = Some(FixtureDir(path));
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("fixture directory: {error}"),
+            }
+        }
+        let directory = directory.expect("unique fixture directory");
+        let source = include_str!("../../tests/fixtures/pinned-network/one-way.ash")
+            .replace(
+                "main : Unit -> Int\n",
+                "main : Unit -> Int ! {Native.EchoBytes}\n",
+            )
+            .replace(
+                "main () = {\n",
+                "main () = {\n    let _ = perform Native.EchoBytes.call (ByteOps.empty ())\n",
+            );
+        let source = if multiple {
+            source
+                .replace("{Network.IO<N>, Native.EchoBytes}", "{Network.IO<N>, Native.EchoBytes, Native.Signal}")
+                .replace("Network.Empty => receive_all worker", "Network.Empty => {\n        let _ = perform Native.Signal.call (ByteOps.empty ())\n        receive_all worker\n    }")
+                .replace("produce<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}", "produce<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>, Native.Signal}")
+                .replace("produce (worker, input) = match Network.try_send (worker, input) {", "produce (worker, input) = {\n    let _ = perform Native.Signal.call (ByteOps.empty ())\n    match Network.try_send (worker, input) {")
+                .replace("    Network.Full => produce (worker, input)\n    Network.Closed => ()\n    Network.SendFailed(_) => ()\n}\n\nmain", "    Network.Full => produce (worker, input)\n    Network.Closed => ()\n    Network.SendFailed(_) => ()\n    }\n}\n\nsend_second<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\nsend_second (worker, input) = match Network.try_send (worker, input) {\n    Network.Sent => ()\n    Network.Full => send_second (worker, input)\n    Network.Closed => ()\n    Network.SendFailed(_) => ()\n}\n\nmain")
+                .replace("    Network.Sent => {\n        let _ = Network.finish_send worker", "    Network.Sent => {\n        let _ = perform Native.Signal.call (ByteOps.empty ())\n        let _ = send_second (worker, input)\n        let _ = Network.finish_send worker")
+                .replace("main : Unit -> Int ! {Native.EchoBytes}", "main : Unit -> Int ! {Native.EchoBytes, Native.Signal}")
+                .replace("main () = {\n", "main () = {\n    let _ = perform Native.Signal.call (ByteOps.empty ())\n")
+        } else {
+            source
+        };
+        let native_source = include_str!("../../tests/fixtures/pinned-network/network_native.ash");
+        let native_source = if multiple {
+            native_source.replace("    symbol EchoBytes", "    symbol Signal : Bytes -> Unit { name \"fixture_network_signal\" }\n    symbol EchoBytes")
+        } else {
+            native_source.to_owned()
+        };
+        let path = directory.0.join("one-way.ash");
+        std::fs::write(&path, source).unwrap();
+        std::fs::write(directory.0.join("network_native.ash"), native_source).unwrap();
+        std::fs::write(
+            directory.0.join("worker_helper.ash"),
+            include_str!("../../tests/fixtures/pinned-network/worker_helper.ash"),
+        )
+        .unwrap();
+        let graph = load_module_graph(&path, &ModuleRoots::empty()).expect("fixture loads");
+        let mut checked: Vec<crate::resolved::CheckedModule> = Vec::new();
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    crate::resolve::DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|candidate| candidate.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            checked.push(check_module(resolve_module(module, &dependencies).unwrap()).unwrap());
+        }
+        let main_span = checked
+            .iter()
+            .find(|module| module.module() == graph.entry())
+            .expect("entry module checked")
+            .schemes()
+            .iter()
+            .find(|scheme| scheme.spelling == "main")
+            .expect("fixture main")
+            .origin
+            .primary_span();
+        let linked =
+            validate_interface_evidence(link_modules(checked, graph.entry()).unwrap()).unwrap();
+        let mut elaborator = EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let unchecked = elaborator
+            .finish_with_owner_free_native_entry(typed.node, main_span)
+            .unwrap_or_else(|_| panic!("the fixture's native root is authenticated"))
+            .0;
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let (mut work, _) = crate::compiler_work::resident_phase_work(
+            crate::compiler_work::CompilationPhase::IndependentCore,
+            &sources,
+        )
+        .unwrap();
+        let program = crate::core::validate::validate_effect_modules_linked_with_work(
+            unchecked, &sources, &relation, &linked, &mut work,
+        )
+        .expect("the linked network fixture is admitted");
+        let root = program.shared();
+        let expression = root.node(program.root()).unwrap();
+        let EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) =
+            &expression.kind
+        else {
+            panic!("the fixture installs its checked native interpretation");
+        };
+        let mut bindings = SourceNativeBindings::default();
+        for interpretation in boundary.interpretations() {
+            let callback: fn(&[NativeArgument]) -> Result<NativeReply, NativeCallError> =
+                match interpretation.symbol().symbol().name() {
+                    "EchoBytes" => native_call,
+                    "Signal" => coordinate,
+                    name => panic!("unexpected native symbol {name}"),
+                };
+            bindings
+                .insert(
+                    Arc::clone(interpretation.symbol()),
+                    callback,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .unwrap();
+        }
+        let admitted =
+            admit_source_native_program(&program, &bindings, &mut TypeWorkBudget::unbounded())
+                .unwrap();
+        CALLS.store(0, Ordering::SeqCst);
+        MESSAGES.store(0, Ordering::SeqCst);
+        WAITS.store(0, Ordering::SeqCst);
+        EMPTY_BEFORE.store(false, Ordering::SeqCst);
+        EMPTY_BETWEEN.store(false, Ordering::SeqCst);
+        *TEST_NATIVE_FAILURE_REPORT.lock().unwrap() = None;
+        TEST_NATIVE_FAILURE_ENABLED.store(fail_message, Ordering::SeqCst);
+        let result = evaluate_effect_with_source_native_program(admitted);
+        TEST_NATIVE_FAILURE_ENABLED.store(false, Ordering::SeqCst);
+        if fail_message {
+            assert!(
+                result.is_err(),
+                "native failure must prevent normal settlement"
+            );
+            assert_eq!(MESSAGES.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                *TEST_NATIVE_FAILURE_REPORT.lock().unwrap(),
+                Some((1, 1, true, true)),
+                "the failed carrier retains and reports the same committed delivery"
+            );
+            return;
+        }
+        let result = result.expect("both workers and their backing settle");
+        assert_eq!(result.value.to_string(), "42");
+        assert_eq!(
+            CALLS.load(Ordering::SeqCst),
+            if multiple { 3 } else { 2 },
+            "main and each received Message call the native helper once"
+        );
+        if multiple {
+            assert_eq!(MESSAGES.load(Ordering::SeqCst), 2);
+            assert_eq!(WAITS.load(Ordering::SeqCst), 2);
+            assert!(EMPTY_BEFORE.load(Ordering::SeqCst));
+            assert!(EMPTY_BETWEEN.load(Ordering::SeqCst));
+        }
+    }
+
+    #[test]
+    fn builtin_network_send_lowers_to_structural_call() {
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (worker, payload) = match Network.try_send (worker, payload) {\n",
+            "Network.Sent => ()\nNetwork.Full => ()\nNetwork.Closed => ()\n",
+            "Network.SendFailed(_) => ()\n}\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        assert!(
+            program.nodes().iter().any(|node| matches!(
+                &node.kind,
+                EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer))
+                    if matches!(&buffer.operation, crate::core::region::RegionBufferOperation::Network { effect, .. }
+                        if crate::resolved::NetworkApi::for_module(effect.effect().module())
+                            .is_some_and(|api| effect.effect() == api.io()))
+            )),
+            "the canonical send wrapper must lower to its structural operation"
+        );
+    }
+
+    #[test]
+    fn builtin_network_settle_lowers_to_structural_call() {
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "close<N> : Network.Pair<N> -> Network.FinishResult ! {Network.Join<N>}\n",
+            "close pair = Network.settle pair\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        assert!(program.nodes().iter().any(|node| matches!(
+            &node.kind,
+            EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer))
+                if matches!(&buffer.operation, crate::core::region::RegionBufferOperation::Network { effect, operation }
+                    if crate::resolved::NetworkApi::for_module(effect.effect().module())
+                        .is_some_and(|api| effect.effect() == api.join() && *operation == OperationId::new(api.join(), 1)))
+        )), "settle must have an authenticated structural Join operation");
+    }
+
+    #[test]
+    fn settle_refuses_without_checked_completion_and_retains_owner() {
+        use crate::eval::network_transport::NetworkTransport;
+        use crate::types::{InferenceVariableId, NominalTypeId, Type};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        let module = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.id.module().is_builtin_network())
+            .unwrap()
+            .id
+            .module();
+        let api = crate::resolved::NetworkApi::for_module(module).unwrap();
+        let activation = ActivationKey(47);
+        let effect = EffectInstance::new(
+            api.join(),
+            Box::new([Type::Inference(InferenceVariableId::new(activation.0))]),
+        );
+        let gate = triomphe::Arc::try_new(CarrierGate {
+            state: std::sync::Mutex::new(CarrierState {
+                phase: CarrierPhase::Preparing,
+                reports: [None, None],
+                release_requested: false,
+                teardown_done: [false; 2],
+            }),
+            changed: std::sync::Condvar::new(),
+        })
+        .unwrap();
+        let transport = NetworkTransport::prepare(1).unwrap();
+        let mut machine = Machine::new_effect(&program);
+        machine.control.take();
+        machine.frames.push(Frame::NetworkBoundary {
+            key: activation,
+            group: CarrierGroup {
+                gate,
+                transport,
+                threads: [None, None],
+                settled: false,
+            },
+        });
+        // The deliberately absent selected provider makes allocation fail after
+        // the typed failure is staged; the owner and both tags remain intact.
+        assert!(
+            machine
+                .interpret_network_settle(
+                    ActivationKey(99),
+                    &effect,
+                    OperationId::new(api.join(), 1),
+                    Value::ResourceHandle(activation),
+                )
+                .is_err()
+        );
+        let failed = crate::types::ConstructorId::new(NominalTypeId::new(module, 7), 1);
+        let incomplete = crate::types::ConstructorId::new(NominalTypeId::new(module, 4), 3);
+        assert!(machine.frames.iter().any(|frame| matches!(frame,
+            Frame::NetworkBoundary { key, .. } if *key == activation)));
+        assert!(machine.frames.iter().any(|frame| matches!(frame,
+            Frame::NetworkFailureReply { result, .. } if *result == failed)));
+        assert!(machine.frames.iter().any(|frame| matches!(frame,
+            Frame::NetworkReply { fields, .. } if matches!(fields.first(), Some(Value::ConstructorTag(tag)) if *tag == incomplete))));
+    }
+
+    #[test]
+    fn settle_failure_uses_selected_region_for_both_result_values() {
+        use crate::eval::network_transport::NetworkTransport;
+        use crate::types::{InferenceVariableId, NominalTypeId, Type};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        let module = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.id.module().is_builtin_network())
+            .unwrap()
+            .id
+            .module();
+        let api = crate::resolved::NetworkApi::for_module(module).unwrap();
+        let activation = ActivationKey(47);
+        let region = ActivationKey(48);
+        let effect = EffectInstance::new(
+            api.join(),
+            Box::new([Type::Inference(InferenceVariableId::new(activation.0))]),
+        );
+        let gate = triomphe::Arc::try_new(CarrierGate {
+            state: std::sync::Mutex::new(CarrierState {
+                phase: CarrierPhase::Preparing,
+                reports: [None, None],
+                release_requested: false,
+                teardown_done: [false; 2],
+            }),
+            changed: std::sync::Condvar::new(),
+        })
+        .unwrap();
+        let mut machine = Machine::new_effect(&program);
+        machine.control.take();
+        machine.frames.push(Frame::RegionBoundary {
+            node: program.root(),
+            key: region,
+            allocate: Value::RegionHostFunction {
+                owner: region,
+                release: false,
+            },
+            release: Value::RegionHostFunction {
+                owner: region,
+                release: true,
+            },
+            preceding: Value::Unit,
+            records: Vec::new(),
+        });
+        machine.frames.push(Frame::NetworkBoundary {
+            key: activation,
+            group: CarrierGroup {
+                gate,
+                transport: NetworkTransport::prepare(1).unwrap(),
+                threads: [None, None],
+                settled: false,
+            },
+        });
+        machine
+            .interpret_network_settle(
+                region,
+                &effect,
+                OperationId::new(api.join(), 1),
+                Value::ResourceHandle(activation),
+            )
+            .unwrap();
+        // The network boundary intentionally refuses after the result returns;
+        // it is not authorized to complete owner teardown in this fixture.
+        assert!(machine.run_loop().is_err());
+        for tag in [
+            crate::types::ConstructorId::new(NominalTypeId::new(module, 4), 3),
+            crate::types::ConstructorId::new(NominalTypeId::new(module, 7), 1),
+        ] {
+            assert!(machine.heap.iter().any(|cell| cell.stored_fields().is_some_and(
+                |fields| matches!(fields.first(), Some(Value::ConstructorTag(found)) if *found == tag)
+            )), "selected provider must construct {tag:?}");
+        }
+    }
+
+    #[test]
+    fn builtin_network_finish_receive_lowers_to_structural_call() {
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (worker, _) = match Network.finish_receive worker {\n",
+            "Network.Ok => ()\nNetwork.Failed(_) => ()\n}\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        assert!(program.nodes().iter().any(|node| matches!(
+            &node.kind,
+            EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer))
+                if matches!(&buffer.operation, crate::core::region::RegionBufferOperation::Network { effect, operation }
+                    if crate::resolved::NetworkApi::for_module(effect.effect().module())
+                        .is_some_and(|api| effect.effect() == api.io() && *operation == OperationId::new(api.io(), 7)))
+        )), "finish_receive must have an authenticated structural Core operation");
+    }
+
+    #[test]
+    fn worker_finish_receive_refuses_without_checked_completion() {
+        use crate::eval::network_transport::{NetworkTransport, Receive, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (worker, payload) = match Network.finish_receive worker {\n",
+            "Network.Ok => {\nlet _ = Network.try_send (worker, payload)\n()\n}\n",
+            "Network.Failed(Network.Refused) => ()\n",
+            "Network.Failed(_) => {\nlet _ = Network.try_send (worker, payload)\n()\n}\n}\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let transport = NetworkTransport::prepare(1).unwrap();
+        run_network_worker(
+            program.shared(),
+            root,
+            result,
+            entry,
+            parameter,
+            ActivationKey(47),
+            Side::A,
+            transport.clone(),
+            vec![42],
+            None,
+        )
+        .expect("the unchecked finish result is a typed refusal");
+        assert!(matches!(transport.reserve_receive(Side::B), Receive::Empty));
+    }
+
+    #[test]
+    fn finish_receive_rejects_a_nonoperation_site() {
+        use crate::eval::network_transport::{NetworkTransport, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (_, _) = ()\nmain : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let mut machine = Machine::new_network_worker(
+            program.shared(),
+            root,
+            result,
+            entry,
+            parameter,
+            ActivationKey(47),
+            Side::A,
+            NetworkTransport::prepare(1).unwrap(),
+            Vec::new(),
+        )
+        .unwrap();
+        machine.worker.as_mut().unwrap().input = None;
+        let module = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.id.module().is_builtin_network())
+            .unwrap()
+            .id
+            .module();
+        let api = crate::resolved::NetworkApi::for_module(module).unwrap();
+        let effect = EffectInstance::new(
+            api.io(),
+            Box::new([crate::types::Type::Inference(
+                crate::types::InferenceVariableId::new(47),
+            )]),
+        );
+        let frame_count = machine.frames.len();
+        assert!(matches!(
+            machine.interpret_network_finish_receive(
+                result,
+                ActivationKey(99),
+                &effect,
+                OperationId::new(api.io(), 7),
+                Value::ResourceHandle(ActivationKey(47)),
+            ),
+            Err(RuntimeFailure::InvalidControlState)
+        ));
+        assert_eq!(
+            machine.frames.len(),
+            frame_count,
+            "no reply allocation started"
+        );
+    }
+
+    #[test]
+    fn worker_reports_all_held_deliveries_without_moving_local_locations() {
+        use crate::eval::network_transport::{EnvelopeKind, NetworkTransport, Send, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (worker, _) = {\nlet _ = Network.try_receive worker\n",
+            "let _ = Network.try_receive worker\n()\n}\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let transport = NetworkTransport::prepare(2).unwrap();
+        assert_eq!(
+            transport.try_send(Side::B, EnvelopeKind::Application, &[1]),
+            Send::Sent
+        );
+        assert_eq!(
+            transport.try_send(Side::B, EnvelopeKind::Application, &[2]),
+            Send::Sent
+        );
+        let mut machine = Machine::new_network_worker(
+            program.shared(),
+            root,
+            result,
+            entry,
+            parameter,
+            ActivationKey(47),
+            Side::A,
+            transport,
+            Vec::new(),
+        )
+        .unwrap();
+        let evaluation = machine.run_loop().expect("both messages arrive");
+        let worker = machine.worker.as_mut().unwrap();
+        assert_eq!(worker.deliveries.len(), 2);
+        assert!(
+            worker
+                .deliveries
+                .iter()
+                .all(|held| held.result_location.is_some())
+        );
+        assert!(worker.report_buffer.capacity() >= worker.deliveries.len());
+        let report = worker.delivery_report();
+        assert_eq!(
+            report.iter().map(|held| held.identity).collect::<Vec<_>>(),
+            [1, 2]
+        );
+        assert_eq!(worker.deliveries.len(), 2);
+        assert!(
+            worker
+                .deliveries
+                .iter()
+                .all(|held| held.result_location.is_some())
+        );
+        drop(evaluation);
+    }
+
+    fn worker_fixture_entry(
+        program: &ValidatedEffectProgram,
+    ) -> (NodeId, NodeId, BinderId, TypeVariableId) {
+        use crate::types::{Kind, Type};
+        let root = program.root();
+        let EffectExprKind::Operation(EffectOperation::Region(region)) =
+            &program.node(root).unwrap().kind
+        else {
+            panic!("entry region")
+        };
+        let EffectExprKind::Operation(EffectOperation::Handler(handler)) =
+            &program.node(region.body()).unwrap().kind
+        else {
+            panic!("root allocation handler")
+        };
+        let mut cursor = handler.body();
+        let mut entry = None;
+        let mut parameter = None;
+        loop {
+            match &program.node(cursor).unwrap().kind {
+                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) => {
+                    cursor = binding.body()
+                }
+                EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::RecursiveBind(group),
+                )) => {
+                    for member in group.members() {
+                        let Type::Forall(parameters, body) = member.binder().ty() else {
+                            continue;
+                        };
+                        let [(identity, Kind::Type)] = parameters.as_ref() else {
+                            continue;
+                        };
+                        let Some(function) = body.function_view() else {
+                            continue;
+                        };
+                        let Type::Tuple(arguments) = function.domain() else {
+                            continue;
+                        };
+                        let [Type::Application(worker, owner), Type::Bytes] = arguments.as_ref()
+                        else {
+                            continue;
+                        };
+                        if matches!((&**worker, &**owner), (Type::Nominal(nominal), Type::Variable(variable)) if nominal.module().is_builtin_network() && nominal.declaration() == 1 && variable == identity)
+                        {
+                            entry = Some(member.binder().id());
+                            parameter = Some(*identity);
+                        }
+                    }
+                    cursor = group.body();
+                }
+                _ => break,
+            }
+        }
+        let entry = entry.expect("actual worker entry");
+        let parameter = parameter.expect("actual entry parameter");
+        (root, cursor, entry, parameter)
+    }
+
+    #[test]
+    fn worker_teardown_failure_preserves_delivery_report() {
+        use crate::eval::network_transport::{EnvelopeKind, Failure, NetworkTransport, Send, Side};
+        let transport = NetworkTransport::prepare(1).unwrap();
+        let scope = disposal::Scope::enter();
+        let bounded = disposal::NoGrowth::enter();
+        let mut pending = disposal::Pending::new(RuntimeResource::FrameStorage);
+        for _ in 0..9 {
+            pending.push(0_u8);
+        }
+        drop(pending);
+        drop(bounded);
+        let program = effect_program("main : Unit -> Unit\nmain () = ()\n");
+        let delivery = ReportedDelivery {
+            identity: 1,
+            network: ActivationKey(47),
+            side: Side::A,
+            receive_site: program.root(),
+        };
+        let exit = WorkerExit {
+            network: ActivationKey(47),
+            side: Side::A,
+            transport: transport.clone(),
+            deliveries: vec![delivery],
+        };
+        let failure = match finish_worker_exit(&scope, Ok(()), exit) {
+            Ok(_) => panic!("failed teardown must not report success"),
+            Err(failure) => failure,
+        };
+        assert!(matches!(failure.failure, RuntimeFailure::Report(_)));
+        assert_eq!(failure.exit.deliveries, [delivery]);
+        assert_eq!(
+            transport.try_send(Side::A, EnvelopeKind::Application, &[42]),
+            Send::Failed(Failure::WorkerFailed)
+        );
+    }
+
+    #[test]
+    fn worker_failure_preserves_committed_receive_obligations() {
+        use crate::eval::network_transport::{EnvelopeKind, NetworkTransport, Send, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "effect Boom {\nfail : Unit -> Unit\n}\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>, Boom}\n",
+            "start (worker, input) = match Network.try_receive worker {\n",
+            "Network.Message(_, _) => perform Boom.fail ()\n",
+            "Network.Empty => ()\nNetwork.End => ()\nNetwork.ReceiveFailed(_) => ()\n}\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let transport = NetworkTransport::prepare(1).unwrap();
+        assert_eq!(
+            transport.try_send(Side::B, EnvelopeKind::Application, &[42]),
+            Send::Sent
+        );
+        let make_input = |side| CarrierInput {
+            program: program.shared(),
+            root,
+            result,
+            entry,
+            parameter,
+            network: ActivationKey(47),
+            side,
+            processing_route: None,
+            processing_cut: None,
+            end_route: None,
+            transport: transport.clone(),
+            input: Vec::new(),
+            bindings: None,
+        };
+        let mut group = CarrierGroup::prepare(make_input(Side::A), make_input(Side::B))
+            .expect("both carriers prepare");
+        {
+            let state = group.gate.lock();
+            assert!(state.phase == CarrierPhase::Preparing);
+            assert!(state.reports.iter().all(Option::is_none));
+        }
+        assert_eq!(
+            transport.users().unwrap().queued,
+            1,
+            "no worker executes before commit"
+        );
+        group.commit().unwrap();
+        let mut state = group.gate.lock();
+        while state.reports[0].is_none() {
+            let (next, timeout) = group
+                .gate
+                .changed
+                .wait_timeout(state, std::time::Duration::from_secs(5))
+                .unwrap();
+            state = next;
+            assert!(!timeout.timed_out(), "worker should report its failure");
+        }
+        let Some(CarrierReport::Failed(failure, deliveries)) = &state.reports[0] else {
+            panic!("the unhandled effect must report failure");
+        };
+        assert!(matches!(failure, RuntimeFailure::ForeignBinding));
+        assert_eq!(
+            deliveries.len(),
+            1,
+            "committed receiver-held work survives failure"
+        );
+        assert!(state.phase == CarrierPhase::Terminal);
+        assert!(
+            !group.threads[0].as_ref().unwrap().is_finished(),
+            "failed carrier retains local support"
+        );
+        drop(state);
+    }
+
+    #[test]
+    fn worker_end_observation_requires_host_end_and_successful_reply() {
+        use crate::eval::network_transport::{NetworkTransport, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (worker, _) = match Network.try_receive worker {\n",
+            "Network.Message(_, _) => ()\nNetwork.Empty => ()\nNetwork.End => ()\nNetwork.ReceiveFailed(_) => ()\n}\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        for sealed in [false, true] {
+            let transport = NetworkTransport::prepare(1).unwrap();
+            if sealed {
+                transport.finish_send(Side::B).unwrap();
+            }
+            let mut machine = Machine::new_network_worker(
+                program.shared(),
+                root,
+                result,
+                entry,
+                parameter,
+                ActivationKey(47),
+                Side::A,
+                transport,
+                Vec::new(),
+            )
+            .unwrap();
+            drop(machine.run_loop().expect("receive returns"));
+            let observed = machine.worker.as_ref().unwrap().end_observation;
+            if sealed {
+                let observed = observed.expect("actual End reply is recorded");
+                assert_eq!(observed.network, ActivationKey(47));
+                assert_eq!(observed.side, Side::A);
+                assert!(matches!(
+                    observed.matched,
+                    DeliveryMatch::Observed { arm: 2, .. }
+                ));
+                assert!(matches!(&program.node(observed.receive_site).unwrap().kind,
+                    EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer))
+                        if matches!(&buffer.operation, crate::core::region::RegionBufferOperation::Network { effect, operation }
+                            if crate::resolved::NetworkApi::for_module(effect.effect().module())
+                                .is_some_and(|api| effect.effect() == api.io() && *operation == OperationId::new(api.io(), 2)))));
+            } else {
+                assert!(observed.is_none(), "Empty cannot create End provenance");
+            }
+        }
+    }
+
+    #[test]
+    fn worker_capacity_one_feedback_allows_producing_cleanup() {
+        use crate::eval::network_transport::{Failure, NetworkTransport, Side};
+        let common = concat!(
+            "import @builtin.network as Network\n",
+            "import @builtin.bytes as ByteOps\n",
+            "effect Unexpected {\nfail : Unit -> Unit\n}\n",
+            "send<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>, Unexpected}\n",
+            "send (worker, payload) = match Network.try_send (worker, payload) {\n",
+            "Network.Sent => ()\nNetwork.Full => send (worker, payload)\n",
+            "Network.Closed => perform Unexpected.fail ()\n",
+            "Network.SendFailed(_) => perform Unexpected.fail ()\n}\n",
+            "receive<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>, Unexpected}\n",
+            "receive (worker, expected) = match Network.try_receive worker {\n",
+            "Network.Message(Network.Application, actual) => match ByteOps.equal (actual, expected) {\n",
+            "true => ()\nfalse => perform Unexpected.fail ()\n}\n",
+            "Network.Empty => receive (worker, expected)\n",
+            "Network.Message(Network.Control, _) => perform Unexpected.fail ()\n",
+            "Network.End => perform Unexpected.fail ()\n",
+            "Network.ReceiveFailed(_) => perform Unexpected.fail ()\n}\n",
+        );
+        let producer = effect_program(&format!(
+            "{common}start<N> : (Network.Worker<N>, Bytes) -> Unit ! {{Network.IO<N>, Unexpected}}\n\
+             start (worker, input) = cleanup fn(ignored) {{\n    send (worker, input)\n}} {{\n\
+             let _ = send (worker, input)\nreceive (worker, input)\n}}\nmain : Unit -> Unit\nmain () = ()\n"
+        ));
+        let consumer = effect_program(&format!(
+            "{common}start<N> : (Network.Worker<N>, Bytes) -> Unit ! {{Network.IO<N>, Unexpected}}\n\
+             start (worker, input) = {{\nlet _ = receive (worker, input)\n\
+             let _ = send (worker, input)\nreceive (worker, input)\n}}\nmain : Unit -> Unit\nmain () = ()\n"
+        ));
+        let (producer_root, producer_result, producer_entry, producer_parameter) =
+            worker_fixture_entry(&producer);
+        let (consumer_root, consumer_result, consumer_entry, consumer_parameter) =
+            worker_fixture_entry(&consumer);
+        let transport = NetworkTransport::prepare(1).unwrap();
+        let producer_transport = transport.clone();
+        let consumer_transport = transport.clone();
+        let producer_program = producer.shared();
+        let consumer_program = consumer.shared();
+        let producer_thread = std::thread::spawn(move || {
+            run_network_worker(
+                producer_program,
+                producer_root,
+                producer_result,
+                producer_entry,
+                producer_parameter,
+                ActivationKey(47),
+                Side::A,
+                producer_transport,
+                vec![42],
+                None,
+            )
+        });
+        let consumer_thread = std::thread::spawn(move || {
+            run_network_worker(
+                consumer_program,
+                consumer_root,
+                consumer_result,
+                consumer_entry,
+                consumer_parameter,
+                ActivationKey(47),
+                Side::B,
+                consumer_transport,
+                vec![42],
+                None,
+            )
+        });
+        let producer_exit = producer_thread
+            .join()
+            .expect("producer thread")
+            .expect("producer and its cleanup return");
+        let consumer_exit = consumer_thread
+            .join()
+            .expect("consumer thread")
+            .expect("consumer receives both messages");
+        assert_eq!(
+            producer_exit.deliveries.len(),
+            1,
+            "producer receives feedback"
+        );
+        assert_eq!(
+            consumer_exit.deliveries.len(),
+            2,
+            "consumer receives body and cleanup messages"
+        );
+        assert_eq!(transport.users().unwrap().queued, 0);
+        assert_eq!(
+            transport.settle(),
+            Err(Failure::IncompleteTeardown),
+            "worker-local returns alone do not authorize settlement"
+        );
+    }
+
+    #[test]
+    fn worker_selected_provider_message_copy_failure_restores_fifo_head() {
+        use crate::eval::network_transport::{EnvelopeKind, NetworkTransport, Receive, Send, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (worker, _) = {\nlet _ = Network.try_receive worker\n()\n}\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let module = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.id.module().is_builtin_network())
+            .unwrap()
+            .id
+            .module();
+        let api = crate::resolved::NetworkApi::for_module(module).unwrap();
+        let effect = EffectInstance::new(
+            api.io(),
+            Box::new([crate::types::Type::Inference(
+                crate::types::InferenceVariableId::new(47),
+            )]),
+        );
+        let mut pending_nodes = vec![root];
+        let site = loop {
+            let node = pending_nodes
+                .pop()
+                .expect("actual linked receive operation");
+            let kind = &program.node(node).unwrap().kind;
+            if matches!(kind, EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer))
+                if matches!(&buffer.operation, crate::core::region::RegionBufferOperation::Network { effect, operation }
+                    if effect.effect() == api.io() && *operation == OperationId::new(api.io(), 2)))
+            {
+                break node;
+            }
+            pending_nodes.extend((0..kind.child_count()).filter_map(|index| kind.child_at(index)));
+        };
+        let transport = NetworkTransport::prepare(1).unwrap();
+        assert_eq!(
+            transport.try_send(Side::B, EnvelopeKind::Application, &[7, 8]),
+            Send::Sent
+        );
+        let mut machine = Machine::new_network_worker(
+            program.shared(),
+            root,
+            result,
+            entry,
+            parameter,
+            ActivationKey(47),
+            Side::A,
+            transport.clone(),
+            Vec::new(),
+        )
+        .unwrap();
+        machine.control.take();
+        machine.worker.as_mut().unwrap().input = None;
+        let region = ActivationKey(48);
+        machine.frames.push(Frame::RegionBoundary {
+            node: root,
+            key: region,
+            allocate: Value::RegionHostFunction {
+                owner: region,
+                release: false,
+            },
+            release: Value::RegionHostFunction {
+                owner: region,
+                release: true,
+            },
+            preceding: Value::Unit,
+            records: Vec::new(),
+        });
+        machine
+            .interpret_network_receive(
+                site,
+                region,
+                &effect,
+                OperationId::new(api.io(), 2),
+                Value::ResourceHandle(ActivationKey(47)),
+            )
+            .expect("the actual Message reaches its selected provider");
+        assert!(matches!(machine.frames.last(), Some(Frame::ApplyArgument {
+            function: Value::RegionHostFunction { owner, release: false }
+        }) if *owner == region));
+        machine.instantiation_work = TypeWorkBudget::with_limit(0);
+        assert!(is_work_exhaustion(machine.run_loop().unwrap_err()));
+        assert!(machine.worker.as_ref().unwrap().deliveries.is_empty());
+        assert!(machine.frames.iter().any(|frame| matches!(frame,
+            Frame::RegionAllocated { segment, .. } if segment.frames.iter().any(|frame| matches!(frame,
+                Frame::NetworkReceiveBytes { pending, .. } if pending.site == site)))));
+        assert!(matches!(transport.reserve_receive(Side::A), Receive::Busy));
+        assert_eq!(
+            transport.try_send(Side::B, EnvelopeKind::Application, &[9]),
+            Send::Full
+        );
+        drop(machine);
+        let Receive::Message(mut restored) = transport.reserve_receive(Side::A) else {
+            panic!("the uncommitted FIFO head must be restored")
+        };
+        assert_eq!(restored.snapshot().unwrap(), &[7, 8]);
+        restored.commit().unwrap();
+    }
+
+    #[test]
+    fn worker_end_reply_allocation_failure_does_not_publish_observation() {
+        use crate::eval::network_transport::{NetworkTransport, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (_, _) = ()\nmain : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let transport = NetworkTransport::prepare(1).unwrap();
+        transport.finish_send(Side::B).unwrap();
+        let mut machine = Machine::new_network_worker(
+            program.shared(),
+            root,
+            result,
+            entry,
+            parameter,
+            ActivationKey(47),
+            Side::A,
+            transport,
+            Vec::new(),
+        )
+        .unwrap();
+        machine.worker.as_mut().unwrap().input = None;
+        let module = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.id.module().is_builtin_network())
+            .unwrap()
+            .id
+            .module();
+        let api = crate::resolved::NetworkApi::for_module(module).unwrap();
+        let effect = EffectInstance::new(
+            api.io(),
+            Box::new([crate::types::Type::Inference(
+                crate::types::InferenceVariableId::new(47),
+            )]),
+        );
+        // There is no provider for this owner, so the selected reply fails
+        // after genuine End was observed but before a result was constructed.
+        assert!(
+            machine
+                .interpret_network_receive(
+                    result,
+                    ActivationKey(99),
+                    &effect,
+                    OperationId::new(api.io(), 2),
+                    Value::ResourceHandle(ActivationKey(47)),
+                )
+                .is_err()
+        );
+        assert!(machine.worker.as_ref().unwrap().end_observation.is_none());
+        assert!(
+            machine
+                .frames
+                .iter()
+                .any(|frame| matches!(frame, Frame::NetworkEndCommit { .. }))
+        );
+    }
+
+    #[test]
+    fn worker_newer_receive_invalidates_pending_end_including_overflow() {
+        use crate::eval::network_transport::{NetworkTransport, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (_, _) = ()\nmain : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let module = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.id.module().is_builtin_network())
+            .unwrap()
+            .id
+            .module();
+        let api = crate::resolved::NetworkApi::for_module(module).unwrap();
+        let effect = EffectInstance::new(
+            api.io(),
+            Box::new([crate::types::Type::Inference(
+                crate::types::InferenceVariableId::new(47),
+            )]),
+        );
+        for initial_generation in [0, u64::MAX - 1] {
+            let transport = NetworkTransport::prepare(1).unwrap();
+            transport.finish_send(Side::B).unwrap();
+            let mut machine = Machine::new_network_worker(
+                program.shared(),
+                root,
+                result,
+                entry,
+                parameter,
+                ActivationKey(47),
+                Side::A,
+                transport,
+                Vec::new(),
+            )
+            .unwrap();
+            let worker = machine.worker.as_mut().unwrap();
+            worker.input = None;
+            worker.receive_generation = Some(initial_generation);
+            // An absent provider leaves the genuine outer End pending. The
+            // second authenticated receive represents provider reentry.
+            let receive = |machine: &mut Machine| {
+                machine.interpret_network_receive(
+                    result,
+                    ActivationKey(99),
+                    &effect,
+                    OperationId::new(api.io(), 2),
+                    Value::ResourceHandle(ActivationKey(47)),
+                )
+            };
+            assert!(receive(&mut machine).is_err());
+            let outer = machine
+                .frames
+                .iter()
+                .rposition(|frame| matches!(frame, Frame::NetworkEndCommit { .. }))
+                .unwrap();
+            assert!(receive(&mut machine).is_err());
+            // Model the older provider returning its already constructed End
+            // after the nested operation; only the pending frame is under test.
+            machine.frames.truncate(outer + 1);
+            let location = machine.heap.len();
+            let end =
+                crate::types::ConstructorId::new(crate::types::NominalTypeId::new(module, 6), 2);
+            machine.heap.push(HeapCell::Tuple(
+                vec![Value::ConstructorTag(end)].into_boxed_slice(),
+            ));
+            let value = Value::Location(location);
+            assert!(machine.preflight_worker_owner_return(&value).unwrap());
+            let frame = machine.frames.pop().unwrap();
+            machine.control.take();
+            machine.return_from_preflighted(frame, value, true).unwrap();
+            assert!(
+                machine.worker.as_ref().unwrap().end_observation.is_none(),
+                "a newer receive must invalidate an older End at generation {initial_generation}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_constructed_end_cannot_create_host_observation() {
+        use crate::eval::network_transport::{NetworkTransport, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (_, _) = match Network.End {\n",
+            "Network.Message(_, _) => ()\nNetwork.Empty => ()\nNetwork.End => ()\nNetwork.ReceiveFailed(_) => ()\n}\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let mut machine = Machine::new_network_worker(
+            program.shared(),
+            root,
+            result,
+            entry,
+            parameter,
+            ActivationKey(47),
+            Side::A,
+            NetworkTransport::prepare(1).unwrap(),
+            Vec::new(),
+        )
+        .unwrap();
+        drop(machine.run_loop().expect("constructed End returns"));
+        assert!(machine.worker.as_ref().unwrap().end_observation.is_none());
+    }
+
+    #[test]
+    fn worker_finish_send_allows_peer_to_observe_genuine_end() {
+        use crate::eval::network_transport::{NetworkTransport, Receive, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (worker, payload) = {\nlet _ = Network.finish_send worker\n",
+            "match Network.try_receive worker {\n",
+            "Network.End => ()\nNetwork.Empty => start (worker, payload)\n",
+            "Network.Message(_, _) => ()\nNetwork.ReceiveFailed(_) => ()\n}\n}\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let transport = NetworkTransport::prepare(1).unwrap();
+        let input = |side| CarrierInput {
+            program: program.shared(),
+            root,
+            result,
+            entry,
+            parameter,
+            network: ActivationKey(47),
+            side,
+            processing_route: None,
+            processing_cut: None,
+            end_route: None,
+            transport: transport.clone(),
+            input: Vec::new(),
+            bindings: None,
+        };
+        let mut group = CarrierGroup::prepare(input(Side::A), input(Side::B)).unwrap();
+        group.commit().unwrap();
+        let mut state = group.gate.lock();
+        while state.reports.iter().any(Option::is_none) {
+            let (next, timeout) = group
+                .gate
+                .changed
+                .wait_timeout(state, std::time::Duration::from_secs(5))
+                .unwrap();
+            state = next;
+            assert!(
+                !timeout.timed_out(),
+                "workers should report after genuine End"
+            );
+        }
+        assert!(state.reports.iter().all(|report| matches!(report, Some(CarrierReport::Returned(deliveries)) if deliveries.is_empty())));
+        assert!(matches!(transport.reserve_receive(Side::A), Receive::End));
+        assert!(matches!(transport.reserve_receive(Side::B), Receive::End));
+    }
+
+    #[test]
+    fn worker_finish_send_returns_typed_failure_after_transport_failure() {
+        use crate::eval::network_transport::{NetworkTransport, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (worker, _) = match Network.finish_send worker {\n",
+            "Network.Ok => ()\nNetwork.Failed(_) => ()\n}\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let transport = NetworkTransport::prepare(1).unwrap();
+        transport.fail();
+        run_network_worker(
+            program.shared(),
+            root,
+            result,
+            entry,
+            parameter,
+            ActivationKey(47),
+            Side::A,
+            transport,
+            Vec::new(),
+            None,
+        )
+        .expect("the actual FinishResult.Failed value matches its typed branch");
+    }
+
+    #[test]
+    fn worker_failed_send_cannot_finish_receive_or_settle() {
+        use crate::eval::network_transport::{Failure, NetworkTransport, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "effect Unexpected {\nfail : Unit -> Unit\n}\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>, Unexpected}\n",
+            "start (worker, input) = match Network.try_send (worker, input) {\n",
+            "Network.SendFailed(_) => match Network.finish_receive worker {\n",
+            "Network.Failed(_) => ()\nNetwork.Ok => perform Unexpected.fail ()\n}\n",
+            "Network.Sent => perform Unexpected.fail ()\n",
+            "Network.Full => perform Unexpected.fail ()\n",
+            "Network.Closed => perform Unexpected.fail ()\n}\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let transport = NetworkTransport::prepare(1).unwrap();
+        transport.fail();
+        run_network_worker(
+            program.shared(),
+            root,
+            result,
+            entry,
+            parameter,
+            ActivationKey(47),
+            Side::A,
+            transport.clone(),
+            Vec::new(),
+            None,
+        )
+        .expect("failed send and refused finish must select the actual typed failure branches");
+        assert_eq!(transport.settle(), Err(Failure::IncompleteTeardown));
+    }
+
+    #[test]
+    fn worker_watches_ready_endpoint_polls_and_cancels() {
+        use crate::eval::network_transport::{NetworkTransport, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (worker, _) = match Network.watch (worker, Network.Writable) {\n",
+            "Network.Watching(registration) => match Network.poll_wake worker {\n",
+            "Network.Wake(_) => match Network.cancel_watch (worker, registration) {\n",
+            "Network.Ok => ()\nNetwork.Failed(_) => {\nlet _ = Network.finish_send worker\n()\n}\n}\n",
+            "Network.NoWake => {\nlet _ = Network.finish_send worker\n()\n}\n",
+            "Network.WakeFailed(_) => {\nlet _ = Network.finish_send worker\n()\n}\n}\n",
+            "Network.WatchFailed(_) => {\nlet _ = Network.finish_send worker\n()\n}\n}\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let transport = NetworkTransport::prepare(1).unwrap();
+        run_network_worker(
+            program.shared(),
+            root,
+            result,
+            entry,
+            parameter,
+            ActivationKey(47),
+            Side::A,
+            transport.clone(),
+            Vec::new(),
+            None,
+        )
+        .expect("the worker can watch and cancel its writable endpoint");
+        assert_eq!(transport.users().unwrap().registrations, 0);
+        assert!(matches!(
+            transport.reserve_receive(Side::B),
+            crate::eval::network_transport::Receive::Empty
+        ));
+    }
+
+    #[test]
+    fn worker_unpublished_watch_rolls_back_when_reply_allocation_fails() {
+        use crate::eval::network_transport::{Interest, NetworkTransport, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (_, _) = ()\nmain : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let transport = NetworkTransport::prepare(1).unwrap();
+        let token = transport
+            .watch_pending(Side::A, Interest::Writable)
+            .unwrap();
+        let published = transport.watch(Side::A, Interest::Writable).unwrap();
+        let mut machine = Machine::new_network_worker(
+            program.shared(),
+            root,
+            result,
+            entry,
+            parameter,
+            ActivationKey(47),
+            Side::A,
+            transport.clone(),
+            Vec::new(),
+        )
+        .unwrap();
+        let module = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.id.module().is_builtin_network())
+            .unwrap()
+            .id
+            .module();
+        machine.frames.push(Frame::NetworkWatchCommit {
+            owner: ActivationKey(99),
+            module,
+            pending: PendingNetworkWatch {
+                transport: transport.clone(),
+                side: Side::A,
+                token,
+                published: false,
+            },
+        });
+        machine.instantiation_work = TypeWorkBudget::with_limit(0);
+        let result =
+            crate::types::ConstructorId::new(crate::types::NominalTypeId::new(module, 9), 0);
+        assert!(
+            machine
+                .begin_network_reply(
+                    ActivationKey(99),
+                    result,
+                    Some(Value::NetworkRegistration(
+                        crate::eval::value::NetworkRegistration {
+                            network: ActivationKey(47),
+                            token
+                        }
+                    ))
+                )
+                .is_err()
+        );
+        assert_eq!(transport.users().unwrap().registrations, 2);
+        machine.rollback_pending_network_watches();
+        assert_eq!(transport.users().unwrap().registrations, 1);
+        transport.cancel_watch(Side::A, published).unwrap();
+        assert!(
+            machine
+                .frames
+                .iter()
+                .any(|frame| matches!(frame, Frame::NetworkWatchCommit { .. }))
+        );
+    }
+
+    #[test]
+    fn worker_discarded_watch_reply_retires_unpublished_registration() {
+        use crate::eval::network_transport::{Interest, NetworkTransport, Side};
+        let transport = NetworkTransport::prepare(1).unwrap();
+        for _ in 0..100 {
+            let token = transport
+                .watch_pending(Side::A, Interest::Writable)
+                .unwrap();
+            assert!(transport.poll_wake(Side::A).unwrap().is_none());
+            drop(PendingNetworkWatch {
+                transport: transport.clone(),
+                side: Side::A,
+                token,
+                published: false,
+            });
+        }
+        assert_eq!(transport.users().unwrap().registrations, 0);
+    }
+
+    #[test]
+    fn worker_watch_resolves_tuple_and_interest_aliases() {
+        use crate::eval::network_transport::{NetworkTransport, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (_, _) = ()\nmain : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let transport = NetworkTransport::prepare(1).unwrap();
+        let mut machine = Machine::new_network_worker(
+            program.shared(),
+            root,
+            result,
+            entry,
+            parameter,
+            ActivationKey(47),
+            Side::A,
+            transport.clone(),
+            Vec::new(),
+        )
+        .unwrap();
+        machine.worker.as_mut().unwrap().input = None;
+        let module = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.id.module().is_builtin_network())
+            .unwrap()
+            .id
+            .module();
+        let api = crate::resolved::NetworkApi::for_module(module).unwrap();
+        let effect = EffectInstance::new(
+            api.io(),
+            Box::new([crate::types::Type::Inference(
+                crate::types::InferenceVariableId::new(47),
+            )]),
+        );
+        let writable =
+            crate::types::ConstructorId::new(crate::types::NominalTypeId::new(module, 8), 1);
+        machine.heap = vec![
+            HeapCell::Constructor(writable, None),
+            HeapCell::Alias(0),
+            HeapCell::Tuple(
+                vec![Value::ResourceHandle(ActivationKey(47)), Value::Location(1)]
+                    .into_boxed_slice(),
+            ),
+            HeapCell::Alias(2),
+        ];
+        // The artificial owner refuses reply allocation after the host watch;
+        // observing the tentative registration proves both aliases resolved.
+        assert!(
+            machine
+                .interpret_network_readiness(
+                    ActivationKey(99),
+                    &effect,
+                    OperationId::new(api.io(), 4),
+                    Value::Location(3)
+                )
+                .is_err()
+        );
+        assert_eq!(transport.users().unwrap().registrations, 1);
+        machine.rollback_pending_network_watches();
+        assert_eq!(transport.users().unwrap().registrations, 0);
+    }
+
+    #[test]
+    fn worker_watch_publication_failure_builds_typed_failure() {
+        use crate::eval::network_transport::{Interest, NetworkTransport, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (_, _) = ()\nmain : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let transport = NetworkTransport::prepare(1).unwrap();
+        let token = transport
+            .watch_pending(Side::A, Interest::Writable)
+            .unwrap();
+        transport.fail();
+        let mut machine = Machine::new_network_worker(
+            program.shared(),
+            root,
+            result,
+            entry,
+            parameter,
+            ActivationKey(47),
+            Side::A,
+            transport.clone(),
+            Vec::new(),
+        )
+        .unwrap();
+        let module = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.id.module().is_builtin_network())
+            .unwrap()
+            .id
+            .module();
+        let frame = Frame::NetworkWatchCommit {
+            owner: ActivationKey(99),
+            module,
+            pending: PendingNetworkWatch {
+                transport: transport.clone(),
+                side: Side::A,
+                token,
+                published: false,
+            },
+        };
+        // The artificial owner refuses the later allocation; the preceding
+        // frame still identifies the actual WatchFailed constructor.
+        assert!(machine.return_from(frame, Value::Unit).is_err());
+        let expected =
+            crate::types::ConstructorId::new(crate::types::NominalTypeId::new(module, 9), 1);
+        assert!(machine.frames.iter().any(|frame| matches!(frame, Frame::NetworkFailureReply { result, .. } if *result == expected)));
+        assert_eq!(transport.users().unwrap().registrations, 0);
+    }
+
+    #[test]
+    fn terminal_carrier_does_not_start_worker_after_commit() {
+        use crate::eval::network_transport::{EnvelopeKind, NetworkTransport, Send, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (worker, _) = match Network.try_receive worker {\n",
+            "Network.Message(_, _) => ()\nNetwork.Empty => ()\nNetwork.End => ()\nNetwork.ReceiveFailed(_) => ()\n}\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let transport = NetworkTransport::prepare(1).unwrap();
+        assert_eq!(
+            transport.try_send(Side::B, EnvelopeKind::Application, &[42]),
+            Send::Sent
+        );
+        let gate = triomphe::Arc::try_new(CarrierGate {
+            state: std::sync::Mutex::new(CarrierState {
+                phase: CarrierPhase::Terminal,
+                reports: [None, None],
+                release_requested: false,
+                teardown_done: [false; 2],
+            }),
+            changed: std::sync::Condvar::new(),
+        })
+        .unwrap();
+        let input = CarrierInput {
+            program: program.shared(),
+            root,
+            result,
+            entry,
+            parameter,
+            network: ActivationKey(47),
+            side: Side::A,
+            processing_route: None,
+            processing_cut: None,
+            end_route: None,
+            transport: transport.clone(),
+            input: Vec::new(),
+            bindings: None,
+        };
+        let worker_gate = gate.clone();
+        let thread = std::thread::spawn(move || run_network_carrier(input, worker_gate));
+        let mut state = gate.lock();
+        while state.reports[0].is_none() {
+            let (next, timeout) = gate
+                .changed
+                .wait_timeout(state, std::time::Duration::from_secs(5))
+                .unwrap();
+            state = next;
+            assert!(!timeout.timed_out(), "terminal carrier should report");
+        }
+        assert!(
+            matches!(&state.reports[0], Some(CarrierReport::Failed(RuntimeFailure::InvalidControlState, deliveries)) if deliveries.is_empty())
+        );
+        assert_eq!(
+            transport.users().unwrap().queued,
+            1,
+            "terminal carrier must not receive"
+        );
+        assert!(
+            !thread.is_finished(),
+            "prepared support remains on its carrier"
+        );
+    }
+
+    #[test]
+    fn worker_root_rebuilds_globals_copies_input_and_skips_main() {
+        use crate::core::effect::{EffectExprKind, EffectOperation};
+        use crate::eval::network_transport::{NetworkTransport, Receive, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\nimport @builtin.bytes as ByteOps\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (worker, payload) = region<R> local {\nusing local {\nmatch ByteOps.at (payload, 0) {\n",
+            "ByteOps.ByteAt(byte) => {\nlet _ = Network.try_send (worker, payload)\n",
+            "match Network.try_receive worker {\nNetwork.Message(_, message) => {\nlet _ = ByteOps.at (message, 0)\n()\n}\n",
+            "Network.Empty => ()\nNetwork.End => ()\nNetwork.ReceiveFailed(_) => ()\n}\n",
+            "}\nByteOps.InvalidIndex => ()\n}\n}\n}\n",
+            "effect MainOnly {\nping : Unit -> Unit\n}\n",
+            "main : Unit -> Unit\nmain () = handle (perform MainOnly.ping ()) with MainOnly {\n",
+            "ping ignored => resume ()\n}\n",
+        ));
+        let (root, cursor, entry, parameter) = worker_fixture_entry(&program);
+        let main_effect = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.spelling == "MainOnly")
+            .unwrap()
+            .id;
+        let transport = NetworkTransport::prepare(1).unwrap();
+        assert!(matches!(
+            Machine::new_network_worker(
+                program.shared(),
+                root,
+                cursor,
+                entry,
+                parameter,
+                ActivationKey(u32::MAX - 1),
+                Side::A,
+                transport.clone(),
+                Vec::new(),
+            ),
+            Err(RuntimeFailure::ResourceCapacity)
+        ));
+        for side in [Side::A, Side::B] {
+            let input = vec![42_u8];
+            let source_address = input.as_ptr() as usize;
+            let receiver = match side {
+                Side::A => Side::B,
+                Side::B => Side::A,
+            };
+            assert_eq!(
+                transport.try_send(
+                    receiver,
+                    crate::eval::network_transport::EnvelopeKind::Application,
+                    &[42]
+                ),
+                crate::eval::network_transport::Send::Sent
+            );
+            let mut machine = Machine::new_network_worker(
+                program.shared(),
+                root,
+                cursor,
+                entry,
+                parameter,
+                ActivationKey(47),
+                side,
+                transport.clone(),
+                input,
+            )
+            .expect("prepared worker");
+            let result = machine.run_loop().expect("local entry returns");
+            assert_eq!(machine.worker.as_ref().unwrap().deliveries.len(), 1);
+            let held = machine.worker.as_ref().unwrap().deliveries[0];
+            assert_eq!(held.identity, 1);
+            assert_eq!(held.network, ActivationKey(47));
+            assert_eq!(held.side, side);
+            assert!(held.result_location.is_some());
+            let DeliveryMatch::Observed {
+                site: match_site,
+                arm,
+            } = held.matched
+            else {
+                panic!("the actual Message result must reach its Match arm");
+            };
+            assert_eq!(arm, 0);
+            assert!(matches!(
+                &program.node(match_site).unwrap().kind,
+                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(_)))
+            ));
+            assert!(matches!(&program.node(held.receive_site).unwrap().kind,
+                EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer))
+                if matches!(&buffer.operation, crate::core::region::RegionBufferOperation::Network { operation, .. } if operation.operation() == 2)));
+            let report = machine.worker.as_mut().unwrap().delivery_report();
+            assert_eq!(
+                report,
+                [ReportedDelivery {
+                    identity: held.identity,
+                    network: held.network,
+                    side: held.side,
+                    receive_site: held.receive_site
+                }]
+            );
+            assert_eq!(
+                machine.worker.as_ref().unwrap().deliveries,
+                [held],
+                "reporting must not transfer worker-local held state"
+            );
+            assert!(matches!(result.value, Value::Unit));
+            assert!(!result.trace.iter().any(|event| match event {
+                TraceEvent::Enter(id) => matches!(&program.node(*id).unwrap().kind,
+                    EffectExprKind::Operation(EffectOperation::Request(request)) if request.effect().effect() == main_effect),
+            }), "the worker must not execute caller main");
+            let local = result
+                .heap
+                .cells_for_test()
+                .iter()
+                .find_map(|cell| match cell {
+                    HeapCell::Bytes(bytes, len, false) if &bytes[..*len] == [42_u8] => {
+                        Some(bytes.as_ptr() as usize)
+                    }
+                    _ => None,
+                })
+                .expect("region-owned startup bytes");
+            assert_ne!(
+                local, source_address,
+                "worker storage is copied while source is live"
+            );
+            assert_eq!(result.heap.cells_for_test().iter().filter(|cell|
+                matches!(cell, HeapCell::Bytes(bytes, len, false) if &bytes[..*len] == [42_u8])
+            ).count(), 1, "received bytes in the selected inner region must be released there");
+            let Receive::Message(mut message) = transport.reserve_receive(receiver) else {
+                panic!("the worker published a message");
+            };
+            assert_eq!(message.snapshot().unwrap(), [42]);
+            message.commit().unwrap();
+            assert_eq!(
+                transport.users().unwrap().queued,
+                0,
+                "the worker consumed its incoming message"
+            );
+        }
+        std::thread::scope(|scope| {
+            for side in [Side::A, Side::B] {
+                let code = program.shared();
+                let transport = transport.clone();
+                scope.spawn(move || {
+                    run_network_worker(
+                        code,
+                        root,
+                        cursor,
+                        entry,
+                        parameter,
+                        ActivationKey(47),
+                        side,
+                        transport,
+                        vec![42],
+                        None,
+                    )
+                    .expect("worker-local entry and teardown return");
+                });
+            }
+        });
     }
 
     fn resource_program() -> ValidatedEffectProgram {
@@ -5970,6 +10324,361 @@ mod tests {
         };
         let environment = Environment::new().extend(scope.callback, callback).unwrap();
         (program, scope, environment)
+    }
+
+    #[test]
+    fn worker_message_binds_only_unique_delivery_to_actual_root_marker() {
+        use crate::eval::network_transport::{EnvelopeKind, NetworkTransport, Send, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "import @builtin.retained_control as Control\n",
+            "effect Checkpoint<S> {\ncheckpoint : Unit -> Unit\n}\n",
+            "process : Unit -> Unit\n",
+            "process () = resource Control.Store<S,(Unit -> Unit ! {Control.Drive<S>})> store = () {\n",
+            "handle (perform Checkpoint<S>.checkpoint ()) with Checkpoint<S> using store {\n",
+            "checkpoint ignored => resume ()\n}\n}\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (worker, _) = match Network.try_receive worker {\n",
+            "Network.Message(_, _) => ()\nNetwork.Empty => ()\nNetwork.End => ()\nNetwork.ReceiveFailed(_) => ()\n}\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (entry_root, result, entry, parameter) = worker_fixture_entry(&program);
+        let mut pending = vec![entry_root];
+        let mut visited = std::collections::HashSet::new();
+        let mut root = None;
+        let mut store_node = None;
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            let node = program.node(id).unwrap();
+            match &node.kind {
+                EffectExprKind::Operation(EffectOperation::RetainedRoot(_)) => root = Some(id),
+                EffectExprKind::Operation(EffectOperation::Store(_)) => store_node = Some(id),
+                _ => {}
+            }
+            pending
+                .extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
+        }
+        let root = root.expect("actual linked retained root");
+        let EffectExprKind::Operation(EffectOperation::RetainedRoot(root_node)) =
+            &program.node(root).unwrap().kind
+        else {
+            unreachable!()
+        };
+        let handler = root_node.handler;
+        let store_node = store_node.expect("actual linked Store acquisition");
+        let api = program
+            .registry()
+            .effects()
+            .iter()
+            .find_map(|effect| crate::resolved::StoreApi::for_module(effect.id.module()))
+            .unwrap();
+        for case in 0..13 {
+            let transport = NetworkTransport::prepare(1).unwrap();
+            assert_eq!(
+                transport.try_send(Side::B, EnvelopeKind::Application, &[42]),
+                Send::Sent
+            );
+            let mut machine = Machine::new_network_worker(
+                program.shared(),
+                entry_root,
+                result,
+                entry,
+                parameter,
+                ActivationKey(47),
+                Side::A,
+                transport,
+                Vec::new(),
+            )
+            .unwrap();
+            drop(machine.run_loop().expect("actual Message branch"));
+            let worker = machine.worker.as_mut().unwrap();
+            let held = worker.deliveries[0];
+            let DeliveryMatch::Observed { site, arm } = held.matched else {
+                panic!("Message match")
+            };
+            // Test-only nomination. Production must obtain this route from the
+            // independently checked payload-to-root relation, which is pending.
+            let mut route = ProcessingRoute {
+                entry,
+                side: Side::A,
+                receive: held.receive_site,
+                message_match: site,
+                arm,
+                root,
+                handler,
+                store: store_node,
+            };
+            match case {
+                2 => route.receive = entry_root,
+                3 => route.message_match = entry_root,
+                4 => route.arm += 1,
+                5 => route.entry = BinderId::new(u32::MAX),
+                6 => route.side = Side::B,
+                7 => route.root = entry_root,
+                8 => route.handler = entry_root,
+                9 => route.store = entry_root,
+                _ => {}
+            }
+            worker.processing_route = Some(route);
+            if matches!(case, 1 | 12) {
+                let mut duplicate = held;
+                duplicate.identity += 1;
+                worker.deliveries.push(duplicate);
+            }
+            let key = ActivationKey(80);
+            machine.frames.push(Frame::ResourceBoundary {
+                node: store_node,
+                key,
+                payload: ResourcePayload::Store(Box::new(RetainedStore::new(key, api))),
+            });
+            machine.live_resources = 1;
+            machine
+                .begin_retained_root(root, handler, key, Environment::new())
+                .unwrap();
+            machine.control.take();
+            let handler_frame = machine.frames.pop().unwrap();
+            machine.return_from(handler_frame, Value::Unit).unwrap();
+            machine.control.take();
+            if case == 0 {
+                machine.instantiation_work = TypeWorkBudget::with_limit(0);
+                assert!(is_work_exhaustion(
+                    machine
+                        .preflight_worker_owner_return(&Value::Unit)
+                        .unwrap_err()
+                ));
+                assert!(matches!(
+                    machine.frames.last(),
+                    Some(Frame::RetainedRootCompletion {
+                        origin: RetainedRootOrigin::Entered {
+                            delivery: Some(_),
+                            ..
+                        },
+                        ..
+                    })
+                ));
+                assert_eq!(
+                    machine.worker.as_ref().unwrap().deliveries[0].root_progress,
+                    DeliveryRootProgress::Active { store: key, root }
+                );
+                machine.instantiation_work = TypeWorkBudget::unbounded();
+            }
+            assert!(machine.preflight_worker_owner_return(&Value::Unit).unwrap());
+            let marker = machine.frames.pop().unwrap();
+            machine
+                .return_from_preflighted(marker, Value::Unit, true)
+                .unwrap();
+            let worker = machine.worker.as_ref().unwrap();
+            assert_eq!(
+                worker.deliveries.len(),
+                if matches!(case, 1 | 12) { 2 } else { 1 }
+            );
+            assert_eq!(
+                worker.deliveries[0].root_progress,
+                if matches!(case, 0 | 10 | 11) {
+                    DeliveryRootProgress::MarkerReturned { store: key, root }
+                } else {
+                    DeliveryRootProgress::Unlinked
+                }
+            );
+            if matches!(case, 0 | 10 | 11 | 12) {
+                // Test-only cut; no product issuer exists until the separate
+                // C3/cleanup/suffix judgment is established.
+                if case != 0 {
+                    let mut checked_route = crate::core::dialect::NetworkProcessingRoute {
+                        owner: entry_root,
+                        entry,
+                        side: 0,
+                        receive: held.receive_site,
+                        message_match: site,
+                        arm,
+                        root,
+                        handler,
+                        store: store_node,
+                    };
+                    if case == 11 {
+                        checked_route.receive = entry_root;
+                    }
+                    machine.worker.as_mut().unwrap().processing_cut =
+                        Some(crate::core::dialect::NetworkProcessingCut {
+                            route: checked_route,
+                        });
+                }
+                machine.control.take();
+                if case == 10 {
+                    machine.instantiation_work = TypeWorkBudget::with_limit(0);
+                    assert!(is_work_exhaustion(
+                        machine
+                            .preflight_worker_owner_return(&Value::Unit)
+                            .unwrap_err()
+                    ));
+                    assert!(
+                        matches!(machine.frames.last(), Some(Frame::ResourceBoundary { key: found, .. }) if *found == key)
+                    );
+                    assert_eq!(
+                        machine.worker.as_ref().unwrap().deliveries[0].root_progress,
+                        DeliveryRootProgress::MarkerReturned { store: key, root }
+                    );
+                    machine.instantiation_work = TypeWorkBudget::unbounded();
+                }
+                assert!(machine.preflight_worker_owner_return(&Value::Unit).unwrap());
+                let boundary = machine.frames.pop().unwrap();
+                machine
+                    .return_from_preflighted(boundary, Value::Unit, true)
+                    .unwrap();
+                let remaining = machine.worker.as_ref().unwrap().deliveries.len();
+                assert_eq!(
+                    remaining,
+                    if case == 10 {
+                        0
+                    } else if case == 12 {
+                        2
+                    } else {
+                        1
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn worker_marker_return_preserves_owner_on_budget_failure() {
+        use crate::eval::network_transport::{NetworkTransport, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "import @builtin.retained_control as Control\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (_, _) = ()\nmain : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let api = program
+            .registry()
+            .effects()
+            .iter()
+            .find_map(|effect| crate::resolved::StoreApi::for_module(effect.id.module()))
+            .unwrap();
+        for budget in [Some(0), Some(2), None] {
+            let mut machine = Machine::new_network_worker(
+                program.shared(),
+                root,
+                result,
+                entry,
+                parameter,
+                ActivationKey(47),
+                Side::A,
+                NetworkTransport::prepare(1).unwrap(),
+                Vec::new(),
+            )
+            .unwrap();
+            let key = ActivationKey(8);
+            let mut store = RetainedStore::new(key, api);
+            store.active_roots = 1;
+            machine.live_resources = 1;
+            machine.control = Some(Control::Return(Value::Unit));
+            machine.frames.push(Frame::ResourceBoundary {
+                node: root,
+                key,
+                payload: ResourcePayload::Store(Box::new(store)),
+            });
+            machine.frames.push(Frame::RetainedRootCompletion {
+                key,
+                origin: RetainedRootOrigin::Entered {
+                    root,
+                    handler: root,
+                    delivery: None,
+                },
+            });
+            if let Some(limit) = budget {
+                assert!(limit == 0 || limit == machine.frames.len());
+                machine.instantiation_work = TypeWorkBudget::with_limit(limit);
+                assert!(is_work_exhaustion(machine.run_loop().unwrap_err()));
+                assert_eq!(machine.instantiation_work.used(), limit);
+                assert!(matches!(machine.frames.last(),
+                    Some(Frame::RetainedRootCompletion { key: found, .. }) if *found == key));
+                assert!(matches!(&machine.frames[0],
+                    Frame::ResourceBoundary { payload: ResourcePayload::Store(store), .. }
+                        if store.activation == key && store.active_roots == 1));
+            } else {
+                let result = machine.run_loop().expect("actual marker returns");
+                assert!(matches!(result.value, Value::Unit));
+                assert!(machine.frames.is_empty());
+                assert_eq!(machine.live_resources, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn worker_owner_preflight_keeps_frames_on_reported_failure() {
+        let (program, scope, environment) = cleanup_fixture();
+        let mut machine = Machine::new_effect(&program);
+        machine.frames.push(Frame::CleanupBoundary {
+            action: scope.action,
+            environment,
+        });
+        machine.instantiation_work = TypeWorkBudget::with_limit(0);
+        assert!(machine.preflight_worker_owner_return(&Value::Unit).is_err());
+        assert!(matches!(
+            machine.frames.last(),
+            Some(Frame::CleanupBoundary { .. })
+        ));
+
+        machine.frames.clear();
+        machine.frames.push(Frame::ResourceBoundary {
+            node: program.root(),
+            key: ActivationKey(7),
+            payload: ResourcePayload::Cell(Value::Unit),
+        });
+        machine.live_resources = 0;
+        assert!(machine.preflight_worker_owner_return(&Value::Unit).is_err());
+        assert!(matches!(
+            machine.frames.last(),
+            Some(Frame::ResourceBoundary { .. })
+        ));
+
+        let program = effect_program(
+            "import @builtin.retained_control as Control\nmain : Unit -> Unit\nmain () = ()\n",
+        );
+        let api = program
+            .registry()
+            .effects()
+            .iter()
+            .find_map(|effect| crate::resolved::StoreApi::for_module(effect.id.module()))
+            .unwrap();
+        let mut machine = Machine::new_effect(&program);
+        let key = ActivationKey(8);
+        let mut store = RetainedStore::new(key, api);
+        store.active_roots = 1;
+        machine.live_resources = 1;
+        machine.frames.push(Frame::ResourceBoundary {
+            node: program.root(),
+            key,
+            payload: ResourcePayload::Store(Box::new(store)),
+        });
+        assert!(machine.preflight_worker_owner_return(&Value::Unit).is_err());
+        assert!(
+            matches!(machine.frames.last(), Some(Frame::ResourceBoundary { payload: ResourcePayload::Store(store), .. }) if store.active_roots == 1)
+        );
+
+        let program = effect_program("main : Unit -> Unit\nmain () = ()\n");
+        let mut machine = Machine::new_effect(&program);
+        machine.frames.push(Frame::RegionCompletion {
+            node: program.root(),
+            key: ActivationKey(9),
+            allocate: Value::Unit,
+            preceding: Value::Unit,
+            saved: Value::Unit,
+            records: Vec::new(),
+        });
+        assert!(
+            machine
+                .preflight_worker_owner_return(&Value::Boolean(false))
+                .is_err()
+        );
+        assert!(matches!(
+            machine.frames.last(),
+            Some(Frame::RegionCompletion { .. })
+        ));
     }
 
     #[test]
@@ -9422,7 +14131,7 @@ mod tests {
             &crate::core::data::TupleNode,
             Environment,
         ) -> Result<Transition, RuntimeFailure> = enter_tuple;
-        let _: fn(&crate::core::data::MatchNode, Environment) -> Transition = enter_match;
+        let _: fn(NodeId, &crate::core::data::MatchNode, Environment) -> Transition = enter_match;
         let _: fn(&TypeAbstractionNode, Environment) -> Transition = enter_type_abstraction;
         let _: fn(&TypeApplicationNode, Environment) -> Transition = enter_type_application;
         let _: fn(BinderId, NodeId, Environment, Value) -> Result<Transition, RuntimeFailure> =
@@ -9635,6 +14344,7 @@ mod tests {
         assert!(matches!(
             dispatch_return(
                 Frame::Match {
+                    site: variable,
                     arms: Box::new([]),
                     environment: Environment::new(),
                 },

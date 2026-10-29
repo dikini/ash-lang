@@ -1,0 +1,6 @@
+
+running 1 test
+test eval::machine::tests::worker_capacity_one_feedback_allows_producing_cleanup ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1772 filtered out; finished in 0.40s
+

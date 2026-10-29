@@ -7581,6 +7581,7 @@ enum BodyWork<'a> {
     RegionBody(&'a crate::resolved::ResolvedRegionExpr),
     ResourceBody(&'a crate::resolved::ResolvedResourceExpr),
     StoreBody(&'a crate::resolved::ResolvedStoreExpr),
+    NetworkBody(&'a crate::resolved::ResolvedNetworkExpr),
     ResourceExit(&'a crate::resolved::ResolvedTypeVariable),
     Declaration(&'a ResolvedLocalDeclaration),
     LexicalNewtype(&'a crate::resolved::ResolvedNominalType),
@@ -7747,6 +7748,24 @@ fn check_expression_work<'a>(
                 )?;
                 push_body_work(&mut work, BodyWork::Expression(&store.body), span, budget)?;
             }
+            BodyWork::NetworkBody(network) => {
+                let parameters = std::slice::from_ref(&network.identity);
+                authenticate_owner_parameters(registry, parameters, budget)?;
+                if network.identity.kind != Kind::Type || !network.acquisition.owns(network) {
+                    return Err(KindFailure::internal_cause(
+                        span,
+                        KindInternalCause::ResourceIdentityKind,
+                    ));
+                }
+                environments.extend_owner_parameters(parameters, budget)?;
+                push_body_work(
+                    &mut work,
+                    BodyWork::ResourceExit(&network.identity),
+                    span,
+                    budget,
+                )?;
+                push_body_work(&mut work, BodyWork::Expression(&network.body), span, budget)?;
+            }
             BodyWork::ResourceExit(identity) => {
                 environments.remove_owner_parameter_extension(std::slice::from_ref(identity));
             }
@@ -7812,6 +7831,20 @@ fn check_expression_work<'a>(
                         &mut work,
                         BodyWork::Expression(&store.initializer),
                         store.initializer.span,
+                        budget,
+                    )?;
+                }
+                ResolvedExprKind::Network(network) => {
+                    push_body_work(
+                        &mut work,
+                        BodyWork::NetworkBody(network),
+                        expression.span,
+                        budget,
+                    )?;
+                    push_body_work(
+                        &mut work,
+                        BodyWork::Expression(&network.initializer),
+                        network.initializer.span,
                         budget,
                     )?;
                 }
@@ -8077,6 +8110,7 @@ fn body_work_span(item: BodyWork<'_>) -> Span {
         BodyWork::RegionBody(region) => region.identity.origin.primary_span(),
         BodyWork::ResourceBody(resource) => resource.acquisition.span,
         BodyWork::StoreBody(store) => store.acquisition.span,
+        BodyWork::NetworkBody(network) => network.acquisition.span,
         BodyWork::ResourceExit(identity) => identity.origin.primary_span(),
         BodyWork::Declaration(declaration) => local_declaration_span(declaration),
         BodyWork::LexicalNewtype(nominal) => nominal.origin.primary_span(),

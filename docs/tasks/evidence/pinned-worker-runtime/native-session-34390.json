@@ -1,0 +1,9 @@
+{
+  "session_id": 34390,
+  "observed_exit_code": 0,
+  "binary": "/tmp/ash-restored-tuple2/ash-lib-test",
+  "binary_sha256": "ad02d4c5b35f9a6ed72e85709ce668d64ebe74a0b083bfa0f3cf091e7ff7d57b",
+  "filter": "eval::machine::tests::linked_native_one_way_",
+  "output": "/tmp/ash-restored-tuple2/native.log",
+  "output_caveat": "Diagnostics from stopped duplicate session 12793 are interleaved; the final summary reports 3 passed, 0 failed."
+}

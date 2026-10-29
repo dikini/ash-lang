@@ -22,6 +22,40 @@ pub struct SourceNativeBindings {
     pub(crate) tuple_storage: Option<crate::eval::NativeTupleAdapter>,
 }
 impl SourceNativeBindings {
+    /// Prepares an owned worker table while retaining each checked symbol's
+    /// identity. Native code and its backing still follow the host contract.
+    pub(crate) fn try_copy_for_worker(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, RuntimeFailure> {
+        // HashMap iteration may visit empty buckets as well as live entries.
+        work.charge(self.entries.capacity())
+            .map_err(|()| RuntimeFailure::ForeignBinding)?;
+        let mut entries = HashMap::new();
+        entries
+            .try_reserve(self.entries.len())
+            .map_err(|_| RuntimeFailure::ForeignBinding)?;
+        for (operation, binding) in &self.entries {
+            entries.insert(
+                *operation,
+                NativeBinding {
+                    symbol: Arc::clone(&binding.symbol),
+                    callback: binding.callback,
+                },
+            );
+        }
+        Ok(Self {
+            entries,
+            tuple_storage: self.tuple_storage,
+        })
+    }
+
+    pub(crate) fn contains_checked_symbol(&self, symbol: &Arc<CheckedForeignSymbol>) -> bool {
+        self.entries
+            .get(&symbol.operation())
+            .is_some_and(|binding| Arc::ptr_eq(symbol, &binding.symbol))
+    }
+
     pub(crate) fn insert(
         &mut self,
         symbol: Arc<CheckedForeignSymbol>,

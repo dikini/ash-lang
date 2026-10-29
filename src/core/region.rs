@@ -190,6 +190,11 @@ pub enum RegionBufferOperation {
     IntegerArithmetic(super::Primitive),
     StringLiteral(std::sync::Arc<[u8]>),
     Intrinsic(super::packed::IntrinsicNode),
+    /// An authenticated built-in network call with explicit allocation context.
+    Network {
+        effect: crate::types::EffectInstance,
+        operation: crate::types::OperationId,
+    },
 }
 
 /// The only administrative prefix admitted around a direct stored function is

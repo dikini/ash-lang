@@ -2,6 +2,7 @@ pub(crate) mod disposal;
 mod failure;
 
 mod machine;
+mod network_transport;
 mod value;
 
 pub use failure::{

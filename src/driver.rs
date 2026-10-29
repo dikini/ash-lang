@@ -976,7 +976,7 @@ where
         configuration,
         &mut InterfaceConstraintBudget::default(),
         interface_validator,
-        |program, sources, modules| {
+        |program, sources, modules, _linked| {
             validator(program, sources, modules)
                 .map(|program| (program, None))
                 .map_err(|failure| (failure, None))
@@ -1011,7 +1011,7 @@ where
         configuration,
         constraint_work,
         interface_validator,
-        |program, sources, modules| {
+        |program, sources, modules, _linked| {
             validator(program, sources, modules)
                 .map(|program| (program, None))
                 .map_err(|failure| (failure, None))
@@ -1040,6 +1040,7 @@ where
         UnvalidatedEffectProgram,
         &[&SourceFile],
         &[(ModuleId, SourceId)],
+        &ValidatedInterfaceProgram,
     ) -> ModularEffectCoreResult,
     E: FnOnce(&CompiledCore) -> Result<Evaluation, RuntimeFailure>,
 {
@@ -1075,6 +1076,7 @@ where
         UnvalidatedEffectProgram,
         &[&SourceFile],
         &[(ModuleId, SourceId)],
+        &ValidatedInterfaceProgram,
     ) -> ModularEffectCoreResult,
 {
     let compilation_phase = crate::calibration::Phase::start("compilation");
@@ -1128,6 +1130,7 @@ where
         UnvalidatedEffectProgram,
         &[&SourceFile],
         &[(ModuleId, SourceId)],
+        &ValidatedInterfaceProgram,
     ) -> ModularEffectCoreResult,
 {
     let mut compilation_work = crate::compiler_work::CompilationWork::default();
@@ -1162,6 +1165,7 @@ where
         UnvalidatedEffectProgram,
         &[&SourceFile],
         &[(ModuleId, SourceId)],
+        &ValidatedInterfaceProgram,
     ) -> ModularEffectCoreResult,
 {
     let mut checked: Vec<crate::resolved::CheckedModule> =
@@ -1645,6 +1649,7 @@ fn validate_modular_effect_core(
     program: UnvalidatedEffectProgram,
     sources: &[&SourceFile],
     modules: &[(ModuleId, SourceId)],
+    linked: &ValidatedInterfaceProgram,
 ) -> ModularEffectCoreResult {
     let phase = crate::compiler_work::CompilationPhase::IndependentCore;
     let validation_phase = crate::calibration::Phase::start("independent-effect-core");
@@ -1654,8 +1659,8 @@ fn validate_modular_effect_core(
             return Err((ValidationError::resource_exhausted(program), None));
         }
     };
-    let result = crate::core::validate::validate_effect_modules_with_work(
-        program, sources, modules, &mut work,
+    let result = crate::core::validate::validate_effect_modules_linked_with_work(
+        program, sources, modules, linked, &mut work,
     );
     crate::calibration::work(
         "independent-effect-core",
@@ -1744,6 +1749,7 @@ where
         UnvalidatedEffectProgram,
         &[&SourceFile],
         &[(ModuleId, SourceId)],
+        &ValidatedInterfaceProgram,
     ) -> ModularEffectCoreResult,
 {
     let elaboration_phase = crate::calibration::Phase::start("final-elaboration");
@@ -1830,16 +1836,17 @@ where
         true,
     );
     elaboration_phase.finish(Some(final_work), final_normal_limit, final_limit);
-    drop(validated_interfaces);
     let (validated, core_work) =
-        validator(unchecked, sources, module_sources).map_err(|(failure, cost)| {
-            let failure = FileFailure::from(PipelineFailure::Validation(failure))
-                .with_compilation_work(*compilation_work);
-            match cost {
-                Some(cost) => failure.with_phase_work(cost),
-                None => failure,
-            }
-        })?;
+        validator(unchecked, sources, module_sources, &validated_interfaces).map_err(
+            |(failure, cost)| {
+                let failure = FileFailure::from(PipelineFailure::Validation(failure))
+                    .with_compilation_work(*compilation_work);
+                match cost {
+                    Some(cost) => failure.with_phase_work(cost),
+                    None => failure,
+                }
+            },
+        )?;
     compilation_work.independent_core = core_work;
     Ok(CompiledProgram {
         core: CompiledCore::Effect(validated),
@@ -2822,7 +2829,9 @@ mod tests {
             source.configuration(),
             &mut InterfaceConstraintBudget::default(),
             validate_interface_evidence_with_budget,
-            |unchecked, sources, _| validate_modular_effect_core(unchecked, sources, &[]),
+            |unchecked, sources, _, linked| {
+                validate_modular_effect_core(unchecked, sources, &[], linked)
+            },
             |_| panic!("evaluation must not run after independent Core rejection"),
             true,
         )

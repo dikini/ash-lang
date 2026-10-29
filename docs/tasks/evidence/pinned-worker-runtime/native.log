@@ -1,0 +1,23 @@
+
+running 3 tests
+test eval::machine::tests::linked_native_one_way_callback_failure_retains_delivery ... native worker entry context: side=0 context=1 parameter=Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 4 } owner_identity=Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 6 } bindings=[(Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 4 }, 121)]
+worker focus: preflight ok, 0 entries, 0 candidates
+End side=0 finish=NodeId { arena: ArenaId(8), index: 53 }, contexts=[FinishContext { matching: NodeId { arena: ArenaId(8), index: 339 }, arm: 0, code: 614, contexnative worker entry context: side=1 context=1 parameter=Resolved { module: ModuleId { nnative worker entry context: side=1 context=1 parameter=Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 2 } owner_identity=Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 6 } bindings=[(Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 2 }, 121)]
+worker focus: preflight ok, 68 entries, 1 candidates
+End side=1 finish=NodeId { arena: ArenaId(8), index: 53 }, contexts=[FinishContext { matching: NodeId { arena: ArenaId(8), index: 280 }, arm: 0, code: 597, context: 1, value_context: 24, call: NodeId { arena: ArenaId(8), index: 276 }, witness: 6 }]
+ok
+test eval::machine::tests::linked_native_one_way_completes_workers_and_settles ... native worker entry context: side=0 context=1 parameter=Resolved { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, local: 4 } owner_identity=Resolved { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, local: 6 } bindings=[(Resolved { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, local: 4 }, 121)]
+worker focus: preflight ok, 0 entries, 0 candidates
+End side=0 finish=NodeId { arena: ArenaId(17), index: 53 }, contexts=[FinishContext { matching: NodeId { arena: ArenaId(17), index: 339 }, arm: 0, code: 614, context: 1,native worker entry context: side=1 context=1 parameter=Resolved { module: ModuleIdnative worker entry context: side=1 context=1 parameter=Resolved { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, local: 2 } owner_identity=Resolved { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, local: 6 } bindings=[(Resolved { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, local: 2 }, 121)]
+worker focus: preflight ok, 68 entries, 1 candidates
+End side=1 finish=NodeId { arena: ArenaId(17), index: 53 }, contexts=[FinishContext { matching: NodeId { arena: ArenaId(17), index: 280 }, arm: 0, code: 597, context: 1, value_context: 24, call: NodeId { arena: ArenaId(17), index: 276 }, witness: 6 }]
+ok
+test eval::machine::tests::linked_native_one_way_multiple_messages_and_empty ... native worker entry context: side=0 context=1 parameter=Resolved { module: ModuleId { namespace: Admitted, graph: 3, value: 0 }, local: 4 } owner_identity=Resolved { module: ModuleId { namespace: Admitted, graph: 3, value: 0 }, local: 7 } bindings=[(Resolved { module: ModuleId { namespace: Admitted, graph: 3, value: 0 }, local: 4 }, 126)]
+worker focus: preflight ok, 0 entries, 0 candidates
+End side=0 finish=NodeId { arena: ArenaId(26), index: 53 }, contexts=[FinishContext { matching: NodeId { arena: ArenaId(26), index: 364 }, arm: 0, code: 695, context: 1, vanative worker entry context: side=1 context=1 parameter=Resolved { module: Modulenative worker entry context: side=1 context=1 parameter=Resolved { module: ModuleId { namespace: Admitted, graph: 3, value: 0 }, local: 2 } owner_identity=Resolved { module: ModuleId { namespace: Admitted, graph: 3, value: 0 }, local: 7 } bindings=[(Resolved { module: ModuleId { namespace: Admitted, graph: 3, value: 0 }, local: 2 }, 126)]
+worker focus: preflight ok, 68 entries, 1 candidates
+End side=1 finish=NodeId { arena: ArenaId(26), index: 53 }, contexts=[FinishContext { matching: NodeId { arena: ArenaId(26), index: 285 }, arm: 0, code: 671, context: 1, value_context: 25, call: NodeId { arena: ArenaId(26), index: 281 }, witness: 6 }]
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1770 filtered out; finished in 55.42s
+

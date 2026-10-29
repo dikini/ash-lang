@@ -57,6 +57,30 @@ const RETAINED_CONTROL_SOURCE: &str = concat!(
     "advance_with_drive pair = advance_with_drive pair\n",
 );
 
+const NETWORK_SOURCE: &str = concat!(
+    "pub opaque type Pair<N> = HiddenPair\n",
+    "pub opaque type Worker<N> = HiddenWorker\n",
+    "pub opaque type Registration<N> = HiddenRegistration\n",
+    "pub type EnvelopeKind = Application\n| Control\n",
+    "pub type Failure = Refused\n| Uncertain\n| WorkerFailed\n| IncompleteTeardown\n",
+    "pub type SendResult = Sent\n| Full\n| Closed\n| SendFailed(Failure)\n",
+    "pub type ReceiveResult = Message(EnvelopeKind, Bytes)\n| Empty\n| End\n| ReceiveFailed(Failure)\n",
+    "pub type FinishResult = Ok\n| Failed(Failure)\n",
+    "pub type Interest = Readable\n| Writable\n",
+    "pub type WatchResult<N> = Watching(Registration<N>)\n| WatchFailed(Failure)\n",
+    "pub type WakeResult<N> = Wake(Registration<N>)\n| NoWake\n| WakeFailed(Failure)\n",
+    "pub effect IO<N> {\ninternal : Unit -> Unit\nsend : (Worker<N>, Bytes) -> SendResult\nreceive : Worker<N> -> ReceiveResult\nfinish : Worker<N> -> FinishResult\nwatch_internal : (Worker<N>, Interest) -> WatchResult<N>\ncancel_internal : (Worker<N>, Registration<N>) -> FinishResult\npoll_internal : Worker<N> -> WakeResult<N>\nfinish_receive_internal : Worker<N> -> FinishResult\n}\n",
+    "pub effect Join<N> {\ninternal : Unit -> Unit\nsettle_internal : Pair<N> -> FinishResult\n}\n",
+    "pub try_send<N> : (Worker<N>, Bytes) -> SendResult ! {IO<N>}\ntry_send value = perform IO<N>.send value\n",
+    "pub try_receive<N> : Worker<N> -> ReceiveResult ! {IO<N>}\ntry_receive value = perform IO<N>.receive value\n",
+    "pub finish_send<N> : Worker<N> -> FinishResult ! {IO<N>}\nfinish_send value = finish_send value\n",
+    "pub finish_receive<N> : Worker<N> -> FinishResult ! {IO<N>}\nfinish_receive value = finish_receive value\n",
+    "pub watch<N> : (Worker<N>, Interest) -> WatchResult<N> ! {IO<N>}\nwatch value = watch value\n",
+    "pub cancel_watch<N> : (Worker<N>, Registration<N>) -> FinishResult ! {IO<N>}\ncancel_watch value = cancel_watch value\n",
+    "pub poll_wake<N> : Worker<N> -> WakeResult<N> ! {IO<N>}\npoll_wake value = poll_wake value\n",
+    "pub settle<N> : Pair<N> -> FinishResult ! {Join<N>}\nsettle value = settle value\n",
+);
+
 // One authenticated identity supplies the public binding facade and private
 // generated allocation service. Importing the facade never exposes ownership.
 const REGION_SOURCE: &str = concat!(
@@ -233,6 +257,7 @@ enum ModuleIdNamespace {
     BuiltinCell,
     BuiltinGenericCell,
     BuiltinRetainedControl,
+    BuiltinNetwork,
     BuiltinRegion,
     BuiltinRegionFacade,
     BuiltinBytes,
@@ -277,6 +302,10 @@ impl ModuleId {
 
     pub(crate) const fn is_builtin_retained_control(self) -> bool {
         matches!(self.namespace, ModuleIdNamespace::BuiltinRetainedControl)
+    }
+
+    pub(crate) const fn is_builtin_network(self) -> bool {
+        matches!(self.namespace, ModuleIdNamespace::BuiltinNetwork)
     }
 
     pub(crate) const fn is_builtin_region_facade(self) -> bool {
@@ -358,6 +387,9 @@ impl fmt::Display for ModuleId {
                     "builtin.retained_control:{}:{}",
                     self.graph, self.value
                 )
+            }
+            ModuleIdNamespace::BuiltinNetwork => {
+                write!(formatter, "builtin.network:{}:{}", self.graph, self.value)
             }
             ModuleIdNamespace::BuiltinCell => {
                 write!(formatter, "builtin.cell:{}:{}", self.graph, self.value)
@@ -1468,6 +1500,7 @@ pub fn load_module_graph(
         let mut builtin_cell = None;
         let mut builtin_generic_cell = None;
         let mut builtin_retained_control = None;
+        let mut builtin_network = None;
         let mut builtin_bytes = None;
         let mut builtin_string = None;
         let mut builtin_foreign = None;
@@ -1553,6 +1586,7 @@ pub fn load_module_graph(
                         "cell"
                             | "generic_cell"
                             | "retained_control"
+                            | "network"
                             | "bytes"
                             | "string"
                             | "foreign"
@@ -1579,6 +1613,8 @@ pub fn load_module_graph(
                     &mut builtin_generic_cell
                 } else if segments[0].text == "retained_control" {
                     &mut builtin_retained_control
+                } else if segments[0].text == "network" {
+                    &mut builtin_network
                 } else {
                     &mut builtin_cell
                 };
@@ -1607,6 +1643,16 @@ pub fn load_module_graph(
                         )?
                     } else if segments[0].text == "retained_control" {
                         admit_builtin_retained_control(
+                            graph_identity,
+                            import.span,
+                            builtin_region
+                                .ok_or_else(|| ModuleFailure::resource(ModuleResource::Sources))?,
+                            &mut budget,
+                            &mut staged,
+                            &mut dependency_order,
+                        )?
+                    } else if segments[0].text == "network" {
+                        admit_builtin_network(
                             graph_identity,
                             import.span,
                             builtin_region
@@ -2032,6 +2078,55 @@ fn admit_builtin_retained_control(
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
     let id = ModuleId {
         namespace: ModuleIdNamespace::BuiltinRetainedControl,
+        graph,
+        value,
+    };
+    budget.charge_edge()?;
+    let service_span = surface.span;
+    staged.push(StagedModule {
+        id,
+        canonical_path: path,
+        owners: OwnerSet::from_paths(&[], budget)?,
+        source,
+        surface,
+        dependencies: vec![ModuleDependency {
+            target: region,
+            import_span: service_span,
+            region_service: true,
+        }],
+        relative_edges: Vec::new(),
+        state: VisitState::Finished,
+    });
+    dependency_order.push(id);
+    Ok(id)
+}
+
+fn admit_builtin_network(
+    graph: u32,
+    import_span: Span,
+    region: ModuleId,
+    budget: &mut GraphBudget,
+    staged: &mut Vec<StagedModule>,
+    dependency_order: &mut Vec<ModuleId>,
+) -> Result<ModuleId, LoadGraphError> {
+    budget.charge_sources()?;
+    staged
+        .try_reserve(1)
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    dependency_order
+        .try_reserve(1)
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    let path = PathBuf::from("@builtin.network");
+    let (source, surface) = parse_surface_module(
+        &path,
+        NETWORK_SOURCE.to_owned(),
+        Some(import_span),
+        &mut budget.syntax_work,
+    )?;
+    let value = u32::try_from(staged.len())
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    let id = ModuleId {
+        namespace: ModuleIdNamespace::BuiltinNetwork,
         graph,
         value,
     };
@@ -2694,6 +2789,7 @@ pub(crate) enum ImageModuleRole {
     BuiltinCell,
     BuiltinGenericCell,
     BuiltinRetainedControl,
+    BuiltinNetwork,
     BuiltinString,
     BuiltinBytes,
 }
@@ -2717,6 +2813,7 @@ pub(crate) fn restore_image_module(
         | ImageModuleRole::BuiltinRegionFacade
         | ImageModuleRole::BuiltinGenericCell
         | ImageModuleRole::BuiltinRetainedControl
+        | ImageModuleRole::BuiltinNetwork
         | ImageModuleRole::BuiltinCell
         | ImageModuleRole::BuiltinString
         | ImageModuleRole::BuiltinBytes => {
@@ -2735,6 +2832,9 @@ pub(crate) fn restore_image_module(
                     RETAINED_CONTROL_SOURCE,
                     ModuleIdNamespace::BuiltinRetainedControl,
                 ),
+                ImageModuleRole::BuiltinNetwork => {
+                    (NETWORK_SOURCE, ModuleIdNamespace::BuiltinNetwork)
+                }
                 ImageModuleRole::BuiltinCell => (CELL_SOURCE, ModuleIdNamespace::BuiltinCell),
                 ImageModuleRole::BuiltinString => (STRING_SOURCE, ModuleIdNamespace::BuiltinString),
                 ImageModuleRole::BuiltinBytes => (BYTES_SOURCE, ModuleIdNamespace::BuiltinBytes),
@@ -2766,6 +2866,10 @@ pub(crate) fn foreign_builtin_source_text() -> &'static str {
 
 pub(crate) fn retained_control_builtin_source_text() -> &'static str {
     RETAINED_CONTROL_SOURCE
+}
+
+pub(crate) fn network_builtin_source_text() -> &'static str {
+    NETWORK_SOURCE
 }
 
 pub(crate) fn region_facade_builtin_source_text() -> &'static str {
