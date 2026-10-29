@@ -263,6 +263,13 @@ result/state relationships; source summaries, names, serialized origin claims
 and same-typed operations grant no authority. Imports and transforms must leave a
 reconstructible form or reject. The separate N3 contract must define how the
 restricted checker validates the ordinary ledger and its control dependencies.
+[CP-0028](CP-0028-checked-functional-network-ledger.md#source-access-and-linked-driver-designation)
+records the accepted source-access and linked driver-designation refinement:
+`send_control` is publicly resolvable as a sealed operation, but actual use
+requires the specified N4 checks for driver confinement and emission. This
+refinement was independently reviewed at
+`94c0be0375d19f8e60900d5d77be2f5caa746eb0`. It does not change the accepted
+one-way transport behavior or establish a proof or product gate.
 
 The Core owner records `(N, capacity, entry_a, entry_b, input_a, input_b, body)`.
 Entry records carry resolved defining binders and their N instantiations,
