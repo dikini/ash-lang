@@ -1,0 +1,17 @@
+{
+  "kind": "independent-source-review-receipt",
+  "reviewer": "/root/m4_reviewer",
+  "requested_model": "gpt-6.1-sol",
+  "requested_reasoning_effort": "high",
+  "reviewed_commit": "eecc85178641f4eaf41cae696653e80003c24432",
+  "root_verified_review_pass": true,
+  "scope": "Bounded frozen source proof gate only; no compiler run or Rust/native correctness claim",
+  "source_sha256": {
+    "Ownership.lean": "5103f2a5b155da16d98b75d8d65a8cb0edd9bf9056c2de033f35efe3e81b71ee",
+    "OwnershipExamples.lean": "0ca6f7915479fca02a8abc8099e845b27a6706e2030ea51a8350d44f7b194c99",
+    "DrainSafety.lean": "c676f253d761fe44dbf9d1d9240a6a6451affbfc410f60bbaaf6986d1fba6677",
+    "WorkerChannel.lean": "d31d533006014f51865324b00799e5731ac909024a5b51e55e5071f4a9fac29b",
+    "worker-channel-correspondence.md": "751a1b77f3217fa1fa43f17a3085abe76ad34292f65666ac5be949a67c32ab29"
+  },
+  "review_text": "No actionable findings in the two-file proof candidate at eecc85178641f4eaf41cae696653e80003c24432. It is ready for a fresh frozen bounded source proof gate.\n\nThe watch repair accounts for multiple registrations independently: registration preserves existing obligations, poll selects one pending key, cancellation preserves other keys and in-flight wakes, and terminal readiness prevents empty polling. The original commit, FIFO/held-work, C1 completion, End, failure and release safeguards remain intact.\n\nStatic checks passed: 71 theorems and 71 unique, resolving #print axioms declarations; no custom axioms or placeholders. Imports remain Std and Ownership. Retained Ownership, OwnershipExamples and DrainSafety sources match Main. Scoped whitespace and documentation-link checks passed.\n\nGate scope: retain those three C3 parent modules and add WorkerChannel, with fresh source, review, compiler/library and report pins. I ran no compiler or frozen gate.\n\nImplementation correspondence remains separate: global versus per-group generation mapping, reservation/copy lifetimes, actual C3 completion, physical Store separation and poison/native failure behavior. The notes preserve these obligations without claiming Rust correctness."
+}

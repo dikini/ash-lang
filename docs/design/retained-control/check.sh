@@ -8,3 +8,4 @@ export LEAN_PATH="$proof_build_dir"
 lean -DwarningAsError=true -o "$proof_build_dir/Ownership.olean" Ownership.lean
 lean -DwarningAsError=true -o "$proof_build_dir/OwnershipExamples.olean" OwnershipExamples.lean
 lean -DwarningAsError=true -o "$proof_build_dir/DrainSafety.olean" DrainSafety.lean
+lean -DwarningAsError=true -o "$proof_build_dir/WorkerChannel.olean" WorkerChannel.lean

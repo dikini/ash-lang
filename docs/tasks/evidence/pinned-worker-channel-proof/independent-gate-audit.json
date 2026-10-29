@@ -1,0 +1,10 @@
+{
+  "kind": "root-recorded-independent-gate-audit",
+  "reviewer": "/root/m4_reviewer",
+  "requested_model": "gpt-6.1-sol",
+  "requested_reasoning_effort": "high",
+  "reviewed_commit": "eecc85178641f4eaf41cae696653e80003c24432",
+  "raw_evidence_sha256": "7912a3af94493e8e9d91f22e39e88f9e9f2011421067e2f52b917a770e0fa3c7",
+  "verdict": "pass; registration adoption ready",
+  "verdict_text": "Independent audit passed for the frozen N2 source gate at eecc85178641f4eaf41cae696653e80003c24432. No fixes required; registration adoption is ready.\n\nVerified directly:\n- Complete run with module exits 0: 153 exact reports (18 + 31 + 33 + 71), no extra diagnostics, only permitted standard axioms.\n- Three coherent cache hits; fresh WorkerChannel compilation took 5.154 seconds.\n- Reviewed source bytes, retained Main parent sources, compiler/library pins, direct-import artifacts, logs and durable copies agree.\n- Generated check.sh equals the reviewed baseline plus the single WorkerChannel registration.\n- First attempt recorded resource blocking with no completed modules.\n- Productive check.sh still contains the original three registrations; adoption remains unapplied.\n\nRaw evidence SHA-256 verified: 7912a3af94493e8e9d91f22e39e88f9e9f2011421067e2f52b917a770e0fa3c7. Operator audit and script hashes also match the supplied pins; this verdict follows my separate checks.\n\nThis establishes the bounded source proof gate. N2 runtime completion, Rust/native correspondence and N-core acceptance remain open. No compilation was rerun."
+}
