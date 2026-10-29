@@ -73,3 +73,7 @@ records two analysis limitations and their reproductions. The
 [C5 checkpoint](https://github.com/dikini/ash-lang/issues/75#issuecomment-6476014597)
 and [separate Main handoff](https://github.com/dikini/ash-lang/issues/54#issuecomment-6476014971)
 remain open.
+
+The bounded [one-way completion source gate](../../tasks/evidence/pinned-one-way-proof/README.md)
+registers `OneWayCompletion` after the four retained parent modules. Its model
+proofs and implementation correspondence have separate acceptance obligations.

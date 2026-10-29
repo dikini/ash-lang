@@ -1,0 +1,32 @@
+'Ash.RetainedControl.Examples.initial_unique_owners' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.Examples.initial_context_safe' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.Examples.root_admission_starts_fresh_work' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.Examples.retain_p' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.Examples.restore_to_current_consumer' depends on axioms: [propext]
+'Ash.RetainedControl.Examples.resumed_cleanup_keeps_saved_result' does not depend on any axioms
+'Ash.RetainedControl.Examples.resumed_cleanup_is_still_running' does not depend on any axioms
+'Ash.RetainedControl.Examples.nested_owner_remains_live_before_resume' does not depend on any axioms
+'Ash.RetainedControl.Examples.yield_again_to_current_consumer' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.Examples.current_consumer_completion_trace' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.Examples.current_consumer_trace_preserves_ownership_and_context' depends on axioms: [propext,
+ Quot.sound]
+'Ash.RetainedControl.Examples.running_drain_yield_trace' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.Examples.running_drain_yield_keeps_q' depends on axioms: [propext]
+'Ash.RetainedControl.Examples.completion_returns_to_current_consumer' does not depend on any axioms
+'Ash.RetainedControl.Examples.other_branch_remains_owned' depends on axioms: [propext]
+'Ash.RetainedControl.Examples.old_key_cannot_replay_after_any_finite_trace' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.Examples.shared_outer_support_is_admitted' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.Examples.preparation_refusal_retains_the_original_owner' depends on axioms: [propext]
+'Ash.RetainedControl.Examples.retained_q_prevents_release' depends on axioms: [propext]
+'Ash.RetainedControl.Examples.reject_self_capture' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.Examples.reject_skipped_outside_completion' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.Examples.reject_branch_local_escape' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.Examples.reject_wrong_interpretation' does not depend on any axioms
+'Ash.RetainedControl.Examples.reject_captured_outside_owner' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.Examples.reject_unreferenced_outside_owner' depends on axioms: [propext, Quot.sound]
+'Ash.RetainedControl.Examples.generation_exhaustion_has_no_recycle_capacity' does not depend on any axioms
+'Ash.RetainedControl.Examples.teardown_can_report_incomplete' depends on axioms: [propext]
+'Ash.RetainedControl.Examples.teardown_can_complete' depends on axioms: [propext]
+'Ash.RetainedControl.Examples.partial_teardown_then_refusal' depends on axioms: [propext]
+'Ash.RetainedControl.Examples.partial_teardown_records_distinct_outcomes' depends on axioms: [propext]
+'Ash.RetainedControl.Examples.outer_close_complete_trace' depends on axioms: [propext, Quot.sound]

@@ -1,0 +1,27 @@
+{
+  "status": "pass",
+  "reviewer": "/root/m4_native_plan",
+  "model": "Sol 6.1",
+  "reasoning_effort": "high",
+  "root_verified_review_pass": true,
+  "source_sha256": "870b4f0f4b134e49a2d97a1039d8f362700cb2ff1f7d667877d6cb9816e1573c",
+  "reviewed_pending_batch_sha256": "0da0c83631b26e18fa0b4e95317482666a13a65594801b1c5ef4bce39b2facae",
+  "reviewed_pending_checkpoint_sha256": "4d77c6bd923765fc0d8e35896694b62359bef589973c9375c2e425efdccce1e2",
+  "scope": "Independent modeled OneWay source and AD-0012 batch review. No Rust, actual Core extraction, native/runtime correspondence, or full N2 acceptance. Fresh integration gate remains required.",
+  "findings": [],
+  "verified": [
+    "modeled execution/solver boundary, matching contexts, empty return seed, final closure replay, outer/inner frames, failure and End authentication",
+    "parent source/script/toolchain, four artifacts/logs, compiler and eight library pins",
+    "one compiler job, cache and 4096 MiB memory plus 4096 MiB headroom",
+    "exact 130 ordered axiom reports, 129 unique theorem names, no placeholders or custom axioms"
+  ],
+  "duplicate_reports": {
+    "Ash.OneWayCompletion.Processing.normalized_frame_sites_sound": 2
+  },
+  "duplicate_scope": "Repeated normalized_frame_sites_sound is reporting duplication only, not an additional theorem. Ordered reports are preserved without normalization.",
+  "permitted_axioms": [
+    "propext",
+    "Classical.choice",
+    "Quot.sound"
+  ]
+}
