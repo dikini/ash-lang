@@ -3089,7 +3089,7 @@ mod tests {
     }
 
     #[test]
-    fn independent_core_validation_starts_with_only_the_core_registry_owner() {
+    fn independent_core_validation_releases_linked_registry_before_evaluation() {
         let source = TestSource::write("main : Unit -> Int\nmain () = 42\n");
         let registry_lifetime = RefCell::new(None);
 
@@ -3110,16 +3110,28 @@ mod tests {
                     .expect("interface validation should record the resolved registry");
                 assert_eq!(
                     registry.strong_count(),
-                    1,
-                    "only the unchecked Core program may own the registry when Core validation begins"
+                    2,
+                    "unchecked Core and linked interface evidence own the registry during validation"
                 );
                 validate_effect_modules(unchecked, sources, module_sources)
             },
-            evaluate_compiled_core,
+            |core| {
+                assert_eq!(
+                    registry_lifetime.borrow().as_ref().unwrap().strong_count(),
+                    1,
+                    "the linked interface owner is released before evaluation"
+                );
+                evaluate_compiled_core(core)
+            },
         )
         .expect("the ownership witness should complete the real pipeline");
 
         assert_eq!(observation.value_display(), "42");
+        drop(observation);
+        assert_eq!(
+            registry_lifetime.borrow().as_ref().unwrap().strong_count(),
+            0
+        );
     }
 
     #[test]

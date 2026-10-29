@@ -22826,66 +22826,100 @@ mod tests {
             "let _ = handle (perform Service<Int>.internal ()) with Service<Int> {\n",
             "internal ignored => resume ()\n}\n42\n}\n",
         );
-        let (donor, sources, relation) = generic_cell_source_fixture(source, None);
+        let fixture = || {
+            let directory = LinkedValidationDirectory::create();
+            let entry = directory.write("entry.ash", source);
+            let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+            let linked =
+                link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+            let linked = validate_linked_facts_for_test(linked).unwrap();
+            let mut elaborator =
+                crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+            let typed = elaborator
+                .synthesize_effect_module_program(&linked)
+                .unwrap();
+            let program = elaborator.finish(typed.node).unwrap();
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source().clone())
+                .collect::<Vec<_>>();
+            let relation = graph
+                .modules()
+                .iter()
+                .map(|module| (module.id(), module.source().id()))
+                .collect::<Vec<_>>();
+            (program, sources, relation, linked)
+        };
+        let (valid, sources, relation, linked) = fixture();
         let refs = sources.iter().collect::<Vec<_>>();
-        for transform in [identity_effect_traversal, fold_effect_literal_primitives] {
-            let valid = validate_effect_modules(transform(&donor).unwrap(), &refs, &relation)
-                .expect("an ordinary same-shaped user service remains available");
-            for handler in [false, true] {
-                for join in [false, true] {
-                    let mut forged = identity_effect_traversal(&valid).unwrap();
-                    let api = forged
-                        .registry
-                        .effects()
-                        .iter()
-                        .find_map(|effect| {
-                            crate::resolved::NetworkApi::for_module(effect.id.module())
-                        })
-                        .unwrap();
-                    let effect = if join { api.join() } else { api.io() };
-                    let sealed = EffectInstance::new(effect, Box::new([Type::Int]));
-                    let operation = OperationId::new(effect, 0);
-                    let index = forged
-                        .nodes
-                        .iter()
-                        .position(|node| match &node.kind {
-                            EffectExprKind::Operation(EffectOperation::Request(request)) => {
-                                !handler
-                                    && forged
-                                        .registry
-                                        .effect(request.effect().effect())
-                                        .is_some_and(|effect| effect.spelling == "Service")
-                            }
-                            EffectExprKind::Operation(EffectOperation::Handler(clause)) => {
-                                handler
-                                    && forged
-                                        .registry
-                                        .effect(clause.effect().effect())
-                                        .is_some_and(|effect| effect.spelling == "Service")
-                            }
-                            _ => false,
-                        })
-                        .expect("user request or handler");
-                    let id = node_id(forged.arena, index).unwrap();
-                    match &mut forged.nodes[index].kind {
+        validate_effect_modules_linked_with_work(
+            valid,
+            &refs,
+            &relation,
+            &linked,
+            &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+        )
+        .expect("an ordinary same-shaped user service remains available");
+        for handler in [false, true] {
+            for join in [false, true] {
+                let (mut forged, sources, relation, linked) = fixture();
+                let refs = sources.iter().collect::<Vec<_>>();
+                let api = forged
+                    .registry
+                    .effects()
+                    .iter()
+                    .find_map(|effect| crate::resolved::NetworkApi::for_module(effect.id.module()))
+                    .unwrap();
+                let effect = if join { api.join() } else { api.io() };
+                let sealed = EffectInstance::new(effect, Box::new([Type::Int]));
+                let operation = OperationId::new(effect, 0);
+                let index = forged
+                    .nodes
+                    .iter()
+                    .position(|node| match &node.kind {
                         EffectExprKind::Operation(EffectOperation::Request(request)) => {
-                            request.effect = sealed.clone();
-                            request.operation = operation;
-                            forged.nodes[index].effects = EffectRow::singleton(sealed);
+                            !handler
+                                && forged
+                                    .registry
+                                    .effect(request.effect().effect())
+                                    .is_some_and(|effect| effect.spelling == "Service")
                         }
                         EffectExprKind::Operation(EffectOperation::Handler(clause)) => {
-                            clause.effect = sealed;
-                            for arm in clause.clauses.iter_mut() {
-                                arm.operation = operation;
-                            }
+                            handler
+                                && forged
+                                    .registry
+                                    .effect(clause.effect().effect())
+                                    .is_some_and(|effect| effect.spelling == "Service")
                         }
-                        _ => unreachable!(),
+                        _ => false,
+                    })
+                    .expect("user request or handler");
+                let id = node_id(forged.arena, index).unwrap();
+                match &mut forged.nodes[index].kind {
+                    EffectExprKind::Operation(EffectOperation::Request(request)) => {
+                        request.effect = sealed.clone();
+                        request.operation = operation;
+                        forged.nodes[index].effects = EffectRow::singleton(sealed);
                     }
-                    let error = validate_effect_modules(forged, &refs, &relation)
-                        .expect_err("forged raw network service");
-                    assert_eq!(error.reason(), ValidationReason::EffectIdentity);
-                    assert_eq!(error.node(), Some(id));
+                    EffectExprKind::Operation(EffectOperation::Handler(clause)) => {
+                        clause.effect = sealed;
+                        for arm in clause.clauses.iter_mut() {
+                            arm.operation = operation;
+                        }
+                    }
+                    _ => unreachable!(),
                 }
+                let error = validate_effect_modules_linked_with_work(
+                    forged,
+                    &refs,
+                    &relation,
+                    &linked,
+                    &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                )
+                .expect_err("forged raw network service");
+                assert_eq!(error.reason(), ValidationReason::EffectIdentity);
+                assert_eq!(error.node(), Some(id));
             }
         }
     }

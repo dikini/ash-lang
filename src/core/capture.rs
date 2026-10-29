@@ -7966,18 +7966,33 @@ main : Unit -> Int"#, 1);
                 );
             }
             if side == 1 {
-                bootstrap
-                    .focus_worker_stores(&mut work)
-                    .unwrap_or_else(|error| {
-                        panic!(
-                            "actual worker Store focus failed: {error:?}; cumulative work={}",
-                            work.used()
-                        )
-                    });
-                assert!(
-                    bootstrap.completion_foci.len() > 1,
-                    "Store focus retains its worker trace"
-                );
+                assert!(matches!(
+                    bootstrap.focus_worker_stores(&mut work),
+                    Err(Failure::RetainedRelease)
+                ));
+                let focus_count = super::super::validate::with_network_native_scope_diagnostic(
+                    &core,
+                    &provenance,
+                    &linked,
+                    owner,
+                    &mut work,
+                    |scope, budget| {
+                        Ok(with_network_worker_resources(
+                            scope,
+                            side,
+                            budget,
+                            |_, worker, _| Ok(worker.completion_foci.len()),
+                        ))
+                    },
+                )
+                .expect("the actual native worker scope is authenticated")
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "actual worker Store focus failed: {error:?}; cumulative work={}",
+                        work.used()
+                    )
+                });
+                assert!(focus_count > 1, "Store focus retains its worker trace");
             }
         }
     }
