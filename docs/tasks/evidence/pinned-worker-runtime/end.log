@@ -1,0 +1,18 @@
+
+running 1 test
+native worker entry context: side=1 context=1 parameter=Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 2 } owner_identity=Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 6 } bindings=[(Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 2 }, 121)]
+worker focus: preflight ok, 68 entries, 1 candidates
+End side=1 finish=NodeId { arena: ArenaId(8), index: 53 }, contexts=[FinishContext { matching: NodeId { arena: ArenaId(8), index: 285 }, arm: 0, code: 604, context: 1, value_context: 24, call: NodeId { arena: ArenaId(8), index: 281 }, witness: 7 }]
+End Invalid at network_end.rs:244
+End loop side=1 body=NodeId { arena: ArenaId(8), index: 261 } binder=Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 0 } witness=3: Invalid
+worker End negative intervening receive: Err(Invalid) work=92946645
+native worker entry context: side=1 context=1 parameter=Resolved { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, local: 2 } owner_identity=Resolved { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, local: 7 } bindings=[(Resolved { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, local: 2 }, 121)]
+worker focus: preflight ok, 69 entries, 2 candidates
+worker Store release path: before=Position { code: 494, next: 0 } context=5 value_context=58 work=Empty control=Some(Request(Request { effect: Some(<effect:builtin.region:2:2:0>), opaque_row: None, ambiguous_instance: false, region_service: true, source: Span { source: SourceId(13), range: ByteRange { start: 1413, end: 1516 } }, operation: Some(OperationId { owner: EffectId { module: ModuleId { namespace: BuiltinRegion, graph: 2, value: 2 }, declaration: 0 }, operation: 0 }) })) transition=Detail(8) after=Position { code: 497, next: 2 } work=Unknown
+worker Store release native return: event=Event { code: 494, label: 2, unknown: false, port: Some(615) } boundary=None edge=Some(Edge { address: Slot { region: Active, site: Next(Position { code: 497, next: 2 }), allocation_context: 58, old: false }, frame: Next { position: Position { code: 497, next: 2 }, context: 5, value_context: 58 }, next: Slot { region: Active, site: CallReturn(597), allocation_context: 55, old: false } })
+worker focus: focused C3 check RetainedRelease
+worker End negative finish boundary: Err(RetainedRelease) work=28642786
+test core::capture::tests::worker_end_rejects_intervening_receive_and_finish_boundary ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1772 filtered out; finished in 39.86s
+

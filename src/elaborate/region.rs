@@ -259,6 +259,46 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .binding(context, query, node, result, Origin::Source(span))?)
     }
 
+    pub(super) fn lower_network_call(
+        &mut self,
+        module: ModuleId,
+        operation: u32,
+        join: bool,
+        ty: &Type,
+        span: Span,
+    ) -> Result<NodeId, TypeError> {
+        let function = ty.function_view().ok_or_else(invalid_state)?;
+        let api = crate::resolved::NetworkApi::for_module(module).ok_or_else(invalid_state)?;
+        let operation_owner = if join { api.join() } else { api.io() };
+        let row = function.effects().ok_or_else(invalid_state)?;
+        let effect = row
+            .known()
+            .iter()
+            .find(|effect| effect.effect() == operation_owner)
+            .ok_or_else(invalid_state)?;
+        let effect = crate::types::clone_effect_instance_with_budget(effect, &mut self.type_work)
+            .map_err(|()| type_resource())?;
+        let domain = self.clone_type(function.domain())?;
+        let parameter = self.builder.binder(domain, Origin::Source(span))?;
+        let domain = self.clone_type(function.domain())?;
+        let operand = self
+            .builder
+            .variable(parameter.id(), domain, Origin::Source(span))?;
+        let body = self.initialize_region_buffer(
+            crate::core::region::RegionBufferOperation::Network {
+                effect,
+                operation: crate::types::OperationId::new(operation_owner, operation),
+            },
+            Some(operand),
+            None,
+            function.value(),
+            row,
+            span,
+        )?;
+        let ty = self.clone_type(ty)?;
+        self.construct_function(parameter, body, ty, Origin::Source(span))
+    }
+
     pub(super) fn lower_buffer_intrinsic(
         &mut self,
         intrinsic: Intrinsic,

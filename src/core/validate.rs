@@ -4,6 +4,7 @@
 mod declaration_closure_tests;
 #[cfg(test)]
 mod effect_signature_borrow_tests;
+mod network;
 
 mod source_declarations;
 
@@ -3091,6 +3092,46 @@ pub(crate) fn check_ordinary_effect_modules_with_budget_for_test(
     result
 }
 
+#[cfg(test)]
+pub(super) fn check_effect_scopes_for_test(
+    program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+) -> Result<(), ValidationError> {
+    let mut validator = Validator::new_modules(program, sources, module_sources)?;
+    validator.type_work_limit = usize::MAX;
+    validator.validate_scopes()?;
+    validator.validate_type_scopes()
+}
+
+/// Observe provisional facts on the real validator path even when a later
+/// validation gate refuses the program. These facts are not an admission.
+#[cfg(test)]
+pub(super) fn inspect_network_validation_for_test(
+    program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+    linked: &crate::evidence_validation::ValidatedInterfaceProgram,
+    work: &mut TypeWorkBudget,
+) -> Result<
+    (
+        Result<(), ValidationError>,
+        Vec<super::dialect::NetworkAdmission>,
+    ),
+    ValidationError,
+> {
+    let mut validator = Validator::new_modules(program, sources, module_sources)?;
+    validator.type_work_limit = work.remaining();
+    validator.linked = Some(linked);
+    let result = validator.run_effect();
+    work.charge(validator.type_work.get())
+        .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+    Ok((
+        result,
+        std::mem::take(validator.network_admissions.get_mut()),
+    ))
+}
+
 pub(super) fn validate_effect_modules_family(
     program: UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
     sources: &[&SourceFile],
@@ -3104,10 +3145,33 @@ pub(super) fn validate_effect_modules_family(
     )
 }
 
+/// Validate an effect program while retaining the original authenticated linked
+/// definition groups for network-entry reconstruction. Network nodes remain
+/// rejected until that independent reconstruction is implemented.
+pub(crate) fn validate_effect_modules_linked_with_work(
+    program: UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+    linked: &crate::evidence_validation::ValidatedInterfaceProgram,
+    work: &mut TypeWorkBudget,
+) -> Result<ValidatedCoreProgram<super::effect::EffectOperationFamily>, ValidationError> {
+    validate_effect_modules_internal(program, sources, module_sources, Some(linked), work)
+}
+
 pub(crate) fn validate_effect_modules_with_work(
     program: UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
     sources: &[&SourceFile],
     module_sources: &[(ModuleId, SourceId)],
+    work: &mut TypeWorkBudget,
+) -> Result<ValidatedCoreProgram<super::effect::EffectOperationFamily>, ValidationError> {
+    validate_effect_modules_internal(program, sources, module_sources, None, work)
+}
+
+fn validate_effect_modules_internal(
+    program: UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+    linked: Option<&crate::evidence_validation::ValidatedInterfaceProgram>,
     work: &mut TypeWorkBudget,
 ) -> Result<ValidatedCoreProgram<super::effect::EffectOperationFamily>, ValidationError> {
     let mut validator = match Validator::new_modules(&program, sources, module_sources) {
@@ -3118,6 +3182,7 @@ pub(crate) fn validate_effect_modules_with_work(
         }
     };
     validator.type_work_limit = work.remaining();
+    validator.linked = linked;
     let result = validator.run_effect();
     // The validator debits this exact remaining allowance, including failures.
     work.charge(validator.type_work.get())
@@ -3126,6 +3191,8 @@ pub(crate) fn validate_effect_modules_with_work(
         program.discard_iteratively();
         return Err(error);
     }
+    let admissions = std::mem::take(validator.network_admissions.get_mut());
+    drop(validator);
     let (registry, method_evidence, anchors, arena, stored, root) = program.into_parts();
     let mut nodes = Vec::with_capacity(stored.len());
     for (index, stored) in stored.into_iter().enumerate() {
@@ -3143,14 +3210,9 @@ pub(crate) fn validate_effect_modules_with_work(
             kind: stored.kind,
         });
     }
-    Ok(ValidatedCoreProgram::new(CoreProgram::new(
-        registry,
-        method_evidence,
-        anchors,
-        arena,
-        nodes,
-        root,
-    )))
+    let mut core = CoreProgram::new(registry, method_evidence, anchors, arena, nodes, root);
+    core.set_network_admissions(admissions);
+    Ok(ValidatedCoreProgram::new(core))
 }
 
 /// Consumes unchecked Core assembled from multiple canonical modules.
@@ -3232,8 +3294,217 @@ pub(crate) fn validate_modules_with_work(
 
 /// Borrowed admission for one independent Effect validation phase. The only
 /// construction site follows complete registry and native correspondence checks.
+// This is an owned staging record only. Release eligibility is assembled
+// atomically after every actual owner and both of its entries have passed.
+struct NetworkWorkerCoverage {
+    owner: NodeId,
+    direct_worker_calls: Vec<NodeId>,
+    requested: bool,
+    baseline_complete: bool,
+}
+
+struct NetworkLinkedSpine {
+    entry_region: NodeId,
+    result: NodeId,
+    initializers: Vec<NodeId>,
+    bindings: Vec<(BinderId, NodeId)>,
+    entries: [Option<NodeId>; 2],
+}
+
+/// Reconstruct diagnostic inputs with the same registry and linked-spine
+/// checks as the validator. This does not admit a worker or authorize release.
+#[cfg(test)]
+#[expect(
+    clippy::type_complexity,
+    reason = "The diagnostic returns the linked bindings and exact entry spine"
+)]
+pub(super) fn network_spine_for_completion_diagnostic(
+    program: &super::UnvalidatedEffectProgram,
+    sources: &[(ModuleId, SourceFile)],
+    linked: &crate::evidence_validation::ValidatedInterfaceProgram,
+    owner: NodeId,
+    budget: &mut TypeWorkBudget,
+) -> Result<(Vec<(BinderId, NodeId)>, [NodeId; 2], NodeId, NodeId), ValidationError> {
+    let resource = || ValidationError::new(ValidationReason::Resource, Some(owner));
+    let invalid = || ValidationError::new(ValidationReason::Registry, Some(owner));
+    budget
+        .charge(sources.len().checked_mul(2).ok_or_else(resource)?)
+        .map_err(|_| resource())?;
+    let mut source_refs = Vec::new();
+    let mut relation = Vec::new();
+    source_refs
+        .try_reserve_exact(sources.len())
+        .map_err(|_| resource())?;
+    relation
+        .try_reserve_exact(sources.len())
+        .map_err(|_| resource())?;
+    for (module, source) in sources {
+        source_refs.push(source);
+        relation.push((*module, source.id()));
+    }
+    let mut validator = Validator::new_modules(program, &source_refs, &relation)?;
+    validator.type_work_limit = budget.remaining();
+    validator.linked = Some(linked);
+    let result = (|| {
+        if owner.arena() != program.arena {
+            return Err(invalid());
+        }
+        let node = validator.node(owner)?;
+        let super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Network(
+            network,
+        )) = &node.kind
+        else {
+            return Err(invalid());
+        };
+        let (_, native) = validator.authenticate_effect_registry_phase()?;
+        validator.validate_network_scope(owner, node, network)?;
+        let spine = validator.check_network_linked_spine(owner, network)?;
+        validator.check_network_initializer_effects(owner, network, &spine, &native)?;
+        let facts = network::check_entry_bodies(&validator, owner, network, &spine, &native)?;
+        validator.network_native_identity_scope(owner, network, &spine, &facts, &native)?;
+        let [Some(first), Some(second)] = spine.entries else {
+            return Err(invalid());
+        };
+        Ok((
+            spine.bindings,
+            [first, second],
+            spine.entry_region,
+            spine.result,
+        ))
+    })();
+    budget
+        .charge(validator.type_work.get())
+        .map_err(|_| resource())?;
+    result
+}
+
 struct AuthenticatedNativeRegistry<'registry> {
     registry: &'registry crate::resolved::ResolvedRegistry,
+}
+
+/// Keep the actual validator facts alive while a diagnostic builds and
+/// inspects its worker graph. The shared budget is charged before the closure.
+#[cfg(test)]
+pub(super) fn with_network_native_scope_diagnostic<R>(
+    program: &super::UnvalidatedEffectProgram,
+    sources: &[(ModuleId, SourceFile)],
+    linked: &crate::evidence_validation::ValidatedInterfaceProgram,
+    owner: NodeId,
+    budget: &mut TypeWorkBudget,
+    inspect: impl FnOnce(
+        &NetworkNativeIdentityScope<'_>,
+        &mut TypeWorkBudget,
+    ) -> Result<R, ValidationError>,
+) -> Result<R, ValidationError> {
+    let resource = || ValidationError::new(ValidationReason::Resource, Some(owner));
+    let invalid = || ValidationError::new(ValidationReason::Registry, Some(owner));
+    budget
+        .charge(sources.len().checked_mul(2).ok_or_else(resource)?)
+        .map_err(|_| resource())?;
+    let mut source_refs = Vec::new();
+    let mut relation = Vec::new();
+    source_refs
+        .try_reserve_exact(sources.len())
+        .map_err(|_| resource())?;
+    relation
+        .try_reserve_exact(sources.len())
+        .map_err(|_| resource())?;
+    for (module, source) in sources {
+        source_refs.push(source);
+        relation.push((*module, source.id()));
+    }
+    let mut validator = Validator::new_modules(program, &source_refs, &relation)?;
+    validator.type_work_limit = budget.remaining();
+    validator.linked = Some(linked);
+    let mut paid = false;
+    let result = (|| {
+        if owner.arena() != program.arena {
+            return Err(invalid());
+        }
+        let node = validator.node(owner)?;
+        let super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Network(
+            network,
+        )) = &node.kind
+        else {
+            return Err(invalid());
+        };
+        let (_, native) = validator.authenticate_effect_registry_phase()?;
+        validator.validate_network_scope(owner, node, network)?;
+        let spine = validator.check_network_linked_spine(owner, network)?;
+        validator.check_network_initializer_effects(owner, network, &spine, &native)?;
+        let facts = network::check_entry_bodies(&validator, owner, network, &spine, &native)?;
+        let scope =
+            validator.network_native_identity_scope(owner, network, &spine, &facts, &native)?;
+        budget
+            .charge(validator.type_work.get())
+            .map_err(|_| resource())?;
+        paid = true;
+        inspect(&scope, budget)
+    })();
+    if !paid {
+        budget
+            .charge(validator.type_work.get())
+            .map_err(|_| resource())?;
+    }
+    result
+}
+
+/// Borrowed identity inputs from the validator's actual linked-worker phase.
+/// This scope neither proves foreign behavior nor grants completion authority.
+pub(super) struct NetworkNativeIdentityScope<'a> {
+    arena: super::dialect::ArenaId,
+    root: NodeId,
+    owner: NodeId,
+    entry_region: NodeId,
+    linked_result: NodeId,
+    receive: NodeId,
+    entries: [NodeId; 2],
+    parameters: [crate::types::TypeVariableId; 2],
+    native_effects: [&'a [EffectInstance]; 2],
+    bindings: &'a [(BinderId, NodeId)],
+    nodes: &'a [StoredNode<super::effect::EffectOperationFamily>],
+    native: &'a AuthenticatedNativeRegistry<'a>,
+}
+
+impl NetworkNativeIdentityScope<'_> {
+    pub(super) fn arena(&self) -> super::dialect::ArenaId {
+        self.arena
+    }
+    pub(super) fn root(&self) -> NodeId {
+        self.root
+    }
+    pub(super) fn owner(&self) -> NodeId {
+        self.owner
+    }
+    pub(super) fn entry_region(&self) -> NodeId {
+        self.entry_region
+    }
+    pub(super) fn linked_result(&self) -> NodeId {
+        self.linked_result
+    }
+    pub(super) fn receive(&self) -> NodeId {
+        self.receive
+    }
+    pub(super) fn entry(&self, side: usize) -> Option<(NodeId, crate::types::TypeVariableId)> {
+        Some((*self.entries.get(side)?, *self.parameters.get(side)?))
+    }
+    pub(super) fn nodes(&self) -> &[StoredNode<super::effect::EffectOperationFamily>] {
+        self.nodes
+    }
+    pub(super) fn native_effects(&self, side: usize) -> Option<&[EffectInstance]> {
+        self.native_effects.get(side).copied()
+    }
+    pub(super) fn bindings(&self) -> &[(BinderId, NodeId)] {
+        self.bindings
+    }
+    pub(super) fn authenticates(
+        &self,
+        interpretation: &super::effect::NativeInterpretation,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, ()> {
+        self.native
+            .authenticates(self.native.registry, interpretation, budget)
+    }
 }
 
 impl AuthenticatedNativeRegistry<'_> {
@@ -3342,6 +3613,11 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     program: &'program UnvalidatedCoreProgram<F>,
     sources: HashMap<SourceId, &'source SourceFile>,
     module_sources: Option<HashMap<ModuleId, SourceId>>,
+    linked: Option<&'program crate::evidence_validation::ValidatedInterfaceProgram>,
+    network_api: Option<crate::resolved::NetworkApi>,
+    authenticated_network_requests: Cell<[Option<NodeId>; 8]>,
+    network_admissions: std::cell::RefCell<Vec<super::dialect::NetworkAdmission>>,
+    network_worker_coverage: std::cell::RefCell<Vec<NetworkWorkerCoverage>>,
 
     binders: HashMap<BinderId, &'program TypedBinder>,
 
@@ -3386,6 +3662,9 @@ pub(super) trait ScopeFamily: CoreOperationFamily {
     fn store_scope(_kind: &Self::Kind) -> Option<&super::effect::StoreScopeNode> {
         None
     }
+    fn network_scope(_kind: &Self::Kind) -> Option<&super::effect::NetworkScopeNode> {
+        None
+    }
 
     fn resume_capability(
         _kind: &Self::Kind,
@@ -3416,8 +3695,14 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
         let sealed = |effect: &EffectInstance| {
             crate::resolved::StoreApi::for_module(effect.effect().module())
                 .is_some_and(|api| effect.effect() == api.drive())
+                || crate::resolved::NetworkApi::for_module(effect.effect().module())
+                    .is_some_and(|api| effect.effect() == api.io() || effect.effect() == api.join())
         };
         match kind {
+            EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) => matches!(
+                buffer.operation,
+                super::region::RegionBufferOperation::Network { .. }
+            ),
             EffectExprKind::Operation(EffectOperation::Request(request)) => {
                 sealed(request.effect())
             }
@@ -3454,6 +3739,15 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
             super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Store(
                 store,
             )) => Some(store),
+            _ => None,
+        }
+    }
+
+    fn network_scope(kind: &Self::Kind) -> Option<&super::effect::NetworkScopeNode> {
+        match kind {
+            super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Network(
+                network,
+            )) => Some(network),
             _ => None,
         }
     }
@@ -3528,6 +3822,13 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
         {
             visit(store.handle.id());
         }
+        if child == 3
+            && let super::effect::EffectExprKind::Operation(
+                super::effect::EffectOperation::Network(network),
+            ) = kind
+        {
+            visit(network.handle.id());
+        }
         let (handler, offset) = match kind {
             super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Handler(
                 handler,
@@ -3555,6 +3856,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 .map(|source| (source.id(), *source))
                 .collect(),
             module_sources: None,
+            linked: None,
+            network_api: None,
+            authenticated_network_requests: Cell::new([None; 8]),
+            network_admissions: std::cell::RefCell::new(Vec::new()),
+            network_worker_coverage: std::cell::RefCell::new(Vec::new()),
             binders: HashMap::new(),
             authenticated_abstract_nominals: std::cell::RefCell::new(HashSet::new()),
             type_work: Cell::new(0),
@@ -3587,6 +3893,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .try_reserve(module_sources.len())
             .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
         for (module, source) in module_sources.iter().copied() {
+            if let Some(api) = crate::resolved::NetworkApi::for_module(module)
+                && validator.network_api.replace(api).is_some()
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
             if let Some(api) = crate::resolved::ResourceApi::for_module(module) {
                 if !api.registry(&program.registry) {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
@@ -5309,6 +5620,54 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         return Ok(true);
                     }
                 }
+            }
+        }
+        Ok(false)
+    }
+
+    // A Store identity is allocated when its body is resolved, after global
+    // declaration parameters. Check the actual carrier before treating its
+    // source coordinate as contextual; the complete Store validation still
+    // checks the initializer, body, descriptor, and effects later.
+    fn is_structural_store_identity(
+        &self,
+        id: crate::types::TypeVariableId,
+    ) -> Result<bool, ValidationError> {
+        for node in &self.program.nodes {
+            self.charge_type_work(1)?;
+            let Some(store) = F::store_scope(&node.kind) else {
+                continue;
+            };
+            let authority = store.acquisition;
+            if authority.identity != id {
+                continue;
+            }
+            let Some(api) = crate::resolved::StoreApi::for_module(authority.builtin) else {
+                continue;
+            };
+            let Some(canonical) = self.program.registry.type_variable(id) else {
+                continue;
+            };
+            let Some((handle_api, identity, _)) = super::effect::store_ports(store.handle.ty())
+            else {
+                continue;
+            };
+            // The Store inventory is fixed-size; reserve its authentication
+            // work before checking the registry and handle shape.
+            self.charge_type_work(100)?;
+            if api.registry(&self.program.registry)
+                && handle_api.store() == api.store()
+                && authority.handle == store.handle.id()
+                && id.module().is_some()
+                && id.module() == authority.handle.module()
+                && canonical.kind == Kind::Type
+                && authority.span.cover(canonical.origin.primary_span()) == Some(authority.span)
+                && authority.span.cover(store.handle.origin().primary_span())
+                    == Some(authority.span)
+                && Some(authority.span) == node.origin.as_ref().map(Origin::primary_span)
+                && self.same_type_charged(identity, &Type::Variable(id))?
+            {
+                return Ok(true);
             }
         }
         Ok(false)
@@ -7108,7 +7467,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             self.charge_type_work(1)?;
             let parameter_span = parameter.origin.primary_span();
             let parameter_range = parameter_span.range();
-            let contextual = self.is_lexical_source_parameter(parameter.id)?;
+            let mut contextual = self.is_lexical_source_parameter(parameter.id)?;
+            if !contextual
+                && previous_type_variable_start
+                    .is_some_and(|previous| parameter_range.start() <= previous)
+            {
+                contextual = self.is_structural_store_identity(parameter.id)?;
+            }
             if identity != parameter.id
                 || Some(parameter_span.source()) != registry_source
                 || !origin_depth_within_limit(&parameter.origin)
@@ -7508,7 +7873,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 let parameter_span = parameter.origin.primary_span();
                 let parameter_range = parameter_span.range();
                 self.charge_type_work(1)?;
-                let contextual = self.is_lexical_source_parameter(parameter.id)?
+                let mut contextual = self.is_lexical_source_parameter(parameter.id)?
                     || generatives.is_some_and(|original| original.contains(&parameter.id));
                 if parameter.id.local() != *expected
                     || parameter_span.source() != source
@@ -7523,7 +7888,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         .get(&module)
                         .is_some_and(|previous| parameter_range.start() <= *previous)
                 {
-                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                    contextual = self.is_structural_store_identity(parameter.id)?;
+                    if !contextual {
+                        return Err(ValidationError::new(ValidationReason::Registry, None));
+                    }
                 }
                 *expected = expected
                     .checked_add(1)
@@ -9800,7 +10168,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     ) -> Result<(), ValidationError> {
         for (index, node) in self.program.nodes.iter().enumerate() {
             let id = node_id(self.program.arena, index)?;
-            if F::has_raw_store_drive(&node.kind) {
+            if F::has_raw_store_drive(&node.kind)
+                && !self
+                    .authenticated_network_requests
+                    .get()
+                    .contains(&Some(id))
+            {
                 return Err(ValidationError::new(
                     ValidationReason::EffectIdentity,
                     Some(id),
@@ -10501,6 +10874,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 )
                 .is_some_and(|api| api.hides_constructor(constructor.constructor()))
                     || crate::resolved::StoreApi::for_module(
+                        constructor.constructor().owner().module(),
+                    )
+                    .is_some_and(|api| api.hides_constructor(constructor.constructor()))
+                    || crate::resolved::NetworkApi::for_module(
                         constructor.constructor().owner().module(),
                     )
                     .is_some_and(|api| api.hides_constructor(constructor.constructor()))
@@ -11577,6 +11954,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         .is_some_and(|api| api.hides_constructor(*constructor))
                         || crate::resolved::StoreApi::for_module(constructor.owner().module())
                             .is_some_and(|api| api.hides_constructor(*constructor))
+                        || crate::resolved::NetworkApi::for_module(constructor.owner().module())
+                            .is_some_and(|api| api.hides_constructor(*constructor))
                     {
                         return Err(ValidationError::with_cause(
                             ValidationCause::PatternHiddenConstructor,
@@ -11858,6 +12237,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         {
                             child_free.remove(&store.acquisition.identity);
                         }
+                        if child_index == 3
+                            && let Some(network) = F::network_scope(&node.kind)
+                        {
+                            child_free.remove(&network.acquisition.identity);
+                        }
 
                         if child_index >= 1
                             && let Some(scope) = F::region_scope(&node.kind)
@@ -11979,8 +12363,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     }
                     let mut metadata_error = None;
                     let store = F::store_scope(&node.kind);
+                    let network = F::network_scope(&node.kind);
                     let mut store_metadata = HashSet::new();
-                    let metadata_free = if store.is_some() {
+                    let metadata_free = if store.is_some() || network.is_some() {
                         &mut store_metadata
                     } else {
                         &mut free
@@ -12016,8 +12401,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     if let Some(error) = metadata_error {
                         return Err(error);
                     }
-                    if let Some(store) = store {
-                        store_metadata.remove(&store.acquisition.identity);
+                    if store.is_some() || network.is_some() {
+                        if let Some(store) = store {
+                            store_metadata.remove(&store.acquisition.identity);
+                        }
+                        if let Some(network) = network {
+                            store_metadata.remove(&network.acquisition.identity);
+                        }
                         self.merge_type_scope_requirements(&mut free, store_metadata)?;
                     }
 
@@ -13549,6 +13939,14 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
     }
 
     fn run_effect(&mut self) -> Result<(), ValidationError> {
+        if let Some(api) = self.network_api {
+            // Fixed-size canonical capability/result/effect inventory, paid
+            // from the same independent validation allowance as all later work.
+            self.charge_type_work(100)?;
+            if !api.registry(&self.program.registry) {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+        }
         let (nominal_parameter_owners, native_registry) =
             self.authenticate_effect_registry_phase()?;
         self.run_effect_with_registry(&nominal_parameter_owners, &native_registry)
@@ -13559,6 +13957,35 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         nominal_parameter_owners: &RegistryParameterOwners,
         native_registry: &AuthenticatedNativeRegistry<'_>,
     ) -> Result<(), ValidationError> {
+        if self.network_api.is_some() && self.linked.is_some() {
+            let send = self.authenticate_network_call("try_send", 1)?;
+            let receive = self.authenticate_network_call("try_receive", 2)?;
+            let finish = self.authenticate_network_call("finish_send", 3)?;
+            let watch = self.authenticate_network_call("watch", 4)?;
+            let cancel = self.authenticate_network_call("cancel_watch", 5)?;
+            let poll = self.authenticate_network_call("poll_wake", 6)?;
+            let finish_receive = self.authenticate_network_call("finish_receive", 7)?;
+            let settle = self.authenticate_network_call("settle", 1)?;
+            let calls = [
+                send,
+                receive,
+                finish,
+                watch,
+                cancel,
+                poll,
+                finish_receive,
+                settle,
+            ];
+            for (i, call) in calls.iter().enumerate() {
+                if calls[..i].contains(call) {
+                    return Err(ValidationError::new(
+                        ValidationReason::EffectIdentity,
+                        Some(*call),
+                    ));
+                }
+            }
+            self.authenticated_network_requests.set(calls.map(Some));
+        }
         let authenticated_method_evidence = self.validate_method_evidence_authority()?;
         self.validate_envelopes(&authenticated_method_evidence)?;
         self.validate_graph()?;
@@ -13588,6 +14015,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 &node.kind,
                 super::effect::EffectExprKind::Operation(
                     super::effect::EffectOperation::Resource(_)
+                        | super::effect::EffectOperation::Network(_)
                         | super::effect::EffectOperation::Store(_)
                         | super::effect::EffectOperation::RetainedRoot(_)
                         | super::effect::EffectOperation::Retain(_)
@@ -13602,6 +14030,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         if !has_generic && !has_discard && !has_resource {
             return Ok(());
         }
+        let worker_release_roots = self.worker_release_roots(native_registry)?;
         let mut capture_work =
             TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let operation: for<'a> fn(
@@ -13611,11 +14040,12 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             _ => None,
         };
         let capture_result = if retained.is_some() {
-            super::capture::check_nodes_with_release(
+            super::capture::check_nodes_with_release_workers(
                 &self.program.nodes,
                 &[],
                 &[],
                 operation,
+                worker_release_roots.as_deref(),
                 &mut capture_work,
             )
         } else {
@@ -13674,7 +14104,97 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 Some(NodeId::new(self.program.arena, node as u32)),
             ),
         })?;
+        // Admit only owners whose two actual workers have complete scoped
+        // resource checks and checked End-to-finish routes. Runtime still
+        // binds each route to its actual End and requires all held deliveries
+        // and carrier/transport obligations to finish before settlement.
+        if !self.network_admissions.borrow().is_empty() && !self.supported_network_completion()? {
+            return Err(ValidationError::new(ValidationReason::Registry, None));
+        }
         Ok(())
+    }
+
+    fn supported_network_completion(&self) -> Result<bool, ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation};
+        let admissions = self.network_admissions.borrow();
+        let coverage = self.network_worker_coverage.borrow();
+        let calls = self.authenticated_network_requests.get();
+        let (Some(receive), Some(finish)) = (calls[1], calls[6]) else {
+            return Ok(false);
+        };
+        let count = admissions.len();
+        if count == 0 || coverage.len() != count {
+            return Ok(false);
+        }
+        // Every membership/uniqueness scan is charged before it starts.
+        let work = self
+            .program
+            .nodes
+            .len()
+            .checked_add(
+                count
+                    .checked_mul(count)
+                    .and_then(|n| n.checked_mul(2))
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+            )
+            .and_then(|n| n.checked_add(count.checked_mul(12)?))
+            .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?;
+        self.charge_type_work(work)?;
+        let mut owners = 0usize;
+        for (index, node) in self.program.nodes.iter().enumerate() {
+            if !matches!(
+                &node.kind,
+                EffectExprKind::Operation(EffectOperation::Network(_))
+            ) {
+                continue;
+            }
+            owners = owners
+                .checked_add(1)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?;
+            let owner = node_id(self.program.arena, index)?;
+            let mut owner_admissions = admissions
+                .iter()
+                .filter(|admission| admission.owner == owner);
+            let Some(admission) = owner_admissions.next() else {
+                return Ok(false);
+            };
+            if owner_admissions.next().is_some() {
+                return Ok(false);
+            }
+            let mut owner_coverage = coverage.iter().filter(|entry| entry.owner == owner);
+            let Some(covered) = owner_coverage.next() else {
+                return Ok(false);
+            };
+            if owner_coverage.next().is_some() || !covered.baseline_complete {
+                return Ok(false);
+            }
+            for (side, entry) in admission.entries.iter().enumerate() {
+                let Some(route) = entry.end_route else {
+                    return Ok(false);
+                };
+                if route.owner != owner
+                    || route.entry != entry.binder
+                    || route.side != side
+                    || route.receive != receive
+                    || route.finish != finish
+                    || [route.owner, route.receive, route.end_match, route.finish]
+                        .into_iter()
+                        .any(|site| site.arena() != self.program.arena || self.node(site).is_err())
+                {
+                    return Ok(false);
+                }
+                let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(
+                    matching,
+                ))) = &self.node(route.end_match)?.kind
+                else {
+                    return Ok(false);
+                };
+                if matching.arms().get(route.arm).is_none() {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(owners == count)
     }
 
     fn effect_signature(
@@ -14423,6 +14943,724 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         Ok(row)
     }
 
+    fn network_outward_row(
+        &self,
+        body: &EffectRow,
+        network: &super::effect::NetworkScopeNode,
+        id: NodeId,
+    ) -> Result<EffectRow, ValidationError> {
+        let api = crate::resolved::NetworkApi::for_module(network.acquisition.builtin)
+            .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+        self.charge_type_work(2)?;
+        let join = EffectInstance::new(
+            api.join(),
+            Box::new([Type::Variable(network.acquisition.identity)]),
+        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let outward = body.remove_exact_with_budget(&join, &mut budget);
+        self.charge_type_work(budget.used())?;
+        match outward.map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))? {
+            Ok(row) => Ok(row),
+            Err(crate::types::EffectRowError::Missing) => {
+                self.union_effect_rows_charged(&EffectRow::empty(), body, id)
+            }
+            Err(error) => Err(ValidationError::row_removal_failure(error, id)),
+        }
+    }
+
+    fn validate_network_scope(
+        &self,
+        id: NodeId,
+        node: &StoredNode<super::effect::EffectOperationFamily>,
+        network: &super::effect::NetworkScopeNode,
+    ) -> Result<(), ValidationError> {
+        let invalid = || ValidationError::new(ValidationReason::NodeType, Some(id));
+        let authority = network.acquisition;
+        let api = crate::resolved::NetworkApi::for_module(authority.builtin).ok_or_else(invalid)?;
+        let canonical = self
+            .program
+            .registry
+            .type_variable(authority.identity)
+            .ok_or_else(invalid)?;
+        self.charge_type_work(2)?;
+        let pair = Type::Application(
+            Box::new(Type::Nominal(api.pair())),
+            Box::new(Type::Variable(authority.identity)),
+        );
+        let capacity = self.node(network.capacity)?;
+        let input_a = self.node(network.inputs[0])?;
+        let input_b = self.node(network.inputs[1])?;
+        let body = self.node(network.body)?;
+        if !api.registry(&self.program.registry)
+            || authority.handle != network.handle.id()
+            || authority.identity.module().is_none()
+            || authority.identity.module() != authority.handle.module()
+            || canonical.kind != Kind::Type
+            || authority.span.cover(canonical.origin.primary_span()) != Some(authority.span)
+            || authority.span.cover(network.handle.origin().primary_span()) != Some(authority.span)
+            || Some(authority.span) != node.origin.as_ref().map(Origin::primary_span)
+            || !self.same_type_charged(network.handle.ty(), &pair)?
+            || !self.same_type_charged(&capacity.ty, &Type::Int)?
+            || !self.same_type_charged(&input_a.ty, &Type::Bytes)?
+            || !self.same_type_charged(&input_b.ty, &Type::Bytes)?
+            || !self.same_type_charged(&body.ty, &node.ty)?
+            || self.type_contains_variable_charged(&node.ty, authority.identity)?
+        {
+            return Err(invalid());
+        }
+        let outward = self.network_outward_row(&body.effects, network, id)?;
+        let expected = self.union_effect_rows_charged(&capacity.effects, &input_a.effects, id)?;
+        let expected = self.union_effect_rows_charged(&expected, &input_b.effects, id)?;
+        let expected = self.union_effect_rows_charged(&expected, &outward, id)?;
+        if !self.same_effect_row_charged(&node.effects, &expected, id)? {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    // Reconstruct the initializer spine from the authenticated linked groups,
+    // not from a marker, binder spelling, or an arbitrary Bind-shaped prefix.
+    // This is only a structural precursor: it does not admit entry bodies,
+    // native services, or network execution.
+    fn check_network_linked_spine(
+        &self,
+        id: NodeId,
+        network: &super::effect::NetworkScopeNode,
+    ) -> Result<NetworkLinkedSpine, ValidationError> {
+        self.reconstruct_network_linked_spine(id, Some(network))
+    }
+
+    // Admit only the actual canonical wrapper's structural call.
+    // The ordinary graph, scope, type and effect passes still run afterwards.
+    fn authenticate_network_call(
+        &self,
+        name: &str,
+        operation: u32,
+    ) -> Result<NodeId, ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation, EffectOperationFamily};
+        let invalid = || ValidationError::new(ValidationReason::EffectIdentity, None);
+        let linked = self.linked.ok_or_else(invalid)?;
+        let spine = self.reconstruct_network_linked_spine(self.program.root, None)?;
+        let mut selected = None;
+        for group in linked.groups() {
+            if !group.module().is_builtin_network() {
+                continue;
+            }
+            self.charge_type_work(group.definitions().len())?;
+            for (definition, scheme) in group.definitions().iter().zip(group.schemes()) {
+                let crate::resolved::ResolvedDefinitionKind::Equational(definition) =
+                    definition.kind()
+                else {
+                    continue;
+                };
+                if definition.interface.name.spelling != name {
+                    continue;
+                }
+                if selected.is_some()
+                    || definition.interface.name.id != scheme.binder
+                    || scheme.binder.module() != Some(group.module())
+                    || !scheme.scheme.requirements.is_empty()
+                {
+                    return Err(invalid());
+                }
+                let [(parameter, Kind::Type)] = scheme.scheme.type_parameters.as_ref() else {
+                    return Err(invalid());
+                };
+                self.charge_type_work(spine.bindings.len())?;
+                let mut matches = spine
+                    .bindings
+                    .iter()
+                    .filter(|(binder, _)| *binder == scheme.binder);
+                let (_, initializer) = matches.next().ok_or_else(invalid)?;
+                if matches.next().is_some() {
+                    return Err(invalid());
+                }
+                let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                    self.pure_kind(*initializer)?
+                else {
+                    return Err(invalid());
+                };
+                if abstraction.parameters() != [(*parameter, Kind::Type)] {
+                    return Err(invalid());
+                }
+                let Type::Forall(_, body) = &self.node(*initializer)?.ty else {
+                    return Err(invalid());
+                };
+                if !self.same_type_charged(body, &scheme.scheme.value_type)? {
+                    return Err(invalid());
+                }
+                let bind = abstraction.body();
+                if !matches!(
+                    self.pure_kind(bind)?,
+                    PureExprKind::Computation(PureComputation::Bind(_))
+                ) {
+                    return Err(invalid());
+                }
+                let (closure_id, closure) =
+                    super::region::closure_initializer::<EffectOperationFamily>(bind, |node| {
+                        self.node(node).ok().map(|n| &n.kind)
+                    })
+                    .ok_or_else(invalid)?;
+                if !closure.captures.is_empty() {
+                    return Err(invalid());
+                }
+                let function = closure.code.function().ok_or_else(invalid)?;
+                let body = function.body();
+                let PureExprKind::Computation(PureComputation::Bind(context)) =
+                    self.pure_kind(body)?
+                else {
+                    return Err(invalid());
+                };
+                let call = context.body();
+                let EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) =
+                    &self.node(call)?.kind
+                else {
+                    return Err(invalid());
+                };
+                let super::region::RegionBufferOperation::Network {
+                    effect,
+                    operation: actual_operation,
+                } = &buffer.operation
+                else {
+                    return Err(invalid());
+                };
+                let api =
+                    crate::resolved::NetworkApi::for_module(group.module()).ok_or_else(invalid)?;
+                let region =
+                    crate::resolved::RegionApi::for_module(buffer.api).ok_or_else(invalid)?;
+                let EffectExprKind::Operation(EffectOperation::Request(query)) =
+                    &self.node(context.initializer())?.kind
+                else {
+                    return Err(invalid());
+                };
+                let operation_owner = if name == "settle" {
+                    api.join()
+                } else {
+                    api.io()
+                };
+                if *actual_operation != OperationId::new(operation_owner, operation)
+                    || effect.effect() != operation_owner
+                    || !matches!(effect.arguments(), [crate::types::KindedArgument::TypeArg(Type::Variable(actual))] if actual == parameter)
+                    || query.effect().effect() != region.default_alloc()
+                    || !query.effect().arguments().is_empty()
+                    || query.operation() != OperationId::new(region.default_alloc(), 1)
+                    || !matches!(
+                        self.pure_kind(query.operand())?,
+                        PureExprKind::Value(PureValue::Unit(_))
+                    )
+                    || !matches!(self.pure_kind(buffer.context)?, PureExprKind::Variable(variable) if variable.binder() == context.binder().id())
+                    || buffer.right.is_some()
+                    || !matches!(buffer.operand.and_then(|operand| self.pure_kind(operand).ok()), Some(PureExprKind::Variable(variable)) if variable.binder() == function.parameter().id())
+                {
+                    return Err(invalid());
+                }
+                selected = Some((*initializer, bind, closure_id, body, call));
+            }
+        }
+        let (initializer, bind, closure, body, call) = selected.ok_or_else(invalid)?;
+        let protected = [initializer, bind, closure, body, call];
+        let mut incoming = [0usize; 5];
+        for node in &self.program.nodes {
+            let count = EffectOperationFamily::child_count(&node.kind);
+            self.charge_type_work(
+                count
+                    .checked_mul(protected.len())
+                    .and_then(|work| work.checked_add(1))
+                    .ok_or_else(invalid)?,
+            )?;
+            for index in 0..count {
+                let child =
+                    EffectOperationFamily::child_at(&node.kind, index).ok_or_else(invalid)?;
+                for (slot, target) in protected.iter().enumerate() {
+                    if child == *target {
+                        incoming[slot] = incoming[slot].checked_add(1).ok_or_else(invalid)?;
+                    }
+                }
+            }
+        }
+        if incoming != [1; 5] {
+            return Err(invalid());
+        }
+        Ok(call)
+    }
+
+    fn reconstruct_network_linked_spine(
+        &self,
+        id: NodeId,
+        network: Option<&super::effect::NetworkScopeNode>,
+    ) -> Result<NetworkLinkedSpine, ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation};
+        let invalid = || ValidationError::new(ValidationReason::Registry, Some(id));
+        let linked = self.linked.ok_or_else(invalid)?;
+        let linked_result = network
+            .map(|network| network.linked_result.ok_or_else(invalid))
+            .transpose()?;
+        if let Some(linked_result) = linked_result {
+            self.node(linked_result)?;
+        }
+        let mut cursor = self.program.root;
+        if let EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) =
+            &self.node(cursor)?.kind
+        {
+            cursor = boundary.body();
+        }
+        let EffectExprKind::Operation(EffectOperation::Region(region)) = &self.node(cursor)?.kind
+        else {
+            return Err(invalid());
+        };
+        if !region.entry {
+            return Err(invalid());
+        }
+        let entry_region = cursor;
+        let forwarder = region.body();
+        let EffectExprKind::Operation(EffectOperation::Handler(handler)) =
+            &self.node(forwarder)?.kind
+        else {
+            return Err(invalid());
+        };
+        let cursor_body = self.cleanup_invocation(forwarder)?;
+        let [allocate, _] = handler.clauses() else {
+            return Err(invalid());
+        };
+        let EffectExprKind::Operation(EffectOperation::Resume(resume)) =
+            &self.node(allocate.body())?.kind
+        else {
+            return Err(invalid());
+        };
+        let EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) =
+            &self.node(resume.value())?.kind
+        else {
+            return Err(invalid());
+        };
+        let PureExprKind::Variable(selected) = self.pure_kind(allocation.context())? else {
+            return Err(invalid());
+        };
+        if selected.binder() != region.access.id() {
+            return Err(invalid());
+        }
+        cursor = cursor_body;
+        let mut found = [false; 2];
+        let mut entries = [None; 2];
+        let mut initializers = Vec::new();
+        let mut bindings = Vec::new();
+        for group in linked.groups() {
+            let count = group.declaration_order().len();
+            self.charge_type_work(
+                count
+                    .checked_mul(2)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Resource, Some(id)))?,
+            )?;
+            let mut constants = Vec::new();
+            let mut recursive = Vec::new();
+            constants
+                .try_reserve(count)
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+            recursive
+                .try_reserve(count)
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+            for declaration in group.declaration_order() {
+                match *declaration {
+                    crate::resolved::ResolvedDeclarationIndex::Global(index) => {
+                        let definition = group.definitions().get(index).ok_or_else(invalid)?;
+                        let scheme = group.schemes().get(index).ok_or_else(invalid)?;
+                        if matches!(
+                            definition.kind(),
+                            crate::resolved::ResolvedDefinitionKind::ForeignConstant(_)
+                        ) {
+                            constants.push(scheme.binder);
+                        } else {
+                            recursive.push(scheme.binder);
+                        }
+                    }
+                    crate::resolved::ResolvedDeclarationIndex::Implementation(index) => {
+                        let fact = group
+                            .implementation_facts()
+                            .get(index)
+                            .ok_or_else(invalid)?;
+                        self.charge_type_work(fact.methods.len())?;
+                        recursive.try_reserve(fact.methods.len()).map_err(|_| {
+                            ValidationError::new(ValidationReason::Resource, Some(id))
+                        })?;
+                        recursive.extend(fact.methods.iter().map(|method| method.binder));
+                    }
+                    crate::resolved::ResolvedDeclarationIndex::Resource(_) => return Err(invalid()),
+                    crate::resolved::ResolvedDeclarationIndex::Type(_)
+                    | crate::resolved::ResolvedDeclarationIndex::Interface(_)
+                    | crate::resolved::ResolvedDeclarationIndex::Effect(_) => {}
+                }
+            }
+            for binder in constants {
+                let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) =
+                    &self.node(cursor)?.kind
+                else {
+                    return Err(invalid());
+                };
+                if binding.binder().id() != binder {
+                    return Err(invalid());
+                }
+                self.charge_type_work(2)?;
+                initializers
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+                bindings
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+                initializers.push(binding.initializer());
+                bindings.push((binder, binding.initializer()));
+                cursor = binding.body();
+            }
+            if !recursive.is_empty() {
+                let EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::RecursiveBind(binding),
+                )) = &self.node(cursor)?.kind
+                else {
+                    return Err(invalid());
+                };
+                self.charge_type_work(
+                    recursive.len().checked_mul(2).ok_or_else(|| {
+                        ValidationError::new(ValidationReason::Resource, Some(id))
+                    })?,
+                )?;
+                if binding.members().len() != recursive.len() {
+                    return Err(invalid());
+                }
+                initializers
+                    .try_reserve(recursive.len())
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+                bindings
+                    .try_reserve(recursive.len())
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+                for (member, expected) in binding.members().iter().zip(recursive) {
+                    if member.binder().id() != expected {
+                        return Err(invalid());
+                    }
+                    initializers.push(member.initializer());
+                    bindings.push((expected, member.initializer()));
+                    if let Some(network) = network {
+                        for (slot, entry) in network.entries.iter().enumerate() {
+                            if *entry == expected {
+                                self.charge_type_work(group.schemes().len())?;
+                                let scheme = group
+                                    .schemes()
+                                    .iter()
+                                    .find(|scheme| scheme.binder == expected)
+                                    .ok_or_else(invalid)?;
+                                self.check_network_entry_scheme(
+                                    id,
+                                    network,
+                                    scheme,
+                                    member.binder(),
+                                )?;
+                                found[slot] = true;
+                                entries[slot] = Some(member.initializer());
+                            }
+                        }
+                    }
+                }
+                cursor = binding.body();
+            }
+        }
+        if linked_result.is_some_and(|result| cursor != result)
+            || (network.is_some() && !found.into_iter().all(|entry| entry))
+        {
+            return Err(invalid());
+        }
+        Ok(NetworkLinkedSpine {
+            entry_region,
+            result: cursor,
+            initializers,
+            bindings,
+            entries,
+        })
+    }
+
+    fn check_network_entry_scheme(
+        &self,
+        id: NodeId,
+        network: &super::effect::NetworkScopeNode,
+        checked: &crate::resolved::CheckedGlobalScheme,
+        binder: &TypedBinder,
+    ) -> Result<(), ValidationError> {
+        let invalid = || ValidationError::new(ValidationReason::Registry, Some(id));
+        let [(identity, Kind::Type)] = checked.scheme.type_parameters.as_ref() else {
+            return Err(invalid());
+        };
+        if !checked.scheme.requirements.is_empty() || checked.binder != binder.id() {
+            return Err(invalid());
+        }
+        let Type::Forall(parameters, actual) = binder.ty() else {
+            return Err(invalid());
+        };
+        if !matches!(parameters.as_ref(), [(parameter, Kind::Type)] if parameter == identity)
+            || !self.same_type_charged(actual, &checked.scheme.value_type)?
+        {
+            return Err(invalid());
+        }
+        let function = actual.function_view().ok_or_else(invalid)?;
+        let Type::Tuple(arguments) = function.domain() else {
+            return Err(invalid());
+        };
+        let [Type::Application(worker, owner), Type::Bytes] = arguments.as_ref() else {
+            return Err(invalid());
+        };
+        let api = crate::resolved::NetworkApi::for_module(network.acquisition.builtin)
+            .ok_or_else(invalid)?;
+        if !matches!((&**worker, &**owner), (Type::Nominal(nominal), Type::Variable(parameter)) if *nominal == api.worker() && parameter == identity)
+            || !matches!(function.value(), Type::Unit)
+            || function.effects().is_some_and(|row| row.tail().is_some())
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    // This inventories the effects of the actual initializer nodes only.
+    // The independently reconstructed node rows and entry-body/capture checks
+    // remain mandatory before this inventory could grant worker admission.
+    fn check_network_initializer_effects(
+        &self,
+        id: NodeId,
+        network: &super::effect::NetworkScopeNode,
+        spine: &NetworkLinkedSpine,
+        native: &AuthenticatedNativeRegistry<'_>,
+    ) -> Result<(), ValidationError> {
+        let invalid = || ValidationError::new(ValidationReason::Registry, Some(id));
+        if !std::ptr::eq(native.registry, self.program.registry.as_ref()) {
+            return Err(invalid());
+        }
+        let api = crate::resolved::NetworkApi::for_module(network.acquisition.builtin)
+            .ok_or_else(invalid)?;
+        for initializer in &spine.initializers {
+            self.charge_type_work(1)?;
+            let row = &self.node(*initializer)?.effects;
+            if row.tail().is_some() {
+                return Err(invalid());
+            }
+            self.charge_type_work(row.known().len())?;
+            for instance in row.known() {
+                let effect = instance.effect();
+                if crate::resolved::RegionApi::for_module(effect.module()).is_some_and(|region| {
+                    region.default_alloc() == effect && instance.arguments().is_empty()
+                }) {
+                    continue;
+                }
+                if effect == api.io()
+                    && matches!(instance.arguments(), [crate::types::KindedArgument::TypeArg(Type::Variable(identity))] if *identity == network.acquisition.identity)
+                {
+                    continue;
+                }
+                let operation = OperationId::new(effect, 0);
+                let Some(symbol) = native.registry.native_symbol(operation) else {
+                    return Err(invalid());
+                };
+                let Some(declaration) = native.registry.effect(effect) else {
+                    return Err(invalid());
+                };
+                self.charge_type_work(3)?;
+                if symbol.effect() != effect
+                    || symbol.operation() != operation
+                    || !declaration
+                        .native_contract
+                        .as_ref()
+                        .is_some_and(|original| std::sync::Arc::ptr_eq(original, symbol))
+                {
+                    return Err(invalid());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn network_native_identity_scope<'scope>(
+        &'scope self,
+        owner: NodeId,
+        network: &super::effect::NetworkScopeNode,
+        spine: &'scope NetworkLinkedSpine,
+        facts: &'scope network::NetworkBodyFacts,
+        native: &'scope AuthenticatedNativeRegistry<'scope>,
+    ) -> Result<NetworkNativeIdentityScope<'scope>, ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation};
+        let invalid = || ValidationError::new(ValidationReason::Registry, Some(owner));
+        self.charge_type_work(8)?;
+        let actual = self.node(owner)?;
+        if !matches!(&actual.kind, EffectExprKind::Operation(EffectOperation::Network(actual))
+            if std::ptr::eq(actual.as_ref(), network))
+            || !std::ptr::eq(native.registry, self.program.registry.as_ref())
+            || owner.arena() != self.program.arena
+            || self.program.root.arena() != self.program.arena
+            || facts.entry_region != spine.entry_region
+            || facts.linked_result != spine.result
+        {
+            return Err(invalid());
+        }
+        let mut entries = [owner; 2];
+        let mut parameters = [facts.entries[0].parameter; 2];
+        for side in 0..2 {
+            let entry = &facts.entries[side];
+            if entry.binder != network.entries[side]
+                || spine.entries[side] != Some(entry.initializer)
+                || entry.initializer.arena() != self.program.arena
+            {
+                return Err(invalid());
+            }
+            entries[side] = entry.initializer;
+            parameters[side] = entry.parameter;
+        }
+        let api = crate::resolved::NetworkApi::for_module(network.acquisition.builtin)
+            .ok_or_else(invalid)?;
+        self.charge_type_work(100)?;
+        if !api.registry(&self.program.registry) {
+            return Err(invalid());
+        }
+        let receive = self.authenticate_network_call("try_receive", 2)?;
+        Ok(NetworkNativeIdentityScope {
+            arena: self.program.arena,
+            root: self.program.root,
+            owner,
+            entry_region: facts.entry_region,
+            linked_result: facts.linked_result,
+            receive,
+            entries,
+            parameters,
+            native_effects: [
+                &facts.entries[0].native_effects,
+                &facts.entries[1].native_effects,
+            ],
+            bindings: &spine.bindings,
+            nodes: &self.program.nodes,
+            native,
+        })
+    }
+
+    // Complete the optional release aggregate only when some actual owner
+    // requested one-way completion. All owners and both entries must pass;
+    // otherwise no symbolic callable receives a release exemption.
+    fn worker_release_roots(
+        &self,
+        native: &AuthenticatedNativeRegistry<'_>,
+    ) -> Result<Option<Vec<usize>>, ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation};
+        let mut coverage = self.network_worker_coverage.borrow_mut();
+        self.charge_type_work(coverage.len())?;
+        if !coverage.iter().any(|item| item.requested) {
+            return Ok(None);
+        }
+        self.charge_type_work(self.program.nodes.len())?;
+        let owner_count = self
+            .program
+            .nodes
+            .iter()
+            .filter(|node| {
+                matches!(
+                    &node.kind,
+                    EffectExprKind::Operation(EffectOperation::Network(_))
+                )
+            })
+            .count();
+        if owner_count != coverage.len() || owner_count != self.network_admissions.borrow().len() {
+            return Ok(None);
+        }
+        for item in coverage.iter_mut() {
+            if item.baseline_complete {
+                continue;
+            }
+            // A previously failed requested query is not made authoritative by
+            // retrying it as an unrestricted query.
+            if item.requested {
+                return Ok(None);
+            }
+            let EffectExprKind::Operation(EffectOperation::Network(network)) =
+                &self.node(item.owner)?.kind
+            else {
+                return Ok(None);
+            };
+            let spine = self.check_network_linked_spine(item.owner, network)?;
+            self.check_network_initializer_effects(item.owner, network, &spine, native)?;
+            let facts = network::check_entry_bodies(self, item.owner, network, &spine, native)?;
+            let scope =
+                self.network_native_identity_scope(item.owner, network, &spine, &facts, native)?;
+            let mut work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let mut complete = true;
+            for side in 0..2 {
+                match super::capture::network_worker_resource_baseline(&scope, side, &mut work) {
+                    Ok(()) => {}
+                    Err(super::capture::Failure::Resource) => {
+                        self.charge_type_work(work.used())?;
+                        return Err(ValidationError::new(
+                            ValidationReason::Resource,
+                            Some(item.owner),
+                        ));
+                    }
+                    Err(_) => {
+                        complete = false;
+                        break;
+                    }
+                }
+            }
+            self.charge_type_work(work.used())?;
+            if !complete {
+                return Ok(None);
+            }
+            item.baseline_complete = true;
+        }
+        let mut roots = Vec::new();
+        for item in coverage.iter() {
+            self.charge_type_work(item.direct_worker_calls.len())?;
+            roots
+                .try_reserve(item.direct_worker_calls.len())
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(item.owner)))?;
+            for node in &item.direct_worker_calls {
+                if node.arena() != self.program.arena {
+                    return Ok(None);
+                }
+                roots.push(node.index().map_err(|_| {
+                    ValidationError::new(ValidationReason::Resource, Some(item.owner))
+                })?);
+            }
+            // Entry schemes were already authenticated as the exact strict
+            // (Worker<N>, Bytes) input. Reconstruct their actual closure nodes;
+            // a tuple-shaped helper or source-nominated function is not enough.
+            let EffectExprKind::Operation(EffectOperation::Network(network)) =
+                &self.node(item.owner)?.kind
+            else {
+                return Ok(None);
+            };
+            let spine = self.check_network_linked_spine(item.owner, network)?;
+            let (Some(left), Some(right)) = (spine.entries[0], spine.entries[1]) else {
+                return Ok(None);
+            };
+            let mut work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let entries = super::capture::linked_worker_functions(
+                &self.program.nodes,
+                self.program.arena,
+                [left, right],
+                &mut work,
+            );
+            self.charge_type_work(work.used())?;
+            let entries = match entries {
+                Ok(entries) => entries,
+                Err(super::capture::Failure::Resource) => {
+                    return Err(ValidationError::new(
+                        ValidationReason::Resource,
+                        Some(item.owner),
+                    ));
+                }
+                Err(_) => return Ok(None),
+            };
+            self.charge_type_work(entries.len())?;
+            roots
+                .try_reserve(entries.len())
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(item.owner)))?;
+            roots.extend(entries);
+        }
+        Ok(Some(roots))
+    }
+
     #[inline(never)]
     fn validate_effect_node_kind(
         &self,
@@ -14440,6 +15678,101 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
 
         let mut has_discard = false;
         match &node.kind {
+            EffectExprKind::Operation(EffectOperation::Network(network)) => {
+                self.validate_network_scope(id, node, network)?;
+                let spine = self.check_network_linked_spine(id, network)?;
+                self.check_network_initializer_effects(id, network, &spine, native_registry)?;
+                let mut facts =
+                    network::check_entry_bodies(self, id, network, &spine, native_registry)?;
+                let mut baseline_complete = facts.requests_completion;
+                let mut routes = [None, None];
+                let mut cuts = [None, None];
+                let mut ends = [None, None];
+                if facts.requests_completion {
+                    // This optional query is only attempted for a called entry
+                    // that reaches the authenticated finish-receive operation.
+                    // It consumes the same remaining validator allowance.
+                    match self.network_native_identity_scope(
+                        id,
+                        network,
+                        &spine,
+                        &facts,
+                        native_registry,
+                    ) {
+                        Ok(scope) => {
+                            let mut work = TypeWorkBudget::with_limit(
+                                self.type_work_limit.saturating_sub(self.type_work.get()),
+                            );
+                            for side in 0..2 {
+                                let result = super::capture::network_worker_admission_facts(
+                                    &scope, side, &mut work,
+                                );
+                                match result {
+                                    Ok((route, cut, end)) => {
+                                        routes[side] = route;
+                                        cuts[side] = cut;
+                                        ends[side] = end;
+                                    }
+                                    Err(super::capture::Failure::Resource) => {
+                                        self.charge_type_work(work.used())?;
+                                        return Err(ValidationError::new(
+                                            ValidationReason::Resource,
+                                            Some(id),
+                                        ));
+                                    }
+                                    Err(_) => {
+                                        baseline_complete = false;
+                                    }
+                                }
+                            }
+                            self.charge_type_work(work.used())?;
+                        }
+                        Err(error) if error.reason() == ValidationReason::Resource => {
+                            return Err(error);
+                        }
+                        Err(_) => {
+                            baseline_complete = false;
+                        }
+                    }
+                }
+                self.charge_type_work(1)?;
+                let mut coverage = self.network_worker_coverage.borrow_mut();
+                coverage
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+                coverage.push(NetworkWorkerCoverage {
+                    owner: id,
+                    direct_worker_calls: std::mem::take(&mut facts.direct_worker_calls),
+                    requested: facts.requests_completion,
+                    baseline_complete,
+                });
+                drop(coverage);
+                let [a, b] = facts.entries;
+                let [route_a, route_b] = routes;
+                let [cut_a, cut_b] = cuts;
+                let [end_a, end_b] = ends;
+                self.charge_type_work(1)?;
+                let mut admissions = self.network_admissions.borrow_mut();
+                admissions
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+                admissions.push(super::dialect::NetworkAdmission {
+                    owner: id,
+                    linked_result: facts.linked_result,
+                    entries: [(a, route_a, cut_a, end_a), (b, route_b, cut_b, end_b)].map(
+                        |(entry, processing_route, processing_cut, end_route)| {
+                            super::dialect::NetworkEntryAdmission {
+                                binder: entry.binder,
+                                parameter: entry.parameter,
+                                native_effects: entry.native_effects,
+                                processing_route,
+                                processing_cut,
+                                end_route,
+                            }
+                        },
+                    ),
+                });
+            }
             EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) => {
                 use super::region::RegionBufferOperation;
                 let api = crate::resolved::RegionApi::for_module(buffer.api)
@@ -14495,6 +15828,39 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                             return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                         }
                     }
+                    RegionBufferOperation::Network { effect, operation } => {
+                        if !self
+                            .authenticated_network_requests
+                            .get()
+                            .contains(&Some(id))
+                            || buffer.right.is_some()
+                            || !crate::resolved::NetworkApi::for_module(effect.effect().module())
+                                .is_some_and(|api| {
+                                    (effect.effect() == api.io()
+                                        && operation.owner() == api.io()
+                                        && matches!(operation.operation(), 1..=7))
+                                        || (effect.effect() == api.join()
+                                            && operation.owner() == api.join()
+                                            && operation.operation() == 1)
+                                })
+                        {
+                            return Err(ValidationError::new(
+                                ValidationReason::EffectIdentity,
+                                Some(id),
+                            ));
+                        }
+                        self.validate_effect_instance(effect, type_binders, id)?;
+                        let (domain, result) =
+                            self.effect_signature(effect, *operation, id, type_binders)?;
+                        let operand = buffer.operand.ok_or_else(|| {
+                            ValidationError::new(ValidationReason::NodeType, Some(id))
+                        })?;
+                        if !self.same_type_charged(&self.node(operand)?.ty, &domain)?
+                            || !self.same_type_charged(&node.ty, &result)?
+                        {
+                            return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                        }
+                    }
                     RegionBufferOperation::Intrinsic(intrinsic) => {
                         self.validate_intrinsic_identity(*intrinsic, id)?;
                         if buffer.right.is_some() || !intrinsic.constructs_buffer_or_reply() {
@@ -14516,6 +15882,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 }
                 let mut expected =
                     EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])));
+                if let RegionBufferOperation::Network { effect, .. } = &buffer.operation {
+                    let requested = self.singleton_effect_row_charged(effect, id)?;
+                    expected = self.union_effect_rows_charged(&expected, &requested, id)?;
+                }
                 for child in std::iter::once(buffer.context)
                     .chain(buffer.operand)
                     .chain(buffer.right)
@@ -14682,6 +16052,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     if crate::resolved::ResourceApi::for_module(constructor.owner().module())
                         .is_some_and(|api| api.hides_constructor(constructor))
                         || crate::resolved::StoreApi::for_module(constructor.owner().module())
+                            .is_some_and(|api| api.hides_constructor(constructor))
+                        || crate::resolved::NetworkApi::for_module(constructor.owner().module())
                             .is_some_and(|api| api.hides_constructor(constructor))
                         || crate::resolved::RegionApi::for_module(constructor.owner().module())
                             .is_some()
@@ -15687,6 +17059,21 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                         })
                     };
                     let row = match &node.kind {
+                        EffectExprKind::Operation(EffectOperation::Network(network)) => {
+                            let outward =
+                                self.network_outward_row(child_row(network.body)?, network, id)?;
+                            let row = self.union_effect_rows_charged(
+                                child_row(network.capacity)?,
+                                child_row(network.inputs[0])?,
+                                id,
+                            )?;
+                            let row = self.union_effect_rows_charged(
+                                &row,
+                                child_row(network.inputs[1])?,
+                                id,
+                            )?;
+                            self.union_effect_rows_charged(&row, &outward, id)?
+                        }
                         EffectExprKind::Operation(EffectOperation::RegionValueRequest(_)) => {
                             EffectRow::empty()
                         }
@@ -15699,6 +17086,13 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                 api.default_alloc(),
                                 Box::new([]),
                             ));
+                            if let super::region::RegionBufferOperation::Network {
+                                effect, ..
+                            } = &buffer.operation
+                            {
+                                let requested = self.singleton_effect_row_charged(effect, id)?;
+                                row = self.union_effect_rows_charged(&row, &requested, id)?;
+                            }
                             for child in std::iter::once(buffer.context)
                                 .chain(buffer.operand)
                                 .chain(buffer.right)
@@ -21423,6 +22817,114 @@ mod tests {
     }
 
     #[test]
+    fn network_services_reject_forged_core_requests_and_handlers() {
+        use super::super::effect::EffectOperation;
+        let source = concat!(
+            "import @builtin.network as Network\n",
+            "effect Service<N> {\ninternal : Unit -> Unit\n}\n",
+            "main : Unit -> Int\nmain () = {\n",
+            "let _ = handle (perform Service<Int>.internal ()) with Service<Int> {\n",
+            "internal ignored => resume ()\n}\n42\n}\n",
+        );
+        let fixture = || {
+            let directory = LinkedValidationDirectory::create();
+            let entry = directory.write("entry.ash", source);
+            let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+            let linked =
+                link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+            let linked = validate_linked_facts_for_test(linked).unwrap();
+            let mut elaborator =
+                crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+            let typed = elaborator
+                .synthesize_effect_module_program(&linked)
+                .unwrap();
+            let program = elaborator.finish(typed.node).unwrap();
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source().clone())
+                .collect::<Vec<_>>();
+            let relation = graph
+                .modules()
+                .iter()
+                .map(|module| (module.id(), module.source().id()))
+                .collect::<Vec<_>>();
+            (program, sources, relation, linked)
+        };
+        let (valid, sources, relation, linked) = fixture();
+        let refs = sources.iter().collect::<Vec<_>>();
+        validate_effect_modules_linked_with_work(
+            valid,
+            &refs,
+            &relation,
+            &linked,
+            &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+        )
+        .expect("an ordinary same-shaped user service remains available");
+        for handler in [false, true] {
+            for join in [false, true] {
+                let (mut forged, sources, relation, linked) = fixture();
+                let refs = sources.iter().collect::<Vec<_>>();
+                let api = forged
+                    .registry
+                    .effects()
+                    .iter()
+                    .find_map(|effect| crate::resolved::NetworkApi::for_module(effect.id.module()))
+                    .unwrap();
+                let effect = if join { api.join() } else { api.io() };
+                let sealed = EffectInstance::new(effect, Box::new([Type::Int]));
+                let operation = OperationId::new(effect, 0);
+                let index = forged
+                    .nodes
+                    .iter()
+                    .position(|node| match &node.kind {
+                        EffectExprKind::Operation(EffectOperation::Request(request)) => {
+                            !handler
+                                && forged
+                                    .registry
+                                    .effect(request.effect().effect())
+                                    .is_some_and(|effect| effect.spelling == "Service")
+                        }
+                        EffectExprKind::Operation(EffectOperation::Handler(clause)) => {
+                            handler
+                                && forged
+                                    .registry
+                                    .effect(clause.effect().effect())
+                                    .is_some_and(|effect| effect.spelling == "Service")
+                        }
+                        _ => false,
+                    })
+                    .expect("user request or handler");
+                let id = node_id(forged.arena, index).unwrap();
+                match &mut forged.nodes[index].kind {
+                    EffectExprKind::Operation(EffectOperation::Request(request)) => {
+                        request.effect = sealed.clone();
+                        request.operation = operation;
+                        forged.nodes[index].effects = EffectRow::singleton(sealed);
+                    }
+                    EffectExprKind::Operation(EffectOperation::Handler(clause)) => {
+                        clause.effect = sealed;
+                        for arm in clause.clauses.iter_mut() {
+                            arm.operation = operation;
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+                let error = validate_effect_modules_linked_with_work(
+                    forged,
+                    &refs,
+                    &relation,
+                    &linked,
+                    &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                )
+                .expect_err("forged raw network service");
+                assert_eq!(error.reason(), ValidationReason::EffectIdentity);
+                assert_eq!(error.node(), Some(id));
+            }
+        }
+    }
+
+    #[test]
     fn retained_store_effect_replay_discharges_only_its_own_drive_and_probe() {
         use super::super::effect::{
             EffectCoreBuilder, EffectOperation, HandlerId, ResumeUse, StoreScopeNode,
@@ -23754,6 +25256,283 @@ mod tests {
     }
 
     #[test]
+    fn network_linked_spine_separates_global_initializers_from_main_result() {
+        let directory = LinkedValidationDirectory::create();
+        let entry = directory.write(
+            "entry.ash",
+            "import @builtin.network as Network\nimport @builtin.bytes as ByteOps\n\
+             start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n\
+             start ignored = ()\n\
+             effect MainOnly {\nping : Unit -> Unit\n}\n\
+             main : Unit -> Unit\nmain () = {\n\
+             let _ = handle (perform MainOnly.ping ()) with MainOnly {\nping ignored => resume ()\n}\n\
+             resource Network.Pair<N> pair = \
+             (1, start, start, ByteOps.empty (), ByteOps.empty ()) {\n()\n}\n}\n",
+        );
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+        let linked = validate_linked_facts_for_test(linked).unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let mut program = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let mut short = Validator::new_modules(&program, &sources, &relation).unwrap();
+        short.type_work_limit = 63;
+        assert_eq!(
+            short.run_effect().unwrap_err().reason(),
+            ValidationReason::Resource
+        );
+        assert_eq!(
+            short.type_work.get(),
+            0,
+            "refusal precedes registry inspection"
+        );
+        let index = program
+            .nodes
+            .iter()
+            .position(|node| {
+                matches!(
+                    &node.kind,
+                    EffectExprKind::Operation(super::super::effect::EffectOperation::Network(_))
+                )
+            })
+            .expect("network owner");
+        let id = node_id(program.arena, index).unwrap();
+        let EffectExprKind::Operation(super::super::effect::EffectOperation::Network(network)) =
+            &program.nodes[index].kind
+        else {
+            unreachable!()
+        };
+        let mut validator = Validator::new_modules(&program, &sources, &relation).unwrap();
+        validator.linked = Some(&linked);
+        let spine = validator
+            .check_network_linked_spine(id, network)
+            .expect("linked global spine");
+        assert_ne!(spine.entry_region, spine.result);
+        assert!(!spine.initializers.is_empty());
+        validator
+            .validate_network_scope(id, &program.nodes[index], network)
+            .expect("the actual owner scope has authenticated types and effects");
+        let main_only = linked
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.spelling == "MainOnly")
+            .expect("main-only effect")
+            .id;
+        assert!(
+            program.nodes.iter().any(|node| matches!(
+                &node.kind,
+                EffectExprKind::Operation(super::super::effect::EffectOperation::Request(request))
+                    if request.effect().effect() == main_only
+            )),
+            "the main body contains an actual main-only request"
+        );
+        assert!(
+            !spine.initializers.contains(&spine.result),
+            "main result is not a global initializer"
+        );
+        let native = AuthenticatedNativeRegistry {
+            registry: program.registry.as_ref(),
+        };
+        validator
+            .check_network_initializer_effects(id, network, &spine, &native)
+            .expect("main-only request is not an initializer effect");
+        let wrong = network.capacity;
+        let initializer = spine.initializers[0].index().unwrap();
+        let _ = validator;
+        let original = std::mem::replace(
+            &mut program.nodes[initializer].effects,
+            EffectRow::singleton(EffectInstance::new(main_only, Box::new([]))),
+        );
+        let mut validator = Validator::new_modules(&program, &sources, &relation).unwrap();
+        validator.linked = Some(&linked);
+        let EffectExprKind::Operation(super::super::effect::EffectOperation::Network(network)) =
+            &program.nodes[index].kind
+        else {
+            unreachable!()
+        };
+        let native = AuthenticatedNativeRegistry {
+            registry: program.registry.as_ref(),
+        };
+        assert!(
+            validator
+                .check_network_initializer_effects(id, network, &spine, &native)
+                .is_err(),
+            "the same unadmitted effect in an initializer must be rejected"
+        );
+        let _ = validator;
+        program.nodes[initializer].effects = original;
+        let EffectExprKind::Operation(super::super::effect::EffectOperation::Network(network)) =
+            &mut program.nodes[index].kind
+        else {
+            unreachable!()
+        };
+        network.linked_result = Some(wrong);
+        let mut validator = Validator::new_modules(&program, &sources, &relation).unwrap();
+        validator.linked = Some(&linked);
+        let EffectExprKind::Operation(super::super::effect::EffectOperation::Network(network)) =
+            &program.nodes[index].kind
+        else {
+            unreachable!()
+        };
+        assert!(
+            validator.check_network_linked_spine(id, network).is_err(),
+            "a forged boundary cannot skip globals or main"
+        );
+    }
+
+    #[test]
+    fn network_send_authentication_reconstructs_the_owned_wrapper() {
+        let directory = LinkedValidationDirectory::create();
+        let entry = directory.write(
+            "entry.ash",
+            "import @builtin.network as Network\nmain : Unit -> Unit\nmain () = ()\n",
+        );
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+        let linked = validate_linked_facts_for_test(linked).unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let mut program = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let mut validator = Validator::new_modules(&program, &sources, &relation).unwrap();
+        validator.linked = Some(&linked);
+        let request = validator
+            .authenticate_network_call("try_send", 1)
+            .expect("actual linked send wrapper");
+        let required = validator.type_work.get();
+        validator
+            .run_effect()
+            .expect("ordinary program with authenticated builtin");
+        let mut unlinked = Validator::new_modules(&program, &sources, &relation).unwrap();
+        assert_eq!(
+            unlinked.run_effect().unwrap_err().reason(),
+            ValidationReason::EffectIdentity
+        );
+        let mut short = Validator::new_modules(&program, &sources, &relation).unwrap();
+        short.linked = Some(&linked);
+        short.type_work_limit = 0;
+        assert_eq!(
+            short
+                .authenticate_network_call("try_send", 1)
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Resource
+        );
+        let mut exact = Validator::new_modules(&program, &sources, &relation).unwrap();
+        exact.linked = Some(&linked);
+        exact.type_work_limit = required;
+        assert_eq!(
+            exact.authenticate_network_call("try_send", 1).unwrap(),
+            request
+        );
+        let mut one_short = Validator::new_modules(&program, &sources, &relation).unwrap();
+        one_short.linked = Some(&linked);
+        one_short.type_work_limit = required - 1;
+        assert_eq!(
+            one_short
+                .authenticate_network_call("try_send", 1)
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Resource
+        );
+        assert_eq!(one_short.authenticated_network_requests.get(), [None; 8]);
+        let EffectExprKind::Operation(super::super::effect::EffectOperation::RegionBuffer(call)) =
+            &program.nodes[request.index().unwrap()].kind
+        else {
+            panic!("structural send")
+        };
+        let operand = call.operand.unwrap().index().unwrap();
+        let authenticated_calls = validator.authenticated_network_requests.get();
+        let _ = validator;
+        let _ = unlinked;
+        let _ = short;
+        let _ = exact;
+        let _ = one_short;
+        let original = std::mem::replace(
+            &mut program.nodes[operand].kind,
+            EffectExprKind::Pure(PureExprKind::Variable(
+                super::super::variable::VariableNode::new(BinderId::generated(u32::MAX)),
+            )),
+        );
+        let mut forged = Validator::new_modules(&program, &sources, &relation).unwrap();
+        forged.linked = Some(&linked);
+        assert!(
+            forged.authenticate_network_call("try_send", 1).is_err(),
+            "a different operand cannot be authenticated"
+        );
+        let _ = forged;
+        program.nodes[operand].kind = original;
+        let graft = program
+            .nodes
+            .iter()
+            .position(|node| {
+                matches!(
+                    &node.kind,
+                    EffectExprKind::Pure(PureExprKind::Value(PureValue::Unit(_)))
+                )
+            })
+            .unwrap();
+        let original = std::mem::replace(
+            &mut program.nodes[graft].kind,
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
+                ApplicationNode::new(request, request),
+            ))),
+        );
+        let mut forged = Validator::new_modules(&program, &sources, &relation).unwrap();
+        forged.linked = Some(&linked);
+        assert!(
+            forged.authenticate_network_call("try_send", 1).is_err(),
+            "a graft cannot share the structural call"
+        );
+        let _ = forged;
+        program.nodes[graft].kind = original;
+        let copied_request = program.nodes[request.index().unwrap()].kind.clone();
+        let original = std::mem::replace(&mut program.nodes[graft].kind, copied_request);
+        let mut forged = Validator::new_modules(&program, &sources, &relation).unwrap();
+        forged.linked = Some(&linked);
+        forged
+            .authenticated_network_requests
+            .set(authenticated_calls);
+        assert_eq!(
+            forged
+                .validate_envelopes(&HashSet::new())
+                .unwrap_err()
+                .reason(),
+            ValidationReason::EffectIdentity,
+            "a second structural call cannot borrow the authenticated wrapper's authority"
+        );
+        assert!(forged.run_effect().is_err());
+        let _ = forged;
+        program.nodes[graft].kind = original;
+    }
+
+    #[test]
     fn builtin_cell_core_requires_the_complete_method_catalogue() {
         for remove_catalogue in [false, true] {
             let directory = LinkedValidationDirectory::create();
@@ -24264,6 +26043,107 @@ mod tests {
             .map(|module| module.source())
             .collect::<Vec<_>>();
         for nominal in [api.store(), api.key()] {
+            let constructor = ConstructorId::new(nominal, 0);
+            let info = registry.constructor(constructor).unwrap();
+            let parameters = registry.nominal_parameters(nominal).unwrap();
+            let mut ty = Type::Nominal(nominal);
+            for parameter in parameters {
+                ty = Type::Application(Box::new(ty), Box::new(Type::Variable(parameter.id)));
+            }
+            let scheme = Type::Forall(
+                parameters
+                    .iter()
+                    .map(|p| (p.id, p.kind.clone()))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+                Box::new(ty.clone()),
+            );
+            let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
+            let root = builder
+                .constructor(constructor, scheme, info.origin.clone())
+                .unwrap();
+            let program = builder.finish(root).unwrap();
+            let validator = Validator::new(&program, &sources);
+            let node = validator.node(root).unwrap();
+            let PureExprKind::Value(value) = &node.kind else {
+                unreachable!()
+            };
+            assert_eq!(
+                validator
+                    .validate_value(root, node, value)
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Registry
+            );
+            let pattern = CorePattern::new(
+                ty.clone(),
+                info.origin.clone(),
+                CorePatternKind::Constructor {
+                    constructor,
+                    payload: None,
+                },
+            );
+            assert_eq!(
+                validator
+                    .validate_pattern(&pattern, &ty, root)
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Pattern
+            );
+        }
+    }
+
+    #[test]
+    fn network_capability_constructors_are_hidden_in_core() {
+        let directory = LinkedValidationDirectory::create();
+        let entry = directory.write(
+            "entry.ash",
+            "import @builtin.network as Network\nmain : Unit -> Unit\nmain () = ()\n",
+        );
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let checked = checked_linked_validation_graph(&graph);
+        let registry = Arc::clone(
+            checked
+                .iter()
+                .find(|module| module.module().is_builtin_network())
+                .unwrap()
+                .registry(),
+        );
+        let api = registry
+            .nominals()
+            .iter()
+            .find_map(|nominal| crate::resolved::NetworkApi::for_module(nominal.id.module()))
+            .unwrap();
+        assert!(api.registry(&registry));
+        for mutation in 0..4 {
+            let mut effects = registry.effects().to_vec();
+            let io = effects
+                .iter_mut()
+                .find(|effect| effect.id == api.io())
+                .unwrap();
+            match mutation {
+                0 => io.public = false,
+                1 => io.parameters[0].id = crate::types::TypeVariableId::generated(77),
+                2 => io.operations[0].spelling = "forged".into(),
+                3 => {
+                    io.operations[0].annotation.ty =
+                        Type::Function(Box::new(Type::Unit), Box::new(Type::Int))
+                }
+                _ => unreachable!(),
+            }
+            let forged = registry
+                .as_ref()
+                .clone()
+                .replace_effects_for_core_test(effects);
+            assert!(!api.registry(&forged), "mutation {mutation}");
+        }
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        for ordinal in 0..3 {
+            let nominal = crate::types::NominalTypeId::new(api.io().module(), ordinal);
             let constructor = ConstructorId::new(nominal, 0);
             let info = registry.constructor(constructor).unwrap();
             let parameters = registry.nominal_parameters(nominal).unwrap();

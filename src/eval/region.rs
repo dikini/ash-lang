@@ -201,6 +201,9 @@ impl Machine<'_> {
             Ok(output)
         }
         match operation {
+            RegionBufferOperation::Network { .. } => {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
             RegionBufferOperation::IntegerLiteral(integer) => {
                 charge_effect_work(
                     &mut self.instantiation_work,
@@ -349,6 +352,48 @@ impl Machine<'_> {
             }
             progress.prepared = Some(self.prepare_buffer(progress.node, Value::Unit, None)?);
         } else if progress.step == 1 {
+            let network =
+                self.buffer_node(progress.node)
+                    .and_then(|buffer| match &buffer.operation {
+                        crate::core::region::RegionBufferOperation::Network {
+                            effect,
+                            operation,
+                        } => Some((effect.clone(), *operation)),
+                        _ => None,
+                    });
+            if let Some((effect, operation)) = network {
+                let effect = progress.environment.instantiation.effect(
+                    &effect,
+                    &mut self.instantiation_work,
+                    Some(RuntimePhase::Access),
+                )?;
+                let owner = progress.owner.ok_or(RuntimeFailure::InvalidControlState)?;
+                if crate::resolved::NetworkApi::for_module(effect.effect().module())
+                    .is_some_and(|api| effect.effect() == api.join())
+                {
+                    return self.interpret_network_settle(owner, &effect, operation, value);
+                }
+                return match operation.operation() {
+                    1 => self.interpret_network_send(owner, &effect, operation, value),
+                    2 => self.interpret_network_receive(
+                        progress.node,
+                        owner,
+                        &effect,
+                        operation,
+                        value,
+                    ),
+                    3 => self.interpret_network_finish_send(owner, &effect, operation, value),
+                    4..=6 => self.interpret_network_readiness(owner, &effect, operation, value),
+                    7 => self.interpret_network_finish_receive(
+                        progress.node,
+                        owner,
+                        &effect,
+                        operation,
+                        value,
+                    ),
+                    _ => Err(RuntimeFailure::InvalidControlState),
+                };
+            }
             if let Some(right) = self
                 .buffer_node(progress.node)
                 .ok_or(RuntimeFailure::InvalidControlState)?
@@ -1055,9 +1100,17 @@ impl Machine<'_> {
         &mut self,
         storage: RegionStorage,
     ) -> Result<(), RuntimeFailure> {
+        self.validate_region_storage_with_frame_count(storage, self.frames.len())
+    }
+
+    pub(super) fn validate_region_storage_with_frame_count(
+        &mut self,
+        storage: RegionStorage,
+        frame_count: usize,
+    ) -> Result<(), RuntimeFailure> {
         charge_effect_work(
             &mut self.instantiation_work,
-            self.frames.len(),
+            frame_count,
             RuntimePhase::Access,
         )?;
         let record = self
@@ -1159,7 +1212,7 @@ impl Machine<'_> {
         })
     }
 
-    fn initialize_region_bytes(
+    pub(super) fn initialize_region_bytes(
         &mut self,
         storage: RegionStorage,
         bytes: &[u8],
@@ -1805,6 +1858,35 @@ mod tests {
             Value::Integer(crate::integer::Integer::from_usize(alignment)),
         ])));
         Value::Location(location)
+    }
+
+    #[test]
+    fn worker_region_storage_refusal_preserves_captured_suffix() {
+        let mut memory = [0_u64; 8];
+        let mut machine = prepared_driver();
+        let reply = reply(&mut machine, memory.as_mut_ptr().cast(), 64, 8, 5);
+        let storage = machine
+            .register_region_backing(ActivationKey(9), reply)
+            .unwrap();
+        let action = match &machine.frames[0] {
+            Frame::RegionBoundary { node, .. } => *node,
+            _ => unreachable!(),
+        };
+        let Frame::RegionAllocated { segment, .. } = machine.frames.last_mut().unwrap() else {
+            unreachable!()
+        };
+        segment.frames.push(Frame::CleanupBoundary {
+            action,
+            environment: Environment::new(),
+        });
+        machine.captured_cells = 1;
+        machine.instantiation_work = crate::types::TypeWorkBudget::with_limit(0);
+        assert!(machine.preflight_worker_owner_return(&storage).is_err());
+        assert!(
+            matches!(machine.frames.last(), Some(Frame::RegionAllocated { segment, .. })
+            if matches!(segment.frames.as_slice(), [Frame::CleanupBoundary { .. }]))
+        );
+        assert_eq!(machine.captured_cells, 1);
     }
 
     #[test]

@@ -856,6 +856,8 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
                     ModuleRoleRecord::BuiltinGenericCell
                 } else if module.is_builtin_retained_control() {
                     ModuleRoleRecord::BuiltinRetainedControl
+                } else if module.is_builtin_network() {
+                    ModuleRoleRecord::BuiltinNetwork
                 } else if module.is_builtin_cell() {
                     ModuleRoleRecord::BuiltinCell
                 } else if module.is_builtin_string() {
@@ -3045,7 +3047,8 @@ impl PureImage {
                 }
                 ModuleRoleRecord::BuiltinCell
                 | ModuleRoleRecord::BuiltinGenericCell
-                | ModuleRoleRecord::BuiltinRetainedControl => {
+                | ModuleRoleRecord::BuiltinRetainedControl
+                | ModuleRoleRecord::BuiltinNetwork => {
                     return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
                 }
                 ModuleRoleRecord::BuiltinForeign => {
@@ -6582,6 +6585,7 @@ enum ModuleRoleRecord {
     BuiltinCell,
     BuiltinGenericCell,
     BuiltinRetainedControl,
+    BuiltinNetwork,
     BuiltinString,
     BuiltinBytes,
 }
@@ -6827,6 +6831,7 @@ impl Wire for ModuleRoleRecord {
             Self::BuiltinRegion => 6,
             Self::BuiltinRegionFacade => 7,
             Self::BuiltinRetainedControl => 8,
+            Self::BuiltinNetwork => 9,
         }
         .write(writer)
     }
@@ -6841,6 +6846,7 @@ impl Wire for ModuleRoleRecord {
             6 => Ok(Self::BuiltinRegion),
             7 => Ok(Self::BuiltinRegionFacade),
             8 => Ok(Self::BuiltinRetainedControl),
+            9 => Ok(Self::BuiltinNetwork),
             _ => Err(ImageFailure::InvalidEncoding),
         }
     }
@@ -8353,6 +8359,9 @@ impl Encoder<'_> {
     ) -> Result<NodeTag, ImageFailure> {
         use crate::core::{EffectExprKind, EffectOperation};
         match kind {
+            EffectExprKind::Operation(EffectOperation::Network(_)) => {
+                Err(ImageFailure::Unsupported(Unsupported::EffectOperation))
+            }
             EffectExprKind::Operation(EffectOperation::RegionValueRequest(request)) => {
                 Ok(NodeTag::RegionValueRequest {
                     api: self.module(request.api)?,
@@ -8362,6 +8371,9 @@ impl Encoder<'_> {
             EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) => {
                 use crate::core::region::RegionBufferOperation;
                 let (source, module, operation, bytes) = match &buffer.operation {
+                    RegionBufferOperation::Network { .. } => {
+                        return Err(ImageFailure::Unsupported(Unsupported::EffectOperation));
+                    }
                     RegionBufferOperation::IntegerLiteral(integer) => {
                         charge(
                             self.work,
@@ -9263,6 +9275,7 @@ impl PureImage {
         let mut seen_cell = false;
         let mut seen_generic_cell = false;
         let mut seen_retained_control = false;
+        let mut seen_network = false;
         let mut seen_region = false;
         let mut seen_region_facade = false;
         let mut seen_string = false;
@@ -9310,6 +9323,12 @@ impl PureImage {
                         return Err(ImageFailure::InvalidRecord);
                     }
                     crate::module::ImageModuleRole::BuiltinRetainedControl
+                }
+                ModuleRoleRecord::BuiltinNetwork => {
+                    if std::mem::replace(&mut seen_network, true) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinNetwork
                 }
                 ModuleRoleRecord::BuiltinCell => {
                     if std::mem::replace(&mut seen_cell, true) {

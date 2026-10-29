@@ -309,6 +309,10 @@ fn method_occurrences(definition: &CheckedDefinition, method: MethodId) -> Vec<&
                 expressions.push(&store.initializer);
                 expressions.push(&store.body);
             }
+            ResolvedExprKind::Network(network) => {
+                expressions.push(&network.initializer);
+                expressions.push(&network.body);
+            }
             ResolvedExprKind::Region(region) => {
                 if let Some(provider) = &region.provider {
                     expressions.push(provider);
@@ -2112,6 +2116,7 @@ fn higher_kinded_interface_erasure_adds_no_runtime_state_or_transition() {
                     EffectExprKind::Operation(EffectOperation::Registration(_)) => "registration",
                     EffectExprKind::Operation(EffectOperation::Resource(_)) => "resource",
                     EffectExprKind::Operation(EffectOperation::Store(_)) => "store",
+                    EffectExprKind::Operation(EffectOperation::Network(_)) => "network",
                     EffectExprKind::Operation(EffectOperation::Continue(_)) => "continue",
                     EffectExprKind::Operation(EffectOperation::RetainedRoot(_)) => "retained-root",
                     EffectExprKind::Operation(EffectOperation::Retain(_)) => "retain",

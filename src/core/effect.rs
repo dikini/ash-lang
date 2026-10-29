@@ -457,6 +457,43 @@ impl StoreScopeNode {
     }
 }
 
+/// A fresh network owner. Entry binders identify linked definitions; they are
+/// never evaluated as caller-owned closure values.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkScopeNode {
+    pub(crate) acquisition: crate::resolved::NetworkAcquisition,
+    pub(super) handle: super::TypedBinder,
+    pub(crate) entries: [crate::resolved::BinderId; 2],
+    // The linked result boundary is a non-owning arena reference. It is set
+    // after final module assembly and must be independently authenticated
+    // against the global initialization spine before worker admission.
+    pub(crate) linked_result: Option<NodeId>,
+    pub(crate) capacity: NodeId,
+    pub(crate) inputs: [NodeId; 2],
+    pub(crate) body: NodeId,
+}
+
+impl NetworkScopeNode {
+    pub(crate) fn new(
+        acquisition: crate::resolved::NetworkAcquisition,
+        handle: super::TypedBinder,
+        entries: [crate::resolved::BinderId; 2],
+        capacity: NodeId,
+        inputs: [NodeId; 2],
+        body: NodeId,
+    ) -> Self {
+        Self {
+            acquisition,
+            handle,
+            entries,
+            linked_result: None,
+            capacity,
+            inputs,
+            body,
+        }
+    }
+}
+
 /// A structural continue evaluates the actual store before its locator.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContinueNode {
@@ -519,6 +556,7 @@ pub enum EffectOperation {
     Registration(RegistrationScopeNode),
     Resource(Box<ResourceScopeNode>),
     Store(Box<StoreScopeNode>),
+    Network(Box<NetworkScopeNode>),
     Continue(ContinueNode),
     RetainedRoot(RetainedRootNode),
     Retain(RetainNode),
@@ -618,6 +656,9 @@ impl CoreOperationFamily for EffectOperationFamily {
         if let EffectExprKind::Operation(EffectOperation::Store(store)) = kind {
             visit(&store.handle);
         }
+        if let EffectExprKind::Operation(EffectOperation::Network(network)) = kind {
+            visit(&network.handle);
+        }
         if let EffectExprKind::Operation(EffectOperation::Continue(continuation)) = kind {
             visit(&continuation.adapter.answer);
         }
@@ -669,6 +710,12 @@ impl CoreOperationFamily for EffectOperationFamily {
                 ));
                 None
             }
+            EffectOperation::Network(network) => {
+                visit(super::dialect::OperationTypeMetadata::Type(
+                    network.handle.ty(),
+                ));
+                None
+            }
             EffectOperation::Region(region) => {
                 visit(super::dialect::OperationTypeMetadata::Type(
                     region.access.ty(),
@@ -689,12 +736,15 @@ impl CoreOperationFamily for EffectOperationFamily {
                 ));
                 None
             }
+            EffectOperation::RegionBuffer(buffer) => match &buffer.operation {
+                super::region::RegionBufferOperation::Network { effect, .. } => Some(effect),
+                _ => None,
+            },
             EffectOperation::RegionAllocate(_)
             | EffectOperation::RetainedRoot(_)
             | EffectOperation::Retain(_)
             | EffectOperation::RegionValueRequest(_)
-            | EffectOperation::RegionTuple(_)
-            | EffectOperation::RegionBuffer(_) => None,
+            | EffectOperation::RegionTuple(_) => None,
             EffectOperation::Request(request) => Some(&request.effect),
             EffectOperation::Handler(handler) => {
                 if let Some(registration) = &handler.hook_registration {
@@ -754,6 +804,11 @@ impl CoreOperationFamily for EffectOperationFamily {
                 store.handle.rewrite_type(&mut |ty| rewrite(ty))?;
                 return Ok(());
             }
+            EffectExprKind::Operation(EffectOperation::Network(network)) => {
+                charge(1)?;
+                network.handle.rewrite_type(&mut |ty| rewrite(ty))?;
+                return Ok(());
+            }
             EffectExprKind::Operation(EffectOperation::Continue(continuation)) => {
                 charge(1)?;
                 continuation
@@ -773,6 +828,14 @@ impl CoreOperationFamily for EffectOperationFamily {
                     function
                         .parameter_mut()
                         .rewrite_type(&mut |ty| rewrite(ty))?;
+                }
+                return Ok(());
+            }
+            EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) => {
+                if let super::region::RegionBufferOperation::Network { effect, .. } =
+                    &mut buffer.operation
+                {
+                    rewrite_effect_instance(effect, rewrite, charge)?;
                 }
                 return Ok(());
             }
@@ -813,6 +876,7 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Registration(_)) => 1,
             EffectExprKind::Operation(EffectOperation::Resource(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Store(_)) => 2,
+            EffectExprKind::Operation(EffectOperation::Network(_)) => 4,
             EffectExprKind::Operation(EffectOperation::Continue(_)) => 4,
             EffectExprKind::Operation(EffectOperation::RetainedRoot(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Region(_)) => 3,
@@ -867,6 +931,13 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Store(store)) => match index {
                 0 => Some(store.initializer),
                 1 => Some(store.body),
+                _ => None,
+            },
+            EffectExprKind::Operation(EffectOperation::Network(network)) => match index {
+                0 => Some(network.capacity),
+                1 => Some(network.inputs[0]),
+                2 => Some(network.inputs[1]),
+                3 => Some(network.body),
                 _ => None,
             },
             EffectExprKind::Operation(EffectOperation::Continue(continuation)) => match index {
@@ -950,6 +1021,7 @@ impl CoreOperationFamily for EffectOperationFamily {
             ) => {}
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => drop(resource),
             EffectExprKind::Operation(EffectOperation::Store(store)) => drop(store),
+            EffectExprKind::Operation(EffectOperation::Network(network)) => drop(network),
             EffectExprKind::Operation(
                 EffectOperation::RetainedRoot(_) | EffectOperation::Retain(_),
             ) => {}
@@ -1023,6 +1095,36 @@ impl CoreBuilder<EffectOperationFamily> {
     ) -> Result<NodeId, super::BuildError> {
         self.push_operation(ty, effects, origin, EffectOperation::Store(store))
     }
+    pub(crate) fn set_network_linked_result(
+        &mut self,
+        linked_result: NodeId,
+    ) -> Result<(), super::BuildError> {
+        if !self.contains_network {
+            return Ok(());
+        }
+        self.charge_effect_metadata(self.nodes.len())?;
+        let result_index = linked_result.index()?;
+        self.node_at_ordinal(linked_result, result_index)?;
+        for node in &mut self.nodes {
+            if let EffectExprKind::Operation(EffectOperation::Network(network)) = &mut node.kind
+                && network.linked_result.replace(linked_result).is_some()
+            {
+                return Err(super::BuildError::InvalidPayload);
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn network_scope(
+        &mut self,
+        network: Box<NetworkScopeNode>,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        let node = self.push_operation(ty, effects, origin, EffectOperation::Network(network))?;
+        self.contains_network = true;
+        Ok(node)
+    }
     pub(crate) fn continue_control(
         &mut self,
         continuation: ContinueNode,
@@ -1089,6 +1191,7 @@ impl CoreBuilder<EffectOperationFamily> {
             Handler(EffectInstance, usize, bool),
             Resource(EffectInstance, NodeId, NodeId),
             Store(EffectInstance, EffectInstance, NodeId, NodeId),
+            Network(EffectInstance, [NodeId; 3], NodeId),
             Continue(NodeId, NodeId, NodeId, NodeId),
             RetainedRoot(NodeId, NodeId),
 
@@ -1106,6 +1209,22 @@ impl CoreBuilder<EffectOperationFamily> {
             for index in range {
                 self.charge_effect_metadata(1)?;
                 let equation = match &self.nodes[index].kind {
+                    EffectExprKind::Operation(EffectOperation::Network(network)) => {
+                        let api =
+                            crate::resolved::NetworkApi::for_module(network.acquisition.builtin)
+                                .ok_or(super::BuildError::InvalidPayload)?;
+                        self.type_work
+                            .charge(2)
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+                        Equation::Network(
+                            EffectInstance::new(
+                                api.join(),
+                                Box::new([Type::Variable(network.acquisition.identity)]),
+                            ),
+                            [network.capacity, network.inputs[0], network.inputs[1]],
+                            network.body,
+                        )
+                    }
                     EffectExprKind::Operation(EffectOperation::Region(scope)) => {
                         Equation::Region((**scope).clone())
                     }
@@ -1116,7 +1235,25 @@ impl CoreBuilder<EffectOperationFamily> {
                         Equation::Empty
                     }
                     EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) => {
-                        Equation::RegionBuffer(buffer.clone())
+                        let operation = match &buffer.operation {
+                            super::region::RegionBufferOperation::Network { effect, operation } => {
+                                super::region::RegionBufferOperation::Network {
+                                    effect: clone_effect_instance_with_budget(
+                                        effect,
+                                        &mut self.type_work,
+                                    )?,
+                                    operation: *operation,
+                                }
+                            }
+                            operation => operation.clone(),
+                        };
+                        Equation::RegionBuffer(super::region::RegionBufferNode {
+                            api: buffer.api,
+                            context: buffer.context,
+                            operand: buffer.operand,
+                            right: buffer.right,
+                            operation,
+                        })
                     }
                     EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => {
                         self.type_work
@@ -1249,6 +1386,19 @@ impl CoreBuilder<EffectOperationFamily> {
                             api.default_alloc(),
                             Box::new([]),
                         ));
+                        if let super::region::RegionBufferOperation::Network { effect, .. } =
+                            &buffer.operation
+                        {
+                            let effect =
+                                clone_effect_instance_with_budget(effect, &mut self.type_work)?;
+                            row = row
+                                .union_with_budget(
+                                    &EffectRow::singleton(effect),
+                                    &mut self.type_work,
+                                )
+                                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                                .map_err(|_| super::BuildError::InvalidPayload)?;
+                        }
                         for child in std::iter::once(buffer.context)
                             .chain(buffer.operand)
                             .chain(buffer.right)
@@ -1424,6 +1574,36 @@ impl CoreBuilder<EffectOperationFamily> {
                             .union_with_budget(&outward, &mut self.type_work)
                             .map_err(|()| super::BuildError::TypeWorkExceeded)?
                             .map_err(|_| super::BuildError::InvalidPayload)?
+                    }
+                    Equation::Network(join, operands, body) => {
+                        let body = &self
+                            .nodes
+                            .get(body.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?
+                            .effects;
+                        let mut effects = match body
+                            .remove_exact_with_budget(&join, &mut self.type_work)
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                        {
+                            Ok(row) => row,
+                            Err(crate::types::EffectRowError::Missing) => {
+                                clone_effect_row_with_budget(body, &mut self.type_work)
+                                    .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                            }
+                            Err(_) => return Err(super::BuildError::InvalidPayload),
+                        };
+                        for operand in operands {
+                            let row = &self
+                                .nodes
+                                .get(operand.index()?)
+                                .ok_or(super::BuildError::InvalidNodeId)?
+                                .effects;
+                            effects = effects
+                                .union_with_budget(row, &mut self.type_work)
+                                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                                .map_err(|_| super::BuildError::InvalidPayload)?;
+                        }
+                        effects
                     }
                     Equation::RetainedRoot(store, handler) => {
                         let store = &self

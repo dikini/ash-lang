@@ -395,9 +395,10 @@ fn retained_probe_checks_driver_before_source_handler_selection() {
         key: activation,
         payload: ResourcePayload::Store(Box::new(RetainedStore::new(activation, api))),
     });
-    machine
-        .frames
-        .push(Frame::RetainedRootCompletion { key: activation });
+    machine.frames.push(Frame::RetainedRootCompletion {
+        key: activation,
+        origin: RetainedRootOrigin::Restored,
+    });
     machine.frames.push(Frame::HandlerBoundary {
         node: handler,
         environment: environment.clone(),
@@ -444,9 +445,10 @@ fn retained_probe_checks_driver_before_source_handler_selection() {
         key: activation,
         payload: ResourcePayload::Store(Box::new(RetainedStore::new(activation, api))),
     });
-    other
-        .frames
-        .push(Frame::RetainedRootCompletion { key: activation });
+    other.frames.push(Frame::RetainedRootCompletion {
+        key: activation,
+        origin: RetainedRootOrigin::Restored,
+    });
     other.frames.push(Frame::HandlerBoundary {
         node: handler,
         environment,
@@ -612,12 +614,19 @@ fn retained_root_moves_only_the_nearest_associated_clause_owner() {
     });
     machine.live_resources = 1;
     machine
-        .begin_retained_root(handler_node, activation, Environment::new())
+        .begin_retained_root(program.root(), handler_node, activation, Environment::new())
         .unwrap();
     assert!(matches!(
         machine.control.take(),
         Some(Control::Evaluate(..))
     ));
+    assert!(machine.frames.iter().any(|frame| matches!(
+        frame,
+        Frame::RetainedRootCompletion {
+            key,
+            origin: RetainedRootOrigin::Entered { root, handler, .. }
+        } if *key == activation && *root == program.root() && *handler == handler_node
+    )));
     let handler = machine.handler(handler_node).unwrap().id();
     let owner = machine.handler(handler_node).unwrap().clauses()[0].resume();
     machine
@@ -705,7 +714,7 @@ fn retained_resume_reyield_preserves_each_suffix_and_unrelated_work() {
     machine.live_resources = 1;
     machine.captured_cells = 1;
     machine
-        .begin_retained_root(handler_node, activation, Environment::new())
+        .begin_retained_root(program.root(), handler_node, activation, Environment::new())
         .unwrap();
     machine.control.take();
     let handler = machine.handler(handler_node).unwrap().id();
@@ -781,7 +790,10 @@ fn retained_root_in_owned_service_segment_keeps_driver_blocked() {
             payload: ResourcePayload::Store(Box::new(store)),
         });
         let segment = CapturedContinuation {
-            frames: vec![Frame::RetainedRootCompletion { key }],
+            frames: vec![Frame::RetainedRootCompletion {
+                key,
+                origin: RetainedRootOrigin::Restored,
+            }],
         };
         machine.frames.push(if region_segment {
             Frame::RegionAllocated {
@@ -840,7 +852,10 @@ fn retained_outer_discard_refuses_to_abandon_a_root_completion() {
                     registration: None,
                     retained: None,
                 },
-                Frame::RetainedRootCompletion { key },
+                Frame::RetainedRootCompletion {
+                    key,
+                    origin: RetainedRootOrigin::Restored,
+                },
             ],
         }),
         registration: None,
@@ -991,7 +1006,12 @@ fn retained_continue_carrier_runs_the_restored_branch_for_its_current_consumer()
         .extend(access, Value::RegionView(ActivationKey(99)))
         .unwrap();
     machine
-        .begin_retained_root(handler, activation, branch_environment.clone())
+        .begin_retained_root(
+            program.root(),
+            handler,
+            activation,
+            branch_environment.clone(),
+        )
         .unwrap();
     machine.control.take();
     // The checkpoint occurs in an already running cleanup. Its continuation
