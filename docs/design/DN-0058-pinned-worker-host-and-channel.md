@@ -139,10 +139,10 @@ fixed source/configuration pins and residual assumptions before adoption.
 
 ## Open decisions for review
 
-The actual source and Core entry representation, envelope authentication and
-error reporting need a concrete design that satisfies CP-0027 before product
-work. In particular, show how startup input is snapshotted without exporting a
-caller resource, how control-envelope emission is sealed against application
-code and transformed/imported Core, and how post-entry failure preserves every
-live owner without claiming recovery. If any cannot be expressed using the
-current machinery, revise the proposal rather than silently widening authority.
+Review CP-0027's proposed source/Core entry and operation signatures, private
+control-envelope origin, error cases and post-entry failure against actual
+linked definitions. In particular, verify startup snapshots, level-triggered
+waits and the N3/N4 boundary that admits only checked ordinary Ash driver paths
+to control emission. If these cannot be expressed as proposed, revise the
+proposal rather than silently widening authority. Independently review this
+decision candidate before recording an accepted decision.

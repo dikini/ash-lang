@@ -38,12 +38,11 @@ verification, or N1–N6 criterion is claimed. N-core, N-proof and N-final full
 gates remain pending. The developer owns acceptance notes after retention; the
 orchestrator assigns each next checkpoint and integration action.
 
-This draft is not the complete N1 contract: the author must add a concrete
-source/Core entry, endpoint and completion representation, including admission,
-capability injection, authenticated envelope origin and failure/settlement
-interfaces, to CP-0027 before it can authorize N2. Independent review must
-cover that delta and the converged architecture decision. The N3 checker
-semantics also require their own acceptance before checker implementation.
+The proposed source/Core entry, endpoint and completion representation in
+CP-0027 is awaiting independent review together with the host/channel decision
+candidate. Review must cover admission, capability injection, authenticated
+envelope origin and failure/settlement interfaces before N2 authorization.
+The N3 checker semantics require separate acceptance before checker work.
 
 ## Verification
 
@@ -69,5 +68,5 @@ existing checks to work around them.
 
 ## Deviations
 
-None. The source/Core entry and control-envelope designs remain open review
-questions; return semantic gaps to the proposal before implementation.
+None. Return any source/Core or control-envelope semantic gap found in review
+to the proposal before implementation.
