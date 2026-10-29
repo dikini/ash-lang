@@ -19,13 +19,14 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-- [CP-0029: Exact base-256 integer split](CP-0029-exact-base-256-integer-split.md)
-- [CP-0030: Checked network codec](CP-0030-checked-network-codec.md)
+No proposed transitions are listed.
 
 ## Accepted changes
 
 - [CP-0027: Pinned workers and copied channels](CP-0027-pinned-workers-and-copied-channels.md)
 - [CP-0028: Checked functional network ledger](CP-0028-checked-functional-network-ledger.md)
+- [CP-0029: Exact base-256 integer split](CP-0029-exact-base-256-integer-split.md)
+- [CP-0030: Checked network codec](CP-0030-checked-network-codec.md)
 
 The [region specification](../../spec/README.md)
 records the lexical-region language rules; the bounded

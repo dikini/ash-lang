@@ -1,10 +1,11 @@
 # CP-0029: Exact base-256 integer split
 
 - ID: `CP-0029`
-- Status: proposed
+- Status: accepted
 - Related: [CP-0030](CP-0030-checked-network-codec.md), [TASK-0058](../tasks/TASK-0058-pinned-worker-network.md), [issue #79](https://github.com/dikini/ash-lang/issues/79)
 
-> This proposal is not current Ash. It does not authorize implementation.
+> This accepted transition is not current Ash. Acceptance does not establish
+> product implementation or evidence.
 
 ## Current behavior
 
@@ -125,4 +126,4 @@ host word size, alias/import and same-typed replacement, allocation refusal,
 terminal work/storage failure and budget boundaries. Independently review the
 runtime-to-model mapping and applicable focused and integrated checks; update
 the affected specification with the retained implementation. None of this
-evidence is claimed by this proposed artifact.
+evidence is claimed by this accepted artifact.

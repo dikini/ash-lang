@@ -1,11 +1,11 @@
 # CP-0030: Checked network codec
 
 - ID: `CP-0030`
-- Status: proposed
+- Status: accepted
 - Related: [CP-0027](CP-0027-pinned-workers-and-copied-channels.md), [CP-0028](CP-0028-checked-functional-network-ledger.md), [CP-0029](CP-0029-exact-base-256-integer-split.md), [TASK-0058](../tasks/TASK-0058-pinned-worker-network.md), [issue #79](https://github.com/dikini/ash-lang/issues/79)
 
-> This proposal is not current Ash. It does not amend accepted CP-0028 or
-> authorize implementation unless separately accepted.
+> This accepted transition is not current Ash. Acceptance does not establish
+> product implementation, actual-definition evidence, or release permission.
 
 ## Current behavior
 
@@ -28,8 +28,9 @@ need their own implementation and evidence. Accepted
 requires a separately accepted codec extension and its actual-definition
 soundness before codec-dependent release. Its N3 invariant and modeled network
 coverage take codec correspondence as a premise. The open [N4 issue #79](https://github.com/dikini/ash-lang/issues/79)
-still requires this extension and actual-definition evidence. No accepted
-codec schema or implementation was found in the relevant proposals or source.
+still requires this extension and actual-definition evidence. Before this
+transition, no accepted codec schema or implementation was found in the
+relevant proposals or source.
 
 The missing rule is a *definition-bound conditional codec law*: checked
 encoder and decoder bodies, all selected helpers, actual byte intrinsic
@@ -58,7 +59,7 @@ byte may itself be `00` or `01`; marker and digit positions are distinct.
 No machine-word limit is part of this representation.
 
 Writing these digits from an arbitrary current `Int` needs the separately
-proposed [CP-0029: exact base-256 integer split](CP-0029-exact-base-256-integer-split.md).
+accepted [CP-0029: exact base-256 integer split](CP-0029-exact-base-256-integer-split.md).
 It returns mathematical quotient/remainder without truncation and gives an
 ordinary negative result. The codec is not implementable under this proposal
 until that operation has its own accepted semantics, implementation and
@@ -186,7 +187,7 @@ cannot publish a partial claim or restart with a hidden allowance.
 
 ## Semantic delta
 
-On separate acceptance, this proposal extends CP-0028's conditional checked
+This accepted proposal extends CP-0028's conditional checked
 ledger contract with the specified canonical framing and actual-definition
 codec correspondence. It adds no inference from byte contents to authenticated
 peer, envelope kind, completion or release. The fixed framing is proposed for
@@ -199,7 +200,7 @@ for the linked canonical builtin identities, [static semantics](../../spec/stati
 for the bounded checked facts and their control and lifetime premises,
 [elaboration](../../spec/elaboration.md) for actual linked reconstruction, and
 [dynamic semantics](../../spec/dynamic-semantics.md) for the corresponding
-ordinary byte, allocation and operation behavior. The separately proposed
+ordinary byte, allocation and operation behavior. The separately accepted
 integer dependency identifies its own additional semantic delta.
 
 ## Resulting specification truth
@@ -213,9 +214,9 @@ Ash semantics.
 
 ## Interactions
 
-CP-0029 must be separately accepted, implemented and verified before dependent
-codec implementation. The N3 ledger facts and N4 driver supply independent
-state, peer and control premises. Existing authenticated envelope kind is
+CP-0029 must be implemented and verified before dependent codec implementation.
+The N3 ledger facts and N4 driver supply independent state, peer and control
+premises. Existing authenticated envelope kind is
 Application or Control; the N2 send path produces Application. N4 still needs
 a checked Control producer and confinement. Measure persistent byte append
 cost on the actual fixture before proposing a bulk-byte change.
@@ -244,5 +245,6 @@ driver. Review the proof, implementation mapping and tests independently at
 matching source/configuration pins. This list states acceptance evidence, not a
 claim that any such test was run here.
 
-Review the proposal independently before acceptance. Implementation and its
-required evidence need separate authorized delivery; none is claimed here.
+Independent review of the accepted metadata and its retention precedes
+implementation. Required implementation and evidence remain open; none is
+claimed here.
