@@ -194,6 +194,12 @@ Registration plus the readiness recheck is indivisible with respect to
 predicate changes: an already-ready predicate produces a wake, while a later
 transition to readiness produces one unless cancelled. Wakes may coalesce; a
 consumer rechecks state rather than counting notifications.
+`Readable` is ready when `try_receive` can return `Message`, genuine `End` or
+`ReceiveFailed`; only `Empty` waits. `Writable` is ready when `try_send` can
+attempt a send or return `Closed` or terminal `SendFailed`; only `Full` waits.
+Readiness does not promise that subsequent snapshot allocation succeeds. A
+seal or terminal failure makes the corresponding interest ready even when it
+was registered afterward; no later state change is needed to wake it.
 The recheck queues a pending wake for the returned generation before `watch`
 returns if the predicate is already ready. `poll_wake` removes at most one
 pending wake and readiness is level-triggered: if the registration remains
@@ -201,7 +207,9 @@ active and the predicate remains ready, another wake is pending or is queued
 before the executor parks. Successful cancellation prevents new wake issuance;
 previously queued wakes for the invalidated generation are harmless. Test the
 publish-before-register, register-before-publish, poll-before-publish,
-readiness-between-recheck-and-park, and cancel-versus-publish schedules.
+readiness-between-recheck-and-park, cancel-versus-publish, and late registration
+after seal or terminal failure for both interests. A sealed empty channel wakes
+Readable for End; a sealed sender wakes Writable for Closed.
 An authenticated `End` or normal settlement result is related to the selected
 interpreter, activation and current state; a user-created constructor, matching
 type, intercepting handler or stale result supplies no such relationship. Empty

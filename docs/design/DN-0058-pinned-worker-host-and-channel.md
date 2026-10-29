@@ -44,6 +44,13 @@ and backing. Queued callbacks and registered waiters count even when no worker
 is currently running, and settlement must exclude any future callback or wake
 against that activation.
 
+Readiness includes terminal observations: Readable covers a message, genuine
+End or receive failure; Writable covers an admissible send attempt, Closed or
+send failure. Only Empty and Full respectively park. Registration after seal or
+failure must enqueue the corresponding wake during its recheck, even if no
+later event occurs. Exercise that schedule as well as publication/registration,
+poll and cancellation races in the host evidence.
+
 Application and protocol messages have distinct, private representations. A
 peer identity comes from the actual channel direction, not a payload field.
 Only the protocol driver can emit or consume control envelopes. No ordinary
