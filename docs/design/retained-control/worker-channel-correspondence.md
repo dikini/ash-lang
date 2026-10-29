@@ -118,9 +118,10 @@ premises. In particular:
 
 ## Transport correspondence at `f5ae9b6`
 
-The private [transport implementation](../../../src/eval/network_transport.rs)
+The private candidate transport (`src/eval/network_transport.rs`)
 at `f5ae9b692b07dbd1396dbddb946a3fc2c8fbbf1d` is evidence for the following
-candidate mapping. These observations do not prove that every Rust transition
+mapping. That implementation is outside this proof-only delivery.
+These observations do not prove that every Rust transition
 refines the model or that higher-level worker completion exists.
 
 - The host allocates `Shared` with fallible `triomphe::Arc::try_new`, assigns a
