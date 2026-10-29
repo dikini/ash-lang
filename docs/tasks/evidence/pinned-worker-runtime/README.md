@@ -5,7 +5,8 @@ These are focused development receipts from the source snapshot whose
 `9cfdcad9724e2781b49fb9ca5de40119eea0e36b1dde0c9d681d1047433fc62a`.
 They precede final delivery assembly and warning/format cleanup. They are not
 a full workspace gate for this checkout or proof that every current input equals
-that snapshot. The final assembled candidate requires its own fresh gate.
+that snapshot. The later [fresh assembled gate](gate-89071.md) records the
+tested source and its comparison with the committed candidate.
 
 The [public copied-byte test](public.log) passed end to end (1/1).
 The [focused diagnostic](focus.log) reconstructs the processing cut and genuine
@@ -17,7 +18,7 @@ The original native process exited successfully, with three tests passed;
 [its session receipt](native-session-34390.json) records the exact immutable
 binary and filter. The [native log](native.log) contains interleaved diagnostics
 from a briefly duplicated process that was stopped. It is not a clean separate
-per-test receipt. The final fresh workspace gate must supply current results.
+per-test receipt. The later workspace gate supplies the candidate results.
 
 Two earlier snapshots supply distinct required runtime controls:
 [Message-copy provider failure](provider.log) at manifest
