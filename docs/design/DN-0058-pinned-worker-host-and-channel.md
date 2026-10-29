@@ -2,14 +2,14 @@
 
 - ID: `DN-0058`
 - Status: exploring
-- Related: [CP-0027](../proposals/CP-0027-pinned-workers-and-copied-channels.md), [DN-0055](DN-0055-algebra-of-regions-lifetimes-and-ownership.md), [DN-0056](DN-0056-scoped-continuation-retention-and-library-scheduling.md), [TASK-0058](../tasks/TASK-0058-pinned-worker-network.md)
+- Related: [AD-0017](../decisions/AD-0017-pinned-worker-host-and-transport.md), [CP-0027](../proposals/CP-0027-pinned-workers-and-copied-channels.md), [DN-0055](DN-0055-algebra-of-regions-lifetimes-and-ownership.md), [DN-0056](DN-0056-scoped-continuation-retention-and-library-scheduling.md), [TASK-0058](../tasks/TASK-0058-pinned-worker-network.md)
 
-This note proposes a non-language host and transport decision for review. It
-does not accept an architecture, establish current Ash behavior, or authorize
-implementation. After independent review converges, record the accepted choice
-as an architectural decision; semantic rules belong in CP-0027.
+This note retains the exploration and proof questions behind the accepted
+[AD-0017](../decisions/AD-0017-pinned-worker-host-and-transport.md). It is
+informative, does not establish current Ash behavior, and does not itself
+authorize implementation. The semantic transition belongs in CP-0027.
 
-## Decision candidate
+## Reviewed decision candidate
 
 Use two host threads, each running one local Ash executor and owning its Store.
 An enclosing host network owner creates two dedicated, positive-capacity FIFO
@@ -144,12 +144,11 @@ cases in CP-0027. Native tests observe actual host behavior but do not prove
 all schedules or the correctness of external code. Record independent review,
 fixed source/configuration pins and residual assumptions before adoption.
 
-## Open decisions for review
+## Implementation correspondence
 
-Review CP-0027's proposed source/Core entry and operation signatures, private
+Implementation must verify CP-0027's entry and operation signatures, private
 control-envelope origin, error cases and post-entry failure against actual
 linked definitions. In particular, verify startup snapshots, level-triggered
 waits and the N3/N4 boundary that admits only checked ordinary Ash driver paths
-to control emission. If these cannot be expressed as proposed, revise the
-proposal rather than silently widening authority. Independently review this
-decision candidate before recording an accepted decision.
+to control emission. If these cannot be expressed as accepted, return to the
+proposal rather than silently widening authority.

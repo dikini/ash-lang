@@ -19,11 +19,11 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-- [CP-0027: Pinned workers and copied channels](CP-0027-pinned-workers-and-copied-channels.md)
+No proposed transitions are listed.
 
 ## Accepted changes
 
-No accepted transitions are listed.
+- [CP-0027: Pinned workers and copied channels](CP-0027-pinned-workers-and-copied-channels.md)
 
 The [region specification](../../spec/README.md)
 records the lexical-region language rules; the bounded

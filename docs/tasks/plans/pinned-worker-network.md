@@ -6,14 +6,13 @@ acceptance remains authoritative for scope; no criterion is complete here.
 
 ## Deliveries and acceptance
 
-1. **N1 — [#76](https://github.com/dikini/ash-lang/issues/76).** Review
-   CP-0027 and DN-0058 for entry and capture admission, endpoint authority,
+1. **N1 — [#76](https://github.com/dikini/ash-lang/issues/76).** Reviewed at
+   `b296e17ce9e4f1760ce73df4f4716ef0c0fb2093`: CP-0027 and DN-0058 cover entry and capture admission, endpoint authority,
    resource-free copies, FIFO, commit/failure ownership, visibility, wait races,
    stale notifications, genuine End and backing settlement. Specify actual
-   source/Core admission and control-envelope provenance, then independently
-   author the concrete entry, endpoint and completion representation in CP-0027;
-   independently review and accept that delta and the host/channel decision
-   before N2 implementation.
+   source/Core admission and control-envelope provenance. CP-0027 and AD-0017
+   record the accepted transition and host/channel decision. Review and verify
+   this adoption on its retaining branch before N2 implementation.
    Preserve assumptions and terminal failure limits. No worker recovery,
    silent transfer or native-stack suspension. Record retained verification and
    acceptance readback before closing N1.

@@ -2,17 +2,18 @@
 
 - ID: `TASK-0058`
 - Status: active
-- Related: [CP-0027](../proposals/CP-0027-pinned-workers-and-copied-channels.md), [DN-0058](../design/DN-0058-pinned-worker-host-and-channel.md), [M4 issue #55](https://github.com/dikini/ash-lang/issues/55)
+- Related: [CP-0027](../proposals/CP-0027-pinned-workers-and-copied-channels.md), [AD-0017](../decisions/AD-0017-pinned-worker-host-and-transport.md), [DN-0058](../design/DN-0058-pinned-worker-host-and-channel.md), [M4 issue #55](https://github.com/dikini/ash-lang/issues/55)
 
-> This task organizes work. It does not define Ash semantics. The proposed
-> contract is not yet accepted and cannot authorize product implementation.
+> This task organizes work. It does not define Ash semantics.
 
 ## Dependencies
 
 M1–M3 are complete on Main at `67c79ddc32a813cc0c9ddab2962f9e2aa849b028`;
 their acceptance is recorded in [#51](https://github.com/dikini/ash-lang/issues/51).
-N1 requires independent contract, platform and proof review, accepted semantic
-proposal and converged host/channel decision before product reliance. The
+N1 contract and host/channel choice were independently reviewed at
+`b296e17ce9e4f1760ce73df4f4716ef0c0fb2093` and are accepted in CP-0027 and
+AD-0017. Product reliance additionally needs the assigned bounded preservation
+evidence. The
 [owned execution plan](plans/pinned-worker-network.md) sequences the original
 [N1–N6 issues](https://github.com/dikini/ash-lang/issues/55) and their gates.
 An accepted checker contract and bounded proof assignment precede checker
@@ -32,22 +33,19 @@ not close a whole criterion.
 
 ## Progress
 
-N1 proposal and host/channel decision candidate are prepared for review. No
-semantic acceptance, product implementation, independent review, retained
-verification, or N1–N6 criterion is claimed. N-core, N-proof and N-final full
-gates remain pending. The developer owns acceptance notes after retention; the
-orchestrator assigns each next checkpoint and integration action.
-
-The proposed source/Core entry, endpoint and completion representation in
-CP-0027 is awaiting independent review together with the host/channel decision
-candidate. Review must cover admission, capability injection, authenticated
-envelope origin and failure/settlement interfaces before N2 authorization.
-The N3 checker semantics require separate acceptance before checker work.
+The N1 source/Core contract and host/channel choice are accepted after
+independent review of the head above. This local adoption still requires
+independent bookkeeping review and retained verification; no N1 issue criterion
+is checked until its original acceptance and readback are verified. No product
+implementation is claimed. N-core, N-proof and N-final gates remain pending.
+The developer owns acceptance notes after retention; the orchestrator assigns
+each next checkpoint and integration action. N3 checker semantics require
+separate acceptance before checker work.
 
 ## Verification
 
-For N1 check artifact authority, relevant links and cases, and independently
-review the proposal, decision candidate and bounded proof assignments. For
+For N1 check artifact authority, relevant links and cases, independently
+review adoption bookkeeping and verify the retained result. For
 product slices freeze source/configuration inputs, run focused positive,
 negative, regression, proof and native checks required by the governing
 artifacts, obtain independent review and verify actual retained commits. Run

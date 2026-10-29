@@ -1,11 +1,13 @@
 # CP-0027: Pinned workers and copied channels
 
 - ID: `CP-0027`
-- Status: proposed
-- Related: [DN-0055](../design/DN-0055-algebra-of-regions-lifetimes-and-ownership.md), [DN-0056](../design/DN-0056-scoped-continuation-retention-and-library-scheduling.md), [DN-0058](../design/DN-0058-pinned-worker-host-and-channel.md), [TASK-0058](../tasks/TASK-0058-pinned-worker-network.md)
+- Status: accepted
+- Related: [AD-0017](../decisions/AD-0017-pinned-worker-host-and-transport.md), [DN-0055](../design/DN-0055-algebra-of-regions-lifetimes-and-ownership.md), [DN-0056](../design/DN-0056-scoped-continuation-retention-and-library-scheduling.md), [DN-0058](../design/DN-0058-pinned-worker-host-and-channel.md), [TASK-0058](../tasks/TASK-0058-pinned-worker-network.md)
 
-> This proposal is not current Ash. It does not authorize product work until
-> its contract and required evidence have been independently reviewed and accepted.
+> This accepted transition authorizes bounded product work; it is not current
+> Ash. The independent contract review covered head
+> `b296e17ce9e4f1760ce73df4f4716ef0c0fb2093`. Required product, proof and
+> integration evidence remains pending.
 
 ## Current behavior
 
@@ -56,10 +58,10 @@ does not move them to the caller or promise recovery. An enclosing network owner
 retains backing and the obligation to coordinate settlement. Partial construction
 and failure may report incomplete teardown; already performed effects remain.
 
-### Concrete entry and endpoint candidate
+### Entry and endpoint representation
 
-This review delta proposes a specific representation; it is not accepted and
-does not define current Ash. The defining identities below belong to a new sealed
+This transition specifies a representation; it does not define current Ash.
+The defining identities below belong to a new sealed
 `@builtin.network` module. An import alias is ordinary. The proposed acquisition
 has this shape:
 
@@ -287,9 +289,8 @@ committed messages, owners and support; uncertainty allows neither retry nor
 reservation retirement. These commit rules do not prove native or OS code.
 
 This contract fixes the initial row, services and error cases. The exact syntactic
-representation must preserve these defining identities and behavior. Independent
-review and acceptance of this complete candidate, the host decision, and its
-proof assignments still precede product work.
+representation must preserve these defining identities and behavior. Bounded
+proof and product verification remain required before release relies on them.
 
 ### Payload and endpoint authority
 
@@ -429,7 +430,8 @@ freedom, termination, or proof of native memory safety is introduced.
 
 ## Required evidence
 
-Independent contract and proof review must precede acceptance. The product must
+The contract and host candidate were independently reviewed at the head above.
+The product must
 test admitted and rejected entry captures and evidence, foreign-pointer and
 resource escape, full and closed sends, failures on both sides of each commit,
 FIFO with accepted pending work, visibility, receive allocation failure,
