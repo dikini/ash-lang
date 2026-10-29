@@ -56,6 +56,128 @@ does not move them to the caller or promise recovery. An enclosing network owner
 retains backing and the obligation to coordinate settlement. Partial construction
 and failure may report incomplete teardown; already performed effects remain.
 
+### Concrete entry and endpoint candidate
+
+This review delta proposes a specific representation; it is not accepted and
+does not define current Ash. The defining identities below belong to a new sealed
+`@builtin.network` module. An import alias is ordinary. The proposed acquisition
+has this shape:
+
+```text
+resource Network.Pair<N> pair = (capacity, start_a, start_b, input_a, input_b) {
+    coordinator_body
+}
+```
+
+N is fresh. Capacity is a positive finite integer and the startup inputs are
+`Bytes`. Each start operand names a resolved, top-level function, polymorphic
+in N, with entry shape `(Network.Worker<N>, Bytes) -> Unit ! rho`; the compiler
+instantiates the actual linked function once for the worker. These operands
+are function designators rather than evaluated closure values. A local or
+computed callback is inadmissible. Check actual linked bodies, selected evidence
+and transitive dependencies, including imported helpers, under the admission
+rules above; an empty outward row does not prove this check. Surrounding source
+handlers are not inherited. Additional effects must be interpreted inside the
+entry or by a specifically admitted worker-local host service. The complete
+row and service admission rules require further design before acceptance;
+unknown service or handler support rejects.
+Each worker creates a fresh local root heap and reconstructs its global callable
+and evidence environment from the admitted linked definitions. Immutable code
+metadata may be shared only when its actual representation is safe for
+concurrent access; runtime closure records, global values, selected handlers and
+caller-root allocations are not shared. Initialization and its failures run on
+that worker after commit, and initialized local resources are owned there.
+
+Capacity and input operands evaluate once, left to right, in the preceding
+scope. Preparation copies both inputs with their source owners live, allocates
+support and prepares both carrier entries. Neither may execute Ash before the
+single network entry commit. Commit requires both injected `Worker<N>`
+capabilities and prepared carriers; only afterward does the coordinator body
+run. Failure before commit joins or otherwise settles prepared carriers and
+publishes neither capability nor activation. Incomplete teardown is reported
+and leaves affected backing protected. Failure after commit follows worker
+ownership rather than moving its control to the coordinator. N and all handles
+and retained dependencies naming the activation cannot escape the owner.
+
+Each injected `Worker<N>` contains authenticated activation and side identities.
+Side A sends on A-to-B and receives on B-to-A; side B has the opposite
+polarities. Source bytes, integers, matching types and user implementations
+cannot forge these identities. `Pair<N>` grants coordination rather than
+worker-local Store or endpoint authority. Worker handles may have local aliases;
+the actual endpoint interpreter serializes each polarity, and reentrant or
+overlapping operations cannot start a second operation. Endpoint completion
+belongs to the activation, not to an alias.
+
+The first host implementation uses these sealed, nonblocking operations:
+
+| Operation | Proposed result and state change |
+| --- | --- |
+| `try_send(worker, bytes)` | `Sent`, `Full`, `Closed` or terminal failure. `Sent` atomically accepts and publishes a complete copied snapshot. `Full` and `Closed` commit nothing. |
+| `try_receive(worker)` | `Message(bytes)`, `Empty`, `End` or terminal failure. `Message` commits only after a complete receiver-region copy; a failed copy leaves the entry. |
+| `finish_send(worker)` | Irreversibly seals this send polarity after earlier operations resolve. |
+| `finish_receive(worker)` | Completes the receive polarity only after genuine End and checked actual completion of earlier processing and required local cleanup. |
+| `settle(pair)` | Returns normally only after worker scopes and endpoints complete, backing users settle and no later callback is possible. |
+| `watch(worker, interest)` | Registers readiness interest for this side and activation, rechecks the predicate, and returns an opaque local registration. |
+| `cancel_watch(worker, registration)` | Cancels that registration and settles possible notifications before its support can be released. |
+| `poll_wake(worker)` | Returns a pending local registration identity, or no wake. Duplicate and stale identities do not authorize restoration. |
+
+The actual error carrier and effect rows must preserve these distinct cases.
+The proposed error carrier distinguishes definite refusal, uncertain
+acceptance, terminal worker failure and incomplete teardown; none means that
+a failed operation's cleanup is complete. An uncertain send retains its
+reservation until authenticated resolution, as specified below. `try_send`,
+`try_receive`, `watch`, `cancel_watch`, `poll_wake` and endpoint completion use
+an identity-indexed sealed `Network.IO<N>` effect interpreted by the injected
+worker activation. The coordinator's `settle` uses a separate sealed
+`Network.Join<N>` effect interpreted by the owner. Neither effect gives a
+source handler the ability to mint endpoint or completion facts.
+An authenticated `End` or normal settlement result is related to the selected
+interpreter, activation and current state; a user-created constructor, matching
+type, intercepting handler or stale result supplies no such relationship. Empty
+and Full allow a local executor to retain its own continuation and recheck
+later. Private host wait registration uses the recheck and settlement rules in
+[DN-0058](../design/DN-0058-pinned-worker-host-and-channel.md).
+The wake identifies the registration, not a Store key; the local executor maps
+its current registration to its own retained continuation and checks its
+generation before restoration. A wake is a hint, and cancellation or
+replacement invalidates an old wake. The executor keeps receive and control
+service possible while application sends wait for bounded capacity, including
+when an application continuation awaits a reply. The host cannot make progress
+by restoring a worker's Store on another thread.
+
+Atomic acceptance and publication makes the abstract accepted-unpublished
+sequence empty in this implementation. The general contract still accounts for
+that sequence if a later provider separates the commits. Private transport tags
+and the actual sending channel establish envelope kind and peer; arbitrary
+application bytes do not. A narrow sealed emission operation authenticates that
+origin only. Registration, ledger transition, local completion, acknowledgement
+and application-drain control remain ordinary linked Ash definitions checked
+under N3/N4. The checker must reconstruct their actual relationships and prove
+the codec correspondence for identifiers; the host does not certify the ledger
+or assert completion merely because it emitted an envelope.
+For N4, access to raw application publication must be confined to the checked
+driver path; analysis follows actual calls, captures and selected evidence through
+imports to reject bypasses. A `finish_receive` call likewise cannot obtain
+permission from an ordinary Boolean or a runtime claim that processing finished:
+the actual local Store and required suffixes must have completed under the
+accepted completion analysis.
+
+Lower acquisition to an explicit Core network owner carrying the fresh identity,
+resolved entry binders and instantiations, capacity and startup operands. Lower
+operations to sealed, identity-indexed Core operations with the actual
+activation and injected side, and explicit normal and terminal-failure paths.
+Independent linked Core validation reconstructs the entry definitions, type and
+row instantiations, selected evidence, admitted captures and services, side and
+lexical owner. It checks normal and abandoned close predecessors and authentic
+result/state relationships; source summaries, names, serialized origin claims
+and same-typed operations grant no authority. Imports and transforms must leave a
+reconstructible form or reject. The separate N3 contract must define how the
+restricted checker validates the ordinary ledger and its control dependencies.
+
+The concrete error carrier, complete effect-row rules and admitted host-service
+catalogue remain unresolved. They must be designed and independently reviewed
+before N1 acceptance; the table above does not by itself authorize product work.
+
 ### Payload and endpoint authority
 
 Each direction has one sender and one receiver, fixed for the activation. A
