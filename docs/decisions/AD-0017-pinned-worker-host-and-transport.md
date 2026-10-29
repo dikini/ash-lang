@@ -31,6 +31,27 @@ rechecks the state and restores its own continuation. No callback or registratio
 may outlive its protected support. Complete or join owned carriers and exclude
 future users before release; terminal failure may report incomplete teardown.
 
+### Terminal failure retention clarification
+
+When terminal failure prevents checked local completion, the affected worker's
+carrier retains its interrupted evaluator, local heap, frames, native binding
+support and outstanding delivery obligations on that same carrier for the
+remaining process lifetime. It reports incomplete teardown to the coordinator;
+that report carries accounting, not the worker's Store or permission to release
+backing. The host marks the shared transport terminal and retains its support.
+The holder does not execute Ash, restore or transfer continuations, retry work,
+run cleanup on the coordinator, or assert successful settlement. Ordinary host
+waiting keeps the carrier alive; it does not capture a resumable native stack.
+Process death is outside this decision's containment guarantee.
+
+The failure boundary must preserve the holder on reported runtime failure,
+including in-progress reservations, callbacks, region providers, retained
+control and native binding support. The admitted native binding contract must
+state whether unwinding is supported. An unknown panic cannot establish
+completion or successful settlement; containment of arbitrary native behavior
+and process death are outside the decision. An implementation must not claim
+panic recovery unless its actual boundary preserves the affected support.
+
 This non-language choice does not make the proposed semantics current Ash.
 The accepted transition and its entry, operation and failure contracts are in
 [CP-0027](../proposals/CP-0027-pinned-workers-and-copied-channels.md).
