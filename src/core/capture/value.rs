@@ -1623,6 +1623,207 @@ impl Graph {
         })
     }
 
+    // Keep buffer construction off the stack of unrelated operations.
+    #[inline(never)]
+    fn build_region_buffer(
+        &mut self,
+        buffer: &crate::core::region::RegionBufferNode,
+        source: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Expr, Failure> {
+        Ok({
+            use crate::core::{packed::Intrinsic, region::RegionBufferOperation};
+            let owner = index(buffer.context);
+            let payload = self.push(
+                Expr::ResidentTuple {
+                    constructor: None,
+                    fields: Vec::new(),
+                    owner,
+                },
+                source,
+                budget,
+            )?;
+            if let RegionBufferOperation::Network { effect, operation } = &buffer.operation {
+                let module = effect.effect().module();
+                let network =
+                    crate::resolved::NetworkApi::for_module(module).ok_or(Failure::Invalid)?;
+                let join = if effect.effect() == network.join() {
+                    if operation.operation() != 1 {
+                        return Err(Failure::Invalid);
+                    }
+                    true
+                } else if effect.effect() == network.io() {
+                    false
+                } else {
+                    return Err(Failure::Invalid);
+                };
+                let result_type = match (join, operation.operation()) {
+                    (true, 1) => 7,
+                    (false, 1) => 5,
+                    (false, 2) => 6,
+                    (false, 3) => 7,
+                    (false, 4) => 9,
+                    (false, 5) => 7,
+                    (false, 6) => 10,
+                    (false, 7) => 7,
+                    _ => return Err(Failure::Invalid),
+                };
+                // Both envelope kinds and all failure tags are possible
+                // observations. Keep their selected-region residency and
+                // full projectable payloads through ordinary matches.
+                let mut kinds = Vec::new();
+                charge(budget, 2)?;
+                kinds.try_reserve_exact(2).map_err(|_| Failure::Resource)?;
+                for case in 0..2 {
+                    kinds.push(self.push(
+                        Expr::ResidentTuple {
+                            constructor: Some(ConstructorId::new(
+                                crate::types::NominalTypeId::new(module, 3),
+                                case,
+                            )),
+                            fields: Vec::new(),
+                            owner,
+                        },
+                        source,
+                        budget,
+                    )?);
+                }
+                let kind = self.push(Expr::Merge(kinds), source, budget)?;
+                let pair = self.push(
+                    Expr::ResidentTuple {
+                        constructor: None,
+                        fields: copy_slice(&[kind, payload], budget)?,
+                        owner,
+                    },
+                    source,
+                    budget,
+                )?;
+                let mut failures = Vec::new();
+                charge(budget, 4)?;
+                failures
+                    .try_reserve_exact(4)
+                    .map_err(|_| Failure::Resource)?;
+                for case in 0..4 {
+                    failures.push(self.push(
+                        Expr::ResidentTuple {
+                            constructor: Some(ConstructorId::new(
+                                crate::types::NominalTypeId::new(module, 4),
+                                case,
+                            )),
+                            fields: Vec::new(),
+                            owner,
+                        },
+                        source,
+                        budget,
+                    )?);
+                }
+                let failure = self.push(Expr::Merge(failures), source, budget)?;
+                // A registration is a non-owning capability of this same
+                // network activation; preserve the worker dependency.
+                let registration = if operation.operation() == 4 {
+                    let operand = buffer.operand.ok_or(Failure::Invalid)?;
+                    self.push(
+                        Expr::Project {
+                            value: index(operand),
+                            field: 0,
+                            constructor: None,
+                        },
+                        source,
+                        budget,
+                    )?
+                } else if operation.operation() == 6 {
+                    index(buffer.operand.ok_or(Failure::Invalid)?)
+                } else {
+                    payload
+                };
+                let mut results = Vec::new();
+                let count = match (join, operation.operation()) {
+                    (true, 1) => 2,
+                    (false, 3 | 4 | 5 | 7) => 2,
+                    (false, 6) => 3,
+                    _ => 4,
+                };
+                charge(budget, count)?;
+                results
+                    .try_reserve_exact(count)
+                    .map_err(|_| Failure::Resource)?;
+                for case in 0..count as u32 {
+                    if join && case == 0 {
+                        continue;
+                    }
+                    let failure_case = match (join, operation.operation()) {
+                        (true, 1) | (false, 3 | 4 | 5 | 7) => 1,
+                        (false, 6) => 2,
+                        _ => 3,
+                    };
+                    let fields = if case == failure_case {
+                        copy_slice(&[failure], budget)?
+                    } else if matches!(operation.operation(), 4 | 6) && case == 0 {
+                        copy_slice(&[registration], budget)?
+                    } else if operation.operation() == 2 && case == 0 {
+                        copy_slice(&[pair], budget)?
+                    } else {
+                        Vec::new()
+                    };
+                    results.push(self.push(
+                        Expr::ResidentTuple {
+                            constructor: Some(ConstructorId::new(
+                                crate::types::NominalTypeId::new(module, result_type),
+                                case,
+                            )),
+                            fields,
+                            owner,
+                        },
+                        source,
+                        budget,
+                    )?);
+                }
+                Expr::Merge(results)
+            } else {
+                let alternatives = match buffer.operation {
+                    RegionBufferOperation::Intrinsic(intrinsic) => match intrinsic.operation() {
+                        Intrinsic::BytesAppendByte { appended, invalid } => {
+                            Some((appended, invalid, payload))
+                        }
+                        Intrinsic::StringFromUtf8 { decoded, invalid } => {
+                            Some((decoded, invalid, payload))
+                        }
+                        Intrinsic::BytesAt { found, invalid } => {
+                            let scalar = self.push(Expr::Scalar, source, budget)?;
+                            Some((found, invalid, scalar))
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some((success, invalid, payload)) = alternatives {
+                    let fields = copy_slice(&[payload], budget)?;
+                    let success = self.push(
+                        Expr::ResidentTuple {
+                            constructor: Some(success),
+                            fields,
+                            owner,
+                        },
+                        source,
+                        budget,
+                    )?;
+                    let invalid = self.push(
+                        Expr::ResidentTuple {
+                            constructor: Some(invalid),
+                            fields: Vec::new(),
+                            owner,
+                        },
+                        source,
+                        budget,
+                    )?;
+                    Expr::Merge(copy_slice(&[success, invalid], budget)?)
+                } else {
+                    Expr::Forward(payload)
+                }
+            }
+        })
+    }
+
     #[allow(clippy::too_many_arguments)] // Borrowed phase inputs avoid another owning environment.
     fn build_operation<F: CoreOperationFamily>(
         &mut self,
@@ -1666,197 +1867,7 @@ impl Graph {
                 Expr::Forward(index(closure.code.body()))
             }
             Some(EffectOperation::RegionBuffer(buffer)) => {
-                use crate::core::{packed::Intrinsic, region::RegionBufferOperation};
-                let owner = index(buffer.context);
-                let payload = self.push(
-                    Expr::ResidentTuple {
-                        constructor: None,
-                        fields: Vec::new(),
-                        owner,
-                    },
-                    source,
-                    budget,
-                )?;
-                if let RegionBufferOperation::Network { effect, operation } = &buffer.operation {
-                    let module = effect.effect().module();
-                    let network =
-                        crate::resolved::NetworkApi::for_module(module).ok_or(Failure::Invalid)?;
-                    let join = if effect.effect() == network.join() {
-                        if operation.operation() != 1 {
-                            return Err(Failure::Invalid);
-                        }
-                        true
-                    } else if effect.effect() == network.io() {
-                        false
-                    } else {
-                        return Err(Failure::Invalid);
-                    };
-                    let result_type = match (join, operation.operation()) {
-                        (true, 1) => 7,
-                        (false, 1) => 5,
-                        (false, 2) => 6,
-                        (false, 3) => 7,
-                        (false, 4) => 9,
-                        (false, 5) => 7,
-                        (false, 6) => 10,
-                        (false, 7) => 7,
-                        _ => return Err(Failure::Invalid),
-                    };
-                    // Both envelope kinds and all failure tags are possible
-                    // observations. Keep their selected-region residency and
-                    // full projectable payloads through ordinary matches.
-                    let mut kinds = Vec::new();
-                    charge(budget, 2)?;
-                    kinds.try_reserve_exact(2).map_err(|_| Failure::Resource)?;
-                    for case in 0..2 {
-                        kinds.push(self.push(
-                            Expr::ResidentTuple {
-                                constructor: Some(ConstructorId::new(
-                                    crate::types::NominalTypeId::new(module, 3),
-                                    case,
-                                )),
-                                fields: Vec::new(),
-                                owner,
-                            },
-                            source,
-                            budget,
-                        )?);
-                    }
-                    let kind = self.push(Expr::Merge(kinds), source, budget)?;
-                    let pair = self.push(
-                        Expr::ResidentTuple {
-                            constructor: None,
-                            fields: copy_slice(&[kind, payload], budget)?,
-                            owner,
-                        },
-                        source,
-                        budget,
-                    )?;
-                    let mut failures = Vec::new();
-                    charge(budget, 4)?;
-                    failures
-                        .try_reserve_exact(4)
-                        .map_err(|_| Failure::Resource)?;
-                    for case in 0..4 {
-                        failures.push(self.push(
-                            Expr::ResidentTuple {
-                                constructor: Some(ConstructorId::new(
-                                    crate::types::NominalTypeId::new(module, 4),
-                                    case,
-                                )),
-                                fields: Vec::new(),
-                                owner,
-                            },
-                            source,
-                            budget,
-                        )?);
-                    }
-                    let failure = self.push(Expr::Merge(failures), source, budget)?;
-                    // A registration is a non-owning capability of this same
-                    // network activation; preserve the worker dependency.
-                    let registration = if operation.operation() == 4 {
-                        let operand = buffer.operand.ok_or(Failure::Invalid)?;
-                        self.push(
-                            Expr::Project {
-                                value: index(operand),
-                                field: 0,
-                                constructor: None,
-                            },
-                            source,
-                            budget,
-                        )?
-                    } else if operation.operation() == 6 {
-                        index(buffer.operand.ok_or(Failure::Invalid)?)
-                    } else {
-                        payload
-                    };
-                    let mut results = Vec::new();
-                    let count = match (join, operation.operation()) {
-                        (true, 1) => 2,
-                        (false, 3 | 4 | 5 | 7) => 2,
-                        (false, 6) => 3,
-                        _ => 4,
-                    };
-                    charge(budget, count)?;
-                    results
-                        .try_reserve_exact(count)
-                        .map_err(|_| Failure::Resource)?;
-                    for case in 0..count as u32 {
-                        if join && case == 0 {
-                            continue;
-                        }
-                        let failure_case = match (join, operation.operation()) {
-                            (true, 1) | (false, 3 | 4 | 5 | 7) => 1,
-                            (false, 6) => 2,
-                            _ => 3,
-                        };
-                        let fields = if case == failure_case {
-                            copy_slice(&[failure], budget)?
-                        } else if matches!(operation.operation(), 4 | 6) && case == 0 {
-                            copy_slice(&[registration], budget)?
-                        } else if operation.operation() == 2 && case == 0 {
-                            copy_slice(&[pair], budget)?
-                        } else {
-                            Vec::new()
-                        };
-                        results.push(self.push(
-                            Expr::ResidentTuple {
-                                constructor: Some(ConstructorId::new(
-                                    crate::types::NominalTypeId::new(module, result_type),
-                                    case,
-                                )),
-                                fields,
-                                owner,
-                            },
-                            source,
-                            budget,
-                        )?);
-                    }
-                    Expr::Merge(results)
-                } else {
-                    let alternatives = match buffer.operation {
-                        RegionBufferOperation::Intrinsic(intrinsic) => {
-                            match intrinsic.operation() {
-                                Intrinsic::BytesAppendByte { appended, invalid } => {
-                                    Some((appended, invalid, payload))
-                                }
-                                Intrinsic::StringFromUtf8 { decoded, invalid } => {
-                                    Some((decoded, invalid, payload))
-                                }
-                                Intrinsic::BytesAt { found, invalid } => {
-                                    let scalar = self.push(Expr::Scalar, source, budget)?;
-                                    Some((found, invalid, scalar))
-                                }
-                                _ => None,
-                            }
-                        }
-                        _ => None,
-                    };
-                    if let Some((success, invalid, payload)) = alternatives {
-                        let fields = copy_slice(&[payload], budget)?;
-                        let success = self.push(
-                            Expr::ResidentTuple {
-                                constructor: Some(success),
-                                fields,
-                                owner,
-                            },
-                            source,
-                            budget,
-                        )?;
-                        let invalid = self.push(
-                            Expr::ResidentTuple {
-                                constructor: Some(invalid),
-                                fields: Vec::new(),
-                                owner,
-                            },
-                            source,
-                            budget,
-                        )?;
-                        Expr::Merge(copy_slice(&[success, invalid], budget)?)
-                    } else {
-                        Expr::Forward(payload)
-                    }
-                }
+                self.build_region_buffer(buffer, source, budget)?
             }
             Some(EffectOperation::RegionTuple(tuple)) => {
                 let mut fields = Vec::new();
