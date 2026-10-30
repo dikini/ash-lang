@@ -242,7 +242,7 @@ pub(in crate::core) struct ConditionalClosureCall<'a> {
 
 impl ConditionalClosureCall<'_> {
     pub(in crate::core) fn same_definition(&self, other: &Self) -> bool {
-        std::ptr::eq(self.summary.arena, other.summary.arena)
+        super::same_ledger_arena(self.summary.arena, other.summary.arena)
             && std::ptr::eq(self.summary.linked, other.summary.linked)
             && self.definitions == other.definitions
             && self.constructors == other.constructors

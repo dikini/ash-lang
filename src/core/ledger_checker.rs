@@ -25,6 +25,12 @@ use crate::{
     types::TypeWorkBudget,
 };
 
+// Trait-object vtables may be duplicated across codegen units. Arena identity
+// is the address of the actual borrowed arena, not its vtable address.
+fn same_ledger_arena(left: &dyn LedgerArena, right: &dyn LedgerArena) -> bool {
+    std::ptr::addr_eq(left, right)
+}
+
 /// Read-only access to one actual Core arena. A validator-stage view permits
 /// reconstruction only; its provisional result is not an admission until the
 /// entire enclosing validation succeeds.
@@ -3424,7 +3430,7 @@ pub(super) struct ConditionalRegistrationCall<'a> {
 
 impl ConditionalRegistrationCall<'_> {
     pub(super) fn same_definition(&self, other: &Self) -> bool {
-        std::ptr::eq(self.summary.graph.arena, other.summary.graph.arena)
+        same_ledger_arena(self.summary.graph.arena, other.summary.graph.arena)
             && std::ptr::eq(self.summary.graph.linked, other.summary.graph.linked)
             && self.definitions == other.definitions
             && self.constructors == other.constructors
@@ -3550,7 +3556,7 @@ pub(super) fn check_registration_result_match(
     work: &mut TypeWorkBudget,
 ) -> Result<RegistrationResultMatch, Rejection> {
     let mut inspect = CoreInspection { program, work };
-    if !std::ptr::eq(program, registration.summary.graph.arena) {
+    if !same_ledger_arena(program, registration.summary.graph.arena) {
         return Err(Rejection::Unsupported);
     }
     let branch = inspect.branch(matching)?;
@@ -4908,9 +4914,9 @@ main () = {
                 assert_eq!(actual.function(), application.closure.root);
                 assert_eq!(actual.argument(), application.arguments.root);
                 assert_eq!(application.closure.body, application.value.root);
-                assert!(std::ptr::eq(application.closure.arena, program));
+                assert!(std::ptr::addr_eq(application.closure.arena, program));
             }
-            assert!(std::ptr::eq(graph.arena, &program));
+            assert!(std::ptr::addr_eq(graph.arena, &program));
             assert_eq!(graph.candidate.initializer, candidate.initializer);
             assert_eq!(graph.constructors.ledger, constructors.ledger);
             assert_eq!(graph.constructors.record, constructors.record);
@@ -5297,14 +5303,14 @@ reserve_job (ledger, owner, wanted, destination, payload) = match ledger {
             let graph = super::reconstruct_registration_counter(
                 &program, &linked, candidate, &captures, ledger, &mut work,
             )?;
-            assert!(std::ptr::eq(graph.arena, &program));
+            assert!(std::ptr::addr_eq(graph.arena, &program));
             assert_eq!(graph.candidate.initializer, candidate.initializer);
             assert_eq!(graph.argument_match, graph.definition.body);
             assert_eq!(graph.result.fields[0], graph.successor.call);
             assert_eq!(graph.result.fields[1], graph.status);
             assert_eq!(graph.successor.arguments.fields[0], graph.increment.root);
             assert_eq!(graph.increment.api, graph.definition.api);
-            assert!(std::ptr::eq(graph.increment.arena, &program));
+            assert!(std::ptr::addr_eq(graph.increment.arena, &program));
             let output_candidate = target_candidate(&program, &linked, "append_output");
             let constructor = |name: &str| {
                 program
@@ -5413,7 +5419,7 @@ reserve_job (ledger, owner, wanted, destination, payload) = match ledger {
                     operation,
                     &mut record_work,
                 )?;
-                assert!(std::ptr::eq(record_graph.arena, &program));
+                assert!(std::ptr::addr_eq(record_graph.arena, &program));
                 assert!(std::ptr::eq(record_graph.linked, &linked));
                 assert_eq!(
                     record_graph.definition.api,
@@ -5688,7 +5694,7 @@ reserve_job (ledger, owner, wanted, destination, payload) = match ledger {
                 &mut registration_work,
             )?;
             let registration = &summary.graph;
-            assert!(std::ptr::eq(registration.arena, &program));
+            assert!(std::ptr::addr_eq(registration.arena, &program));
             assert!(std::ptr::eq(registration.linked, &linked));
             assert_eq!(
                 registration.flow.entry.api,
@@ -5734,7 +5740,7 @@ reserve_job (ledger, owner, wanted, destination, payload) = match ledger {
                 flow_constructors,
                 &mut flow_work,
             )?;
-            assert!(std::ptr::eq(flow.arena, &program));
+            assert!(std::ptr::addr_eq(flow.arena, &program));
             assert!(std::ptr::eq(flow.linked, &linked));
             assert_eq!(flow.entry.api, flow.finish.api);
             assert_eq!(flow.missing_result.fields.len(), 2);
@@ -5777,7 +5783,7 @@ reserve_job (ledger, owner, wanted, destination, payload) = match ledger {
                 &mut output_work,
             )?;
             assert!(std::ptr::eq(output.linked, &linked));
-            assert!(std::ptr::eq(output.graph.arena, &program));
+            assert!(std::ptr::addr_eq(output.graph.arena, &program));
             assert_eq!(
                 output.graph.candidate.initializer,
                 output_candidate.initializer
@@ -5792,7 +5798,7 @@ reserve_job (ledger, owner, wanted, destination, payload) = match ledger {
                 constructor("Root"),
                 &mut projection_work,
             )?;
-            assert!(std::ptr::eq(projection.arena, &program));
+            assert!(std::ptr::addr_eq(projection.arena, &program));
             assert!(std::ptr::eq(projection.linked, &linked));
             assert_eq!(
                 projection.candidate.initializer,
@@ -6631,7 +6637,7 @@ remove_record (wanted, records) = match records {
             )
             .map(|summary| {
                 assert!(std::ptr::eq(summary.linked, &linked));
-                assert!(std::ptr::eq(summary.graph.arena, &program));
+                assert!(std::ptr::addr_eq(summary.graph.arena, &program));
                 assert_eq!(summary.graph.candidate.binder, target.binder);
                 assert_eq!(
                     summary.graph.dependencies.comparison.binder,
@@ -6653,7 +6659,7 @@ remove_record (wanted, records) = match records {
                     false,
                     &mut TypeWorkBudget::unbounded(),
                 )?;
-                assert!(std::ptr::eq(graph.arena, &program));
+                assert!(std::ptr::addr_eq(graph.arena, &program));
                 assert_eq!(graph.definition.api, graph.provider_api);
                 assert_eq!(graph.comparison_pair.api, graph.provider_api);
                 assert_eq!(graph.constructor_value.api, graph.provider_api);
@@ -6667,7 +6673,7 @@ remove_record (wanted, records) = match records {
                     graph.projection,
                     graph.constructor,
                 ] {
-                    assert!(std::ptr::eq(closure.arena, &program));
+                    assert!(std::ptr::addr_eq(closure.arena, &program));
                     for node in [
                         closure.root,
                         closure.query,
@@ -6715,7 +6721,7 @@ remove_record (wanted, records) = match records {
                     graph.constructor_pair,
                     graph.constructor_value,
                 ] {
-                    assert!(std::ptr::eq(tuple.arena, &program));
+                    assert!(std::ptr::addr_eq(tuple.arena, &program));
                     assert!(program.node(tuple.root).is_some());
                 }
                 assert_eq!(graph.comparison_pair.fields[0], graph.projection_call);
@@ -6882,7 +6888,7 @@ remove_record (wanted, records) = match records {
             };
             let argument = inspector.application(call)?.argument();
             let witness = inspector.persistent_tuple(argument, None)?;
-            assert!(std::ptr::eq(witness.arena, &program));
+            assert!(std::ptr::addr_eq(witness.arena, &program));
             assert_eq!(witness.root, argument);
             let super::EffectExprKind::Pure(super::PureExprKind::Computation(
                 super::PureComputation::Bind(binding),
@@ -7008,7 +7014,7 @@ lookup_child (wanted, children) = match children {
                 graph.dependencies.projection.binder,
                 dependencies.projection.binder
             );
-            assert!(std::ptr::eq(graph.arena, &program));
+            assert!(std::ptr::addr_eq(graph.arena, &program));
             assert_eq!(graph.definition.root, candidate.initializer);
             assert_eq!(graph.definition.body, graph.argument_match);
             assert_eq!(graph.comparison.root, dependencies.comparison.initializer);
@@ -7319,7 +7325,7 @@ insert_child (fresh, children) = match children {
             assert_eq!(summary.semantics.more, semantics.more);
             let graph = &summary.graph;
             let view = &summary.model;
-            assert!(std::ptr::eq(graph.arena, &program));
+            assert!(std::ptr::addr_eq(graph.arena, &program));
             assert_eq!(graph.definition.root, candidate.initializer);
             assert_eq!(graph.candidate.binder, candidate.binder);
             assert_eq!(graph.constructors.more, c.more);
@@ -7362,7 +7368,7 @@ insert_child (fresh, children) = match children {
             ] {
                 assert!(program.node(id).is_some());
             }
-            assert!(std::ptr::eq(view.arena, &program));
+            assert!(std::ptr::addr_eq(view.arena, &program));
             assert_eq!(
                 view.nodes
                     .iter()
