@@ -12,6 +12,10 @@ Launch an Ash delivery team to achieve this milestone.
 - Milestone and outcome: [name/link and intended outcome]
 - Issues: [issue links or numbers]
 - Governing artifacts and tasks: [links]
+- Production vertical slice and acceptance check: [actual entry through its
+  consumers, runtime completion and cleanup; integration owner]
+- Crossed interfaces: [existing task/plan record of producers, consumers,
+  evidence/data, lifetimes, failure behavior and responsible owners]
 - Retaining branch: [milestone integration branch]
 - Merge/signing policy: [method and requirements]
 - Full-gate checkpoints: [shared-runtime and dependent-library completion
@@ -51,6 +55,12 @@ Use existing issues, PRs and tasks for records. Keep handoffs compact. Continue
 through the agreed milestone outcome and required gates. Return concrete
 semantic decisions to this chat; incorporate accepted refinements through updated
 artifacts and a short delta.
+
+Apply [connected delivery planning](agent-workflow.md#connected-delivery-planning)
+before parallel implementation. Have the independent reviewer challenge the
+interfaces and remaining delivery chain; revisit that chain when stuck. Keep
+confirmed findings in the existing records and estimate completion including
+missing consumers, integration, review and required gates.
 
 Use [checkpoint gating](agent-workflow.md#verification-cadence): focused
 verification and independent review for each delivery, full workspace gates at
