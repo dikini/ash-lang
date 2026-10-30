@@ -1,0 +1,5 @@
+import NetworkLedgerCoreRecordRemoval
+#print axioms Ash.NetworkLedger.CoreValues.removal_body_correct_with
+#print axioms Ash.NetworkLedger.CoreValues.removal_body_correct
+#print axioms Ash.NetworkLedger.CoreRecordRemoval.record_removal_body_correct
+#print axioms Ash.NetworkLedger.CoreRecordRemoval.record_removal_outcome_clauses

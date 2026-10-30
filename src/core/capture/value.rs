@@ -5056,6 +5056,48 @@ impl<'a> Analysis<'a> {
         Ok(ports)
     }
 
+    pub(super) fn existing_original_capture_ports(
+        &self,
+        target: usize,
+        creation: usize,
+        capture_nodes: &[crate::core::NodeId],
+        arena: crate::core::dialect::ArenaId,
+        nodes: &[StoredNode<super::super::effect::EffectOperationFamily>],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<usize>, Failure> {
+        if self.graph.original_nodes != nodes.len()
+            || self.graph.original_base != nodes.as_ptr() as usize
+        {
+            return Err(Failure::Invalid);
+        }
+        let Some(Expr::Function { captures, .. }) = self.graph.expressions.get(target) else {
+            return Err(Failure::Invalid);
+        };
+        charge(budget, capture_nodes.len())?;
+        let mut ports = Vec::new();
+        ports
+            .try_reserve_exact(capture_nodes.len())
+            .map_err(|_| Failure::Resource)?;
+        for node in capture_nodes {
+            if node.arena() != arena {
+                return Err(Failure::Invalid);
+            }
+            let expression = node.index().map_err(|_| Failure::Invalid)?;
+            if expression >= self.graph.original_nodes {
+                return Err(Failure::Invalid);
+            }
+            let Some(Expr::Alias(symbol)) = self.graph.expressions.get(expression) else {
+                return Err(Failure::Invalid);
+            };
+            charge(budget, captures.len())?;
+            if !captures.contains(symbol) {
+                return Err(Failure::Invalid);
+            }
+            ports.push(self.existing_slot(*symbol, creation, budget)?);
+        }
+        Ok(ports)
+    }
+
     /// Check every actual function capture against original linked captures,
     /// its saved Region context, or an authenticated type parameter. The
     /// caller owns the source and bootstrap proofs for those categories.
@@ -5181,8 +5223,101 @@ impl<'a> Analysis<'a> {
         ))
     }
 
-    /// Read the already settled ordered fields of an original generated
-    /// Bind/RegionTuple without creating slots or merging alternatives.
+    /// Read all settled original tuple field ports at their actual creation
+    /// contexts. A mixed or unknown tuple producer does not supply a field
+    /// relationship. This query never creates a value slot.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The original arena and frozen tuple coordinates are independent inputs"
+    )]
+    pub(super) fn existing_original_tuple_fields(
+        &self,
+        binding: crate::core::NodeId,
+        tuple: crate::core::NodeId,
+        fields: &[crate::core::NodeId],
+        arena: crate::core::dialect::ArenaId,
+        nodes: &[StoredNode<super::super::effect::EffectOperationFamily>],
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, Vec<(usize, Vec<usize>)>), Failure> {
+        charge(
+            budget,
+            fields.len().checked_add(2).ok_or(Failure::Resource)?,
+        )?;
+        if binding.arena() != arena
+            || tuple.arena() != arena
+            || fields.iter().any(|id| id.arena() != arena)
+            || self.graph.original_nodes != nodes.len()
+            || self.graph.original_base != nodes.as_ptr() as usize
+        {
+            return Err(Failure::Invalid);
+        }
+        let binding = binding.index().map_err(|_| Failure::Invalid)?;
+        let tuple = tuple.index().map_err(|_| Failure::Invalid)?;
+        if binding >= self.graph.original_nodes || tuple >= self.graph.original_nodes {
+            return Err(Failure::Invalid);
+        }
+        for field in fields {
+            charge(budget, 1)?;
+            if field.index().map_err(|_| Failure::Invalid)? >= self.graph.original_nodes {
+                return Err(Failure::Invalid);
+            }
+        }
+        let Some(Expr::Bind { body, .. }) = self.graph.expressions.get(binding) else {
+            return Err(Failure::Invalid);
+        };
+        let Some(Expr::ResidentTuple {
+            constructor: None,
+            fields: actual,
+            ..
+        }) = self.graph.expressions.get(tuple)
+        else {
+            return Err(Failure::Invalid);
+        };
+        if *body != tuple || actual.len() != fields.len() {
+            return Err(Failure::Invalid);
+        }
+        for (&actual, field) in actual.iter().zip(fields) {
+            charge(budget, 1)?;
+            if actual != field.index().map_err(|_| Failure::Invalid)? {
+                return Err(Failure::Invalid);
+            }
+        }
+        let port = self.existing_slot(binding, context, budget)?;
+        let atoms = &self.slots.get(port).ok_or(Failure::Invalid)?.atoms;
+        charge(budget, atoms.len())?;
+        let mut alternatives = Vec::new();
+        alternatives
+            .try_reserve(atoms.len())
+            .map_err(|_| Failure::Resource)?;
+        for atom in atoms {
+            let Atom::Aggregate(actual, creation) = *atom else {
+                return Err(Failure::Invalid);
+            };
+            if actual != tuple {
+                return Err(Failure::Invalid);
+            }
+            charge(budget, fields.len())?;
+            let mut ports = Vec::new();
+            ports
+                .try_reserve_exact(fields.len())
+                .map_err(|_| Failure::Resource)?;
+            for field in fields {
+                ports.push(self.existing_slot(
+                    field.index().map_err(|_| Failure::Invalid)?,
+                    creation,
+                    budget,
+                )?);
+            }
+            alternatives.push((creation, ports));
+        }
+        if alternatives.is_empty() {
+            return Err(Failure::Invalid);
+        }
+        Ok((port, alternatives))
+    }
+
+    /// Preserve the worker-specific check over the shared ordered tuple query.
     #[expect(
         clippy::too_many_arguments,
         reason = "The tuple identity and scoped value provenance are distinct checked inputs"
@@ -5197,52 +5332,13 @@ impl<'a> Analysis<'a> {
         context: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<(usize, (crate::core::NodeId, u8)), Failure> {
-        charge(budget, 4)?;
-        if [binding, tuple, fields[0], fields[1]]
-            .iter()
-            .any(|id| id.arena() != arena)
-            || self.graph.original_nodes != nodes.len()
-            || self.graph.original_base != nodes.as_ptr() as usize
-        {
-            return Err(Failure::Invalid);
-        }
-        let binding = binding.index().map_err(|_| Failure::Invalid)?;
-        let tuple = tuple.index().map_err(|_| Failure::Invalid)?;
-        let fields = [
-            fields[0].index().map_err(|_| Failure::Invalid)?,
-            fields[1].index().map_err(|_| Failure::Invalid)?,
-        ];
-        let Some(Expr::Bind { body, .. }) = self.graph.expressions.get(binding) else {
-            return Err(Failure::Invalid);
-        };
-        let Some(Expr::ResidentTuple {
-            constructor: None,
-            fields: actual,
-            ..
-        }) = self.graph.expressions.get(tuple)
-        else {
-            return Err(Failure::Invalid);
-        };
-        if *body != tuple || actual.as_slice() != fields {
-            return Err(Failure::Invalid);
-        }
-        let port = self.existing_slot(binding, context, budget)?;
-        let atoms = &self.slots.get(port).ok_or(Failure::Invalid)?.atoms;
-        charge(budget, atoms.len())?;
+        let (port, alternatives) = self.existing_original_tuple_fields(
+            binding, tuple, &fields, arena, nodes, context, budget,
+        )?;
         let mut origin = None;
-        for atom in atoms {
-            let Atom::Aggregate(actual, creation) = *atom else {
-                return Err(Failure::Invalid);
-            };
-            if actual != tuple {
-                return Err(Failure::Invalid);
-            }
-            // The restored argument is a frozen tuple value. Its fields live
-            // at the tuple's actual creation context, not the restored caller
-            // context; do not invent copied field slots.
-            let worker = self.existing_slot(fields[0], creation, budget)?;
-            self.existing_slot(fields[1], creation, budget)?;
-            let actual = self.worker_origin_at_port(worker, budget)?;
+        for (_creation, fields) in alternatives {
+            charge(budget, 1)?;
+            let actual = self.worker_origin_at_port(fields[0], budget)?;
             if origin.is_some_and(|prior| prior != actual) {
                 return Err(Failure::Invalid);
             }
@@ -5375,6 +5471,171 @@ impl<'a> Analysis<'a> {
         self.existing_slot(body, context, budget)
     }
 
+    /// Read the two settled ports of the original Bind without extending the
+    /// focused value graph. The caller authenticates execution on the trace.
+    pub(super) fn existing_binding_ports(
+        &self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, usize), Failure> {
+        let expression = self.existing_position_expression(code, budget)?;
+        let Some(Expr::Bind {
+            binder,
+            initializer,
+            ..
+        }) = self.graph.expressions.get(expression)
+        else {
+            return Err(Failure::Invalid);
+        };
+        Ok((
+            self.existing_slot(*binder, context, budget)?,
+            self.existing_slot(*initializer, context, budget)?,
+        ))
+    }
+
+    /// Follow the exact completed TypeApplication which created this call's
+    /// stored closure. Its metadata function freezes the original context;
+    /// the allocation query is not re-executed in the specialized context.
+    pub(super) fn existing_type_application_creation(
+        &self,
+        call: super::control::CompletionCall,
+        context_node: crate::core::NodeId,
+        arena: crate::core::dialect::ArenaId,
+        nodes: &[StoredNode<super::super::effect::EffectOperationFamily>],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        charge(budget, 4)?;
+        if context_node.arena() != arena
+            || self.graph.original_nodes != nodes.len()
+            || self.graph.original_base != nodes.as_ptr() as usize
+            || call.target != call.expression
+        {
+            return Err(Failure::Invalid);
+        }
+        let ContextPath::Step {
+            parent,
+            transition: Transition::Invoke(applied, metadata, class),
+            ..
+        } = *self
+            .contexts
+            .paths
+            .get(call.creation)
+            .ok_or(Failure::Invalid)?
+        else {
+            return Err(Failure::Invalid);
+        };
+        if parent != call.caller_value_context {
+            return Err(Failure::Invalid);
+        }
+        let term = self.existing_position_expression(call.code, budget)?;
+        let Some(Expr::Call {
+            function: term_function,
+            ..
+        }) = self.graph.expressions.get(term)
+        else {
+            return Err(Failure::Invalid);
+        };
+        if *term_function != applied {
+            return Err(Failure::Invalid);
+        }
+        let Some(Expr::Call {
+            function,
+            type_application: true,
+            ..
+        }) = self.graph.expressions.get(applied)
+        else {
+            return Err(Failure::Invalid);
+        };
+        let Some(Expr::Function { body, captures, .. }) = self.graph.expressions.get(metadata)
+        else {
+            return Err(Failure::Invalid);
+        };
+        let context = context_node.index().map_err(|_| Failure::Invalid)?;
+        charge(budget, captures.len())?;
+        if *body != call.expression || captures.iter().filter(|&&item| item == context).count() != 1
+        {
+            return Err(Failure::Invalid);
+        }
+        let function_port = self.existing_slot(*function, parent, budget)?;
+        let result = self.existing_slot(applied, parent, budget)?;
+        let atoms = &self.slots.get(function_port).ok_or(Failure::Invalid)?.atoms;
+        charge(budget, atoms.len())?;
+        let mut original = None;
+        for atom in atoms {
+            let Atom::Closure(target, creation) = *atom else {
+                return Err(Failure::Invalid);
+            };
+            if target != metadata
+                || self
+                    .contexts
+                    .paths
+                    .get(creation)
+                    .ok_or(Failure::Invalid)?
+                    .projection()
+                    != class
+                || original.is_some_and(|old| old != creation)
+            {
+                return Err(Failure::Invalid);
+            }
+            original = Some(creation);
+        }
+        let original = original.ok_or(Failure::Invalid)?;
+        charge(budget, 1)?;
+        if !self
+            .callable_transfers
+            .contains(&(Some(result), result, metadata, original))
+        {
+            return Err(Failure::Invalid);
+        }
+        for &capture in captures {
+            let destination = self.existing_slot(capture, call.creation, budget)?;
+            let source = self.existing_slot(capture, original, budget)?;
+            let edges = &self.slots.get(destination).ok_or(Failure::Invalid)?.edges;
+            charge(budget, edges.len())?;
+            if !edges.contains(&source) {
+                return Err(Failure::Invalid);
+            }
+        }
+        let body = self.existing_slot(*body, call.creation, budget)?;
+        let result_slot = self.slots.get(result).ok_or(Failure::Invalid)?;
+        charge(
+            budget,
+            result_slot
+                .edges
+                .len()
+                .checked_add(result_slot.atoms.len())
+                .ok_or(Failure::Resource)?,
+        )?;
+        if !result_slot.edges.contains(&body)
+            || result_slot.atoms.is_empty()
+            || result_slot
+                .atoms
+                .iter()
+                .any(|atom| *atom != Atom::Closure(call.expression, call.creation))
+        {
+            return Err(Failure::Invalid);
+        }
+        Ok(original)
+    }
+
+    /// Read an already-settled request and its operand in this exact focus.
+    pub(super) fn existing_request_operand_ports(
+        &self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, usize), Failure> {
+        let expression = self.existing_position_expression(code, budget)?;
+        let Some(Expr::Request { operand, .. }) = self.graph.expressions.get(expression) else {
+            return Err(Failure::Invalid);
+        };
+        Ok((
+            self.existing_slot(expression, context, budget)?,
+            self.existing_slot(*operand, context, budget)?,
+        ))
+    }
+
     /// Return the exact existing result and operand slots of a transparent
     /// alias or conversion. No operand is inferred from a value atom.
     pub(super) fn existing_forward_ports(
@@ -5479,6 +5740,25 @@ impl<'a> Analysis<'a> {
             *result_case,
             cases,
         )))
+    }
+
+    pub(super) fn existing_case_arm_ports(
+        &self,
+        code: usize,
+        ordinal: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, usize), Failure> {
+        charge(budget, 1)?;
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let Expr::Match { arms, .. } = &self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        let body = arms.get(ordinal).ok_or(Failure::Invalid)?.1;
+        Ok((
+            self.existing_slot(expression, context, budget)?,
+            self.existing_slot(body, context, budget)?,
+        ))
     }
 
     pub(super) fn existing_arm_bindings(

@@ -3155,7 +3155,8 @@ pub(crate) fn validate_effect_modules_linked_with_work(
     linked: &crate::evidence_validation::ValidatedInterfaceProgram,
     work: &mut TypeWorkBudget,
 ) -> Result<ValidatedCoreProgram<super::effect::EffectOperationFamily>, ValidationError> {
-    validate_effect_modules_internal(program, sources, module_sources, Some(linked), work)
+    validate_effect_modules_internal(program, sources, module_sources, Some(linked), None, work)
+        .map(|(core, _)| core)
 }
 
 pub(crate) fn validate_effect_modules_with_work(
@@ -3164,7 +3165,35 @@ pub(crate) fn validate_effect_modules_with_work(
     module_sources: &[(ModuleId, SourceId)],
     work: &mut TypeWorkBudget,
 ) -> Result<ValidatedCoreProgram<super::effect::EffectOperationFamily>, ValidationError> {
-    validate_effect_modules_internal(program, sources, module_sources, None, work)
+    validate_effect_modules_internal(program, sources, module_sources, None, None, work)
+        .map(|(core, _)| core)
+}
+
+/// An untrusted plan is checked in the same validator/focus/budget. The
+/// returned observations are conditional and available only after all ordinary
+/// Core validation succeeds; they grant no network permission.
+pub(in crate::core) fn validate_effect_modules_linked_with_ledger_plans<'a>(
+    program: UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+    linked: &'a crate::evidence_validation::ValidatedInterfaceProgram,
+    plans: &'a [super::ledger_checker::plan::LedgerPlan<'a>],
+    work: &mut TypeWorkBudget,
+) -> Result<
+    (
+        ValidatedCoreProgram<super::effect::EffectOperationFamily>,
+        Vec<super::capture::PendingLedgerObservation>,
+    ),
+    ValidationError,
+> {
+    validate_effect_modules_internal(
+        program,
+        sources,
+        module_sources,
+        Some(linked),
+        Some(plans),
+        work,
+    )
 }
 
 fn validate_effect_modules_internal(
@@ -3172,8 +3201,15 @@ fn validate_effect_modules_internal(
     sources: &[&SourceFile],
     module_sources: &[(ModuleId, SourceId)],
     linked: Option<&crate::evidence_validation::ValidatedInterfaceProgram>,
+    plans: Option<&[super::ledger_checker::plan::LedgerPlan<'_>]>,
     work: &mut TypeWorkBudget,
-) -> Result<ValidatedCoreProgram<super::effect::EffectOperationFamily>, ValidationError> {
+) -> Result<
+    (
+        ValidatedCoreProgram<super::effect::EffectOperationFamily>,
+        Vec<super::capture::PendingLedgerObservation>,
+    ),
+    ValidationError,
+> {
     let mut validator = match Validator::new_modules(&program, sources, module_sources) {
         Ok(validator) => validator,
         Err(error) => {
@@ -3183,6 +3219,7 @@ fn validate_effect_modules_internal(
     };
     validator.type_work_limit = work.remaining();
     validator.linked = linked;
+    validator.ledger_plans = plans;
     let result = validator.run_effect();
     // The validator debits this exact remaining allowance, including failures.
     work.charge(validator.type_work.get())
@@ -3192,6 +3229,82 @@ fn validate_effect_modules_internal(
         return Err(error);
     }
     let admissions = std::mem::take(validator.network_admissions.get_mut());
+    let observations = std::mem::take(validator.ledger_observations.get_mut());
+    if observations.len() != plans.map_or(0, <[_]>::len) {
+        drop(validator);
+        program.discard_iteratively();
+        return Err(ValidationError::new(ValidationReason::Registry, None));
+    }
+    // A pairwise freshness premise requires distinct fixed allocator labels
+    // for both checked workers of this actual Network owner. A single-side
+    // observation remains conditional on the peer's later check.
+    let allocator_check = (|| -> Result<(), ValidationError> {
+        let pairs = observations
+            .len()
+            .checked_mul(observations.len())
+            .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?;
+        work.charge(pairs)
+            .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+        let value = |id: NodeId| -> Result<&crate::integer::Integer, ValidationError> {
+            if id.arena() != program.arena {
+                return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+            }
+            let index = id
+                .index()
+                .map_err(|_| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+            match program.nodes.get(index).map(|node| &node.kind) {
+                Some(super::effect::EffectExprKind::Pure(super::PureExprKind::Value(
+                    super::PureValue::Integer(integer),
+                ))) => Ok(integer.value()),
+                _ => Err(ValidationError::new(ValidationReason::Registry, Some(id))),
+            }
+        };
+        for (index, left) in observations.iter().enumerate() {
+            for right in &observations[index + 1..] {
+                if left.owner != right.owner || left.side == right.side {
+                    continue;
+                }
+                if !matches!(
+                    (left.initialization_role, right.initialization_role),
+                    (
+                        super::ledger_checker::InitializationRole::Root,
+                        super::ledger_checker::InitializationRole::Worker
+                    ) | (
+                        super::ledger_checker::InitializationRole::Worker,
+                        super::ledger_checker::InitializationRole::Root
+                    )
+                ) {
+                    return Err(ValidationError::new(
+                        ValidationReason::Registry,
+                        Some(left.owner),
+                    ));
+                }
+                let a = value(left.allocator)?;
+                let b = value(right.allocator)?;
+                let bytes = a.magnitude_byte_length().max(b.magnitude_byte_length());
+                let bytes = usize::try_from(bytes)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                work.charge(
+                    bytes
+                        .checked_add(1)
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+                )
+                .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+                if a == b {
+                    return Err(ValidationError::new(
+                        ValidationReason::Registry,
+                        Some(left.owner),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    })();
+    if let Err(error) = allocator_check {
+        drop(validator);
+        program.discard_iteratively();
+        return Err(error);
+    }
     drop(validator);
     let (registry, method_evidence, anchors, arena, stored, root) = program.into_parts();
     let mut nodes = Vec::with_capacity(stored.len());
@@ -3212,7 +3325,7 @@ fn validate_effect_modules_internal(
     }
     let mut core = CoreProgram::new(registry, method_evidence, anchors, arena, nodes, root);
     core.set_network_admissions(admissions);
-    Ok(ValidatedCoreProgram::new(core))
+    Ok((ValidatedCoreProgram::new(core), observations))
 }
 
 /// Consumes unchecked Core assembled from multiple canonical modules.
@@ -3614,6 +3727,8 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     sources: HashMap<SourceId, &'source SourceFile>,
     module_sources: Option<HashMap<ModuleId, SourceId>>,
     linked: Option<&'program crate::evidence_validation::ValidatedInterfaceProgram>,
+    ledger_plans: Option<&'program [super::ledger_checker::plan::LedgerPlan<'program>]>,
+    ledger_observations: std::cell::RefCell<Vec<super::capture::PendingLedgerObservation>>,
     network_api: Option<crate::resolved::NetworkApi>,
     authenticated_network_requests: Cell<[Option<NodeId>; 8]>,
     network_admissions: std::cell::RefCell<Vec<super::dialect::NetworkAdmission>>,
@@ -3857,6 +3972,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 .collect(),
             module_sources: None,
             linked: None,
+            ledger_plans: None,
+            ledger_observations: std::cell::RefCell::new(Vec::new()),
             network_api: None,
             authenticated_network_requests: Cell::new([None; 8]),
             network_admissions: std::cell::RefCell::new(Vec::new()),
@@ -15694,10 +15811,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 let mut routes = [None, None];
                 let mut cuts = [None, None];
                 let mut ends = [None, None];
-                if facts.requests_completion {
-                    // This optional query is only attempted for a called entry
-                    // that reaches the authenticated finish-receive operation.
-                    // It consumes the same remaining validator allowance.
+                let plans = self.ledger_plans.unwrap_or(&[]);
+                self.charge_type_work(plans.len())?;
+                let has_plan = plans.iter().any(|plan| plan.owner == id);
+                if facts.requests_completion || has_plan {
                     match self.network_native_identity_scope(
                         id,
                         network,
@@ -15709,36 +15826,98 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                             let mut work = TypeWorkBudget::with_limit(
                                 self.type_work_limit.saturating_sub(self.type_work.get()),
                             );
-                            for side in 0..2 {
-                                let result = super::capture::network_worker_admission_facts(
-                                    &scope, side, &mut work,
-                                );
-                                match result {
-                                    Ok((route, cut, end)) => {
-                                        routes[side] = route;
-                                        cuts[side] = cut;
-                                        ends[side] = end;
-                                    }
-                                    Err(super::capture::Failure::Resource) => {
-                                        self.charge_type_work(work.used())?;
+                            let query_result = (|| -> Result<(), ValidationError> {
+                                for side in 0..2 {
+                                    work.charge(plans.len()).map_err(|()| {
+                                        ValidationError::new(ValidationReason::Resource, Some(id))
+                                    })?;
+                                    let mut selected = plans.iter().filter(|plan| {
+                                        plan.owner == id && usize::from(plan.side) == side
+                                    });
+                                    let plan = selected.next();
+                                    if selected.next().is_some() {
                                         return Err(ValidationError::new(
-                                            ValidationReason::Resource,
+                                            ValidationReason::Registry,
                                             Some(id),
                                         ));
                                     }
-                                    Err(_) => {
-                                        baseline_complete = false;
+                                    if let Some(plan) = plan {
+                                        let linked = self.linked.ok_or_else(|| {
+                                            ValidationError::new(
+                                                ValidationReason::Registry,
+                                                Some(id),
+                                            )
+                                        })?;
+                                        match super::capture::network_worker_admission_with_ledger(
+                                            &scope,
+                                            side,
+                                            facts.requests_completion,
+                                            self.program,
+                                            linked,
+                                            plan,
+                                            &mut work,
+                                        ) {
+                                            Ok((route, cut, end, observation)) => {
+                                                routes[side] = route;
+                                                cuts[side] = cut;
+                                                ends[side] = end;
+                                                work.charge(1).map_err(|()| {
+                                                    ValidationError::new(
+                                                        ValidationReason::Resource,
+                                                        Some(id),
+                                                    )
+                                                })?;
+                                                let mut observations =
+                                                    self.ledger_observations.borrow_mut();
+                                                observations.try_reserve(1).map_err(|_| {
+                                                    ValidationError::new(
+                                                        ValidationReason::Resource,
+                                                        Some(id),
+                                                    )
+                                                })?;
+                                                observations.push(observation);
+                                            }
+                                            Err(super::capture::Failure::Resource) => {
+                                                return Err(ValidationError::new(
+                                                    ValidationReason::Resource,
+                                                    Some(id),
+                                                ));
+                                            }
+                                            Err(_) => {
+                                                return Err(ValidationError::new(
+                                                    ValidationReason::Registry,
+                                                    Some(id),
+                                                ));
+                                            }
+                                        }
+                                    } else if facts.requests_completion {
+                                        match super::capture::network_worker_admission_facts(
+                                            &scope, side, &mut work,
+                                        ) {
+                                            Ok((route, cut, end)) => {
+                                                routes[side] = route;
+                                                cuts[side] = cut;
+                                                ends[side] = end;
+                                            }
+                                            Err(super::capture::Failure::Resource) => {
+                                                return Err(ValidationError::new(
+                                                    ValidationReason::Resource,
+                                                    Some(id),
+                                                ));
+                                            }
+                                            Err(_) => baseline_complete = false,
+                                        }
                                     }
                                 }
-                            }
+                                Ok(())
+                            })();
                             self.charge_type_work(work.used())?;
+                            query_result?;
                         }
-                        Err(error) if error.reason() == ValidationReason::Resource => {
+                        Err(error) if error.reason() == ValidationReason::Resource || has_plan => {
                             return Err(error);
                         }
-                        Err(_) => {
-                            baseline_complete = false;
-                        }
+                        Err(_) => baseline_complete = false,
                     }
                 }
                 self.charge_type_work(1)?;

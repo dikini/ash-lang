@@ -15,6 +15,8 @@ use std::{
 mod control;
 mod network_completion;
 mod network_end;
+mod network_ledger;
+pub(super) use network_ledger::PendingLedgerObservation;
 mod value;
 use control::{
     Analysis, Clause, Control, NetworkEventStage, NetworkOutcome, copy_slice, query_required,
@@ -3501,6 +3503,59 @@ pub(super) fn network_worker_admission_facts(
     })
 }
 
+/// Evaluate the optional ledger nomination during the existing worker query.
+/// The candidate is private and remains conditional until whole Core validation.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The scope, linked arena, nomination and shared work budget are distinct inputs"
+)]
+pub(super) fn network_worker_admission_with_ledger(
+    scope: &super::validate::NetworkNativeIdentityScope<'_>,
+    side: usize,
+    include_network: bool,
+    program: &super::UnvalidatedEffectProgram,
+    linked: &crate::evidence_validation::ValidatedInterfaceProgram,
+    plan: &super::ledger_checker::plan::LedgerPlan<'_>,
+    budget: &mut TypeWorkBudget,
+) -> Result<
+    (
+        Option<super::dialect::NetworkProcessingRoute>,
+        Option<super::dialect::NetworkProcessingCut>,
+        Option<super::dialect::NetworkEndRoute>,
+        network_ledger::PendingLedgerObservation,
+    ),
+    Failure,
+> {
+    with_network_worker_resources(scope, side, budget, |graph, worker, budget| {
+        let (route, cut) = if include_network {
+            network_worker_processing_facts_in_query(scope, side, graph, worker, budget)?
+        } else {
+            (None, None)
+        };
+        let end = if include_network {
+            match network_end::worker_end_route(scope, side, graph, worker, budget) {
+                Ok(end) => end.map(|end| super::dialect::NetworkEndRoute {
+                    owner: end.owner,
+                    entry: end.entry,
+                    side: end.side,
+                    receive: end.receive,
+                    end_match: end.end_match,
+                    arm: end.end_arm,
+                    finish: end.finish,
+                }),
+                Err(Failure::Resource) => return Err(Failure::Resource),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+        let candidate = network_ledger::observe_ledger_plan(
+            scope, graph, worker, program, linked, plan, budget,
+        )?;
+        Ok((route, cut, end, candidate))
+    })
+}
+
 /// Rebuild one linked network's capture graph and keep its control and focused
 /// value analyses alive while the completion checker inspects them. The
 /// candidate nodes only select a query; this function grants no network fact.
@@ -6118,7 +6173,7 @@ mod tests {
         (core, provenance)
     }
 
-    fn retained_drain_fixture_with_linked(
+    pub(super) fn retained_drain_fixture_with_linked(
         source: &str,
     ) -> (
         super::super::UnvalidatedEffectProgram,
@@ -6160,6 +6215,11 @@ mod tests {
         )
         .unwrap();
         std::fs::write(directory.join("worker_helper.ash"), worker_helper).unwrap();
+        std::fs::write(
+            directory.join("network_types.ash"),
+            include_str!("../../libraries/network_types.ash"),
+        )
+        .unwrap();
         std::fs::write(
             directory.join("network_native.ash"),
             include_str!("../../tests/fixtures/pinned-network/network_native.ash"),
