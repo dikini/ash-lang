@@ -6194,6 +6194,33 @@ mod tests {
         Vec<(crate::module::ModuleId, SourceFile)>,
         crate::evidence_validation::ValidatedInterfaceProgram,
     ) {
+        retained_drain_fixture_with_modules(source, worker_helper, None)
+    }
+
+    pub(super) fn retained_drain_fixture_with_ledger_module(
+        source: &str,
+        ledger_module: &str,
+    ) -> (
+        super::super::UnvalidatedEffectProgram,
+        Vec<(crate::module::ModuleId, SourceFile)>,
+        crate::evidence_validation::ValidatedInterfaceProgram,
+    ) {
+        retained_drain_fixture_with_modules(
+            source,
+            include_str!("../../tests/fixtures/pinned-network/worker_helper.ash"),
+            Some(ledger_module),
+        )
+    }
+
+    fn retained_drain_fixture_with_modules(
+        source: &str,
+        worker_helper: &str,
+        ledger_module: Option<&str>,
+    ) -> (
+        super::super::UnvalidatedEffectProgram,
+        Vec<(crate::module::ModuleId, SourceFile)>,
+        crate::evidence_validation::ValidatedInterfaceProgram,
+    ) {
         use crate::{
             elaborate::{EffectElaborator, check_module, link_modules},
             evidence_validation::validate_interface_evidence,
@@ -6209,6 +6236,9 @@ mod tests {
         ));
         std::fs::create_dir(&directory).unwrap();
         std::fs::write(directory.join("entry.ash"), source).unwrap();
+        if let Some(ledger_module) = ledger_module {
+            std::fs::write(directory.join("ledger_helper.ash"), ledger_module).unwrap();
+        }
         std::fs::write(
             directory.join("probe_helper.ash"),
             include_str!("../../tests/fixtures/retained-drain/probe_helper.ash"),

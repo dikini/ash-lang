@@ -4105,6 +4105,68 @@ mod tests {
     }
 
     #[test]
+    fn imported_ledger_and_transformed_core_are_rechecked() {
+        let source = completed_worker(include_str!("../../../tests/fixtures/n3-ledger-worker.ash"));
+        let (entry, declarations) = source
+            .split_once("\n\ntype Child = ")
+            .expect("ledger fixture boundary");
+        let entry = format!("import ledger_helper as Ledger\n{entry}")
+            .replace("reserve_job (", "Ledger.reserve_job (")
+            .replace("initial ()", "Ledger.initial ()");
+        let declarations = format!("type Child = {declarations}");
+        let declarations = declarations
+            .replace("\ntype ", "\npub type ")
+            .replacen("type Child =", "pub type Child =", 1)
+            .replace("\ninitial :", "\npub initial :")
+            .replace("\nreserve_job :", "\npub reserve_job :");
+        let module = format!("import network_types as LedgerTypes\n{declarations}");
+        run_worker_case_variant(
+            &entry,
+            true,
+            false,
+            None,
+            Some(true),
+            None,
+            FixtureVariation {
+                ledger_module: Some(&module),
+                transform: false,
+                expect_bad_helper: false,
+            },
+        );
+        run_worker_case_variant(
+            &entry,
+            true,
+            false,
+            None,
+            Some(true),
+            None,
+            FixtureVariation {
+                ledger_module: Some(&module),
+                transform: true,
+                expect_bad_helper: false,
+            },
+        );
+        let changed = module.replace(
+            "Ledger(next + 1, remaining, outgoing)",
+            "Ledger(next + 2, remaining, outgoing)",
+        );
+        assert_ne!(changed, module);
+        run_worker_case_variant(
+            &entry,
+            true,
+            false,
+            None,
+            None,
+            None,
+            FixtureVariation {
+                ledger_module: Some(&changed),
+                transform: false,
+                expect_bad_helper: true,
+            },
+        );
+    }
+
+    #[test]
     fn linked_ledger_plan_budget_is_shared_and_failures_publish_nothing() {
         let source = completed_worker(include_str!("../../../tests/fixtures/n3-ledger-worker.ash"));
         run_worker_case_with_budget(&source, true, false, None, Some(false), Some((1, 1, true)));
@@ -4144,8 +4206,71 @@ mod tests {
         exercise_plan: Option<bool>,
         budget: Option<(usize, usize, bool)>,
     ) -> Option<usize> {
-        let (program, provenance, linked) =
-            super::super::tests::retained_drain_fixture_with_linked(source);
+        run_worker_case_variant(
+            source,
+            expect_current,
+            two_calls,
+            transition_case,
+            exercise_plan,
+            budget,
+            FixtureVariation {
+                ledger_module: None,
+                transform: false,
+                expect_bad_helper: false,
+            },
+        )
+    }
+
+    struct FixtureVariation<'a> {
+        ledger_module: Option<&'a str>,
+        transform: bool,
+        expect_bad_helper: bool,
+    }
+
+    fn run_worker_case_variant(
+        source: &str,
+        expect_current: bool,
+        two_calls: bool,
+        transition_case: Option<bool>,
+        exercise_plan: Option<bool>,
+        budget: Option<(usize, usize, bool)>,
+        variation: FixtureVariation<'_>,
+    ) -> Option<usize> {
+        let FixtureVariation {
+            ledger_module,
+            transform,
+            expect_bad_helper,
+        } = variation;
+        let (program, provenance, linked) = match ledger_module {
+            Some(module) => {
+                super::super::tests::retained_drain_fixture_with_ledger_module(source, module)
+            }
+            None => super::super::tests::retained_drain_fixture_with_linked(source),
+        };
+        if transform {
+            let sources: Vec<_> = provenance.iter().map(|(_, source)| source).collect();
+            let relations: Vec<_> = provenance
+                .iter()
+                .map(|(module, source)| (*module, source.id()))
+                .collect();
+            let mut original_work = TypeWorkBudget::with_limit(500_000_000);
+            let checked = crate::core::validate::validate_effect_modules_linked_with_work(
+                program,
+                &sources,
+                &relations,
+                &linked,
+                &mut original_work,
+            )
+            .expect("original linked Core validates before transformation");
+            assert!(
+                matches!(
+                    crate::core::transform::identity_effect_traversal(&checked),
+                    Err(crate::core::transform::TransformError::InvalidValidatedInput)
+                ),
+                "Network effect transformation must reject before publishing a ledger fact"
+            );
+            return None;
+        }
         let recursive_driver = source.contains("driver<N> :");
         let candidate = |name: &str| {
             let binder = linked
@@ -4194,6 +4319,13 @@ mod tests {
                 "Root" | "Work" | "NoParent" | "Parent" | "WorkOut" | "AckOut"
             ) {
                 network_types_module
+            } else if let Some(module_source) = ledger_module {
+                provenance
+                    .iter()
+                    .find_map(|(module, source)| {
+                        (source.text() == module_source).then_some(*module)
+                    })
+                    .expect("independent linked ledger module")
             } else {
                 linked.entry()
             };
@@ -4359,6 +4491,67 @@ mod tests {
                 .then(|| NodeId::new(program.arena, i as u32))
             })
             .expect("actual Network owner");
+        if expect_bad_helper {
+            let initial = candidate("initial");
+            let initialization_call = program
+                .nodes
+                .iter()
+                .enumerate()
+                .find_map(|(index, node)| {
+                    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
+                        app,
+                    ))) = &node.kind
+                    else {
+                        return None;
+                    };
+                    let EffectExprKind::Pure(PureExprKind::Variable(variable)) =
+                        &program.nodes.get(app.function().index().ok()?)?.kind
+                    else {
+                        return None;
+                    };
+                    (variable.binder() == initial.binder)
+                        .then(|| NodeId::new(program.arena, index as u32))
+                })
+                .expect("actual imported initializer call");
+            let nominations = [crate::core::ledger_checker::plan::RegistrationNomination {
+                call,
+                result_match: matching(call),
+                definitions,
+                constructors,
+            }];
+            let plans = [crate::core::ledger_checker::plan::LedgerPlan {
+                owner,
+                side: 1,
+                initialization_call,
+                initialization: initial,
+                initialization_constructors: state,
+                initialization_role: InitializationRole::Root,
+                initialization_binding: None,
+                registrations: &nominations,
+                transitions: &[],
+                drivers: &[],
+                receives: &[],
+            }];
+            let sources: Vec<_> = provenance.iter().map(|(_, source)| source).collect();
+            let relations: Vec<_> = provenance
+                .iter()
+                .map(|(module, source)| (*module, source.id()))
+                .collect();
+            let mut allowance = TypeWorkBudget::with_limit(500_000_000);
+            let outcome = crate::core::validate::validate_effect_modules_linked_with_ledger_plans(
+                program,
+                &sources,
+                &relations,
+                &linked,
+                &plans,
+                &mut allowance,
+            );
+            assert!(
+                matches!(outcome, Err(error) if error.reason() == crate::core::validate::ValidationReason::Registry),
+                "changed imported helper must reject before publication"
+            );
+            return None;
+        }
         let mut work = TypeWorkBudget::with_limit(500_000_000);
         let registration = check_nominated_registration_call(
             &program,

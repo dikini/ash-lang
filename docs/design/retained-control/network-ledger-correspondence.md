@@ -5,20 +5,21 @@ it is not a proof of Rust, the production evaluator, N4 premises, or a
 published network-completion permission. The N3 proof and this correspondence
 require independent review together on the final integrated source pin.
 
-The frozen integrated candidate is `target/ash-m4-evidence/n3-pr-checkout`. Its
-manifest is `target/ash-m4-evidence/n3-delivery-r3-before.sha256`, SHA-256
-`cc82926fcb8a0b3aaf2bdd5c21305ef5b03edaf20220a9383760371dbc471c6e`.
-The complete manifest checked successfully before and after the focused test.
-This pin identifies source inputs, not a retained commit. Selected files at
-this pin are:
+The focused import and transformation tests used the integrated candidate in
+`target/ash-m4-evidence/n3-pr-checkout`. Their complete input manifest,
+`target/ash-m4-evidence/n3-import-transform-before.sha256`, has SHA-256
+`5e118d3663d939b5a2ca2dd364c2932915f4e3df27b0926ce41f5331e60f2992` and
+checked successfully before and after those tests. It predates this evidence
+note update; the final integrated gate must pin the resulting full tree.
+Selected source files from the focused test are:
 
 | Relative source path | SHA-256 |
 | --- | --- |
-| `src/core/ledger_checker.rs` | `e48de8cd5782c3e7ce1c7170ddfd43e4488f4bbdfccd21dcaf457cb764784697` |
+| `src/core/ledger_checker.rs` | `8b7119f8d2b9bf2c9d108c666bce552de4d11ff4ee6904e2c94b2f2c8cb6108b` |
 | `src/core/closure.rs` | `de08021330e88a4e647cb765b06da0b30e05fd5ea00bd3ddaa61704f85da0502` |
 | `src/core/retirement.rs` | `b695b94ec2e5769277e03a23fc1975d105be3e13d2ccd0f774af120314561695` |
 | `src/core/acknowledgement.rs` | `fa13286424eb98cc6b60ba1eaa40599789f94ab06fa25e503ec85c2a9871d59e` |
-| `src/core/capture/network_ledger.rs` | `dd496c2819c19f8d4b1bdaa7e84e52c525ce9caf26da4192e7b29097eacc7839` |
+| `src/core/capture/network_ledger.rs` | `f675c7c78788b4de5ab8fef947b30708ed2c485dd77066bda85a4c9762eb50b4` |
 | `src/core/capture/transition_observation.rs` | `9c20f30f4874b2acdd6bfabe694ad39d8d92c09426a60f49aa0656bc2a2678d2` |
 | `src/core/capture/network_end.rs` | `312f545d63faf96b9e939685494f684d98361ce1fed63b8890af9779cd580341` |
 | `src/core/capture/network_completion.rs` | `5ca27be5de34e319ff5372dd7686d63b045e8a59674642116f1dc01e14b811e6` |
@@ -242,7 +243,7 @@ validation test checks the call and result identities; it is not a native
 execution receipt. The fixture does not exercise successful retirement or
 Ack output emission. The stale variant tests rejection of an
 old successor input. `requested_ledger_plan_runs_inside_full_linked_validation`
-(`:4069`) adds a renamed-binder case. The shared-budget test (`:4108`)
+(`:4069`) adds a renamed-binder case. The shared-budget test (`:4170`)
 measures the observer on one settled linked focus, then checks the exact
 allowance, one unit short, a pre-spent allowance and retries without resetting
 the exhausted budgets. A separate full-validator query with a pre-spent
@@ -253,6 +254,16 @@ the canonical receive case, including that negative. The r2 raw log SHA-256
 is `490a6c574113b79894f6a5a2cc7b6186777ee652b5cb13a37bfe967ab89a6d53`;
 the r3 raw log SHA-256 is
 `c7e97c23f5aacd5801663ae699f00d6c1689a124b9099bb8f051f0172847078f`.
+The `imported_ledger_and_transformed_core_are_rechecked` case (`:4108`)
+passed with a separately imported ledger module on the full linked-validator
+path and rejected a same-typed changed helper before publication. The existing
+Network transform returns `InvalidValidatedInput`, which the test expects before
+any observation. The ledger-only `linked_registration_counter_uses_the_returned_successor_field`
+case (`ledger_checker.rs:5142`) passed after a supported identity traversal:
+the rebuilt Core has a fresh arena, rejects the old nomination, independently
+validates with linked evidence, and reconstructs the call, result and helper
+relationships. These two focused cases passed in the raw log SHA-256
+`585ed648a112e698dcdd2e97da493fe7bf81911febca976abddd6074977328bb`.
 The complete integrated gate remains pending. Full coverage of successful retirement emission, wrong-peer and duplicate
 acknowledgements, linked mutations, transforms, failed retries and the governing
 assignment's other cases remains subject to the combined evidence and review.

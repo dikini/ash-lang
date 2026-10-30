@@ -4614,6 +4614,18 @@ main () = {
         source: &str,
         precheck: impl FnOnce(&crate::core::UnvalidatedEffectProgram, &ValidatedInterfaceProgram),
     ) -> (ValidatedEffectProgram, ValidatedInterfaceProgram) {
+        let (program, linked, _) = ordinary_ledger_with_provenance(source, precheck);
+        (program, linked)
+    }
+
+    fn ordinary_ledger_with_provenance(
+        source: &str,
+        precheck: impl FnOnce(&crate::core::UnvalidatedEffectProgram, &ValidatedInterfaceProgram),
+    ) -> (
+        ValidatedEffectProgram,
+        ValidatedInterfaceProgram,
+        Vec<(crate::module::ModuleId, crate::source::SourceFile)>,
+    ) {
         let directory = FixtureDirectory::create();
         let path = directory.0.join("entry.ash");
         std::fs::write(&path, source).expect("write fixture source");
@@ -4662,7 +4674,12 @@ main () = {
             &mut TypeWorkBudget::default(),
         )
         .expect("independently validate linked Effect Core");
-        (validated, linked)
+        let provenance = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().clone()))
+            .collect();
+        (validated, linked, provenance)
     }
 
     fn target_candidate(
@@ -5192,12 +5209,62 @@ reserve_job (ledger, owner, wanted, destination, payload) = match ledger {
 }
 "#;
         fn inspect(extra: &str) -> Result<(), super::Rejection> {
+            inspect_variant(extra, false)
+        }
+        fn inspect_variant(extra: &str, transform: bool) -> Result<(), super::Rejection> {
             let base = ORDINARY_LEDGER.replace(
                 "let ignored = remove_child (Root, Empty)",
                 "let ignored = match reserve_job (initial (), 0, Root, 0, B.empty ()) {\n        (successor, status) => successor\n    }",
             );
             let source = format!("import @builtin.bytes as B\n{base}\n{extra}");
-            let (program, linked) = ordinary_ledger(&source);
+            let (program, linked, provenance) = ordinary_ledger_with_provenance(&source, |_, _| {});
+            let program = if transform {
+                let old = target_candidate(&program, &linked, "commit_registration");
+                let old_captures = [
+                    target_candidate(&program, &linked, "append_child").binder,
+                    target_candidate(&program, &linked, "update_record").binder,
+                    target_candidate(&program, &linked, "append_output").binder,
+                ];
+                let ledger = program
+                    .registry()
+                    .constructors()
+                    .iter()
+                    .find(|item| item.spelling == "Ledger")
+                    .expect("fixture ledger")
+                    .id;
+                let rebuilt = crate::core::transform::identity_effect_traversal(&program)
+                    .expect("supported ledger Core transform");
+                assert_ne!(old.initializer.arena(), rebuilt.root.arena());
+                assert!(
+                    matches!(
+                        super::reconstruct_registration_counter(
+                            &rebuilt,
+                            &linked,
+                            old,
+                            &old_captures,
+                            ledger,
+                            &mut TypeWorkBudget::unbounded(),
+                        ),
+                        Err(super::Rejection::Unsupported)
+                    ),
+                    "old-arena nomination cannot authorize rebuilt Core"
+                );
+                let sources: Vec<_> = provenance.iter().map(|(_, source)| source).collect();
+                let relations: Vec<_> = provenance
+                    .iter()
+                    .map(|(module, source)| (*module, source.id()))
+                    .collect();
+                crate::core::validate::validate_effect_modules_linked_with_work(
+                    rebuilt,
+                    &sources,
+                    &relations,
+                    &linked,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .expect("transformed ledger Core independently validates")
+            } else {
+                program
+            };
             let candidate = target_candidate(&program, &linked, "commit_registration");
             let captures = [
                 target_candidate(&program, &linked, "append_child").binder,
@@ -5812,6 +5879,7 @@ reserve_job (ledger, owner, wanted, destination, payload) = match ledger {
             Ok(())
         }
         assert_eq!(inspect(REGISTER), Ok(()));
+        assert_eq!(inspect_variant(REGISTER, true), Ok(()));
         assert_eq!(
             inspect(&REGISTER.replace("true => HasRecord(record)", "true => NoRecord")),
             Err(super::Rejection::Unsupported)
