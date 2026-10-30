@@ -2,6 +2,9 @@
 //!
 //! No ledger facts or network permissions are published by this module yet.
 
+#[path = "codec.rs"]
+pub(super) mod codec;
+
 #[path = "driver.rs"]
 pub(super) mod driver;
 #[path = "plan.rs"]
@@ -4639,6 +4642,16 @@ main () = {
         (program, linked)
     }
 
+    fn ordinary_ledger_with_files(
+        source: &str,
+        files: &[(&str, &str)],
+        precheck: impl FnOnce(&crate::core::UnvalidatedEffectProgram, &ValidatedInterfaceProgram),
+    ) -> (ValidatedEffectProgram, ValidatedInterfaceProgram) {
+        let (program, linked, _) =
+            ordinary_ledger_with_provenance_and_files(source, files, precheck);
+        (program, linked)
+    }
+
     fn ordinary_ledger_with_provenance(
         source: &str,
         precheck: impl FnOnce(&crate::core::UnvalidatedEffectProgram, &ValidatedInterfaceProgram),
@@ -4647,7 +4660,22 @@ main () = {
         ValidatedInterfaceProgram,
         Vec<(crate::module::ModuleId, crate::source::SourceFile)>,
     ) {
+        ordinary_ledger_with_provenance_and_files(source, &[], precheck)
+    }
+
+    fn ordinary_ledger_with_provenance_and_files(
+        source: &str,
+        files: &[(&str, &str)],
+        precheck: impl FnOnce(&crate::core::UnvalidatedEffectProgram, &ValidatedInterfaceProgram),
+    ) -> (
+        ValidatedEffectProgram,
+        ValidatedInterfaceProgram,
+        Vec<(crate::module::ModuleId, crate::source::SourceFile)>,
+    ) {
         let directory = FixtureDirectory::create();
+        for (name, contents) in files {
+            std::fs::write(directory.0.join(name), contents).expect("write fixture module");
+        }
         let path = directory.0.join("entry.ash");
         std::fs::write(&path, source).expect("write fixture source");
         let graph = load_module_graph(&path, &ModuleRoots::empty()).expect("load fixture modules");
@@ -4742,6 +4770,766 @@ main () = {
             binder,
             initializer,
         }
+    }
+
+    #[test]
+    fn codec_primitive_requires_its_actual_linked_builtin_body() {
+        use super::codec::{CodecPrimitive, reconstruct_primitive};
+        let source = r#"import @builtin.bytes as B
+import @builtin.integer as I
+fake : (Bytes, Int) -> B.ReadResult
+fake pair = B.InvalidIndex
+main : Unit -> Unit
+main () = ()
+"#;
+        let (program, linked) = ordinary_ledger(source);
+        for (name, operation) in [
+            ("at", CodecPrimitive::At),
+            ("append_byte", CodecPrimitive::Append),
+            ("split_base256", CodecPrimitive::Split),
+        ] {
+            let candidate = target_candidate(&program, &linked, name);
+            assert!(
+                reconstruct_primitive(
+                    &program,
+                    &linked,
+                    candidate,
+                    operation,
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .is_ok(),
+                "{name}"
+            );
+            assert!(matches!(
+                reconstruct_primitive(
+                    &program,
+                    &linked,
+                    candidate,
+                    operation,
+                    &mut TypeWorkBudget::with_limit(0)
+                ),
+                Err(super::Rejection::Exhausted)
+            ));
+        }
+        let fake = target_candidate(&program, &linked, "fake");
+        assert!(matches!(
+            reconstruct_primitive(
+                &program,
+                &linked,
+                fake,
+                CodecPrimitive::At,
+                &mut TypeWorkBudget::unbounded()
+            ),
+            Err(super::Rejection::Unsupported)
+        ));
+        let at = target_candidate(&program, &linked, "at");
+        assert!(matches!(
+            reconstruct_primitive(
+                &program,
+                &linked,
+                at,
+                CodecPrimitive::Append,
+                &mut TypeWorkBudget::unbounded()
+            ),
+            Err(super::Rejection::Unsupported)
+        ));
+    }
+
+    #[test]
+    fn natural_end_checks_actual_linked_return_fields_and_branches() {
+        use super::codec::{NaturalEndConstructors, check_conditional_natural_end};
+        let original = include_str!("../../libraries/network_codec.ash");
+        for (source, expected) in [
+            (original.to_owned(), true),
+            (
+                original.replacen("Nat(value, cursor + 1)", "Nat(cursor, value + 1)", 1),
+                false,
+            ),
+            (
+                original.replacen("true => InvalidNat", "true => Nat(value, cursor + 1)", 1),
+                false,
+            ),
+        ] {
+            assert!(!source.is_empty());
+            let files = [
+                (
+                    "network_types.ash",
+                    include_str!("../../libraries/network_types.ash"),
+                ),
+                ("network_codec.ash", source.as_str()),
+            ];
+            let (program, linked) = ordinary_ledger_with_files(
+                "import network_codec as Codec\nmain : Unit -> Unit\nmain () = ()\n",
+                &files,
+                |_, _| {},
+            );
+            let constructor = |name| {
+                program
+                    .registry()
+                    .constructors()
+                    .iter()
+                    .find(|item| item.spelling == name)
+                    .expect("constructor")
+                    .id
+            };
+            let constructors = NaturalEndConstructors {
+                nat: constructor("Nat"),
+                invalid: constructor("InvalidNat"),
+            };
+            let candidate = target_candidate(&program, &linked, "read_nat_end");
+            let result = check_conditional_natural_end(
+                &program,
+                &linked,
+                candidate,
+                constructors,
+                &mut TypeWorkBudget::unbounded(),
+            );
+            assert_eq!(result.is_ok(), expected);
+        }
+    }
+
+    #[test]
+    fn natural_reader_checks_actual_digit_cursor_and_initial_state() {
+        use super::codec::{
+            NaturalEndConstructors, NaturalReaderConstructors, NaturalReaderDefinitions,
+            check_conditional_natural_reader,
+        };
+        let original = include_str!("../../libraries/network_codec.ash");
+        let cases = [
+            (original.to_owned(), true),
+            (original.replacen("read_nat_step (buffer, cursor, 0, 1, false, 0)", "read_nat_step (buffer, cursor, 1, 1, false, 0)", 1), false),
+            (original.replacen("read_nat_step (buffer, cursor + 2, value + digit * power, power * 256, true, digit)", "read_nat_step (buffer, cursor + 1, value + digit * power, power * 256, true, digit)", 1), false),
+            (original.replacen("true => read_nat_end (cursor, value, has_digit, last)", "true => read_nat_end (value, cursor, has_digit, last)", 1), false),
+        ];
+        for (source, expected) in cases {
+            let files = [
+                (
+                    "network_types.ash",
+                    include_str!("../../libraries/network_types.ash"),
+                ),
+                ("network_codec.ash", source.as_str()),
+            ];
+            let (program, linked) = ordinary_ledger_with_files(
+                "import network_codec as Codec\nmain : Unit -> Unit\nmain () = ()\n",
+                &files,
+                |_, _| {},
+            );
+            let candidate = |name| target_candidate(&program, &linked, name);
+            let constructor = |name| {
+                program
+                    .registry()
+                    .constructors()
+                    .iter()
+                    .find(|item| item.spelling == name)
+                    .expect("constructor")
+                    .id
+            };
+            let definitions = NaturalReaderDefinitions {
+                entry: candidate("read_nat"),
+                step: candidate("read_nat_step"),
+                digit: candidate("read_nat_digit"),
+                end: candidate("read_nat_end"),
+                at: candidate("at"),
+            };
+            let constructors = NaturalReaderConstructors {
+                end: NaturalEndConstructors {
+                    nat: constructor("Nat"),
+                    invalid: constructor("InvalidNat"),
+                },
+                byte_at: constructor("ByteAt"),
+                invalid_index: constructor("InvalidIndex"),
+            };
+            let mut measured = TypeWorkBudget::unbounded();
+            let result = check_conditional_natural_reader(
+                &program,
+                &linked,
+                definitions,
+                constructors,
+                &mut measured,
+            );
+            assert_eq!(result.is_ok(), expected);
+            if expected {
+                let cost = measured.used();
+                assert!(cost > 1);
+                let mut exact = TypeWorkBudget::with_limit(cost);
+                assert!(
+                    check_conditional_natural_reader(
+                        &program,
+                        &linked,
+                        definitions,
+                        constructors,
+                        &mut exact
+                    )
+                    .is_ok()
+                );
+                let mut short = TypeWorkBudget::with_limit(cost - 1);
+                assert!(matches!(
+                    check_conditional_natural_reader(
+                        &program,
+                        &linked,
+                        definitions,
+                        constructors,
+                        &mut short
+                    ),
+                    Err(super::Rejection::Exhausted)
+                ));
+                let mut spent = TypeWorkBudget::with_limit(cost);
+                spent.charge(1).unwrap();
+                assert!(matches!(
+                    check_conditional_natural_reader(
+                        &program,
+                        &linked,
+                        definitions,
+                        constructors,
+                        &mut spent
+                    ),
+                    Err(super::Rejection::Exhausted)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn decoder_checks_linked_fields_payload_and_full_input() {
+        use super::codec::{
+            DecoderConstructors, DecoderDefinitions, NaturalEndConstructors,
+            NaturalReaderConstructors, NaturalReaderDefinitions, check_conditional_decoder,
+        };
+        let original = include_str!("../../libraries/network_codec.ash");
+        let cases = [
+            (original.to_owned(), true),
+            (original.replacen("ReadIdentity(Network.Work(owner, serial), after_serial)", "ReadIdentity(Network.Work(serial, owner), after_serial)", 1), false),
+            (original.replacen("read_payload (source, cursor + 1, copied + 1, length, next)", "read_payload (source, cursor + 2, copied + 1, length, next)", 1), false),
+            (original.replacen("true => WorkDecoded(child, parent, payload)\n        false => InvalidFrame", "true => WorkDecoded(child, parent, payload)\n        false => WorkDecoded(child, parent, payload)", 1), false),
+            (original.replacen("false => InvalidFrame\n        }\n    }\n}\n\npub decode", "false => AckDecoded(parent, child)\n        }\n    }\n}\n\npub decode", 1), false),
+        ];
+        for (index, (source, expected)) in cases.into_iter().enumerate() {
+            if !expected {
+                assert_ne!(source, original, "mutant {index} must change the source");
+            }
+            let files = [
+                (
+                    "network_types.ash",
+                    include_str!("../../libraries/network_types.ash"),
+                ),
+                ("network_codec.ash", source.as_str()),
+            ];
+            let (program, linked) = ordinary_ledger_with_files(
+                "import network_codec as Codec\nmain : Unit -> Unit\nmain () = ()\n",
+                &files,
+                |_, _| {},
+            );
+            let candidate = |name| target_candidate(&program, &linked, name);
+            let constructor = |name| {
+                program
+                    .registry()
+                    .constructors()
+                    .iter()
+                    .find(|item| item.spelling == name)
+                    .expect("constructor")
+                    .id
+            };
+            let definitions = DecoderDefinitions {
+                reader: NaturalReaderDefinitions {
+                    entry: candidate("read_nat"),
+                    step: candidate("read_nat_step"),
+                    digit: candidate("read_nat_digit"),
+                    end: candidate("read_nat_end"),
+                    at: candidate("at"),
+                },
+                decode: candidate("decode"),
+                work: candidate("read_work"),
+                ack: candidate("read_ack"),
+                finish_work: candidate("finish_work"),
+                payload: candidate("read_payload"),
+                address: candidate("read_address"),
+                identity: candidate("read_identity"),
+                work_identity: candidate("read_work_identity"),
+                append: candidate("append"),
+                append_byte: candidate("append_byte"),
+                empty: candidate("empty"),
+                length: candidate("length"),
+            };
+            let constructors = DecoderConstructors {
+                reader: NaturalReaderConstructors {
+                    end: NaturalEndConstructors {
+                        nat: constructor("Nat"),
+                        invalid: constructor("InvalidNat"),
+                    },
+                    byte_at: constructor("ByteAt"),
+                    invalid_index: constructor("InvalidIndex"),
+                },
+                root: constructor("Root"),
+                work_id: constructor("Work"),
+                parent: constructor("Parent"),
+                identity: constructor("ReadIdentity"),
+                invalid_identity: constructor("InvalidIdentity"),
+                address: constructor("ReadAddress"),
+                invalid_address: constructor("InvalidAddress"),
+                payload: constructor("ReadPayload"),
+                invalid_payload: constructor("InvalidPayload"),
+                encoded: constructor("Encoded"),
+                encode_failed: constructor("EncodeFailed"),
+                work_decoded: constructor("WorkDecoded"),
+                ack_decoded: constructor("AckDecoded"),
+                invalid_frame: constructor("InvalidFrame"),
+            };
+            let mut work = TypeWorkBudget::unbounded();
+            let result =
+                check_conditional_decoder(&program, &linked, definitions, constructors, &mut work);
+            assert_eq!(result.is_ok(), expected, "case {index}");
+            if expected {
+                let cost = work.used();
+                let mut exact = TypeWorkBudget::with_limit(cost);
+                assert!(
+                    check_conditional_decoder(
+                        &program,
+                        &linked,
+                        definitions,
+                        constructors,
+                        &mut exact
+                    )
+                    .is_ok()
+                );
+                let mut short = TypeWorkBudget::with_limit(cost - 1);
+                assert!(matches!(
+                    check_conditional_decoder(
+                        &program,
+                        &linked,
+                        definitions,
+                        constructors,
+                        &mut short
+                    ),
+                    Err(super::Rejection::Exhausted)
+                ));
+                let mut spent = TypeWorkBudget::with_limit(cost);
+                spent.charge(1).unwrap();
+                assert!(matches!(
+                    check_conditional_decoder(
+                        &program,
+                        &linked,
+                        definitions,
+                        constructors,
+                        &mut spent
+                    ),
+                    Err(super::Rejection::Exhausted)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn encoder_checks_linked_split_fields_payload_and_frame_tags() {
+        use super::codec::{EncoderConstructors, EncoderDefinitions, check_conditional_encoder};
+        let original = include_str!("../../libraries/network_codec.ash");
+        let cases = [
+            (original.to_owned(), true),
+            (
+                original.replacen("Integer.split_base256 value", "Integer.split_base256 0", 1),
+                false,
+            ),
+            (
+                original.replacen(
+                    "=> write_digits (buffer, quotient, remainder)",
+                    "=> write_digits (buffer, remainder, quotient)",
+                    1,
+                ),
+                false,
+            ),
+            (
+                original.replacen(
+                    "write_nat (with_owner, serial)",
+                    "write_nat (with_owner, owner)",
+                    1,
+                ),
+                false,
+            ),
+            (
+                original.replacen(
+                    "copy_bytes (source, next, cursor + 1, length)",
+                    "copy_bytes (source, next, cursor + 2, length)",
+                    1,
+                ),
+                false,
+            ),
+            (
+                original.replacen("append (B.empty (), 32)", "append (B.empty (), 33)", 1),
+                false,
+            ),
+            (
+                original.replacen("append (B.empty (), 33)", "append (B.empty (), 32)", 1),
+                false,
+            ),
+        ];
+        for (index, (source, expected)) in cases.into_iter().enumerate() {
+            if !expected {
+                assert_ne!(source, original, "mutant {index} must change the source");
+            }
+            let files = [
+                (
+                    "network_types.ash",
+                    include_str!("../../libraries/network_types.ash"),
+                ),
+                ("network_codec.ash", source.as_str()),
+            ];
+            let (program, linked) = ordinary_ledger_with_files(
+                "import network_codec as Codec\nmain : Unit -> Unit\nmain () = ()\n",
+                &files,
+                |_, _| {},
+            );
+            let candidate = |name| target_candidate(&program, &linked, name);
+            let constructor = |name| {
+                program
+                    .registry()
+                    .constructors()
+                    .iter()
+                    .find(|item| item.spelling == name)
+                    .expect("constructor")
+                    .id
+            };
+            let definitions = EncoderDefinitions {
+                encode: candidate("encode"),
+                work: candidate("encode_work"),
+                ack: candidate("encode_ack"),
+                work_parent: candidate("encode_work_parent"),
+                work_payload: candidate("encode_work_payload"),
+                copy: candidate("copy_bytes"),
+                address: candidate("write_address"),
+                identity: candidate("write_identity"),
+                nat: candidate("write_nat"),
+                digits: candidate("write_digits"),
+                append: candidate("append"),
+                split: candidate("split_base256"),
+                append_byte: candidate("append_byte"),
+                empty: candidate("empty"),
+                length: candidate("length"),
+                at: candidate("at"),
+            };
+            let constructors = EncoderConstructors {
+                root: constructor("Root"),
+                work_id: constructor("Work"),
+                no_parent: constructor("NoParent"),
+                parent: constructor("Parent"),
+                work_out: constructor("WorkOut"),
+                ack_out: constructor("AckOut"),
+                encoded: constructor("Encoded"),
+                encode_failed: constructor("EncodeFailed"),
+                split_parts: constructor("Parts"),
+                split_negative: constructor("Negative"),
+                byte_at: constructor("ByteAt"),
+                invalid_index: constructor("InvalidIndex"),
+            };
+            let mut work = TypeWorkBudget::unbounded();
+            let result =
+                check_conditional_encoder(&program, &linked, definitions, constructors, &mut work);
+            assert_eq!(result.is_ok(), expected, "case {index}");
+            if expected {
+                let cost = work.used();
+                let mut exact = TypeWorkBudget::with_limit(cost);
+                assert!(
+                    check_conditional_encoder(
+                        &program,
+                        &linked,
+                        definitions,
+                        constructors,
+                        &mut exact
+                    )
+                    .is_ok()
+                );
+                let mut short = TypeWorkBudget::with_limit(cost - 1);
+                assert!(matches!(
+                    check_conditional_encoder(
+                        &program,
+                        &linked,
+                        definitions,
+                        constructors,
+                        &mut short
+                    ),
+                    Err(super::Rejection::Exhausted)
+                ));
+                let mut spent = TypeWorkBudget::with_limit(cost);
+                spent.charge(1).unwrap();
+                assert!(matches!(
+                    check_conditional_encoder(
+                        &program,
+                        &linked,
+                        definitions,
+                        constructors,
+                        &mut spent
+                    ),
+                    Err(super::Rejection::Exhausted)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn codec_nominated_calls_bind_actual_operands_and_result_matches() {
+        use super::codec::{
+            self, DecoderConstructors, DecoderDefinitions, EncoderConstructors, EncoderDefinitions,
+            NaturalEndConstructors, NaturalReaderConstructors, NaturalReaderDefinitions,
+        };
+        let source = r#"import network_codec as Codec
+import network_types as Network
+import @builtin.bytes as B
+check_encode : Network.Envelope -> Bool
+check_encode frame = match Codec.encode frame {
+    Codec.Encoded(bytes) => true
+    Codec.EncodeFailed => false
+}
+check_decode : Bytes -> Unit
+check_decode bytes = match Codec.decode bytes {
+    Codec.WorkDecoded(child, parent, payload) => ()
+    Codec.AckDecoded(parent, child) => ()
+    Codec.InvalidFrame => ()
+}
+main : Unit -> Unit
+main () = check_decode (B.empty ())
+"#;
+        let files = [
+            (
+                "network_types.ash",
+                include_str!("../../libraries/network_types.ash"),
+            ),
+            (
+                "network_codec.ash",
+                include_str!("../../libraries/network_codec.ash"),
+            ),
+        ];
+        let (program, linked) = ordinary_ledger_with_files(source, &files, |_, _| {});
+        let candidate = |name| target_candidate(&program, &linked, name);
+        let constructor = |name| {
+            program
+                .registry()
+                .constructors()
+                .iter()
+                .find(|item| item.spelling == name)
+                .expect("constructor")
+                .id
+        };
+        let encoder = EncoderDefinitions {
+            encode: candidate("encode"),
+            work: candidate("encode_work"),
+            ack: candidate("encode_ack"),
+            work_parent: candidate("encode_work_parent"),
+            work_payload: candidate("encode_work_payload"),
+            copy: candidate("copy_bytes"),
+            address: candidate("write_address"),
+            identity: candidate("write_identity"),
+            nat: candidate("write_nat"),
+            digits: candidate("write_digits"),
+            append: candidate("append"),
+            split: candidate("split_base256"),
+            append_byte: candidate("append_byte"),
+            empty: candidate("empty"),
+            length: candidate("length"),
+            at: candidate("at"),
+        };
+        let encode_c = EncoderConstructors {
+            root: constructor("Root"),
+            work_id: constructor("Work"),
+            no_parent: constructor("NoParent"),
+            parent: constructor("Parent"),
+            work_out: constructor("WorkOut"),
+            ack_out: constructor("AckOut"),
+            encoded: constructor("Encoded"),
+            encode_failed: constructor("EncodeFailed"),
+            split_parts: constructor("Parts"),
+            split_negative: constructor("Negative"),
+            byte_at: constructor("ByteAt"),
+            invalid_index: constructor("InvalidIndex"),
+        };
+        let decoder = DecoderDefinitions {
+            reader: NaturalReaderDefinitions {
+                entry: candidate("read_nat"),
+                step: candidate("read_nat_step"),
+                digit: candidate("read_nat_digit"),
+                end: candidate("read_nat_end"),
+                at: candidate("at"),
+            },
+            decode: candidate("decode"),
+            work: candidate("read_work"),
+            ack: candidate("read_ack"),
+            finish_work: candidate("finish_work"),
+            payload: candidate("read_payload"),
+            address: candidate("read_address"),
+            identity: candidate("read_identity"),
+            work_identity: candidate("read_work_identity"),
+            append: candidate("append"),
+            append_byte: candidate("append_byte"),
+            empty: candidate("empty"),
+            length: candidate("length"),
+        };
+        let decode_c = DecoderConstructors {
+            reader: NaturalReaderConstructors {
+                end: NaturalEndConstructors {
+                    nat: constructor("Nat"),
+                    invalid: constructor("InvalidNat"),
+                },
+                byte_at: constructor("ByteAt"),
+                invalid_index: constructor("InvalidIndex"),
+            },
+            root: constructor("Root"),
+            work_id: constructor("Work"),
+            parent: constructor("Parent"),
+            identity: constructor("ReadIdentity"),
+            invalid_identity: constructor("InvalidIdentity"),
+            address: constructor("ReadAddress"),
+            invalid_address: constructor("InvalidAddress"),
+            payload: constructor("ReadPayload"),
+            invalid_payload: constructor("InvalidPayload"),
+            encoded: constructor("Encoded"),
+            encode_failed: constructor("EncodeFailed"),
+            work_decoded: constructor("WorkDecoded"),
+            ack_decoded: constructor("AckDecoded"),
+            invalid_frame: constructor("InvalidFrame"),
+        };
+        let source_match = |binder| {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut inspect = super::CoreInspection {
+                program: &program,
+                work: &mut work,
+            };
+            let mut found = None;
+            for index in 0..program.nodes().len() {
+                let id =
+                    crate::core::NodeId::new(program.root().arena(), u32::try_from(index).unwrap());
+                let Ok(branch) = inspect.branch(id) else {
+                    continue;
+                };
+                let call = branch.scrutinee();
+                let Ok(application) = inspect.application(call) else {
+                    continue;
+                };
+                if inspect.variable(application.function()).ok() == Some(binder) {
+                    assert!(found.replace((id, call, application.argument())).is_none());
+                }
+            }
+            found.expect("actual source match and call")
+        };
+        let (encode_match, encode_call, encode_argument) = source_match(encoder.encode.binder);
+        let (decode_match, decode_call, decode_argument) = source_match(decoder.decode.binder);
+        let driver_candidate = candidate("check_decode");
+        let mut source_work = TypeWorkBudget::unbounded();
+        let mut source_inspect = super::CoreInspection {
+            program: &program,
+            work: &mut source_work,
+        };
+        let mut driver_call = None;
+        for index in 0..program.nodes().len() {
+            let id =
+                crate::core::NodeId::new(program.root().arena(), u32::try_from(index).unwrap());
+            let Ok(application) = source_inspect.application(id) else {
+                continue;
+            };
+            if source_inspect.variable(application.function()).ok() == Some(driver_candidate.binder)
+            {
+                assert!(driver_call.replace(id).is_none());
+            }
+        }
+        let driver_call = driver_call.expect("actual Unit driver call");
+        let mut work = TypeWorkBudget::unbounded();
+        let encode = codec::nominate_encode_call(
+            &program,
+            &linked,
+            encode_call,
+            encoder,
+            encode_c,
+            &mut work,
+        )
+        .expect("actual encoder call");
+        assert_eq!(encode.argument(), encode_argument);
+        assert!(
+            codec::check_encode_result_match(&program, &encode, encode_match, &mut work).is_ok()
+        );
+        assert!(
+            codec::check_encode_result_match(&program, &encode, decode_match, &mut work).is_err()
+        );
+        assert!(
+            codec::nominate_encode_call(
+                &program,
+                &linked,
+                decode_call,
+                encoder,
+                encode_c,
+                &mut work
+            )
+            .is_err()
+        );
+        let decode = codec::nominate_decode_call(
+            &program,
+            &linked,
+            decode_call,
+            decoder,
+            decode_c,
+            &mut work,
+        )
+        .expect("actual decoder call");
+        assert_eq!(decode.argument(), decode_argument);
+        let driver = codec::check_nominated_decode_driver(
+            &program,
+            &linked,
+            driver_candidate,
+            driver_call,
+            decoder,
+            decode_c,
+            &mut work,
+        )
+        .expect("actual linked decode driver");
+        assert_eq!(driver.outer_call(), driver_call);
+        assert_eq!(driver.invocation().call(), decode_call);
+        assert_eq!(driver.result_match().matching(), decode_match);
+        assert!(
+            codec::check_nominated_decode_driver(
+                &program,
+                &linked,
+                driver_candidate,
+                decode_call,
+                decoder,
+                decode_c,
+                &mut work
+            )
+            .is_err()
+        );
+        assert!(
+            codec::check_decode_result_match(&program, &decode, decode_match, &mut work).is_ok()
+        );
+        assert!(
+            codec::check_decode_result_match(&program, &decode, encode_match, &mut work).is_err()
+        );
+        assert!(
+            codec::nominate_decode_call(
+                &program,
+                &linked,
+                encode_call,
+                decoder,
+                decode_c,
+                &mut work
+            )
+            .is_err()
+        );
+        assert!(matches!(
+            codec::nominate_encode_call(
+                &program,
+                &linked,
+                encode_call,
+                encoder,
+                encode_c,
+                &mut TypeWorkBudget::with_limit(0)
+            ),
+            Err(super::Rejection::Exhausted)
+        ));
+        assert!(matches!(
+            codec::nominate_decode_call(
+                &program,
+                &linked,
+                decode_call,
+                decoder,
+                decode_c,
+                &mut TypeWorkBudget::with_limit(0)
+            ),
+            Err(super::Rejection::Exhausted)
+        ));
     }
 
     #[test]

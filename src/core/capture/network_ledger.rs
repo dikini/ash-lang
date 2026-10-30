@@ -86,6 +86,14 @@ enum Phase {
         ordinal: usize,
         role: crate::resolved::BinderId,
     },
+    Encoding {
+        port: usize,
+        context: usize,
+        ordinal: usize,
+        role: crate::resolved::BinderId,
+        entry: usize,
+        witness: usize,
+    },
     PreparingArgument {
         port: usize,
         context: usize,
@@ -103,7 +111,7 @@ enum Phase {
     },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 struct DefinitionProvenance {
     query: crate::core::NodeId,
     binding: crate::core::NodeId,
@@ -264,11 +272,6 @@ fn checked_call_sites(
     extra_roots: &[crate::core::NodeId],
     work: &mut TypeWorkBudget,
 ) -> Result<(HashSet<usize>, HashSet<usize>, HashSet<usize>), Failure> {
-    use crate::core::{EffectExprKind, EffectOperation, PureComputation, PureExprKind, PureValue};
-    let mut pending = Vec::new();
-    let mut visited = HashSet::new();
-    let mut calls = HashSet::new();
-    let mut closures = HashSet::new();
     let roots = registration.definition_roots();
     let count = roots
         .len()
@@ -276,10 +279,45 @@ fn checked_call_sites(
         .and_then(|n| n.checked_add(1))
         .ok_or(Failure::Resource)?;
     charge(work, count)?;
-    pending.try_reserve(count).map_err(|_| Failure::Resource)?;
-    pending.extend(roots);
-    pending.extend_from_slice(extra_roots);
-    pending.push(initialization.definition_binding());
+    let mut all = Vec::new();
+    all.try_reserve(count).map_err(|_| Failure::Resource)?;
+    all.extend(roots);
+    all.extend_from_slice(extra_roots);
+    all.push(initialization.definition_binding());
+    checked_call_roots_owned(scope, all, work)
+}
+
+#[expect(
+    clippy::type_complexity,
+    reason = "the actual call, closure and visited-node sets are distinct bounded results"
+)]
+fn checked_call_roots(
+    scope: &NetworkNativeIdentityScope<'_>,
+    roots: &[crate::core::NodeId],
+    work: &mut TypeWorkBudget,
+) -> Result<(HashSet<usize>, HashSet<usize>, HashSet<usize>), Failure> {
+    charge(work, roots.len())?;
+    let mut pending = Vec::new();
+    pending
+        .try_reserve(roots.len())
+        .map_err(|_| Failure::Resource)?;
+    pending.extend_from_slice(roots);
+    checked_call_roots_owned(scope, pending, work)
+}
+
+#[expect(
+    clippy::type_complexity,
+    reason = "the actual call, closure and visited-node sets are distinct bounded results"
+)]
+fn checked_call_roots_owned(
+    scope: &NetworkNativeIdentityScope<'_>,
+    mut pending: Vec<crate::core::NodeId>,
+    work: &mut TypeWorkBudget,
+) -> Result<(HashSet<usize>, HashSet<usize>, HashSet<usize>), Failure> {
+    use crate::core::{EffectExprKind, EffectOperation, PureComputation, PureExprKind, PureValue};
+    let mut visited = HashSet::new();
+    let mut calls = HashSet::new();
+    let mut closures = HashSet::new();
     while let Some(id) = pending.pop() {
         charge(work, 1)?;
         if id.arena() != scope.arena() {
@@ -377,7 +415,6 @@ fn authenticate_body_call(
     query_origins: &HashMap<usize, LocalOrigin>,
     work: &mut TypeWorkBudget,
 ) -> Result<(), Failure> {
-    use crate::core::{EffectExprKind, EffectOperation, PureComputation, PureExprKind};
     let control::CompletionTransition::Call { target, .. } = transition else {
         return Err(Failure::Invalid);
     };
@@ -397,6 +434,133 @@ fn authenticate_body_call(
         work,
     )?;
     let call = focus.trace()?.call(witness, work)?;
+    authenticate_known_body_call(
+        scope,
+        focus,
+        call,
+        calls,
+        closures,
+        helpers,
+        closure_origins,
+        query_origins,
+        work,
+    )
+}
+
+/// Authenticate only the checked linked bytes-length intrinsic in the
+/// encoder's live focus. It has no stored context or captures.
+#[allow(clippy::too_many_arguments)]
+fn authenticate_encoder_length_call(
+    scope: &NetworkNativeIdentityScope<'_>,
+    graph: &SummaryGraph,
+    focus: &control::CompletionFocus<'_>,
+    from: usize,
+    to: usize,
+    transition: control::CompletionTransition,
+    calls: &HashSet<usize>,
+    binder: crate::resolved::BinderId,
+    intrinsic: crate::core::NodeId,
+    work: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
+    let witness = entered_call(graph, focus, from, to, transition, intrinsic, work)?;
+    let call = focus.trace()?.call(witness, work)?;
+    check_encoder_length_call(scope, focus, call, calls, binder, intrinsic, work)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_encoder_length_call(
+    scope: &NetworkNativeIdentityScope<'_>,
+    focus: &control::CompletionFocus<'_>,
+    call: control::CompletionCall,
+    calls: &HashSet<usize>,
+    binder: crate::resolved::BinderId,
+    intrinsic: crate::core::NodeId,
+    work: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
+    use crate::core::{
+        EffectExprKind, PureComputation, PureExprKind, PureValue, packed::Intrinsic,
+    };
+    charge(work, 4)?;
+    if intrinsic.arena() != scope.arena() {
+        return Err(Failure::Invalid);
+    }
+    let target = intrinsic.index().map_err(|_| Failure::Invalid)?;
+    let Some(EffectExprKind::Pure(PureExprKind::Value(PureValue::Intrinsic(actual)))) =
+        scope.nodes().get(target).map(|node| &node.kind)
+    else {
+        return Err(Failure::Invalid);
+    };
+    if !actual.authentic_module()
+        || !actual.module().is_builtin_bytes()
+        || actual.operation() != Intrinsic::BytesLength
+        || binder.module() != Some(actual.module())
+    {
+        return Err(Failure::Invalid);
+    }
+    if call.target != target || call.expression != target {
+        return Err(Failure::Invalid);
+    }
+    let original = focus
+        .values()
+        .original_control_node(call.code, scope.nodes(), work)?;
+    if !calls.contains(&original) {
+        return Err(Failure::Invalid);
+    }
+    let Some(EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(app)))) =
+        scope.nodes().get(original).map(|node| &node.kind)
+    else {
+        return Err(Failure::Invalid);
+    };
+    if app.function().arena() != scope.arena() || app.argument().arena() != scope.arena() {
+        return Err(Failure::Invalid);
+    }
+    let function = app.function().index().map_err(|_| Failure::Invalid)?;
+    if !matches!(scope.nodes().get(function).map(|node| &node.kind),
+        Some(EffectExprKind::Pure(PureExprKind::Variable(variable))) if variable.binder() == binder)
+    {
+        return Err(Failure::Invalid);
+    }
+    let (_, _, arguments, captures) = focus.values().existing_call_ports(
+        call.code,
+        call.caller_value_context,
+        call.expression,
+        call.callee_value_context,
+        call.creation,
+        work,
+    )?;
+    let argument_code = app
+        .argument()
+        .index()
+        .map_err(|_| Failure::Invalid)?
+        .checked_add(1)
+        .ok_or(Failure::Resource)?;
+    let (argument, _) =
+        focus
+            .values()
+            .existing_forward_ports(argument_code, call.caller_value_context, work)?;
+    if arguments.len() != 1 || arguments[0].1 != argument || !captures.is_empty() {
+        return Err(Failure::Invalid);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_known_body_call(
+    scope: &NetworkNativeIdentityScope<'_>,
+    focus: &control::CompletionFocus<'_>,
+    call: control::CompletionCall,
+    calls: &HashSet<usize>,
+    closures: &HashSet<usize>,
+    helpers: &[(crate::resolved::BinderId, crate::core::NodeId)],
+    closure_origins: &HashMap<usize, DefinitionProvenance>,
+    query_origins: &HashMap<usize, LocalOrigin>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
+    use crate::core::{EffectExprKind, EffectOperation, PureComputation, PureExprKind};
+    let target = call.target;
+    if call.expression != target || !closures.contains(&target) {
+        return Err(Failure::Invalid);
+    }
     checked_context_capture(
         scope,
         focus,
@@ -597,12 +761,17 @@ fn checked_context_capture(
 /// Bind a generated RegionBuffer service to the one checked Core Add whose
 /// existing strict control sequence contains it. Explicit Region allocations
 /// retain their ordinary original-node mapping.
+/// Bind a generated RegionBuffer service to its unique checked Core parent
+/// and exact strict operands and service family. Codec primitives require an
+/// explicit codec nomination; ordinary ledger Add remains separately checked.
+/// Explicit Region allocations retain their original-node mapping.
 fn checked_region_source(
     scope: &NetworkNativeIdentityScope<'_>,
     graph: &SummaryGraph,
     focus: &control::CompletionFocus<'_>,
     code: usize,
     checked_nodes: &HashSet<usize>,
+    codec_buffers: Option<&HashSet<usize>>,
     work: &mut TypeWorkBudget,
 ) -> Result<Option<usize>, Failure> {
     use crate::core::{EffectExprKind, EffectOperation};
@@ -623,20 +792,60 @@ fn checked_region_source(
         else {
             continue;
         };
-        if !matches!(
+        let ledger_add = matches!(
             &buffer.operation,
             crate::core::region::RegionBufferOperation::IntegerArithmetic(
                 crate::core::Primitive::Add
             )
-        ) {
+        );
+        let codec_allowed = codec_buffers.is_some_and(|nodes| nodes.contains(&original));
+        if (!ledger_add || buffer.right.is_none()) && !codec_allowed {
             continue;
         }
-        let (Some(left), Some(right)) = (buffer.operand, buffer.right) else {
-            continue;
+        let family = if codec_allowed {
+            use crate::core::{packed::Intrinsic, region::RegionBufferOperation};
+            charge(work, 3)?;
+            match &buffer.operation {
+                RegionBufferOperation::Intrinsic(intrinsic)
+                    if intrinsic.module().is_builtin_bytes() =>
+                {
+                    if buffer.right.is_some() {
+                        return Err(Failure::Invalid);
+                    }
+                    match intrinsic.operation() {
+                        Intrinsic::BytesAt { .. } | Intrinsic::BytesEmpty => 1,
+                        Intrinsic::BytesAppendByte { .. } => 2,
+                        _ => continue,
+                    }
+                }
+                RegionBufferOperation::Intrinsic(intrinsic)
+                    if intrinsic.module().is_builtin_integer()
+                        && matches!(intrinsic.operation(), Intrinsic::IntegerSplit256 { .. }) =>
+                {
+                    if buffer.right.is_some() {
+                        return Err(Failure::Invalid);
+                    }
+                    3
+                }
+                RegionBufferOperation::IntegerArithmetic(
+                    crate::core::Primitive::Add | crate::core::Primitive::Multiply,
+                ) => {
+                    if buffer.right.is_none() {
+                        return Err(Failure::Invalid);
+                    }
+                    1
+                }
+                _ => continue,
+            }
+        } else {
+            1
         };
-        if [buffer.context, left, right]
-            .iter()
-            .any(|node| node.arena() != scope.arena())
+        let Some(left) = buffer.operand else { continue };
+        if buffer.context.arena() != scope.arena()
+            || left.arena() != scope.arena()
+            || buffer
+                .right
+                .is_some_and(|right| right.arena() != scope.arena())
         {
             return Err(Failure::Invalid);
         }
@@ -651,21 +860,47 @@ fn checked_region_source(
         let Some(control::Control::Sequence(children)) = graph.code.get(parent) else {
             return Err(Failure::Invalid);
         };
-        let coordinates = [buffer.context, left, right].map(|node| node.index());
-        let [Ok(context), Ok(left), Ok(right)] = coordinates else {
-            return Err(Failure::Invalid);
+        let context = buffer
+            .context
+            .index()
+            .map_err(|_| Failure::Invalid)?
+            .checked_add(1)
+            .ok_or(Failure::Resource)?;
+        let left = left
+            .index()
+            .map_err(|_| Failure::Invalid)?
+            .checked_add(1)
+            .ok_or(Failure::Resource)?;
+        let (prefix, tail) = match children.split_last() {
+            Some((tail, prefix)) => (prefix, *tail),
+            None => continue,
         };
-        let expected = [
-            context.checked_add(1),
-            left.checked_add(1),
-            right.checked_add(1),
-            Some(code),
-        ];
-        if expected.iter().any(Option::is_none) {
-            return Err(Failure::Resource);
-        }
-        if children.as_slice() == expected.map(Option::unwrap) && found.replace(original).is_some()
-        {
+        let operands_match = if let Some(right) = buffer.right {
+            let right = right
+                .index()
+                .map_err(|_| Failure::Invalid)?
+                .checked_add(1)
+                .ok_or(Failure::Resource)?;
+            prefix == [context, left, right]
+        } else {
+            prefix == [context, left]
+        };
+        let service_match = if family == 1 {
+            tail == code
+        } else if let Some(control::Control::Choice(choices)) = graph.code.get(tail) {
+            let twice = choices.get(1).and_then(|index| graph.code.get(*index));
+            let two = matches!(twice, Some(control::Control::Sequence(parts)) if parts.as_slice() == [code, code]);
+            let three = if family == 3 {
+                matches!(choices.get(2).and_then(|index| graph.code.get(*index)),
+                    Some(control::Control::Sequence(parts)) if parts.as_slice() == [code, code, code])
+            } else {
+                true
+            };
+            choices.len() == family && choices.first() == Some(&code) && two && three
+        } else {
+            false
+        };
+        if operands_match && service_match && found.replace(original).is_some() {
             return Err(Failure::Invalid);
         }
     }
@@ -835,6 +1070,7 @@ fn checked_body_region_return(
     checked_nodes: &HashSet<usize>,
     original: usize,
     module: crate::module::ModuleId,
+    codec_buffers: Option<&HashSet<usize>>,
     work: &mut TypeWorkBudget,
 ) -> Result<(), Failure> {
     use crate::core::{EffectExprKind, EffectOperation, PureComputation, PureExprKind};
@@ -861,7 +1097,8 @@ fn checked_body_region_return(
                         crate::core::region::RegionBufferOperation::IntegerArithmetic(
                             crate::core::Primitive::Add
                         )
-                    )) =>
+                    )
+                    || codec_buffers.is_some_and(|nodes| nodes.contains(&original))) =>
         {
             buffer.context
         }
@@ -1005,6 +1242,9 @@ struct ProvisionalCurrentLedger<'focus, 'graph, 'arena> {
     requires_exclusive_update: bool,
     requires_peer_authentication: bool,
     _transition_returns: Vec<(usize, usize, usize, usize, usize)>,
+    encoder_returns: Vec<(usize, usize, usize, usize)>,
+    #[cfg(test)]
+    saw_encoder_length: bool,
     transition_bindings: Vec<(usize, crate::core::NodeId, crate::resolved::BinderId)>,
     transitions: Vec<(usize, usize, usize, usize)>,
     current: Vec<(usize, usize, usize, crate::resolved::BinderId)>,
@@ -1465,361 +1705,39 @@ fn driver_formal_projection(
     Ok(Some(result.ok_or(Failure::Invalid)?))
 }
 
-/// Follow an initializer and a finite set of nominated registrations on every
-/// reached predecessor. Only the checked initializer binding and exact
-/// returned-ledger forwarding are supported; other calls lose the candidate.
-/// Observations stay private to this focus until the enclosing validation
-/// succeeds and the remaining provider premises are established.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "The actual scope, control coordinates, checked definitions and work budget are distinct inputs"
-)]
-fn observe_direct_registration<'focus, 'graph, 'arena>(
+struct CheckedQueries {
+    closure_origins: HashMap<usize, DefinitionProvenance>,
+    query_origins: HashMap<usize, LocalOrigin>,
+    verified_query_requests: HashSet<usize>,
+    verified_query_resumes: HashSet<usize>,
+    query_caller_contexts: HashMap<usize, usize>,
+}
+
+/// Verify the actual query/handler/resume paths in one settled focus. No
+/// value port returned here can be transferred to any other focus.
+#[allow(clippy::too_many_arguments)]
+fn checked_queries(
     scope: &NetworkNativeIdentityScope<'_>,
     graph: &SummaryGraph,
-    focus: &'focus control::CompletionFocus<'graph>,
-    initialization: &'focus ConditionalInitializationCall<'arena>,
-    registrations: &'focus [(
-        &'focus ConditionalRegistrationCall<'arena>,
-        &'focus RegistrationResultMatch,
-    )],
-    drivers: &[crate::core::ledger_checker::driver::CheckedDriverCall<'arena>],
-    receives: &[crate::core::ledger_checker::driver::CheckedReceiveCall<'arena>],
-    initial_binding: Option<crate::core::NodeId>,
-    transitions: &[transition_observation::TransitionCall<'focus, 'arena>],
+    focus: &control::CompletionFocus<'_>,
+    checked_nodes: &HashSet<usize>,
+    definitions: &[DefinitionProvenance],
+    provider_api: crate::module::ModuleId,
     default_handler: crate::core::NodeId,
-    side: u8,
+    states: &[Option<&control::State>],
+    edges: &[(usize, usize, control::CompletionTransition)],
+    details: &HashMap<usize, control::CompletionDetail>,
+    outgoing: &[Vec<usize>],
+    require_all_definitions: bool,
     work: &mut TypeWorkBudget,
-) -> Result<ProvisionalCurrentLedger<'focus, 'graph, 'arena>, Failure> {
-    let (registration, _) = *registrations.first().ok_or(Failure::Invalid)?;
-    if scope.entry(usize::from(side)).is_none()
-        || (drivers.is_empty()
-            && initial_binding.is_none()
-            && initialization.call() != registration.input())
-        || initialization.provider_api() != registration.provider_api()
-    {
-        return Err(Failure::Invalid);
-    }
-    // The table is a finite set of actual call sites. Reuse of the same
-    // authenticated definition is permitted, but ambiguous call or result
-    // coordinates and a different provider/closure fail closed.
-    let mut calls = HashSet::new();
-    let mut matches = HashSet::new();
-    for &(site, result) in registrations {
-        charge(work, 1)?;
-        if !site.same_definition(registration)
-            || site.closure() != registration.closure()
-            || site.provider_api() != registration.provider_api()
-            || site.definition_query() != registration.definition_query()
-        {
-            return Err(Failure::Invalid);
-        }
-        calls.try_reserve(1).map_err(|_| Failure::Resource)?;
-        matches.try_reserve(1).map_err(|_| Failure::Resource)?;
-        if !calls.insert(site.call()) || !matches.insert(result.matching) {
-            return Err(Failure::Invalid);
-        }
-    }
-    charge(
-        work,
-        calls
-            .capacity()
-            .checked_add(matches.capacity())
-            .ok_or(Failure::Resource)?,
-    )?;
-    if let Some(binding) = initial_binding {
-        use crate::core::{EffectExprKind, PureComputation, PureExprKind};
-        if binding.arena() != scope.arena() || registration.input().arena() != scope.arena() {
-            return Err(Failure::Invalid);
-        }
-        let Some(EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(bind)))) =
-            scope
-                .nodes()
-                .get(binding.index().map_err(|_| Failure::Invalid)?)
-                .map(|node| &node.kind)
-        else {
-            return Err(Failure::Invalid);
-        };
-        let Some(EffectExprKind::Pure(PureExprKind::Variable(input))) = scope
-            .nodes()
-            .get(registration.input().index().map_err(|_| Failure::Invalid)?)
-            .map(|node| &node.kind)
-        else {
-            return Err(Failure::Invalid);
-        };
-        if bind.initializer() != initialization.call()
-            || (drivers.is_empty() && bind.binder().id() != input.binder())
-        {
-            return Err(Failure::Invalid);
-        }
-    }
-    let initial_definitions = [
-        DefinitionProvenance {
-            query: initialization.definition_query(),
-            binding: initialization.definition_binding(),
-            context: initialization.definition_context(),
-            closure: initialization.closure(),
-        },
-        DefinitionProvenance {
-            query: registration.definition_query(),
-            binding: registration.definition_binding(),
-            context: registration.definition_context(),
-            closure: registration.closure(),
-        },
-    ];
-    if initial_definitions[0].query == initial_definitions[1].query
-        || initial_definitions[0].closure == initial_definitions[1].closure
-    {
-        return Err(Failure::Invalid);
-    }
-    let mut definitions = Vec::new();
-    charge(
-        work,
-        transitions.len().checked_add(2).ok_or(Failure::Resource)?,
-    )?;
-    definitions
-        .try_reserve(transitions.len().checked_add(2).ok_or(Failure::Resource)?)
-        .map_err(|_| Failure::Resource)?;
-    definitions.extend(initial_definitions);
-    let mut extra_roots = Vec::new();
-    let mut argument_constructors = Vec::new();
-    for (position, &transition) in transitions.iter().enumerate() {
-        if transition.provider_api() != initialization.provider_api() {
-            return Err(Failure::Invalid);
-        }
-        let definition = transition.definition();
-        if definitions
-            .iter()
-            .any(|old| old.query == definition.query || old.closure == definition.closure)
-        {
-            charge(work, position)?;
-            if !transitions[..position]
-                .iter()
-                .any(|old| old.same_definition(transition))
-            {
-                return Err(Failure::Invalid);
-            }
-        } else {
-            definitions.push(definition);
-        }
-        transition.extend_roots(&mut extra_roots, work)?;
-        if let Some(pair) = transition.argument_constructor(work)? {
-            charge(
-                work,
-                argument_constructors
-                    .len()
-                    .checked_add(1)
-                    .ok_or(Failure::Resource)?,
-            )?;
-            if argument_constructors
-                .iter()
-                .any(|&(call, closure)| call == pair.0 || closure == pair.1)
-            {
-                return Err(Failure::Invalid);
-            }
-            argument_constructors
-                .try_reserve(1)
-                .map_err(|_| Failure::Resource)?;
-            argument_constructors.push(pair);
-        }
-    }
-    for (driver_index, driver) in drivers.iter().enumerate() {
-        charge(
-            work,
-            definitions
-                .len()
-                .checked_add(driver_index)
-                .and_then(|n| n.checked_add(1))
-                .ok_or(Failure::Resource)?,
-        )?;
-        for previous in &drivers[..driver_index] {
-            if previous.closure() == driver.closure()
-                && (previous.formal() != driver.formal()
-                    || previous.field() != driver.field()
-                    || previous.fields().len() != driver.fields().len()
-                    || previous.definition_binding() != driver.definition_binding()
-                    || previous.definition_context() != driver.definition_context())
-            {
-                return Err(Failure::Invalid);
-            }
-        }
-        if driver.provider_api() != initialization.provider_api() {
-            return Err(Failure::Invalid);
-        }
-        let definition = DefinitionProvenance {
-            query: driver.definition_query(),
-            binding: driver.definition_binding(),
-            context: driver.definition_context(),
-            closure: driver.closure(),
-        };
-        if let Some(old) = definitions
-            .iter()
-            .find(|old| old.query == definition.query || old.closure == definition.closure)
-        {
-            if old.query != definition.query
-                || old.binding != definition.binding
-                || old.context != definition.context
-                || old.closure != definition.closure
-            {
-                return Err(Failure::Invalid);
-            }
-        } else {
-            definitions.try_reserve(1).map_err(|_| Failure::Resource)?;
-            definitions.push(definition);
-            charge(work, 1)?;
-            extra_roots.try_reserve(1).map_err(|_| Failure::Resource)?;
-            extra_roots.push(driver.definition_root());
-        }
-    }
-    for receive in receives {
-        charge(
-            work,
-            definitions.len().checked_add(1).ok_or(Failure::Resource)?,
-        )?;
-        if receive.provider_api() != initialization.provider_api() {
-            return Err(Failure::Invalid);
-        }
-        let definition = DefinitionProvenance {
-            query: receive.definition_query(),
-            binding: receive.definition_binding(),
-            context: receive.definition_context(),
-            closure: receive.closure(),
-        };
-        if let Some(old) = definitions
-            .iter()
-            .find(|old| old.query == definition.query || old.closure == definition.closure)
-        {
-            if old.query != definition.query
-                || old.binding != definition.binding
-                || old.context != definition.context
-                || old.closure != definition.closure
-            {
-                return Err(Failure::Invalid);
-            }
-        } else {
-            definitions.try_reserve(1).map_err(|_| Failure::Resource)?;
-            definitions.push(definition);
-            charge(work, 1)?;
-            extra_roots.try_reserve(1).map_err(|_| Failure::Resource)?;
-            extra_roots.push(receive.definition_binding());
-        }
-    }
-    let root = scope.root().index().map_err(|_| Failure::Invalid)?;
-    let root_code = root.checked_add(1).ok_or(Failure::Resource)?;
-    if focus
-        .values()
-        .original_control_node(root_code, scope.nodes(), work)?
-        != root
-    {
-        return Err(Failure::Invalid);
-    }
-    let trace = focus.trace()?;
-    if trace.focus().is_ok() {
-        return Err(Failure::Invalid);
-    }
-    let (mut body_calls, mut body_closures, mut checked_nodes) =
-        checked_call_sites(scope, initialization, registration, &extra_roots, work)?;
-    include_argument_nodes(
-        scope,
-        registration.argument_binding(),
-        &mut checked_nodes,
-        work,
-    )?;
-    for &(next, _) in registrations.iter().skip(1) {
-        include_argument_nodes(scope, next.argument_binding(), &mut checked_nodes, work)?;
-    }
-    for driver in drivers {
-        include_argument_nodes(scope, driver.binding(), &mut checked_nodes, work)?;
-    }
-    for receive in receives {
-        include_argument_nodes(scope, receive.call(), &mut checked_nodes, work)?;
-    }
-    for &transition in transitions {
-        include_argument_nodes(
-            scope,
-            transition.argument_binding(),
-            &mut checked_nodes,
-            work,
-        )?;
-        charge(work, 1)?;
-        body_calls.try_reserve(1).map_err(|_| Failure::Resource)?;
-        body_calls.insert(transition.call().index().map_err(|_| Failure::Invalid)?);
-    }
-    for &(call, closure) in &argument_constructors {
-        charge(work, 1)?;
-        body_calls.try_reserve(1).map_err(|_| Failure::Resource)?;
-        body_closures
-            .try_reserve(1)
-            .map_err(|_| Failure::Resource)?;
-        body_calls.insert(call.index().map_err(|_| Failure::Invalid)?);
-        body_closures.insert(closure.index().map_err(|_| Failure::Invalid)?);
-    }
-    let base_helpers = registration.linked_helpers();
-    let mut candidates = Vec::new();
-    charge(work, base_helpers.len())?;
-    candidates
-        .try_reserve(base_helpers.len())
-        .map_err(|_| Failure::Resource)?;
-    candidates.extend(base_helpers);
-    for &transition in transitions {
-        transition.extend_helpers(&mut candidates, work)?;
-    }
-    let mut helpers = Vec::new();
-    for (binder, closure) in candidates {
-        charge(work, helpers.len().checked_add(1).ok_or(Failure::Resource)?)?;
-        if let Some((_, existing)) = helpers.iter().find(|(existing, _)| *existing == binder) {
-            if *existing != closure {
-                return Err(Failure::Invalid);
-            }
-            continue;
-        }
-        helpers.try_reserve(1).map_err(|_| Failure::Resource)?;
-        helpers.push((binder, closure));
-    }
-    let index = network_completion::MatchedReturnIndex::new(focus, work)?;
-    let states = index.states();
-    let edges = trace.indexed_edges(work)?;
-    let mut details = HashMap::new();
-    trace.visit_details(work, |id, detail, work| {
-        charge(work, 1)?;
-        details.try_reserve(1).map_err(|_| Failure::Resource)?;
-        if details.insert(id, detail).is_some() {
-            return Err(Failure::Invalid);
-        }
-        Ok(())
-    })?;
-    charge(work, details.capacity())?;
-    charge(
-        work,
-        states
-            .len()
-            .checked_add(edges.len())
-            .ok_or(Failure::Resource)?,
-    )?;
-    let mut outgoing = Vec::new();
-    outgoing
-        .try_reserve_exact(states.len())
-        .map_err(|_| Failure::Resource)?;
-    outgoing.resize_with(states.len(), Vec::new);
-    for (number, &(from, to, _)) in edges.iter().enumerate() {
-        if to >= states.len() {
-            return Err(Failure::Invalid);
-        }
-        let entries = outgoing.get_mut(from).ok_or(Failure::Invalid)?;
-        charge(work, 1)?;
-        entries.try_reserve(1).map_err(|_| Failure::Resource)?;
-        entries.push(number);
-    }
-    for entries in &outgoing {
-        charge(work, entries.capacity())?;
-    }
+) -> Result<CheckedQueries, Failure> {
     // Authenticate this actual initialization closure's context query on the
     // same converged startup trace. The selected handler must be the checked
     // entry provider and each reached alternative must follow its direct
     // normal Resume. This is only the first part of provider correspondence:
     // the returned port has not yet been tied to closure captures or uses.
-    let bindings = query_bindings(scope, &checked_nodes, initialization.provider_api(), work)?;
-    let closure_origins = closure_bindings(scope, &bindings, initialization.provider_api(), work)?;
+    let bindings = query_bindings(scope, checked_nodes, provider_api, work)?;
+    let closure_origins = closure_bindings(scope, &bindings, provider_api, work)?;
     let mut query_count = Vec::new();
     charge(work, definitions.len())?;
     query_count
@@ -2075,7 +1993,7 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
             .map_err(|_| Failure::Resource)?;
         verified_query_requests.insert(id);
     }
-    if query_count.contains(&0) {
+    if require_all_definitions && query_count.contains(&0) {
         return Err(Failure::Invalid);
     }
     charge(
@@ -2093,11 +2011,511 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
     eprintln!(
         "N3 initializer/registration context queries: {query_count:?} reached states; later allocation and reentry checks remain open"
     );
+    Ok(CheckedQueries {
+        closure_origins,
+        query_origins,
+        verified_query_requests,
+        verified_query_resumes,
+        query_caller_contexts,
+    })
+}
+
+/// Follow an initializer and a finite set of nominated registrations on every
+/// reached predecessor. Only the checked initializer binding and exact
+/// returned-ledger forwarding are supported; other calls lose the candidate.
+/// Observations stay private to this focus until the enclosing validation
+/// succeeds and the remaining provider premises are established.
+pub(super) struct EncoderNomination<'a, 'arena> {
+    pub(super) invocation: &'a crate::core::ledger_checker::codec::NominatedCodecCall<'arena>,
+    pub(super) result: &'a crate::core::ledger_checker::codec::CodecResultMatch,
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The actual scope, control coordinates, checked definitions and work budget are distinct inputs"
+)]
+fn observe_direct_registration<'focus, 'graph, 'arena>(
+    scope: &NetworkNativeIdentityScope<'_>,
+    graph: &SummaryGraph,
+    focus: &'focus control::CompletionFocus<'graph>,
+    initialization: &'focus ConditionalInitializationCall<'arena>,
+    registrations: &'focus [(
+        &'focus ConditionalRegistrationCall<'arena>,
+        &'focus RegistrationResultMatch,
+    )],
+    drivers: &[crate::core::ledger_checker::driver::CheckedDriverCall<'arena>],
+    receives: &[crate::core::ledger_checker::driver::CheckedReceiveCall<'arena>],
+    initial_binding: Option<crate::core::NodeId>,
+    transitions: &[transition_observation::TransitionCall<'focus, 'arena>],
+    encoder: Option<&EncoderNomination<'_, 'arena>>,
+    default_handler: crate::core::NodeId,
+    side: u8,
+    work: &mut TypeWorkBudget,
+) -> Result<ProvisionalCurrentLedger<'focus, 'graph, 'arena>, Failure> {
+    let (registration, _) = *registrations.first().ok_or(Failure::Invalid)?;
+    if scope.entry(usize::from(side)).is_none()
+        || (drivers.is_empty()
+            && initial_binding.is_none()
+            && initialization.call() != registration.input())
+        || initialization.provider_api() != registration.provider_api()
+    {
+        return Err(Failure::Invalid);
+    }
+    // The table is a finite set of actual call sites. Reuse of the same
+    // authenticated definition is permitted, but ambiguous call or result
+    // coordinates and a different provider/closure fail closed.
+    let mut calls = HashSet::new();
+    let mut matches = HashSet::new();
+    for &(site, result) in registrations {
+        charge(work, 1)?;
+        if !site.same_definition(registration)
+            || site.closure() != registration.closure()
+            || site.provider_api() != registration.provider_api()
+            || site.definition_query() != registration.definition_query()
+        {
+            return Err(Failure::Invalid);
+        }
+        calls.try_reserve(1).map_err(|_| Failure::Resource)?;
+        matches.try_reserve(1).map_err(|_| Failure::Resource)?;
+        if !calls.insert(site.call()) || !matches.insert(result.matching) {
+            return Err(Failure::Invalid);
+        }
+    }
+    charge(
+        work,
+        calls
+            .capacity()
+            .checked_add(matches.capacity())
+            .ok_or(Failure::Resource)?,
+    )?;
+    if let Some(binding) = initial_binding {
+        use crate::core::{EffectExprKind, PureComputation, PureExprKind};
+        if binding.arena() != scope.arena() || registration.input().arena() != scope.arena() {
+            return Err(Failure::Invalid);
+        }
+        let Some(EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(bind)))) =
+            scope
+                .nodes()
+                .get(binding.index().map_err(|_| Failure::Invalid)?)
+                .map(|node| &node.kind)
+        else {
+            return Err(Failure::Invalid);
+        };
+        let Some(EffectExprKind::Pure(PureExprKind::Variable(input))) = scope
+            .nodes()
+            .get(registration.input().index().map_err(|_| Failure::Invalid)?)
+            .map(|node| &node.kind)
+        else {
+            return Err(Failure::Invalid);
+        };
+        if bind.initializer() != initialization.call()
+            || (drivers.is_empty() && bind.binder().id() != input.binder())
+        {
+            return Err(Failure::Invalid);
+        }
+    }
+    let initial_definitions = [
+        DefinitionProvenance {
+            query: initialization.definition_query(),
+            binding: initialization.definition_binding(),
+            context: initialization.definition_context(),
+            closure: initialization.closure(),
+        },
+        DefinitionProvenance {
+            query: registration.definition_query(),
+            binding: registration.definition_binding(),
+            context: registration.definition_context(),
+            closure: registration.closure(),
+        },
+    ];
+    if initial_definitions[0].query == initial_definitions[1].query
+        || initial_definitions[0].closure == initial_definitions[1].closure
+    {
+        return Err(Failure::Invalid);
+    }
+    let mut definitions = Vec::new();
+    charge(
+        work,
+        transitions.len().checked_add(2).ok_or(Failure::Resource)?,
+    )?;
+    definitions
+        .try_reserve(transitions.len().checked_add(2).ok_or(Failure::Resource)?)
+        .map_err(|_| Failure::Resource)?;
+    definitions.extend(initial_definitions);
+    let mut extra_roots = Vec::new();
+    let mut argument_constructors = Vec::new();
+    for (position, &transition) in transitions.iter().enumerate() {
+        if transition.provider_api() != initialization.provider_api() {
+            return Err(Failure::Invalid);
+        }
+        let definition = transition.definition();
+        if definitions
+            .iter()
+            .any(|old| old.query == definition.query || old.closure == definition.closure)
+        {
+            charge(work, position)?;
+            if !transitions[..position]
+                .iter()
+                .any(|old| old.same_definition(transition))
+            {
+                return Err(Failure::Invalid);
+            }
+        } else {
+            definitions.push(definition);
+        }
+        transition.extend_roots(&mut extra_roots, work)?;
+        if let Some(pair) = transition.argument_constructor(work)? {
+            charge(
+                work,
+                argument_constructors
+                    .len()
+                    .checked_add(1)
+                    .ok_or(Failure::Resource)?,
+            )?;
+            if argument_constructors
+                .iter()
+                .any(|&(call, closure)| call == pair.0 || closure == pair.1)
+            {
+                return Err(Failure::Invalid);
+            }
+            argument_constructors
+                .try_reserve(1)
+                .map_err(|_| Failure::Resource)?;
+            argument_constructors.push(pair);
+        }
+    }
+    for (driver_index, driver) in drivers.iter().enumerate() {
+        charge(
+            work,
+            definitions
+                .len()
+                .checked_add(driver_index)
+                .and_then(|n| n.checked_add(1))
+                .ok_or(Failure::Resource)?,
+        )?;
+        for previous in &drivers[..driver_index] {
+            if previous.closure() == driver.closure()
+                && (previous.formal() != driver.formal()
+                    || previous.field() != driver.field()
+                    || previous.fields().len() != driver.fields().len()
+                    || previous.definition_binding() != driver.definition_binding()
+                    || previous.definition_context() != driver.definition_context())
+            {
+                return Err(Failure::Invalid);
+            }
+        }
+        if driver.provider_api() != initialization.provider_api() {
+            return Err(Failure::Invalid);
+        }
+        let definition = DefinitionProvenance {
+            query: driver.definition_query(),
+            binding: driver.definition_binding(),
+            context: driver.definition_context(),
+            closure: driver.closure(),
+        };
+        if let Some(old) = definitions
+            .iter()
+            .find(|old| old.query == definition.query || old.closure == definition.closure)
+        {
+            if old.query != definition.query
+                || old.binding != definition.binding
+                || old.context != definition.context
+                || old.closure != definition.closure
+            {
+                return Err(Failure::Invalid);
+            }
+        } else {
+            definitions.try_reserve(1).map_err(|_| Failure::Resource)?;
+            definitions.push(definition);
+            charge(work, 1)?;
+            extra_roots.try_reserve(1).map_err(|_| Failure::Resource)?;
+            extra_roots.push(driver.definition_root());
+        }
+    }
+    for receive in receives {
+        charge(
+            work,
+            definitions.len().checked_add(1).ok_or(Failure::Resource)?,
+        )?;
+        if receive.provider_api() != initialization.provider_api() {
+            return Err(Failure::Invalid);
+        }
+        let definition = DefinitionProvenance {
+            query: receive.definition_query(),
+            binding: receive.definition_binding(),
+            context: receive.definition_context(),
+            closure: receive.closure(),
+        };
+        if let Some(old) = definitions
+            .iter()
+            .find(|old| old.query == definition.query || old.closure == definition.closure)
+        {
+            if old.query != definition.query
+                || old.binding != definition.binding
+                || old.context != definition.context
+                || old.closure != definition.closure
+            {
+                return Err(Failure::Invalid);
+            }
+        } else {
+            definitions.try_reserve(1).map_err(|_| Failure::Resource)?;
+            definitions.push(definition);
+            charge(work, 1)?;
+            extra_roots.try_reserve(1).map_err(|_| Failure::Resource)?;
+            extra_roots.push(receive.definition_binding());
+        }
+    }
+    let mut codec_roots = Vec::new();
+    let mut codec_helpers = Vec::new();
+    let mut codec_definitions = Vec::new();
+    let mut codec_buffers = HashSet::new();
+    if let Some(encoder) = encoder {
+        use crate::core::ledger_checker::codec::CodecResultArm;
+        let invocation = encoder.invocation;
+        if invocation.provider_api() != initialization.provider_api()
+            || encoder.result.call() != invocation.call()
+            || !matches!(encoder.result.arm(0), Some(CodecResultArm::Encoded { .. }))
+        {
+            return Err(Failure::Invalid);
+        }
+        let descriptors = invocation.helpers(work).map_err(plan_rejection)?;
+        charge(
+            work,
+            descriptors.len().checked_mul(3).ok_or(Failure::Resource)?,
+        )?;
+        codec_roots
+            .try_reserve_exact(descriptors.len())
+            .map_err(|_| Failure::Resource)?;
+        codec_helpers
+            .try_reserve_exact(descriptors.len())
+            .map_err(|_| Failure::Resource)?;
+        codec_definitions
+            .try_reserve(descriptors.len())
+            .map_err(|_| Failure::Resource)?;
+        for descriptor in descriptors {
+            let definition = DefinitionProvenance {
+                query: descriptor.query(),
+                binding: descriptor.root(),
+                context: descriptor.context(),
+                closure: descriptor.closure(),
+            };
+            if [
+                definition.query,
+                definition.binding,
+                definition.context,
+                definition.closure,
+            ]
+            .iter()
+            .any(|node| node.arena() != scope.arena())
+            {
+                return Err(Failure::Invalid);
+            }
+            charge(
+                work,
+                definitions
+                    .len()
+                    .checked_add(codec_definitions.len())
+                    .and_then(|n| n.checked_add(codec_helpers.len()))
+                    .ok_or(Failure::Resource)?,
+            )?;
+            if definitions
+                .iter()
+                .any(|old| old.query == definition.query || old.closure == definition.closure)
+                || codec_definitions.iter().any(|old: &DefinitionProvenance| {
+                    old.query == definition.query || old.closure == definition.closure
+                })
+                || codec_helpers
+                    .iter()
+                    .any(|(binder, _)| *binder == descriptor.binder())
+            {
+                return Err(Failure::Invalid);
+            }
+            codec_definitions.push(definition);
+            codec_roots.push(definition.binding);
+            codec_helpers.push((descriptor.binder(), definition.closure));
+        }
+        for node in invocation.buffer_nodes(work).map_err(plan_rejection)? {
+            if node.arena() != scope.arena() {
+                return Err(Failure::Invalid);
+            }
+            charge(work, 1)?;
+            codec_buffers
+                .try_reserve(1)
+                .map_err(|_| Failure::Resource)?;
+            codec_buffers.insert(node.index().map_err(|_| Failure::Invalid)?);
+        }
+    }
+    let root = scope.root().index().map_err(|_| Failure::Invalid)?;
+    let root_code = root.checked_add(1).ok_or(Failure::Resource)?;
+    if focus
+        .values()
+        .original_control_node(root_code, scope.nodes(), work)?
+        != root
+    {
+        return Err(Failure::Invalid);
+    }
+    let trace = focus.trace()?;
+    if trace.focus().is_ok() {
+        return Err(Failure::Invalid);
+    }
+    let (mut body_calls, mut body_closures, mut checked_nodes) =
+        checked_call_sites(scope, initialization, registration, &extra_roots, work)?;
+    let (mut codec_calls, codec_closures, codec_nodes) = if encoder.is_some() {
+        checked_call_roots(scope, &codec_roots, work)?
+    } else {
+        (HashSet::new(), HashSet::new(), HashSet::new())
+    };
+    if let Some(encoder) = encoder {
+        let call = encoder.invocation.call();
+        if call.arena() != scope.arena() {
+            return Err(Failure::Invalid);
+        }
+        charge(work, 1)?;
+        codec_calls.try_reserve(1).map_err(|_| Failure::Resource)?;
+        codec_calls.insert(call.index().map_err(|_| Failure::Invalid)?);
+    }
+    include_argument_nodes(
+        scope,
+        registration.argument_binding(),
+        &mut checked_nodes,
+        work,
+    )?;
+    for &(next, _) in registrations.iter().skip(1) {
+        include_argument_nodes(scope, next.argument_binding(), &mut checked_nodes, work)?;
+    }
+    for driver in drivers {
+        include_argument_nodes(scope, driver.binding(), &mut checked_nodes, work)?;
+    }
+    for receive in receives {
+        include_argument_nodes(scope, receive.call(), &mut checked_nodes, work)?;
+    }
+    for &transition in transitions {
+        include_argument_nodes(
+            scope,
+            transition.argument_binding(),
+            &mut checked_nodes,
+            work,
+        )?;
+        charge(work, 1)?;
+        body_calls.try_reserve(1).map_err(|_| Failure::Resource)?;
+        body_calls.insert(transition.call().index().map_err(|_| Failure::Invalid)?);
+    }
+    for &(call, closure) in &argument_constructors {
+        charge(work, 1)?;
+        body_calls.try_reserve(1).map_err(|_| Failure::Resource)?;
+        body_closures
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        body_calls.insert(call.index().map_err(|_| Failure::Invalid)?);
+        body_closures.insert(closure.index().map_err(|_| Failure::Invalid)?);
+    }
+    let base_helpers = registration.linked_helpers();
+    let mut candidates = Vec::new();
+    charge(work, base_helpers.len())?;
+    candidates
+        .try_reserve(base_helpers.len())
+        .map_err(|_| Failure::Resource)?;
+    candidates.extend(base_helpers);
+    for &transition in transitions {
+        transition.extend_helpers(&mut candidates, work)?;
+    }
+    let mut helpers = Vec::new();
+    for (binder, closure) in candidates {
+        charge(work, helpers.len().checked_add(1).ok_or(Failure::Resource)?)?;
+        if let Some((_, existing)) = helpers.iter().find(|(existing, _)| *existing == binder) {
+            if *existing != closure {
+                return Err(Failure::Invalid);
+            }
+            continue;
+        }
+        helpers.try_reserve(1).map_err(|_| Failure::Resource)?;
+        helpers.push((binder, closure));
+    }
+    let index = network_completion::MatchedReturnIndex::new(focus, work)?;
+    let states = index.states();
+    let edges = trace.indexed_edges(work)?;
+    let mut details = HashMap::new();
+    trace.visit_details(work, |id, detail, work| {
+        charge(work, 1)?;
+        details.try_reserve(1).map_err(|_| Failure::Resource)?;
+        if details.insert(id, detail).is_some() {
+            return Err(Failure::Invalid);
+        }
+        Ok(())
+    })?;
+    charge(work, details.capacity())?;
+    charge(
+        work,
+        states
+            .len()
+            .checked_add(edges.len())
+            .ok_or(Failure::Resource)?,
+    )?;
+    let mut outgoing = Vec::new();
+    outgoing
+        .try_reserve_exact(states.len())
+        .map_err(|_| Failure::Resource)?;
+    outgoing.resize_with(states.len(), Vec::new);
+    for (number, &(from, to, _)) in edges.iter().enumerate() {
+        if to >= states.len() {
+            return Err(Failure::Invalid);
+        }
+        let entries = outgoing.get_mut(from).ok_or(Failure::Invalid)?;
+        charge(work, 1)?;
+        entries.try_reserve(1).map_err(|_| Failure::Resource)?;
+        entries.push(number);
+    }
+    for entries in &outgoing {
+        charge(work, entries.capacity())?;
+    }
+    let CheckedQueries {
+        closure_origins,
+        query_origins,
+        verified_query_requests,
+        verified_query_resumes,
+        query_caller_contexts,
+    } = checked_queries(
+        scope,
+        graph,
+        focus,
+        &checked_nodes,
+        &definitions,
+        initialization.provider_api(),
+        default_handler,
+        states,
+        &edges,
+        &details,
+        &outgoing,
+        true,
+        work,
+    )?;
+    let codec_queries = if encoder.is_some() {
+        Some(checked_queries(
+            scope,
+            graph,
+            focus,
+            &codec_nodes,
+            &codec_definitions,
+            initialization.provider_api(),
+            default_handler,
+            states,
+            &edges,
+            &details,
+            &outgoing,
+            true,
+            work,
+        )?)
+    } else {
+        None
+    };
     let mut pending = VecDeque::new();
     let mut seen = HashSet::new();
     let mut requires_exclusive_update = false;
     let mut requires_peer_authentication = false;
     let mut transition_returns = Vec::new();
+    let mut encoder_returns = Vec::new();
+    #[cfg(test)]
+    let mut saw_encoder_length = false;
     let mut transition_bindings = Vec::new();
     let mut projected = HashMap::new();
     let mut current = HashMap::new();
@@ -2179,12 +2597,18 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
         }
         let region_source = if matches!(graph.code.get(before.position.code), Some(control::Control::Request(request)) if request.region_service)
         {
+            let encoding = matches!(phase, Phase::Encoding { .. });
             let mut source = checked_region_source(
                 scope,
                 graph,
                 focus,
                 before.position.code,
-                &checked_nodes,
+                if encoding {
+                    &codec_nodes
+                } else {
+                    &checked_nodes
+                },
+                encoding.then_some(&codec_buffers),
                 work,
             )?;
             if source.is_none()
@@ -2335,6 +2759,21 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
                 phase = Phase::Invalidated;
             }
         }
+        let (active_requests, active_resumes, active_origins) =
+            if matches!(phase, Phase::Encoding { .. }) {
+                let queries = codec_queries.as_ref().ok_or(Failure::Invalid)?;
+                (
+                    &queries.verified_query_requests,
+                    &queries.verified_query_resumes,
+                    &queries.query_origins,
+                )
+            } else {
+                (
+                    &verified_query_requests,
+                    &verified_query_resumes,
+                    &query_origins,
+                )
+            };
         if matches!(
             phase,
             Phase::Initializing(_)
@@ -2345,6 +2784,7 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
                 | Phase::Receiving { .. }
                 | Phase::Returned { .. }
                 | Phase::Current { .. }
+                | Phase::Encoding { .. }
                 | Phase::PreparingArgument { .. }
                 | Phase::RunningArgument { .. }
         ) {
@@ -2354,7 +2794,7 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
                 .ok_or(Failure::Invalid)?
             {
                 control::Control::Request(request) if !request.region_service => {
-                    if !verified_query_requests.contains(&id) {
+                    if !active_requests.contains(&id) {
                         return Err(Failure::Invalid);
                     }
                 }
@@ -2375,7 +2815,7 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
                 | control::Control::Retain { .. }
                 | control::Control::Continue { .. }
                 | control::Control::Discard { .. } => return Err(Failure::Invalid),
-                control::Control::Resume { .. } if !verified_query_resumes.contains(&id) => {
+                control::Control::Resume { .. } if !active_resumes.contains(&id) => {
                     return Err(Failure::Invalid);
                 }
                 _ => {}
@@ -2390,6 +2830,7 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
                     | Phase::Transitioning { .. }
                     | Phase::TransitionReturned { .. }
                     | Phase::Receiving { .. }
+                    | Phase::Encoding { .. }
                     | Phase::PreparingArgument { .. }
                     | Phase::RunningArgument { .. }
             ))
@@ -2439,6 +2880,54 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
                     work,
                 )?;
             }
+            if matches!(phase, Phase::Encoding { .. })
+                && let control::CompletionTransition::Call { target, .. } = transition
+            {
+                let entry = encoder.ok_or(Failure::Invalid)?.invocation.closure();
+                if target == entry.index().map_err(|_| Failure::Invalid)? {
+                    return Err(Failure::Invalid);
+                }
+                let length = encoder.and_then(|item| item.invocation.encoder_length());
+                if let Some((binder, intrinsic)) = length
+                    && intrinsic.index().ok() == Some(target)
+                {
+                    authenticate_encoder_length_call(
+                        scope,
+                        graph,
+                        focus,
+                        from,
+                        to,
+                        transition,
+                        &codec_calls,
+                        binder,
+                        intrinsic,
+                        work,
+                    )?;
+                    #[cfg(test)]
+                    {
+                        if !saw_encoder_length {
+                            eprintln!("checked encoder bytes-length target: {target}");
+                        }
+                        saw_encoder_length = true;
+                    }
+                } else {
+                    let queries = codec_queries.as_ref().ok_or(Failure::Invalid)?;
+                    authenticate_body_call(
+                        scope,
+                        graph,
+                        focus,
+                        from,
+                        to,
+                        transition,
+                        &codec_calls,
+                        &codec_closures,
+                        &codec_helpers,
+                        &queries.closure_origins,
+                        &queries.query_origins,
+                        work,
+                    )?;
+                }
+            }
             if body_region {
                 let control::CompletionTransition::Detail(detail_id) = transition else {
                     return Err(Failure::Invalid);
@@ -2450,10 +2939,15 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
                     before,
                     states.get(to).copied().flatten().ok_or(Failure::Invalid)?,
                     *details.get(&detail_id).ok_or(Failure::Invalid)?,
-                    &query_origins,
-                    &checked_nodes,
+                    active_origins,
+                    if matches!(phase, Phase::Encoding { .. }) {
+                        &codec_nodes
+                    } else {
+                        &checked_nodes
+                    },
                     region_source.ok_or(Failure::Invalid)?,
                     initialization.provider_api(),
+                    matches!(phase, Phase::Encoding { .. }).then_some(&codec_buffers),
                     work,
                 )?;
             }
@@ -2755,7 +3249,9 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
                 return Err(Failure::Invalid);
             }
             if matches!(transition, control::CompletionTransition::Call { .. }) {
-                if let Phase::PreparingArgument {
+                if matches!(phase, Phase::Encoding { .. }) {
+                    // Every nested call was authenticated against the codec catalog above.
+                } else if let Phase::PreparingArgument {
                     port,
                     context,
                     ordinal,
@@ -2796,6 +3292,79 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
                     };
                 } else if matches!(phase, Phase::RunningArgument { .. }) {
                     return Err(Failure::Invalid);
+                } else if let Some(encoder) = encoder
+                    && source_position(scope, focus, before, encoder.invocation.call(), work)?
+                {
+                    let Phase::Current {
+                        port,
+                        context,
+                        ordinal,
+                        role,
+                    } = phase
+                    else {
+                        return Err(Failure::Invalid);
+                    };
+                    if before.value_context != context {
+                        return Err(Failure::Invalid);
+                    }
+                    let invocation = encoder.invocation;
+                    let witness = entered_call(
+                        graph,
+                        focus,
+                        from,
+                        to,
+                        transition,
+                        invocation.closure(),
+                        work,
+                    )?;
+                    let actual = trace.call(witness, work)?;
+                    let queries = codec_queries.as_ref().ok_or(Failure::Invalid)?;
+                    authenticate_known_body_call(
+                        scope,
+                        focus,
+                        actual,
+                        &codec_calls,
+                        &codec_closures,
+                        &codec_helpers,
+                        &queries.closure_origins,
+                        &queries.query_origins,
+                        work,
+                    )?;
+                    let (_, _, arguments, _) = focus.values().existing_call_ports(
+                        actual.code,
+                        actual.caller_value_context,
+                        actual.expression,
+                        actual.callee_value_context,
+                        actual.creation,
+                        work,
+                    )?;
+                    let argument = invocation.argument();
+                    if argument.arena() != scope.arena() {
+                        return Err(Failure::Invalid);
+                    }
+                    let argument_code = argument
+                        .index()
+                        .map_err(|_| Failure::Invalid)?
+                        .checked_add(1)
+                        .ok_or(Failure::Resource)?;
+                    let (argument_port, _) =
+                        focus
+                            .values()
+                            .existing_forward_ports(argument_code, context, work)?;
+                    if arguments.len() != 1 || arguments[0].1 != argument_port {
+                        return Err(Failure::Invalid);
+                    }
+                    // Any suspension still requires exclusive ownership of
+                    // the checked current ledger until this call returns.
+                    requires_exclusive_update = true;
+                    next = Phase::Encoding {
+                        port,
+                        context,
+                        ordinal,
+                        role,
+                        entry: from,
+                        witness,
+                    };
                 } else if source_position(scope, focus, before, initialization.call(), work)? {
                     if phase != Phase::BeforeInitialization {
                         return Err(Failure::Invalid);
@@ -3198,6 +3767,83 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
                         phase
                     };
                     match return_phase {
+                        Phase::Encoding {
+                            port,
+                            context,
+                            ordinal,
+                            role,
+                            entry,
+                            witness: expected,
+                        } if witness == expected => {
+                            let invocation = encoder.ok_or(Failure::Invalid)?.invocation;
+                            let call = matched_source_return(
+                                scope,
+                                focus,
+                                &index,
+                                from,
+                                to,
+                                edge,
+                                native_return,
+                                invocation.call(),
+                                invocation.closure(),
+                                work,
+                            )?
+                            .ok_or(Failure::Invalid)?;
+                            if call.caller_value_context != context {
+                                return Err(Failure::Invalid);
+                            }
+                            let returned = (entry, to, witness, call.result);
+                            charge(
+                                work,
+                                encoder_returns
+                                    .len()
+                                    .checked_add(1)
+                                    .ok_or(Failure::Resource)?,
+                            )?;
+                            if !encoder_returns.contains(&returned) {
+                                encoder_returns
+                                    .try_reserve(1)
+                                    .map_err(|_| Failure::Resource)?;
+                                encoder_returns.push(returned);
+                            }
+                            next = Phase::Current {
+                                port,
+                                context,
+                                ordinal,
+                                role,
+                            };
+                        }
+                        Phase::Encoding { .. } => {
+                            let call = trace.call(witness, work)?;
+                            let length = encoder
+                                .and_then(|item| item.invocation.encoder_length())
+                                .filter(|(_, node)| node.index().ok() == Some(call.target));
+                            if let Some((binder, intrinsic)) = length {
+                                check_encoder_length_call(
+                                    scope,
+                                    focus,
+                                    call,
+                                    &codec_calls,
+                                    binder,
+                                    intrinsic,
+                                    work,
+                                )?;
+                            } else if !codec_closures.contains(&call.target)
+                                || call.expression != call.target
+                            {
+                                return Err(Failure::Invalid);
+                            }
+                            let before = states
+                                .get(from)
+                                .copied()
+                                .flatten()
+                                .ok_or(Failure::Invalid)?;
+                            let after =
+                                states.get(to).copied().flatten().ok_or(Failure::Invalid)?;
+                            network_completion::matched_return_checked(
+                                focus, edge, call, before, after, work,
+                            )?;
+                        }
                         Phase::Transitioning {
                             site,
                             witness: expected,
@@ -3522,6 +4168,9 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
         requires_exclusive_update,
         requires_peer_authentication,
         _transition_returns: transition_returns,
+        encoder_returns,
+        #[cfg(test)]
+        saw_encoder_length,
         transition_bindings,
         transitions: result,
         current: current_points,
@@ -3581,8 +4230,65 @@ pub(super) struct SameFocusLedger<'a> {
     entry: crate::core::NodeId,
     side: u8,
     current: &'a [(usize, usize, usize, crate::resolved::BinderId)],
+    encoder_returns: &'a [(usize, usize, usize, usize)],
+    ledger_constructor: crate::types::ConstructorId,
+    output_cons: crate::types::ConstructorId,
     requires_exclusive_update: bool,
     requires_peer_authentication: bool,
+}
+
+/// Untrusted coordinates for a direct match of the current ledger's output
+/// head followed by a call. State identifiers belong only to this focus.
+#[allow(dead_code)]
+#[derive(Clone, Copy)]
+pub(super) struct OutputHeadCall {
+    pub(super) ledger_state: usize,
+    pub(super) output_state: usize,
+    pub(super) call_state: usize,
+    pub(super) ledger_match: crate::core::NodeId,
+    pub(super) ledger_arm: usize,
+    pub(super) output_match: crate::core::NodeId,
+    pub(super) output_arm: usize,
+    pub(super) call: crate::core::NodeId,
+    pub(super) role: crate::resolved::BinderId,
+}
+
+/// The selected call argument is the selected head of this current ledger's
+/// outputs. An encoder consumer must authenticate this exact state and value
+/// context in the borrowed focus, not just the source call coordinate. This
+/// says nothing about dequeue, encoding, sending or a peer.
+#[allow(dead_code)]
+pub(super) struct CheckedCurrentOutputArgument<'a> {
+    _focus: &'a control::CompletionFocus<'a>,
+    pub(super) owner: crate::core::NodeId,
+    pub(super) entry: crate::core::NodeId,
+    pub(super) side: u8,
+    pub(super) call: crate::core::NodeId,
+    pub(super) argument: crate::core::NodeId,
+    pub(super) call_state: usize,
+    pub(super) value_context: usize,
+    pub(super) role: crate::resolved::BinderId,
+    ledger_input: crate::core::NodeId,
+    result_match: Option<crate::core::NodeId>,
+    ledger_code: usize,
+    ledger_arm: usize,
+    output_code: usize,
+    output_arm: usize,
+    pub(super) requires_history_and_peer_allocator: bool,
+    pub(super) requires_exclusive_update: bool,
+    pub(super) requires_peer_authentication: bool,
+}
+
+/// A focus-local successful encoder result. Its private port can only be
+/// inspected while the same focus is borrowed; it grants no send authority.
+#[allow(dead_code)]
+pub(super) struct CheckedEncodedOutput<'a, 'focus> {
+    _output: &'a CheckedCurrentOutputArgument<'focus>,
+    call_state: usize,
+    return_witness: usize,
+    result_state: usize,
+    bytes_binder: crate::resolved::BinderId,
+    bytes_port: usize,
 }
 
 /// A successful check remains conditional on history, peer identity and the
@@ -3665,6 +4371,514 @@ impl<'a> SameFocusLedger<'a> {
             requires_peer_authentication: self.requires_peer_authentication,
         }))
     }
+
+    /// Check the direct source shape `match ledger { Ledger(_, _, outputs) =>
+    /// match outputs { OutputCons(head, _) => call(head), ... } }` or an
+    /// immediately matched call result at the actual selected edges. The
+    /// caller must separately authenticate the nominated call and its result
+    /// match in this focus.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "reserved for the N4 same-focus consumer")
+    )]
+    pub(super) fn checked_output_head_call(
+        &self,
+        nominated: &OutputHeadCall,
+        work: &mut TypeWorkBudget,
+    ) -> Result<CheckedCurrentOutputArgument<'_>, Failure> {
+        use crate::core::{CorePatternKind, EffectExprKind, PureComputation, PureExprKind};
+
+        let nodes = self.scope.nodes();
+        let matching = |id: crate::core::NodeId| {
+            if id.arena() != self.scope.arena() {
+                return Err(Failure::Invalid);
+            }
+            let index = id.index().map_err(|_| Failure::Invalid)?;
+            match nodes.get(index).map(|node| &node.kind) {
+                Some(EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(
+                    matching,
+                )))) => Ok(matching),
+                _ => Err(Failure::Invalid),
+            }
+        };
+        charge(work, 3)?;
+        let ledger = matching(nominated.ledger_match)?;
+        let output = matching(nominated.output_match)?;
+        let ledger_arm = ledger
+            .arms()
+            .get(nominated.ledger_arm)
+            .ok_or(Failure::Invalid)?;
+        let output_arm = output
+            .arms()
+            .get(nominated.output_arm)
+            .ok_or(Failure::Invalid)?;
+        if ledger_arm.body() != nominated.output_match {
+            return Err(Failure::Invalid);
+        }
+        let result_match = if output_arm.body() == nominated.call {
+            None
+        } else {
+            let wrapper = matching(output_arm.body())?;
+            if wrapper.scrutinee() != nominated.call {
+                return Err(Failure::Invalid);
+            }
+            Some(output_arm.body())
+        };
+        let CorePatternKind::Constructor {
+            constructor,
+            payload: Some(payload),
+        } = &ledger_arm.pattern().kind
+        else {
+            return Err(Failure::Invalid);
+        };
+        if *constructor != self.ledger_constructor {
+            return Err(Failure::Invalid);
+        }
+        let CorePatternKind::Tuple(fields) = &payload.kind else {
+            return Err(Failure::Invalid);
+        };
+        let [first, second, outputs] = fields.as_ref() else {
+            return Err(Failure::Invalid);
+        };
+        let (
+            CorePatternKind::Wildcard,
+            CorePatternKind::Wildcard,
+            CorePatternKind::Binder(outputs),
+        ) = (&first.kind, &second.kind, &outputs.kind)
+        else {
+            return Err(Failure::Invalid);
+        };
+        let CorePatternKind::Constructor {
+            constructor,
+            payload: Some(payload),
+        } = &output_arm.pattern().kind
+        else {
+            return Err(Failure::Invalid);
+        };
+        if *constructor != self.output_cons {
+            return Err(Failure::Invalid);
+        }
+        let CorePatternKind::Tuple(fields) = &payload.kind else {
+            return Err(Failure::Invalid);
+        };
+        let [head, tail] = fields.as_ref() else {
+            return Err(Failure::Invalid);
+        };
+        let (CorePatternKind::Binder(head), CorePatternKind::Wildcard) = (&head.kind, &tail.kind)
+        else {
+            return Err(Failure::Invalid);
+        };
+        let variable = |id: crate::core::NodeId| {
+            if id.arena() != self.scope.arena() {
+                return Err(Failure::Invalid);
+            }
+            let index = id.index().map_err(|_| Failure::Invalid)?;
+            match nodes.get(index).map(|node| &node.kind) {
+                Some(EffectExprKind::Pure(PureExprKind::Variable(variable))) => {
+                    Ok(variable.binder())
+                }
+                _ => Err(Failure::Invalid),
+            }
+        };
+        if variable(ledger.scrutinee())? != nominated.role
+            || variable(output.scrutinee())? != outputs.id()
+        {
+            return Err(Failure::Invalid);
+        }
+        if nominated.call.arena() != self.scope.arena() {
+            return Err(Failure::Invalid);
+        }
+        let call_index = nominated.call.index().map_err(|_| Failure::Invalid)?;
+        let Some(EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(call)))) =
+            nodes.get(call_index).map(|node| &node.kind)
+        else {
+            return Err(Failure::Invalid);
+        };
+        let argument = call.argument();
+        if variable(argument)? != head.id() {
+            return Err(Failure::Invalid);
+        }
+
+        let trace = self.focus.trace()?;
+        let before_ledger = trace.state(nominated.ledger_state, work)?;
+        let before_output = trace.state(nominated.output_state, work)?;
+        let before_call = trace.state(nominated.call_state, work)?;
+        if (before_ledger.context, before_ledger.value_context)
+            != (before_output.context, before_output.value_context)
+            || (before_output.context, before_output.value_context)
+                != (before_call.context, before_call.value_context)
+            || !source_position(
+                self.scope,
+                self.focus,
+                before_output,
+                nominated.output_match,
+                work,
+            )?
+            || !source_position(self.scope, self.focus, before_call, nominated.call, work)?
+        {
+            return Err(Failure::Invalid);
+        }
+        for (state, site) in [
+            (nominated.ledger_state, nominated.ledger_match),
+            (nominated.output_state, nominated.output_match),
+            (nominated.call_state, nominated.call),
+        ] {
+            self.checked_input(state, site, ledger.scrutinee(), nominated.role, work)?
+                .ok_or(Failure::Invalid)?;
+        }
+        let mut selected = [false; 2];
+        trace.visit_edges(work, |from, _, transition, _| {
+            if transition
+                == (control::CompletionTransition::Choice {
+                    ordinal: nominated.ledger_arm,
+                })
+                && from == nominated.ledger_state
+            {
+                selected[0] = true;
+            }
+            if transition
+                == (control::CompletionTransition::Choice {
+                    ordinal: nominated.output_arm,
+                })
+                && from == nominated.output_state
+            {
+                selected[1] = true;
+            }
+            Ok(())
+        })?;
+        if selected != [true, true] {
+            return Err(Failure::Invalid);
+        }
+        let mut address = before_call.stack;
+        if let Some(result_match) = result_match {
+            charge(work, before_call.heap.len())?;
+            let mut edges = before_call
+                .heap
+                .iter()
+                .filter(|edge| edge.address == address);
+            let edge = edges.next().ok_or(Failure::Invalid)?;
+            let code = result_match
+                .index()
+                .map_err(|_| Failure::Invalid)?
+                .checked_add(1)
+                .ok_or(Failure::Resource)?;
+            if edges.next().is_some()
+                || edge.frame
+                    != (control::Frame::Next {
+                        position: control::Position { code, next: 1 },
+                        context: before_call.context,
+                        value_context: before_call.value_context,
+                    })
+            {
+                return Err(Failure::Invalid);
+            }
+            address = edge.next;
+        }
+        for (code, ordinal) in [
+            (before_output.position.code, nominated.output_arm),
+            (before_ledger.position.code, nominated.ledger_arm),
+        ] {
+            charge(work, before_call.heap.len())?;
+            let mut edges = before_call
+                .heap
+                .iter()
+                .filter(|edge| edge.address == address);
+            let edge = edges.next().ok_or(Failure::Invalid)?;
+            if edges.next().is_some()
+                || edge.frame
+                    != (control::Frame::CaseReturn {
+                        code,
+                        ordinal,
+                        context: before_call.context,
+                        value_context: before_call.value_context,
+                    })
+            {
+                return Err(Failure::Invalid);
+            }
+            address = edge.next;
+        }
+        let values = self.focus.values();
+        let project =
+            |state: &control::State, ordinal, constructor, field, work: &mut TypeWorkBudget| {
+                let (source, _, _) = values
+                    .existing_choice(state.position.code, state.value_context, work)?
+                    .ok_or(Failure::Invalid)?;
+                let bindings = values.existing_arm_bindings(
+                    state.position.code,
+                    ordinal,
+                    state.value_context,
+                    work,
+                )?;
+                let [(binding, projection)] = bindings.as_slice() else {
+                    return Err(Failure::Invalid);
+                };
+                let (payload, actual_field, actual_constructor) =
+                    values.existing_pattern_projection(*projection, work)?;
+                let (actual_source, payload_field, payload_constructor) =
+                    values.existing_pattern_projection(payload, work)?;
+                if actual_source != source
+                    || payload_field != 0
+                    || payload_constructor != Some(constructor)
+                    || actual_field != field
+                    || actual_constructor.is_some()
+                {
+                    return Err(Failure::Invalid);
+                }
+                Ok((source, *binding))
+            };
+        let (ledger_source, outputs_port) = project(
+            before_ledger,
+            nominated.ledger_arm,
+            self.ledger_constructor,
+            2,
+            work,
+        )?;
+        let (output_source, head_port) = project(
+            before_output,
+            nominated.output_arm,
+            self.output_cons,
+            0,
+            work,
+        )?;
+        let output_code = output
+            .scrutinee()
+            .index()
+            .map_err(|_| Failure::Invalid)?
+            .checked_add(1)
+            .ok_or(Failure::Resource)?;
+        let (actual_output, output_origin) =
+            values.existing_forward_ports(output_code, before_output.value_context, work)?;
+        let argument_code = argument
+            .index()
+            .map_err(|_| Failure::Invalid)?
+            .checked_add(1)
+            .ok_or(Failure::Resource)?;
+        let (_, argument_origin) =
+            values.existing_forward_ports(argument_code, before_call.value_context, work)?;
+        let input_code = ledger
+            .scrutinee()
+            .index()
+            .map_err(|_| Failure::Invalid)?
+            .checked_add(1)
+            .ok_or(Failure::Resource)?;
+        let (actual_ledger, _) =
+            values.existing_forward_ports(input_code, before_ledger.value_context, work)?;
+        if actual_ledger != ledger_source
+            || actual_output != output_source
+            || output_origin != outputs_port
+            || argument_origin != head_port
+        {
+            return Err(Failure::Invalid);
+        }
+        Ok(CheckedCurrentOutputArgument {
+            _focus: self.focus,
+            owner: self.scope.owner(),
+            entry: self.entry,
+            side: self.side,
+            call: nominated.call,
+            argument,
+            call_state: nominated.call_state,
+            value_context: before_call.value_context,
+            role: nominated.role,
+            ledger_input: ledger.scrutinee(),
+            result_match,
+            ledger_code: before_ledger.position.code,
+            ledger_arm: nominated.ledger_arm,
+            output_code: before_output.position.code,
+            output_arm: nominated.output_arm,
+            requires_history_and_peer_allocator: true,
+            requires_exclusive_update: self.requires_exclusive_update,
+            requires_peer_authentication: self.requires_peer_authentication,
+        })
+    }
+
+    /// Bind a checked output occurrence to the actual matched normal return
+    /// and selected Encoded payload. Failure arms yield no such witness.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "reserved for the N4 same-focus consumer")
+    )]
+    pub(super) fn checked_encoded_output<'query, 'focus>(
+        &'query self,
+        output: &'query CheckedCurrentOutputArgument<'focus>,
+        result: &crate::core::ledger_checker::codec::CodecResultMatch,
+        state_id: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<CheckedEncodedOutput<'query, 'focus>, Failure> {
+        use crate::core::ledger_checker::codec::CodecResultArm;
+        use crate::core::{CorePatternKind, EffectExprKind, PureComputation, PureExprKind};
+        if !std::ptr::eq(output._focus, self.focus)
+            || result.call() != output.call
+            || output.result_match != Some(result.matching())
+        {
+            return Err(Failure::Invalid);
+        }
+        let Some(CodecResultArm::Encoded { bytes, .. }) = result.arm(0) else {
+            return Err(Failure::Invalid);
+        };
+        let trace = self.focus.trace()?;
+        let choice = trace.state(state_id, work)?;
+        if choice.value_context != output.value_context
+            || !source_position(self.scope, self.focus, choice, result.matching(), work)?
+            || self
+                .checked_input(
+                    state_id,
+                    result.matching(),
+                    output.ledger_input,
+                    output.role,
+                    work,
+                )?
+                .is_none()
+        {
+            return Err(Failure::Invalid);
+        }
+        let match_index = result.matching().index().map_err(|_| Failure::Invalid)?;
+        let Some(EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(matching)))) =
+            self.scope.nodes().get(match_index).map(|node| &node.kind)
+        else {
+            return Err(Failure::Invalid);
+        };
+        let arm = matching.arms().first().ok_or(Failure::Invalid)?;
+        let CorePatternKind::Constructor {
+            constructor,
+            payload: Some(payload),
+        } = &arm.pattern().kind
+        else {
+            return Err(Failure::Invalid);
+        };
+        if !matches!(&payload.kind, CorePatternKind::Binder(binder) if binder.id() == bytes) {
+            return Err(Failure::Invalid);
+        }
+        // Select only actual returns from this call occurrence which reach
+        // the nominated Choice through its saved Match continuation. Distinct
+        // return states may represent different encoder branches.
+        charge(work, self.encoder_returns.len())?;
+        let code = match_index.checked_add(1).ok_or(Failure::Resource)?;
+        let mut selected_return = None;
+        for &(entry, returned, witness, result_port) in self.encoder_returns {
+            if entry != output.call_state {
+                continue;
+            }
+            let returned_state = trace.state(returned, work)?;
+            charge(work, returned_state.heap.len())?;
+            let mut top = returned_state
+                .heap
+                .iter()
+                .filter(|edge| edge.address == returned_state.stack);
+            let Some(&next) = top.next() else { continue };
+            if top.next().is_some()
+                || next.frame
+                    != (control::Frame::Next {
+                        position: control::Position { code, next: 1 },
+                        context: choice.context,
+                        value_context: choice.value_context,
+                    })
+            {
+                continue;
+            }
+            let mut details = Vec::new();
+            trace.visit_details(work, |id, detail, work| {
+                if detail == control::CompletionDetail::Return(next) {
+                    charge(work, 1)?;
+                    details.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    details.push(id);
+                }
+                Ok(())
+            })?;
+            let mut intermediates = Vec::new();
+            let mut selected = false;
+            trace.visit_edges(work, |from, to, transition, work| {
+                charge(work, details.len())?;
+                if from == returned
+                    && matches!(transition, control::CompletionTransition::Detail(id) if details.contains(&id))
+                {
+                    charge(work, 1)?;
+                    intermediates.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    intermediates.push(to);
+                }
+                if from == state_id
+                    && transition == (control::CompletionTransition::Choice { ordinal: 0 })
+                {
+                    selected = true;
+                }
+                Ok(())
+            })?;
+            let mut connected = false;
+            trace.visit_edges(work, |from, to, transition, work| {
+                charge(work, intermediates.len())?;
+                if intermediates.contains(&from)
+                    && to == state_id
+                    && transition == (control::CompletionTransition::Sequence { ordinal: 1 })
+                {
+                    connected = true;
+                }
+                Ok(())
+            })?;
+            if selected && connected {
+                let actual = (witness, result_port);
+                if selected_return
+                    .replace(actual)
+                    .is_some_and(|old| old != actual)
+                {
+                    return Err(Failure::Invalid);
+                }
+            }
+        }
+        let (witness, result_port) = selected_return.ok_or(Failure::Invalid)?;
+        let (scrutinee, _, _) = self
+            .focus
+            .values()
+            .existing_choice(choice.position.code, choice.value_context, work)?
+            .ok_or(Failure::Invalid)?;
+        if scrutinee != result_port {
+            return Err(Failure::Invalid);
+        }
+        let bindings = self.focus.values().existing_arm_bindings(
+            choice.position.code,
+            0,
+            choice.value_context,
+            work,
+        )?;
+        let [(bytes_port, projection)] = bindings.as_slice() else {
+            return Err(Failure::Invalid);
+        };
+        let (source, field, projected) = self
+            .focus
+            .values()
+            .existing_pattern_projection(*projection, work)?;
+        if source != result_port || field != 0 || projected != Some(*constructor) {
+            return Err(Failure::Invalid);
+        }
+        let mut address = choice.stack;
+        for (code, ordinal) in [
+            (output.output_code, output.output_arm),
+            (output.ledger_code, output.ledger_arm),
+        ] {
+            charge(work, choice.heap.len())?;
+            let mut edges = choice.heap.iter().filter(|edge| edge.address == address);
+            let edge = edges.next().ok_or(Failure::Invalid)?;
+            if edges.next().is_some()
+                || edge.frame
+                    != (control::Frame::CaseReturn {
+                        code,
+                        ordinal,
+                        context: choice.context,
+                        value_context: choice.value_context,
+                    })
+            {
+                return Err(Failure::Invalid);
+            }
+            address = edge.next;
+        }
+        Ok(CheckedEncodedOutput {
+            _output: output,
+            call_state: output.call_state,
+            return_witness: witness,
+            result_state: state_id,
+            bytes_binder: bytes,
+            bytes_port: *bytes_port,
+        })
+    }
 }
 
 #[expect(
@@ -3728,6 +4942,26 @@ pub(super) fn with_observed_ledger_plan<R>(
     program: &crate::core::UnvalidatedEffectProgram,
     linked: &crate::evidence_validation::ValidatedInterfaceProgram,
     plan: &crate::core::ledger_checker::plan::LedgerPlan<'_>,
+    work: &mut TypeWorkBudget,
+    inspect: impl FnOnce(&SameFocusLedger<'_>, &mut TypeWorkBudget) -> Result<R, Failure>,
+) -> Result<(PendingLedgerObservation, R), Failure> {
+    with_observed_ledger_plan_and_encoder(
+        scope, graph, worker, program, linked, plan, None, work, inspect,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The optional encoder is checked in the same worker focus"
+)]
+pub(super) fn with_observed_ledger_plan_and_encoder<R>(
+    scope: &NetworkNativeIdentityScope<'_>,
+    graph: &SummaryGraph,
+    worker: &control::Analysis<'_>,
+    program: &crate::core::UnvalidatedEffectProgram,
+    linked: &crate::evidence_validation::ValidatedInterfaceProgram,
+    plan: &crate::core::ledger_checker::plan::LedgerPlan<'_>,
+    encoder: Option<&EncoderNomination<'_, '_>>,
     work: &mut TypeWorkBudget,
     inspect: impl FnOnce(&SameFocusLedger<'_>, &mut TypeWorkBudget) -> Result<R, Failure>,
 ) -> Result<(PendingLedgerObservation, R), Failure> {
@@ -3923,6 +5157,7 @@ pub(super) fn with_observed_ledger_plan<R>(
         &receives,
         plan.initialization_binding,
         &transition_refs,
+        encoder,
         default_handler,
         plan.side,
         work,
@@ -3937,6 +5172,9 @@ pub(super) fn with_observed_ledger_plan<R>(
             entry,
             side: plan.side,
             current: &observed.current,
+            encoder_returns: &observed.encoder_returns,
+            ledger_constructor: plan.initialization_constructors.ledger,
+            output_cons: plan.initialization_constructors.outputs_more,
             requires_exclusive_update: observed.requires_exclusive_update,
             requires_peer_authentication: observed.requires_peer_authentication,
         },
@@ -4077,6 +5315,70 @@ mod tests {
         );
         assert_ne!(stale, two_calls);
         run_worker_case(&stale, false, true, None, None);
+    }
+
+    #[test]
+    fn current_output_head_is_the_direct_call_argument() {
+        let source = include_str!("../../../tests/fixtures/n3-ledger-worker.ash");
+        let source = source.replace(
+            "    let ignored = match reserve_job (initial (), 0, LedgerTypes.Root, 0, payload) {\n        (successor, status) => successor\n    }",
+            "    let decoy = LedgerTypes.AckOut(LedgerTypes.NoParent, LedgerTypes.Root)\n    let original = initial ()\n    let ignored = match reserve_job (original, 0, LedgerTypes.Root, 0, payload) {\n        (successor, status) => match successor {\n            Ledger(_, _, outputs) => match outputs {\n                NoOutputs => sink_empty decoy\n                OutputCons(head, _) => sink_output head\n            }\n        }\n    }",
+        ).replace(
+            "main : Unit -> Unit",
+            "sink_output : LedgerTypes.Envelope -> Unit\nsink_output _ = ()\nsink_empty : LedgerTypes.Envelope -> Unit\nsink_empty _ = ()\n\nmain : Unit -> Unit",
+        );
+        assert!(source.contains("OutputCons(head, _) => sink_output head"));
+        run_worker_case(&source, true, false, None, None);
+        let stale = source.replace(
+            "match successor {\n            Ledger",
+            "match original {\n            Ledger",
+        );
+        assert_ne!(source, stale);
+        run_worker_case(&stale, true, false, None, None);
+        let wrong_head = source.replace("sink_output head", "sink_output decoy");
+        assert_ne!(source, wrong_head);
+        run_worker_case(&wrong_head, true, false, None, None);
+        let matched = source
+            .replace(
+                "sink_output : LedgerTypes.Envelope -> Unit\nsink_output _ = ()",
+                "type SinkResult =\n    Encoded\n    | EncodeFailed\nsink_output : LedgerTypes.Envelope -> SinkResult\nsink_output _ = Encoded",
+            )
+            .replace(
+                "OutputCons(head, _) => sink_output head",
+                "OutputCons(head, _) => match sink_output head {\n                    Encoded => ()\n                    EncodeFailed => ()\n                }",
+            )
+            .replace(
+                "    let ignored = match reserve_job (original, 0, LedgerTypes.Root, 0, payload) {\n        (successor, status) => match successor {",
+                "    let (successor, status) = reserve_job (original, 0, LedgerTypes.Root, 0, payload)\n    let ignored = match successor {",
+            )
+            .replace("            }\n        }\n    }\n    ()\n}", "            }\n    }\n    ()\n}");
+        assert_ne!(source, matched);
+        run_worker_case(&matched, true, false, None, None);
+    }
+
+    #[test]
+    fn actual_encoder_receives_the_current_output_head() {
+        let source = include_str!("../../../tests/fixtures/n3-ledger-worker.ash");
+        let source = source.replace(
+            "import network_types as LedgerTypes",
+            "import network_types as LedgerTypes\nimport network_codec as Codec",
+        ).replace(
+            "worker (endpoint, payload) = {\n    let received = Network.try_receive endpoint\n    let ignored = match reserve_job (initial (), 0, LedgerTypes.Root, 0, payload) {\n        (successor, status) => successor\n    }\n    ()\n}",
+            "worker (endpoint, payload) = {\n    let received = Network.try_receive endpoint\n    let original = initial ()\n    let (successor, status) = reserve_job (original, 0, LedgerTypes.Root, 0, payload)\n    let encoded_success = match successor {\n        Ledger(_, _, outputs) => match outputs {\n            NoOutputs => false\n            OutputCons(head, _) => match Codec.encode head {\n                Codec.Encoded(bytes) => true\n                Codec.EncodeFailed => false\n            }\n        }\n    }\n    ()\n}",
+        );
+        assert!(source.contains("match Codec.encode head"));
+        run_worker_case(&source, true, false, None, None);
+        let stale = source.replace(
+            "match successor {\n        Ledger",
+            "match original {\n        Ledger",
+        );
+        assert_ne!(source, stale);
+        run_worker_case(&stale, true, false, None, None);
+        let wrong_head = source
+            .replace("    let original = initial ()", "    let decoy = LedgerTypes.AckOut(LedgerTypes.NoParent, LedgerTypes.Root)\n    let original = initial ()")
+            .replace("Codec.encode head", "Codec.encode decoy");
+        assert_ne!(source, wrong_head);
+        run_worker_case(&wrong_head, true, false, None, None);
     }
 
     #[test]
@@ -4392,6 +5694,32 @@ mod tests {
             })
             .expect("linked shared network types");
         let constructor = |name: &str| {
+            if source.contains("import network_codec as Codec")
+                && matches!(
+                    name,
+                    "Encoded" | "EncodeFailed" | "Parts" | "Negative" | "ByteAt" | "InvalidIndex"
+                )
+            {
+                return program
+                    .registry
+                    .constructors()
+                    .iter()
+                    .find(|item| {
+                        let module = item.id.owner().module();
+                        item.spelling == name
+                            && match name {
+                                "Parts" | "Negative" => module.is_builtin_integer(),
+                                "ByteAt" | "InvalidIndex" => module.is_builtin_bytes(),
+                                _ => provenance.iter().any(|(id, file)| {
+                                    *id == module
+                                        && file.text()
+                                            == include_str!("../../../libraries/network_codec.ash")
+                                }),
+                            }
+                    })
+                    .expect("actual codec constructor")
+                    .id;
+            }
             let module = if matches!(
                 name,
                 "Root" | "Work" | "NoParent" | "Parent" | "WorkOut" | "AckOut"
@@ -4522,7 +5850,11 @@ mod tests {
                 })
                 .expect("actual returned pair match")
         };
-        let binding = if two_calls || recursive_driver {
+        let binding = if two_calls
+            || recursive_driver
+            || source.contains("sink_output :")
+            || source.contains("import network_codec as Codec")
+        {
             let initial = candidate("initial").binder;
             Some(
                 program
@@ -4963,6 +6295,83 @@ mod tests {
         };
         let plan_initial = candidate("initial");
         let plan_initial_call = initialization.call();
+        let encoder = if source.contains("import network_codec as Codec") {
+            use crate::core::ledger_checker::codec::{
+                EncoderConstructors, EncoderDefinitions, check_encode_result_match,
+                nominate_encode_call,
+            };
+            let encode = candidate("encode");
+            let encode_call = program
+                .nodes
+                .iter()
+                .enumerate()
+                .find_map(|(index, node)| {
+                    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
+                        app,
+                    ))) = &node.kind
+                    else {
+                        return None;
+                    };
+                    let EffectExprKind::Pure(PureExprKind::Variable(variable)) =
+                        &program.nodes.get(app.function().index().ok()?)?.kind
+                    else {
+                        return None;
+                    };
+                    (variable.binder() == encode.binder)
+                        .then(|| NodeId::new(program.arena, index as u32))
+                })
+                .expect("actual encoder call");
+            let definitions = EncoderDefinitions {
+                encode,
+                work: candidate("encode_work"),
+                ack: candidate("encode_ack"),
+                work_parent: candidate("encode_work_parent"),
+                work_payload: candidate("encode_work_payload"),
+                copy: candidate("copy_bytes"),
+                address: candidate("write_address"),
+                identity: candidate("write_identity"),
+                nat: candidate("write_nat"),
+                digits: candidate("write_digits"),
+                append: candidate("append"),
+                split: candidate("split_base256"),
+                append_byte: candidate("append_byte"),
+                empty: candidate("empty"),
+                length: candidate("length"),
+                at: candidate("at"),
+            };
+            let constructors = EncoderConstructors {
+                root: constructor("Root"),
+                work_id: constructor("Work"),
+                no_parent: constructor("NoParent"),
+                parent: constructor("Parent"),
+                work_out: constructor("WorkOut"),
+                ack_out: constructor("AckOut"),
+                encoded: constructor("Encoded"),
+                encode_failed: constructor("EncodeFailed"),
+                split_parts: constructor("Parts"),
+                split_negative: constructor("Negative"),
+                byte_at: constructor("ByteAt"),
+                invalid_index: constructor("InvalidIndex"),
+            };
+            let invocation = nominate_encode_call(
+                &program,
+                &linked,
+                encode_call,
+                definitions,
+                constructors,
+                &mut work,
+            )
+            .expect("actual linked encoder");
+            let result =
+                check_encode_result_match(&program, &invocation, matching(encode_call), &mut work)
+                    .expect("actual encoder result match");
+            Some((invocation, result))
+        } else {
+            None
+        };
+        let encoder_nomination = encoder
+            .as_ref()
+            .map(|(invocation, result)| EncoderNomination { invocation, result });
         let default_handler = checked_entry_default_handler(&program, &mut work).unwrap();
         let check_budget = budget.is_some();
         crate::core::validate::with_network_native_scope_diagnostic(
@@ -5000,6 +6409,7 @@ mod tests {
                             nominations
                                 .as_ref()
                                 .map_or(&[][..], |items| items.as_slice()),
+                            encoder_nomination.as_ref(),
                             default_handler,
                             1,
                             budget,
@@ -5016,6 +6426,141 @@ mod tests {
                         }
                         if two_calls {
                             assert!(observed.transitions.len() >= 2);
+                        }
+                        if source.contains("sink_output :") || encoder.is_some() {
+                            let sink = encoder.as_ref().map_or_else(|| candidate("sink_output").binder, |_| candidate("encode").binder);
+                            let sink_call = program.nodes.iter().enumerate().find_map(|(index, node)| {
+                                let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(app))) = &node.kind else { return None };
+                                let EffectExprKind::Pure(PureExprKind::Variable(variable)) = &program.nodes.get(app.function().index().ok()?)?.kind else { return None };
+                                (variable.binder() == sink).then(|| NodeId::new(program.arena, index as u32))
+                            }).expect("actual output sink call");
+                            let find_parent_match = |body: NodeId| {
+                                program.nodes.iter().enumerate().find_map(|(index, node)| {
+                                    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(matching))) = &node.kind else { return None };
+                                    matching.arms().iter().position(|arm| arm.body() == body)
+                                        .map(|arm| (NodeId::new(program.arena, index as u32), arm))
+                                }).expect("actual enclosing match")
+                            };
+                            let sink_body = if let Some((_, result)) = &encoder {
+                                result.matching()
+                            } else if source.contains("type SinkResult =") {
+                                program.nodes.iter().enumerate().find_map(|(index, node)| {
+                                    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(matching))) = &node.kind else { return None };
+                                    (matching.scrutinee() == sink_call).then(|| NodeId::new(program.arena, index as u32))
+                                }).expect("actual sink result match")
+                            } else {
+                                sink_call
+                            };
+                            let (output_match, output_arm) = find_parent_match(sink_body);
+                            let (ledger_match, ledger_arm) = find_parent_match(output_match);
+                            let plan = crate::core::ledger_checker::plan::LedgerPlan {
+                                owner, side: 1, initialization_call: plan_initial_call,
+                                initialization: plan_initial, initialization_constructors: state,
+                                initialization_role: InitializationRole::Root,
+                                initialization_binding: binding.map(|(node, _)| node),
+                                registrations: std::slice::from_ref(&plan_registration), transitions: &[], drivers: &[],
+                                receives: receive_plan.as_slice(),
+                            };
+                            let stale = source.contains("match original {\n            Ledger")
+                                || source.contains("match original {\n        Ledger")
+                                || source.contains("sink_output decoy") || source.contains("Codec.encode decoy");
+                            let (_, ()) = with_observed_ledger_plan_and_encoder(
+                                scope, graph, worker, &program, &linked, &plan, encoder_nomination.as_ref(), budget,
+                                |query, work| {
+                                    let states = query.focus.trace()?.indexed_states(work)?;
+                                    let mut positions = [Vec::new(), Vec::new(), Vec::new()];
+                                    for &(id, _, _, _) in query.current {
+                                        let actual = states.get(id).copied().flatten().ok_or(Failure::Invalid)?;
+                                        for (slot, node) in [ledger_match, output_match, sink_call].into_iter().enumerate() {
+                                            if source_position(scope, query.focus, actual, node, work)? {
+                                                positions[slot].push(id);
+                                            }
+                                        }
+                                    }
+                                    if !stale {
+                                        if encoder.is_some() {
+                                            assert!(observed.saw_encoder_length, "the actual encoder must call checked bytes length");
+                                        }
+                                        assert!(positions.iter().all(|items| !items.is_empty()), "all three source sites must be reached with a current ledger");
+                                    }
+                                    let mut found = false;
+                                    let mut encoded = false;
+                                    for &ledger_state in &positions[0] {
+                                        for &output_state in &positions[1] {
+                                            for &call_state in &positions[2] {
+                                                let nomination = OutputHeadCall {
+                                                    ledger_state, output_state, call_state, ledger_match, ledger_arm,
+                                                    output_match, output_arm, call: sink_call,
+                                                    role: registrations[0].1.ledger,
+                                                };
+                                                let before = work.used();
+                                                match query.checked_output_head_call(&nomination, work) {
+                                                    Ok(witness) => {
+                                                        let exact = work.used().checked_sub(before).ok_or(Failure::Invalid)?;
+                                                        assert_eq!((witness.owner, witness.entry, witness.side, witness.call), (owner, query.entry, 1, sink_call));
+                                                        assert_eq!((witness.call_state, witness.role), (call_state, registrations[0].1.ledger));
+                                                        assert_eq!(witness.value_context, states[call_state].ok_or(Failure::Invalid)?.value_context);
+                                                        assert!(witness.requires_history_and_peer_allocator);
+                                                        if let Some((_, result)) = &encoder {
+                                                            for &(result_state, _, _, _) in query.current {
+                                                                let actual = states.get(result_state).copied().flatten().ok_or(Failure::Invalid)?;
+                                                                if source_position(scope, query.focus, actual, result.matching(), work)? {
+                                                                    let before = work.used();
+                                                                    match query.checked_encoded_output(&witness, result, result_state, work) {
+                                                                        Ok(encoded_output) => {
+                                                                            let exact = work.used().checked_sub(before).ok_or(Failure::Invalid)?;
+                                                                            assert_eq!(encoded_output.call_state, call_state);
+                                                                            assert_eq!(encoded_output.result_state, result_state);
+                                                                            assert!(encoded_output._output.requires_exclusive_update);
+                                                                            assert!(encoded_output._output.requires_history_and_peer_allocator);
+                                                                            if !encoded {
+                                                                                assert!(exact > 1);
+                                                                                let mut same = TypeWorkBudget::with_limit(exact);
+                                                                                let _ = query.checked_encoded_output(&witness, result, result_state, &mut same)?;
+                                                                                let mut short = TypeWorkBudget::with_limit(exact - 1);
+                                                                                assert!(matches!(query.checked_encoded_output(&witness, result, result_state, &mut short), Err(Failure::Resource)));
+                                                                                assert!(matches!(query.checked_encoded_output(&witness, result, result_state, &mut short), Err(Failure::Resource)));
+                                                                                let mut spent = TypeWorkBudget::with_limit(exact);
+                                                                                spent.charge(1).map_err(|()| Failure::Resource)?;
+                                                                                assert!(matches!(query.checked_encoded_output(&witness, result, result_state, &mut spent), Err(Failure::Resource)));
+                                                                            }
+                                                                            encoded = true;
+                                                                        }
+                                                                        Err(Failure::Invalid) => {}
+                                                                        Err(error) => return Err(error),
+                                                                    }
+                                                                }
+                                                            }
+                                                            assert!(matches!(query.checked_encoded_output(&witness, result, call_state, work), Err(Failure::Invalid)), "the call occurrence is not an Encoded result arm");
+                                                        }
+                                                        let wrong_arm = OutputHeadCall { output_arm: output_arm + 1, ..nomination };
+                                                        assert!(matches!(query.checked_output_head_call(&wrong_arm, work), Err(Failure::Invalid)));
+                                                        if !found {
+                                                            assert!(exact > 1);
+                                                            let mut same = TypeWorkBudget::with_limit(exact);
+                                                            let _ = query.checked_output_head_call(&nomination, &mut same)?;
+                                                            let mut short = TypeWorkBudget::with_limit(exact - 1);
+                                                            assert!(matches!(query.checked_output_head_call(&nomination, &mut short), Err(Failure::Resource)));
+                                                            assert!(matches!(query.checked_output_head_call(&nomination, &mut short), Err(Failure::Resource)), "retry must use the remaining budget");
+                                                            let mut spent = TypeWorkBudget::with_limit(exact);
+                                                            spent.charge(1).map_err(|()| Failure::Resource)?;
+                                                            assert!(matches!(query.checked_output_head_call(&nomination, &mut spent), Err(Failure::Resource)));
+                                                        }
+                                                        found = true;
+                                                    }
+                                                    Err(Failure::Invalid) => {}
+                                                    Err(error) => return Err(error),
+                                                }
+                                            }
+                                        }
+                                    }
+                                    assert_eq!(found, !stale, "only the current successor's actual output may reach the sink");
+                                    if encoder.is_some() && !stale {
+                                        assert!(encoded, "actual Encoded result must follow a matched call return; returns: {:?}", query.encoder_returns);
+                                    }
+                                    Ok(())
+                                },
+                            )?;
                         }
                         if two_calls && exercise_plan != Some(false) {
                             let following_call = *calls.get(1).ok_or(Failure::Invalid)?;
@@ -5112,7 +6657,7 @@ mod tests {
                                 scope, graph, focus, &initialization, &registrations, &drivers,
                                 &receives, binding.map(|(node, _)| node),
                                 nominations.as_ref().map_or(&[][..], |items| items.as_slice()),
-                                default_handler, 1, work,
+                                None, default_handler, 1, work,
                             );
                             let mut measured = TypeWorkBudget::with_limit(500_000_000);
                             let _ = run(&mut measured)?;
@@ -5148,6 +6693,7 @@ mod tests {
                                 nominations
                                     .as_ref()
                                     .map_or(&[][..], |items| items.as_slice()),
+                                None,
                                 default_handler,
                                 1,
                                 &mut TypeWorkBudget::with_limit(0)
