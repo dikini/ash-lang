@@ -25807,6 +25807,80 @@ mod tests {
     }
 
     #[test]
+    fn control_send_rejects_direct_same_typed_core_request() {
+        use super::super::effect::EffectOperation;
+        let directory = LinkedValidationDirectory::create();
+        let entry = directory.write(
+            "entry.ash",
+            concat!(
+                "import @builtin.network as Network\n",
+                "effect Service<N> {\nsend : (Network.Worker<N>, Bytes) -> Network.SendResult\n}\n",
+                "send<N> : (Network.Worker<N>, Bytes) -> Network.SendResult ! {Service<N>}\n",
+                "send pair = perform Service<N>.send pair\n",
+                "main : Unit -> Unit\nmain () = ()\n",
+            ),
+        );
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+        let linked = validate_linked_facts_for_test(linked).unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let mut program = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let mut validator = Validator::new_modules(&program, &sources, &relation).unwrap();
+        validator.linked = Some(&linked);
+        validator
+            .run_effect()
+            .expect("the same-typed user operation is valid");
+        let _ = validator;
+        let api = program
+            .registry
+            .effects()
+            .iter()
+            .find_map(|effect| crate::resolved::NetworkApi::for_module(effect.id.module()))
+            .unwrap();
+        let index = program
+            .nodes
+            .iter()
+            .position(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Request(request)) => program
+                    .registry
+                    .effect(request.effect().effect())
+                    .is_some_and(|effect| effect.spelling == "Service"),
+                _ => false,
+            })
+            .expect("actual user request");
+        let EffectExprKind::Operation(EffectOperation::Request(request)) =
+            &mut program.nodes[index].kind
+        else {
+            unreachable!()
+        };
+        let sealed = EffectInstance::new_kinded(api.io(), request.effect().arguments().into());
+        request.effect = sealed.clone();
+        request.operation = OperationId::new(api.io(), 8);
+        program.nodes[index].effects = EffectRow::singleton(sealed);
+        let mut forged = Validator::new_modules(&program, &sources, &relation).unwrap();
+        forged.linked = Some(&linked);
+        let error = forged
+            .run_effect()
+            .expect_err("direct raw Control request is sealed");
+        assert_eq!(error.reason(), ValidationReason::EffectIdentity);
+        assert_eq!(error.node(), Some(node_id(program.arena, index).unwrap()));
+    }
+
+    #[test]
     fn network_send_authentication_reconstructs_the_owned_wrapper() {
         let directory = LinkedValidationDirectory::create();
         let entry = directory.write(
@@ -25838,6 +25912,9 @@ mod tests {
             .authenticate_network_call("try_send", 1)
             .expect("actual linked send wrapper");
         let required = validator.type_work.get();
+        let control = validator
+            .authenticate_network_call("send_control", 8)
+            .expect("actual linked control wrapper");
         validator
             .run_effect()
             .expect("ordinary program with authenticated builtin");
@@ -25942,6 +26019,58 @@ mod tests {
         assert!(forged.run_effect().is_err());
         let _ = forged;
         program.nodes[graft].kind = original;
+
+        // Both operations have the same domain and result. Changing only the
+        // operation of the actual Application wrapper must not turn it into an
+        // inline Control producer or borrow the canonical wrapper's authority.
+        let EffectExprKind::Operation(super::super::effect::EffectOperation::RegionBuffer(call)) =
+            &mut program.nodes[request.index().unwrap()].kind
+        else {
+            panic!("structural send")
+        };
+        let super::super::region::RegionBufferOperation::Network { operation, .. } =
+            &mut call.operation
+        else {
+            panic!("network operation")
+        };
+        let original_operation = *operation;
+        *operation = OperationId::new(original_operation.owner(), 8);
+        let mut forged = Validator::new_modules(&program, &sources, &relation).unwrap();
+        forged.linked = Some(&linked);
+        assert_eq!(
+            forged.run_effect().unwrap_err().reason(),
+            ValidationReason::EffectIdentity
+        );
+        let _ = forged;
+        let EffectExprKind::Operation(super::super::effect::EffectOperation::RegionBuffer(call)) =
+            &mut program.nodes[request.index().unwrap()].kind
+        else {
+            unreachable!()
+        };
+        let super::super::region::RegionBufferOperation::Network { operation, .. } =
+            &mut call.operation
+        else {
+            unreachable!()
+        };
+        *operation = original_operation;
+
+        // A copied structural request remains a real, correctly typed node but
+        // is not the one authenticated as the canonical wrapper's call.
+        let source = &program.nodes[control.index().unwrap()];
+        let duplicate = StoredNode {
+            dialect: source.dialect,
+            ty: source.ty.clone(),
+            effects: source.effects.clone(),
+            origin: source.origin.clone(),
+            kind: source.kind.clone(),
+        };
+        program.nodes.push(duplicate);
+        let mut forged = Validator::new_modules(&program, &sources, &relation).unwrap();
+        forged.linked = Some(&linked);
+        assert_eq!(
+            forged.run_effect().unwrap_err().reason(),
+            ValidationReason::EffectIdentity
+        );
     }
 
     #[test]
