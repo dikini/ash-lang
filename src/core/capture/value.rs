@@ -1674,7 +1674,7 @@ impl Graph {
                 };
                 let result_type = match (join, operation.operation()) {
                     (true, 1) => 7,
-                    (false, 1) => 5,
+                    (false, 1 | 8) => 5,
                     (false, 2) => 6,
                     (false, 3) => 7,
                     (false, 4) => 9,

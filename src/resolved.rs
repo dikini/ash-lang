@@ -236,7 +236,7 @@ impl NetworkApi {
                 || effect.parameters[0].id != TypeVariableId::resolved(self.module, parameter)
                 || effect.parameters[0].kind != Kind::Type
                 || effect.parameters[0].spelling != "N"
-                || effect.operations.len() != if id == self.io() { 8 } else { 2 }
+                || effect.operations.len() != if id == self.io() { 9 } else { 2 }
                 || effect.operations[0].id != OperationId::new(id, 0)
                 || effect.operations[0].spelling != "internal"
                 || !matches!(&effect.operations[0].annotation.ty, Type::Function(domain, value) if **domain == Type::Unit && **value == Type::Unit)
@@ -268,6 +268,13 @@ impl NetworkApi {
                                     if matches!((&**worker, &**owner), (Type::Nominal(worker), Type::Variable(variable))
                                         if *worker == self.worker() && *variable == effect.parameters[0].id)))
                             && matches!(&**result, Type::Nominal(result) if *result == NominalTypeId::new(self.module, 5)))
+                {
+                    return false;
+                }
+                let control = &effect.operations[8];
+                if control.id != OperationId::new(id, 8)
+                    || control.spelling != "send_control_internal"
+                    || control.annotation.ty != operation.annotation.ty
                 {
                     return false;
                 }

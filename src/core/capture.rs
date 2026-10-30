@@ -2351,7 +2351,7 @@ fn network_control_paths(
         // Join currently returns only Failed(IncompleteTeardown), after its
         // failure payload and result have both been constructed.
         (true, 1) => &[network_path(FailedOutcome, 2, false, false, FailedOutcome)],
-        (false, 1) => &[
+        (false, 1 | 8) => &[
             network_path(Sent, 1, false, false, Sent),
             network_path(Full, 1, false, false, Full),
             network_path(Closed, 1, false, false, Closed),

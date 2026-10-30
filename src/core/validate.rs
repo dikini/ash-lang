@@ -3734,7 +3734,7 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     ledger_plans: Option<&'program [super::ledger_checker::plan::LedgerPlan<'program>]>,
     ledger_observations: std::cell::RefCell<Vec<super::capture::PendingLedgerObservation>>,
     network_api: Option<crate::resolved::NetworkApi>,
-    authenticated_network_requests: Cell<[Option<NodeId>; 8]>,
+    authenticated_network_requests: Cell<[Option<NodeId>; 9]>,
     network_admissions: std::cell::RefCell<Vec<super::dialect::NetworkAdmission>>,
     network_worker_coverage: std::cell::RefCell<Vec<NetworkWorkerCoverage>>,
 
@@ -3979,7 +3979,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             ledger_plans: None,
             ledger_observations: std::cell::RefCell::new(Vec::new()),
             network_api: None,
-            authenticated_network_requests: Cell::new([None; 8]),
+            authenticated_network_requests: Cell::new([None; 9]),
             network_admissions: std::cell::RefCell::new(Vec::new()),
             network_worker_coverage: std::cell::RefCell::new(Vec::new()),
             binders: HashMap::new(),
@@ -14086,6 +14086,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
     ) -> Result<(), ValidationError> {
         if self.network_api.is_some() && self.linked.is_some() {
             let send = self.authenticate_network_call("try_send", 1)?;
+            let control = self.authenticate_network_call("send_control", 8)?;
+            self.reject_unchecked_control_references()?;
             let receive = self.authenticate_network_call("try_receive", 2)?;
             let finish = self.authenticate_network_call("finish_send", 3)?;
             let watch = self.authenticate_network_call("watch", 4)?;
@@ -14102,6 +14104,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 poll,
                 finish_receive,
                 settle,
+                control,
             ];
             for (i, call) in calls.iter().enumerate() {
                 if calls[..i].contains(call) {
@@ -15146,6 +15149,46 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         Ok(())
     }
 
+    // Until the N4 emission checker reconstructs actual driver paths, reject
+    // every source reference to the canonical wrapper, including aliases and
+    // unused definitions. The builtin's authenticated initializer is still
+    // validated; its existence alone grants no emission authority.
+    fn reject_unchecked_control_references(&self) -> Result<(), ValidationError> {
+        let invalid = || ValidationError::new(ValidationReason::EffectIdentity, None);
+        let linked = self.linked.ok_or_else(invalid)?;
+        let mut binder = None;
+        for group in linked.groups() {
+            if !group.module().is_builtin_network() {
+                continue;
+            }
+            self.charge_type_work(group.definitions().len())?;
+            for definition in group.definitions() {
+                let crate::resolved::ResolvedDefinitionKind::Equational(definition) =
+                    definition.kind()
+                else {
+                    continue;
+                };
+                if definition.interface.name.spelling == "send_control"
+                    && binder.replace(definition.interface.name.id).is_some()
+                {
+                    return Err(invalid());
+                }
+            }
+        }
+        let binder = binder.ok_or_else(invalid)?;
+        for (index, node) in self.program.nodes.iter().enumerate() {
+            self.charge_type_work(1)?;
+            if matches!(&node.kind, super::effect::EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == binder)
+            {
+                return Err(ValidationError::new(
+                    ValidationReason::EffectIdentity,
+                    Some(node_id(self.program.arena, index)?),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     // Reconstruct the initializer spine from the authenticated linked groups,
     // not from a marker, binder spelling, or an arbitrary Bind-shaped prefix.
     // This is only a structural precursor: it does not admit entry bodies,
@@ -16027,7 +16070,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                 .is_some_and(|api| {
                                     (effect.effect() == api.io()
                                         && operation.owner() == api.io()
-                                        && matches!(operation.operation(), 1..=7))
+                                        && matches!(operation.operation(), 1..=8))
                                         || (effect.effect() == api.join()
                                             && operation.owner() == api.join()
                                             && operation.operation() == 1)
@@ -25711,6 +25754,59 @@ mod tests {
     }
 
     #[test]
+    fn control_send_resolves_and_lowers_but_unchecked_use_is_rejected() {
+        let directory = LinkedValidationDirectory::create();
+        let entry = directory.write(
+            "entry.ash",
+            concat!(
+                "import @builtin.network as Network\n",
+                "send<N> : (Network.Worker<N>, Bytes) -> Network.SendResult ! {Network.IO<N>}\n",
+                "send pair = Network.send_control pair\n",
+                "main : Unit -> Unit\nmain () = ()\n",
+            ),
+        );
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+        let linked = validate_linked_facts_for_test(linked).unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let program = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let mut validator = Validator::new_modules(&program, &sources, &relation).unwrap();
+        validator.linked = Some(&linked);
+        let control = validator
+            .authenticate_network_call("send_control", 8)
+            .expect("canonical control wrapper");
+        assert_ne!(
+            control,
+            validator.authenticate_network_call("try_send", 1).unwrap()
+        );
+        assert!(
+            validator
+                .authenticate_network_call("send_control", 1)
+                .is_err()
+        );
+        assert!(validator.authenticate_network_call("try_send", 8).is_err());
+        assert_eq!(
+            validator.run_effect().unwrap_err().reason(),
+            ValidationReason::EffectIdentity,
+            "unchecked control reference cannot authorize emission"
+        );
+    }
+
+    #[test]
     fn network_send_authentication_reconstructs_the_owned_wrapper() {
         let directory = LinkedValidationDirectory::create();
         let entry = directory.write(
@@ -25777,7 +25873,7 @@ mod tests {
                 .reason(),
             ValidationReason::Resource
         );
-        assert_eq!(one_short.authenticated_network_requests.get(), [None; 8]);
+        assert_eq!(one_short.authenticated_network_requests.get(), [None; 9]);
         let EffectExprKind::Operation(super::super::effect::EffectOperation::RegionBuffer(call)) =
             &program.nodes[request.index().unwrap()].kind
         else {

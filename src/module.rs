@@ -69,7 +69,7 @@ const NETWORK_SOURCE: &str = concat!(
     "pub type Interest = Readable\n| Writable\n",
     "pub type WatchResult<N> = Watching(Registration<N>)\n| WatchFailed(Failure)\n",
     "pub type WakeResult<N> = Wake(Registration<N>)\n| NoWake\n| WakeFailed(Failure)\n",
-    "pub effect IO<N> {\ninternal : Unit -> Unit\nsend : (Worker<N>, Bytes) -> SendResult\nreceive : Worker<N> -> ReceiveResult\nfinish : Worker<N> -> FinishResult\nwatch_internal : (Worker<N>, Interest) -> WatchResult<N>\ncancel_internal : (Worker<N>, Registration<N>) -> FinishResult\npoll_internal : Worker<N> -> WakeResult<N>\nfinish_receive_internal : Worker<N> -> FinishResult\n}\n",
+    "pub effect IO<N> {\ninternal : Unit -> Unit\nsend : (Worker<N>, Bytes) -> SendResult\nreceive : Worker<N> -> ReceiveResult\nfinish : Worker<N> -> FinishResult\nwatch_internal : (Worker<N>, Interest) -> WatchResult<N>\ncancel_internal : (Worker<N>, Registration<N>) -> FinishResult\npoll_internal : Worker<N> -> WakeResult<N>\nfinish_receive_internal : Worker<N> -> FinishResult\nsend_control_internal : (Worker<N>, Bytes) -> SendResult\n}\n",
     "pub effect Join<N> {\ninternal : Unit -> Unit\nsettle_internal : Pair<N> -> FinishResult\n}\n",
     "pub try_send<N> : (Worker<N>, Bytes) -> SendResult ! {IO<N>}\ntry_send value = perform IO<N>.send value\n",
     "pub try_receive<N> : Worker<N> -> ReceiveResult ! {IO<N>}\ntry_receive value = perform IO<N>.receive value\n",
@@ -79,6 +79,7 @@ const NETWORK_SOURCE: &str = concat!(
     "pub cancel_watch<N> : (Worker<N>, Registration<N>) -> FinishResult ! {IO<N>}\ncancel_watch value = cancel_watch value\n",
     "pub poll_wake<N> : Worker<N> -> WakeResult<N> ! {IO<N>}\npoll_wake value = poll_wake value\n",
     "pub settle<N> : Pair<N> -> FinishResult ! {Join<N>}\nsettle value = settle value\n",
+    "pub send_control<N> : (Worker<N>, Bytes) -> SendResult ! {IO<N>}\nsend_control value = send_control value\n",
 );
 
 // One authenticated identity supplies the public binding facade and private
