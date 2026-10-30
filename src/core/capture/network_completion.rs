@@ -627,6 +627,7 @@ struct WorkerProcessingFragment {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProcessingHelper {
     Native(NodeId),
+    Codec,
     Pure {
         recursive: NodeId,
         equal: NodeId,
@@ -2155,9 +2156,152 @@ pub(super) fn worker_processing_route(
     }))
 }
 
+/// Before focused C3, authenticate the actual Application route and its
+/// nominated driver, then retain only its checked source identities. The
+/// later Store query must still prove every call, return and lifecycle gate.
+pub(super) fn codec_worker_preflight(
+    scope: &super::super::validate::NetworkNativeIdentityScope<'_>,
+    side: usize,
+    graph: &SummaryGraph,
+    worker: &super::control::Analysis<'_>,
+    driver: &crate::core::ledger_checker::codec::ConditionalDecodeDriver<'_>,
+    default_handler: NodeId,
+    budget: &mut TypeWorkBudget,
+) -> Result<super::control::CodecPreflight, Failure> {
+    let route =
+        worker_processing_route(scope, side, graph, worker, budget)?.ok_or(Failure::Invalid)?;
+    let fragment = worker_processing_fragment(scope, &route, budget)?;
+    if fragment.expected.is_some() || fragment.helper_call != driver.outer_call() {
+        return Err(Failure::Invalid);
+    }
+    let certificate = super::network_ledger::codec_source_certificate(
+        scope,
+        side,
+        graph,
+        worker,
+        driver,
+        default_handler,
+        budget,
+    )?;
+    super::network_ledger::codec_preflight_sources(
+        scope,
+        certificate,
+        driver,
+        default_handler,
+        budget,
+    )
+}
+
 /// Inspect all final focused Store exits belonging to this route. This is an
 /// intermediate C3 coverage check, not a processing cut: marker correlation,
 /// message escape and saved-suffix obligations remain separate.
+/// A matched Application Work result in its owning live Store focus. The
+/// source coordinates and ports are provisional until the entire validator
+/// query succeeds. Receiver addresses, ledger labels, peer history and copied
+/// delivery correspondence are separate obligations.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "receive fields are inspected by test callbacks")
+)]
+pub(super) struct ReceivedWork<'focus, 'graph> {
+    pub(super) focus: &'focus CompletionFocus<'graph>,
+    pub(super) owner: NodeId,
+    pub(super) receive: NodeId,
+    pub(super) receiver_endpoint_side: u8,
+    pub(super) opposite_endpoint_side: u8,
+    pub(super) fields: [usize; 3],
+}
+
+/// Check the actual selected DecodeResult arm and its focus-local field
+/// projections. An Ack or failure yields no Application decoded observation.
+fn codec_result_arm(
+    scope: &super::super::validate::NetworkNativeIdentityScope<'_>,
+    focus: &CompletionFocus<'_>,
+    state: &State,
+    ordinal: usize,
+    driver: &crate::core::ledger_checker::codec::ConditionalDecodeDriver<'_>,
+    call: CompletionCall,
+    budget: &mut TypeWorkBudget,
+) -> Result<Option<[usize; 3]>, Failure> {
+    use crate::core::{data::CorePatternKind, ledger_checker::codec::CodecResultArm};
+    let matching = driver.result_match();
+    if matching.call() != driver.invocation().call()
+        || matching.matching().arena() != scope.arena()
+        || focus
+            .values()
+            .original_control_node(state.position.code, scope.nodes(), budget)?
+            != matching.matching().index().map_err(|_| Failure::Invalid)?
+    {
+        return Err(Failure::Invalid);
+    }
+    let (scrutinee, _, _) = focus
+        .values()
+        .existing_choice(state.position.code, state.value_context, budget)?
+        .ok_or(Failure::Invalid)?;
+    if scrutinee != call.result {
+        return Err(Failure::Invalid);
+    }
+    let arm = matching.arm(ordinal).ok_or(Failure::Invalid)?;
+    let count = match &arm {
+        CodecResultArm::Work { fields, .. } => fields.len(),
+        CodecResultArm::Ack { fields, .. } => fields.len(),
+        CodecResultArm::Failure { .. } => 0,
+        CodecResultArm::Encoded { .. } => return Err(Failure::Invalid),
+    };
+    let bindings = focus.values().existing_arm_bindings(
+        state.position.code,
+        ordinal,
+        state.value_context,
+        budget,
+    )?;
+    if bindings.len() != count {
+        return Err(Failure::Invalid);
+    }
+    if count == 0 {
+        return Ok(None);
+    }
+    let Some(EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(branch)))) =
+        scope
+            .nodes()
+            .get(matching.matching().index().map_err(|_| Failure::Invalid)?)
+            .map(|node| &node.kind)
+    else {
+        return Err(Failure::Invalid);
+    };
+    let CorePatternKind::Constructor { constructor, .. } = &branch
+        .arms()
+        .get(ordinal)
+        .ok_or(Failure::Invalid)?
+        .pattern()
+        .kind
+    else {
+        return Err(Failure::Invalid);
+    };
+    charge(budget, count)?;
+    let mut seen = Vec::new();
+    seen.try_reserve_exact(count)
+        .map_err(|_| Failure::Resource)?;
+    seen.resize(count, false);
+    let mut fields = [0; 3];
+    for (binder, projected) in bindings {
+        let (payload, field, owner) = focus
+            .values()
+            .existing_pattern_projection(projected, budget)?;
+        if owner.is_some() || field >= count || seen[field] {
+            return Err(Failure::Invalid);
+        }
+        seen[field] = true;
+        fields[field] = binder;
+        let (source, field, owner) = focus
+            .values()
+            .existing_pattern_projection(payload, budget)?;
+        if source != scrutinee || field != 0 || owner != Some(*constructor) {
+            return Err(Failure::Invalid);
+        }
+    }
+    Ok(matches!(arm, CodecResultArm::Work { .. }).then_some(fields))
+}
+
 pub(super) fn worker_store_exit_coverage(
     scope: &super::super::validate::NetworkNativeIdentityScope<'_>,
     route: &crate::core::dialect::NetworkProcessingRoute,
@@ -2165,7 +2309,79 @@ pub(super) fn worker_store_exit_coverage(
     worker: &super::control::Analysis<'_>,
     budget: &mut TypeWorkBudget,
 ) -> Result<(usize, usize), Failure> {
-    use super::control::{CompletionDetail, DrainWork, Frame};
+    worker_store_exit_coverage_inner(scope, route, graph, worker, None, None, budget)
+}
+
+/// Check an actual Unit codec driver in the existing processing Store. This
+/// remains provisional until whole validation and contextual N4 obligations.
+#[cfg(test)]
+pub(super) fn worker_store_codec_exit_coverage(
+    scope: &super::super::validate::NetworkNativeIdentityScope<'_>,
+    route: &crate::core::dialect::NetworkProcessingRoute,
+    graph: &SummaryGraph,
+    worker: &super::control::Analysis<'_>,
+    driver: &crate::core::ledger_checker::codec::ConditionalDecodeDriver<'_>,
+    default_handler: NodeId,
+    budget: &mut TypeWorkBudget,
+) -> Result<(usize, usize), Failure> {
+    worker_store_exit_coverage_inner(
+        scope,
+        route,
+        graph,
+        worker,
+        Some((driver, default_handler)),
+        None,
+        budget,
+    )
+}
+
+/// The callback is private to the validator query and may only stage
+/// conditional checks; its results must be discarded on any later failure.
+#[cfg(test)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the test observes the actual focused route under the shared budget"
+)]
+pub(super) fn worker_store_codec_exit_coverage_with_work(
+    scope: &super::super::validate::NetworkNativeIdentityScope<'_>,
+    route: &crate::core::dialect::NetworkProcessingRoute,
+    graph: &SummaryGraph,
+    worker: &super::control::Analysis<'_>,
+    driver: &crate::core::ledger_checker::codec::ConditionalDecodeDriver<'_>,
+    default_handler: NodeId,
+    observe: &mut dyn FnMut(&ReceivedWork<'_, '_>, &mut TypeWorkBudget) -> Result<(), Failure>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(usize, usize), Failure> {
+    worker_store_exit_coverage_inner(
+        scope,
+        route,
+        graph,
+        worker,
+        Some((driver, default_handler)),
+        Some(observe),
+        budget,
+    )
+}
+
+#[expect(
+    clippy::type_complexity,
+    reason = "the callback borrows focus-local fields only during this query"
+)]
+fn worker_store_exit_coverage_inner(
+    scope: &super::super::validate::NetworkNativeIdentityScope<'_>,
+    route: &crate::core::dialect::NetworkProcessingRoute,
+    graph: &SummaryGraph,
+    worker: &super::control::Analysis<'_>,
+    codec: Option<(
+        &crate::core::ledger_checker::codec::ConditionalDecodeDriver<'_>,
+        NodeId,
+    )>,
+    mut observe: Option<
+        &mut dyn FnMut(&ReceivedWork<'_, '_>, &mut TypeWorkBudget) -> Result<(), Failure>,
+    >,
+    budget: &mut TypeWorkBudget,
+) -> Result<(usize, usize), Failure> {
+    use super::control::{CompletionDetail, Control, DrainWork, Frame};
     let EffectExprKind::Operation(crate::core::effect::EffectOperation::Network(network)) = &scope
         .nodes()
         .get(scope.owner().index().map_err(|_| Failure::Invalid)?)
@@ -2202,6 +2418,22 @@ pub(super) fn worker_store_exit_coverage(
     if fragment.expected.is_some() {
         eprintln!("pure cut: source fragment {fragment:?}");
     }
+    let certificate = if let Some((driver, default_handler)) = codec {
+        if fragment.expected.is_some() || driver.outer_call() != fragment.helper_call {
+            return Err(Failure::Invalid);
+        }
+        Some(super::network_ledger::codec_source_certificate(
+            scope,
+            route.side,
+            graph,
+            worker,
+            driver,
+            default_handler,
+            budget,
+        )?)
+    } else {
+        None
+    };
     let whole = worker.completion_foci.last().ok_or(Failure::Invalid)?;
     if whole.trace()?.focus().is_ok() {
         return Err(Failure::Invalid);
@@ -2301,7 +2533,30 @@ pub(super) fn worker_store_exit_coverage(
             if original != fragment.helper_call.index().map_err(|_| Failure::Invalid)? {
                 return Ok(());
             }
-            let kind = if fragment.expected.is_some() {
+            let kind = if let Some((driver, _)) = codec {
+                if call.target != driver.closure().index().map_err(|_| Failure::Invalid)?
+                    || call.expression != call.target
+                    || driver.outer_argument().arena() != scope.arena()
+                {
+                    return Err(Failure::Invalid);
+                }
+                let Some(EffectExprKind::Pure(PureExprKind::Variable(argument))) = scope
+                    .nodes()
+                    .get(
+                        driver
+                            .outer_argument()
+                            .index()
+                            .map_err(|_| Failure::Invalid)?,
+                    )
+                    .map(|node| &node.kind)
+                else {
+                    return Err(Failure::Invalid);
+                };
+                if argument.binder() != fragment.payload {
+                    return Err(Failure::Invalid);
+                }
+                ProcessingHelper::Codec
+            } else if fragment.expected.is_some() {
                 let (recursive, equal, equal_target) =
                     checked_pure_unit_helper(scope, call, budget).inspect_err(|error| {
                         #[cfg(test)]
@@ -2324,7 +2579,10 @@ pub(super) fn worker_store_exit_coverage(
                 call.creation,
                 budget,
             )?;
-            if let ProcessingHelper::Pure { .. } = kind {
+            if matches!(
+                kind,
+                ProcessingHelper::Pure { .. } | ProcessingHelper::Codec
+            ) {
                 let EffectExprKind::Operation(crate::core::effect::EffectOperation::RegionClosure(
                     closure,
                 )) = &scope
@@ -2348,6 +2606,25 @@ pub(super) fn worker_store_exit_coverage(
                     budget,
                 )?;
             }
+            if let Some((driver, _)) = codec {
+                let argument_code = driver
+                    .outer_argument()
+                    .index()
+                    .map_err(|_| Failure::Invalid)?
+                    .checked_add(1)
+                    .ok_or(Failure::Resource)?;
+                let (actual, source) = focus.values().existing_forward_ports(
+                    argument_code,
+                    call.caller_value_context,
+                    budget,
+                )?;
+                if !matches!(arguments.as_slice(), [(_, value)] if *value == actual) {
+                    return Err(Failure::Invalid);
+                }
+                // The payload was frozen from this Store's original selected
+                // Message binding; no whole-worker port number is reused.
+                let _ = focus.values().existing_frozen_origin(source, budget)?;
+            }
             if arguments.len() != 1 || helper.is_some_and(|prior| prior != (witness, call, kind)) {
                 return Err(Failure::Invalid);
             }
@@ -2355,6 +2632,84 @@ pub(super) fn worker_store_exit_coverage(
             Ok(())
         })?;
         let (helper_witness, helper_call, helper_kind) = helper.ok_or(Failure::Invalid)?;
+        let nested_codec = if let Some((driver, _)) = codec {
+            let mut nested = None;
+            trace.visit_calls(budget, |witness, call, budget| {
+                let original =
+                    match focus
+                        .values()
+                        .original_control_node(call.code, scope.nodes(), budget)
+                    {
+                        Ok(original) => original,
+                        Err(Failure::Invalid) => return Ok(()),
+                        Err(error) => return Err(error),
+                    };
+                if original
+                    != driver
+                        .invocation()
+                        .call()
+                        .index()
+                        .map_err(|_| Failure::Invalid)?
+                {
+                    return Ok(());
+                }
+                if call.target
+                    != driver
+                        .invocation()
+                        .closure()
+                        .index()
+                        .map_err(|_| Failure::Invalid)?
+                    || call.expression != call.target
+                {
+                    return Err(Failure::Invalid);
+                }
+                let (result, _, arguments, _) = focus.values().existing_call_ports(
+                    call.code,
+                    call.caller_value_context,
+                    call.expression,
+                    call.callee_value_context,
+                    call.creation,
+                    budget,
+                )?;
+                let (_, _, outer_arguments, _) = focus.values().existing_call_ports(
+                    helper_call.code,
+                    helper_call.caller_value_context,
+                    helper_call.expression,
+                    helper_call.callee_value_context,
+                    helper_call.creation,
+                    budget,
+                )?;
+                let [(_, argument)] = arguments.as_slice() else {
+                    return Err(Failure::Invalid);
+                };
+                let [(formal, _)] = outer_arguments.as_slice() else {
+                    return Err(Failure::Invalid);
+                };
+                let code = driver
+                    .invocation()
+                    .argument()
+                    .index()
+                    .map_err(|_| Failure::Invalid)?
+                    .checked_add(1)
+                    .ok_or(Failure::Resource)?;
+                let (actual, source) = focus.values().existing_forward_ports(
+                    code,
+                    call.caller_value_context,
+                    budget,
+                )?;
+                if actual != *argument || source != *formal || result != call.result {
+                    return Err(Failure::Invalid);
+                }
+                if nested.is_some_and(|prior| prior != (witness, call)) {
+                    return Err(Failure::Invalid);
+                }
+                nested = Some((witness, call));
+                Ok(())
+            })?;
+            Some(nested.ok_or(Failure::Invalid)?)
+        } else {
+            None
+        };
         #[cfg(test)]
         if fragment.expected.is_some() {
             eprintln!(
@@ -2433,6 +2788,21 @@ pub(super) fn worker_store_exit_coverage(
             bucket.try_reserve(1).map_err(|_| Failure::Resource)?;
             bucket.push(index);
         }
+        let codec_guard = match (codec, certificate.as_ref()) {
+            (Some((driver, handler)), Some(certificate)) => {
+                Some(super::network_ledger::codec_store_guard(
+                    scope,
+                    graph,
+                    focus,
+                    certificate,
+                    driver,
+                    handler,
+                    budget,
+                )?)
+            }
+            (None, None) => None,
+            _ => return Err(Failure::Invalid),
+        };
         // 0: before the marker; 1: root entered; 2: helper entered;
         // 3: native returned; 4: helper returned; 5: root returned.
         // Bypass exits cannot satisfy the runtime MarkerReturned premise.
@@ -2453,20 +2823,121 @@ pub(super) fn worker_store_exit_coverage(
             }
             *slot |= bit;
             if exit_states.contains(&id) {
-                if (1..5).contains(&phase) {
-                    return Err(Failure::Invalid);
-                }
-                if phase == 5 {
-                    returned_exits = returned_exits.checked_add(1).ok_or(Failure::Resource)?;
+                if matches!(helper_kind, ProcessingHelper::Codec) {
+                    if (1..7).contains(&phase) {
+                        return Err(Failure::Invalid);
+                    }
+                    if phase == 7 {
+                        returned_exits = returned_exits.checked_add(1).ok_or(Failure::Resource)?;
+                    }
+                } else {
+                    if (1..5).contains(&phase) {
+                        return Err(Failure::Invalid);
+                    }
+                    if phase == 5 {
+                        returned_exits = returned_exits.checked_add(1).ok_or(Failure::Resource)?;
+                    }
                 }
             }
             let state = states.get(id).copied().flatten().ok_or(Failure::Invalid)?;
+            if matches!(helper_kind, ProcessingHelper::Codec) && (2..=5).contains(&phase) {
+                let guard = codec_guard.as_ref().ok_or(Failure::Invalid)?;
+                match graph
+                    .code
+                    .get(state.position.code)
+                    .ok_or(Failure::Invalid)?
+                {
+                    Control::Request(request)
+                        if !request.region_service && !guard.query_request(id) =>
+                    {
+                        return Err(Failure::Invalid);
+                    }
+                    Control::Resume { .. } if !guard.query_resume(id) => {
+                        return Err(Failure::Invalid);
+                    }
+                    Control::NetworkEvent { .. }
+                    | Control::Unavailable
+                    | Control::WorkerInputStart { .. }
+                    | Control::WorkerInputDone { .. }
+                    | Control::Cleanup { .. }
+                    | Control::Resource { .. }
+                    | Control::Registration { .. }
+                    | Control::NativeInterpret { .. }
+                    | Control::Retain { .. }
+                    | Control::Continue { .. }
+                    | Control::Discard { .. } => return Err(Failure::Invalid),
+                    _ => {}
+                }
+            }
             for &index in outgoing.get(id).ok_or(Failure::Invalid)? {
                 charge(budget, 1)?;
                 let (_, to, transition) = *edges.get(index).ok_or(Failure::Invalid)?;
                 let mut next = phase;
+                if matches!(helper_kind, ProcessingHelper::Codec) && phase == 4 {
+                    let (driver, _) = codec.ok_or(Failure::Invalid)?;
+                    let (_, decode_call) = nested_codec.ok_or(Failure::Invalid)?;
+                    let original = match focus.values().original_control_node(
+                        state.position.code,
+                        scope.nodes(),
+                        budget,
+                    ) {
+                        Ok(node) => Some(node),
+                        Err(Failure::Invalid) => None,
+                        Err(reason) => return Err(reason),
+                    };
+                    if matches!(
+                        graph.code.get(state.position.code),
+                        Some(Control::Choice(_))
+                    ) && original
+                        == Some(
+                            driver
+                                .result_match()
+                                .matching()
+                                .index()
+                                .map_err(|_| Failure::Invalid)?,
+                        )
+                    {
+                        let CompletionTransition::Choice { ordinal } = transition else {
+                            return Err(Failure::Invalid);
+                        };
+                        // Work is Application-compatible. Ack/failure issue no
+                        // decoded fact even though the Unit driver may return.
+                        if let Some(fields) = codec_result_arm(
+                            scope,
+                            focus,
+                            state,
+                            ordinal,
+                            driver,
+                            decode_call,
+                            budget,
+                        )? && let Some(observe) = observe.as_deref_mut()
+                        {
+                            let receiver_endpoint_side =
+                                u8::try_from(route.side).map_err(|_| Failure::Invalid)?;
+                            if receiver_endpoint_side > 1 {
+                                return Err(Failure::Invalid);
+                            }
+                            observe(
+                                &ReceivedWork {
+                                    focus,
+                                    owner: route.owner,
+                                    receive: route.receive,
+                                    receiver_endpoint_side,
+                                    opposite_endpoint_side: 1 - receiver_endpoint_side,
+                                    fields,
+                                },
+                                budget,
+                            )?;
+                        }
+                        next = 5;
+                    }
+                }
                 if let CompletionTransition::Call { .. } = transition
-                    && (1..5).contains(&phase)
+                    && if matches!(helper_kind, ProcessingHelper::Codec) {
+                        (1..6).contains(&phase)
+                    } else {
+                        (1..5).contains(&phase)
+                    }
                 {
                     let after = states.get(to).copied().flatten().ok_or(Failure::Invalid)?;
                     charge(budget, after.heap.len())?;
@@ -2495,7 +2966,24 @@ pub(super) fn worker_store_exit_coverage(
                         if entered.call != helper_call {
                             return Err(Failure::Invalid);
                         }
+                        if let Some(guard) = &codec_guard {
+                            guard.call(scope, graph, focus, id, to, transition, budget)?;
+                        }
                         next = 2;
+                    } else if matches!(helper_kind, ProcessingHelper::Codec) {
+                        let (nested_witness, nested_call) = nested_codec.ok_or(Failure::Invalid)?;
+                        let guard = codec_guard.as_ref().ok_or(Failure::Invalid)?;
+                        if phase == 2 && witness == nested_witness && entered.call == nested_call {
+                            guard.call(scope, graph, focus, id, to, transition, budget)?;
+                            next = 3;
+                        } else if phase == 3
+                            && witness != helper_witness
+                            && witness != nested_witness
+                        {
+                            guard.call(scope, graph, focus, id, to, transition, budget)?;
+                        } else {
+                            return Err(Failure::Invalid);
+                        }
                     } else if let ProcessingHelper::Pure {
                         recursive,
                         equal,
@@ -2561,6 +3049,24 @@ pub(super) fn worker_store_exit_coverage(
                         return Err(Failure::Invalid);
                     }
                 }
+                if let CompletionTransition::CodecSummaryReturn { witness, edge } = transition {
+                    let (nested_witness, nested_call) = nested_codec.ok_or(Failure::Invalid)?;
+                    if !matches!(helper_kind, ProcessingHelper::Codec)
+                        || phase != 3
+                        || witness != nested_witness
+                        || !matches!(edge.frame, Frame::CallReturn { witness: actual, .. } if actual == witness)
+                        || focus.trace()?.call(witness, budget)? != nested_call
+                    {
+                        return Err(Failure::Invalid);
+                    }
+                    let after = states.get(to).copied().flatten().ok_or(Failure::Invalid)?;
+                    if matched_return_checked(focus, edge, nested_call, state, after, budget)?.call
+                        != nested_call
+                    {
+                        return Err(Failure::Invalid);
+                    }
+                    next = 4;
+                }
                 if let CompletionTransition::Detail(detail_id) = transition {
                     match details.get(&detail_id).ok_or(Failure::Invalid)? {
                         CompletionDetail::EnterRoot {
@@ -2596,7 +3102,11 @@ pub(super) fn worker_store_exit_coverage(
                                     scope.nodes(),
                                     budget,
                                 )? != route.root.index().map_err(|_| Failure::Invalid)?
-                                    || phase != 4
+                                    || (if matches!(helper_kind, ProcessingHelper::Codec) {
+                                        phase != 6
+                                    } else {
+                                        phase != 4
+                                    })
                                     || state.stack != edge.address
                                 {
                                     return Err(Failure::Invalid);
@@ -2611,11 +3121,17 @@ pub(super) fn worker_store_exit_coverage(
                                     value_context,
                                     budget,
                                 )?;
-                                next = 5;
+                                next = if matches!(helper_kind, ProcessingHelper::Codec) {
+                                    7
+                                } else {
+                                    5
+                                };
                             } else if matches!(edge.frame, Frame::CallReturn { witness, .. } if witness == helper_witness)
                             {
                                 let expected_phase =
-                                    if matches!(helper_kind, ProcessingHelper::Native(_)) {
+                                    if matches!(helper_kind, ProcessingHelper::Codec) {
+                                        5
+                                    } else if matches!(helper_kind, ProcessingHelper::Native(_)) {
                                         3
                                     } else {
                                         2
@@ -2626,7 +3142,33 @@ pub(super) fn worker_store_exit_coverage(
                                 {
                                     return Err(Failure::Invalid);
                                 }
+                                next = if matches!(helper_kind, ProcessingHelper::Codec) {
+                                    6
+                                } else {
+                                    4
+                                };
+                            } else if matches!(helper_kind, ProcessingHelper::Codec)
+                                && matches!(edge.frame, Frame::CallReturn { witness, .. } if nested_codec.is_some_and(|(expected, _)| witness == expected))
+                            {
+                                let (_, expected_call) = nested_codec.ok_or(Failure::Invalid)?;
+                                if phase != 3
+                                    || matched_call_return(focus, id, to, *edge, budget)?.call
+                                        != expected_call
+                                {
+                                    return Err(Failure::Invalid);
+                                }
                                 next = 4;
+                            } else if matches!(helper_kind, ProcessingHelper::Codec)
+                                && matches!(edge.frame, Frame::CallReturn { .. })
+                            {
+                                if phase != 3 {
+                                    return Err(Failure::Invalid);
+                                }
+                                let returned = matched_call_return(focus, id, to, *edge, budget)?;
+                                codec_guard
+                                    .as_ref()
+                                    .ok_or(Failure::Invalid)?
+                                    .returned_call(scope, focus, returned.call, budget)?;
                             } else if let (
                                 2,
                                 ProcessingHelper::Pure {
@@ -2664,6 +3206,41 @@ pub(super) fn worker_store_exit_coverage(
                             boundary,
                             edge,
                         } if (1..5).contains(&phase) => {
+                            if matches!(helper_kind, ProcessingHelper::Codec) && phase == 3 {
+                                let after =
+                                    states.get(to).copied().flatten().ok_or(Failure::Invalid)?;
+                                let guard = codec_guard.as_ref().ok_or(Failure::Invalid)?;
+                                guard.service(
+                                    scope,
+                                    graph,
+                                    focus,
+                                    state,
+                                    after,
+                                    *details.get(&detail_id).ok_or(Failure::Invalid)?,
+                                    budget,
+                                )?;
+                                if let Some(returned_edge) = edge
+                                    && let Frame::CallReturn { witness, .. } = returned_edge.frame
+                                {
+                                    let returned_call = focus.trace()?.call(witness, budget)?;
+                                    let (nested_witness, nested_call) =
+                                        nested_codec.ok_or(Failure::Invalid)?;
+                                    if witness == nested_witness {
+                                        if returned_call != nested_call {
+                                            return Err(Failure::Invalid);
+                                        }
+                                        next = 4;
+                                    } else if witness == helper_witness {
+                                        return Err(Failure::Invalid);
+                                    } else {
+                                        guard.returned_call(scope, focus, returned_call, budget)?;
+                                    }
+                                }
+                                charge(budget, 1)?;
+                                pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+                                pending.push_back((to, next));
+                                continue;
+                            }
                             if matches!(helper_kind, ProcessingHelper::Pure { .. })
                                 && boundary.is_none()
                             {

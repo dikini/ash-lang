@@ -6,9 +6,9 @@ use super::{
     CoreInspection, DefinitionCandidate, EffectExprKind, EffectOperation, LedgerArena, NodeId,
     PureComputation, PureExprKind, Rejection, TypeWorkBudget, ValidatedInterfaceProgram,
     acknowledgement, binder_pattern, bool_value, check_registration_contexts,
-    constructor_application, constructor_pattern, expect_variable, integer_equal,
-    linked_initializer, nullary_constructor, reconstruct_counter_increment, registration_call,
-    reject_evidence, require_distinct,
+    checked_entry_default_handler, constructor_application, constructor_pattern, expect_variable,
+    integer_equal, linked_initializer, nullary_constructor, reconstruct_counter_increment,
+    registration_call, reject_evidence, require_distinct,
 };
 use crate::types::{ConstructorId, Type};
 
@@ -2616,6 +2616,224 @@ impl CodecHelper {
     }
 }
 impl NominatedCodecCall<'_> {
+    pub(in crate::core) fn decoder_length(&self) -> Option<(BinderId, NodeId)> {
+        match &self.shape {
+            CodecCallShape::Decode {
+                definition,
+                definitions,
+                ..
+            } => Some((definitions.length.binder, definition.length)),
+            CodecCallShape::Encode { .. } => None,
+        }
+    }
+
+    pub(in crate::core) fn matches_source_root(&self, root: NodeId, kind: &EffectExprKind) -> bool {
+        let arena = self.entry().arena;
+        arena.root() == root
+            && arena
+                .kind_at(root)
+                .is_some_and(|actual| std::ptr::eq(actual, kind))
+    }
+
+    /// Recheck the closed effect vocabulary of the actual reconstructed
+    /// decoder bodies. This is only source evidence: the caller must still
+    /// authenticate the live closures, captures and selected provider.
+    pub(in crate::core) fn decoder_readonly_query(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(NodeId, NodeId), Rejection> {
+        use super::super::{packed::Intrinsic, region::RegionBufferOperation};
+
+        let CodecCallShape::Decode { definitions, .. } = &self.shape else {
+            return Err(Rejection::Unsupported);
+        };
+        let helpers = self.helpers(work)?;
+        let buffers = self.buffer_nodes(work)?;
+        let arena = self.entry().arena;
+        let default_handler = checked_entry_default_handler(arena, work)?;
+        let api = self.provider_api();
+        let region_api =
+            crate::resolved::RegionApi::for_module(api).ok_or(Rejection::Unsupported)?;
+        let mut inspect = CoreInspection {
+            program: arena,
+            work,
+        };
+        let mut pending = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        inspect
+            .work
+            .charge(helpers.len())
+            .map_err(|()| Rejection::Exhausted)?;
+        pending
+            .try_reserve(helpers.len())
+            .map_err(|_| Rejection::Exhausted)?;
+        for helper in &helpers {
+            let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) =
+                inspect.kind(helper.closure)?
+            else {
+                return Err(Rejection::Unsupported);
+            };
+            if closure.api != api {
+                return Err(Rejection::Unsupported);
+            }
+            pending.push(
+                closure
+                    .code
+                    .function()
+                    .ok_or(Rejection::Unsupported)?
+                    .body(),
+            );
+        }
+        let mut query = None;
+        while let Some(id) = pending.pop() {
+            inspect.work.charge(1).map_err(|()| Rejection::Exhausted)?;
+            visited.try_reserve(1).map_err(|_| Rejection::Exhausted)?;
+            if !visited.insert(id) {
+                continue;
+            }
+            let kind = inspect.kind(id)?;
+            match kind {
+                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(call))) => {
+                    match inspect.kind(call.function())? {
+                        EffectExprKind::Pure(PureExprKind::Variable(variable)) => {
+                            inspect
+                                .work
+                                .charge(helpers.len())
+                                .map_err(|()| Rejection::Exhausted)?;
+                            if variable.binder() != definitions.length.binder
+                                && !helpers
+                                    .iter()
+                                    .any(|helper| helper.binder == variable.binder())
+                            {
+                                return Err(Rejection::Unsupported);
+                            }
+                        }
+                        EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                            _,
+                        ))) => {
+                            let constructor =
+                                inspect.stored_function_witness(call.function(), &[])?;
+                            if constructor.api != api {
+                                return Err(Rejection::Unsupported);
+                            }
+                        }
+                        _ => return Err(Rejection::Unsupported),
+                    }
+                }
+                EffectExprKind::Pure(PureExprKind::Value(super::super::PureValue::Intrinsic(
+                    intrinsic,
+                ))) => {
+                    if !intrinsic.authentic_module()
+                        || !intrinsic.module().is_builtin_bytes()
+                        || intrinsic.operation() != Intrinsic::BytesLength
+                    {
+                        return Err(Rejection::Unsupported);
+                    }
+                }
+                EffectExprKind::Pure(PureExprKind::Value(super::super::PureValue::Function(_)))
+                | EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::RecursiveBind(_),
+                )) => {
+                    return Err(Rejection::Unsupported);
+                }
+                EffectExprKind::Pure(_) => {}
+                EffectExprKind::Operation(EffectOperation::Request(request)) => {
+                    if request.effect().effect() != region_api.default_alloc()
+                        || !request.effect().arguments().is_empty()
+                        || request.operation()
+                            != crate::types::OperationId::new(region_api.default_alloc(), 1)
+                        || !matches!(
+                            inspect.kind(request.operand())?,
+                            EffectExprKind::Pure(PureExprKind::Value(
+                                super::super::PureValue::Unit(_)
+                            ))
+                        )
+                    {
+                        return Err(Rejection::Unsupported);
+                    }
+                    query.get_or_insert(id);
+                }
+                EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) => {
+                    inspect
+                        .work
+                        .charge(buffers.len())
+                        .map_err(|()| Rejection::Exhausted)?;
+                    if buffer.api != api
+                        || !buffers.contains(&id)
+                        || !matches!(
+                            &buffer.operation,
+                            RegionBufferOperation::Intrinsic(_)
+                                | RegionBufferOperation::IntegerArithmetic(_)
+                        )
+                    {
+                        return Err(Rejection::Unsupported);
+                    }
+                }
+                EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) => {
+                    if allocation.api != api
+                        || !matches!(inspect.kind(allocation.request)?, EffectExprKind::Operation(EffectOperation::RegionValueRequest(request)) if request.api == api)
+                    {
+                        return Err(Rejection::Unsupported);
+                    }
+                }
+                EffectExprKind::Operation(EffectOperation::RegionValueRequest(request))
+                    if request.api == api => {}
+                EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => {
+                    let EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) =
+                        inspect.kind(tuple.storage)?
+                    else {
+                        return Err(Rejection::Unsupported);
+                    };
+                    if tuple.api != api
+                        || allocation.api != api
+                        || inspect.variable(allocation.context)?
+                            != inspect.variable(tuple.context)?
+                    {
+                        return Err(Rejection::Unsupported);
+                    }
+                }
+                EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                    let EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) =
+                        inspect.kind(closure.storage)?
+                    else {
+                        return Err(Rejection::Unsupported);
+                    };
+                    if closure.api != api
+                        || !closure.captures.is_empty()
+                        || closure.code.function().is_none()
+                        || allocation.api != api
+                        || inspect.variable(allocation.context)?
+                            != inspect.variable(closure.context)?
+                    {
+                        return Err(Rejection::Unsupported);
+                    }
+                }
+                EffectExprKind::Operation(_) => return Err(Rejection::Unsupported),
+            }
+            let count = kind.child_count();
+            inspect
+                .work
+                .charge(count)
+                .map_err(|()| Rejection::Exhausted)?;
+            pending
+                .try_reserve(count)
+                .map_err(|_| Rejection::Exhausted)?;
+            for ordinal in 0..count {
+                pending.push(kind.child_at(ordinal).ok_or(Rejection::Unsupported)?);
+            }
+        }
+        inspect
+            .work
+            .charge(
+                visited
+                    .capacity()
+                    .checked_add(pending.capacity())
+                    .ok_or(Rejection::Exhausted)?,
+            )
+            .map_err(|()| Rejection::Exhausted)?;
+        Ok((query.ok_or(Rejection::Unsupported)?, default_handler))
+    }
+
     pub(in crate::core) fn call(&self) -> NodeId {
         match &self.shape {
             CodecCallShape::Encode { call, .. } | CodecCallShape::Decode { call, .. } => *call,

@@ -2051,7 +2051,17 @@ fn compile<F: CoreOperationFamily>(
     data: &mut value::Graph,
     budget: &mut TypeWorkBudget,
 ) -> Result<(SummaryGraph, Vec<usize>), Failure> {
-    compile_with_boundary(nodes, values, &[], imported, operation, data, None, budget)
+    compile_with_boundary(
+        nodes,
+        values,
+        &[],
+        imported,
+        operation,
+        data,
+        None,
+        None,
+        budget,
+    )
 }
 
 // Import copying completes before per-node control construction, so its
@@ -2962,6 +2972,7 @@ fn compile_with_boundary<F: CoreOperationFamily>(
     operation: fn(&F::Kind) -> Option<&EffectOperation>,
     data: &mut value::Graph,
     domain: Option<&HashSet<usize>>,
+    preserve_case: Option<usize>,
     budget: &mut TypeWorkBudget,
 ) -> Result<(SummaryGraph, Vec<usize>), Failure> {
     let mut graph = SummaryGraph {
@@ -3112,7 +3123,9 @@ fn compile_with_boundary<F: CoreOperationFamily>(
             if let Control::Sequence(children) | Control::Choice(children) = &graph.code[id] {
                 // A pure match can still produce the case observed by a
                 // later Store probe check. Preserve that result port.
-                if data.case_result_required(id) {
+                if data.case_result_required(id)
+                    || preserve_case.is_some_and(|original| data.position_is_original(id, original))
+                {
                     continue;
                 }
                 charge(budget, children.len())?;
@@ -3343,6 +3356,62 @@ fn with_network_worker_resources<R>(
     budget: &mut TypeWorkBudget,
     inspect: impl FnOnce(&SummaryGraph, &Analysis<'_>, &mut TypeWorkBudget) -> Result<R, Failure>,
 ) -> Result<R, Failure> {
+    with_network_worker_resources_inner(scope, side, None, budget, inspect)
+}
+
+/// Codec-specific preflight remains private and can return only after its
+/// actual Store exits and End-to-finish route are checked in this query.
+#[cfg(test)]
+fn with_network_worker_codec_resources<R>(
+    scope: &super::validate::NetworkNativeIdentityScope<'_>,
+    side: usize,
+    driver: &super::ledger_checker::codec::ConditionalDecodeDriver<'_>,
+    handler: NodeId,
+    budget: &mut TypeWorkBudget,
+    inspect: impl FnOnce(&SummaryGraph, &Analysis<'_>, &mut TypeWorkBudget) -> Result<R, Failure>,
+) -> Result<R, Failure> {
+    with_network_worker_resources_inner(
+        scope,
+        side,
+        Some((driver, handler)),
+        budget,
+        |graph, worker, budget| {
+            let route =
+                network_completion::worker_processing_route(scope, side, graph, worker, budget)?
+                    .ok_or(Failure::Invalid)?;
+            network_completion::worker_store_codec_exit_coverage(
+                scope, &route, graph, worker, driver, handler, budget,
+            )?;
+            codec_worker_finish_gate(scope, side, graph, worker, budget)?;
+            inspect(graph, worker, budget)
+        },
+    )
+}
+
+/// The same checked End-to-finish gate is used by the codec wrapper and its
+/// missing-finish control; no absent route can produce a completion result.
+#[cfg(test)]
+fn codec_worker_finish_gate(
+    scope: &super::validate::NetworkNativeIdentityScope<'_>,
+    side: usize,
+    graph: &SummaryGraph,
+    worker: &Analysis<'_>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
+    network_end::worker_end_route(scope, side, graph, worker, budget)?.ok_or(Failure::Invalid)?;
+    Ok(())
+}
+
+fn with_network_worker_resources_inner<R>(
+    scope: &super::validate::NetworkNativeIdentityScope<'_>,
+    side: usize,
+    codec: Option<(
+        &super::ledger_checker::codec::ConditionalDecodeDriver<'_>,
+        NodeId,
+    )>,
+    budget: &mut TypeWorkBudget,
+    inspect: impl FnOnce(&SummaryGraph, &Analysis<'_>, &mut TypeWorkBudget) -> Result<R, Failure>,
+) -> Result<R, Failure> {
     use super::effect::{EffectExprKind, EffectOperationFamily};
     let entry = scope.entry(side).ok_or(Failure::Invalid)?.0;
     let region_id = scope.entry_region();
@@ -3360,7 +3429,16 @@ fn with_network_worker_resources<R>(
     // the linked initializers and both entries, rejecting reachable method
     // evidence and unresolved callable definitions. Its bindings are the
     // actual same-arena linked source definitions, including imported helpers.
-    let mut built = build_capture_graph::<EffectOperationFamily>(
+    let preserve_case = codec
+        .map(|(driver, _)| driver.result_match().matching())
+        .map(|node| {
+            if node.arena() != scope.arena() {
+                return Err(Failure::Invalid);
+            }
+            node.index().map_err(|_| Failure::Invalid)
+        })
+        .transpose()?;
+    let mut built = build_capture_graph_preserving_case::<EffectOperationFamily>(
         scope.nodes(),
         scope.bindings(),
         &[],
@@ -3371,6 +3449,7 @@ fn with_network_worker_resources<R>(
         &[],
         &[],
         None,
+        preserve_case,
         budget,
     )?
     .ok_or(Failure::Invalid)?;
@@ -3391,6 +3470,11 @@ fn with_network_worker_resources<R>(
         u8::try_from(side).map_err(|_| Failure::Invalid)?,
         budget,
     )?;
+    #[expect(
+        clippy::needless_late_init,
+        reason = "the worker borrows preflight and must be dropped first"
+    )]
+    let preflight;
     let mut worker = Analysis::new(&built.graph, None, budget)?;
     worker.check_worker_bootstrap(
         root_index.checked_add(1).ok_or(Failure::Resource)?,
@@ -3400,7 +3484,24 @@ fn with_network_worker_resources<R>(
         success,
         budget,
     )?;
-    worker.focus_worker_stores_scoped(scope, side, None, budget)?;
+    preflight = codec
+        .map(|(driver, handler)| {
+            network_completion::codec_worker_preflight(
+                scope,
+                side,
+                &built.graph,
+                &worker,
+                driver,
+                handler,
+                budget,
+            )
+        })
+        .transpose()?;
+    if let Some(preflight) = preflight.as_ref() {
+        worker.focus_worker_stores_codec(scope, side, preflight, budget)?;
+    } else {
+        worker.focus_worker_stores_scoped(scope, side, None, budget)?;
+    }
     inspect(&built.graph, &worker, budget)
 }
 
@@ -4040,6 +4141,26 @@ fn build_capture_graph<F: CoreOperationFamily>(
     domain: Option<&HashSet<usize>>,
     budget: &mut TypeWorkBudget,
 ) -> Result<Option<BuiltCaptureGraph>, Failure> {
+    build_capture_graph_preserving_case(
+        nodes, globals, imports, operation, methods, adapters, domain, None, budget,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the private checked codec match is an additional exact graph input"
+)]
+fn build_capture_graph_preserving_case<F: CoreOperationFamily>(
+    nodes: &[StoredNode<F>],
+    globals: &[(BinderId, NodeId)],
+    imports: &[(BinderId, &CaptureValueSummary)],
+    operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    methods: &[MethodUse],
+    adapters: &[MethodAdapter],
+    domain: Option<&HashSet<usize>>,
+    preserve_case: Option<usize>,
+    budget: &mut TypeWorkBudget,
+) -> Result<Option<BuiltCaptureGraph>, Failure> {
     charge(budget, nodes.len() + globals.len())?;
     let mut bindings = HashMap::new();
     bindings
@@ -4136,7 +4257,15 @@ fn build_capture_graph<F: CoreOperationFamily>(
         nodes, globals, imports, &imported, operation, methods, adapters, domain, budget,
     )?;
     let (mut graph, roots) = compile_with_boundary(
-        nodes, &values, globals, &imported, operation, &mut data, domain, budget,
+        nodes,
+        &values,
+        globals,
+        &imported,
+        operation,
+        &mut data,
+        domain,
+        preserve_case,
+        budget,
     )?;
     graph.data = Some(Arc::new(data));
     Ok(Some(BuiltCaptureGraph {
@@ -5608,6 +5737,8 @@ mod tests {
         panic!("entry module is present");
     }
 
+    // Use the public driver's source-closure allowance for this larger
+    // fixture, sharing the type-work ledger across its dependency graph.
     fn checked_codec_entry_with_dependencies(
         graph: &crate::module::ModuleGraph,
     ) -> (
@@ -7438,6 +7569,607 @@ main : Unit -> Int"#, 1);
             "selected context provider mutation rejected: {result:?}; work={}",
             work.used()
         );
+    }
+
+    // This worker still drains recursively after every Application message
+    // and finishes on End. The Empty branch reports no completion instead of
+    // adding an independent retry loop to this codec-focused fixture.
+    fn codec_one_way_source() -> String {
+        let source = native_one_way_source();
+        let worker = source.replacen(
+            "Network.Empty => receive_all worker",
+            "Network.Empty => false",
+            1,
+        );
+        assert_ne!(worker, source, "codec worker must change the Empty arm");
+        worker
+    }
+
+    fn require_codec_summary_trace(
+        worker: &control::Analysis<'_>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let mut found = false;
+        for focus in &worker.completion_foci {
+            focus
+                .trace()?
+                .visit_edges(budget, |_, _, transition, budget| {
+                    charge(budget, 1)?;
+                    found |= matches!(
+                        transition,
+                        control::CompletionTransition::CodecSummaryReturn { .. }
+                    );
+                    Ok(())
+                })?;
+        }
+        if found { Ok(()) } else { Err(Failure::Invalid) }
+    }
+
+    fn check_codec_summary_forged_inputs(
+        scope: &super::super::validate::NetworkNativeIdentityScope<'_>,
+        graph: &SummaryGraph,
+        worker: &control::Analysis<'_>,
+        driver: &super::super::ledger_checker::codec::ConditionalDecodeDriver<'_>,
+        handler: NodeId,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let preflight = network_completion::codec_worker_preflight(
+            scope, 1, graph, worker, driver, handler, budget,
+        )?;
+        let parent = worker
+            .completion_foci
+            .last()
+            .ok_or(Failure::Invalid)?
+            .values();
+        let mut tested = false;
+        for focus in &worker.completion_foci {
+            let trace = focus.trace()?;
+            let mut summary = None;
+            trace.visit_edges(budget, |_, _, transition, budget| {
+                if let control::CompletionTransition::CodecSummaryReturn { witness, .. } =
+                    transition
+                {
+                    let call = trace.call(witness, budget)?;
+                    if summary.is_none() {
+                        summary = Some(call);
+                    }
+                }
+                Ok(())
+            })?;
+            let Some(call) = summary else { continue };
+            let actual_argument = driver.invocation().argument();
+            let wrong_argument = driver.outer_argument();
+            if actual_argument == wrong_argument || call.creation == call.caller_value_context {
+                return Err(Failure::Invalid);
+            }
+            network_ledger::checked_codec_entry_captures(
+                scope,
+                parent,
+                focus.values(),
+                &preflight.bootstrap,
+                call,
+                actual_argument,
+                budget,
+            )?;
+            let mut forged = call;
+            forged.creation = call.caller_value_context;
+            for result in [
+                network_ledger::checked_codec_entry_captures(
+                    scope,
+                    parent,
+                    focus.values(),
+                    &preflight.bootstrap,
+                    forged,
+                    actual_argument,
+                    budget,
+                ),
+                network_ledger::checked_codec_entry_captures(
+                    scope,
+                    parent,
+                    focus.values(),
+                    &preflight.bootstrap,
+                    call,
+                    wrong_argument,
+                    budget,
+                ),
+            ] {
+                match result {
+                    Err(Failure::Invalid) => {}
+                    Err(other) => return Err(other),
+                    Ok(()) => return Err(Failure::Invalid),
+                }
+            }
+            tested = true;
+            break;
+        }
+        if tested {
+            Ok(())
+        } else {
+            Err(Failure::Invalid)
+        }
+    }
+
+    fn check_codec_unit_driver_case(selected: &str) {
+        use crate::core::effect::EffectExprKind;
+        use crate::core::ledger_checker::{
+            self,
+            codec::{
+                self, DecoderConstructors, DecoderDefinitions, NaturalEndConstructors,
+                NaturalReaderConstructors, NaturalReaderDefinitions,
+            },
+        };
+        let original = codec_one_way_source();
+        let helper = r#"import network_native as Native
+import network_codec as Codec
+pub process : Bytes -> Unit ! {Native.EchoBytes}
+process message = match Codec.decode message {
+    Codec.WorkDecoded(child, parent, payload) => ()
+    Codec.AckDecoded(parent, child) => ()
+    Codec.InvalidFrame => ()
+}
+"#;
+        let wrong_input = original.replace(
+            "Helper.process message",
+            "Helper.process (ByteOps.empty ())",
+        );
+        let missing_finish =
+            original.replace("let _ = Network.finish_receive worker", "let _ = ()");
+        let wrong_kind = original
+            .replace(
+                "Network.Message(Network.Application, message)",
+                "Network.Message(Network.Control, message)",
+            )
+            .replace(
+                "Network.Message(Network.Control, _) => false",
+                "Network.Message(Network.Application, _) => false",
+            );
+        let wrong_return = helper.replace(
+            "    Codec.WorkDecoded(child, parent, payload) => ()\n    Codec.AckDecoded(parent, child) => ()",
+            "    Codec.AckDecoded(parent, child) => ()\n    Codec.WorkDecoded(child, parent, payload) => ()",
+        );
+        assert_ne!(wrong_input, original);
+        assert_ne!(missing_finish, original);
+        assert_ne!(wrong_kind, original);
+        assert_ne!(wrong_return, helper);
+        for (label, source, helper_source, expected, shape_valid) in [
+            ("actual", original.as_str(), helper, true, true),
+            ("wrong input", wrong_input.as_str(), helper, false, true),
+            (
+                "missing finish",
+                missing_finish.as_str(),
+                helper,
+                false,
+                true,
+            ),
+            ("wrong kind", wrong_kind.as_str(), helper, false, true),
+            (
+                "wrong return",
+                original.as_str(),
+                wrong_return.as_str(),
+                false,
+                false,
+            ),
+        ] {
+            if label != selected {
+                continue;
+            }
+            let (core, provenance, linked) =
+                retained_drain_fixture_with_helper(source, helper_source);
+            let candidate = |name: &str| {
+                let binder = linked
+                    .groups()
+                    .iter()
+                    .flat_map(|group| group.definitions())
+                    .find_map(|item| {
+                        let crate::resolved::ResolvedDefinitionKind::Equational(item) = item.kind()
+                        else {
+                            return None;
+                        };
+                        (item.interface.name.spelling == name).then_some(item.interface.name.id)
+                    })
+                    .expect("linked codec definition");
+                let initializer = core
+                    .nodes
+                    .iter()
+                    .find_map(|node| {
+                        let EffectExprKind::Pure(PureExprKind::Computation(
+                            PureComputation::RecursiveBind(group),
+                        )) = &node.kind
+                        else {
+                            return None;
+                        };
+                        group
+                            .members()
+                            .iter()
+                            .find(|member| member.binder().id() == binder)
+                            .map(|member| member.initializer())
+                    })
+                    .expect("actual initializer");
+                ledger_checker::DefinitionCandidate {
+                    binder,
+                    initializer,
+                }
+            };
+            let constructor = |name: &str| {
+                core.registry
+                    .constructors()
+                    .iter()
+                    .find(|item| item.spelling == name)
+                    .expect("constructor")
+                    .id
+            };
+            let definitions = DecoderDefinitions {
+                reader: NaturalReaderDefinitions {
+                    entry: candidate("read_nat"),
+                    step: candidate("read_nat_step"),
+                    digit: candidate("read_nat_digit"),
+                    end: candidate("read_nat_end"),
+                    at: candidate("at"),
+                },
+                decode: candidate("decode"),
+                work: candidate("read_work"),
+                ack: candidate("read_ack"),
+                finish_work: candidate("finish_work"),
+                payload: candidate("read_payload"),
+                address: candidate("read_address"),
+                identity: candidate("read_identity"),
+                work_identity: candidate("read_work_identity"),
+                append: candidate("append"),
+                append_byte: candidate("append_byte"),
+                empty: candidate("empty"),
+                length: candidate("length"),
+            };
+            let constructors = DecoderConstructors {
+                reader: NaturalReaderConstructors {
+                    end: NaturalEndConstructors {
+                        nat: constructor("Nat"),
+                        invalid: constructor("InvalidNat"),
+                    },
+                    byte_at: constructor("ByteAt"),
+                    invalid_index: constructor("InvalidIndex"),
+                },
+                root: constructor("Root"),
+                work_id: constructor("Work"),
+                parent: constructor("Parent"),
+                identity: constructor("ReadIdentity"),
+                invalid_identity: constructor("InvalidIdentity"),
+                address: constructor("ReadAddress"),
+                invalid_address: constructor("InvalidAddress"),
+                payload: constructor("ReadPayload"),
+                invalid_payload: constructor("InvalidPayload"),
+                encoded: constructor("Encoded"),
+                encode_failed: constructor("EncodeFailed"),
+                work_decoded: constructor("WorkDecoded"),
+                ack_decoded: constructor("AckDecoded"),
+                invalid_frame: constructor("InvalidFrame"),
+            };
+            let driver_candidate = candidate("process");
+            let mut actual_call = None;
+            for (index, node) in core.nodes.iter().enumerate() {
+                let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(app))) =
+                    &node.kind
+                else {
+                    continue;
+                };
+                let Some(EffectExprKind::Pure(PureExprKind::Variable(variable))) = core
+                    .nodes
+                    .get(app.function().index().unwrap())
+                    .map(|node| &node.kind)
+                else {
+                    continue;
+                };
+                if variable.binder() == driver_candidate.binder {
+                    assert!(
+                        actual_call
+                            .replace(NodeId::new(core.arena, u32::try_from(index).unwrap()))
+                            .is_none()
+                    );
+                }
+            }
+            let sources: Vec<_> = provenance.iter().map(|(_, source)| source).collect();
+            let (mut budget, _) = crate::compiler_work::resident_phase_work(
+                crate::compiler_work::CompilationPhase::IndependentCore,
+                &sources,
+            )
+            .expect("size the production IndependentCore allowance");
+            let driver = codec::check_nominated_decode_driver(
+                &core,
+                &linked,
+                driver_candidate,
+                actual_call.expect("actual processing call"),
+                definitions,
+                constructors,
+                &mut budget,
+            );
+            if !shape_valid {
+                assert!(
+                    matches!(driver, Err(ledger_checker::Rejection::Unsupported)),
+                    "{label} must reject before any focus fact"
+                );
+                continue;
+            }
+            let driver = driver.expect("actual codec driver shape");
+            let handler = ledger_checker::checked_entry_default_handler(&core, &mut budget)
+                .expect("entry provider shape");
+            let owner_index = core
+                .nodes
+                .iter()
+                .position(|node| {
+                    matches!(
+                        &node.kind,
+                        EffectExprKind::Operation(EffectOperation::Network(_))
+                    )
+                })
+                .unwrap();
+            let owner = NodeId::new(core.arena, u32::try_from(owner_index).unwrap());
+            if label == "missing finish" {
+                // Exercise the actual codec policy through the complete Store
+                // cut, then require the genuine End-to-finish route to fail.
+                let stage = super::super::validate::with_network_native_scope_diagnostic(
+                    &core,
+                    &provenance,
+                    &linked,
+                    owner,
+                    &mut budget,
+                    |scope, budget| {
+                        Ok(with_network_worker_resources_inner(
+                            scope,
+                            1,
+                            Some((&driver, handler)),
+                            budget,
+                            |graph, worker, budget| {
+                                require_codec_summary_trace(worker, budget)?;
+                                let route = network_completion::worker_processing_route(
+                                    scope, 1, graph, worker, budget,
+                                )?
+                                .ok_or(Failure::Invalid)?;
+                                network_completion::worker_store_codec_exit_coverage(
+                                    scope, &route, graph, worker, &driver, handler, budget,
+                                )?;
+                                match codec_worker_finish_gate(scope, 1, graph, worker, budget) {
+                                    Err(Failure::Invalid) => Ok(()),
+                                    Ok(()) => Err(Failure::Invalid),
+                                    Err(error) => Err(error),
+                                }
+                            },
+                        ))
+                    },
+                )
+                .expect("authenticated missing-finish worker scope");
+                stage.expect("codec policy and Store cut must reach the missing-finish gate");
+                let relation: Vec<_> = provenance
+                    .iter()
+                    .map(|(module, source)| (*module, source.id()))
+                    .collect();
+                let (mut validation_work, _) = crate::compiler_work::resident_phase_work(
+                    crate::compiler_work::CompilationPhase::IndependentCore,
+                    &sources,
+                )
+                .expect("size the complete validator allowance");
+                let (whole, admissions) =
+                    super::super::validate::inspect_network_validation_for_test(
+                        &core,
+                        &sources,
+                        &relation,
+                        &linked,
+                        &mut validation_work,
+                    )
+                    .expect("complete validator must account for its work");
+                if whole.is_ok() {
+                    let admission = admissions
+                        .iter()
+                        .find(|entry| entry.owner == owner)
+                        .expect("actual network admission");
+                    assert!(
+                        admission.entries[1].end_route.is_none(),
+                        "missing finish cannot yield an End-to-finish route"
+                    );
+                }
+                continue;
+            }
+            // These queries inspect an already accepted focus independently;
+            // they are not part of the validator's shared work allowance.
+            let (mut inspection_work, _) = crate::compiler_work::resident_phase_work(
+                crate::compiler_work::CompilationPhase::IndependentCore,
+                &sources,
+            )
+            .expect("size the independent inspection allowance");
+            let result = super::super::validate::with_network_native_scope_diagnostic(
+                &core,
+                &provenance,
+                &linked,
+                owner,
+                &mut budget,
+                |scope, budget| {
+                    Ok(with_network_worker_codec_resources(
+                        scope,
+                        1,
+                        &driver,
+                        handler,
+                        budget,
+                        |graph, worker, _| {
+                            eprintln!("codec wrapper passed Store and End gates");
+                            let budget = &mut inspection_work;
+                            require_codec_summary_trace(worker, budget)?;
+                            check_codec_summary_forged_inputs(
+                                scope, graph, worker, &driver, handler, budget,
+                            )?;
+                            let route = network_completion::worker_processing_route(
+                                scope, 1, graph, worker, budget,
+                            )?
+                            .ok_or(Failure::Invalid)?;
+                            let before = budget.used();
+                            let mut staged_work = 0usize;
+                            let coverage =
+                                network_completion::worker_store_codec_exit_coverage_with_work(
+                                    scope,
+                                    &route,
+                                    graph,
+                                    worker,
+                                    &driver,
+                                    handler,
+                                    &mut |received, _| {
+                                        if received.owner != route.owner
+                                            || received.receive != route.receive
+                                            || received.receiver_endpoint_side != 1
+                                            || received.opposite_endpoint_side != 0
+                                            || received.fields[0] == received.fields[1]
+                                            || received.fields[0] == received.fields[2]
+                                            || received.fields[1] == received.fields[2]
+                                        {
+                                            return Err(Failure::Invalid);
+                                        }
+                                        let _ = received.focus.trace()?;
+                                        staged_work =
+                                            staged_work.checked_add(1).ok_or(Failure::Resource)?;
+                                        Ok(())
+                                    },
+                                    budget,
+                                )?;
+                            if staged_work == 0 {
+                                return Err(Failure::Invalid);
+                            }
+                            let cost = budget.used().checked_sub(before).ok_or(Failure::Invalid)?;
+                            if cost < 2 {
+                                return Err(Failure::Invalid);
+                            }
+                            let mut exact = TypeWorkBudget::with_limit(cost);
+                            if network_completion::worker_store_codec_exit_coverage(
+                                scope, &route, graph, worker, &driver, handler, &mut exact,
+                            )? != coverage
+                            {
+                                return Err(Failure::Invalid);
+                            }
+                            let mut short = TypeWorkBudget::with_limit(cost - 1);
+                            if !matches!(
+                                network_completion::worker_store_codec_exit_coverage(
+                                    scope, &route, graph, worker, &driver, handler, &mut short
+                                ),
+                                Err(Failure::Resource)
+                            ) {
+                                return Err(Failure::Invalid);
+                            }
+                            let mut spent = TypeWorkBudget::with_limit(cost);
+                            spent.charge(1).map_err(|_| Failure::Resource)?;
+                            if !matches!(
+                                network_completion::worker_store_codec_exit_coverage(
+                                    scope, &route, graph, worker, &driver, handler, &mut spent
+                                ),
+                                Err(Failure::Resource)
+                            ) {
+                                return Err(Failure::Invalid);
+                            }
+                            Ok(coverage)
+                        },
+                    ))
+                },
+            )
+            .expect("authenticated worker scope");
+            if expected {
+                assert!(result.is_ok(), "{label}: {result:?}");
+            } else {
+                assert!(
+                    matches!(result, Err(Failure::Invalid)),
+                    "{label}: {result:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn codec_unit_driver_follows_actual_application_store_and_end() {
+        check_codec_unit_driver_case("actual");
+    }
+
+    #[test]
+    fn codec_unit_driver_rejects_wrong_payload() {
+        check_codec_unit_driver_case("wrong input");
+    }
+
+    #[test]
+    fn codec_unit_driver_rejects_missing_finish() {
+        check_codec_unit_driver_case("missing finish");
+    }
+
+    #[test]
+    fn codec_unit_driver_rejects_wrong_kind() {
+        check_codec_unit_driver_case("wrong kind");
+    }
+
+    #[test]
+    fn codec_unit_driver_rejects_wrong_result_match() {
+        check_codec_unit_driver_case("wrong return");
+    }
+
+    #[test]
+    fn codec_worker_changed_provider_publishes_no_admission() {
+        use super::super::effect::{EffectExprKind, EffectOperationFamily};
+        let helper = r#"import network_native as Native
+import network_codec as Codec
+pub process : Bytes -> Unit ! {Native.EchoBytes}
+process message = match Codec.decode message {
+    Codec.WorkDecoded(child, parent, payload) => ()
+    Codec.AckDecoded(parent, child) => ()
+    Codec.InvalidFrame => ()
+}
+"#;
+        let (mut core, provenance, linked) =
+            retained_drain_fixture_with_helper(&codec_one_way_source(), helper);
+        let region = core
+            .nodes
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Region(region)) if region.entry => {
+                    Some(region)
+                }
+                _ => None,
+            })
+            .expect("actual entry Region");
+        let EffectExprKind::Operation(EffectOperation::Handler(handler)) =
+            &core.nodes[region.body().index().unwrap()].kind
+        else {
+            panic!("entry handler")
+        };
+        let [_, context] = handler.clauses() else {
+            panic!("context clause")
+        };
+        let selected = context.body().index().unwrap();
+        let replacement = core
+            .nodes
+            .iter()
+            .enumerate()
+            .find(|(index, node)| {
+                *index != selected
+                    && node.ty == core.nodes[selected].ty
+                    && matches!(&node.kind, EffectExprKind::Pure(PureExprKind::Value(_)))
+                    && EffectOperationFamily::child_count(&node.kind) == 0
+            })
+            .expect("same-typed provider replacement")
+            .1
+            .kind
+            .clone();
+        core.nodes[selected].kind = replacement;
+        let sources: Vec<_> = provenance.iter().map(|(_, source)| source).collect();
+        let modules: Vec<_> = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect();
+        let (mut work, _) = crate::compiler_work::resident_phase_work(
+            crate::compiler_work::CompilationPhase::IndependentCore,
+            &sources,
+        )
+        .expect("size the production IndependentCore allowance");
+        let (result, admissions) = super::super::validate::inspect_network_validation_for_test(
+            &core, &sources, &modules, &linked, &mut work,
+        )
+        .expect("validator work accounting");
+        let failure = result.expect_err("altered provider must fail closed");
+        assert_ne!(
+            failure.reason(),
+            super::super::validate::ValidationReason::Resource,
+            "budget exhaustion does not establish the provider rejection"
+        );
+        assert!(admissions.is_empty(), "failure must publish no admission");
     }
 
     #[test]

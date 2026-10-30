@@ -1204,6 +1204,10 @@ fn native_route_eligibility(result: Result<(), Failure>) -> Result<bool, Failure
 // A focused completion query retains the exact normalized C3 state graph.
 // No edge alone grants network completion: operation, marker, and result
 // provenance must be checked against the linked Core and runtime separately.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the exact summary edge is copied with its trace transition"
+)]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub(super) enum CompletionTransition {
     #[default]
@@ -1220,6 +1224,12 @@ pub(super) enum CompletionTransition {
         value_context: usize,
         expression: usize,
         creation: usize,
+    },
+    /// Conditional normal return from the exact checked decoder call. This
+    /// is not an observed traversal of the decoder's helper bodies.
+    CodecSummaryReturn {
+        witness: usize,
+        edge: Edge,
     },
     Detail(usize),
 }
@@ -1774,6 +1784,11 @@ struct CompletionQueue {
     trace: Option<Box<[CompletionTrace]>>,
     current: Option<usize>,
     transition: CompletionTransition,
+    // Positive entered-call proofs belong to this one append-only trace.
+    checked_buffer_calls: HashMap<Frame, CompletionCall>,
+    checked_allocation_cases: HashMap<Frame, usize>,
+    codec_summary_entries: HashMap<usize, Frame>,
+    codec_summary_return: Option<usize>,
 }
 
 impl CompletionQueue {
@@ -1814,6 +1829,129 @@ impl CompletionQueue {
 
     fn mark(&mut self, transition: CompletionTransition) {
         self.transition = transition;
+    }
+
+    // Index only an actual Call edge after discover_call enqueues it. The
+    // stored witness remains private to this one append-only query trace.
+    fn record_buffer_call(
+        &mut self,
+        frame: Frame,
+        call: CompletionCall,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let Frame::CallReturn {
+            code,
+            result,
+            body,
+            context,
+            value_context,
+            witness,
+        } = frame
+        else {
+            return Err(Failure::Invalid);
+        };
+        if self.current.is_none()
+            || (code, result, body, context, value_context)
+                != (
+                    call.code,
+                    call.result,
+                    call.body,
+                    call.caller_context,
+                    call.caller_value_context,
+                )
+            || self.transition
+                != (CompletionTransition::Call {
+                    target: call.target,
+                    value_context: call.callee_value_context,
+                    expression: call.expression,
+                    creation: call.creation,
+                })
+        {
+            return Err(Failure::Invalid);
+        }
+        let trace = self
+            .trace
+            .as_deref()
+            .and_then(|traces| traces.first())
+            .ok_or(Failure::Invalid)?;
+        charge(budget, 7)?;
+        if trace.calls.get(&call) != Some(&witness) {
+            return Err(Failure::Invalid);
+        }
+        charge(budget, 7)?;
+        if let Some(previous) = self.checked_buffer_calls.get(&frame) {
+            return if *previous == call {
+                Ok(())
+            } else {
+                Err(Failure::Invalid)
+            };
+        }
+        charge(budget, 7)?;
+        self.checked_buffer_calls
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        self.checked_buffer_calls.insert(frame, call);
+        Ok(())
+    }
+
+    fn checked_buffer_call(
+        &self,
+        frame: Frame,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<CompletionCall, Failure> {
+        charge(budget, 7)?;
+        self.checked_buffer_calls
+            .get(&frame)
+            .copied()
+            .ok_or(Failure::Invalid)
+    }
+
+    // Record only the exact entry produced by discover_choice after its
+    // successful enqueue recorded the Choice edge in this queue's trace.
+    fn record_allocation_case(
+        &mut self,
+        frame: Frame,
+        body: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let Frame::CaseReturn { ordinal, .. } = frame else {
+            return Err(Failure::Invalid);
+        };
+        if self.current.is_none()
+            || self.trace.is_none()
+            || self.transition != (CompletionTransition::Choice { ordinal })
+        {
+            return Err(Failure::Invalid);
+        }
+        charge(budget, 1)?;
+        if let Some(previous) = self.checked_allocation_cases.get(&frame) {
+            return if *previous == body {
+                Ok(())
+            } else {
+                Err(Failure::Invalid)
+            };
+        }
+        charge(budget, 1)?;
+        self.checked_allocation_cases
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        self.checked_allocation_cases.insert(frame, body);
+        Ok(())
+    }
+
+    // Restored or otherwise unrecorded frames cannot establish an entry.
+    fn checked_allocation_case(
+        &self,
+        frame: Frame,
+        body: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, 1)?;
+        if self.checked_allocation_cases.get(&frame) == Some(&body) {
+            Ok(())
+        } else {
+            Err(Failure::Invalid)
+        }
     }
 
     fn call_witness(
@@ -1890,6 +2028,18 @@ impl CompletionQueue {
 
     #[inline(never)]
     fn mark_return(&mut self, edge: &Edge, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        if let Some(witness) = self.codec_summary_return.take() {
+            if !matches!(edge.frame, Frame::CallReturn { witness: actual, .. } if actual == witness)
+            {
+                return Err(Failure::Invalid);
+            }
+            charge(budget, 1)?;
+            self.transition = CompletionTransition::CodecSummaryReturn {
+                witness,
+                edge: *edge,
+            };
+            return Ok(());
+        }
         if let Some(traces) = &mut self.trace {
             let trace = traces.first_mut().ok_or(Failure::Invalid)?;
             let detail = match trace.pending_native_route {
@@ -2588,6 +2738,24 @@ struct WorkerStartup<'a> {
     coordinates: [usize; 4],
     restored_calls: Vec<CompletionCall>,
     native_scope: Option<WorkerNativeScope<'a>>,
+    // Source-only matches over this worker's immutable graph and arena.
+    checked_buffer_sources: HashMap<usize, crate::core::NodeId>,
+    checked_tuple_sources: HashSet<usize>,
+}
+
+/// Source-only codec policy for one authenticated worker query. It grants no
+/// delivery, completion or provider fact.
+pub(super) struct CodecPreflight {
+    pub(super) owner: crate::core::NodeId,
+    pub(super) side: usize,
+    pub(super) nodes: HashSet<usize>,
+    pub(super) buffers: HashSet<usize>,
+    pub(super) bootstrap: super::network_ledger::CodecBootstrapOrigins,
+    pub(super) call: crate::core::NodeId,
+    pub(super) argument: crate::core::NodeId,
+    pub(super) closure: crate::core::NodeId,
+    pub(super) context_query: crate::core::NodeId,
+    pub(super) default_handler: crate::core::NodeId,
 }
 
 #[derive(Clone, Copy)]
@@ -2595,6 +2763,7 @@ struct WorkerNativeScope<'a> {
     scope: &'a super::super::validate::NetworkNativeIdentityScope<'a>,
     side: usize,
     entry_context: usize,
+    codec: Option<&'a CodecPreflight>,
 }
 
 struct WorkerReleaseRoots {
@@ -4042,6 +4211,8 @@ impl<'a> Analysis<'a> {
             coordinates: [entry_region, cutoff, input_request, input_success],
             restored_calls: Vec::new(),
             native_scope: None,
+            checked_buffer_sources: HashMap::new(),
+            checked_tuple_sources: HashSet::new(),
         });
         self.worker_startup = Some(startup.into_boxed_slice());
         let seed = State {
@@ -4109,6 +4280,30 @@ impl<'a> Analysis<'a> {
         incomplete: Option<&mut IncompleteNativeFocuses<'a>>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
+        self.focus_worker_stores_scoped_inner(scope, side, None, incomplete, budget)
+    }
+
+    pub(super) fn focus_worker_stores_codec(
+        &mut self,
+        scope: &'a super::super::validate::NetworkNativeIdentityScope<'a>,
+        side: usize,
+        codec: &'a CodecPreflight,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        self.focus_worker_stores_scoped_inner(scope, side, Some(codec), None, budget)
+    }
+
+    fn focus_worker_stores_scoped_inner(
+        &mut self,
+        scope: &'a super::super::validate::NetworkNativeIdentityScope<'a>,
+        side: usize,
+        codec: Option<&'a CodecPreflight>,
+        incomplete: Option<&mut IncompleteNativeFocuses<'a>>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if codec.is_some_and(|codec| codec.owner != scope.owner() || codec.side != side) {
+            return Err(Failure::Invalid);
+        }
         let [worker] = self.completion_foci.as_slice() else {
             return Err(Failure::Invalid);
         };
@@ -4147,6 +4342,7 @@ impl<'a> Analysis<'a> {
             scope,
             side,
             entry_context,
+            codec,
         });
         self.focus_worker_stores_with_native(incomplete, budget)
     }
@@ -4651,6 +4847,16 @@ impl<'a> Analysis<'a> {
         seed: Option<&State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<Option<Box<[CompletionTrace]>>, Failure> {
+        self.discover_with_parent(roots, seed, None, budget)
+    }
+
+    fn discover_with_parent(
+        &mut self,
+        roots: &[usize],
+        seed: Option<&State>,
+        parent: Option<&super::value::Analysis<'_>>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<Box<[CompletionTrace]>>, Failure> {
         let mut pending = if self.collect_completion
             && !self.inspecting
             && (self.worker_tracing
@@ -4708,6 +4914,80 @@ impl<'a> Analysis<'a> {
             while let Some(state) = pending.pop_front() {
                 pending.begin(&state, budget)?;
                 charge(budget, 1)?;
+                let summary_frame = if pending.codec_summary_entries.is_empty() {
+                    None
+                } else {
+                    charge(budget, 1)?;
+                    pending
+                        .current
+                        .and_then(|id| pending.codec_summary_entries.get(&id).copied())
+                };
+                if let Some(expected_frame) = summary_frame {
+                    let edges = state.edges(state.stack, budget)?;
+                    if let [edge] = edges
+                        && edge.frame == expected_frame
+                        && !matches!(state.stack, Address::Slot { old: true, .. })
+                    {
+                        let Frame::CallReturn { witness, .. } = edge.frame else {
+                            return Err(Failure::Invalid);
+                        };
+                        let call = pending
+                            .trace
+                            .as_deref()
+                            .and_then(|traces| traces.first())
+                            .ok_or(Failure::Invalid)?
+                            .call(witness, budget)?;
+                        if state.position.code
+                            != self.graph.callables.get(call.target, budget)?.body
+                            || state.position.next != 0
+                            || state.value_context != call.callee_value_context
+                            || state.context
+                                != self.call_context(
+                                    call.code,
+                                    call.target,
+                                    call.caller_context,
+                                    budget,
+                                )?
+                        {
+                            return Err(Failure::Invalid);
+                        }
+                        let policy = self
+                            .worker_startup
+                            .as_deref()
+                            .and_then(|startup| startup.first())
+                            .and_then(|startup| startup.native_scope)
+                            .ok_or(Failure::Invalid)?;
+                        let codec = policy.codec.ok_or(Failure::Invalid)?;
+                        if call.target != codec.closure.index().map_err(|_| Failure::Invalid)?
+                            || self
+                                .data
+                                .as_ref()
+                                .ok_or(Failure::Invalid)?
+                                .original_control_node(call.code, policy.scope.nodes(), budget)?
+                                != codec.call.index().map_err(|_| Failure::Invalid)?
+                        {
+                            return Err(Failure::Invalid);
+                        }
+                        self.data.as_mut().ok_or(Failure::Invalid)?.close(budget)?;
+                        self.codec_context_provider(&state, policy.scope, codec, budget)?;
+                        super::network_ledger::checked_codec_entry_captures(
+                            policy.scope,
+                            parent.ok_or(Failure::Invalid)?,
+                            self.data.as_ref().ok_or(Failure::Invalid)?,
+                            &codec.bootstrap,
+                            call,
+                            codec.argument,
+                            budget,
+                        )?;
+                        pending.codec_summary_return = Some(witness);
+                        self.returned(state, &mut pending, &mut visited, budget)?;
+                        if pending.codec_summary_return.is_some() {
+                            return Err(Failure::Invalid);
+                        }
+                        continue;
+                    }
+                    return Err(Failure::Invalid);
+                }
                 let code = state.position.code;
                 match &self.graph.code[code] {
                     Control::Return => self.returned(state, &mut pending, &mut visited, budget)?,
@@ -4743,6 +5023,7 @@ impl<'a> Analysis<'a> {
                         &mut unresolved_retained,
                         &mut pending,
                         &mut visited,
+                        parent,
                         budget,
                     )?,
                 }
@@ -4866,6 +5147,7 @@ impl<'a> Analysis<'a> {
         unresolved_retained: &mut HashSet<State>,
         pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
+        parent: Option<&super::value::Analysis<'_>>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
         let code = state.position.code;
@@ -4985,7 +5267,15 @@ impl<'a> Analysis<'a> {
                 )?;
             }
             Control::Call { .. } => {
-                self.discover_call(state, calls, observed_calls, pending, visited, budget)?;
+                self.discover_call(
+                    state,
+                    calls,
+                    observed_calls,
+                    pending,
+                    visited,
+                    parent,
+                    budget,
+                )?;
             }
             Control::Resume { value, .. } => {
                 let value = *value;
@@ -5067,6 +5357,7 @@ impl<'a> Analysis<'a> {
             }
             let mut next = state.copy(budget)?;
             let mut pushed = false;
+            let mut entered_case = None;
             if let Some((result_case, _, _)) = &cases {
                 if let Some(drain) = &mut next.drain {
                     let data = self.data.as_mut().ok_or(Failure::Invalid)?;
@@ -5078,15 +5369,14 @@ impl<'a> Analysis<'a> {
                     }
                 }
                 if *result_case || pending.trace.is_some() {
-                    next.push(
-                        Frame::CaseReturn {
-                            code,
-                            ordinal,
-                            context: state.context,
-                            value_context: state.value_context,
-                        },
-                        budget,
-                    )?;
+                    let frame = Frame::CaseReturn {
+                        code,
+                        ordinal,
+                        context: state.context,
+                        value_context: state.value_context,
+                    };
+                    next.push(frame, budget)?;
+                    entered_case = Some(frame);
                     pushed = true;
                 }
             }
@@ -5097,6 +5387,23 @@ impl<'a> Analysis<'a> {
             pending.mark(CompletionTransition::Choice { ordinal });
             if pushed {
                 Self::enqueue(next, pending, visited, budget)?;
+                if self.focusing
+                    && self.worker_tracing
+                    && !self.inspecting
+                    && pending.trace.is_some()
+                    && self
+                        .worker_startup
+                        .as_deref()
+                        .and_then(|items| items.first())
+                        .and_then(|startup| startup.native_scope)
+                        .is_some_and(|policy| policy.codec.is_some())
+                {
+                    pending.record_allocation_case(
+                        entered_case.ok_or(Failure::Invalid)?,
+                        *child,
+                        budget,
+                    )?;
+                }
             } else {
                 Self::enqueue_normalized(next, pending, visited, budget)?;
             }
@@ -6070,6 +6377,154 @@ impl<'a> Analysis<'a> {
     }
 
     #[inline(never)]
+    /// Resolve the checked decoder's actual DefaultAlloc query against the
+    /// caller's current stack. This is a selection check only: it does not
+    /// insert a request or a return edge into the completion trace.
+    fn codec_context_provider(
+        &mut self,
+        state: &State,
+        scope: &super::super::validate::NetworkNativeIdentityScope<'_>,
+        codec: &CodecPreflight,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let query = codec.context_query.index().map_err(|_| Failure::Invalid)?;
+        let parent = query.checked_add(1).ok_or(Failure::Resource)?;
+        let crate::core::EffectExprKind::Operation(crate::core::EffectOperation::Request(request)) =
+            &scope.nodes().get(query).ok_or(Failure::Invalid)?.kind
+        else {
+            return Err(Failure::Invalid);
+        };
+        let operand = request
+            .operand()
+            .index()
+            .map_err(|_| Failure::Invalid)?
+            .checked_add(1)
+            .ok_or(Failure::Resource)?;
+        let Some(Control::Sequence(children)) = self.graph.code.get(parent) else {
+            return Err(Failure::Invalid);
+        };
+        let [actual_operand, code] = children.as_slice() else {
+            return Err(Failure::Invalid);
+        };
+        if *actual_operand != operand {
+            return Err(Failure::Invalid);
+        }
+        let code = *code;
+        let data = self.data.as_ref().ok_or(Failure::Invalid)?;
+        if data.original_control_node(code, scope.nodes(), budget)? != query
+            || !matches!(self.graph.code.get(code), Some(Control::Request(_)))
+        {
+            return Err(Failure::Invalid);
+        }
+        let label = self.label(code, state.context, budget)?;
+        let (selected, escaped) = self.requested_boundaries(
+            state,
+            Event {
+                code,
+                label,
+                unknown: false,
+                port: None,
+            },
+            state.stack,
+            budget,
+        )?;
+        let [selected] = selected.as_slice() else {
+            return Err(Failure::Invalid);
+        };
+        let Frame::Handler {
+            code: handler,
+            capture_context,
+            ..
+        } = selected.boundary.frame
+        else {
+            return Err(Failure::Invalid);
+        };
+        if escaped
+            || self
+                .data
+                .as_ref()
+                .ok_or(Failure::Invalid)?
+                .original_control_node(handler, scope.nodes(), budget)?
+                != codec
+                    .default_handler
+                    .index()
+                    .map_err(|_| Failure::Invalid)?
+        {
+            return Err(Failure::Invalid);
+        }
+        let entry_region = scope.entry_region().index().map_err(|_| Failure::Invalid)?;
+        self.data
+            .as_ref()
+            .ok_or(Failure::Invalid)?
+            .existing_worker_entry_region_binding(
+                entry_region.checked_add(1).ok_or(Failure::Resource)?,
+                capture_context,
+                entry_region,
+                budget,
+            )?;
+        // Explicit Region services use owner-directed dispatch and are not
+        // selected by the ordinary context-query lookup above. Reject any
+        // reachable Region handler or native boundary that might intercept
+        // that service; do not invent a request operand or a trace event.
+        let (boundaries, _, _) = selection_boundaries(
+            state,
+            state.stack,
+            |frame| {
+                Ok((
+                    matches!(
+                        frame,
+                        Frame::Handler { .. }
+                            | Frame::RemovedHandler { .. }
+                            | Frame::NativeInterpret { .. }
+                    ),
+                    true,
+                ))
+            },
+            budget,
+        )?;
+        for edge in boundaries {
+            match edge.frame {
+                Frame::Handler { code, .. } | Frame::RemovedHandler { code, .. } => {
+                    let Some(Control::Handler { effect, .. }) = self.graph.code.get(code) else {
+                        return Err(Failure::Invalid);
+                    };
+                    if effect.region_service {
+                        return Err(Failure::Invalid);
+                    }
+                }
+                Frame::NativeInterpret { code, context, .. } => {
+                    let Some(Control::NativeInterpret { effects, .. }) = self.graph.code.get(code)
+                    else {
+                        return Err(Failure::Invalid);
+                    };
+                    charge(budget, effects.len())?;
+                    let mut requests = Vec::new();
+                    requests
+                        .try_reserve_exact(effects.len())
+                        .map_err(|_| Failure::Resource)?;
+                    for effect in effects {
+                        requests.push(effect.copy(budget)?);
+                    }
+                    for request in &requests {
+                        if request.region_service {
+                            return Err(Failure::Invalid);
+                        }
+                        let candidate = self.specialize_label(request, context, budget)?;
+                        if self.match_labels(label, candidate, budget)?.0 {
+                            return Err(Failure::Invalid);
+                        }
+                    }
+                }
+                _ => return Err(Failure::Invalid),
+            }
+        }
+        Ok(())
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the call step uses the existing focused worklist and budget"
+    )]
     fn discover_call(
         &mut self,
         state: State,
@@ -6077,6 +6532,7 @@ impl<'a> Analysis<'a> {
         observed_calls: &mut HashMap<State, usize>,
         pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
+        parent: Option<&super::value::Analysis<'_>>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
         let code = state.position.code;
@@ -6144,6 +6600,34 @@ impl<'a> Analysis<'a> {
             unknown,
             returns,
         } = successors;
+        let policy = if self.focusing && self.worker_tracing && !self.inspecting {
+            self.worker_startup
+                .as_deref()
+                .and_then(|startup| startup.first())
+                .and_then(|startup| startup.native_scope)
+                .filter(|policy| policy.codec.is_some())
+        } else {
+            None
+        };
+        let summary_site = if let Some(policy) = policy {
+            let codec = policy.codec.ok_or(Failure::Invalid)?;
+            let call_index = codec.call.index().map_err(|_| Failure::Invalid)?;
+            match self
+                .data
+                .as_ref()
+                .ok_or(Failure::Invalid)?
+                .original_control_node(code, policy.scope.nodes(), budget)
+            {
+                Ok(original) => original == call_index,
+                Err(Failure::Invalid) => false,
+                Err(other) => return Err(other),
+            }
+        } else {
+            false
+        };
+        if summary_site && (unknown || returns) {
+            return Err(Failure::Invalid);
+        }
         let prefix = prefix
             .as_ref()
             .map(|request| request.copy(budget))
@@ -6154,6 +6638,7 @@ impl<'a> Analysis<'a> {
             let context = self.call_context(code, target, state.context, budget)?;
             let mut next = state.copy(budget)?;
             let mut pushed = false;
+            let mut entered_call = None;
             if next.drain.is_some() || pending.trace.is_some() {
                 let data = self.data.as_mut().ok_or(Failure::Invalid)?;
                 let (result, body, pairs) = data.case_call_ports(
@@ -6180,38 +6665,72 @@ impl<'a> Analysis<'a> {
                         drain.assign(formal, fact, budget)?;
                     }
                 }
-                let witness = pending.call_witness(
-                    CompletionCall {
-                        code,
-                        result,
-                        body,
-                        caller_context: state.context,
-                        caller_value_context: state.value_context,
-                        target,
-                        callee_value_context: value_context,
-                        expression,
-                        creation,
-                    },
-                    budget,
-                )?;
-                next.push(
-                    Frame::CallReturn {
-                        code,
-                        result,
-                        body,
-                        context: state.context,
-                        value_context: state.value_context,
-                        witness,
-                    },
-                    budget,
-                )?;
+                let call = CompletionCall {
+                    code,
+                    result,
+                    body,
+                    caller_context: state.context,
+                    caller_value_context: state.value_context,
+                    target,
+                    callee_value_context: value_context,
+                    expression,
+                    creation,
+                };
+                let witness = pending.call_witness(call, budget)?;
+                let frame = Frame::CallReturn {
+                    code,
+                    result,
+                    body,
+                    context: state.context,
+                    value_context: state.value_context,
+                    witness,
+                };
+                next.push(frame, budget)?;
+                entered_call = Some((frame, call));
                 pushed = true;
+            }
+            if summary_site {
+                let policy = policy.ok_or(Failure::Invalid)?;
+                let codec = policy.codec.ok_or(Failure::Invalid)?;
+                let (_, call) = entered_call.ok_or(Failure::Invalid)?;
+                if call.target != codec.closure.index().map_err(|_| Failure::Invalid)?
+                    || call.expression != call.target
+                {
+                    return Err(Failure::Invalid);
+                }
+                self.data.as_mut().ok_or(Failure::Invalid)?.close(budget)?;
+                self.codec_context_provider(&state, policy.scope, codec, budget)?;
+                super::network_ledger::checked_codec_entry_captures(
+                    policy.scope,
+                    parent.ok_or(Failure::Invalid)?,
+                    self.data.as_ref().ok_or(Failure::Invalid)?,
+                    &codec.bootstrap,
+                    call,
+                    codec.argument,
+                    budget,
+                )?;
             }
             next.context = context;
             next.value_context = value_context;
             next.position = Position {
                 code: self.graph.callables.get(target, budget)?.body,
                 next: 0,
+            };
+            let summary_state = if summary_site {
+                next.normalize(budget)?;
+                // Keep the indexed entry exactly equal to the state recorded
+                // by enqueue. An unresolved discard history is unsupported.
+                if next.abandoned.is_some() {
+                    return Err(Failure::Invalid);
+                }
+                let trace = pending
+                    .trace
+                    .as_deref_mut()
+                    .and_then(|traces| traces.first_mut())
+                    .ok_or(Failure::Invalid)?;
+                Some(trace.intern(&next, budget)?)
+            } else {
+                None
             };
             pending.mark(CompletionTransition::Call {
                 target,
@@ -6220,7 +6739,40 @@ impl<'a> Analysis<'a> {
                 creation,
             });
             if pushed {
-                Self::enqueue(next, pending, visited, budget)?;
+                if summary_site {
+                    Self::enqueue_normalized(next, pending, visited, budget)?;
+                } else {
+                    Self::enqueue(next, pending, visited, budget)?;
+                }
+                if self.focusing
+                    && self.worker_tracing
+                    && !self.inspecting
+                    && pending.trace.is_some()
+                    && self
+                        .worker_startup
+                        .as_deref()
+                        .and_then(|items| items.first())
+                        .and_then(|startup| startup.native_scope)
+                        .is_some_and(|policy| policy.codec.is_some())
+                {
+                    let (frame, call) = entered_call.ok_or(Failure::Invalid)?;
+                    pending.record_buffer_call(frame, call, budget)?;
+                    if summary_site {
+                        let state = summary_state.ok_or(Failure::Invalid)?;
+                        charge(budget, 1)?;
+                        pending
+                            .codec_summary_entries
+                            .try_reserve(1)
+                            .map_err(|_| Failure::Resource)?;
+                        if pending
+                            .codec_summary_entries
+                            .insert(state, frame)
+                            .is_some_and(|previous| previous != frame)
+                        {
+                            return Err(Failure::Invalid);
+                        }
+                    }
+                }
             } else {
                 Self::enqueue_normalized(next, pending, visited, budget)?;
             }
@@ -6561,7 +7113,8 @@ impl<'a> Analysis<'a> {
                     if self.check_retained_release && focused_store {
                         self.release_unsafe = false;
                     }
-                    let trace = self.discover(&[], Some(&seed), budget)?;
+                    let trace =
+                        self.discover_with_parent(&[], Some(&seed), Some(&normal), budget)?;
                     let trace_revision = if trace.is_some() {
                         Some(self.data.as_ref().ok_or(Failure::Invalid)?.revision())
                     } else {
@@ -8232,6 +8785,7 @@ impl<'a> Analysis<'a> {
         &mut self,
         state: &State,
         event: Event,
+        pending: &mut CompletionQueue,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
         use super::super::effect::{EffectExprKind, EffectOperation};
@@ -8266,14 +8820,35 @@ impl<'a> Analysis<'a> {
             scope.arena(),
             u32::try_from(original).map_err(|_| Failure::Resource)?,
         );
-        charge(budget, scope.nodes().len())?;
-        let mut tuples = scope.nodes().iter().filter(|node| matches!(
-            &node.kind,
-            EffectExprKind::Operation(EffectOperation::RegionTuple(tuple))
-                if tuple.storage == allocation_id && tuple.context == allocation.context && tuple.api == allocation.api
-        ));
-        if tuples.next().is_none() || tuples.next().is_some() {
-            return Err(Failure::Invalid);
+        charge(budget, 1)?;
+        let checked = self
+            .worker_startup
+            .as_deref()
+            .and_then(|items| items.first())
+            .is_some_and(|startup| startup.checked_tuple_sources.contains(&event.code));
+        if !checked {
+            charge(budget, scope.nodes().len())?;
+            let mut tuples = scope.nodes().iter().filter(|node| matches!(
+                &node.kind,
+                EffectExprKind::Operation(EffectOperation::RegionTuple(tuple))
+                    if tuple.storage == allocation_id && tuple.context == allocation.context && tuple.api == allocation.api
+            ));
+            if tuples.next().is_none() || tuples.next().is_some() {
+                return Err(Failure::Invalid);
+            }
+            charge(budget, 1)?;
+            let startup = self
+                .worker_startup
+                .as_deref_mut()
+                .and_then(|items| items.first_mut())
+                .ok_or(Failure::Invalid)?;
+            startup
+                .checked_tuple_sources
+                .try_reserve(1)
+                .map_err(|_| Failure::Resource)?;
+            if !startup.checked_tuple_sources.insert(event.code) {
+                return Err(Failure::Invalid);
+            }
         }
         let (selected, escaped) = self.requested_boundaries(state, event, state.stack, budget)?;
         if !escaped || !selected.is_empty() {
@@ -8290,10 +8865,288 @@ impl<'a> Analysis<'a> {
         let [edge] = state.edges(state.stack, budget)? else {
             return Err(Failure::Invalid);
         };
-        if !matches!(edge.frame, Frame::Next { .. }) {
+        if matches!(edge.frame, Frame::Next { .. }) {
+            return Ok(());
+        }
+        charge(budget, 1)?;
+        if !policy
+            .codec
+            .is_some_and(|codec| codec.nodes.contains(&original))
+        {
             return Err(Failure::Invalid);
         }
-        Ok(())
+        self.worker_entry_allocation_return_preflight(state, pending, scope, budget)
+    }
+
+    // Generated buffer services use a synthetic request position, so resolve
+    // the actual parent by its complete lowered operand and service sequence.
+    // This is a local allocation-safety check, not a codec or protocol fact.
+    #[inline(never)]
+    fn worker_entry_buffer_allocation_preflight(
+        &mut self,
+        state: &State,
+        event: Event,
+        pending: &mut CompletionQueue,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        use crate::core::{
+            EffectExprKind, EffectOperation, packed::Intrinsic, region::RegionBufferOperation,
+        };
+        let policy = self
+            .worker_startup
+            .as_deref()
+            .and_then(|items| items.first())
+            .and_then(|startup| startup.native_scope)
+            .ok_or(Failure::Invalid)?;
+        if !self.focusing || !self.worker_tracing || self.inspecting || event.unknown {
+            return Err(Failure::Invalid);
+        }
+        let scope = policy.scope;
+        let codec = policy.codec.ok_or(Failure::Invalid)?;
+        let Control::Request(request) = self.graph.code.get(event.code).ok_or(Failure::Invalid)?
+        else {
+            return Err(Failure::Invalid);
+        };
+        if !request.region_service {
+            return Err(Failure::Invalid);
+        }
+        charge(budget, 1)?;
+        let cached = self
+            .worker_startup
+            .as_deref()
+            .and_then(|items| items.first())
+            .and_then(|startup| startup.checked_buffer_sources.get(&event.code))
+            .copied();
+        let context = if let Some(context) = cached {
+            context
+        } else {
+            let mut found = None;
+            // The policy already contains exactly the checked buffer nodes;
+            // the former whole-arena scan skipped every other node.
+            charge(budget, codec.buffers.capacity())?;
+            for &original in &codec.buffers {
+                charge(budget, 1)?;
+                let node = scope.nodes().get(original).ok_or(Failure::Invalid)?;
+                let EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) = &node.kind
+                else {
+                    continue;
+                };
+                let api =
+                    crate::resolved::RegionApi::for_module(buffer.api).ok_or(Failure::Invalid)?;
+                if request.operation != Some(crate::types::OperationId::new(api.default_alloc(), 0))
+                {
+                    continue;
+                }
+                let family = match &buffer.operation {
+                    RegionBufferOperation::Intrinsic(intrinsic)
+                        if intrinsic.module().is_builtin_bytes() =>
+                    {
+                        match intrinsic.operation() {
+                            Intrinsic::BytesAt { .. } | Intrinsic::BytesEmpty => 1,
+                            Intrinsic::BytesAppendByte { .. } => 2,
+                            _ => continue,
+                        }
+                    }
+                    RegionBufferOperation::Intrinsic(intrinsic)
+                        if intrinsic.module().is_builtin_integer()
+                            && matches!(
+                                intrinsic.operation(),
+                                Intrinsic::IntegerSplit256 { .. }
+                            ) =>
+                    {
+                        3
+                    }
+                    RegionBufferOperation::IntegerArithmetic(
+                        crate::core::Primitive::Add | crate::core::Primitive::Multiply,
+                    ) => 1,
+                    _ => continue,
+                };
+                let Some(left) = buffer.operand else { continue };
+                if buffer.context.arena() != scope.arena()
+                    || left.arena() != scope.arena()
+                    || buffer
+                        .right
+                        .is_some_and(|right| right.arena() != scope.arena())
+                {
+                    return Err(Failure::Invalid);
+                }
+                if matches!(buffer.operation, RegionBufferOperation::Intrinsic(_))
+                    && buffer.right.is_some()
+                    || matches!(
+                        buffer.operation,
+                        RegionBufferOperation::IntegerArithmetic(_)
+                    ) && buffer.right.is_none()
+                {
+                    return Err(Failure::Invalid);
+                }
+                let parent = original.checked_add(1).ok_or(Failure::Resource)?;
+                if self
+                    .data
+                    .as_ref()
+                    .ok_or(Failure::Invalid)?
+                    .original_control_node(parent, scope.nodes(), budget)?
+                    != original
+                {
+                    return Err(Failure::Invalid);
+                }
+                let Some(Control::Sequence(children)) = self.graph.code.get(parent) else {
+                    continue;
+                };
+                let context = buffer
+                    .context
+                    .index()
+                    .map_err(|_| Failure::Invalid)?
+                    .checked_add(1)
+                    .ok_or(Failure::Resource)?;
+                let left = left
+                    .index()
+                    .map_err(|_| Failure::Invalid)?
+                    .checked_add(1)
+                    .ok_or(Failure::Resource)?;
+                let (prefix, tail) = match children.split_last() {
+                    Some((tail, prefix)) => (prefix, *tail),
+                    None => continue,
+                };
+                let operands_match = if let Some(right) = buffer.right {
+                    let right = right
+                        .index()
+                        .map_err(|_| Failure::Invalid)?
+                        .checked_add(1)
+                        .ok_or(Failure::Resource)?;
+                    prefix == [context, left, right]
+                } else {
+                    prefix == [context, left]
+                };
+                if !operands_match {
+                    continue;
+                }
+                let service_match = if family == 1 {
+                    tail == event.code
+                } else if let Some(Control::Choice(choices)) = self.graph.code.get(tail) {
+                    let twice = choices.get(1).and_then(|code| self.graph.code.get(*code));
+                    let two = matches!(twice, Some(Control::Sequence(parts)) if parts.as_slice() == [event.code, event.code]);
+                    let three = if family == 3 {
+                        matches!(choices.get(2).and_then(|code| self.graph.code.get(*code)),
+                        Some(Control::Sequence(parts)) if parts.as_slice() == [event.code, event.code, event.code])
+                    } else {
+                        true
+                    };
+                    choices.len() == family && choices.first() == Some(&event.code) && two && three
+                } else {
+                    false
+                };
+                if service_match && found.replace((buffer.context, parent)).is_some() {
+                    return Err(Failure::Invalid);
+                }
+            }
+            let (context, _) = found.ok_or(Failure::Invalid)?;
+            charge(budget, 1)?;
+            let startup = self
+                .worker_startup
+                .as_deref_mut()
+                .and_then(|items| items.first_mut())
+                .ok_or(Failure::Invalid)?;
+            startup
+                .checked_buffer_sources
+                .try_reserve(1)
+                .map_err(|_| Failure::Resource)?;
+            if startup
+                .checked_buffer_sources
+                .insert(event.code, context)
+                .is_some()
+            {
+                return Err(Failure::Invalid);
+            }
+            context
+        };
+        let (selected, escaped) = self.requested_boundaries(state, event, state.stack, budget)?;
+        if !escaped || !selected.is_empty() {
+            return Err(Failure::Invalid);
+        }
+        let values = self.data.as_mut().ok_or(Failure::Invalid)?;
+        values.worker_entry_region_request(
+            event.port.ok_or(Failure::Invalid)?,
+            scope.entry_region().index().map_err(|_| Failure::Invalid)?,
+            budget,
+        )?;
+        let (request_port, operand_port) =
+            values.existing_request_operand_ports(event.code, state.value_context, budget)?;
+        let context_code = context
+            .index()
+            .map_err(|_| Failure::Invalid)?
+            .checked_add(1)
+            .ok_or(Failure::Resource)?;
+        if event.port != Some(request_port)
+            || values.existing_port(context_code, state.value_context, budget)? != operand_port
+        {
+            return Err(Failure::Invalid);
+        }
+        self.worker_entry_allocation_return_preflight(state, pending, scope, budget)
+    }
+
+    // Reconstruct only actual normal return frames; this grants no codec fact.
+    fn worker_entry_allocation_return_preflight(
+        &self,
+        state: &State,
+        pending: &mut CompletionQueue,
+        scope: &super::super::validate::NetworkNativeIdentityScope<'_>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        use crate::core::{EffectExprKind, PureComputation, PureExprKind};
+        let [edge] = state.edges(state.stack, budget)? else {
+            return Err(Failure::Invalid);
+        };
+        let values = self.data.as_ref().ok_or(Failure::Invalid)?;
+        match edge.frame {
+            Frame::Next { .. } => Ok(()),
+            Frame::CallReturn { result, body, .. } => {
+                let call = pending.checked_buffer_call(edge.frame, budget)?;
+                if call.callee_value_context != state.value_context
+                    || call.target != call.expression
+                {
+                    return Err(Failure::Invalid);
+                }
+                let (actual_result, actual_body, _, _) = values.existing_call_ports(
+                    call.code,
+                    call.caller_value_context,
+                    call.expression,
+                    call.callee_value_context,
+                    call.creation,
+                    budget,
+                )?;
+                if (actual_result, actual_body) != (result, body) {
+                    return Err(Failure::Invalid);
+                }
+                Ok(())
+            }
+            Frame::CaseReturn {
+                code,
+                ordinal,
+                value_context,
+                ..
+            } => {
+                if state.value_context != value_context {
+                    return Err(Failure::Invalid);
+                }
+                let Control::Choice(arms) = self.graph.code.get(code).ok_or(Failure::Invalid)?
+                else {
+                    return Err(Failure::Invalid);
+                };
+                let body = *arms.get(ordinal).ok_or(Failure::Invalid)?;
+                let original = values.original_control_node(code, scope.nodes(), budget)?;
+                if !matches!(
+                    scope.nodes().get(original).map(|node| &node.kind),
+                    Some(EffectExprKind::Pure(PureExprKind::Computation(
+                        PureComputation::Match(_)
+                    )))
+                ) {
+                    return Err(Failure::Invalid);
+                }
+                values.existing_case_arm_ports(code, ordinal, value_context, budget)?;
+                pending.checked_allocation_case(edge.frame, body, budget)
+            }
+            _ => Err(Failure::Invalid),
+        }
     }
 
     #[inline(never)]
@@ -8311,9 +9164,13 @@ impl<'a> Analysis<'a> {
             .and_then(|items| items.first())
             .is_some_and(|startup| startup.native_scope.is_some())
         {
-            native_route_eligibility(
-                self.worker_entry_tuple_allocation_preflight(state, event, budget),
-            )?
+            match self.worker_entry_tuple_allocation_preflight(state, event, pending, budget) {
+                Ok(()) => true,
+                Err(Failure::Resource) => return Err(Failure::Resource),
+                Err(_) => native_route_eligibility(
+                    self.worker_entry_buffer_allocation_preflight(state, event, pending, budget),
+                )?,
+            }
         } else {
             false
         };
@@ -10972,6 +11829,7 @@ mod tests {
                 &mut self.indices,
                 &mut self.pending,
                 &mut self.visited,
+                None,
                 work,
             )
         }
