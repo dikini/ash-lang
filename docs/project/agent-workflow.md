@@ -70,6 +70,48 @@ and effort; label exact model runtime unavailable when it is not exposed.
 Elapsed-minus-tools is only a proxy. Use existing receipts and task/handoff
 records; timing collection does not authorize extra verification or benchmarks.
 
+## Connected delivery planning
+
+For work crossing implementation boundaries, plan one production vertical slice
+before dividing it among agents: actual entry, intermediate operations, consuming
+admission or execution path, runtime completion and cleanup, as applicable.
+Name the integration owner and the acceptance check for that complete path.
+Separate component fixtures support this check; they do not replace it.
+
+Record the necessary interface agreements in the existing task or its execution
+plan. For each crossed boundary, identify:
+
+- The producer, consumer and responsible owners.
+- The data or evidence transferred, its provenance, lifetime and ownership.
+- Failure behavior, unsupported cases and what remains unresolved.
+- The check showing that the real consumer uses the producer's result.
+
+Use the smallest record sufficient for the change. This is implementation
+planning, not new semantic authority, a separate interface specification, or an
+additional approval requirement. Reuse retained mechanisms and evidence where
+their contracts apply. A helper without its required production consumer is
+partial work, even when its isolated tests pass.
+
+For complex parallel work, have the independent reviewer challenge the boundary
+map before substantial implementation. Compile interfaces early and establish
+the integration acceptance check from the start. Exercise the real path at the
+first coherent slice; do not accumulate independently passing components before
+discovering their integration requirements. Review includes admission, runtime,
+failure and cleanup consumers, not just the producing API.
+
+When work stalls or repeated repairs reveal new dependencies, ask the same
+independent reviewer to analyse the complete remaining path, challenge its
+assumptions and suggest a simpler implementation plan before adding more
+helpers. Keep confirmed findings, failed approaches, missing connections and
+next owners in the existing delivery ledger or task so agents do not rediscover
+them. Update the plan when the delivery path changes.
+
+Estimate the whole outstanding delivery chain, including unimplemented
+consumers, integration, review and required gates. Distinguish measured work
+from unresolved interfaces and explain the assumptions behind the range. Do not
+present time to the next local repair as time to milestone completion, or count
+component checks as completed issue acceptance.
+
 ## Verification cadence
 
 Use checkpoint gating rather than a full workspace gate for every PR. Every
