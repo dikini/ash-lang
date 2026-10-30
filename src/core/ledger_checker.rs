@@ -14,6 +14,8 @@ pub(super) mod plan;
 pub(super) mod acknowledgement;
 #[path = "closure.rs"]
 pub(super) mod closure;
+#[path = "install.rs"]
+pub(super) mod install;
 #[path = "retirement.rs"]
 pub(super) mod retirement;
 
@@ -5283,8 +5285,18 @@ check_decode bytes = match Codec.decode bytes {
     Codec.AckDecoded(parent, child) => ()
     Codec.InvalidFrame => ()
 }
+check_receipt : (Int, Int, Bytes, Int, Int) -> Unit
+check_receipt (endpoint, ledger, bytes, own, peer) = match Codec.decode bytes {
+    Codec.WorkDecoded(child, parent, payload) => ()
+    Codec.AckDecoded(parent, child) => ()
+    Codec.InvalidFrame => ()
+}
 main : Unit -> Unit
-main () = check_decode (B.empty ())
+main () = {
+    let previous = check_decode (B.empty ())
+    let current = 0
+    check_receipt (0, current, B.empty (), 0, 0)
+}
 "#;
         let files = [
             (
@@ -5384,6 +5396,19 @@ main () = check_decode (B.empty ())
             ack_decoded: constructor("AckDecoded"),
             invalid_frame: constructor("InvalidFrame"),
         };
+        let driver_candidate = candidate("check_decode");
+        let mut source_work = TypeWorkBudget::unbounded();
+        let initializer =
+            super::linked_initializer(&program, &linked, driver_candidate, &mut source_work)
+                .expect("actual linked Unit driver");
+        let mut inspect_driver = super::CoreInspection {
+            program: &program,
+            work: &mut source_work,
+        };
+        let unit_match = inspect_driver
+            .stored_function_witness(initializer, &[decoder.decode.binder])
+            .expect("actual stored Unit driver")
+            .body;
         let source_match = |binder| {
             let mut work = TypeWorkBudget::unbounded();
             let mut inspect = super::CoreInspection {
@@ -5401,7 +5426,9 @@ main () = check_decode (B.empty ())
                 let Ok(application) = inspect.application(call) else {
                     continue;
                 };
-                if inspect.variable(application.function()).ok() == Some(binder) {
+                if inspect.variable(application.function()).ok() == Some(binder)
+                    && (binder != decoder.decode.binder || id == unit_match)
+                {
                     assert!(found.replace((id, call, application.argument())).is_none());
                 }
             }
@@ -5409,7 +5436,6 @@ main () = check_decode (B.empty ())
         };
         let (encode_match, encode_call, encode_argument) = source_match(encoder.encode.binder);
         let (decode_match, decode_call, decode_argument) = source_match(decoder.decode.binder);
-        let driver_candidate = candidate("check_decode");
         let mut source_work = TypeWorkBudget::unbounded();
         let mut source_inspect = super::CoreInspection {
             program: &program,
@@ -5479,6 +5505,46 @@ main () = check_decode (B.empty ())
         assert_eq!(driver.outer_call(), driver_call);
         assert_eq!(driver.invocation().call(), decode_call);
         assert_eq!(driver.result_match().matching(), decode_match);
+        let receipt_candidate = candidate("check_receipt");
+        let receipt_call = (0..program.nodes().len())
+            .filter_map(|index| {
+                let id =
+                    crate::core::NodeId::new(program.root().arena(), u32::try_from(index).unwrap());
+                let application = source_inspect.application(id).ok()?;
+                (source_inspect.variable(application.function()).ok()
+                    == Some(receipt_candidate.binder))
+                .then_some(id)
+            })
+            .collect::<Vec<_>>();
+        let [receipt_call] = receipt_call.as_slice() else {
+            panic!("actual receipt call")
+        };
+        let plan = super::driver::DriverNomination {
+            definition: receipt_candidate,
+            captures: &[decoder.decode.binder],
+            call: *receipt_call,
+            arity: 5,
+            ledger_field: 1,
+        };
+        let receipt = codec::check_nominated_receipt_decode(
+            &program, &linked, &plan, 2, decoder, decode_c, &mut work,
+        )
+        .expect("actual linked multi-field decode driver");
+        assert_eq!(receipt.driver().call(), *receipt_call);
+        assert_eq!(receipt.message_field(), 2);
+        assert_eq!(receipt.result_match().call(), receipt.invocation().call());
+        assert!(matches!(
+            codec::check_nominated_receipt_decode(
+                &program, &linked, &plan, 0, decoder, decode_c, &mut work,
+            ),
+            Err(super::Rejection::Unsupported)
+        ));
+        assert!(matches!(
+            codec::check_nominated_receipt_decode(
+                &program, &linked, &plan, 1, decoder, decode_c, &mut work,
+            ),
+            Err(super::Rejection::Unsupported)
+        ));
         assert!(
             codec::check_nominated_decode_driver(
                 &program,
@@ -8237,5 +8303,179 @@ insert_child (fresh, children) = match children {
             "insert_child (fresh, children)",
         );
         assert_eq!(inspect(&wrong_tail), Err(super::Rejection::Unsupported));
+    }
+
+    #[test]
+    fn received_installation_checks_actual_fresh_append_and_failure_branches() {
+        const LOOKUP: &str = r#"
+type RecordLookup =
+    NoRecord
+    | HasRecord(Record)
+record_id : Record -> Identity
+record_id record = match record {
+    Record(actual, parent, phase, children) => actual
+}
+find_record : (Identity, Records) -> RecordLookup
+find_record (wanted, records) = match records {
+    NoRecords => NoRecord
+    RecordCons(record, tail) => match same_id (record_id record, wanted) {
+        true => HasRecord(record)
+        false => find_record (wanted, tail)
+    }
+}
+"#;
+        fn inspect(fragment: &str) -> Result<(), super::Rejection> {
+            use super::install::{
+                InstallationConstructors, InstallationDefinitions, check_conditional_installation,
+                check_installation_result_match, check_nominated_installation_call,
+            };
+            let base = ORDINARY_LEDGER.replace(
+                "let ignored = remove_child (Root, Empty)",
+                "let ignored = match install_received (initial (), Work(1, 2), Parent(0, Root)) {\n        (successor, installed) => match installed {\n            true => successor\n            false => successor\n        }\n    }",
+            );
+            let fragment = fragment.replace("LedgerTypes.", "");
+            let source = format!("{base}\n{LOOKUP}\n{fragment}");
+            let (program, linked) = ordinary_ledger(&source);
+            let candidate = |name| target_candidate(&program, &linked, name);
+            let constructor = |name: &str| {
+                program
+                    .registry()
+                    .constructors()
+                    .iter()
+                    .find(|item| item.spelling == name)
+                    .expect("fixture constructor")
+                    .id
+            };
+            let definitions = InstallationDefinitions {
+                entry: candidate("install_received"),
+                finish: candidate("finish_install"),
+                lookup: candidate("find_record"),
+                insertion: candidate("append_record"),
+                comparison: candidate("same_id"),
+                projection: candidate("record_id"),
+            };
+            let constructors = InstallationConstructors {
+                state: super::InitializationConstructors {
+                    ledger: constructor("Ledger"),
+                    record: constructor("Record"),
+                    root: constructor("Root"),
+                    work: constructor("Work"),
+                    no_parent: constructor("NoParent"),
+                    parent: constructor("Parent"),
+                    open: constructor("Open"),
+                    closed: constructor("Closed"),
+                    children_empty: constructor("Empty"),
+                    children_more: constructor("More"),
+                    records_empty: constructor("NoRecords"),
+                    records_more: constructor("RecordCons"),
+                    outputs_empty: constructor("NoOutputs"),
+                    outputs_more: constructor("OutputCons"),
+                },
+                no_record: constructor("NoRecord"),
+                has_record: constructor("HasRecord"),
+            };
+            let mut work = TypeWorkBudget::unbounded();
+            check_conditional_installation(
+                &program,
+                &linked,
+                definitions,
+                constructors,
+                &mut work,
+            )?;
+            let entry_binder = definitions.entry.binder;
+            let mut actual_call = None;
+            for (index, node) in program.nodes().iter().enumerate() {
+                let super::EffectExprKind::Pure(super::PureExprKind::Computation(
+                    super::PureComputation::Apply(application),
+                )) = &node.kind
+                else {
+                    continue;
+                };
+                let Some(super::EffectExprKind::Pure(super::PureExprKind::Variable(function))) =
+                    program.node(application.function()).map(|node| &node.kind)
+                else {
+                    continue;
+                };
+                if function.binder() == entry_binder {
+                    assert!(
+                        actual_call
+                            .replace(super::NodeId::new(
+                                program.root().arena(),
+                                u32::try_from(index).unwrap()
+                            ))
+                            .is_none()
+                    );
+                }
+            }
+            let actual_call = actual_call.expect("actual install call");
+            let actual_match = program
+                .nodes()
+                .iter()
+                .enumerate()
+                .find_map(|(index, node)| {
+                    let super::EffectExprKind::Pure(super::PureExprKind::Computation(
+                        super::PureComputation::Match(branch),
+                    )) = &node.kind
+                    else {
+                        return None;
+                    };
+                    (branch.scrutinee() == actual_call).then(|| {
+                        super::NodeId::new(program.root().arena(), u32::try_from(index).unwrap())
+                    })
+                })
+                .expect("actual install result match");
+            let mut call_work = TypeWorkBudget::unbounded();
+            let nominated = check_nominated_installation_call(
+                &program,
+                &linked,
+                actual_call,
+                definitions,
+                constructors,
+                &mut call_work,
+            )?;
+            check_installation_result_match(&program, &nominated, actual_match, &mut call_work)?;
+            let used = work.used();
+            let mut exact = TypeWorkBudget::with_limit(used);
+            check_conditional_installation(
+                &program,
+                &linked,
+                definitions,
+                constructors,
+                &mut exact,
+            )?;
+            let mut short = TypeWorkBudget::with_limit(used - 1);
+            assert!(matches!(
+                check_conditional_installation(
+                    &program,
+                    &linked,
+                    definitions,
+                    constructors,
+                    &mut short
+                ),
+                Err(super::Rejection::Exhausted)
+            ));
+            Ok(())
+        }
+        let source = include_str!("../../tests/fixtures/pinned-network/install-fragment.ash");
+        assert_eq!(inspect(source), Ok(()));
+        for (old, new) in [
+            (
+                "HasRecord(existing) => (ledger, false)",
+                "HasRecord(existing) => (ledger, true)",
+            ),
+            (
+                "Record(child, parent, Open, Empty)",
+                "Record(child, parent, Closed, Empty)",
+            ),
+            (
+                "append_record (Record(child, parent, Open, Empty), records)",
+                "records",
+            ),
+            ("Ledger(next, append_record", "Ledger(0, append_record"),
+        ] {
+            let changed = source.replacen(old, new, 1);
+            assert_ne!(changed, source);
+            assert_eq!(inspect(&changed), Err(super::Rejection::Unsupported));
+        }
     }
 }

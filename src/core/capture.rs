@@ -3356,7 +3356,7 @@ fn with_network_worker_resources<R>(
     budget: &mut TypeWorkBudget,
     inspect: impl FnOnce(&SummaryGraph, &Analysis<'_>, &mut TypeWorkBudget) -> Result<R, Failure>,
 ) -> Result<R, Failure> {
-    with_network_worker_resources_inner(scope, side, None, budget, inspect)
+    with_network_worker_resources_inner(scope, side, None, None, budget, inspect)
 }
 
 /// Codec-specific preflight remains private and can return only after its
@@ -3374,6 +3374,7 @@ fn with_network_worker_codec_resources<R>(
         scope,
         side,
         Some((driver, handler)),
+        None,
         budget,
         |graph, worker, budget| {
             let route =
@@ -3409,6 +3410,10 @@ fn with_network_worker_resources_inner<R>(
         &super::ledger_checker::codec::ConditionalDecodeDriver<'_>,
         NodeId,
     )>,
+    original_codec: Option<(
+        &super::ledger_checker::codec::ConditionalReceiptDecode<'_>,
+        NodeId,
+    )>,
     budget: &mut TypeWorkBudget,
     inspect: impl FnOnce(&SummaryGraph, &Analysis<'_>, &mut TypeWorkBudget) -> Result<R, Failure>,
 ) -> Result<R, Failure> {
@@ -3429,8 +3434,12 @@ fn with_network_worker_resources_inner<R>(
     // the linked initializers and both entries, rejecting reachable method
     // evidence and unresolved callable definitions. Its bindings are the
     // actual same-arena linked source definitions, including imported helpers.
+    if codec.is_some() && original_codec.is_some() {
+        return Err(Failure::Invalid);
+    }
     let preserve_case = codec
         .map(|(driver, _)| driver.result_match().matching())
+        .or_else(|| original_codec.map(|(driver, _)| driver.result_match().matching()))
         .map(|node| {
             if node.arena() != scope.arena() {
                 return Err(Failure::Invalid);
@@ -3475,15 +3484,28 @@ fn with_network_worker_resources_inner<R>(
         reason = "the worker borrows preflight and must be dropped first"
     )]
     let preflight;
+    let original_preflight = original_codec
+        .map(|(driver, handler)| {
+            network_ledger::original_codec_preflight(
+                scope,
+                side,
+                driver.invocation(),
+                handler,
+                budget,
+            )
+        })
+        .transpose()?;
     let mut worker = Analysis::new(&built.graph, None, budget)?;
-    worker.check_worker_bootstrap(
-        root_index.checked_add(1).ok_or(Failure::Resource)?,
-        region_index.checked_add(1).ok_or(Failure::Resource)?,
-        result_index.checked_add(1).ok_or(Failure::Resource)?,
-        request,
-        success,
-        budget,
-    )?;
+    let root = root_index.checked_add(1).ok_or(Failure::Resource)?;
+    let region = region_index.checked_add(1).ok_or(Failure::Resource)?;
+    let cutoff = result_index.checked_add(1).ok_or(Failure::Resource)?;
+    if let Some(codec) = original_preflight.as_ref() {
+        worker.check_worker_bootstrap_original_codec(
+            root, region, cutoff, request, success, scope, codec, budget,
+        )?;
+    } else {
+        worker.check_worker_bootstrap(root, region, cutoff, request, success, budget)?;
+    }
     preflight = codec
         .map(|(driver, handler)| {
             network_completion::codec_worker_preflight(
@@ -7689,6 +7711,306 @@ main : Unit -> Int"#, 1);
         }
     }
 
+    #[test]
+    fn original_worker_decoder_summary_tracks_real_call() {
+        use crate::core::effect::EffectExprKind;
+        use crate::core::ledger_checker::{
+            self,
+            codec::{
+                self, DecoderConstructors, DecoderDefinitions, NaturalEndConstructors,
+                NaturalReaderConstructors, NaturalReaderDefinitions,
+            },
+            driver::DriverNomination,
+        };
+        let source = include_str!("../../tests/fixtures/pinned-network/receipt-driver.ash");
+        let (core, provenance, linked) = retained_drain_fixture_with_helper(source, "");
+        let candidate = |name: &str| {
+            let binder = linked
+                .groups()
+                .iter()
+                .flat_map(|group| group.definitions())
+                .find_map(|item| {
+                    let crate::resolved::ResolvedDefinitionKind::Equational(item) = item.kind()
+                    else {
+                        return None;
+                    };
+                    (item.interface.name.spelling == name).then_some(item.interface.name.id)
+                })
+                .expect("linked codec definition");
+            let initializer = core
+                .nodes
+                .iter()
+                .find_map(|node| {
+                    let EffectExprKind::Pure(PureExprKind::Computation(
+                        PureComputation::RecursiveBind(group),
+                    )) = &node.kind
+                    else {
+                        return None;
+                    };
+                    group
+                        .members()
+                        .iter()
+                        .find(|member| member.binder().id() == binder)
+                        .map(|member| member.initializer())
+                })
+                .expect("actual initializer");
+            ledger_checker::DefinitionCandidate {
+                binder,
+                initializer,
+            }
+        };
+        let constructor = |name: &str| {
+            core.registry
+                .constructors()
+                .iter()
+                .find(|item| item.spelling == name)
+                .expect("constructor")
+                .id
+        };
+        let definitions = DecoderDefinitions {
+            reader: NaturalReaderDefinitions {
+                entry: candidate("read_nat"),
+                step: candidate("read_nat_step"),
+                digit: candidate("read_nat_digit"),
+                end: candidate("read_nat_end"),
+                at: candidate("at"),
+            },
+            decode: candidate("decode"),
+            work: candidate("read_work"),
+            ack: candidate("read_ack"),
+            finish_work: candidate("finish_work"),
+            payload: candidate("read_payload"),
+            address: candidate("read_address"),
+            identity: candidate("read_identity"),
+            work_identity: candidate("read_work_identity"),
+            append: candidate("append"),
+            append_byte: candidate("append_byte"),
+            empty: candidate("empty"),
+            length: candidate("length"),
+        };
+        let constructors = DecoderConstructors {
+            reader: NaturalReaderConstructors {
+                end: NaturalEndConstructors {
+                    nat: constructor("Nat"),
+                    invalid: constructor("InvalidNat"),
+                },
+                byte_at: constructor("ByteAt"),
+                invalid_index: constructor("InvalidIndex"),
+            },
+            root: constructor("Root"),
+            work_id: constructor("Work"),
+            parent: constructor("Parent"),
+            identity: constructor("ReadIdentity"),
+            invalid_identity: constructor("InvalidIdentity"),
+            address: constructor("ReadAddress"),
+            invalid_address: constructor("InvalidAddress"),
+            payload: constructor("ReadPayload"),
+            invalid_payload: constructor("InvalidPayload"),
+            encoded: constructor("Encoded"),
+            encode_failed: constructor("EncodeFailed"),
+            work_decoded: constructor("WorkDecoded"),
+            ack_decoded: constructor("AckDecoded"),
+            invalid_frame: constructor("InvalidFrame"),
+        };
+        let receipt = candidate("handle_application");
+        let mut initializer = receipt.initializer;
+        while let EffectExprKind::Pure(PureExprKind::Computation(
+            PureComputation::TypeAbstraction(abstraction),
+        )) = &core.nodes[initializer.index().unwrap()].kind
+        {
+            initializer = abstraction.body();
+        }
+        let (_, closure) = crate::core::region::closure_initializer::<
+            crate::core::EffectOperationFamily,
+        >(initializer, |id| {
+            core.nodes.get(id.index().ok()?).map(|node| &node.kind)
+        })
+        .expect("actual receipt closure");
+        let captures: Vec<_> = closure
+            .captures
+            .iter()
+            .map(|id| {
+                let EffectExprKind::Pure(PureExprKind::Variable(variable)) =
+                    &core.nodes[id.index().unwrap()].kind
+                else {
+                    panic!("actual receipt capture")
+                };
+                variable.binder()
+            })
+            .collect();
+        let mut calls = Vec::new();
+        for (index, node) in core.nodes.iter().enumerate() {
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
+                application,
+            ))) = &node.kind
+            else {
+                continue;
+            };
+            let mut function = application.function();
+            loop {
+                match &core.nodes[function.index().unwrap()].kind {
+                    EffectExprKind::Pure(PureExprKind::Computation(
+                        PureComputation::TypeApplication(applied),
+                    )) => function = applied.function(),
+                    EffectExprKind::Pure(PureExprKind::Variable(variable))
+                        if variable.binder() == receipt.binder =>
+                    {
+                        calls.push(NodeId::new(core.arena, u32::try_from(index).unwrap()));
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+        }
+        let [call] = calls.as_slice() else {
+            panic!("one actual Application receipt call")
+        };
+        let sources: Vec<_> = provenance.iter().map(|(_, source)| source).collect();
+        let (mut budget, _) = crate::compiler_work::resident_phase_work(
+            crate::compiler_work::CompilationPhase::IndependentCore,
+            &sources,
+        )
+        .unwrap();
+        let plan = DriverNomination {
+            definition: receipt,
+            captures: &captures,
+            call: *call,
+            arity: 5,
+            ledger_field: 1,
+        };
+        let driver = codec::check_nominated_receipt_decode(
+            &core,
+            &linked,
+            &plan,
+            2,
+            definitions,
+            constructors,
+            &mut budget,
+        )
+        .expect("actual five-field receipt decoder");
+        let handler = ledger_checker::checked_entry_default_handler(&core, &mut budget).unwrap();
+        let (mut inspection, _) = crate::compiler_work::resident_phase_work(
+            crate::compiler_work::CompilationPhase::IndependentCore,
+            &sources,
+        )
+        .unwrap();
+        let owner = core
+            .nodes
+            .iter()
+            .enumerate()
+            .find_map(|(index, node)| {
+                matches!(
+                    &node.kind,
+                    EffectExprKind::Operation(EffectOperation::Network(_))
+                )
+                .then(|| NodeId::new(core.arena, u32::try_from(index).unwrap()))
+            })
+            .expect("actual pair owner");
+        let result = super::super::validate::with_network_native_scope_diagnostic(
+            &core,
+            &provenance,
+            &linked,
+            owner,
+            &mut budget,
+            |scope, budget| {
+                Ok(with_network_worker_resources_inner(
+                    scope,
+                    0,
+                    None,
+                    Some((&driver, handler)),
+                    budget,
+                    |graph, worker, _| {
+                        let budget = &mut inspection;
+                        let focus = worker.completion_foci.last().ok_or(Failure::Invalid)?;
+                        let trace = focus.trace()?;
+                        let mut found = None;
+                        trace.visit_edges(budget, |_, _, transition, budget| {
+                            let control::CompletionTransition::CodecSummaryReturn {
+                                witness, ..
+                            } = transition
+                            else {
+                                return Ok(());
+                            };
+                            let call = trace.call(witness, budget)?;
+                            if call.target
+                                == driver
+                                    .invocation()
+                                    .closure()
+                                    .index()
+                                    .map_err(|_| Failure::Invalid)?
+                                && call.expression == call.target
+                                && focus.values().original_control_node(
+                                    call.code,
+                                    scope.nodes(),
+                                    budget,
+                                )? == driver
+                                    .invocation()
+                                    .call()
+                                    .index()
+                                    .map_err(|_| Failure::Invalid)?
+                                && found.is_none()
+                            {
+                                found = Some(call);
+                            }
+                            Ok(())
+                        })?;
+                        let call = found.ok_or(Failure::Invalid)?;
+                        let source = network_ledger::original_codec_preflight(
+                            scope,
+                            0,
+                            driver.invocation(),
+                            handler,
+                            budget,
+                        )?;
+                        let origins = network_ledger::checked_original_codec_origins(
+                            scope,
+                            graph,
+                            trace,
+                            focus.values(),
+                            &source,
+                            budget,
+                        )?;
+                        network_ledger::checked_original_codec_call(
+                            scope,
+                            graph,
+                            focus.values(),
+                            &source,
+                            &origins,
+                            call,
+                            budget,
+                        )?;
+                        let mut forged = call;
+                        forged.code = driver
+                            .result_match()
+                            .matching()
+                            .index()
+                            .map_err(|_| Failure::Invalid)?
+                            .checked_add(1)
+                            .ok_or(Failure::Resource)?;
+                        if forged.code == call.code {
+                            return Err(Failure::Invalid);
+                        }
+                        match network_ledger::checked_original_codec_call(
+                            scope,
+                            graph,
+                            focus.values(),
+                            &source,
+                            &origins,
+                            forged,
+                            budget,
+                        ) {
+                            Err(Failure::Invalid) => Ok(()),
+                            Err(other) => Err(other),
+                            Ok(()) => Err(Failure::Invalid),
+                        }
+                    },
+                ))
+            },
+        )
+        .expect("actual authenticated worker scope");
+        result.expect("original worker reaches the actual conditional decoder summary");
+    }
+
     fn check_codec_unit_driver_case(selected: &str) {
         use crate::core::effect::EffectExprKind;
         use crate::core::ledger_checker::{
@@ -7916,6 +8238,7 @@ process message = match Codec.decode message {
                             scope,
                             1,
                             Some((&driver, handler)),
+                            None,
                             budget,
                             |graph, worker, budget| {
                                 require_codec_summary_trace(worker, budget)?;

@@ -1377,13 +1377,20 @@ fn source_position(
     node: crate::core::NodeId,
     work: &mut TypeWorkBudget,
 ) -> Result<bool, Failure> {
+    source_position_values(scope, focus.values(), state, node, work)
+}
+
+fn source_position_values(
+    scope: &NetworkNativeIdentityScope<'_>,
+    values: &super::value::Analysis<'_>,
+    state: &control::State,
+    node: crate::core::NodeId,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, Failure> {
     if node.arena() != scope.arena() {
         return Err(Failure::Invalid);
     }
-    match focus
-        .values()
-        .original_control_node(state.position.code, scope.nodes(), work)
-    {
+    match values.original_control_node(state.position.code, scope.nodes(), work) {
         Ok(original) => Ok(original == node.index().map_err(|_| Failure::Invalid)?),
         Err(Failure::Invalid) => Ok(false),
         Err(error) => Err(error),
@@ -1784,7 +1791,7 @@ struct CheckedQueries {
 fn checked_queries(
     scope: &NetworkNativeIdentityScope<'_>,
     graph: &SummaryGraph,
-    focus: &control::CompletionFocus<'_>,
+    values: &super::value::Analysis<'_>,
     checked_nodes: &HashSet<usize>,
     definitions: &[DefinitionProvenance],
     provider_api: crate::module::ModuleId,
@@ -1822,21 +1829,18 @@ fn checked_queries(
         ) {
             continue;
         }
-        let original =
-            match focus
-                .values()
-                .original_control_node(state.position.code, scope.nodes(), work)
-            {
-                Ok(index) => index,
-                Err(Failure::Invalid) => continue,
-                Err(other) => return Err(other),
-            };
+        let original = match values.original_control_node(state.position.code, scope.nodes(), work)
+        {
+            Ok(index) => index,
+            Err(Failure::Invalid) => continue,
+            Err(other) => return Err(other),
+        };
         let Some(&(binding, binder)) = bindings.get(&original) else {
             continue;
         };
         let mut owner = None;
         for (i, definition) in definitions.iter().enumerate() {
-            if source_position(scope, focus, state, definition.query, work)?
+            if source_position_values(scope, values, state, definition.query, work)?
                 && owner.replace(i).is_some()
             {
                 return Err(Failure::Invalid);
@@ -1845,10 +1849,7 @@ fn checked_queries(
         if let Some(owner) = owner {
             query_count[owner] = query_count[owner].checked_add(1).ok_or(Failure::Resource)?;
         }
-        let query_port =
-            focus
-                .values()
-                .existing_port(state.position.code, state.value_context, work)?;
+        let query_port = values.existing_port(state.position.code, state.value_context, work)?;
         let local_origin = LocalOrigin {
             binding,
             binder,
@@ -1865,14 +1866,13 @@ fn checked_queries(
                 return Err(Failure::Invalid);
             }
             let after = states.get(to).copied().flatten().ok_or(Failure::Invalid)?;
-            let query = super::network_end::context_query(scope, graph, focus, state, after, work)?;
+            let query =
+                super::network_end::context_query_values(scope, graph, values, state, after, work)?;
             let control::Frame::Clause { handler, .. } = query.clause.frame else {
                 return Err(Failure::Invalid);
             };
             if default_handler.arena() != scope.arena()
-                || focus
-                    .values()
-                    .original_control_node(handler, scope.nodes(), work)?
+                || values.original_control_node(handler, scope.nodes(), work)?
                     != default_handler.index().map_err(|_| Failure::Invalid)?
             {
                 return Err(Failure::Invalid);
@@ -2111,6 +2111,359 @@ pub(super) struct CodecBootstrapOrigins {
     parent_revision: usize,
 }
 
+/// Checked source catalog for a nominated decoder in the original worker.
+/// The catalog is not a provider, capture, currentness or receive fact.
+pub(super) struct OriginalCodecPreflight {
+    pub(super) owner: crate::core::NodeId,
+    pub(super) side: usize,
+    pub(super) call: crate::core::NodeId,
+    pub(super) argument: crate::core::NodeId,
+    pub(super) closure: crate::core::NodeId,
+    pub(super) context_query: crate::core::NodeId,
+    pub(super) default_handler: crate::core::NodeId,
+    api: crate::module::ModuleId,
+    length: (crate::resolved::BinderId, crate::core::NodeId),
+    definitions: Vec<DefinitionProvenance>,
+    helpers: Vec<(crate::resolved::BinderId, crate::core::NodeId)>,
+    checked_nodes: HashSet<usize>,
+}
+
+pub(super) fn original_codec_preflight(
+    scope: &NetworkNativeIdentityScope<'_>,
+    side: usize,
+    invocation: &crate::core::ledger_checker::codec::NominatedCodecCall<'_>,
+    default_handler: crate::core::NodeId,
+    work: &mut TypeWorkBudget,
+) -> Result<OriginalCodecPreflight, Failure> {
+    charge(work, 1)?;
+    if scope.entry(side).is_none() {
+        return Err(Failure::Invalid);
+    }
+    let root = scope
+        .nodes()
+        .get(scope.root().index().map_err(|_| Failure::Invalid)?)
+        .ok_or(Failure::Invalid)?;
+    let (context_query, actual_handler) = invocation
+        .decoder_readonly_query(work)
+        .map_err(plan_rejection)?;
+    if actual_handler != default_handler
+        || !invocation.matches_source_root(scope.root(), &root.kind)
+        || [
+            invocation.call(),
+            invocation.argument(),
+            invocation.closure(),
+            context_query,
+            default_handler,
+        ]
+        .iter()
+        .any(|node| node.arena() != scope.arena())
+    {
+        return Err(Failure::Invalid);
+    }
+    let descriptors = invocation.helpers(work).map_err(plan_rejection)?;
+    let mut definitions = Vec::new();
+    let mut helpers = Vec::new();
+    let mut roots = Vec::new();
+    charge(
+        work,
+        descriptors.len().checked_mul(3).ok_or(Failure::Resource)?,
+    )?;
+    definitions
+        .try_reserve_exact(descriptors.len())
+        .map_err(|_| Failure::Resource)?;
+    helpers
+        .try_reserve_exact(descriptors.len())
+        .map_err(|_| Failure::Resource)?;
+    roots
+        .try_reserve_exact(descriptors.len())
+        .map_err(|_| Failure::Resource)?;
+    for descriptor in descriptors {
+        let definition = DefinitionProvenance {
+            query: descriptor.query(),
+            binding: descriptor.root(),
+            context: descriptor.context(),
+            closure: descriptor.closure(),
+        };
+        if [
+            definition.query,
+            definition.binding,
+            definition.context,
+            definition.closure,
+        ]
+        .iter()
+        .any(|node| node.arena() != scope.arena())
+        {
+            return Err(Failure::Invalid);
+        }
+        charge(
+            work,
+            definitions
+                .len()
+                .checked_add(helpers.len())
+                .ok_or(Failure::Resource)?,
+        )?;
+        if definitions.iter().any(|old: &DefinitionProvenance| {
+            old.query == definition.query || old.closure == definition.closure
+        }) || helpers
+            .iter()
+            .any(|(binder, _)| *binder == descriptor.binder())
+        {
+            return Err(Failure::Invalid);
+        }
+        roots.push(definition.binding);
+        helpers.push((descriptor.binder(), definition.closure));
+        definitions.push(definition);
+    }
+    let (_, _, checked_nodes) = checked_call_roots(scope, &roots, work)?;
+    for node in invocation.buffer_nodes(work).map_err(plan_rejection)? {
+        charge(work, 1)?;
+        if node.arena() != scope.arena()
+            || !checked_nodes.contains(&node.index().map_err(|_| Failure::Invalid)?)
+        {
+            return Err(Failure::Invalid);
+        }
+    }
+    Ok(OriginalCodecPreflight {
+        owner: scope.owner(),
+        side,
+        call: invocation.call(),
+        argument: invocation.argument(),
+        closure: invocation.closure(),
+        context_query,
+        default_handler,
+        api: invocation.provider_api(),
+        length: invocation.decoder_length().ok_or(Failure::Invalid)?,
+        definitions,
+        helpers,
+        checked_nodes,
+    })
+}
+
+/// Reconstruct the query-origin catalog once against the settled original
+/// worker trace. Its ports remain private to this exact value revision.
+pub(super) fn checked_original_codec_origins(
+    scope: &NetworkNativeIdentityScope<'_>,
+    graph: &SummaryGraph,
+    trace: &control::CompletionTrace,
+    values: &super::value::Analysis<'_>,
+    preflight: &OriginalCodecPreflight,
+    work: &mut TypeWorkBudget,
+) -> Result<CodecBootstrapOrigins, Failure> {
+    let data_graph = graph.data.as_deref().ok_or(Failure::Invalid)?;
+    if !values.belongs_to(data_graph)
+        || preflight.owner != scope.owner()
+        || scope.entry(preflight.side).is_none()
+    {
+        return Err(Failure::Invalid);
+    }
+    let states = trace.indexed_states(work)?;
+    let edges = trace.indexed_edges(work)?;
+    let mut outgoing = Vec::new();
+    charge(
+        work,
+        states
+            .len()
+            .checked_add(edges.len())
+            .ok_or(Failure::Resource)?,
+    )?;
+    outgoing
+        .try_reserve_exact(states.len())
+        .map_err(|_| Failure::Resource)?;
+    outgoing.resize_with(states.len(), Vec::new);
+    for (number, &(from, to, _)) in edges.iter().enumerate() {
+        if to >= states.len() {
+            return Err(Failure::Invalid);
+        }
+        charge(work, 1)?;
+        let entries = outgoing.get_mut(from).ok_or(Failure::Invalid)?;
+        entries.try_reserve(1).map_err(|_| Failure::Resource)?;
+        entries.push(number);
+    }
+    for entries in &outgoing {
+        charge(work, entries.capacity())?;
+    }
+    let mut details = HashMap::new();
+    trace.visit_details(work, |id, detail, work| {
+        charge(work, 1)?;
+        details.try_reserve(1).map_err(|_| Failure::Resource)?;
+        if details.insert(id, detail).is_some() {
+            return Err(Failure::Invalid);
+        }
+        Ok(())
+    })?;
+    charge(work, details.capacity())?;
+    let queries = checked_queries(
+        scope,
+        graph,
+        values,
+        &preflight.checked_nodes,
+        &preflight.definitions,
+        preflight.api,
+        preflight.default_handler,
+        &states,
+        &edges,
+        &details,
+        &outgoing,
+        true,
+        work,
+    )?;
+    let mut definitions = Vec::new();
+    let mut helpers = Vec::new();
+    charge(
+        work,
+        preflight
+            .definitions
+            .len()
+            .checked_add(preflight.helpers.len())
+            .ok_or(Failure::Resource)?,
+    )?;
+    definitions
+        .try_reserve_exact(preflight.definitions.len())
+        .map_err(|_| Failure::Resource)?;
+    helpers
+        .try_reserve_exact(preflight.helpers.len())
+        .map_err(|_| Failure::Resource)?;
+    definitions.extend_from_slice(&preflight.definitions);
+    helpers.extend_from_slice(&preflight.helpers);
+    let origins = CodecBootstrapOrigins {
+        origins: queries.query_origins,
+        definitions,
+        helpers,
+        api: preflight.api,
+        length: preflight.length,
+        parent_revision: values.revision(),
+    };
+    Ok(origins)
+}
+
+/// Authenticate each actual call and its full capture graph using the
+/// settled catalog from this same original worker analysis.
+pub(super) fn checked_original_codec_call(
+    scope: &NetworkNativeIdentityScope<'_>,
+    graph: &SummaryGraph,
+    values: &super::value::Analysis<'_>,
+    preflight: &OriginalCodecPreflight,
+    origins: &CodecBootstrapOrigins,
+    call: control::CompletionCall,
+    work: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
+    let data_graph = graph.data.as_deref().ok_or(Failure::Invalid)?;
+    if !values.belongs_to(data_graph)
+        || preflight.owner != scope.owner()
+        || scope.entry(preflight.side).is_none()
+        || values.revision() != origins.parent_revision
+        || call.target != call.expression
+        || call.target != preflight.closure.index().map_err(|_| Failure::Invalid)?
+        || values.original_control_node(call.code, scope.nodes(), work)?
+            != preflight.call.index().map_err(|_| Failure::Invalid)?
+    {
+        return Err(Failure::Invalid);
+    }
+    let (result, body, arguments, captures) = values.existing_call_ports(
+        call.code,
+        call.caller_value_context,
+        call.expression,
+        call.callee_value_context,
+        call.creation,
+        work,
+    )?;
+    let [(_, actual_argument)] = arguments.as_slice() else {
+        return Err(Failure::Invalid);
+    };
+    let argument_code = preflight
+        .argument
+        .index()
+        .map_err(|_| Failure::Invalid)?
+        .checked_add(1)
+        .ok_or(Failure::Resource)?;
+    let (argument_port, _) =
+        values.existing_forward_ports(argument_code, call.caller_value_context, work)?;
+    if result != call.result || body != call.body || *actual_argument != argument_port {
+        return Err(Failure::Invalid);
+    }
+    let crate::core::EffectExprKind::Operation(crate::core::EffectOperation::RegionClosure(
+        closure,
+    )) = &scope.nodes().get(call.target).ok_or(Failure::Invalid)?.kind
+    else {
+        return Err(Failure::Invalid);
+    };
+    if closure.api != preflight.api {
+        return Err(Failure::Invalid);
+    }
+    charge(work, preflight.definitions.len())?;
+    let mut candidates = preflight
+        .definitions
+        .iter()
+        .filter(|definition| definition.closure.index().ok() == Some(call.target));
+    let definition = *candidates.next().ok_or(Failure::Invalid)?;
+    if candidates.next().is_some() {
+        return Err(Failure::Invalid);
+    }
+    let binding = definition
+        .binding
+        .index()
+        .map_err(|_| Failure::Invalid)?
+        .checked_add(1)
+        .ok_or(Failure::Resource)?;
+    let creation = match values.existing_binding_ports(binding, call.creation, work) {
+        Ok(_) => call.creation,
+        Err(Failure::Invalid) => values.existing_type_application_creation(
+            call,
+            definition.context,
+            scope.arena(),
+            scope.nodes(),
+            work,
+        )?,
+        Err(other) => return Err(other),
+    };
+    let (binder, query) = values.existing_binding_ports(binding, creation, work)?;
+    charge(work, 1)?;
+    let origin = origins.origins.get(&query).ok_or(Failure::Invalid)?;
+    if origin.binding != binding - 1 || origin.context != creation {
+        return Err(Failure::Invalid);
+    }
+    let context_code = definition
+        .context
+        .index()
+        .map_err(|_| Failure::Invalid)?
+        .checked_add(1)
+        .ok_or(Failure::Resource)?;
+    let (original_context, context_source) =
+        values.existing_forward_ports(context_code, creation, work)?;
+    if context_source != binder {
+        return Err(Failure::Invalid);
+    }
+    let context_port = if creation == call.creation {
+        original_context
+    } else {
+        values
+            .existing_forward_ports(context_code, call.creation, work)?
+            .0
+    };
+    charge(work, captures.len())?;
+    if captures
+        .iter()
+        .filter(|(_, source)| *source == context_port)
+        .count()
+        != 1
+    {
+        return Err(Failure::Invalid);
+    }
+    values.check_closed_global_capture_ports(
+        call.target,
+        call.creation,
+        call.callee_value_context,
+        &closure.captures,
+        closure.context,
+        &[],
+        scope.arena(),
+        scope.nodes(),
+        &captures,
+        work,
+    )?;
+    checked_codec_closed_captures(scope, values, origins, call.target, creation, work)
+}
+
 /// Check one actual decoder entry against copied parent origins and the
 /// finite linked helper capture graph. Returned coordinates remain private
 /// to their owning analyses; no helper call or callee is invented here.
@@ -2256,11 +2609,23 @@ pub(super) fn checked_codec_entry_captures(
             return Err(Failure::Invalid);
         }
     }
+    checked_codec_closed_captures(scope, parent, bootstrap, call.target, parent_creation, work)
+}
+
+/// Verify every actual creation alternative in one owning value analysis.
+fn checked_codec_closed_captures(
+    scope: &NetworkNativeIdentityScope<'_>,
+    values: &super::value::Analysis<'_>,
+    bootstrap: &CodecBootstrapOrigins,
+    target: usize,
+    creation: usize,
+    work: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
     let mut pending = Vec::new();
     let mut visited = HashSet::new();
     charge(work, 1)?;
     pending.try_reserve(1).map_err(|_| Failure::Resource)?;
-    pending.push((call.target, parent_creation));
+    pending.push((target, creation));
     while let Some((target, creation)) = pending.pop() {
         charge(
             work,
@@ -2283,7 +2648,7 @@ pub(super) fn checked_codec_entry_captures(
             return Err(Failure::Invalid);
         }
         let binding_index = definition.binding.index().map_err(|_| Failure::Invalid)?;
-        let (binder, query) = parent.existing_binding_ports(
+        let (binder, query) = values.existing_binding_ports(
             binding_index.checked_add(1).ok_or(Failure::Resource)?,
             creation,
             work,
@@ -2298,7 +2663,7 @@ pub(super) fn checked_codec_entry_captures(
             .map_err(|_| Failure::Invalid)?
             .checked_add(1)
             .ok_or(Failure::Resource)?;
-        let (_, source) = parent.existing_forward_ports(context_code, creation, work)?;
+        let (_, source) = values.existing_forward_ports(context_code, creation, work)?;
         if source != binder {
             return Err(Failure::Invalid);
         }
@@ -2311,7 +2676,7 @@ pub(super) fn checked_codec_entry_captures(
         if closure.api != bootstrap.api {
             return Err(Failure::Invalid);
         }
-        let sources = parent.existing_closed_capture_sources(
+        let sources = values.existing_closed_capture_sources(
             target,
             creation,
             &closure.captures,
@@ -2347,7 +2712,7 @@ pub(super) fn checked_codec_entry_captures(
                 return Err(Failure::Invalid);
             };
             let expected_index = expected.index().map_err(|_| Failure::Invalid)?;
-            for (actual, actual_creation) in parent.existing_closures_at_port(source, work)? {
+            for (actual, actual_creation) in values.existing_closures_at_port(source, work)? {
                 if actual != expected_index {
                     return Err(Failure::Invalid);
                 }
@@ -2567,7 +2932,7 @@ pub(super) fn codec_source_certificate<'focus, 'graph>(
     let local = checked_queries(
         scope,
         graph,
-        focus,
+        focus.values(),
         &checked_nodes,
         &definitions,
         api,
@@ -2701,7 +3066,7 @@ pub(super) fn codec_store_guard<'cert, 'focus, 'graph>(
     let queries = checked_queries(
         scope,
         graph,
-        focus,
+        focus.values(),
         &checked_nodes,
         &certificate.definitions,
         certificate.api,
@@ -3277,7 +3642,7 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
     } = checked_queries(
         scope,
         graph,
-        focus,
+        focus.values(),
         &checked_nodes,
         &definitions,
         initialization.provider_api(),
@@ -3293,7 +3658,7 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
         Some(checked_queries(
             scope,
             graph,
-            focus,
+            focus.values(),
             &codec_nodes,
             &codec_definitions,
             initialization.provider_api(),
