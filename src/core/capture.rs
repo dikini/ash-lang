@@ -5608,6 +5608,59 @@ mod tests {
         panic!("entry module is present");
     }
 
+    fn checked_codec_entry_with_dependencies(
+        graph: &crate::module::ModuleGraph,
+    ) -> (
+        crate::resolved::CheckedModule,
+        Vec<crate::resolved::CheckedModule>,
+    ) {
+        use crate::resolve::{DependencyExports, resolve_module};
+        let (mut work, source_bytes) = crate::compiler_work::source_work(graph).unwrap();
+        let mut coverage = crate::pattern::UsefulnessBudget::default();
+        let mut constraints = crate::interface::InterfaceConstraintBudget::default();
+        let primary = crate::calibration::limit(
+            crate::compiler_work::primary_total(source_bytes).unwrap(),
+            crate::calibration::DiagnosticOwner::Structural,
+        );
+        let rewrite = crate::calibration::limit(
+            crate::compiler_work::rewrite_total(source_bytes).unwrap(),
+            crate::calibration::DiagnosticOwner::Structural,
+        );
+        let mut checked = Vec::<crate::resolved::CheckedModule>::new();
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|item| item.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(module, &dependencies).unwrap();
+            let item = crate::elaborate::check_module_with_budget_and_rewrite_work(
+                resolved,
+                &mut work,
+                &mut coverage,
+                &mut constraints,
+                Some(TypeWorkBudget::with_limit(primary)),
+                Some(TypeWorkBudget::with_limit(rewrite)),
+            )
+            .expect("codec source must fit the resident-closure allowance");
+            if module.id() == graph.entry() {
+                return (item, checked);
+            }
+            checked.push(item);
+        }
+        panic!("entry module is present");
+    }
+
     fn validate_checked_core(
         core: super::super::effect::UnvalidatedEffectProgram,
         provenance: &[(crate::module::ModuleId, SourceFile)],
@@ -6246,6 +6299,11 @@ mod tests {
         .unwrap();
         std::fs::write(directory.join("worker_helper.ash"), worker_helper).unwrap();
         std::fs::write(
+            directory.join("network_codec.ash"),
+            include_str!("../../libraries/network_codec.ash"),
+        )
+        .unwrap();
+        std::fs::write(
             directory.join("network_types.ash"),
             include_str!("../../libraries/network_types.ash"),
         )
@@ -6258,8 +6316,17 @@ mod tests {
         let loaded = load_module_graph(&directory.join("entry.ash"), &ModuleRoots::empty());
         std::fs::remove_dir_all(directory).unwrap();
         let graph = loaded.unwrap();
-        let (resolved, mut dependencies) = resolved_entry_with_checked_dependencies(&graph);
-        let checked = check_module(resolved).expect("source fixture must elaborate");
+        let (checked, mut dependencies) = if worker_helper.contains("import network_codec as Codec")
+            || source.contains("import network_codec as Codec")
+        {
+            checked_codec_entry_with_dependencies(&graph)
+        } else {
+            let (resolved, dependencies) = resolved_entry_with_checked_dependencies(&graph);
+            (
+                check_module(resolved).expect("source fixture must elaborate"),
+                dependencies,
+            )
+        };
         let main = checked
             .schemes()
             .iter()

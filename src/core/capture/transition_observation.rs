@@ -343,6 +343,7 @@ fn advance_successor(
                     focus,
                     before.position.code,
                     &current.checked_nodes,
+                    None,
                     work,
                 )?
                 .ok_or(Failure::Invalid)?,
@@ -399,6 +400,7 @@ fn advance_successor(
                     &current.checked_nodes,
                     original,
                     next.provider_api(),
+                    None,
                     work,
                 )?;
             }
@@ -753,6 +755,7 @@ pub(super) fn observe_transition_calls<'focus, 'graph>(
                         focus,
                         before.position.code,
                         &current.checked_nodes,
+                        None,
                         work,
                     )?
                     .ok_or(Failure::Invalid)?,
@@ -835,6 +838,7 @@ pub(super) fn observe_transition_calls<'focus, 'graph>(
                         &current.checked_nodes,
                         original,
                         nominated.provider_api(),
+                        None,
                         work,
                     )?;
                 }
