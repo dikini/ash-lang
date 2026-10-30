@@ -3172,6 +3172,10 @@ pub(crate) fn validate_effect_modules_with_work(
 /// An untrusted plan is checked in the same validator/focus/budget. The
 /// returned observations are conditional and available only after all ordinary
 /// Core validation succeeds; they grant no network permission.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "reserved for the N4 linked validator consumer")
+)]
 pub(in crate::core) fn validate_effect_modules_linked_with_ledger_plans<'a>(
     program: UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
     sources: &[&SourceFile],

@@ -3506,8 +3506,8 @@ pub(super) fn network_worker_admission_facts(
 /// Evaluate the optional ledger nomination during the existing worker query.
 /// The candidate is private and remains conditional until whole Core validation.
 #[expect(
-    clippy::too_many_arguments,
-    reason = "The scope, linked arena, nomination and shared work budget are distinct inputs"
+    clippy::type_complexity,
+    reason = "The result carries separate processing, cut, end and ledger observations"
 )]
 pub(super) fn network_worker_admission_with_ledger(
     scope: &super::validate::NetworkNativeIdentityScope<'_>,

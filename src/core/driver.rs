@@ -36,37 +36,33 @@ pub(in crate::core) fn check_nominated_driver_call<'a>(
     let mut body = initializer;
     let mut parameter_count = 0usize;
     let mut type_parameters = Vec::new();
-    loop {
-        match inspect.kind(body)? {
-            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(
-                abstraction,
-            ))) => {
-                inspect
-                    .work
-                    .charge(
-                        abstraction
-                            .parameters()
-                            .len()
-                            .checked_add(1)
-                            .ok_or(Rejection::Exhausted)?,
-                    )
-                    .map_err(|()| Rejection::Exhausted)?;
-                parameter_count = parameter_count
-                    .checked_add(abstraction.parameters().len())
-                    .ok_or(Rejection::Exhausted)?;
-                type_parameters
-                    .try_reserve(abstraction.parameters().len())
-                    .map_err(|_| Rejection::Exhausted)?;
-                type_parameters.extend(
-                    abstraction
-                        .parameters()
-                        .iter()
-                        .map(|(parameter, _)| *parameter),
-                );
-                body = abstraction.body();
-            }
-            _ => break,
-        }
+    while let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(
+        abstraction,
+    ))) = inspect.kind(body)?
+    {
+        inspect
+            .work
+            .charge(
+                abstraction
+                    .parameters()
+                    .len()
+                    .checked_add(1)
+                    .ok_or(Rejection::Exhausted)?,
+            )
+            .map_err(|()| Rejection::Exhausted)?;
+        parameter_count = parameter_count
+            .checked_add(abstraction.parameters().len())
+            .ok_or(Rejection::Exhausted)?;
+        type_parameters
+            .try_reserve(abstraction.parameters().len())
+            .map_err(|_| Rejection::Exhausted)?;
+        type_parameters.extend(
+            abstraction
+                .parameters()
+                .iter()
+                .map(|(parameter, _)| *parameter),
+        );
+        body = abstraction.body();
     }
     let definition = inspect.stored_function_witness(body, plan.captures)?;
     let branch = inspect.branch(definition.body)?;
@@ -117,27 +113,23 @@ pub(in crate::core) fn check_nominated_driver_call<'a>(
     let application = inspect.application(plan.call)?;
     let mut callee = application.function();
     let mut actual_count = 0usize;
-    loop {
-        match inspect.kind(callee)? {
-            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
-                applied,
-            ))) => {
-                let count = applied
-                    .arguments()
-                    .len()
-                    .checked_add(applied.row_arguments().len())
-                    .ok_or(Rejection::Exhausted)?;
-                inspect
-                    .work
-                    .charge(count.checked_add(1).ok_or(Rejection::Exhausted)?)
-                    .map_err(|()| Rejection::Exhausted)?;
-                actual_count = actual_count
-                    .checked_add(count)
-                    .ok_or(Rejection::Exhausted)?;
-                callee = applied.function();
-            }
-            _ => break,
-        }
+    while let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+        applied,
+    ))) = inspect.kind(callee)?
+    {
+        let count = applied
+            .arguments()
+            .len()
+            .checked_add(applied.row_arguments().len())
+            .ok_or(Rejection::Exhausted)?;
+        inspect
+            .work
+            .charge(count.checked_add(1).ok_or(Rejection::Exhausted)?)
+            .map_err(|()| Rejection::Exhausted)?;
+        actual_count = actual_count
+            .checked_add(count)
+            .ok_or(Rejection::Exhausted)?;
+        callee = applied.function();
     }
     if actual_count != parameter_count || inspect.variable(callee)? != plan.definition.binder {
         return Err(Rejection::Unsupported);
@@ -243,61 +235,53 @@ pub(in crate::core) fn check_nominated_receive_call<'a>(
     let mut body = initializer;
     let mut parameters = 0usize;
     let mut type_parameters = Vec::new();
-    loop {
-        match inspect.kind(body)? {
-            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(
-                abstraction,
-            ))) => {
-                inspect
-                    .work
-                    .charge(
-                        abstraction
-                            .parameters()
-                            .len()
-                            .checked_add(1)
-                            .ok_or(Rejection::Exhausted)?,
-                    )
-                    .map_err(|()| Rejection::Exhausted)?;
-                parameters = parameters
-                    .checked_add(abstraction.parameters().len())
-                    .ok_or(Rejection::Exhausted)?;
-                type_parameters
-                    .try_reserve(abstraction.parameters().len())
-                    .map_err(|_| Rejection::Exhausted)?;
-                type_parameters.extend(
-                    abstraction
-                        .parameters()
-                        .iter()
-                        .map(|(parameter, _)| *parameter),
-                );
-                body = abstraction.body();
-            }
-            _ => break,
-        }
+    while let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(
+        abstraction,
+    ))) = inspect.kind(body)?
+    {
+        inspect
+            .work
+            .charge(
+                abstraction
+                    .parameters()
+                    .len()
+                    .checked_add(1)
+                    .ok_or(Rejection::Exhausted)?,
+            )
+            .map_err(|()| Rejection::Exhausted)?;
+        parameters = parameters
+            .checked_add(abstraction.parameters().len())
+            .ok_or(Rejection::Exhausted)?;
+        type_parameters
+            .try_reserve(abstraction.parameters().len())
+            .map_err(|_| Rejection::Exhausted)?;
+        type_parameters.extend(
+            abstraction
+                .parameters()
+                .iter()
+                .map(|(parameter, _)| *parameter),
+        );
+        body = abstraction.body();
     }
     let definition = inspect.stored_function_witness(body, &[])?;
     let application = inspect.application(plan.call)?;
     let mut callee = application.function();
     let mut arguments = 0usize;
-    loop {
-        match inspect.kind(callee)? {
-            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
-                applied,
-            ))) => {
-                let count = applied
-                    .arguments()
-                    .len()
-                    .checked_add(applied.row_arguments().len())
-                    .ok_or(Rejection::Exhausted)?;
-                inspect
-                    .work
-                    .charge(count.checked_add(1).ok_or(Rejection::Exhausted)?)
-                    .map_err(|()| Rejection::Exhausted)?;
-                arguments = arguments.checked_add(count).ok_or(Rejection::Exhausted)?;
-                callee = applied.function();
-            }
-            _ => break,
-        }
+    while let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+        applied,
+    ))) = inspect.kind(callee)?
+    {
+        let count = applied
+            .arguments()
+            .len()
+            .checked_add(applied.row_arguments().len())
+            .ok_or(Rejection::Exhausted)?;
+        inspect
+            .work
+            .charge(count.checked_add(1).ok_or(Rejection::Exhausted)?)
+            .map_err(|()| Rejection::Exhausted)?;
+        arguments = arguments.checked_add(count).ok_or(Rejection::Exhausted)?;
+        callee = applied.function();
     }
     if arguments != parameters || inspect.variable(callee)? != plan.definition.binder {
         return Err(Rejection::Unsupported);

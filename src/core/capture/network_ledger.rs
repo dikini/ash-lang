@@ -253,6 +253,10 @@ fn closure_bindings(
 
 /// The exact already-reconstructed bodies bound the set of callable code and
 /// call sites that can participate in this conditional registration run.
+#[expect(
+    clippy::type_complexity,
+    reason = "The returned sets distinguish code, call sites and closures"
+)]
 fn checked_call_sites(
     scope: &NetworkNativeIdentityScope<'_>,
     initialization: &ConditionalInitializationCall<'_>,
@@ -355,6 +359,10 @@ fn include_argument_nodes(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The actual scope, control coordinates, checked definitions and work budget are distinct inputs"
+)]
 fn authenticate_body_call(
     scope: &NetworkNativeIdentityScope<'_>,
     graph: &SummaryGraph,
@@ -656,10 +664,9 @@ fn checked_region_source(
         if expected.iter().any(Option::is_none) {
             return Err(Failure::Resource);
         }
-        if children.as_slice() == expected.map(Option::unwrap) {
-            if found.replace(original).is_some() {
-                return Err(Failure::Invalid);
-            }
+        if children.as_slice() == expected.map(Option::unwrap) && found.replace(original).is_some()
+        {
+            return Err(Failure::Invalid);
         }
     }
     Ok(found)
@@ -813,6 +820,10 @@ fn checked_receive_path_source(
 /// resumed DefaultAlloc query and actual operand port. This only accepts the
 /// outward host route with one exact normal Next, case or matched call return;
 /// all other alternatives refuse.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The actual scope, control coordinates, checked definitions and work budget are distinct inputs"
+)]
 fn checked_body_region_return(
     scope: &NetworkNativeIdentityScope<'_>,
     graph: &SummaryGraph,
@@ -981,7 +992,15 @@ struct ProvisionalCurrentLedger<'focus, 'graph, 'arena> {
         &'focus ConditionalRegistrationCall<'arena>,
         &'focus RegistrationResultMatch,
     )],
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the focused transition observer")
+    )]
     owner: crate::core::NodeId,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the focused transition observer")
+    )]
     side: u8,
     requires_exclusive_update: bool,
     requires_peer_authentication: bool,
@@ -989,16 +1008,60 @@ struct ProvisionalCurrentLedger<'focus, 'graph, 'arena> {
     transition_bindings: Vec<(usize, crate::core::NodeId, crate::resolved::BinderId)>,
     transitions: Vec<(usize, usize, usize, usize)>,
     current: Vec<(usize, usize, usize, crate::resolved::BinderId)>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the focused transition observer")
+    )]
     transition_calls: Vec<(crate::core::NodeId, crate::core::NodeId)>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the focused transition observer")
+    )]
     argument_constructors: Vec<(crate::core::NodeId, crate::core::NodeId)>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the focused transition observer")
+    )]
     checked_nodes: HashSet<usize>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the focused transition observer")
+    )]
     body_calls: HashSet<usize>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the focused transition observer")
+    )]
     body_closures: HashSet<usize>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the focused transition observer")
+    )]
     helpers: Vec<(crate::resolved::BinderId, crate::core::NodeId)>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the focused transition observer")
+    )]
     closure_origins: HashMap<usize, DefinitionProvenance>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the focused transition observer")
+    )]
     query_origins: HashMap<usize, LocalOrigin>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the focused transition observer")
+    )]
     verified_query_requests: HashSet<usize>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the focused transition observer")
+    )]
     verified_query_resumes: HashSet<usize>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the focused transition observer")
+    )]
     query_caller_contexts: HashMap<usize, usize>,
 }
 
@@ -1063,6 +1126,10 @@ fn entered_call(
 
 /// Confirm one actual call's normal return against the checked source node
 /// and stored closure. This is an observation, not a current-state fact.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The actual scope, control coordinates, checked definitions and work budget are distinct inputs"
+)]
 fn matched_source_return(
     scope: &NetworkNativeIdentityScope<'_>,
     focus: &control::CompletionFocus<'_>,
@@ -1177,6 +1244,10 @@ fn returned_ledger_port(
 
 /// Authenticate one actual driver invocation and its Ledger tuple projection.
 /// The result stays private until the actual parameter match arm executes.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The actual scope, control coordinates, checked definitions and work budget are distinct inputs"
+)]
 fn entered_driver(
     scope: &NetworkNativeIdentityScope<'_>,
     graph: &SummaryGraph,
@@ -1399,6 +1470,10 @@ fn driver_formal_projection(
 /// returned-ledger forwarding are supported; other calls lose the candidate.
 /// Observations stay private to this focus until the enclosing validation
 /// succeeds and the remaining provider premises are established.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The actual scope, control coordinates, checked definitions and work budget are distinct inputs"
+)]
 fn observe_direct_registration<'focus, 'graph, 'arena>(
     scope: &NetworkNativeIdentityScope<'_>,
     graph: &SummaryGraph,
@@ -1778,10 +1853,10 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
         };
         let mut owner = None;
         for (i, definition) in definitions.iter().enumerate() {
-            if source_position(scope, focus, state, definition.query, work)? {
-                if owner.replace(i).is_some() {
-                    return Err(Failure::Invalid);
-                }
+            if source_position(scope, focus, state, definition.query, work)?
+                && owner.replace(i).is_some()
+            {
+                return Err(Failure::Invalid);
             }
         }
         if let Some(owner) = owner {
@@ -2132,25 +2207,23 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
         } else {
             None
         };
-        if let Phase::Current { context, .. } = phase {
-            if query_caller_contexts
+        if let Phase::Current { context, .. } = phase
+            && (query_caller_contexts
                 .get(&id)
                 .is_some_and(|saved| *saved != context)
                 || (before.value_context != context
-                    && query_caller_contexts.get(&id) != Some(&context))
-            {
-                phase = Phase::Invalidated;
-            }
+                    && query_caller_contexts.get(&id) != Some(&context)))
+        {
+            phase = Phase::Invalidated;
         }
-        if let Phase::PreparingArgument { context, .. } = phase {
-            if query_caller_contexts
+        if let Phase::PreparingArgument { context, .. } = phase
+            && (query_caller_contexts
                 .get(&id)
                 .is_some_and(|saved| *saved != context)
                 || (before.value_context != context
-                    && query_caller_contexts.get(&id) != Some(&context))
-            {
-                return Err(Failure::Invalid);
-            }
+                    && query_caller_contexts.get(&id) != Some(&context)))
+        {
+            return Err(Failure::Invalid);
         }
         if matches!(
             phase,
@@ -2192,16 +2265,16 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
             role,
             ..
         } = phase
+            && before.value_context == context
+            && !query_caller_contexts.contains_key(&id)
         {
-            if before.value_context == context && !query_caller_contexts.contains_key(&id) {
-                charge(work, 1)?;
-                current.try_reserve(1).map_err(|_| Failure::Resource)?;
-                if current
-                    .insert(id, (port, context, role))
-                    .is_some_and(|old| old != (port, context, role))
-                {
-                    return Err(Failure::Invalid);
-                }
+            charge(work, 1)?;
+            current.try_reserve(1).map_err(|_| Failure::Resource)?;
+            if current
+                .insert(id, (port, context, role))
+                .is_some_and(|old| old != (port, context, role))
+            {
+                return Err(Failure::Invalid);
             }
         }
         if matches!(
@@ -2663,8 +2736,8 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
                     };
                 }
             }
-            if let Phase::EnteringDriver { context, .. } = phase {
-                if before.value_context != context
+            if let Phase::EnteringDriver { context, .. } = phase
+                && (before.value_context != context
                     || !matches!(
                         graph.code.get(before.position.code),
                         Some(
@@ -2677,10 +2750,9 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
                         transition,
                         control::CompletionTransition::Call { .. }
                             | control::CompletionTransition::WorkerInputAllocation
-                    )
-                {
-                    return Err(Failure::Invalid);
-                }
+                    ))
+            {
+                return Err(Failure::Invalid);
             }
             if matches!(transition, control::CompletionTransition::Call { .. }) {
                 if let Phase::PreparingArgument {
@@ -2753,10 +2825,10 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
                     let mut receive_site = None;
                     for (index, receive) in receives.iter().enumerate() {
                         charge(work, 1)?;
-                        if source_position(scope, focus, before, receive.call(), work)? {
-                            if receive_site.replace((index, receive)).is_some() {
-                                return Err(Failure::Invalid);
-                            }
+                        if source_position(scope, focus, before, receive.call(), work)?
+                            && receive_site.replace((index, receive)).is_some()
+                        {
+                            return Err(Failure::Invalid);
                         }
                     }
                     if let Some((receive_index, receive)) = receive_site {
@@ -2847,10 +2919,10 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
                         let mut driver_site = None;
                         for (index, driver) in drivers.iter().enumerate() {
                             charge(work, 1)?;
-                            if source_position(scope, focus, before, driver.call(), work)? {
-                                if driver_site.replace((index, driver)).is_some() {
-                                    return Err(Failure::Invalid);
-                                }
+                            if source_position(scope, focus, before, driver.call(), work)?
+                                && driver_site.replace((index, driver)).is_some()
+                            {
+                                return Err(Failure::Invalid);
                             }
                         }
                         if let Some((driver_index, driver)) = driver_site {
@@ -2914,10 +2986,10 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
                             let mut selected_site = None;
                             for (ordinal, &(site, _)) in registrations.iter().enumerate() {
                                 charge(work, 1)?;
-                                if source_position(scope, focus, before, site.call(), work)? {
-                                    if selected_site.replace((ordinal, site)).is_some() {
-                                        return Err(Failure::Invalid);
-                                    }
+                                if source_position(scope, focus, before, site.call(), work)?
+                                    && selected_site.replace((ordinal, site)).is_some()
+                                {
+                                    return Err(Failure::Invalid);
                                 }
                             }
                             if let Some((ordinal, selected)) = selected_site {
@@ -3020,10 +3092,9 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
                                         before,
                                         candidate.call(),
                                         work,
-                                    )? {
-                                        if selected.replace((site, candidate)).is_some() {
-                                            return Err(Failure::Invalid);
-                                        }
+                                    )? && selected.replace((site, candidate)).is_some()
+                                    {
+                                        return Err(Failure::Invalid);
                                     }
                                 }
                                 if let Some((site, candidate)) = selected {
@@ -3109,174 +3180,173 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
                     }) if body_region => Some((*edge, true)),
                     _ => None,
                 };
-                if let Some((edge, native_return)) = returned {
-                    if let control::Frame::CallReturn { witness, .. } = edge.frame {
-                        // A receive Reply can restore its caller on this same
-                        // edge. Use the checked event's updated stage for that
-                        // one case; all other returns inspect the incoming phase.
-                        let return_phase = if matches!(
-                            next,
-                            Phase::Receiving {
-                                stage: ReceiveStage::Replied,
-                                ..
-                            }
-                        ) {
-                            next
-                        } else {
-                            phase
-                        };
-                        match return_phase {
-                            Phase::Transitioning {
-                                site,
-                                witness: expected,
-                                input,
-                                context,
-                                ordinal,
-                            } if witness == expected => {
-                                let candidate = *transitions.get(site).ok_or(Failure::Invalid)?;
-                                let call = matched_source_return(
-                                    scope,
-                                    focus,
-                                    &index,
-                                    from,
-                                    to,
-                                    edge,
-                                    native_return,
-                                    candidate.call(),
-                                    candidate.closure(),
-                                    work,
-                                )?
-                                .ok_or(Failure::Invalid)?;
-                                if call.caller_value_context != context {
-                                    return Err(Failure::Invalid);
-                                }
-                                charge(work, 1)?;
-                                transition_returns
-                                    .try_reserve(1)
-                                    .map_err(|_| Failure::Resource)?;
-                                transition_returns.push((site, from, to, input, call.result));
-                                next = Phase::TransitionReturned {
-                                    site,
-                                    port: call.result,
-                                    context,
-                                    ordinal,
-                                };
-                            }
-                            Phase::Receiving {
-                                receive,
-                                witness: expected,
-                                port,
-                                context,
-                                ordinal,
-                                role,
-                                stage: ReceiveStage::Replied,
-                            } if witness == expected => {
-                                let nominated = receives.get(receive).ok_or(Failure::Invalid)?;
-                                let call = matched_source_return(
-                                    scope,
-                                    focus,
-                                    &index,
-                                    from,
-                                    to,
-                                    edge,
-                                    native_return,
-                                    nominated.call(),
-                                    nominated.closure(),
-                                    work,
-                                )?
-                                .ok_or(Failure::Invalid)?;
-                                if call.caller_value_context != context {
-                                    return Err(Failure::Invalid);
-                                }
-                                next = Phase::Current {
-                                    port,
-                                    context,
-                                    ordinal,
-                                    role,
-                                };
-                            }
-                            Phase::RunningArgument {
-                                port,
-                                context,
-                                ordinal,
-                                role,
-                                constructor,
-                                witness: expected,
-                            } if witness == expected => {
-                                let &(call_node, closure) = argument_constructors
-                                    .get(constructor)
-                                    .ok_or(Failure::Invalid)?;
-                                let call = matched_source_return(
-                                    scope,
-                                    focus,
-                                    &index,
-                                    from,
-                                    to,
-                                    edge,
-                                    native_return,
-                                    call_node,
-                                    closure,
-                                    work,
-                                )?
-                                .ok_or(Failure::Invalid)?;
-                                if call.caller_value_context != context {
-                                    return Err(Failure::Invalid);
-                                }
-                                next = Phase::Current {
-                                    port,
-                                    context,
-                                    ordinal,
-                                    role,
-                                };
-                            }
-                            Phase::Initializing(expected) if witness == expected => {
-                                let call = matched_source_return(
-                                    scope,
-                                    focus,
-                                    &index,
-                                    from,
-                                    to,
-                                    edge,
-                                    native_return,
-                                    initialization.call(),
-                                    initialization.closure(),
-                                    work,
-                                )?
-                                .ok_or(Failure::Invalid)?;
-                                next = Phase::Initialized {
-                                    port: call.result,
-                                    context: call.caller_value_context,
-                                };
-                            }
-                            Phase::Registering {
-                                witness: expected,
-                                input,
-                                ordinal,
-                            } if witness == expected => {
-                                let selected =
-                                    registrations.get(ordinal).ok_or(Failure::Invalid)?.0;
-                                let call = matched_source_return(
-                                    scope,
-                                    focus,
-                                    &index,
-                                    from,
-                                    to,
-                                    edge,
-                                    native_return,
-                                    selected.call(),
-                                    selected.closure(),
-                                    work,
-                                )?
-                                .ok_or(Failure::Invalid)?;
-                                next = Phase::Returned {
-                                    port: call.result,
-                                    context: call.caller_value_context,
-                                    input,
-                                    ordinal,
-                                };
-                            }
-                            _ => {}
+                if let Some((edge, native_return)) = returned
+                    && let control::Frame::CallReturn { witness, .. } = edge.frame
+                {
+                    // A receive Reply can restore its caller on this same
+                    // edge. Use the checked event's updated stage for that
+                    // one case; all other returns inspect the incoming phase.
+                    let return_phase = if matches!(
+                        next,
+                        Phase::Receiving {
+                            stage: ReceiveStage::Replied,
+                            ..
                         }
+                    ) {
+                        next
+                    } else {
+                        phase
+                    };
+                    match return_phase {
+                        Phase::Transitioning {
+                            site,
+                            witness: expected,
+                            input,
+                            context,
+                            ordinal,
+                        } if witness == expected => {
+                            let candidate = *transitions.get(site).ok_or(Failure::Invalid)?;
+                            let call = matched_source_return(
+                                scope,
+                                focus,
+                                &index,
+                                from,
+                                to,
+                                edge,
+                                native_return,
+                                candidate.call(),
+                                candidate.closure(),
+                                work,
+                            )?
+                            .ok_or(Failure::Invalid)?;
+                            if call.caller_value_context != context {
+                                return Err(Failure::Invalid);
+                            }
+                            charge(work, 1)?;
+                            transition_returns
+                                .try_reserve(1)
+                                .map_err(|_| Failure::Resource)?;
+                            transition_returns.push((site, from, to, input, call.result));
+                            next = Phase::TransitionReturned {
+                                site,
+                                port: call.result,
+                                context,
+                                ordinal,
+                            };
+                        }
+                        Phase::Receiving {
+                            receive,
+                            witness: expected,
+                            port,
+                            context,
+                            ordinal,
+                            role,
+                            stage: ReceiveStage::Replied,
+                        } if witness == expected => {
+                            let nominated = receives.get(receive).ok_or(Failure::Invalid)?;
+                            let call = matched_source_return(
+                                scope,
+                                focus,
+                                &index,
+                                from,
+                                to,
+                                edge,
+                                native_return,
+                                nominated.call(),
+                                nominated.closure(),
+                                work,
+                            )?
+                            .ok_or(Failure::Invalid)?;
+                            if call.caller_value_context != context {
+                                return Err(Failure::Invalid);
+                            }
+                            next = Phase::Current {
+                                port,
+                                context,
+                                ordinal,
+                                role,
+                            };
+                        }
+                        Phase::RunningArgument {
+                            port,
+                            context,
+                            ordinal,
+                            role,
+                            constructor,
+                            witness: expected,
+                        } if witness == expected => {
+                            let &(call_node, closure) = argument_constructors
+                                .get(constructor)
+                                .ok_or(Failure::Invalid)?;
+                            let call = matched_source_return(
+                                scope,
+                                focus,
+                                &index,
+                                from,
+                                to,
+                                edge,
+                                native_return,
+                                call_node,
+                                closure,
+                                work,
+                            )?
+                            .ok_or(Failure::Invalid)?;
+                            if call.caller_value_context != context {
+                                return Err(Failure::Invalid);
+                            }
+                            next = Phase::Current {
+                                port,
+                                context,
+                                ordinal,
+                                role,
+                            };
+                        }
+                        Phase::Initializing(expected) if witness == expected => {
+                            let call = matched_source_return(
+                                scope,
+                                focus,
+                                &index,
+                                from,
+                                to,
+                                edge,
+                                native_return,
+                                initialization.call(),
+                                initialization.closure(),
+                                work,
+                            )?
+                            .ok_or(Failure::Invalid)?;
+                            next = Phase::Initialized {
+                                port: call.result,
+                                context: call.caller_value_context,
+                            };
+                        }
+                        Phase::Registering {
+                            witness: expected,
+                            input,
+                            ordinal,
+                        } if witness == expected => {
+                            let selected = registrations.get(ordinal).ok_or(Failure::Invalid)?.0;
+                            let call = matched_source_return(
+                                scope,
+                                focus,
+                                &index,
+                                from,
+                                to,
+                                edge,
+                                native_return,
+                                selected.call(),
+                                selected.closure(),
+                                work,
+                            )?
+                            .ok_or(Failure::Invalid)?;
+                            next = Phase::Returned {
+                                port: call.result,
+                                context: call.caller_value_context,
+                                input,
+                                ordinal,
+                            };
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -3313,10 +3383,10 @@ fn observe_direct_registration<'focus, 'graph, 'arena>(
                 let mut matching_site = None;
                 for (index, &(_, result)) in registrations.iter().enumerate() {
                     charge(work, 1)?;
-                    if source_position(scope, focus, before, result.matching, work)? {
-                        if matching_site.replace(index).is_some() {
-                            return Err(Failure::Invalid);
-                        }
+                    if source_position(scope, focus, before, result.matching, work)?
+                        && matching_site.replace(index).is_some()
+                    {
+                        return Err(Failure::Invalid);
                     }
                 }
                 if let Some(matching_site) = matching_site {
@@ -3536,6 +3606,10 @@ impl<'a> SameFocusLedger<'a> {
     /// Check a selected source input at one reached state in this exact focus.
     /// The consumer must independently bind that input to its nominated call
     /// or field; this checks only the actual variable-to-current-port relation.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "reserved for the N4 same-focus consumer")
+    )]
     pub(super) fn checked_input(
         &self,
         state: usize,
@@ -3593,6 +3667,10 @@ impl<'a> SameFocusLedger<'a> {
     }
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Keep checked witnesses inline without adding an uncharged allocation"
+)]
 enum CheckedPlannedTransition<'a> {
     Closure(crate::core::ledger_checker::closure::ConditionalClosureCall<'a>),
     Retirement(crate::core::ledger_checker::retirement::ConditionalRetirementCall<'a>),
@@ -4660,13 +4738,11 @@ mod tests {
         let driver_definition = if recursive_driver {
             let definition = candidate("driver");
             let mut body = definition.initializer;
-            loop {
-                match &program.nodes[body.index().unwrap()].kind {
-                    EffectExprKind::Pure(PureExprKind::Computation(
-                        PureComputation::TypeAbstraction(abstraction),
-                    )) => body = abstraction.body(),
-                    _ => break,
-                }
+            while let EffectExprKind::Pure(PureExprKind::Computation(
+                PureComputation::TypeAbstraction(abstraction),
+            )) = &program.nodes[body.index().unwrap()].kind
+            {
+                body = abstraction.body();
             }
             let (_, closure) = crate::core::region::closure_initializer::<
                 crate::core::EffectOperationFamily,
@@ -4957,7 +5033,7 @@ mod tests {
                                 initialization_role: InitializationRole::Root,
                                 initialization_binding: binding.map(|(node, _)| node),
                                 registrations: &requested, transitions: &[], drivers: &[],
-                                receives: receive_plan.as_ref().map_or(&[], std::slice::from_ref),
+                                receives: receive_plan.as_slice(),
                             };
                             let actual_input = registrations[1].0.input();
                             let role = registrations[0].1.ledger;

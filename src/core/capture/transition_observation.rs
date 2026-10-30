@@ -146,6 +146,7 @@ fn extend_charged<T: Copy>(
 /// reviewed transition mapping, full validation, and (for acknowledgement)
 /// authenticated peer and nonnegative integer representation. It carries no
 /// public currentness, peer authentication, or network permission.
+#[cfg(test)]
 pub(super) struct ConditionalTransitionSuccessor<'focus, 'graph> {
     _focus: &'focus control::CompletionFocus<'graph>,
     owner: crate::core::NodeId,
@@ -159,6 +160,7 @@ pub(super) struct ConditionalTransitionSuccessor<'focus, 'graph> {
     pub(super) peer_authentication_required: bool,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ArgumentPhase {
     Ready,
@@ -168,6 +170,11 @@ enum ArgumentPhase {
 
 /// Follow only the checked Bind of a returned Ledger into the next nominated
 /// call. The returned points remain conditional on the predecessor's premises.
+#[cfg(test)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The actual control, focus, successor and shared budget are distinct inputs"
+)]
 fn advance_successor(
     scope: &NetworkNativeIdentityScope<'_>,
     graph: &SummaryGraph,
@@ -437,19 +444,18 @@ fn advance_successor(
                     }) if region => Some((*edge, true)),
                     _ => None,
                 };
-                if let Some((edge, native)) = returned {
-                    if matches!(edge.frame, control::Frame::CallReturn { witness: actual, .. } if actual == witness)
-                    {
-                        let (call, closure) = argument_constructor.ok_or(Failure::Invalid)?;
-                        let matched = matched_source_return(
-                            scope, focus, index, from, to, edge, native, call, closure, work,
-                        )?
-                        .ok_or(Failure::Invalid)?;
-                        if matched.caller_value_context != successor.caller_context {
-                            return Err(Failure::Invalid);
-                        }
-                        next_phase = ArgumentPhase::Ready;
+                if let Some((edge, native)) = returned
+                    && matches!(edge.frame, control::Frame::CallReturn { witness: actual, .. } if actual == witness)
+                {
+                    let (call, closure) = argument_constructor.ok_or(Failure::Invalid)?;
+                    let matched = matched_source_return(
+                        scope, focus, index, from, to, edge, native, call, closure, work,
+                    )?
+                    .ok_or(Failure::Invalid)?;
+                    if matched.caller_value_context != successor.caller_context {
+                        return Err(Failure::Invalid);
                     }
+                    next_phase = ArgumentPhase::Ready;
                 }
             }
             traversed.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -532,6 +538,11 @@ fn advance_successor(
     Ok(points)
 }
 
+#[cfg(test)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The actual control, focus, successor and shared budget are distinct inputs"
+)]
 pub(super) fn observe_transition_calls<'focus, 'graph>(
     scope: &NetworkNativeIdentityScope<'_>,
     graph: &SummaryGraph,

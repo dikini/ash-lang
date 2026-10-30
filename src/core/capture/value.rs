@@ -5229,6 +5229,10 @@ impl<'a> Analysis<'a> {
         clippy::too_many_arguments,
         reason = "The original arena and frozen tuple coordinates are independent inputs"
     )]
+    #[expect(
+        clippy::type_complexity,
+        reason = "The result preserves the tuple port and ordered alternative field ports"
+    )]
     pub(super) fn existing_original_tuple_fields(
         &self,
         binding: crate::core::NodeId,

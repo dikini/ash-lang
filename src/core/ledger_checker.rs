@@ -161,10 +161,10 @@ fn linked_initializer_and_result(
                         if binding.binder().id() != scheme.binder {
                             return Err(Rejection::Unsupported);
                         }
-                        if scheme.binder == candidate.binder {
-                            if selected.replace(binding.initializer()).is_some() {
-                                return Err(Rejection::Unsupported);
-                            }
+                        if scheme.binder == candidate.binder
+                            && selected.replace(binding.initializer()).is_some()
+                        {
+                            return Err(Rejection::Unsupported);
                         }
                         cursor = binding.body();
                     }
@@ -206,10 +206,10 @@ fn linked_initializer_and_result(
                 if member.binder().id() != scheme.binder {
                     return Err(Rejection::Unsupported);
                 }
-                if scheme.binder == candidate.binder {
-                    if selected.replace(member.initializer()).is_some() {
-                        return Err(Rejection::Unsupported);
-                    }
+                if scheme.binder == candidate.binder
+                    && selected.replace(member.initializer()).is_some()
+                {
+                    return Err(Rejection::Unsupported);
                 }
             }
             if expected.next().is_some() {
@@ -501,10 +501,10 @@ fn binder_pattern(pattern: &super::CorePattern) -> Result<BinderId, Rejection> {
     }
 }
 
-fn constructor_pattern<'a>(
-    pattern: &'a super::CorePattern,
+fn constructor_pattern(
+    pattern: &super::CorePattern,
     expected: crate::types::ConstructorId,
-) -> Result<Option<&'a super::CorePattern>, Rejection> {
+) -> Result<Option<&super::CorePattern>, Rejection> {
     match &pattern.kind {
         super::CorePatternKind::Constructor {
             constructor,
@@ -1075,7 +1075,6 @@ fn check_removal_body_shape(
     if record {
         // The projection checker establishes the exact first field of the
         // linked Record constructor; the second traversal below binds its nodes.
-        drop(inspect);
         reconstruct_record_projection(
             program,
             linked,
@@ -2475,6 +2474,10 @@ struct RegistrationFlowGraph<'a> {
 
 /// Reconstruct every entry/finish branch and its exact forwarded arguments.
 /// The successful commit and helper laws must still be composed before use.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Linked definitions, constructors and the shared work budget are distinct inputs"
+)]
 fn reconstruct_registration_flow<'a>(
     program: &'a dyn LedgerArena,
     linked: &'a ValidatedInterfaceProgram,
@@ -2838,6 +2841,10 @@ enum RecordOperation {
 }
 
 /// The exact checked result constructors of a Record-list operation.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Keep checked branch witnesses inline without an uncharged allocation"
+)]
 enum RecordOperationBranches<'a> {
     Lookup {
         present_call: NodeId,
@@ -2877,6 +2884,10 @@ struct RecordOperationGraph<'a> {
     branches: RecordOperationBranches<'a>,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Linked definitions, constructors and the shared work budget are distinct inputs"
+)]
 fn reconstruct_record_operation<'a>(
     program: &'a dyn LedgerArena,
     linked: &'a ValidatedInterfaceProgram,
@@ -3154,6 +3165,10 @@ struct ConditionalRecordOperation<'a> {
     graph: RecordOperationGraph<'a>,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Linked definitions, constructors and the shared work budget are distinct inputs"
+)]
 fn check_conditional_record_operation<'a>(
     program: &'a dyn LedgerArena,
     linked: &'a ValidatedInterfaceProgram,
