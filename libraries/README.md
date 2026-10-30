@@ -68,3 +68,13 @@ representation, output storage and foreign text readback remain future gaps,
 not implicit conversions or new compiler resource policy. Supported foreign
 arguments are Unit, Address, Bytes and flat tuples of pointer arguments;
 results are Unit (C void) or Address (C pointer).
+
+`network_types.ash` defines the ordinary identities, parents and outgoing
+messages used by the codec and intended for the network ledger.
+`network_codec.ash` encodes Work and Ack frames with the CP-0030 tagged
+base-256 representation and decodes only complete canonical frames. A decoded
+Work carries its child, parent and payload; the receiver is supplied separately by the authenticated delivery
+context. The codec is ordinary source code. A successful parse alone does not
+authenticate a peer or kind and does not establish a ledger transition,
+completion or release. The definition-bound checker and its integrated driver
+evidence remain under development.

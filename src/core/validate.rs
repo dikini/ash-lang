@@ -23777,6 +23777,71 @@ mod tests {
     }
 
     #[test]
+    fn network_codec_rejects_negative_actual_encoder_fields() {
+        use super::super::effect::EffectExprKind;
+        for envelope in [
+            "Network.WorkOut(Network.Work(101, 0), Network.Parent(0, Network.Root), 0, B.empty ())",
+            "Network.WorkOut(Network.Work(0, 101), Network.Parent(0, Network.Root), 0, B.empty ())",
+            "Network.AckOut(Network.Parent(101, Network.Root), Network.Root)",
+        ] {
+            let tree = LinkedValidationDirectory::create();
+            tree.write(
+                "network_types.ash",
+                include_str!("../../libraries/network_types.ash"),
+            );
+            tree.write(
+                "network_codec.ash",
+                include_str!("../../libraries/network_codec.ash"),
+            );
+            let source = format!(
+                "import network_types as Network\nimport network_codec as Codec\nimport @builtin.bytes as B\nmain : Unit -> Bool\nmain () = match Codec.encode ({envelope}) {{\nCodec.EncodeFailed => true\nCodec.Encoded(bytes) => false\n}}\n"
+            );
+            let entry = tree.write("entry.ash", &source);
+            let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+                entry,
+                roots: ModuleRoots::empty(),
+            })
+            .unwrap();
+            let (program, provenance) = compiled.effect_build_input().unwrap();
+            let sources = provenance
+                .iter()
+                .map(|(_, source)| source.as_ref().clone())
+                .collect::<Vec<_>>();
+            let relation = provenance
+                .iter()
+                .map(|(module, source)| (*module, source.id()))
+                .collect::<Vec<_>>();
+            let mut copied = crate::core::transform::identity_effect_traversal(program).unwrap();
+            let indices: Vec<_> = copied
+                .nodes
+                .iter()
+                .enumerate()
+                .filter_map(|(index, node)| {
+                    matches!(&node.kind,
+                    EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(value)))
+                    if value.value().to_string() == "101")
+                    .then_some(index)
+                })
+                .collect();
+            assert_eq!(indices.len(), 1, "identify the actual encoder argument");
+            copied.nodes[indices[0]].kind =
+                EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(
+                    crate::core::literal::IntegerNode::new(crate::integer::Integer::from_i64(-1)),
+                )));
+            let refs = sources.iter().collect::<Vec<_>>();
+            let valid = super::super::validate_effect_modules(copied, &refs, &relation).unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&valid)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "true",
+                "{envelope}"
+            );
+        }
+    }
+
+    #[test]
     fn integer_split_survives_supported_core_transforms() {
         let source = concat!(
             "import @builtin.integer as I\n",
