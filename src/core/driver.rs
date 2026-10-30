@@ -235,7 +235,19 @@ pub(in crate::core) fn check_nominated_receive_call<'a>(
     plan: &ReceiveNomination,
     work: &mut TypeWorkBudget,
 ) -> Result<CheckedReceiveCall<'a>, Rejection> {
-    let initializer = linked_initializer(program, linked, plan.definition, work)?;
+    check_nominated_network_wrapper_call(program, linked, plan.definition, plan.call, work)
+}
+
+/// Reconstruct an actual linked polymorphic wrapper and its nominated call.
+/// The caller must independently authenticate its operation and control path.
+pub(in crate::core) fn check_nominated_network_wrapper_call<'a>(
+    program: &'a dyn LedgerArena,
+    linked: &'a ValidatedInterfaceProgram,
+    definition_candidate: DefinitionCandidate,
+    call: NodeId,
+    work: &mut TypeWorkBudget,
+) -> Result<CheckedReceiveCall<'a>, Rejection> {
+    let initializer = linked_initializer(program, linked, definition_candidate, work)?;
     let mut inspect = CoreInspection { program, work };
     let mut body = initializer;
     let mut parameters = 0usize;
@@ -269,7 +281,7 @@ pub(in crate::core) fn check_nominated_receive_call<'a>(
         body = abstraction.body();
     }
     let definition = inspect.stored_function_witness(body, &[])?;
-    let application = inspect.application(plan.call)?;
+    let application = inspect.application(call)?;
     let mut callee = application.function();
     let mut arguments = 0usize;
     while let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
@@ -288,13 +300,13 @@ pub(in crate::core) fn check_nominated_receive_call<'a>(
         arguments = arguments.checked_add(count).ok_or(Rejection::Exhausted)?;
         callee = applied.function();
     }
-    if arguments != parameters || inspect.variable(callee)? != plan.definition.binder {
+    if arguments != parameters || inspect.variable(callee)? != definition_candidate.binder {
         return Err(Rejection::Unsupported);
     }
     Ok(CheckedReceiveCall {
         definition,
         type_parameters,
-        call: plan.call,
+        call,
     })
 }
 

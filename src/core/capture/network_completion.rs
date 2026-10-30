@@ -124,6 +124,43 @@ pub(super) fn enter_call<'focus, 'graph>(
     dependencies: &HashSet<usize>,
     budget: &mut TypeWorkBudget,
 ) -> Result<(EnteredCall<'focus, 'graph>, HashSet<usize>), Failure> {
+    if !matches!(transition, CompletionTransition::Call { .. }) {
+        return Err(Failure::Invalid);
+    }
+    let trace = focus.trace()?;
+    if !trace.contains_call_edge(from, to, transition, budget)? {
+        return Err(Failure::Invalid);
+    }
+    let call = trace.call(witness, budget)?;
+    let before = trace.state(from, budget)?;
+    let after = trace.state(to, budget)?;
+    enter_call_reached(
+        graph,
+        focus,
+        transition,
+        witness,
+        dependencies,
+        call,
+        before,
+        after,
+        budget,
+    )
+}
+
+/// Apply the same call-entry predicates to already-indexed immutable trace
+/// coordinates. Both callers authenticate the actual edge before reaching here.
+#[allow(clippy::too_many_arguments)]
+fn enter_call_reached<'focus, 'graph>(
+    graph: &SummaryGraph,
+    focus: &'focus CompletionFocus<'graph>,
+    transition: CompletionTransition,
+    witness: usize,
+    dependencies: &HashSet<usize>,
+    call: CompletionCall,
+    before: &State,
+    after: &State,
+    budget: &mut TypeWorkBudget,
+) -> Result<(EnteredCall<'focus, 'graph>, HashSet<usize>), Failure> {
     let CompletionTransition::Call {
         target,
         value_context,
@@ -133,13 +170,6 @@ pub(super) fn enter_call<'focus, 'graph>(
     else {
         return Err(Failure::Invalid);
     };
-    let trace = focus.trace()?;
-    if !trace.contains_call_edge(from, to, transition, budget)? {
-        return Err(Failure::Invalid);
-    }
-    let call = trace.call(witness, budget)?;
-    let before = trace.state(from, budget)?;
-    let after = trace.state(to, budget)?;
     if (target, value_context, expression, creation)
         != (
             call.target,
@@ -277,6 +307,86 @@ impl<'focus, 'graph> MatchedReturnIndex<'focus, 'graph> {
 
     pub(super) fn states(&self) -> &[Option<&'focus State>] {
         &self.states
+    }
+
+    pub(super) fn is_focus(&self, focus: &CompletionFocus<'_>) -> bool {
+        std::ptr::eq(self.focus, focus)
+    }
+
+    /// Read one exact call witness from this focus-owned immutable index.
+    pub(super) fn call(
+        &self,
+        witness: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<CompletionCall, Failure> {
+        charge(budget, 1)?;
+        self.calls.get(&witness).copied().ok_or(Failure::Invalid)
+    }
+
+    /// Authenticate the actual indexed Call edge with the same entry checks
+    /// used by enter_call, without rescanning immutable focus state tables.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn entered_call(
+        &self,
+        graph: &SummaryGraph,
+        focus: &CompletionFocus<'_>,
+        from: usize,
+        to: usize,
+        transition: CompletionTransition,
+        expected_target: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, CompletionCall), Failure> {
+        charge(budget, 1)?;
+        if !self.is_focus(focus) {
+            return Err(Failure::Invalid);
+        }
+        if !matches!(transition, CompletionTransition::Call { .. })
+            || !self
+                .focus
+                .trace()?
+                .contains_call_edge(from, to, transition, budget)?
+        {
+            return Err(Failure::Invalid);
+        }
+        charge(budget, 2)?;
+        let before = self
+            .states
+            .get(from)
+            .copied()
+            .flatten()
+            .ok_or(Failure::Invalid)?;
+        let after = self
+            .states
+            .get(to)
+            .copied()
+            .flatten()
+            .ok_or(Failure::Invalid)?;
+        charge(budget, after.heap.len())?;
+        let mut frames = after.heap.iter().filter_map(|edge| match edge.frame {
+            Frame::CallReturn { witness, .. } if edge.address == after.stack => Some(witness),
+            _ => None,
+        });
+        let witness = frames.next().ok_or(Failure::Invalid)?;
+        if frames.next().is_some() {
+            return Err(Failure::Invalid);
+        }
+        charge(budget, 1)?;
+        let call = *self.calls.get(&witness).ok_or(Failure::Invalid)?;
+        if call.target != expected_target || call.expression != expected_target {
+            return Err(Failure::Invalid);
+        }
+        let _ = enter_call_reached(
+            graph,
+            self.focus,
+            transition,
+            witness,
+            &HashSet::new(),
+            call,
+            before,
+            after,
+            budget,
+        )?;
+        Ok((witness, call))
     }
 
     pub(super) fn matched_return(

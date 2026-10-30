@@ -401,6 +401,7 @@ fn advance_successor(
                     original,
                     next.provider_api(),
                     None,
+                    None,
                     work,
                 )?;
             }
@@ -838,6 +839,7 @@ pub(super) fn observe_transition_calls<'focus, 'graph>(
                         &current.checked_nodes,
                         original,
                         nominated.provider_api(),
+                        None,
                         None,
                         work,
                     )?;

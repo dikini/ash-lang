@@ -2875,6 +2875,14 @@ impl NominatedCodecCall<'_> {
         self.entry().api
     }
 
+    /// The linked nominal identities already checked for this encoder.
+    pub(in crate::core) fn encoder_constructors(&self) -> Option<EncoderConstructors> {
+        match &self.shape {
+            CodecCallShape::Encode { constructors, .. } => Some(*constructors),
+            CodecCallShape::Decode { .. } => None,
+        }
+    }
+
     /// The already checked linked bytes-length intrinsic, when this is an encoder.
     pub(in crate::core) fn encoder_length(&self) -> Option<(BinderId, NodeId)> {
         match &self.shape {

@@ -1727,6 +1727,65 @@ fn constructor_application<'a>(
     })
 }
 
+/// The actual source construction of `Ledger(counter, records, tail)`.
+/// It is only a candidate until its source fields are tied to the selected
+/// current output, and its provider, call and normal return are checked.
+#[allow(dead_code)]
+pub(super) struct ConditionalOutputTail<'a> {
+    construction: ConstructorApplication<'a>,
+}
+
+#[allow(dead_code)]
+pub(super) fn check_output_tail_constructor<'a>(
+    program: &'a dyn LedgerArena,
+    call: NodeId,
+    ledger: crate::types::ConstructorId,
+    fields: [BinderId; 3],
+    provider_api: crate::module::ModuleId,
+    work: &mut TypeWorkBudget,
+) -> Result<ConditionalOutputTail<'a>, Rejection> {
+    require_distinct(work, &fields)?;
+    let mut inspect = CoreInspection { program, work };
+    let construction = constructor_application(&mut inspect, call, ledger, 3, provider_api)?;
+    for (&actual, expected) in construction.arguments.fields.iter().zip(fields) {
+        expect_variable(&mut inspect, actual, expected)?;
+    }
+    Ok(ConditionalOutputTail { construction })
+}
+
+impl ConditionalOutputTail<'_> {
+    pub(super) fn call(&self) -> NodeId {
+        self.construction.call
+    }
+    pub(super) fn closure(&self) -> NodeId {
+        self.construction.closure.closure
+    }
+    pub(super) fn definition_binding(&self) -> NodeId {
+        self.construction.closure.root
+    }
+    pub(super) fn definition_query(&self) -> NodeId {
+        self.construction.closure.query
+    }
+    pub(super) fn definition_context(&self) -> NodeId {
+        self.construction.closure.context
+    }
+    pub(super) fn argument_binding(&self) -> NodeId {
+        self.construction.arguments.root
+    }
+    pub(super) fn argument_tuple(&self) -> NodeId {
+        self.construction.arguments.tuple
+    }
+    pub(super) fn argument_fields(&self) -> &[NodeId] {
+        self.construction.arguments.fields
+    }
+    pub(super) fn result_tuple(&self) -> NodeId {
+        self.construction.value.tuple
+    }
+    pub(super) fn provider_api(&self) -> crate::module::ModuleId {
+        self.construction.closure.api
+    }
+}
+
 fn nullary_constructor<'a>(
     inspect: &mut CoreInspection<'a, '_>,
     node: NodeId,
@@ -1937,6 +1996,12 @@ impl ConditionalInitializationCall<'_> {
     }
     pub(super) fn provider_api(&self) -> crate::module::ModuleId {
         self.graph.provider_api
+    }
+    pub(super) fn ledger_constructor(&self) -> crate::types::ConstructorId {
+        self.graph.constructors.ledger
+    }
+    pub(super) fn output_cons(&self) -> crate::types::ConstructorId {
+        self.graph.constructors.outputs_more
     }
     pub(super) fn definition_query(&self) -> NodeId {
         self.graph.initializer.query

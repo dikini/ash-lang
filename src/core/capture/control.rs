@@ -5038,6 +5038,7 @@ impl<'a> Analysis<'a> {
         trace.visit_edges(budget, |from, to, transition, budget| {
             charge(budget, 1)?;
             let CompletionTransition::Call { target, expression, .. } = transition else { return Ok(()) };
+            charge(budget, 1)?;
             let before = indexed_states.get(from).copied().flatten().ok_or(Failure::Invalid)?;
             if before.position.code == metadata_code {
                 if target != entry.index().map_err(|_| Failure::Invalid)? { return Err(Failure::Invalid); }
@@ -5045,6 +5046,7 @@ impl<'a> Analysis<'a> {
             }
             if before.position.code == worker_code {
                 if target != expected_function || expression != expected_function { return Err(Failure::Invalid); }
+                charge(budget, 1)?;
                 let after = indexed_states.get(to).copied().flatten().ok_or(Failure::Invalid)?;
                 let [frame] = after.edges(after.stack, budget)? else { return Err(Failure::Invalid) };
                 let call = trace.entered_call_for_frame(frame.frame, budget)?;

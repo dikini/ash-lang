@@ -3513,6 +3513,41 @@ pub(super) fn with_network_native_scope_diagnostic<R>(
         &mut TypeWorkBudget,
     ) -> Result<R, ValidationError>,
 ) -> Result<R, ValidationError> {
+    with_network_native_scope_diagnostic_inner(
+        program, sources, linked, owner, false, budget, inspect,
+    )
+}
+
+#[cfg(test)]
+pub(super) fn with_network_send_scope_diagnostic<R>(
+    program: &super::UnvalidatedEffectProgram,
+    sources: &[(ModuleId, SourceFile)],
+    linked: &crate::evidence_validation::ValidatedInterfaceProgram,
+    owner: NodeId,
+    budget: &mut TypeWorkBudget,
+    inspect: impl FnOnce(
+        &NetworkNativeIdentityScope<'_>,
+        &mut TypeWorkBudget,
+    ) -> Result<R, ValidationError>,
+) -> Result<R, ValidationError> {
+    with_network_native_scope_diagnostic_inner(
+        program, sources, linked, owner, true, budget, inspect,
+    )
+}
+
+#[cfg(test)]
+fn with_network_native_scope_diagnostic_inner<R>(
+    program: &super::UnvalidatedEffectProgram,
+    sources: &[(ModuleId, SourceFile)],
+    linked: &crate::evidence_validation::ValidatedInterfaceProgram,
+    owner: NodeId,
+    sends: bool,
+    budget: &mut TypeWorkBudget,
+    inspect: impl FnOnce(
+        &NetworkNativeIdentityScope<'_>,
+        &mut TypeWorkBudget,
+    ) -> Result<R, ValidationError>,
+) -> Result<R, ValidationError> {
     let resource = || ValidationError::new(ValidationReason::Resource, Some(owner));
     let invalid = || ValidationError::new(ValidationReason::Registry, Some(owner));
     budget
@@ -3550,6 +3585,12 @@ pub(super) fn with_network_native_scope_diagnostic<R>(
         let spine = validator.check_network_linked_spine(owner, network)?;
         validator.check_network_initializer_effects(owner, network, &spine, &native)?;
         let facts = network::check_entry_bodies(&validator, owner, network, &spine, &native)?;
+        if sends {
+            let mut requests = validator.authenticated_network_requests.get();
+            requests[0] = Some(validator.authenticate_network_call("try_send", 1)?);
+            requests[8] = Some(validator.authenticate_network_call("send_control", 8)?);
+            validator.authenticated_network_requests.set(requests);
+        }
         let scope =
             validator.network_native_identity_scope(owner, network, &spine, &facts, &native)?;
         budget
@@ -3575,6 +3616,7 @@ pub(super) struct NetworkNativeIdentityScope<'a> {
     entry_region: NodeId,
     linked_result: NodeId,
     receive: NodeId,
+    send_operations: [Option<NodeId>; 2],
     entries: [NodeId; 2],
     parameters: [crate::types::TypeVariableId; 2],
     native_effects: [&'a [EffectInstance]; 2],
@@ -3601,6 +3643,9 @@ impl NetworkNativeIdentityScope<'_> {
     }
     pub(super) fn receive(&self) -> NodeId {
         self.receive
+    }
+    pub(super) fn send_operation(&self, control: bool) -> Option<NodeId> {
+        self.send_operations[usize::from(control)]
     }
     pub(super) fn entry(&self, side: usize) -> Option<(NodeId, crate::types::TypeVariableId)> {
         Some((*self.entries.get(side)?, *self.parameters.get(side)?))
@@ -15691,6 +15736,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             entry_region: facts.entry_region,
             linked_result: facts.linked_result,
             receive,
+            send_operations: {
+                let requests = self.authenticated_network_requests.get();
+                [requests[0], requests[8]]
+            },
             entries,
             parameters,
             native_effects: [
