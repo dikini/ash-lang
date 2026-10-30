@@ -4997,7 +4997,6 @@ impl<'a> Analysis<'a> {
         self.existing_closures_at_port(port, budget)
     }
 
-    #[cfg(test)]
     pub(super) fn existing_closures_at_port(
         &self,
         port: usize,
