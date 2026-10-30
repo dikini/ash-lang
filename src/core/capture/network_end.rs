@@ -51,7 +51,7 @@ fn original<'a>(
 }
 
 /// The supported loop has only a false literal or a direct recursive call on
-/// each non-End normal return. A one-arm wildcard Match can run processing
+/// each non-End normal return. A one-arm irrefutable Match can run processing
 /// before that tail call; processing completion is checked separately.
 fn checked_loop_result(
     scope: &super::super::validate::NetworkNativeIdentityScope<'_>,
@@ -114,7 +114,21 @@ fn checked_loop_result(
             let [branch] = prefix.arms() else {
                 return Err(end_invalid(line!()));
             };
-            if !matches!(&branch.pattern().kind, CorePatternKind::Wildcard) {
+            let irrefutable = match &branch.pattern().kind {
+                CorePatternKind::Wildcard => true,
+                CorePatternKind::Tuple(fields) => {
+                    charge(budget, fields.len())?;
+                    !fields.is_empty()
+                        && fields.iter().all(|field| {
+                            matches!(
+                                &field.kind,
+                                CorePatternKind::Binder(_) | CorePatternKind::Wildcard
+                            )
+                        })
+                }
+                _ => false,
+            };
+            if !irrefutable {
                 return Err(end_invalid(line!()));
             }
             body = branch.body();
@@ -340,14 +354,14 @@ fn finish_contexts(
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct ContextQuery {
-    clause: super::control::Edge,
-    resume: usize,
-    value: usize,
+pub(super) struct ContextQuery {
+    pub(super) clause: super::control::Edge,
+    pub(super) resume: usize,
+    pub(super) value: usize,
 }
 
 /// Match a request successor to the actual selected direct-resume clause.
-fn context_query(
+pub(super) fn context_query(
     scope: &super::super::validate::NetworkNativeIdentityScope<'_>,
     graph: &SummaryGraph,
     focus: &super::control::CompletionFocus<'_>,

@@ -14,6 +14,9 @@ and reviewed product correspondence.
 | [OwnershipExamples](OwnershipExamples.lean) | Concrete positive and negative traces over those transitions. |
 | [DrainSafety](DrainSafety.lean) | Finite focused-State normal returns, port cases and the checked Store-close predecessor. |
 | [WorkerChannel](WorkerChannel.lean) | Bounded two-worker ownership, copied FIFO channels, held-delivery completion, endpoint closure and registration accounting. |
+| [NetworkLedgerTransitions](NetworkLedgerTransitions.lean) and [NetworkLedgerChecker](NetworkLedgerChecker.lean) | Finite ledger laws and definition-bound modeled checking. |
+| [NetworkLedgerHistoryControl](NetworkLedgerHistoryControl.lean) | Conditional currentness and history through modeled control steps. |
+| [NetworkLedgerCoverageClosure](NetworkLedgerCoverageClosure.lean) | Conditional correspondence between modeled ledger traces and protocol coverage. |
 
 The C1 candidate passed independent source review and a frozen scoped
 [AD-0012](../../decisions/AD-0012-proof-development-feedback-and-build-reuse.md)
@@ -33,6 +36,10 @@ Its [correspondence map](worker-channel-correspondence.md) states the runtime,
 C3, native binding and transport premises that remain outside the model proof.
 This prerequisite does not establish successful native shutdown, full N2
 acceptance or current Ash language semantics.
+
+The N3 ledger model and its [correspondence](network-ledger-correspondence.md)
+record the assumptions needed to relate checked linked Core to the finite model.
+They do not establish peer authentication, exclusive control or network release.
 
 ## Retained product evidence
 

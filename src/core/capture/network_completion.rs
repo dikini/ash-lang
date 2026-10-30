@@ -334,7 +334,7 @@ pub(super) fn matched_call_return(
     matched_return_checked(focus, edge, call, before, after, budget)
 }
 
-fn matched_return_checked(
+pub(super) fn matched_return_checked(
     focus: &CompletionFocus<'_>,
     edge: Edge,
     call: CompletionCall,
