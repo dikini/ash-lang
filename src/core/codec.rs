@@ -3353,3 +3353,86 @@ pub(in crate::core) fn check_nominated_decode_driver<'a>(
         result_match,
     })
 }
+
+/// Source coordinates for a multi-field receipt helper. The actual worker,
+/// current ledger, message origin, provider and reached arm are checked in
+/// the owning live worker query; this witness grants none of those facts.
+pub(in crate::core) struct ConditionalReceiptDecode<'a> {
+    driver: super::driver::CheckedDriverCall<'a>,
+    message_field: usize,
+    message_formal: BinderId,
+    invocation: NominatedCodecCall<'a>,
+    result_match: CodecResultMatch,
+}
+
+impl ConditionalReceiptDecode<'_> {
+    pub(in crate::core) fn driver(&self) -> &super::driver::CheckedDriverCall<'_> {
+        &self.driver
+    }
+
+    pub(in crate::core) fn message_field(&self) -> usize {
+        self.message_field
+    }
+
+    pub(in crate::core) fn message_formal(&self) -> BinderId {
+        self.message_formal
+    }
+
+    pub(in crate::core) fn invocation(&self) -> &NominatedCodecCall<'_> {
+        &self.invocation
+    }
+
+    pub(in crate::core) fn result_match(&self) -> &CodecResultMatch {
+        &self.result_match
+    }
+}
+
+/// Check the actual tuple argument/formals and the exact direct decoder match.
+/// In particular, a caller-supplied DecodeResult or an unrelated message
+/// field cannot substitute for the nominated source call.
+pub(in crate::core) fn check_nominated_receipt_decode<'a>(
+    program: &'a dyn LedgerArena,
+    linked: &'a ValidatedInterfaceProgram,
+    driver_plan: &super::driver::DriverNomination<'_>,
+    message_field: usize,
+    definitions: DecoderDefinitions,
+    constructors: DecoderConstructors,
+    work: &mut TypeWorkBudget,
+) -> Result<ConditionalReceiptDecode<'a>, Rejection> {
+    if message_field >= driver_plan.arity || message_field == driver_plan.ledger_field {
+        return Err(Rejection::Unsupported);
+    }
+    let driver = super::driver::check_nominated_driver_call(program, linked, driver_plan, work)?;
+    let mut inspect = CoreInspection { program, work };
+    let parameters = inspect.branch(driver.parameter_match())?;
+    let [arm] = parameters.arms() else {
+        return Err(Rejection::Unsupported);
+    };
+    let super::super::CorePatternKind::Tuple(formals) = &arm.pattern().kind else {
+        return Err(Rejection::Unsupported);
+    };
+    let message_formal = binder_pattern(formals.get(message_field).ok_or(Rejection::Unsupported)?)?;
+    let matching = arm.body();
+    let branch = inspect.branch(matching)?;
+    let call = branch.scrutinee();
+    let invocation = nominate_decode_call(
+        program,
+        linked,
+        call,
+        definitions,
+        constructors,
+        inspect.work,
+    )?;
+    expect_variable(&mut inspect, invocation.argument(), message_formal)?;
+    if driver.provider_api() != invocation.provider_api() {
+        return Err(Rejection::Unsupported);
+    }
+    let result_match = check_decode_result_match(program, &invocation, matching, inspect.work)?;
+    Ok(ConditionalReceiptDecode {
+        driver,
+        message_field,
+        message_formal,
+        invocation,
+        result_match,
+    })
+}

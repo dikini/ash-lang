@@ -369,6 +369,20 @@ pub(super) fn context_query(
     after: &super::control::State,
     budget: &mut TypeWorkBudget,
 ) -> Result<ContextQuery, Failure> {
+    context_query_values(scope, graph, focus.values(), before, after, budget)
+}
+
+/// Inspect the same reached request and selected clause against the value
+/// analysis that owns them. A borrowed in-progress analysis is provisional;
+/// this check alone does not make its trace final.
+pub(super) fn context_query_values(
+    scope: &super::super::validate::NetworkNativeIdentityScope<'_>,
+    graph: &SummaryGraph,
+    values: &super::value::Analysis<'_>,
+    before: &super::control::State,
+    after: &super::control::State,
+    budget: &mut TypeWorkBudget,
+) -> Result<ContextQuery, Failure> {
     use super::control::{Address, Control, Frame};
     use super::{PureExprKind, PureValue};
     let Control::Request(request) = graph
@@ -393,10 +407,7 @@ pub(super) fn context_query(
     {
         return Err(end_invalid(line!()));
     }
-    let index =
-        focus
-            .values()
-            .original_control_node(before.position.code, scope.nodes(), budget)?;
+    let index = values.original_control_node(before.position.code, scope.nodes(), budget)?;
     let node = scope
         .nodes()
         .get(index)
@@ -437,12 +448,7 @@ pub(super) fn context_query(
     };
     if event.code != before.position.code
         || event.unknown
-        || event.port
-            != Some(
-                focus
-                    .values()
-                    .existing_port(event.code, before.value_context, budget)?,
-            )
+        || event.port != Some(values.existing_port(event.code, before.value_context, budget)?)
         || matches!(capture, Address::Empty | Address::End)
         || after.context != context
         || after.value_context != clause_context
@@ -483,9 +489,7 @@ pub(super) fn context_query(
     if *resume_owner != owner || !matches!(graph.code.get(*value), Some(Control::Return)) {
         return Err(end_invalid(line!()));
     }
-    let value_index = focus
-        .values()
-        .original_control_node(*value, scope.nodes(), budget)?;
+    let value_index = values.original_control_node(*value, scope.nodes(), budget)?;
     let value_node = scope
         .nodes()
         .get(value_index)

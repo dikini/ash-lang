@@ -5153,6 +5153,19 @@ impl<'a> Analysis<'a> {
         origin.ok_or(Failure::Invalid)
     }
 
+    /// Authenticate the already-settled worker projection in its owning
+    /// analysis. This does not create a slot or confer network authority.
+    pub(super) fn existing_worker_port_origin(
+        &self,
+        port: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(crate::core::NodeId, u8), Failure> {
+        if self.current.is_some() || !self.pending.is_empty() {
+            return Err(Failure::Invalid);
+        }
+        self.worker_origin_at_port(port, budget)
+    }
+
     /// Read closure alternatives already materialized for a linked initializer
     /// in this exact bootstrap analysis. Empty and opaque alternatives refuse.
     #[cfg(test)]
