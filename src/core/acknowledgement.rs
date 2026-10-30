@@ -1,5 +1,15 @@
 //! Draft acknowledgement analysis; this publishes no authority.
-use super::*;
+use super::{
+    BinderId, CheckedPersistentTuple, CheckedStoredFunction, ConditionalLookup,
+    ConditionalRecordOperation, ConditionalRemoval, CoreInspection, DefinitionCandidate,
+    EffectExprKind, InitializationConstructors, LedgerArena, LookupConstructors, NodeId,
+    PureExprKind, RecordListConstructors, RecordOperation, Rejection, RemovalConstructors,
+    RemovalDependencies, TypeWorkBudget, ValidatedInterfaceProgram, binder_pattern,
+    check_conditional_lookup, check_conditional_record_operation, check_conditional_removal,
+    check_initialization_nominals, check_registration_contexts, constructor_application,
+    constructor_pattern, expect_variable, integer_equal, linked_initializer, pattern_pair,
+    registration_call, reject_evidence, require_distinct,
+};
 use crate::types::ConstructorId;
 
 #[derive(Clone, Copy, Eq, PartialEq)]

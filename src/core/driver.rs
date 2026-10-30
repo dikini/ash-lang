@@ -1,5 +1,10 @@
 //! Untrusted actual driver-call coordinates. This witness grants no fact.
-use super::*;
+use super::{
+    BinderId, CheckedPersistentTuple, CheckedStoredFunction, CoreInspection, DefinitionCandidate,
+    EffectExprKind, LedgerArena, NodeId, PureComputation, PureExprKind, Rejection, TypeWorkBudget,
+    ValidatedInterfaceProgram, binder_pattern, check_registration_contexts, expect_variable,
+    linked_initializer, reject_evidence, require_distinct,
+};
 
 pub(in crate::core) struct DriverNomination<'a> {
     pub(in crate::core) definition: DefinitionCandidate,

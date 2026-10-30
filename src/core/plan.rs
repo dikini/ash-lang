@@ -1,6 +1,9 @@
 //! Untrusted coordinates for one bounded, validator-owned ledger query.
 //! These values are nominations, never prechecked summaries or permission.
-use super::*;
+use super::{
+    DefinitionCandidate, InitializationConstructors, InitializationRole, NodeId,
+    RegistrationConstructors, RegistrationDefinitions,
+};
 use super::{
     acknowledgement::{AcknowledgementConstructors, AcknowledgementDefinitions},
     closure::{ClosureConstructors, ClosureDefinitions},

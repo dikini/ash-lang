@@ -6,9 +6,10 @@ published network-completion permission. The N3 proof and this correspondence
 require independent review together on the final integrated source pin.
 
 The current source candidate is `target/ash-m4-evidence/n3-pr-checkout`.
-Its source manifest `target/ash-m4-evidence/n3-arena-candidate-before.sha256`
-has SHA-256 `6b5b2d6c01616dc0be7a4b96e73721a4871e9aeb01e55240d7906ded1d151dc3`.
-The earlier focused import and transformation tests used manifest
+The architecture test used input manifest `n3-architecture-r7-before.sha256`,
+SHA-256 `4c08f89f3e8cec3cdfabd5a95784660242c590bc497582f89bf517d261b921e1`;
+that manifest predates this evidence-note update. The earlier focused import
+and transformation tests used manifest
 `n3-import-transform-before.sha256`, SHA-256
 `5e118d3663d939b5a2ca2dd364c2932915f4e3df27b0926ce41f5331e60f2992`.
 The final integrated gate must pin the resulting full tree. Selected current
@@ -17,14 +18,14 @@ source files are:
 | Relative source path | SHA-256 |
 | --- | --- |
 | `src/core/ledger_checker.rs` | `495c9f121f1cba5520a487340e41e032e9aac9b481f2678a3413175522314e03` |
-| `src/core/closure.rs` | `2e6e21603a608ba01f1ff907c0d3a6317585b3a64d63b6f56f0e1b2f230e7571` |
-| `src/core/retirement.rs` | `cadee03bb9724ee3f169a321caf1fdcdad94ce6253a1650465ebe68a78dc2c43` |
-| `src/core/acknowledgement.rs` | `7f89795487e0a79c5dbcce31d31ad8dc6050b5e177490222d7c75a59b6b115db` |
+| `src/core/closure.rs` | `0285157d7f22cc93f56708a95672ae087a6bc37fe2a72022ad638f774884fccf` |
+| `src/core/retirement.rs` | `a76201a676252e4d3f189db2a1d4e711431df9b6acab3d4b2aec5fd65da07f7a` |
+| `src/core/acknowledgement.rs` | `813e02527ed441b44b48fa29c2900d9fc82c31a4da08cd8c1b58e650ef3538dc` |
 | `src/core/capture/network_ledger.rs` | `46eb6d644eeb1660ecf8ceba70cbee116e29f3fd9bcc3047a7b9c25838e2de0d` |
 | `src/core/capture/transition_observation.rs` | `23fac1c47a4d1b13e6b93ce5841448e8ee219d144ce1d1d09f8aa29636437b0f` |
 | `src/core/capture/network_end.rs` | `312f545d63faf96b9e939685494f684d98361ce1fed63b8890af9779cd580341` |
 | `src/core/capture/network_completion.rs` | `5ca27be5de34e319ff5372dd7686d63b045e8a59674642116f1dc01e14b811e6` |
-| `src/core/driver.rs` | `3cf01d7b9f805d0cc199673f21293d911bad17ab92805d543e664b3b9da0cad1` |
+| `src/core/driver.rs` | `a989bc4fa0052ac7593de8958e1df744419206a876cdc2a5826af7f8c576351b` |
 | `src/core/validate.rs` | `360a5b6eee116f9d2bb61fe9666397ade406b21735c35f5aa95ef27fbed0debf` |
 | `tests/fixtures/n3-ledger-transitions.ash` | `984ac68351cc955845344acb298933686277861c196a65492a7636629c02018f` |
 
@@ -155,7 +156,7 @@ the checked call, evaluated argument tuple and selected formal projection.
 the old observation. Reuse of an old value after a no-op requires actual
 returned value equality or a separately established equality.
 
-`driver.rs:30` accepts any positive arity and in-range ledger field;
+`driver.rs:29` accepts any positive arity and in-range ledger field;
 `driver_formal_projection` (`network_ledger.rs:1394`) checks each field.
 The reviewed V5 rule covers those modeled choices by the same actual/formal
 index. Its concrete stored tuple, matching and binding must be independently
