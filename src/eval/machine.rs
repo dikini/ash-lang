@@ -8823,13 +8823,13 @@ value ignored => {handler}
                 )
                 .unwrap();
             // The selected real region provider constructs the SendResult.
-            // A later worker/region teardown is outside this isolated call.
-            let _ = machine.run_loop();
+            // Successful evaluation retains the heap in its result.
+            let evaluation = machine.run_loop().expect("send reply completes");
             let expected = crate::types::ConstructorId::new(
                 crate::types::NominalTypeId::new(module, 5),
                 expected_case,
             );
-            assert!(machine.heap.iter().any(|cell| cell.stored_fields().is_some_and(
+            assert!(evaluation.heap.cells_for_test().iter().any(|cell| cell.stored_fields().is_some_and(
                 |fields| matches!(fields.first(), Some(Value::ConstructorTag(found)) if *found == expected)
             )), "the selected provider constructs the actual send result");
         }
