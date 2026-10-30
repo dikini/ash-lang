@@ -405,7 +405,7 @@ impl Machine<'_> {
                     return self.interpret_network_settle(owner, &effect, operation, value);
                 }
                 return match operation.operation() {
-                    1 => self.interpret_network_send(owner, &effect, operation, value),
+                    1 | 8 => self.interpret_network_send(owner, &effect, operation, value),
                     2 => self.interpret_network_receive(
                         progress.node,
                         owner,

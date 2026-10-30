@@ -10862,6 +10862,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             && matches!(
                                 equational.interface.name.spelling.as_str(),
                                 "try_send"
+                                    | "send_control"
                                     | "try_receive"
                                     | "finish_send"
                                     | "watch"
@@ -10875,6 +10876,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             let ty = self.clone_type(&function_type.ty)?;
                             let operation = match equational.interface.name.spelling.as_str() {
                                 "try_send" => 1,
+                                "send_control" => 8,
                                 "try_receive" => 2,
                                 "finish_send" => 3,
                                 "watch" => 4,

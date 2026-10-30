@@ -3002,7 +3002,14 @@ impl<'runtime> Machine<'runtime> {
         use super::network_transport::{EnvelopeKind, Failure, Send};
         let api = crate::resolved::NetworkApi::for_module(effect.effect().module())
             .ok_or(RuntimeFailure::InvalidControlState)?;
-        if effect.effect() != api.io() || operation != OperationId::new(api.io(), 1) {
+        let kind = if operation == OperationId::new(api.io(), 1) {
+            EnvelopeKind::Application
+        } else if operation == OperationId::new(api.io(), 8) {
+            EnvelopeKind::Control
+        } else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        if effect.effect() != api.io() {
             return Err(RuntimeFailure::InvalidControlState);
         }
         let activation =
@@ -3040,7 +3047,7 @@ impl<'runtime> Machine<'runtime> {
             bytes.len(),
             RuntimePhase::Access,
         )?;
-        let outcome = transport.try_send(side, EnvelopeKind::Application, bytes);
+        let outcome = transport.try_send(side, kind, bytes);
         let result = crate::types::NominalTypeId::new(effect.effect().module(), 5);
         let (case, failure) = match outcome {
             Send::Sent => (0, None),
@@ -8736,6 +8743,109 @@ value ignored => {handler}
             assert_eq!(WAITS.load(Ordering::SeqCst), 2);
             assert!(EMPTY_BEFORE.load(Ordering::SeqCst));
             assert!(EMPTY_BETWEEN.load(Ordering::SeqCst));
+        }
+    }
+
+    #[test]
+    fn authenticated_send_operations_publish_distinct_kinds_in_one_fifo() {
+        use crate::eval::network_transport::{EnvelopeKind, NetworkTransport, Receive, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (_, _) = ()\nmain : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let transport = NetworkTransport::prepare(2).unwrap();
+        let module = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.id.module().is_builtin_network())
+            .unwrap()
+            .id
+            .module();
+        let api = crate::resolved::NetworkApi::for_module(module).unwrap();
+        let effect = EffectInstance::new(
+            api.io(),
+            Box::new([crate::types::Type::Inference(
+                crate::types::InferenceVariableId::new(47),
+            )]),
+        );
+        for (operation, byte, expected_case) in [(1, 41, 0), (8, 42, 0), (8, 43, 1)] {
+            let mut machine = Machine::new_network_worker(
+                program.shared(),
+                root,
+                result,
+                entry,
+                parameter,
+                ActivationKey(47),
+                Side::A,
+                transport.clone(),
+                Vec::new(),
+            )
+            .unwrap();
+            machine.control.take();
+            machine.worker.as_mut().unwrap().input = None;
+            let region = ActivationKey(48);
+            machine.frames.push(Frame::RegionBoundary {
+                node: root,
+                key: region,
+                allocate: Value::RegionHostFunction {
+                    owner: region,
+                    release: false,
+                },
+                release: Value::RegionHostFunction {
+                    owner: region,
+                    release: true,
+                },
+                preceding: Value::Unit,
+                records: Vec::new(),
+            });
+            let bytes = allocate_heap(
+                &mut machine.heap,
+                HeapCell::Bytes(Box::new([byte]), 1, false),
+            )
+            .unwrap();
+            let argument = allocate_heap(
+                &mut machine.heap,
+                HeapCell::Tuple(Box::new([
+                    Value::ResourceHandle(ActivationKey(47)),
+                    Value::Location(bytes),
+                ])),
+            )
+            .unwrap();
+            machine
+                .interpret_network_send(
+                    region,
+                    &effect,
+                    OperationId::new(api.io(), operation),
+                    Value::Location(argument),
+                )
+                .unwrap();
+            // The selected real region provider constructs the SendResult.
+            // Successful evaluation retains the heap in its result.
+            let evaluation = machine.run_loop().expect("send reply completes");
+            let expected = crate::types::ConstructorId::new(
+                crate::types::NominalTypeId::new(module, 5),
+                expected_case,
+            );
+            assert!(evaluation.heap.cells_for_test().iter().any(|cell| cell.stored_fields().is_some_and(
+                |fields| matches!(fields.first(), Some(Value::ConstructorTag(found)) if *found == expected)
+            )), "the selected provider constructs the actual send result");
+        }
+        for (kind, byte) in [(EnvelopeKind::Application, 41), (EnvelopeKind::Control, 42)] {
+            let Receive::Message(mut delivery) = transport.reserve_receive(Side::B) else {
+                panic!("message")
+            };
+            assert_eq!(
+                (
+                    delivery.sender(),
+                    delivery.kind(),
+                    delivery.snapshot().unwrap()
+                ),
+                (Side::A, kind, &[byte][..])
+            );
+            delivery.commit().unwrap();
         }
     }
 

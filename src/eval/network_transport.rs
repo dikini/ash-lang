@@ -30,13 +30,6 @@ impl Side {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum EnvelopeKind {
     Application,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the checked protocol driver supplies control envelopes in a later milestone"
-        )
-    )]
     Control,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
