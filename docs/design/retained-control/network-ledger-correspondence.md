@@ -5,26 +5,27 @@ it is not a proof of Rust, the production evaluator, N4 premises, or a
 published network-completion permission. The N3 proof and this correspondence
 require independent review together on the final integrated source pin.
 
-The focused import and transformation tests used the integrated candidate in
-`target/ash-m4-evidence/n3-pr-checkout`. Their complete input manifest,
-`target/ash-m4-evidence/n3-import-transform-before.sha256`, has SHA-256
-`5e118d3663d939b5a2ca2dd364c2932915f4e3df27b0926ce41f5331e60f2992` and
-checked successfully before and after those tests. It predates this evidence
-note update; the final integrated gate must pin the resulting full tree.
-Selected source files from the focused test are:
+The current source candidate is `target/ash-m4-evidence/n3-pr-checkout`.
+Its source manifest `target/ash-m4-evidence/n3-arena-candidate-before.sha256`
+has SHA-256 `6b5b2d6c01616dc0be7a4b96e73721a4871e9aeb01e55240d7906ded1d151dc3`.
+The earlier focused import and transformation tests used manifest
+`n3-import-transform-before.sha256`, SHA-256
+`5e118d3663d939b5a2ca2dd364c2932915f4e3df27b0926ce41f5331e60f2992`.
+The final integrated gate must pin the resulting full tree. Selected current
+source files are:
 
 | Relative source path | SHA-256 |
 | --- | --- |
-| `src/core/ledger_checker.rs` | `8b7119f8d2b9bf2c9d108c666bce552de4d11ff4ee6904e2c94b2f2c8cb6108b` |
-| `src/core/closure.rs` | `de08021330e88a4e647cb765b06da0b30e05fd5ea00bd3ddaa61704f85da0502` |
-| `src/core/retirement.rs` | `b695b94ec2e5769277e03a23fc1975d105be3e13d2ccd0f774af120314561695` |
-| `src/core/acknowledgement.rs` | `fa13286424eb98cc6b60ba1eaa40599789f94ab06fa25e503ec85c2a9871d59e` |
-| `src/core/capture/network_ledger.rs` | `f675c7c78788b4de5ab8fef947b30708ed2c485dd77066bda85a4c9762eb50b4` |
-| `src/core/capture/transition_observation.rs` | `9c20f30f4874b2acdd6bfabe694ad39d8d92c09426a60f49aa0656bc2a2678d2` |
+| `src/core/ledger_checker.rs` | `495c9f121f1cba5520a487340e41e032e9aac9b481f2678a3413175522314e03` |
+| `src/core/closure.rs` | `2e6e21603a608ba01f1ff907c0d3a6317585b3a64d63b6f56f0e1b2f230e7571` |
+| `src/core/retirement.rs` | `cadee03bb9724ee3f169a321caf1fdcdad94ce6253a1650465ebe68a78dc2c43` |
+| `src/core/acknowledgement.rs` | `7f89795487e0a79c5dbcce31d31ad8dc6050b5e177490222d7c75a59b6b115db` |
+| `src/core/capture/network_ledger.rs` | `46eb6d644eeb1660ecf8ceba70cbee116e29f3fd9bcc3047a7b9c25838e2de0d` |
+| `src/core/capture/transition_observation.rs` | `23fac1c47a4d1b13e6b93ce5841448e8ee219d144ce1d1d09f8aa29636437b0f` |
 | `src/core/capture/network_end.rs` | `312f545d63faf96b9e939685494f684d98361ce1fed63b8890af9779cd580341` |
 | `src/core/capture/network_completion.rs` | `5ca27be5de34e319ff5372dd7686d63b045e8a59674642116f1dc01e14b811e6` |
-| `src/core/driver.rs` | `8e55157ea82166efb1a56325b1cc6aee69b840447557a9715a90df3fa150b4db` |
-| `src/core/validate.rs` | `311bf2c96d2f1fe1afffe6372ea5d224c9027ea122cb9244f8772fb14f505db5` |
+| `src/core/driver.rs` | `3cf01d7b9f805d0cc199673f21293d911bad17ab92805d543e664b3b9da0cad1` |
+| `src/core/validate.rs` | `360a5b6eee116f9d2bb61fe9666397ade406b21735c35f5aa95ef27fbed0debf` |
 | `tests/fixtures/n3-ledger-transitions.ash` | `984ac68351cc955845344acb298933686277861c196a65492a7636629c02018f` |
 
 ## Data and evaluation boundary
@@ -47,8 +48,11 @@ values correspond only to nonnegative representable source integers with
 equality preserved; the model's serial is a mathematical `Int`. Nominal IDs,
 phases, result and list constructors correspond by linked identity, not name.
 An arbitrary source copy or matching type does not establish this relation.
+Linked checker witnesses compare the address of their borrowed Core arena;
+trait-object vtable identity is not used as arena identity. Separate checks
+still bind the linked program and each arena-local node.
 `observe_ledger_plan` checks a fixed, nonnegative literal allocator across the
-nominated registrations (`network_ledger.rs:3705`); `validate.rs:3238`
+nominated registrations (`network_ledger.rs:3780`); `validate.rs:3242`
 compares the fixed values and Root/Worker roles when both sides of the same
 owner are present. A one-sided observation retains the peer-allocator and
 history premise. These source checks do not establish the finite issued
@@ -152,7 +156,7 @@ the old observation. Reuse of an old value after a no-op requires actual
 returned value equality or a separately established equality.
 
 `driver.rs:30` accepts any positive arity and in-range ledger field;
-`driver_formal_projection` (`network_ledger.rs:1323`) checks each field.
+`driver_formal_projection` (`network_ledger.rs:1394`) checks each field.
 The reviewed V5 rule covers those modeled choices by the same actual/formal
 index. Its concrete stored tuple, matching and binding must be independently
 compared with C3 port identity. The Rust checks on extra source ports and
@@ -193,11 +197,11 @@ Failure, failure reply and return. `receiveActual` connects the witness, call,
 ordered events and the exact before/after modeled state to C3; it must prove
 the actual outcome, checked operation/owner/side, message commit, reply and
 matching frame restoration. The model does not derive this relation from
-coordinates. The concrete source mapping starts with `entered_call` (`network_ledger.rs:1025`)
-and `checked_context_capture` (`:515`) for the nominated closure, caller and
+coordinates. The concrete source mapping starts with `entered_call` (`network_ledger.rs:1088`)
+and `checked_context_capture` (`:523`) for the nominated closure, caller and
 selected Region origin. The source must select the expected receive operation
-and worker owner/side (`:2388`), then check the exact stage sequence
-(`:2455`), and `matched_source_return` (`:1066`) must restore the saved
+and worker owner/side (`:2523`), then check the exact stage sequence
+(`:2528`), and `matched_source_return` (`:1133`) must restore the saved
 caller context, role and current port under the same call witness. A received
 message may allocate buffers or other storage. V5's receive rule holds its
 modeled `Store` fixed; the correspondence must interpret that store as the
@@ -213,16 +217,18 @@ suspension and restoration and exclude reentry, mutation and unknown joins.
 Budget exhaustion must reject before publication, with no partial fact. The
 existing abstract `NetworkLedgerBudget` models atomic publication only; the
 actual cumulative charges, retries, and N3 publication boundary require
-source-level evidence. `PendingLedgerObservation` (`network_ledger.rs:3488`) remains provisional,
+source-level evidence. `PendingLedgerObservation` (`network_ledger.rs:3558`) remains provisional,
 stores source coordinates for revalidation in the same worker focus and
 carries requirements for issued history, peer allocator, exclusive update and
-peer authentication. `transition_observation.rs:171` follows a checked
-successor binding. At `:904` it matches the normal return, and at `:923` it
-checks all incoming edges for the same witness, result and caller context.
-These observations do not publish a dynamic current ledger by themselves.
+peer authentication. The production worklist checks call returns, successor
+bindings and joins in `network_ledger.rs`. The test-only observer in
+`transition_observation.rs:174` separately follows a checked successor;
+at `:915` it matches the normal return, and at `:934` it checks incoming
+edges for the same witness, result and caller context. These observations do
+not publish a dynamic current ledger by themselves.
 
-`with_observed_ledger_plan` (`network_ledger.rs:3646`) also provides a scoped
-`SameFocusLedger` query (`:3508`). `checked_input` (`:3539`) ties a nominated
+`with_observed_ledger_plan` (`network_ledger.rs:3724`) also provides a scoped
+`SameFocusLedger` query (`:3578`). `checked_input` (`:3613`) ties a nominated
 source site and variable binder to the same reached state, caller context and
 must-joined current port, without exporting the port. A caller must separately
 bind that variable to its actual call or field. The callback result remains
@@ -235,7 +241,7 @@ must independently establish exclusive update, peer and output relationships.
 ## Linked fixture and budget evidence
 
 The source candidate includes `retirement_successor_is_acknowledgement_input_and_old_alias_is_stale`
-(`network_ledger.rs:4053`), whose linked production path nominates actual
+(`network_ledger.rs:4131`), whose linked production path nominates actual
 registration, Close, Retire and Ack calls and checks their observation
 identities. In the fixture's modeled execution, Close and Retire target a missing Work
 record and are no-ops, while Ack removes a matching Root child. The linked
@@ -243,7 +249,7 @@ validation test checks the call and result identities; it is not a native
 execution receipt. The fixture does not exercise successful retirement or
 Ack output emission. The stale variant tests rejection of an
 old successor input. `requested_ledger_plan_runs_inside_full_linked_validation`
-(`:4069`) adds a renamed-binder case. The shared-budget test (`:4170`)
+(`:4147`) adds a renamed-binder case. The shared-budget test (`:4248`)
 measures the observer on one settled linked focus, then checks the exact
 allowance, one unit short, a pre-spent allowance and retries without resetting
 the exhausted budgets. A separate full-validator query with a pre-spent
@@ -254,12 +260,12 @@ the canonical receive case, including that negative. The r2 raw log SHA-256
 is `490a6c574113b79894f6a5a2cc7b6186777ee652b5cb13a37bfe967ab89a6d53`;
 the r3 raw log SHA-256 is
 `c7e97c23f5aacd5801663ae699f00d6c1689a124b9099bb8f051f0172847078f`.
-The `imported_ledger_and_transformed_core_are_rechecked` case (`:4108`)
+The `imported_ledger_and_transformed_core_are_rechecked` case (`:4186`)
 passed with a separately imported ledger module on the full linked-validator
 path and rejected a same-typed changed helper before publication. The existing
 Network transform returns `InvalidValidatedInput`, which the test expects before
 any observation. The ledger-only `linked_registration_counter_uses_the_returned_successor_field`
-case (`ledger_checker.rs:5142`) passed after a supported identity traversal:
+case (`ledger_checker.rs:5163`) passed after a supported identity traversal:
 the rebuilt Core has a fresh arena, rejects the old nomination, independently
 validates with linked evidence, and reconstructs the call, result and helper
 relationships. These two focused cases passed in the raw log SHA-256
