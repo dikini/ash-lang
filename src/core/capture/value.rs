@@ -2711,6 +2711,10 @@ impl Graph {
         })
     }
 
+    pub(super) fn position_is_original(&self, code: usize, original: usize) -> bool {
+        self.positions.get(&code) == Some(&original) && original < self.original_nodes
+    }
+
     pub(super) fn append_global_initializers(
         &self,
         offset: usize,
@@ -4215,6 +4219,8 @@ pub(super) struct Analysis<'a> {
     current: Option<usize>,
     frozen_contexts: usize,
     focus: Option<(usize, usize)>,
+    // Original creation context used by this exact resource-focus seed.
+    focus_creation: Option<usize>,
     cuts: HashMap<(usize, usize, usize), PreparedCut>,
 }
 
@@ -4623,6 +4629,7 @@ impl<'a> Analysis<'a> {
         }
         let context = query.context(0, Transition::Focus, budget)?;
         query.focus = Some((expression, context));
+        query.focus_creation = Some(creation);
         for input in self.graph.free_inputs(expression, budget)? {
             query.freeze_slot(input, creation, context, budget)?;
         }
@@ -4674,6 +4681,168 @@ impl<'a> Analysis<'a> {
             self.atom(target, atom, budget)?;
         }
         Ok(())
+    }
+
+    /// Reconstruct a frozen value's original creation context through this
+    /// focus's own immutable Restore/WorkerCallRestore chain. This compares
+    /// copied slots only inside this analysis; no cross-focus port is exposed.
+    pub(super) fn existing_frozen_origin(
+        &self,
+        port: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        let mut current = port;
+        loop {
+            charge(budget, 1)?;
+            let slot = self.slots.get(current).ok_or(Failure::Invalid)?;
+            if slot.queued || !slot.terminal {
+                return Err(Failure::Invalid);
+            }
+            let (expression, context) = slot.key;
+            if context < self.frozen_contexts {
+                return Ok(context);
+            }
+            let previous = match *self.contexts.paths.get(context).ok_or(Failure::Invalid)? {
+                ContextPath::Step {
+                    transition: Transition::Restore(previous, _, _),
+                    ..
+                }
+                | ContextPath::Step {
+                    transition: Transition::WorkerCallRestore(previous, _, _),
+                    ..
+                } => previous,
+                ContextPath::Step {
+                    transition: Transition::Focus,
+                    ..
+                } if self.focus.is_some_and(|(_, focus)| focus == context) => {
+                    self.focus_creation.ok_or(Failure::Invalid)?
+                }
+                _ => return Err(Failure::Invalid),
+            };
+            if previous >= context {
+                return Err(Failure::Invalid);
+            }
+            let source = self.existing_slot(expression, previous, budget)?;
+            let prior = self.slots.get(source).ok_or(Failure::Invalid)?;
+            charge(
+                budget,
+                slot.atoms
+                    .len()
+                    .checked_add(prior.atoms.len())
+                    .ok_or(Failure::Resource)?,
+            )?;
+            if !prior.terminal || slot.atoms != prior.atoms {
+                return Err(Failure::Invalid);
+            }
+            current = source;
+        }
+    }
+
+    /// Relate this Store focus's frozen Bind inputs to the copied slots in
+    /// its parent worker analysis. Returned ports belong only to `parent`.
+    pub(super) fn existing_parent_binding_ports(
+        &self,
+        parent: &Self,
+        binding: usize,
+        binder_port: usize,
+        query_port: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, usize), Failure> {
+        if !std::ptr::eq(self.graph, parent.graph) || self.frozen_contexts != parent.contexts.len()
+        {
+            return Err(Failure::Invalid);
+        }
+        let origin = self.existing_frozen_origin(query_port, budget)?;
+        if self.existing_frozen_origin(binder_port, budget)? != origin {
+            return Err(Failure::Invalid);
+        }
+        let mut path = origin;
+        loop {
+            charge(budget, 1)?;
+            let child = self.contexts.paths.get(path).ok_or(Failure::Invalid)?;
+            let original = parent.contexts.paths.get(path).ok_or(Failure::Invalid)?;
+            if child != original {
+                return Err(Failure::Invalid);
+            }
+            match *child {
+                ContextPath::Empty => break,
+                ContextPath::Step { parent, .. } => {
+                    if parent >= path {
+                        return Err(Failure::Invalid);
+                    }
+                    path = parent;
+                }
+            }
+        }
+        let (parent_binder, parent_query) =
+            parent.existing_binding_ports(binding, origin, budget)?;
+        for (local, original) in [(binder_port, parent_binder), (query_port, parent_query)] {
+            let expression = self.slots.get(local).ok_or(Failure::Invalid)?.key.0;
+            let frozen = self.existing_slot(expression, origin, budget)?;
+            let copied = self.slots.get(frozen).ok_or(Failure::Invalid)?;
+            let source = parent.slots.get(original).ok_or(Failure::Invalid)?;
+            charge(
+                budget,
+                copied
+                    .atoms
+                    .len()
+                    .checked_add(source.atoms.len())
+                    .ok_or(Failure::Resource)?,
+            )?;
+            if copied.key != source.key
+                || copied.queued
+                || source.queued
+                || copied.atoms != source.atoms
+            {
+                return Err(Failure::Invalid);
+            }
+        }
+        Ok((origin, parent_query))
+    }
+
+    /// Relate an already frozen local capture to its exact parent slot. The
+    /// returned port is parent-scoped; it is never interpreted locally.
+    pub(super) fn existing_parent_capture_port(
+        &self,
+        parent: &Self,
+        local_port: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        if !std::ptr::eq(self.graph, parent.graph) || self.frozen_contexts != parent.contexts.len()
+        {
+            return Err(Failure::Invalid);
+        }
+        let origin = self.existing_frozen_origin(local_port, budget)?;
+        let mut path = origin;
+        loop {
+            charge(budget, 1)?;
+            let child = self.contexts.paths.get(path).ok_or(Failure::Invalid)?;
+            if parent.contexts.paths.get(path).ok_or(Failure::Invalid)? != child {
+                return Err(Failure::Invalid);
+            }
+            match *child {
+                ContextPath::Empty => break,
+                ContextPath::Step { parent, .. } if parent < path => path = parent,
+                _ => return Err(Failure::Invalid),
+            }
+        }
+        let expression = self.slots.get(local_port).ok_or(Failure::Invalid)?.key.0;
+        let local = self.existing_slot(expression, origin, budget)?;
+        let original = parent.existing_slot(expression, origin, budget)?;
+        let local = self.slots.get(local).ok_or(Failure::Invalid)?;
+        let source = parent.slots.get(original).ok_or(Failure::Invalid)?;
+        charge(
+            budget,
+            local
+                .atoms
+                .len()
+                .checked_add(source.atoms.len())
+                .ok_or(Failure::Resource)?,
+        )?;
+        if local.key != source.key || local.queued || source.queued || local.atoms != source.atoms {
+            return Err(Failure::Invalid);
+        }
+        Ok(original)
     }
 
     pub(super) fn revision(&self) -> usize {
@@ -5095,6 +5264,94 @@ impl<'a> Analysis<'a> {
             ports.push(self.existing_slot(*symbol, creation, budget)?);
         }
         Ok(ports)
+    }
+
+    /// Check the actual creation-side capture list without manufacturing a
+    /// callee context or a call. Each original capture and the saved context
+    /// must already be represented by the linked function's existing slots.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "capture provenance requires the actual source coordinates and shared budget"
+    )]
+    pub(super) fn existing_closed_capture_sources(
+        &self,
+        target: usize,
+        creation: usize,
+        capture_nodes: &[crate::core::NodeId],
+        context_node: crate::core::NodeId,
+        arena: crate::core::dialect::ArenaId,
+        nodes: &[StoredNode<super::super::effect::EffectOperationFamily>],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<usize>, Failure> {
+        if self.graph.original_nodes != nodes.len()
+            || self.graph.original_base != nodes.as_ptr() as usize
+            || context_node.arena() != arena
+        {
+            return Err(Failure::Invalid);
+        }
+        let context = context_node.index().map_err(|_| Failure::Invalid)?;
+        let Some(Expr::Function { captures, .. }) = self.graph.expressions.get(target) else {
+            return Err(Failure::Invalid);
+        };
+        charge(budget, captures.len())?;
+        if captures
+            .iter()
+            .filter(|expression| **expression == context)
+            .count()
+            != 1
+        {
+            return Err(Failure::Invalid);
+        }
+        let mut symbols = Vec::new();
+        charge(
+            budget,
+            capture_nodes
+                .len()
+                .checked_add(captures.len())
+                .ok_or(Failure::Resource)?,
+        )?;
+        symbols
+            .try_reserve_exact(capture_nodes.len())
+            .map_err(|_| Failure::Resource)?;
+        for node in capture_nodes {
+            if node.arena() != arena {
+                return Err(Failure::Invalid);
+            }
+            let expression = node.index().map_err(|_| Failure::Invalid)?;
+            if expression >= self.graph.original_nodes {
+                return Err(Failure::Invalid);
+            }
+            let Some(Expr::Alias(symbol)) = self.graph.expressions.get(expression) else {
+                return Err(Failure::Invalid);
+            };
+            symbols.push(*symbol);
+        }
+        let mut represented = Vec::new();
+        represented
+            .try_reserve_exact(symbols.len())
+            .map_err(|_| Failure::Resource)?;
+        represented.resize(symbols.len(), false);
+        for &expression in captures {
+            charge(
+                budget,
+                symbols.len().checked_add(1).ok_or(Failure::Resource)?,
+            )?;
+            let mut original = false;
+            for (index, symbol) in symbols.iter().enumerate() {
+                if *symbol == expression {
+                    represented[index] = true;
+                    original = true;
+                }
+            }
+            if !original && expression != context {
+                return Err(Failure::Invalid);
+            }
+            self.existing_slot(expression, creation, budget)?;
+        }
+        if represented.iter().any(|present| !present) {
+            return Err(Failure::Invalid);
+        }
+        self.existing_original_capture_ports(target, creation, capture_nodes, arena, nodes, budget)
     }
 
     /// Check every actual function capture against original linked captures,
@@ -7023,7 +7280,21 @@ impl<'a> Analysis<'a> {
         };
         let operand = self.slot(operand, context, budget)?;
         self.close(budget)?;
-        let atoms = &self.slots.get(operand).ok_or(Failure::Invalid)?.atoms;
+        self.existing_worker_entry_region_port(operand, entry_region, budget)
+    }
+
+    /// Check an existing settled port against the actual entry Region. No
+    /// slot, request, or provider selection is created by this accessor.
+    pub(super) fn existing_worker_entry_region_port(
+        &self,
+        port: usize,
+        entry_region: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if self.current.is_some() || !self.pending.is_empty() {
+            return Err(Failure::Invalid);
+        }
+        let atoms = &self.slots.get(port).ok_or(Failure::Invalid)?.atoms;
         charge(budget, atoms.len())?;
         #[cfg(test)]
         eprintln!("worker entry Region request: expected={entry_region}, atoms={atoms:?}");
@@ -7033,6 +7304,32 @@ impl<'a> Analysis<'a> {
         } else {
             Err(Failure::Invalid)
         }
+    }
+
+    /// Read the already existing entry-Region binder in the actual selected
+    /// handler's captured context; no binding or value is synthesized.
+    pub(super) fn existing_worker_entry_region_binding(
+        &self,
+        code: usize,
+        capture_context: usize,
+        entry_region: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, 1)?;
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        if expression != entry_region {
+            return Err(Failure::Invalid);
+        }
+        let Expr::Bind { binder, .. } = self
+            .graph
+            .expressions
+            .get(expression)
+            .ok_or(Failure::Invalid)?
+        else {
+            return Err(Failure::Invalid);
+        };
+        let port = self.existing_slot(*binder, capture_context, budget)?;
+        self.existing_worker_entry_region_port(port, entry_region, budget)
     }
 
     pub(super) fn cell_operands(
@@ -7356,6 +7653,7 @@ impl<'a> Analysis<'a> {
             current: None,
             frozen_contexts: 0,
             focus: None,
+            focus_creation: None,
             cuts: HashMap::new(),
         })
     }
