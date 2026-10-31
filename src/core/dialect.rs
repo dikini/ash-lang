@@ -1724,7 +1724,8 @@ pub(super) struct StoredNode<F: CoreOperationFamily> {
     pub(super) kind: F::Kind,
 }
 
-/// An unchecked Core arena which must cross [`super::validate()`] before use.
+/// An unchecked compiler-built Core arena which must cross [`super::validate()`]
+/// before use. A linked compiler image reconstructs an already-validated arena.
 #[derive(Debug)]
 pub struct UnvalidatedCoreProgram<F: CoreOperationFamily> {
     pub(super) registry: Arc<ResolvedRegistry>,
@@ -1775,6 +1776,44 @@ impl<F: CoreOperationFamily> UnvalidatedCoreProgram<F> {
             nodes,
             self.root,
         )
+    }
+
+    /// Rebuilds the compiler-verified representation carried by a linked image.
+    pub(crate) fn into_compiler_image(
+        self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ValidatedCoreProgram<F>, BuildError> {
+        work.charge(
+            self.nodes
+                .len()
+                .checked_mul(2)
+                .ok_or(BuildError::TypeWorkExceeded)?,
+        )
+        .map_err(|()| BuildError::TypeWorkExceeded)?;
+        if self.nodes.iter().any(|node| node.origin.is_none()) {
+            return Err(BuildError::InvalidPayload);
+        }
+        let mut nodes = Vec::new();
+        nodes
+            .try_reserve_exact(self.nodes.len())
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        let (registry, method_evidence, anchors, arena, stored, root) = self.into_parts();
+        for node in stored {
+            nodes.push(CoreTypedExpr {
+                ty: node.ty,
+                effects: node.effects,
+                origin: node.origin.expect("image origins were checked above"),
+                kind: node.kind,
+            });
+        }
+        Ok(ValidatedCoreProgram::new(CoreProgram::new(
+            registry,
+            method_evidence,
+            anchors,
+            arena,
+            nodes,
+            root,
+        )))
     }
 
     fn discard_contents(&mut self) {
@@ -1958,7 +1997,7 @@ impl<F: CoreOperationFamily> ValidatedCoreProgram<F> {
         self.0.node_count()
     }
 
-    /// Borrows every independently validated node for paid admission scans.
+    /// Borrows compiler-validated nodes for paid scans.
     pub(crate) fn nodes(&self) -> &[CoreTypedExpr<F>] {
         &self.0.nodes
     }
@@ -2295,8 +2334,8 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
 
     /// Runs one payload-construction operation on the caller's actual ledger.
     ///
-    /// Private image reconstruction uses this seam between its own admission
-    /// steps. The meter returns to the caller after both success and failure;
+    /// Private image reconstruction uses this seam for its construction work.
+    /// The meter returns to the caller after both success and failure;
     /// no separate allowance or replayed charge is introduced.
     pub(crate) fn with_caller_type_work<T>(
         &mut self,
@@ -2341,6 +2380,20 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         Self::with_registry_method_evidence_and_rewrite_work(
             registry,
             method_evidence,
+            TypeWorkBudget::default(),
+        )
+    }
+
+    pub(crate) fn with_registry_for_image(
+        registry: Arc<ResolvedRegistry>,
+        method_evidence: Arc<MethodEvidenceCatalog>,
+    ) -> Self {
+        Self::from_catalogs(
+            registry,
+            method_evidence,
+            Vec::new(),
+            Vec::new(),
+            TypeWorkBudget::default(),
             TypeWorkBudget::default(),
         )
     }
@@ -2434,10 +2487,6 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             .method_evidence
             .implementation_owner(implementation)
             .is_some())
-    }
-
-    pub(crate) fn method_evidence_anchors(&self) -> &[MethodEvidenceAnchor] {
-        &self.method_evidence_anchors
     }
 
     #[allow(
@@ -7532,12 +7581,15 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
     pub(crate) fn finish_image(
         mut self,
         root: NodeId,
+        anchors: Vec<MethodEvidenceAnchor>,
         work: &mut TypeWorkBudget,
     ) -> Result<UnvalidatedCoreProgram<F>, BuildError> {
-        let finish_work = self.consumed_method_evidence.len();
-        work.charge(finish_work)
+        work.charge(anchors.len())
             .map_err(|()| BuildError::TypeWorkExceeded)?;
-        self.type_work = TypeWorkBudget::with_limit(finish_work);
+        // These anchors and their final rows came from verified compiler Core.
+        // Install their relocated records without reauthenticating the proof.
+        self.method_evidence_anchors = anchors;
+        self.type_work = TypeWorkBudget::with_limit(0);
         self.finish(root)
     }
     pub(crate) fn node_at_ordinal(

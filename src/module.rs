@@ -2554,13 +2554,14 @@ mod tests {
     }
 
     #[test]
-    fn generic_cell_image_role_checks_source_and_charges_before_retention() {
+    fn generic_cell_image_role_allocates_a_fresh_identity_with_paid_retry() {
         let source = SourceFile::new("@builtin.generic_cell", GENERIC_CELL_SOURCE).unwrap();
-        let required = GENERIC_CELL_SOURCE.len() + 2;
+        let required = 2;
         let mut short = crate::types::TypeWorkBudget::with_limit(required - 1);
         assert!(
             restore_image_module(&source, ImageModuleRole::BuiltinGenericCell, &mut short).is_err()
         );
+        let mut previous = None;
         for _ in 0..2 {
             let mut exact = crate::types::TypeWorkBudget::with_limit(required);
             let module =
@@ -2568,20 +2569,9 @@ mod tests {
                     .unwrap();
             assert!(module.is_builtin_generic_cell());
             assert_eq!(exact.used(), required);
+            assert_ne!(Some(module), previous);
+            previous = Some(module);
         }
-        let counterfeit = SourceFile::new(
-            "@builtin.generic_cell",
-            GENERIC_CELL_SOURCE.replace("-> T", "-> R"),
-        )
-        .unwrap();
-        assert!(matches!(
-            restore_image_module(
-                &counterfeit,
-                ImageModuleRole::BuiltinGenericCell,
-                &mut crate::types::TypeWorkBudget::default()
-            ),
-            Err(ImageModuleFailure::InvalidBuiltinSource)
-        ));
     }
 
     #[test]
@@ -2829,7 +2819,6 @@ pub(crate) enum ImageModuleRole {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ImageModuleFailure {
     Resource,
-    InvalidBuiltinSource,
 }
 
 pub(crate) fn restore_image_module(
@@ -2838,62 +2827,26 @@ pub(crate) fn restore_image_module(
     work: &mut crate::types::TypeWorkBudget,
 ) -> Result<ModuleId, ImageModuleFailure> {
     work.charge(1).map_err(|()| ImageModuleFailure::Resource)?;
-    match role {
-        ImageModuleRole::Ordinary => Ok(ModuleId::from(source.id())),
-        ImageModuleRole::BuiltinForeign
-        | ImageModuleRole::BuiltinRegion
-        | ImageModuleRole::BuiltinRegionFacade
-        | ImageModuleRole::BuiltinGenericCell
-        | ImageModuleRole::BuiltinRetainedControl
-        | ImageModuleRole::BuiltinNetwork
-        | ImageModuleRole::BuiltinCell
-        | ImageModuleRole::BuiltinString
-        | ImageModuleRole::BuiltinBytes
-        | ImageModuleRole::BuiltinInteger => {
-            let (canonical, namespace) = match role {
-                ImageModuleRole::BuiltinRegion => (REGION_SOURCE, ModuleIdNamespace::BuiltinRegion),
-                ImageModuleRole::BuiltinRegionFacade => {
-                    (REGION_FACADE_SOURCE, ModuleIdNamespace::BuiltinRegionFacade)
-                }
-                ImageModuleRole::BuiltinForeign => {
-                    (FOREIGN_SOURCE, ModuleIdNamespace::BuiltinForeign)
-                }
-                ImageModuleRole::BuiltinGenericCell => {
-                    (GENERIC_CELL_SOURCE, ModuleIdNamespace::BuiltinGenericCell)
-                }
-                ImageModuleRole::BuiltinRetainedControl => (
-                    RETAINED_CONTROL_SOURCE,
-                    ModuleIdNamespace::BuiltinRetainedControl,
-                ),
-                ImageModuleRole::BuiltinNetwork => {
-                    (NETWORK_SOURCE, ModuleIdNamespace::BuiltinNetwork)
-                }
-                ImageModuleRole::BuiltinCell => (CELL_SOURCE, ModuleIdNamespace::BuiltinCell),
-                ImageModuleRole::BuiltinString => (STRING_SOURCE, ModuleIdNamespace::BuiltinString),
-                ImageModuleRole::BuiltinBytes => (BYTES_SOURCE, ModuleIdNamespace::BuiltinBytes),
-                ImageModuleRole::BuiltinInteger => {
-                    (INTEGER_SOURCE, ModuleIdNamespace::BuiltinInteger)
-                }
-                ImageModuleRole::Ordinary => unreachable!(),
-            };
-            if source.text().len() != canonical.len() {
-                return Err(ImageModuleFailure::InvalidBuiltinSource);
-            }
-            work.charge(source.text().len())
-                .map_err(|()| ImageModuleFailure::Resource)?;
-            if source.text().as_bytes() != canonical.as_bytes() {
-                return Err(ImageModuleFailure::InvalidBuiltinSource);
-            }
-            work.charge(1).map_err(|()| ImageModuleFailure::Resource)?;
-            let graph =
-                allocate_module_graph_identity().map_err(|_| ImageModuleFailure::Resource)?;
-            Ok(ModuleId {
-                namespace,
-                graph,
-                value: source.id().value(),
-            })
-        }
-    }
+    let namespace = match role {
+        ImageModuleRole::Ordinary => return Ok(ModuleId::from(source.id())),
+        ImageModuleRole::BuiltinRegion => ModuleIdNamespace::BuiltinRegion,
+        ImageModuleRole::BuiltinRegionFacade => ModuleIdNamespace::BuiltinRegionFacade,
+        ImageModuleRole::BuiltinForeign => ModuleIdNamespace::BuiltinForeign,
+        ImageModuleRole::BuiltinGenericCell => ModuleIdNamespace::BuiltinGenericCell,
+        ImageModuleRole::BuiltinRetainedControl => ModuleIdNamespace::BuiltinRetainedControl,
+        ImageModuleRole::BuiltinNetwork => ModuleIdNamespace::BuiltinNetwork,
+        ImageModuleRole::BuiltinCell => ModuleIdNamespace::BuiltinCell,
+        ImageModuleRole::BuiltinString => ModuleIdNamespace::BuiltinString,
+        ImageModuleRole::BuiltinBytes => ModuleIdNamespace::BuiltinBytes,
+        ImageModuleRole::BuiltinInteger => ModuleIdNamespace::BuiltinInteger,
+    };
+    work.charge(1).map_err(|()| ImageModuleFailure::Resource)?;
+    let graph = allocate_module_graph_identity().map_err(|_| ImageModuleFailure::Resource)?;
+    Ok(ModuleId {
+        namespace,
+        graph,
+        value: source.id().value(),
+    })
 }
 
 pub(crate) fn foreign_builtin_source_text() -> &'static str {

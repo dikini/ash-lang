@@ -10,7 +10,6 @@ mod source_declarations;
 
 static REGION_OWNER_KIND: crate::types::Kind = crate::types::Kind::Type;
 
-pub(crate) use source_declarations::DeclarationCoordinateLoan;
 pub(crate) use source_declarations::DeclarationCoordinates;
 
 use std::{

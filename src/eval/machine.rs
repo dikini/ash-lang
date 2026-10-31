@@ -6811,7 +6811,7 @@ fn matches_pattern_with_work(
     Ok(true)
 }
 
-/// Evaluates one independently validated pure Core program.
+/// Evaluates one compiler-validated pure Core program.
 ///
 /// # Errors
 ///
@@ -6821,7 +6821,7 @@ pub fn evaluate(program: &ValidatedProgram) -> Result<Evaluation, RuntimeFailure
     Machine::new(program).run()
 }
 
-/// Evaluates one independently validated effect Core program.
+/// Evaluates one compiler-validated effect Core program.
 pub fn evaluate_effect(program: &ValidatedEffectProgram) -> Result<Evaluation, RuntimeFailure> {
     Machine::new_effect(program).run()
 }

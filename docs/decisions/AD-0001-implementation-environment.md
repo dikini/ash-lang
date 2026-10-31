@@ -13,7 +13,7 @@ The first execution path is an interpreter for the functional Core language. It 
 
 Shared compiler components remain independent of execution backends. LLVM, MLIR, Cranelift, and other backend types must not appear in Core or its transformations. MLIR is a possible future lowering target, not an implementation-environment dependency.
 
-Safe Rust is required for semantic representations and compiler transformations. Unsafe Rust is permitted only in isolated runtime, FFI, or backend adapters whose invariants and verification are stated. Compiler phases use explicit types and validate their IR after construction, parsing, deserialization, and transformation.
+Safe Rust is required for semantic representations and compiler transformations. Unsafe Rust is permitted only in isolated runtime, FFI, or backend adapters whose invariants and verification are stated. Compiler phases use explicit types and validate their IR after construction, parsing, and transformation. A linked compiler-generated executable reconstructs the compiler-verified representation without repeating its semantic validation, as specified by [AD-0013](AD-0013-generated-native-bridges-and-program-builds.md).
 
 Ordinary x86-64 and ARM64 desktop and server systems are development hosts. The interpreter and runtime must remain suitable for application-class x86-64 and ARM64 hardware, including Raspberry Pi-class systems. Mobile hardware is a deployment consideration even when an operating-system policy or distribution agreement prevents a particular execution model. Microcontrollers are not an initial requirement.
 

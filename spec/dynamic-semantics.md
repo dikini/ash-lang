@@ -72,14 +72,17 @@ E-Program-Start :=
 
 `linked_program` includes the generated root around the dependency-ordered groups
 and `main ()` described in
-[Elaboration](elaboration.md). The second premise requires independent
-whole-program validation before evaluation. Neither premise performs module
-loading at runtime. The ordinary recursive-binding and application rules enter
-the linked groups and call `main`. Imports have no initialization step, and
-modules are not runtime values.
+[Elaboration](elaboration.md). The second premise is the compiler's independent
+whole-program validation before evaluation. For a generated executable, that
+proof precedes packaging; startup reconstructs the verified representation
+without repeating validation. Neither premise performs module loading at
+runtime. The ordinary recursive-binding and application rules enter the linked
+groups and call `main`. Imports have no initialization step, and modules are
+not runtime values.
 
-Native-binding admission checks the entries actually supplied against the
-original symbol facts of validated Core before Ash execution. It does not check
+Native-binding admission checks separately supplied entries against the original
+symbol facts of validated Core before Ash execution; a generated host sets up its
+compiler-established bridge associations. Neither checks
 that every possible native request has a binding; the empty supplied table
 satisfies this association check. When a native boundary is selected, invocation
 requires the entry for that exact original symbol. A missing selected entry is

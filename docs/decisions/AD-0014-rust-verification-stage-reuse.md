@@ -64,8 +64,8 @@ in its matching-compiler fingerprint. The tooling overlay therefore changes
 that candidate's identity even though its fingerprint algorithm and product
 sources are unchanged. Measurements must record the overlaid
 source/configuration identity and retain required native and embedded-image
-proof under the original product configuration separately. An adopted
-candidate requires matching compiler/native-image proof under its own
+execution evidence under the original product configuration separately. An adopted
+candidate requires matching compiler/native-image execution evidence under its own
 configuration; historical measurement binaries cannot substitute for it.
 
 ## Consequences
