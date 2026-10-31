@@ -146,7 +146,6 @@ enum DisposalOwner {
     ResolvedTreeAndCheckedTree,
     TypeTreeAndKindTree,
     CoreTreeAndResolvedTreeAndRegistryTree,
-    CoreTreeAndResolvedTreeAndRegistryTreeAndEvidenceTree,
     CheckedTreeAndSummaryTreeAndTransientWork,
     TypeTreeAndResolvedTreeAndRegistryTree,
     CoreTreeAndResolvedTreeAndRegistryTreeAndTransientWork,
@@ -241,9 +240,7 @@ define_kind_site_profiles! {
     FieldNativeBindingBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, Evaluation, Evaluation, TypeTreeAndResolvedTreeAndRegistryTree),
     FieldNativeProgramBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, Evaluation, Evaluation, CoreTreeAndResolvedTreeAndRegistryTree),
     // Network checking borrows linked facts and the Core/registry owners.
-    FieldNetworkValidationBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, CoreTreeAndResolvedTreeAndRegistryTree),
     FieldNetworkLinkedBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, EvidenceTree),
-    FieldNetworkCoreAndLinkedBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, CoreTreeAndResolvedTreeAndRegistryTreeAndEvidenceTree),
     // Actual module publication: summaries share only defining certificates;
     // checked code owners separately retain Core, canonical context and facts.
     FieldProviderEvidenceFactsBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, EvidenceValidation, EvidenceType, SummaryTree),
@@ -480,201 +477,8 @@ const KIND_SITES: &[KindSite] = &[
     // Generic acquisition/row replay and runtime roots retain existing owner categories.
     // Network carriers retain the original phase-specific owners and budgets.
     // N3 checker witnesses retain borrowed linked Core and validated interface carriers.
-    kind_site!("src/core/acknowledgement.rs::ConditionalAcknowledgement.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/acknowledgement.rs::ConditionalAcknowledgement.child_lookup", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/acknowledgement.rs::ConditionalAcknowledgement.child_removal", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/acknowledgement.rs::ConditionalAcknowledgement.linked", FieldNetworkLinkedBorrow),
-    kind_site!("src/core/acknowledgement.rs::ConditionalAcknowledgement.record_lookup", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/acknowledgement.rs::ConditionalAcknowledgement.record_update", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/acknowledgement.rs::ConditionalAcknowledgementCall.summary", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/install.rs::ConditionalInstallation.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/install.rs::ConditionalInstallation.entry", FieldNetworkValidationBorrow),
-    kind_site!("src/core/install.rs::ConditionalInstallation.finish", FieldNetworkValidationBorrow),
-    kind_site!("src/core/install.rs::ConditionalInstallation.insertion", FieldNetworkValidationBorrow),
-    kind_site!("src/core/install.rs::ConditionalInstallation.linked", FieldNetworkLinkedBorrow),
-    kind_site!("src/core/install.rs::ConditionalInstallation.lookup", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/install.rs::ConditionalInstallationCall.summary", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/install.rs::ConditionalInstallationCall.arguments", FieldNetworkValidationBorrow),
-    kind_site!("src/core/capture/network_ledger.rs::CheckedPlannedTransition.Acknowledgement.0", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/capture/network_ledger.rs::CheckedPlannedTransition.Closure.0", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/capture/network_ledger.rs::CheckedPlannedTransition.Retirement.0", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/capture/network_ledger.rs::CheckedSendCandidate.tail", FieldNetworkValidationBorrow),
-    kind_site!("src/core/capture/network_ledger.rs::CheckedSendCandidate.wrapper", FieldNetworkValidationBorrow),
-    kind_site!("src/core/capture/network_ledger.rs::ProvisionalCurrentLedger._registrations", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/capture/network_ledger.rs::SameFocusLedger.scope", FieldNetworkValidationBorrow),
-    kind_site!("src/core/capture/transition_observation.rs::TransitionCall.Acknowledgement.0", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/capture/transition_observation.rs::TransitionCall.Closure.0", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/capture/transition_observation.rs::TransitionCall.Retirement.0", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/closure.rs::ConditionalClosure.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/closure.rs::ConditionalClosure.linked", FieldNetworkLinkedBorrow),
-    kind_site!("src/core/closure.rs::ConditionalClosure.lookup", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/closure.rs::ConditionalClosure.update", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/closure.rs::ConditionalClosureCall.summary", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::CheckedRegistrationGraph.child_append", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::CheckedRegistrationGraph.flow", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::CheckedRegistrationGraph.linked", FieldNetworkLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::CheckedRegistrationGraph.lookup", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::CheckedRegistrationGraph.output_append", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::CheckedRegistrationGraph.update", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalInsertion.linked", FieldNetworkLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalLookup.linked", FieldNetworkLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalRecordOperation.graph", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalRecordRemoval.linked", FieldNetworkLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalRegistration.graph", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalRegistrationCall.summary", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalRemoval.linked", FieldNetworkLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalRootInitialization.linked", FieldNetworkLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalSpineInsertion.linked", FieldNetworkLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalWorkerInitialization.linked", FieldNetworkLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::RecordOperationGraph.linked", FieldNetworkLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::RecordOperationGraph.projection", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::RecordProjectionGraph.linked", FieldNetworkLinkedBorrow),
-    kind_site!("src/core/ledger_checker.rs::RegistrationFlowGraph.linked", FieldNetworkLinkedBorrow),
-    kind_site!("src/core/retirement.rs::ConditionalRetirement.append", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/retirement.rs::ConditionalRetirement.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/retirement.rs::ConditionalRetirement.linked", FieldNetworkLinkedBorrow),
-    kind_site!("src/core/retirement.rs::ConditionalRetirement.lookup", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/retirement.rs::ConditionalRetirement.removal", FieldNetworkCoreAndLinkedBorrow),
-    kind_site!("src/core/retirement.rs::ConditionalRetirementCall.summary", FieldNetworkCoreAndLinkedBorrow),
     kind_site!("src/eval/region.rs::PreparedBuffer.tuple_tail", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     // Actual arena, stored function and tuple views remain borrowed.
-    kind_site!("src/core/capture/network_ledger.rs::EncoderNomination.invocation", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::CodecCallShape.Decode.definition", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::CodecCallShape.Encode.definition", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalDecodeDriver.definition", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalDecodeDriver.invocation", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalReceiptDecode.driver", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalReceiptDecode.invocation", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalDecoder.append_byte", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalDecoder.definitions", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalDecoder.empty", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalDecoder.reader", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalEncoder.append_byte", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalEncoder.at", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalEncoder.definitions", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalEncoder.empty", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalEncoder.split", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalNaturalEnd.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalNaturalEnd.cursor_increments", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalNaturalEnd.definition", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalNaturalReader.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalNaturalReader.at", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalNaturalReader.digit", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalNaturalReader.end", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalNaturalReader.entry", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::ConditionalNaturalReader.step", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::NominatedCodecCall.shape", FieldNetworkValidationBorrow),
-    kind_site!("src/core/codec.rs::PrimitiveWitness.definition", FieldNetworkValidationBorrow),
-    kind_site!("src/core/acknowledgement.rs::ConditionalAcknowledgement.stages", FieldNetworkValidationBorrow),
-    kind_site!("src/core/acknowledgement.rs::ConditionalAcknowledgementCall.arguments", FieldNetworkValidationBorrow),
-    kind_site!("src/core/capture/network_ledger.rs::ProvisionalCurrentLedger._initialization", FieldNetworkValidationBorrow),
-    kind_site!("src/core/closure.rs::ConditionalClosure.stages", FieldNetworkValidationBorrow),
-    kind_site!("src/core/closure.rs::ConditionalClosureCall.arguments", FieldNetworkValidationBorrow),
-    kind_site!("src/core/driver.rs::CheckedDriverCall.argument", FieldNetworkValidationBorrow),
-    kind_site!("src/core/driver.rs::CheckedDriverCall.definition", FieldNetworkValidationBorrow),
-    kind_site!("src/core/driver.rs::CheckedReceiveCall.definition", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::CheckedCounterIncrement.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::CheckedPersistentTuple.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::CheckedRegistrationGraph.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::CheckedRegistrationGraph.success", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::CheckedStoredFunction.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalInitializationCall.graph", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalInsertion.graph", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalInsertion.model", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalLookup.graph", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalRecordRemoval.graph", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalRegistrationCall.arguments", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalRemoval.graph", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalRootInitialization.graph", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalSpineInsertion.graph", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalWorkerInitialization.graph", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConditionalOutputTail.construction", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConstructorApplication.arguments", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConstructorApplication.closure", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::ConstructorApplication.value", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::CoreInspection.program", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::InitializationGraph.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::InitializationGraph.children_empty", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::InitializationGraph.initializer", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::InitializationGraph.ledger", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::InitializationGraph.no_parent", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::InitializationGraph.open", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::InitializationGraph.outputs_empty", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::InitializationGraph.records_empty", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::InitializationGraph.records_more", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::InitializationGraph.root", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::InitializationGraph.root_record", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::InsertGraph.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::InsertGraph.definition", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::InsertGraph.empty", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::InsertGraph.prepend", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::InsertGraph.recursive_pair", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::InsertGraph.singleton", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::InsertModelView.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::LookupGraph.absent", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::LookupGraph.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::LookupGraph.comparator_pair", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::LookupGraph.comparison", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::LookupGraph.comparison_pair", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::LookupGraph.definition", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::LookupGraph.present_constructor", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::LookupGraph.present_value", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::LookupGraph.projection", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::LookupGraph.recursive_pair", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RecordOperationBranches.Lookup.present_closure", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RecordOperationBranches.Lookup.present_value", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RecordOperationBranches.Update.replaced", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RecordOperationBranches.Update.retained", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RecordOperationGraph.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RecordOperationGraph.branches", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RecordOperationGraph.comparator_pair", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RecordOperationGraph.comparison", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RecordOperationGraph.comparison_pair", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RecordOperationGraph.definition", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RecordOperationGraph.empty_result", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RecordOperationGraph.recursive_pair", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RecordProjectionGraph.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RecordProjectionGraph.definition", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RegistrationCounterGraph.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RegistrationCounterGraph.definition", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RegistrationCounterGraph.increment", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RegistrationCounterGraph.result", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RegistrationCounterGraph.successor", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RegistrationFlowGraph.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RegistrationFlowGraph.closed_result", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RegistrationFlowGraph.entry", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RegistrationFlowGraph.finish", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RegistrationFlowGraph.missing_result", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RegistrationSuccessGraph.child", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RegistrationSuccessGraph.counter", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RegistrationSuccessGraph.output", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RegistrationSuccessGraph.parent", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RegistrationSuccessGraph.replacement", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RegistrationSuccessGraph.status_closure", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RegistrationSuccessGraph.work_value", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RemovalGraph.arena", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RemovalGraph.comparator_pair", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RemovalGraph.comparison", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RemovalGraph.comparison_pair", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RemovalGraph.constructor", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RemovalGraph.constructor_pair", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RemovalGraph.constructor_value", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RemovalGraph.definition", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RemovalGraph.empty_pair", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RemovalGraph.empty_value", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RemovalGraph.found_value", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RemovalGraph.hit_pair", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RemovalGraph.missing_value", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RemovalGraph.projection", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RemovalGraph.recursive_pair", FieldNetworkValidationBorrow),
-    kind_site!("src/core/ledger_checker.rs::RemovalGraph.result_pair", FieldNetworkValidationBorrow),
-    kind_site!("src/core/retirement.rs::ConditionalRetirement.stages", FieldNetworkValidationBorrow),
-    kind_site!("src/core/retirement.rs::ConditionalRetirementCall.arguments", FieldNetworkValidationBorrow),
-    kind_site!("src/core/capture/control.rs::Analysis.worker_startup", FieldNetworkValidationBorrow),
-    kind_site!("src/core/capture/control.rs::WorkerNativeScope.scope", FieldNetworkValidationBorrow),
-    kind_site!("src/core/capture/control.rs::OriginalCodecScope.scope", FieldNetworkValidationBorrow),
-    kind_site!("src/core/capture/control.rs::WorkerStartup.native_scope", FieldNetworkValidationBorrow),
-    kind_site!("src/core/capture/control.rs::WorkerStartup.original_codec", FieldNetworkValidationBorrow),
     kind_site!("src/core/dialect.rs::CoreProgram.network_admissions", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::NetworkAdmission.entries", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::NetworkEntryAdmission.native_effects", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
@@ -685,9 +489,6 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/effect.rs::NetworkScopeNode.handle", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/region.rs::RegionBufferNode.operation", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/region.rs::RegionBufferOperation.Network.effect", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
-    kind_site!("src/core/validate.rs::NetworkNativeIdentityScope.native", FieldNetworkValidationBorrow),
-    kind_site!("src/core/validate.rs::NetworkNativeIdentityScope.native_effects", FieldNetworkValidationBorrow),
-    kind_site!("src/core/validate.rs::NetworkNativeIdentityScope.nodes", FieldNetworkValidationBorrow),
     kind_site!("src/core/validate.rs::Validator.linked", FieldNetworkLinkedBorrow),
     kind_site!("src/core/validate.rs::Validator.network_admissions", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
     kind_site!("src/core/validate/network.rs::NetworkBodyFacts.entries", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
@@ -5272,24 +5073,6 @@ fn reference_reaches_owner_with_aliases(
         {
             return false;
         }
-        if reference == "LedgerArena"
-            && current.source == "src/core/ledger_checker.rs"
-            && !aliases.contains_key(reference)
-        {
-            assert!(
-                declarations.get(reference).is_none(),
-                "a shadowing LedgerArena carrier needs an explicit path"
-            );
-            return resolve(
-                current,
-                "crate::core::ledger_checker::LedgerArena",
-                aliases,
-                declarations,
-                owners,
-                visited,
-                true,
-            );
-        }
         if let Some((prefix, suffix)) = reference.split_once("::")
             && !matches!(prefix, "crate" | "self" | "super")
             && let Some(target) = aliases.get(prefix)
@@ -5328,85 +5111,6 @@ fn reference_reaches_owner_with_aliases(
             })
         });
         if let Some(absolute) = absolute {
-            if absolute == "core::ledger_checker::LedgerArena" {
-                // This trait is a borrowed view of exactly these two Core
-                // program carriers. Follow both real implementations through
-                // the existing alias/ownership resolver; an unregistered
-                // implementation must fail closed instead of hiding Type.
-                static VERIFIED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-                VERIFIED.get_or_init(|| {
-                    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-                    let mut paths = Vec::new();
-                    collect_production_rust_sources(&root.join("src"), &mut paths);
-                    paths.sort();
-                    let mut implementations = Vec::new();
-                    for path in paths {
-                        let source =
-                            fs::read_to_string(&path).expect("production source is readable");
-                        let tokens = production_rust_code_tokens(&source);
-                        assert!(
-                            !tokens
-                                .windows(2)
-                                .any(|window| window == ["LedgerArena", "as"]),
-                            "LedgerArena aliases must not hide implementations"
-                        );
-                        let relative = path
-                            .strip_prefix(root)
-                            .unwrap()
-                            .to_string_lossy()
-                            .replace('\\', "/");
-                        implementations.extend(tokens.windows(2).enumerate().filter_map(
-                            |(index, window)| {
-                                if window != ["LedgerArena", "for"] {
-                                    return None;
-                                }
-                                let target = tokens[index + 2..]
-                                    .iter()
-                                    .take_while(|token| !matches!(**token, "{" | "where"))
-                                    .copied()
-                                    .collect::<String>();
-                                Some((relative.clone(), target))
-                            },
-                        ));
-                    }
-                    implementations.sort();
-                    assert_eq!(
-                        implementations,
-                        [
-                            (
-                                "src/core/ledger_checker.rs".to_owned(),
-                                "ValidatedEffectProgram".to_owned()
-                            ),
-                            (
-                                "src/core/ledger_checker.rs".to_owned(),
-                                "super::UnvalidatedEffectProgram".to_owned()
-                            ),
-                        ],
-                        "ledger arena implementations must remain inventoried"
-                    );
-                });
-                let mut validated_branch = visited.clone();
-                let validated = resolve(
-                    current,
-                    "crate::core::effect::ValidatedEffectProgram",
-                    aliases,
-                    declarations,
-                    owners,
-                    &mut validated_branch,
-                    true,
-                );
-                let mut unchecked_branch = visited.clone();
-                let unchecked = resolve(
-                    current,
-                    "crate::core::effect::UnvalidatedEffectProgram",
-                    aliases,
-                    declarations,
-                    owners,
-                    &mut unchecked_branch,
-                    true,
-                );
-                return validated | unchecked;
-            }
             let segments = absolute.split("::").collect::<Vec<_>>();
             for prefix_length in (1..=segments.len()).rev() {
                 let binding = segments[..prefix_length].join("::");
@@ -7803,11 +7507,11 @@ fn core_and_evaluator_keep_interface_evidence_outside_their_closed_inventories()
         .expect("Core validator source is inventoried")
         .1;
     let validator = production_rust_code_tokens(validator_source);
-    // The borrowed validator handoffs, including the conditional ledger-plan
-    // entry, and declaration-order reconstruction may name the linked interface capability.
+    // The borrowed validator handoffs and declaration-order reconstruction may
+    // name the linked interface capability.
     for (name, expected) in [
-        ("evidence_validation", 4),
-        ("ValidatedInterfaceProgram", 4),
+        ("evidence_validation", 3),
+        ("ValidatedInterfaceProgram", 3),
         ("implementation_facts", 1),
     ] {
         assert_eq!(

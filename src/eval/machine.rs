@@ -612,15 +612,6 @@ enum Frame {
         owner: ActivationKey,
         pending: NetworkReceivePending,
     },
-    // A sealed-and-empty observation is tentative until its selected-region
-    // reply is actually constructed and returned on this worker.
-    NetworkEndCommit {
-        network: ActivationKey,
-        side: super::network_transport::Side,
-        receive_site: NodeId,
-        generation: u64,
-        module: crate::module::ModuleId,
-    },
     NetworkWatchCommit {
         owner: ActivationKey,
         module: crate::module::ModuleId,
@@ -753,7 +744,6 @@ enum Frame {
     // only its actual return retires the store's outstanding root count.
     RetainedRootCompletion {
         key: ActivationKey,
-        origin: RetainedRootOrigin,
     },
     Bind {
         binder: BinderId,
@@ -783,7 +773,6 @@ enum Frame {
         environment: Environment,
     },
     Match {
-        site: NodeId,
         arms: Box<[CoreMatchArm]>,
         environment: Environment,
     },
@@ -1172,46 +1161,6 @@ pub struct Machine<'runtime> {
     allocation_frames: AllocationFrameObservations,
 }
 
-// A restored continuation is a separate root occurrence. Only a freshly
-// entered root carries the actual linked root and handler coordinates.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RetainedRootOrigin {
-    Entered {
-        root: NodeId,
-        handler: NodeId,
-        delivery: Option<DeliveryRootIdentity>,
-    },
-    Restored,
-}
-
-// A route is only a future consumer of the checker's all-context relation.
-// Startup currently installs none; it never grants completion or retirement.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ProcessingRoute {
-    entry: BinderId,
-    side: super::network_transport::Side,
-    receive: NodeId,
-    message_match: NodeId,
-    arm: usize,
-    root: NodeId,
-    handler: NodeId,
-    store: NodeId,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct DeliveryRootIdentity {
-    network: ActivationKey,
-    side: super::network_transport::Side,
-    identity: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DeliveryRootProgress {
-    Unlinked,
-    Active { store: ActivationKey, root: NodeId },
-    MarkerReturned { store: ActivationKey, root: NodeId },
-}
-
 struct WorkerStartup {
     result: NodeId,
     entry: BinderId,
@@ -1220,125 +1169,12 @@ struct WorkerStartup {
     side: super::network_transport::Side,
     transport: super::network_transport::NetworkTransport,
     input: Option<Vec<u8>>,
-    deliveries: Vec<HeldDelivery>,
-    processing_route: Option<ProcessingRoute>,
-    processing_cut: Option<crate::core::dialect::NetworkProcessingCut>,
-    end_route: Option<crate::core::dialect::NetworkEndRoute>,
-    report_buffer: Vec<ReportedDelivery>,
-    next_delivery: u64,
-    receive_generation: Option<u64>,
-    end_observation: Option<EndObservation>,
-}
-
-// These coordinates remain worker-local observations. They do not grant
-// completion or authorize finish_receive.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct EndObservation {
-    network: ActivationKey,
-    side: super::network_transport::Side,
-    receive_site: NodeId,
-    result_location: Location,
-    matched: DeliveryMatch,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct HeldDelivery {
-    identity: u64,
-    network: ActivationKey,
-    side: super::network_transport::Side,
-    receive_site: NodeId,
-    // Worker-local only. Cleared before the record crosses to its owner.
-    result_location: Option<Location>,
-    matched: DeliveryMatch,
-    root_progress: DeliveryRootProgress,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DeliveryMatch {
-    Unobserved,
-    Observed { site: NodeId, arm: usize },
-    Ambiguous,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ReportedDelivery {
-    identity: u64,
-    network: ActivationKey,
-    side: super::network_transport::Side,
-    receive_site: NodeId,
-}
-
-impl WorkerStartup {
-    // The cut is a separate checked input, not inferred from the route or
-    // from an empty Store. Ambiguity leaves every delivery held.
-    fn processing_cut_candidate(&self, store_node: NodeId, store: ActivationKey) -> Option<usize> {
-        let cut = self.processing_cut?;
-        let route = self.processing_route?;
-        let expected = cut.route;
-        let side = match self.side {
-            super::network_transport::Side::A => 0,
-            super::network_transport::Side::B => 1,
-        };
-        if expected.entry != self.entry
-            || expected.side != side
-            || expected.store != store_node
-            || route.entry != expected.entry
-            || route.side != self.side
-            || route.receive != expected.receive
-            || route.message_match != expected.message_match
-            || route.arm != expected.arm
-            || route.root != expected.root
-            || route.handler != expected.handler
-            || route.store != expected.store
-            || self.input.is_some()
-        {
-            return None;
-        }
-        let mut found = None;
-        for (index, held) in self.deliveries.iter().enumerate() {
-            if held.network == self.network
-                && held.side == self.side
-                && held.receive_site == expected.receive
-                && held.matched
-                    == (DeliveryMatch::Observed {
-                        site: expected.message_match,
-                        arm: expected.arm,
-                    })
-                && held.root_progress
-                    == (DeliveryRootProgress::MarkerReturned {
-                        store,
-                        root: expected.root,
-                    })
-            {
-                if found.is_some() {
-                    return None;
-                }
-                found = Some(index);
-            }
-        }
-        found
-    }
-
-    fn delivery_report(&mut self) -> Vec<ReportedDelivery> {
-        debug_assert!(self.report_buffer.is_empty());
-        debug_assert!(self.report_buffer.capacity() >= self.deliveries.len());
-        for held in &self.deliveries {
-            self.report_buffer.push(ReportedDelivery {
-                identity: held.identity,
-                network: held.network,
-                side: held.side,
-                receive_site: held.receive_site,
-            });
-        }
-        std::mem::take(&mut self.report_buffer)
-    }
 }
 
 struct NetworkReceivePending {
     guard: super::network_transport::ReceiveGuard,
     module: crate::module::ModuleId,
     kind: super::network_transport::EnvelopeKind,
-    site: NodeId,
 }
 
 struct PendingNetworkWatch {
@@ -1364,14 +1200,12 @@ impl Drop for PendingNetworkWatch {
     }
 }
 
-// The owner must retain this report and its backing until independently
-// checked delivery completion and endpoint settlement are established.
+// The test exit retains the transport until local teardown has completed.
 #[cfg(test)]
 struct WorkerExit {
     network: ActivationKey,
     side: super::network_transport::Side,
     transport: super::network_transport::NetworkTransport,
-    deliveries: Vec<ReportedDelivery>,
 }
 
 #[cfg(test)]
@@ -1380,7 +1214,6 @@ impl fmt::Debug for WorkerExit {
         f.debug_struct("WorkerExit")
             .field("network", &self.network)
             .field("side", &self.side)
-            .field("deliveries", &self.deliveries)
             .finish_non_exhaustive()
     }
 }
@@ -1393,10 +1226,6 @@ struct WorkerFailure {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::result_large_err,
-    reason = "The test preserves the owned worker exit on failure"
-)]
 fn finish_worker_exit(
     disposal: &disposal::Scope,
     execution: Result<(), RuntimeFailure>,
@@ -1434,7 +1263,6 @@ impl fmt::Debug for WorkerStartup {
 // does not itself attest that endpoints or backing have settled.
 #[cfg(test)]
 #[expect(
-    clippy::result_large_err,
     clippy::too_many_arguments,
     reason = "The test retains each worker startup input and owned failure report"
 )]
@@ -1451,7 +1279,6 @@ fn run_network_worker(
     bindings: Option<crate::foreign::source_bindings::SourceNativeBindings>,
 ) -> Result<WorkerExit, WorkerFailure> {
     let disposal = disposal::Scope::enter();
-    let mut deliveries = Vec::new();
     let execution = (|| {
         let mut machine = Machine::new_network_worker(
             program,
@@ -1469,11 +1296,6 @@ fn run_network_worker(
         if evaluation.is_err() {
             machine.rollback_pending_network_watches();
         }
-        let worker = machine
-            .worker
-            .as_mut()
-            .ok_or(RuntimeFailure::InvalidControlState)?;
-        deliveries = worker.delivery_report();
         drop(machine);
         let evaluation = evaluation?;
         if !matches!(evaluation.value, Value::Unit) {
@@ -1486,7 +1308,6 @@ fn run_network_worker(
         network,
         side,
         transport: transport.clone(),
-        deliveries,
     };
     finish_worker_exit(&disposal, execution, exit)
 }
@@ -1501,9 +1322,6 @@ struct CarrierInput {
     parameter: TypeVariableId,
     network: ActivationKey,
     side: super::network_transport::Side,
-    processing_route: Option<ProcessingRoute>,
-    processing_cut: Option<crate::core::dialect::NetworkProcessingCut>,
-    end_route: Option<crate::core::dialect::NetworkEndRoute>,
     transport: super::network_transport::NetworkTransport,
     input: Vec<u8>,
     bindings: Option<crate::foreign::source_bindings::SourceNativeBindings>,
@@ -1518,15 +1336,8 @@ enum CarrierPhase {
 }
 
 enum CarrierReport {
-    Returned(Vec<ReportedDelivery>),
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "terminal failure retains its report and delivery support on the carrier"
-        )
-    )]
-    Failed(RuntimeFailure, Vec<ReportedDelivery>),
+    Returned,
+    Failed,
 }
 
 struct CarrierState {
@@ -1685,7 +1496,7 @@ impl CarrierGroup {
     }
 
     // Both carriers retain their local roots until the owner has observed
-    // completed endpoints, empty delivery reports and no transport users.
+    // normal worker returns, completed endpoints, and no transport users.
     fn settle(&mut self) -> Result<(), super::network_transport::Failure> {
         use super::network_transport::Failure;
         let mut state = self.gate.lock();
@@ -1696,9 +1507,15 @@ impl CarrierGroup {
                 .wait(state)
                 .map_err(|_| Failure::IncompleteTeardown)?;
         }
-        if state.phase != CarrierPhase::Committed || state.release_requested
-            || state.reports.iter().any(|report| !matches!(report, Some(CarrierReport::Returned(deliveries)) if deliveries.is_empty()))
-        { return Err(Failure::IncompleteTeardown); }
+        if state.phase != CarrierPhase::Committed
+            || state.release_requested
+            || state
+                .reports
+                .iter()
+                .any(|report| !matches!(report, Some(CarrierReport::Returned)))
+        {
+            return Err(Failure::IncompleteTeardown);
+        }
         self.transport.ready_for_settlement()?;
         state.release_requested = true;
         self.gate.changed.notify_all();
@@ -1775,8 +1592,7 @@ impl Drop for CarrierGroup {
 static TEST_NATIVE_FAILURE_ENABLED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 #[cfg(test)]
-static TEST_NATIVE_FAILURE_REPORT: std::sync::Mutex<Option<(usize, usize, bool, bool)>> =
-    std::sync::Mutex::new(None);
+static TEST_NATIVE_FAILURE_REPORT: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
 
 #[cfg(test)]
 std::thread_local! {
@@ -1792,11 +1608,7 @@ fn run_network_carrier(input: CarrierInput, gate: triomphe::Arc<CarrierGate>) {
         CarrierPhase::Aborted => return,
         CarrierPhase::Terminal => {
             input.transport.fail();
-            gate.report(
-                input.side,
-                CarrierReport::Failed(RuntimeFailure::InvalidControlState, Vec::new()),
-                true,
-            );
+            gate.report(input.side, CarrierReport::Failed, true);
             loop {
                 std::thread::park();
                 std::hint::black_box((&input, &gate));
@@ -1812,9 +1624,6 @@ fn run_network_carrier(input: CarrierInput, gate: triomphe::Arc<CarrierGate>) {
         parameter,
         network,
         side,
-        processing_route,
-        processing_cut,
-        end_route,
         transport,
         input,
         bindings,
@@ -1832,46 +1641,22 @@ fn run_network_carrier(input: CarrierInput, gate: triomphe::Arc<CarrierGate>) {
         input,
     ) {
         Ok(machine) => machine,
-        Err(failure) => {
+        Err(_) => {
             transport.fail();
-            gate.report(side, CarrierReport::Failed(failure, Vec::new()), true);
+            gate.report(side, CarrierReport::Failed, true);
             return;
         }
     };
     machine.source_bindings = bindings.as_ref();
-    if let Some(worker) = machine.worker.as_mut() {
-        worker.processing_route = processing_route;
-        worker.processing_cut = processing_cut;
-        worker.end_route = end_route;
-    }
     let evaluation = machine.run_loop();
     if evaluation.is_err() {
         machine.rollback_pending_network_watches();
     }
-    let deliveries = match machine.worker.as_mut() {
-        Some(worker) => worker.delivery_report(),
-        None => {
-            transport.fail();
-            gate.report(
-                side,
-                CarrierReport::Failed(RuntimeFailure::InvalidControlState, Vec::new()),
-                true,
-            );
-            loop {
-                std::thread::park();
-                std::hint::black_box((&machine, &bindings));
-            }
-        }
-    };
     let evaluation = match evaluation {
         Ok(evaluation) if matches!(evaluation.value, Value::Unit) => Some(evaluation),
         Ok(evaluation) => {
             transport.fail();
-            gate.report(
-                side,
-                CarrierReport::Failed(RuntimeFailure::InvalidControlState, deliveries),
-                true,
-            );
+            gate.report(side, CarrierReport::Failed, true);
             loop {
                 std::thread::park();
                 std::hint::black_box((&machine, &bindings, &evaluation));
@@ -1882,36 +1667,18 @@ fn run_network_carrier(input: CarrierInput, gate: triomphe::Arc<CarrierGate>) {
             let failure = disposal.finish::<()>(Err(failure)).unwrap_err();
             #[cfg(test)]
             if TEST_NATIVE_CALLBACK_FAILED.with(|failed| failed.get()) {
-                let held = machine
-                    .worker
-                    .as_ref()
-                    .and_then(|worker| worker.deliveries.first());
-                let local = machine
-                    .worker
-                    .as_ref()
-                    .map_or(0, |worker| worker.deliveries.len());
-                let same = held.zip(deliveries.first()).is_some_and(|(held, report)| {
-                    held.identity == report.identity
-                        && held.network == report.network
-                        && held.side == report.side
-                        && held.receive_site == report.receive_site
-                        && held.result_location.is_some()
-                });
-                *TEST_NATIVE_FAILURE_REPORT.lock().unwrap() = Some((
-                    local,
-                    deliveries.len(),
-                    matches!(failure, RuntimeFailure::ForeignBinding),
-                    same,
-                ));
+                *TEST_NATIVE_FAILURE_REPORT.lock().unwrap() = Some(
+                    machine.worker.is_some() && matches!(failure, RuntimeFailure::ForeignBinding),
+                );
             }
-            gate.report(side, CarrierReport::Failed(failure, deliveries), true);
+            gate.report(side, CarrierReport::Failed, true);
             loop {
                 std::thread::park();
-                std::hint::black_box((&machine, &bindings));
+                std::hint::black_box((&machine, &bindings, &failure));
             }
         }
     };
-    gate.report(side, CarrierReport::Returned(deliveries), false);
+    gate.report(side, CarrierReport::Returned, false);
     if !gate.wait_for_release() {
         loop {
             std::thread::park();
@@ -2049,20 +1816,12 @@ impl<'runtime> Machine<'runtime> {
             side,
             transport,
             input: Some(input),
-            deliveries: Vec::new(),
-            processing_route: None,
-            processing_cut: None,
-            end_route: None,
-            report_buffer: Vec::new(),
-            next_delivery: 0,
-            receive_generation: Some(0),
-            end_observation: None,
         });
         Ok(machine)
     }
 
     fn run(mut self) -> Result<Evaluation, RuntimeFailure> {
-        // Worker exits must preserve receiver-held obligations for the owner.
+        // Worker execution is owned by the carrier lifecycle.
         if self.worker.is_some() {
             return Err(RuntimeFailure::InvalidControlState);
         }
@@ -2366,43 +2125,7 @@ impl<'runtime> Machine<'runtime> {
             .ok_or(RuntimeFailure::ResourceCapacity)?;
         let input_a = self.copy_network_input(&first)?;
         let input_b = self.copy_network_input(&second)?;
-        for (side, entry) in admission.entries.iter().enumerate() {
-            if let Some(cut) = entry.processing_cut
-                && entry.processing_route != Some(cut.route)
-            {
-                return Err(RuntimeFailure::InvalidControlState);
-            }
-            if let Some(route) = entry.processing_route {
-                charge_effect_work(&mut self.instantiation_work, 9, RuntimePhase::Acquisition)?;
-                if route.owner != node
-                    || route.entry != entry.binder
-                    || route.side != side
-                    || [
-                        route.owner,
-                        route.receive,
-                        route.message_match,
-                        route.root,
-                        route.handler,
-                        route.store,
-                    ]
-                    .into_iter()
-                    .any(|site| program.node(site).is_none())
-                {
-                    return Err(RuntimeFailure::InvalidControlState);
-                }
-            }
-            if let Some(end) = entry.end_route {
-                charge_effect_work(&mut self.instantiation_work, 6, RuntimePhase::Acquisition)?;
-                if end.owner != node
-                    || end.entry != entry.binder
-                    || end.side != side
-                    || [end.owner, end.receive, end.end_match, end.finish]
-                        .into_iter()
-                        .any(|site| program.node(site).is_none())
-                {
-                    return Err(RuntimeFailure::InvalidControlState);
-                }
-            }
+        for entry in &admission.entries {
             self.check_network_native_support(&program, entry, activation)?;
         }
         let bindings_a = self
@@ -2435,20 +2158,6 @@ impl<'runtime> Machine<'runtime> {
             parameter: admission.entries[index].parameter,
             network: activation,
             side,
-            processing_route: admission.entries[index].processing_route.map(|route| {
-                ProcessingRoute {
-                    entry: route.entry,
-                    side,
-                    receive: route.receive,
-                    message_match: route.message_match,
-                    arm: route.arm,
-                    root: route.root,
-                    handler: route.handler,
-                    store: route.store,
-                }
-            }),
-            processing_cut: admission.entries[index].processing_cut,
-            end_route: admission.entries[index].end_route,
             transport: transport.clone(),
             input: bytes,
             bindings,
@@ -2579,7 +2288,7 @@ impl<'runtime> Machine<'runtime> {
 
     pub(super) fn interpret_network_receive(
         &mut self,
-        site: NodeId,
+        _site: NodeId,
         owner: ActivationKey,
         effect: &EffectInstance,
         operation: OperationId,
@@ -2606,20 +2315,6 @@ impl<'runtime> Machine<'runtime> {
         let (side, transport) = (worker.side, worker.transport.clone());
         let module = effect.effect().module();
         charge_runtime_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
-        let worker = self
-            .worker
-            .as_mut()
-            .expect("authenticated worker remains present");
-        worker.end_observation = None;
-        let Some(generation) = worker
-            .receive_generation
-            .and_then(|current| current.checked_add(1))
-        else {
-            // Exhaustion permanently invalidates every pending observation.
-            worker.receive_generation = None;
-            return self.begin_network_failure(owner, module, 6, Failure::Refused);
-        };
-        worker.receive_generation = Some(generation);
         match transport.reserve_receive(side) {
             Receive::Message(mut guard) => {
                 let sender = match side {
@@ -2643,7 +2338,6 @@ impl<'runtime> Machine<'runtime> {
                         guard,
                         module,
                         kind,
-                        site,
                     },
                 });
                 self.invoke_region_allocate(
@@ -2660,24 +2354,11 @@ impl<'runtime> Machine<'runtime> {
                 crate::types::ConstructorId::new(crate::types::NominalTypeId::new(module, 6), 1),
                 None,
             ),
-            Receive::End => {
-                reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
-                self.frames.push(Frame::NetworkEndCommit {
-                    network: activation,
-                    side,
-                    receive_site: site,
-                    generation,
-                    module,
-                });
-                self.begin_network_reply(
-                    owner,
-                    crate::types::ConstructorId::new(
-                        crate::types::NominalTypeId::new(module, 6),
-                        2,
-                    ),
-                    None,
-                )
-            }
+            Receive::End => self.begin_network_reply(
+                owner,
+                crate::types::ConstructorId::new(crate::types::NominalTypeId::new(module, 6), 2),
+                None,
+            ),
             Receive::Busy => self.begin_network_failure(owner, module, 6, Failure::Refused),
             Receive::Failed(failure) => self.begin_network_failure(owner, module, 6, failure),
         }
@@ -2799,51 +2480,16 @@ impl<'runtime> Machine<'runtime> {
         {
             return Err(RuntimeFailure::InvalidControlState);
         }
-        let side_index = match worker.side {
-            super::network_transport::Side::A => 0,
-            super::network_transport::Side::B => 1,
-        };
-        let admitted = worker.end_route.is_some_and(|route| {
-            route.entry == worker.entry
-                && route.side == side_index
-                && route.finish == site
-                && worker.receive_generation.is_some()
-                && worker.deliveries.is_empty()
-                && worker.end_observation.is_some_and(|end| {
-                    end.network == activation
-                        && end.side == worker.side
-                        && end.receive_site == route.receive
-                        && end.matched
-                            == (DeliveryMatch::Observed {
-                                site: route.end_match,
-                                arm: route.arm,
-                            })
-                })
-        });
-        if !admitted {
-            return self.begin_network_failure(
-                owner,
-                effect.effect().module(),
-                7,
-                super::network_transport::Failure::Refused,
-            );
-        }
         let (side, transport) = (worker.side, worker.transport.clone());
         match transport.finish_receive(side) {
-            Ok(()) => {
-                self.worker
-                    .as_mut()
-                    .ok_or(RuntimeFailure::InvalidControlState)?
-                    .end_observation = None;
-                self.begin_network_reply(
-                    owner,
-                    crate::types::ConstructorId::new(
-                        crate::types::NominalTypeId::new(effect.effect().module(), 7),
-                        0,
-                    ),
-                    None,
-                )
-            }
+            Ok(()) => self.begin_network_reply(
+                owner,
+                crate::types::ConstructorId::new(
+                    crate::types::NominalTypeId::new(effect.effect().module(), 7),
+                    0,
+                ),
+                None,
+            ),
             Err(failure) => self.begin_network_failure(owner, effect.effect().module(), 7, failure),
         }
     }
@@ -3156,59 +2802,8 @@ impl<'runtime> Machine<'runtime> {
         value: &Value,
     ) -> Result<bool, RuntimeFailure> {
         match self.frames.last() {
-            Some(Frame::Match { .. }) if matches!(value, Value::Location(_)) => {
-                let worker = self
-                    .worker
-                    .as_ref()
-                    .ok_or(RuntimeFailure::InvalidControlState)?;
-                let count = worker
-                    .deliveries
-                    .len()
-                    .saturating_mul(2)
-                    .saturating_add(usize::from(worker.end_observation.is_some()));
-                charge_runtime_work(
-                    &mut self.instantiation_work,
-                    count,
-                    RuntimePhase::Evaluation,
-                )?;
-                Ok(true)
-            }
-            Some(Frame::NetworkEndCommit {
-                network,
-                side,
-                module,
-                ..
-            }) => {
-                let network = *network;
-                let side = *side;
-                let module = *module;
-                charge_runtime_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
-                let worker = self
-                    .worker
-                    .as_ref()
-                    .ok_or(RuntimeFailure::InvalidControlState)?;
-                let Value::Location(location) = value else {
-                    return Err(RuntimeFailure::InvalidControlState);
-                };
-                let expected = crate::types::ConstructorId::new(
-                    crate::types::NominalTypeId::new(module, 6),
-                    2,
-                );
-                let fields = self
-                    .heap
-                    .get(*location)
-                    .and_then(|cell| cell.stored_fields());
-                if worker.network != network
-                    || worker.side != side
-                    || !matches!(fields, Some([Value::ConstructorTag(tag)]) if *tag == expected)
-                {
-                    return Err(RuntimeFailure::InvalidControlState);
-                }
-                Ok(true)
-            }
-            Some(Frame::RetainedRootCompletion { key, origin }) => {
+            Some(Frame::RetainedRootCompletion { key, .. }) => {
                 let key = *key;
-                let origin = *origin;
                 // The marker remains owned by the worker until every
                 // fallible lookup and the later scan have been paid for.
                 charge_effect_work(
@@ -3228,41 +2823,6 @@ impl<'runtime> Machine<'runtime> {
                     .active_roots
                     .checked_sub(1)
                     .ok_or(RuntimeFailure::InvalidControlState)?;
-                if let RetainedRootOrigin::Entered {
-                    root,
-                    delivery: Some(identity),
-                    ..
-                } = origin
-                {
-                    let worker = self
-                        .worker
-                        .as_ref()
-                        .ok_or(RuntimeFailure::InvalidControlState)?;
-                    let count = worker.deliveries.len();
-                    charge_runtime_work(
-                        &mut self.instantiation_work,
-                        count.saturating_mul(2),
-                        RuntimePhase::Access,
-                    )?;
-                    let worker = self.worker.as_ref().expect("worker remains in place");
-                    let matches = worker
-                        .deliveries
-                        .iter()
-                        .filter(|held| {
-                            held.identity == identity.identity
-                                && held.network == identity.network
-                                && held.side == identity.side
-                                && held.root_progress
-                                    == (DeliveryRootProgress::Active { store: key, root })
-                        })
-                        .count();
-                    if worker.network != identity.network
-                        || worker.side != identity.side
-                        || matches != 1
-                    {
-                        return Err(RuntimeFailure::InvalidControlState);
-                    }
-                }
                 Ok(true)
             }
             Some(Frame::RegionAllocated {
@@ -3315,8 +2875,7 @@ impl<'runtime> Machine<'runtime> {
                 }
                 Ok(true)
             }
-            Some(Frame::ResourceBoundary { node, key, payload }) => {
-                let node = *node;
+            Some(Frame::ResourceBoundary { key, payload, .. }) => {
                 let key = *key;
                 if let ResourcePayload::Store(store) = payload {
                     charge_effect_work(
@@ -3329,21 +2888,6 @@ impl<'runtime> Machine<'runtime> {
                         || store.slots.iter().any(|slot| slot.continuation.is_some())
                     {
                         return Err(RuntimeFailure::InvalidControlState);
-                    }
-                    if let Some(worker) = self.worker.as_ref()
-                        && worker.processing_cut.is_some()
-                    {
-                        let count = worker.deliveries.len();
-                        charge_runtime_work(
-                            &mut self.instantiation_work,
-                            count.saturating_mul(3),
-                            RuntimePhase::Cleanup,
-                        )?;
-                        let _ = self
-                            .worker
-                            .as_ref()
-                            .expect("worker remains in place")
-                            .processing_cut_candidate(node, key);
                     }
                 }
                 self.live_resources
@@ -3517,93 +3061,13 @@ impl<'runtime> Machine<'runtime> {
                 self.begin_network_reply(owner, result, Some(value))?;
             }
             Frame::NetworkReceiveCommit { owner, pending } => {
-                let Value::Location(result_location) = &value else {
+                if !matches!(&value, Value::Location(_)) {
                     return Err(RuntimeFailure::InvalidControlState);
-                };
-                // Pay both the local record and its later owner-safe report
-                // projection before the transport head can be committed.
-                charge_runtime_work(&mut self.instantiation_work, 10, RuntimePhase::Access)?;
-                let module = pending.module;
-                let worker = self
-                    .worker
-                    .as_mut()
-                    .ok_or(RuntimeFailure::InvalidControlState)?;
-                let Some(next) = worker.next_delivery.checked_add(1) else {
-                    drop(pending);
-                    return self.begin_network_failure(
-                        owner,
-                        module,
-                        6,
-                        super::network_transport::Failure::Refused,
-                    );
-                };
-                let Some(report_capacity) = worker.deliveries.len().checked_add(1) else {
-                    drop(pending);
-                    return self.begin_network_failure(
-                        owner,
-                        module,
-                        6,
-                        super::network_transport::Failure::Refused,
-                    );
-                };
-                if !worker.report_buffer.is_empty()
-                    || worker.deliveries.try_reserve(1).is_err()
-                    || worker.report_buffer.try_reserve(report_capacity).is_err()
-                {
-                    drop(pending);
-                    return self.begin_network_failure(
-                        owner,
-                        module,
-                        6,
-                        super::network_transport::Failure::Refused,
-                    );
                 }
-                // Reserve receiver-held responsibility before removing the FIFO
-                // head. A failed commit removes this unpublished reservation.
-                worker.deliveries.push(HeldDelivery {
-                    identity: next,
-                    network: worker.network,
-                    side: worker.side,
-                    receive_site: pending.site,
-                    result_location: Some(*result_location),
-                    matched: DeliveryMatch::Unobserved,
-                    root_progress: DeliveryRootProgress::Unlinked,
-                });
                 if let Err(failure) = pending.guard.commit() {
-                    worker.deliveries.pop();
-                    return self.begin_network_failure(owner, module, 6, failure);
+                    return self.begin_network_failure(owner, pending.module, 6, failure);
                 }
-                worker.next_delivery = next;
                 self.apply(Transition::direct(Control::Return(value)));
-            }
-            Frame::NetworkEndCommit {
-                network,
-                side,
-                receive_site,
-                generation,
-                ..
-            } => {
-                if !preflighted {
-                    return Err(RuntimeFailure::InvalidControlState);
-                }
-                let Value::Location(result_location) = value else {
-                    return Err(RuntimeFailure::InvalidControlState);
-                };
-                let worker = self.worker.as_mut().expect("preflight checked worker");
-                worker.end_observation = if worker.receive_generation == Some(generation) {
-                    Some(EndObservation {
-                        network,
-                        side,
-                        receive_site,
-                        result_location,
-                        matched: DeliveryMatch::Unobserved,
-                    })
-                } else {
-                    None
-                };
-                self.apply(Transition::direct(Control::Return(Value::Location(
-                    result_location,
-                ))));
             }
             Frame::NetworkWatchCommit {
                 owner,
@@ -3631,49 +3095,6 @@ impl<'runtime> Machine<'runtime> {
             }
             Frame::NetworkFailureReply { owner, result } => {
                 self.begin_network_reply(owner, result, Some(value))?
-            }
-            Frame::Match {
-                site,
-                arms,
-                environment,
-            } if self.worker.is_some() => {
-                let location = match &value {
-                    Value::Location(location) => Some(*location),
-                    _ => None,
-                };
-                let (transition, arm) =
-                    return_match_selected(arms, environment, value, &self.heap)?;
-                if let Some(location) = location {
-                    let worker = self
-                        .worker
-                        .as_mut()
-                        .ok_or(RuntimeFailure::InvalidControlState)?;
-                    let matches = worker
-                        .deliveries
-                        .iter()
-                        .filter(|held| held.result_location == Some(location))
-                        .count();
-                    if let Some(end) = &mut worker.end_observation
-                        && end.result_location == location
-                    {
-                        end.matched = if matches == 0 && end.matched == DeliveryMatch::Unobserved {
-                            DeliveryMatch::Observed { site, arm }
-                        } else {
-                            DeliveryMatch::Ambiguous
-                        };
-                    }
-                    for held in &mut worker.deliveries {
-                        if held.result_location == Some(location) {
-                            held.matched =
-                                if matches == 1 && held.matched == DeliveryMatch::Unobserved {
-                                    DeliveryMatch::Observed { site, arm }
-                                } else {
-                                    DeliveryMatch::Ambiguous
-                                };
-                        }
-                    }
-                }
-                self.apply(transition);
             }
             Frame::WorkerInput {
                 entry,
@@ -4012,7 +3433,7 @@ impl<'runtime> Machine<'runtime> {
                     },
                     _ => return Err(RuntimeFailure::InvalidControlState),
                 };
-                self.begin_retained_root(node, handler, key, environment)?;
+                self.begin_retained_root(handler, key, environment)?;
             }
             Frame::ContinueStore { node, environment } => {
                 let Value::ResourceHandle(store) = value else {
@@ -4045,7 +3466,7 @@ impl<'runtime> Machine<'runtime> {
                 };
                 self.continue_retained(node, environment, store, key)?;
             }
-            Frame::ResourceBoundary { node, key, payload } => {
+            Frame::ResourceBoundary { key, payload, .. } => {
                 if !preflighted && let ResourcePayload::Store(store) = &payload {
                     charge_effect_work(
                         &mut self.instantiation_work,
@@ -4063,26 +3484,12 @@ impl<'runtime> Machine<'runtime> {
                     .live_resources
                     .checked_sub(1)
                     .ok_or(RuntimeFailure::InvalidControlState)?;
-                let candidate = if preflighted && matches!(&payload, ResourcePayload::Store(_)) {
-                    self.worker
-                        .as_ref()
-                        .and_then(|worker| worker.processing_cut_candidate(node, key))
-                } else {
-                    None
-                };
                 drop(payload);
-                if let Some(index) = candidate {
-                    self.worker
-                        .as_mut()
-                        .expect("candidate belongs to a worker")
-                        .deliveries
-                        .remove(index);
-                }
                 let result = value;
                 self.trace_effect(EffectTraceEvent::ResourceReleased(key.0));
                 self.apply(Transition::direct(Control::Return(result)));
             }
-            Frame::RetainedRootCompletion { key, origin } => {
+            Frame::RetainedRootCompletion { key, .. } => {
                 let index = if preflighted {
                     // Preflight checked the unique Store and paid this scan;
                     // no frame between it and this pop can mutate the Store.
@@ -4104,28 +3511,6 @@ impl<'runtime> Machine<'runtime> {
                     .active_roots
                     .checked_sub(1)
                     .ok_or(RuntimeFailure::InvalidControlState)?;
-                if let RetainedRootOrigin::Entered {
-                    root,
-                    delivery: Some(identity),
-                    ..
-                } = origin
-                {
-                    // The worker preflight checked and prepaid this exact lookup
-                    // before the owner marker was moved. This is only a marker
-                    // observation; cleanup and C3 do not follow from it.
-                    assert!(preflighted, "delivery marker requires worker preflight");
-                    let worker = self.worker.as_mut().expect("delivery marker has a worker");
-                    let held = worker
-                        .deliveries
-                        .iter_mut()
-                        .find(|held| {
-                            held.identity == identity.identity
-                                && held.network == identity.network
-                                && held.side == identity.side
-                        })
-                        .expect("preflighted delivery remains in place");
-                    held.root_progress = DeliveryRootProgress::MarkerReturned { store: key, root };
-                }
                 self.apply(Transition::direct(Control::Return(value)));
             }
             Frame::NativeInterpretBoundary { .. } => {
@@ -4570,67 +3955,8 @@ impl<'runtime> Machine<'runtime> {
         Ok(())
     }
 
-    // This only associates a held record with the actual marker; it is not a
-    // completion fact. The route must eventually come from linked validation.
-    fn processing_candidate(
-        &mut self,
-        root: NodeId,
-        handler: NodeId,
-        store_node: NodeId,
-    ) -> Result<Option<(usize, DeliveryRootIdentity)>, RuntimeFailure> {
-        let Some((route, count)) = self.worker.as_ref().and_then(|worker| {
-            worker
-                .processing_route
-                .map(|route| (route, worker.deliveries.len()))
-        }) else {
-            return Ok(None);
-        };
-        let worker = self.worker.as_ref().expect("route belongs to a worker");
-        if route.entry != worker.entry
-            || route.side != worker.side
-            || route.root != root
-            || route.handler != handler
-            || route.store != store_node
-        {
-            return Ok(None);
-        }
-        charge_runtime_work(
-            &mut self.instantiation_work,
-            count.saturating_mul(2),
-            RuntimePhase::Access,
-        )?;
-        let worker = self.worker.as_ref().expect("worker remains in place");
-        let mut found = None;
-        for (index, held) in worker.deliveries.iter().enumerate() {
-            if held.network == worker.network
-                && held.side == worker.side
-                && held.receive_site == route.receive
-                && held.matched
-                    == (DeliveryMatch::Observed {
-                        site: route.message_match,
-                        arm: route.arm,
-                    })
-                && held.root_progress == DeliveryRootProgress::Unlinked
-            {
-                if found.is_some() {
-                    return Ok(None);
-                }
-                found = Some((
-                    index,
-                    DeliveryRootIdentity {
-                        network: held.network,
-                        side: held.side,
-                        identity: held.identity,
-                    },
-                ));
-            }
-        }
-        Ok(found)
-    }
-
     fn begin_retained_root(
         &mut self,
-        root: NodeId,
         node: NodeId,
         key: ActivationKey,
         environment: Environment,
@@ -4643,14 +3969,12 @@ impl<'runtime> Machine<'runtime> {
             .ok_or(RuntimeFailure::InvalidControlState)?;
         let (body, handler_id) = (handler.body(), handler.id());
         let Frame::ResourceBoundary {
-            node: store_node,
             payload: ResourcePayload::Store(store),
             ..
         } = &self.frames[index]
         else {
             return Err(RuntimeFailure::InvalidControlState);
         };
-        let store_node = *store_node;
         let active = store.active_roots.checked_add(1).ok_or_else(|| {
             control_failure(
                 ResourceFailureCause::ConfiguredCapacity,
@@ -4659,7 +3983,6 @@ impl<'runtime> Machine<'runtime> {
                 Some(0),
             )
         })?;
-        let candidate = self.processing_candidate(root, node, store_node)?;
         reserve_control(&mut self.frames, 2, RuntimeResource::FrameStorage, false)?;
         reserve_control(&mut self.trace, 1, RuntimeResource::EffectTrace, false)?;
         if let Some(trace) = &mut self.effect_trace {
@@ -4673,19 +3996,7 @@ impl<'runtime> Machine<'runtime> {
             unreachable!("the checked store remains in place");
         };
         store.active_roots = active;
-        if let Some((delivery_index, _)) = candidate {
-            let worker = self.worker.as_mut().expect("candidate belongs to a worker");
-            worker.deliveries[delivery_index].root_progress =
-                DeliveryRootProgress::Active { store: key, root };
-        }
-        self.frames.push(Frame::RetainedRootCompletion {
-            key,
-            origin: RetainedRootOrigin::Entered {
-                root,
-                handler: node,
-                delivery: candidate.map(|(_, identity)| identity),
-            },
-        });
+        self.frames.push(Frame::RetainedRootCompletion { key });
         self.frames.push(Frame::HandlerBoundary {
             node,
             environment: environment.clone(),
@@ -4878,10 +4189,8 @@ impl<'runtime> Machine<'runtime> {
             body: some,
             environment,
         });
-        self.frames.push(Frame::RetainedRootCompletion {
-            key: activation,
-            origin: RetainedRootOrigin::Restored,
-        });
+        self.frames
+            .push(Frame::RetainedRootCompletion { key: activation });
         for frame in &captured.frames {
             if let Frame::HandlerBoundary { node, .. } = frame {
                 let handler = self
@@ -6469,7 +5778,7 @@ fn dispatch_entry(
             enter_tuple(tuple, environment)?
         }
         PureExprKind::Computation(PureComputation::Match(match_node)) => {
-            enter_match(node, match_node, environment)
+            enter_match(match_node, environment)
         }
         PureExprKind::Computation(PureComputation::NewtypeConversion(operation)) => {
             Transition::direct(Control::Evaluate(operation.child(), environment))
@@ -6592,15 +5901,10 @@ fn enter_tuple(
     ))
 }
 
-fn enter_match(
-    site: NodeId,
-    match_node: &crate::core::data::MatchNode,
-    environment: Environment,
-) -> Transition {
+fn enter_match(match_node: &crate::core::data::MatchNode, environment: Environment) -> Transition {
     Transition::suspend(
         Control::Evaluate(match_node.scrutinee(), environment.clone()),
         Frame::Match {
-            site,
             arms: match_node.arms().to_vec().into_boxed_slice(),
             environment,
         },
@@ -8498,7 +7802,8 @@ value ignored => {handler}
     }
 
     #[test]
-    fn linked_native_one_way_callback_failure_retains_delivery() {
+    fn linked_native_one_way_callback_failure_retains_carrier() {
+        // The callback runs on received bytes before the worker opens its Store.
         run_linked_native_one_way(false, true);
     }
 
@@ -8726,8 +8031,8 @@ value ignored => {handler}
             assert_eq!(MESSAGES.load(Ordering::SeqCst), 1);
             assert_eq!(
                 *TEST_NATIVE_FAILURE_REPORT.lock().unwrap(),
-                Some((1, 1, true, true)),
-                "the failed carrier retains and reports the same committed delivery"
+                Some(true),
+                "the failed carrier retains its machine after the native failure"
             );
             return;
         }
@@ -9052,7 +8357,7 @@ value ignored => {handler}
     }
 
     #[test]
-    fn worker_finish_receive_refuses_without_checked_completion() {
+    fn worker_finish_receive_refuses_while_peer_send_open() {
         use crate::eval::network_transport::{NetworkTransport, Receive, Side};
         let program = effect_program(concat!(
             "import @builtin.network as Network\n",
@@ -9077,8 +8382,42 @@ value ignored => {handler}
             vec![42],
             None,
         )
-        .expect("the unchecked finish result is a typed refusal");
+        .expect("an open peer send produces a typed refusal");
         assert!(matches!(transport.reserve_receive(Side::B), Receive::Empty));
+    }
+
+    #[test]
+    fn worker_finish_receive_accepts_closed_empty_transport_without_source_route() {
+        use crate::eval::network_transport::{NetworkTransport, Receive, Side};
+        let program = effect_program(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (worker, payload) = match Network.finish_receive worker {\n",
+            "Network.Ok => {\nlet _ = Network.try_send (worker, payload)\n()\n}\n",
+            "Network.Failed(_) => ()\n}\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (root, result, entry, parameter) = worker_fixture_entry(&program);
+        let transport = NetworkTransport::prepare(1).unwrap();
+        transport.finish_send(Side::B).unwrap();
+        run_network_worker(
+            program.shared(),
+            root,
+            result,
+            entry,
+            parameter,
+            ActivationKey(47),
+            Side::A,
+            transport.clone(),
+            vec![42],
+            None,
+        )
+        .expect("a closed and empty incoming transport may finish");
+        let Receive::Message(mut message) = transport.reserve_receive(Side::B) else {
+            panic!("the success arm must run");
+        };
+        assert_eq!(message.snapshot().unwrap(), &[42]);
+        message.commit().unwrap();
     }
 
     #[test]
@@ -9134,63 +8473,6 @@ value ignored => {handler}
             frame_count,
             "no reply allocation started"
         );
-    }
-
-    #[test]
-    fn worker_reports_all_held_deliveries_without_moving_local_locations() {
-        use crate::eval::network_transport::{EnvelopeKind, NetworkTransport, Send, Side};
-        let program = effect_program(concat!(
-            "import @builtin.network as Network\n",
-            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
-            "start (worker, _) = {\nlet _ = Network.try_receive worker\n",
-            "let _ = Network.try_receive worker\n()\n}\n",
-            "main : Unit -> Unit\nmain () = ()\n",
-        ));
-        let (root, result, entry, parameter) = worker_fixture_entry(&program);
-        let transport = NetworkTransport::prepare(2).unwrap();
-        assert_eq!(
-            transport.try_send(Side::B, EnvelopeKind::Application, &[1]),
-            Send::Sent
-        );
-        assert_eq!(
-            transport.try_send(Side::B, EnvelopeKind::Application, &[2]),
-            Send::Sent
-        );
-        let mut machine = Machine::new_network_worker(
-            program.shared(),
-            root,
-            result,
-            entry,
-            parameter,
-            ActivationKey(47),
-            Side::A,
-            transport,
-            Vec::new(),
-        )
-        .unwrap();
-        let evaluation = machine.run_loop().expect("both messages arrive");
-        let worker = machine.worker.as_mut().unwrap();
-        assert_eq!(worker.deliveries.len(), 2);
-        assert!(
-            worker
-                .deliveries
-                .iter()
-                .all(|held| held.result_location.is_some())
-        );
-        assert!(worker.report_buffer.capacity() >= worker.deliveries.len());
-        let report = worker.delivery_report();
-        assert_eq!(
-            report.iter().map(|held| held.identity).collect::<Vec<_>>(),
-            [1, 2]
-        );
-        assert_eq!(worker.deliveries.len(), 2);
-        assert!(
-            worker
-                .deliveries
-                .iter()
-                .all(|held| held.result_location.is_some())
-        );
-        drop(evaluation);
     }
 
     fn worker_fixture_entry(
@@ -9253,7 +8535,7 @@ value ignored => {handler}
     }
 
     #[test]
-    fn worker_teardown_failure_preserves_delivery_report() {
+    fn worker_teardown_failure_fails_transport() {
         use crate::eval::network_transport::{EnvelopeKind, Failure, NetworkTransport, Send, Side};
         let transport = NetworkTransport::prepare(1).unwrap();
         let scope = disposal::Scope::enter();
@@ -9264,25 +8546,17 @@ value ignored => {handler}
         }
         drop(pending);
         drop(bounded);
-        let program = effect_program("main : Unit -> Unit\nmain () = ()\n");
-        let delivery = ReportedDelivery {
-            identity: 1,
-            network: ActivationKey(47),
-            side: Side::A,
-            receive_site: program.root(),
-        };
         let exit = WorkerExit {
             network: ActivationKey(47),
             side: Side::A,
             transport: transport.clone(),
-            deliveries: vec![delivery],
         };
         let failure = match finish_worker_exit(&scope, Ok(()), exit) {
             Ok(_) => panic!("failed teardown must not report success"),
             Err(failure) => failure,
         };
         assert!(matches!(failure.failure, RuntimeFailure::Report(_)));
-        assert_eq!(failure.exit.deliveries, [delivery]);
+        assert_eq!(failure.exit.network, ActivationKey(47));
         assert_eq!(
             transport.try_send(Side::A, EnvelopeKind::Application, &[42]),
             Send::Failed(Failure::WorkerFailed)
@@ -9290,7 +8564,7 @@ value ignored => {handler}
     }
 
     #[test]
-    fn worker_failure_preserves_committed_receive_obligations() {
+    fn worker_failure_keeps_carrier_alive() {
         use crate::eval::network_transport::{EnvelopeKind, NetworkTransport, Send, Side};
         let program = effect_program(concat!(
             "import @builtin.network as Network\n",
@@ -9315,9 +8589,6 @@ value ignored => {handler}
             parameter,
             network: ActivationKey(47),
             side,
-            processing_route: None,
-            processing_cut: None,
-            end_route: None,
             transport: transport.clone(),
             input: Vec::new(),
             bindings: None,
@@ -9345,14 +8616,9 @@ value ignored => {handler}
             state = next;
             assert!(!timeout.timed_out(), "worker should report its failure");
         }
-        let Some(CarrierReport::Failed(failure, deliveries)) = &state.reports[0] else {
-            panic!("the unhandled effect must report failure");
-        };
-        assert!(matches!(failure, RuntimeFailure::ForeignBinding));
-        assert_eq!(
-            deliveries.len(),
-            1,
-            "committed receiver-held work survives failure"
+        assert!(
+            matches!(&state.reports[0], Some(CarrierReport::Failed)),
+            "the unhandled effect must report failure"
         );
         assert!(state.phase == CarrierPhase::Terminal);
         assert!(
@@ -9363,59 +8629,6 @@ value ignored => {handler}
     }
 
     #[test]
-    fn worker_end_observation_requires_host_end_and_successful_reply() {
-        use crate::eval::network_transport::{NetworkTransport, Side};
-        let program = effect_program(concat!(
-            "import @builtin.network as Network\n",
-            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
-            "start (worker, _) = match Network.try_receive worker {\n",
-            "Network.Message(_, _) => ()\nNetwork.Empty => ()\nNetwork.End => ()\nNetwork.ReceiveFailed(_) => ()\n}\n",
-            "main : Unit -> Unit\nmain () = ()\n",
-        ));
-        let (root, result, entry, parameter) = worker_fixture_entry(&program);
-        for sealed in [false, true] {
-            let transport = NetworkTransport::prepare(1).unwrap();
-            if sealed {
-                transport.finish_send(Side::B).unwrap();
-            }
-            let mut machine = Machine::new_network_worker(
-                program.shared(),
-                root,
-                result,
-                entry,
-                parameter,
-                ActivationKey(47),
-                Side::A,
-                transport,
-                Vec::new(),
-            )
-            .unwrap();
-            drop(machine.run_loop().expect("receive returns"));
-            let observed = machine.worker.as_ref().unwrap().end_observation;
-            if sealed {
-                let observed = observed.expect("actual End reply is recorded");
-                assert_eq!(observed.network, ActivationKey(47));
-                assert_eq!(observed.side, Side::A);
-                assert!(matches!(
-                    observed.matched,
-                    DeliveryMatch::Observed { arm: 2, .. }
-                ));
-                assert!(matches!(&program.node(observed.receive_site).unwrap().kind,
-                    EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer))
-                        if matches!(&buffer.operation, crate::core::region::RegionBufferOperation::Network { effect, operation }
-                            if crate::resolved::NetworkApi::for_module(effect.effect().module())
-                                .is_some_and(|api| effect.effect() == api.io() && *operation == OperationId::new(api.io(), 2)))));
-            } else {
-                assert!(observed.is_none(), "Empty cannot create End provenance");
-            }
-        }
-    }
-
-    #[test]
-    #[expect(
-        clippy::result_large_err,
-        reason = "Both test threads preserve their owned worker failure reports"
-    )]
     fn worker_capacity_one_feedback_allows_producing_cleanup() {
         use crate::eval::network_transport::{Failure, NetworkTransport, Side};
         let common = concat!(
@@ -9483,24 +8696,14 @@ value ignored => {handler}
                 None,
             )
         });
-        let producer_exit = producer_thread
+        let _producer_exit = producer_thread
             .join()
             .expect("producer thread")
             .expect("producer and its cleanup return");
-        let consumer_exit = consumer_thread
+        let _consumer_exit = consumer_thread
             .join()
             .expect("consumer thread")
             .expect("consumer receives both messages");
-        assert_eq!(
-            producer_exit.deliveries.len(),
-            1,
-            "producer receives feedback"
-        );
-        assert_eq!(
-            consumer_exit.deliveries.len(),
-            2,
-            "consumer receives body and cleanup messages"
-        );
         assert_eq!(transport.users().unwrap().queued, 0);
         assert_eq!(
             transport.settle(),
@@ -9596,10 +8799,9 @@ value ignored => {handler}
         }) if *owner == region));
         machine.instantiation_work = TypeWorkBudget::with_limit(0);
         assert!(is_work_exhaustion(machine.run_loop().unwrap_err()));
-        assert!(machine.worker.as_ref().unwrap().deliveries.is_empty());
         assert!(machine.frames.iter().any(|frame| matches!(frame,
             Frame::RegionAllocated { segment, .. } if segment.frames.iter().any(|frame| matches!(frame,
-                Frame::NetworkReceiveBytes { pending, .. } if pending.site == site)))));
+                Frame::NetworkReceiveBytes { .. })))));
         assert!(matches!(transport.reserve_receive(Side::A), Receive::Busy));
         assert_eq!(
             transport.try_send(Side::B, EnvelopeKind::Application, &[9]),
@@ -9614,7 +8816,7 @@ value ignored => {handler}
     }
 
     #[test]
-    fn worker_end_reply_allocation_failure_does_not_publish_observation() {
+    fn worker_end_reply_allocation_failure_is_reported() {
         use crate::eval::network_transport::{NetworkTransport, Side};
         let program = effect_program(concat!(
             "import @builtin.network as Network\n",
@@ -9665,121 +8867,6 @@ value ignored => {handler}
                 )
                 .is_err()
         );
-        assert!(machine.worker.as_ref().unwrap().end_observation.is_none());
-        assert!(
-            machine
-                .frames
-                .iter()
-                .any(|frame| matches!(frame, Frame::NetworkEndCommit { .. }))
-        );
-    }
-
-    #[test]
-    fn worker_newer_receive_invalidates_pending_end_including_overflow() {
-        use crate::eval::network_transport::{NetworkTransport, Side};
-        let program = effect_program(concat!(
-            "import @builtin.network as Network\n",
-            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
-            "start (_, _) = ()\nmain : Unit -> Unit\nmain () = ()\n",
-        ));
-        let (root, result, entry, parameter) = worker_fixture_entry(&program);
-        let module = program
-            .registry()
-            .effects()
-            .iter()
-            .find(|effect| effect.id.module().is_builtin_network())
-            .unwrap()
-            .id
-            .module();
-        let api = crate::resolved::NetworkApi::for_module(module).unwrap();
-        let effect = EffectInstance::new(
-            api.io(),
-            Box::new([crate::types::Type::Inference(
-                crate::types::InferenceVariableId::new(47),
-            )]),
-        );
-        for initial_generation in [0, u64::MAX - 1] {
-            let transport = NetworkTransport::prepare(1).unwrap();
-            transport.finish_send(Side::B).unwrap();
-            let mut machine = Machine::new_network_worker(
-                program.shared(),
-                root,
-                result,
-                entry,
-                parameter,
-                ActivationKey(47),
-                Side::A,
-                transport,
-                Vec::new(),
-            )
-            .unwrap();
-            let worker = machine.worker.as_mut().unwrap();
-            worker.input = None;
-            worker.receive_generation = Some(initial_generation);
-            // An absent provider leaves the genuine outer End pending. The
-            // second authenticated receive represents provider reentry.
-            let receive = |machine: &mut Machine| {
-                machine.interpret_network_receive(
-                    result,
-                    ActivationKey(99),
-                    &effect,
-                    OperationId::new(api.io(), 2),
-                    Value::ResourceHandle(ActivationKey(47)),
-                )
-            };
-            assert!(receive(&mut machine).is_err());
-            let outer = machine
-                .frames
-                .iter()
-                .rposition(|frame| matches!(frame, Frame::NetworkEndCommit { .. }))
-                .unwrap();
-            assert!(receive(&mut machine).is_err());
-            // Model the older provider returning its already constructed End
-            // after the nested operation; only the pending frame is under test.
-            machine.frames.truncate(outer + 1);
-            let location = machine.heap.len();
-            let end =
-                crate::types::ConstructorId::new(crate::types::NominalTypeId::new(module, 6), 2);
-            machine.heap.push(HeapCell::Tuple(
-                vec![Value::ConstructorTag(end)].into_boxed_slice(),
-            ));
-            let value = Value::Location(location);
-            assert!(machine.preflight_worker_owner_return(&value).unwrap());
-            let frame = machine.frames.pop().unwrap();
-            machine.control.take();
-            machine.return_from_preflighted(frame, value, true).unwrap();
-            assert!(
-                machine.worker.as_ref().unwrap().end_observation.is_none(),
-                "a newer receive must invalidate an older End at generation {initial_generation}"
-            );
-        }
-    }
-
-    #[test]
-    fn source_constructed_end_cannot_create_host_observation() {
-        use crate::eval::network_transport::{NetworkTransport, Side};
-        let program = effect_program(concat!(
-            "import @builtin.network as Network\n",
-            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
-            "start (_, _) = match Network.End {\n",
-            "Network.Message(_, _) => ()\nNetwork.Empty => ()\nNetwork.End => ()\nNetwork.ReceiveFailed(_) => ()\n}\n",
-            "main : Unit -> Unit\nmain () = ()\n",
-        ));
-        let (root, result, entry, parameter) = worker_fixture_entry(&program);
-        let mut machine = Machine::new_network_worker(
-            program.shared(),
-            root,
-            result,
-            entry,
-            parameter,
-            ActivationKey(47),
-            Side::A,
-            NetworkTransport::prepare(1).unwrap(),
-            Vec::new(),
-        )
-        .unwrap();
-        drop(machine.run_loop().expect("constructed End returns"));
-        assert!(machine.worker.as_ref().unwrap().end_observation.is_none());
     }
 
     #[test]
@@ -9804,9 +8891,6 @@ value ignored => {handler}
             parameter,
             network: ActivationKey(47),
             side,
-            processing_route: None,
-            processing_cut: None,
-            end_route: None,
             transport: transport.clone(),
             input: Vec::new(),
             bindings: None,
@@ -9826,7 +8910,12 @@ value ignored => {handler}
                 "workers should report after genuine End"
             );
         }
-        assert!(state.reports.iter().all(|report| matches!(report, Some(CarrierReport::Returned(deliveries)) if deliveries.is_empty())));
+        assert!(
+            state
+                .reports
+                .iter()
+                .all(|report| matches!(report, Some(CarrierReport::Returned)))
+        );
         assert!(matches!(transport.reserve_receive(Side::A), Receive::End));
         assert!(matches!(transport.reserve_receive(Side::B), Receive::End));
     }
@@ -10175,9 +9264,6 @@ value ignored => {handler}
             parameter,
             network: ActivationKey(47),
             side: Side::A,
-            processing_route: None,
-            processing_cut: None,
-            end_route: None,
             transport: transport.clone(),
             input: Vec::new(),
             bindings: None,
@@ -10193,9 +9279,7 @@ value ignored => {handler}
             state = next;
             assert!(!timeout.timed_out(), "terminal carrier should report");
         }
-        assert!(
-            matches!(&state.reports[0], Some(CarrierReport::Failed(RuntimeFailure::InvalidControlState, deliveries)) if deliveries.is_empty())
-        );
+        assert!(matches!(&state.reports[0], Some(CarrierReport::Failed)));
         assert_eq!(
             transport.users().unwrap().queued,
             1,
@@ -10274,42 +9358,6 @@ value ignored => {handler}
             )
             .expect("prepared worker");
             let result = machine.run_loop().expect("local entry returns");
-            assert_eq!(machine.worker.as_ref().unwrap().deliveries.len(), 1);
-            let held = machine.worker.as_ref().unwrap().deliveries[0];
-            assert_eq!(held.identity, 1);
-            assert_eq!(held.network, ActivationKey(47));
-            assert_eq!(held.side, side);
-            assert!(held.result_location.is_some());
-            let DeliveryMatch::Observed {
-                site: match_site,
-                arm,
-            } = held.matched
-            else {
-                panic!("the actual Message result must reach its Match arm");
-            };
-            assert_eq!(arm, 0);
-            assert!(matches!(
-                &program.node(match_site).unwrap().kind,
-                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(_)))
-            ));
-            assert!(matches!(&program.node(held.receive_site).unwrap().kind,
-                EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer))
-                if matches!(&buffer.operation, crate::core::region::RegionBufferOperation::Network { operation, .. } if operation.operation() == 2)));
-            let report = machine.worker.as_mut().unwrap().delivery_report();
-            assert_eq!(
-                report,
-                [ReportedDelivery {
-                    identity: held.identity,
-                    network: held.network,
-                    side: held.side,
-                    receive_site: held.receive_site
-                }]
-            );
-            assert_eq!(
-                machine.worker.as_ref().unwrap().deliveries,
-                [held],
-                "reporting must not transfer worker-local held state"
-            );
             assert!(matches!(result.value, Value::Unit));
             assert!(!result.trace.iter().any(|event| match event {
                 TraceEvent::Enter(id) => matches!(&program.node(*id).unwrap().kind,
@@ -10529,222 +9577,6 @@ value ignored => {handler}
     }
 
     #[test]
-    fn worker_message_binds_only_unique_delivery_to_actual_root_marker() {
-        use crate::eval::network_transport::{EnvelopeKind, NetworkTransport, Send, Side};
-        let program = effect_program(concat!(
-            "import @builtin.network as Network\n",
-            "import @builtin.retained_control as Control\n",
-            "effect Checkpoint<S> {\ncheckpoint : Unit -> Unit\n}\n",
-            "process : Unit -> Unit\n",
-            "process () = resource Control.Store<S,(Unit -> Unit ! {Control.Drive<S>})> store = () {\n",
-            "handle (perform Checkpoint<S>.checkpoint ()) with Checkpoint<S> using store {\n",
-            "checkpoint ignored => resume ()\n}\n}\n",
-            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
-            "start (worker, _) = match Network.try_receive worker {\n",
-            "Network.Message(_, _) => ()\nNetwork.Empty => ()\nNetwork.End => ()\nNetwork.ReceiveFailed(_) => ()\n}\n",
-            "main : Unit -> Unit\nmain () = ()\n",
-        ));
-        let (entry_root, result, entry, parameter) = worker_fixture_entry(&program);
-        let mut pending = vec![entry_root];
-        let mut visited = std::collections::HashSet::new();
-        let mut root = None;
-        let mut store_node = None;
-        while let Some(id) = pending.pop() {
-            if !visited.insert(id) {
-                continue;
-            }
-            let node = program.node(id).unwrap();
-            match &node.kind {
-                EffectExprKind::Operation(EffectOperation::RetainedRoot(_)) => root = Some(id),
-                EffectExprKind::Operation(EffectOperation::Store(_)) => store_node = Some(id),
-                _ => {}
-            }
-            pending
-                .extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
-        }
-        let root = root.expect("actual linked retained root");
-        let EffectExprKind::Operation(EffectOperation::RetainedRoot(root_node)) =
-            &program.node(root).unwrap().kind
-        else {
-            unreachable!()
-        };
-        let handler = root_node.handler;
-        let store_node = store_node.expect("actual linked Store acquisition");
-        let api = program
-            .registry()
-            .effects()
-            .iter()
-            .find_map(|effect| crate::resolved::StoreApi::for_module(effect.id.module()))
-            .unwrap();
-        for case in 0..13 {
-            let transport = NetworkTransport::prepare(1).unwrap();
-            assert_eq!(
-                transport.try_send(Side::B, EnvelopeKind::Application, &[42]),
-                Send::Sent
-            );
-            let mut machine = Machine::new_network_worker(
-                program.shared(),
-                entry_root,
-                result,
-                entry,
-                parameter,
-                ActivationKey(47),
-                Side::A,
-                transport,
-                Vec::new(),
-            )
-            .unwrap();
-            drop(machine.run_loop().expect("actual Message branch"));
-            let worker = machine.worker.as_mut().unwrap();
-            let held = worker.deliveries[0];
-            let DeliveryMatch::Observed { site, arm } = held.matched else {
-                panic!("Message match")
-            };
-            // Test-only nomination. Production must obtain this route from the
-            // independently checked payload-to-root relation, which is pending.
-            let mut route = ProcessingRoute {
-                entry,
-                side: Side::A,
-                receive: held.receive_site,
-                message_match: site,
-                arm,
-                root,
-                handler,
-                store: store_node,
-            };
-            match case {
-                2 => route.receive = entry_root,
-                3 => route.message_match = entry_root,
-                4 => route.arm += 1,
-                5 => route.entry = BinderId::new(u32::MAX),
-                6 => route.side = Side::B,
-                7 => route.root = entry_root,
-                8 => route.handler = entry_root,
-                9 => route.store = entry_root,
-                _ => {}
-            }
-            worker.processing_route = Some(route);
-            if matches!(case, 1 | 12) {
-                let mut duplicate = held;
-                duplicate.identity += 1;
-                worker.deliveries.push(duplicate);
-            }
-            let key = ActivationKey(80);
-            machine.frames.push(Frame::ResourceBoundary {
-                node: store_node,
-                key,
-                payload: ResourcePayload::Store(Box::new(RetainedStore::new(key, api))),
-            });
-            machine.live_resources = 1;
-            machine
-                .begin_retained_root(root, handler, key, Environment::new())
-                .unwrap();
-            machine.control.take();
-            let handler_frame = machine.frames.pop().unwrap();
-            machine.return_from(handler_frame, Value::Unit).unwrap();
-            machine.control.take();
-            if case == 0 {
-                machine.instantiation_work = TypeWorkBudget::with_limit(0);
-                assert!(is_work_exhaustion(
-                    machine
-                        .preflight_worker_owner_return(&Value::Unit)
-                        .unwrap_err()
-                ));
-                assert!(matches!(
-                    machine.frames.last(),
-                    Some(Frame::RetainedRootCompletion {
-                        origin: RetainedRootOrigin::Entered {
-                            delivery: Some(_),
-                            ..
-                        },
-                        ..
-                    })
-                ));
-                assert_eq!(
-                    machine.worker.as_ref().unwrap().deliveries[0].root_progress,
-                    DeliveryRootProgress::Active { store: key, root }
-                );
-                machine.instantiation_work = TypeWorkBudget::unbounded();
-            }
-            assert!(machine.preflight_worker_owner_return(&Value::Unit).unwrap());
-            let marker = machine.frames.pop().unwrap();
-            machine
-                .return_from_preflighted(marker, Value::Unit, true)
-                .unwrap();
-            let worker = machine.worker.as_ref().unwrap();
-            assert_eq!(
-                worker.deliveries.len(),
-                if matches!(case, 1 | 12) { 2 } else { 1 }
-            );
-            assert_eq!(
-                worker.deliveries[0].root_progress,
-                if matches!(case, 0 | 10 | 11) {
-                    DeliveryRootProgress::MarkerReturned { store: key, root }
-                } else {
-                    DeliveryRootProgress::Unlinked
-                }
-            );
-            if matches!(case, 0 | 10 | 11 | 12) {
-                // Test-only cut; no product issuer exists until the separate
-                // C3/cleanup/suffix judgment is established.
-                if case != 0 {
-                    let mut checked_route = crate::core::dialect::NetworkProcessingRoute {
-                        owner: entry_root,
-                        entry,
-                        side: 0,
-                        receive: held.receive_site,
-                        message_match: site,
-                        arm,
-                        root,
-                        handler,
-                        store: store_node,
-                    };
-                    if case == 11 {
-                        checked_route.receive = entry_root;
-                    }
-                    machine.worker.as_mut().unwrap().processing_cut =
-                        Some(crate::core::dialect::NetworkProcessingCut {
-                            route: checked_route,
-                        });
-                }
-                machine.control.take();
-                if case == 10 {
-                    machine.instantiation_work = TypeWorkBudget::with_limit(0);
-                    assert!(is_work_exhaustion(
-                        machine
-                            .preflight_worker_owner_return(&Value::Unit)
-                            .unwrap_err()
-                    ));
-                    assert!(
-                        matches!(machine.frames.last(), Some(Frame::ResourceBoundary { key: found, .. }) if *found == key)
-                    );
-                    assert_eq!(
-                        machine.worker.as_ref().unwrap().deliveries[0].root_progress,
-                        DeliveryRootProgress::MarkerReturned { store: key, root }
-                    );
-                    machine.instantiation_work = TypeWorkBudget::unbounded();
-                }
-                assert!(machine.preflight_worker_owner_return(&Value::Unit).unwrap());
-                let boundary = machine.frames.pop().unwrap();
-                machine
-                    .return_from_preflighted(boundary, Value::Unit, true)
-                    .unwrap();
-                let remaining = machine.worker.as_ref().unwrap().deliveries.len();
-                assert_eq!(
-                    remaining,
-                    if case == 10 {
-                        0
-                    } else if case == 12 {
-                        2
-                    } else {
-                        1
-                    }
-                );
-            }
-        }
-    }
-
-    #[test]
     fn worker_marker_return_preserves_owner_on_budget_failure() {
         use crate::eval::network_transport::{NetworkTransport, Side};
         let program = effect_program(concat!(
@@ -10783,14 +9615,7 @@ value ignored => {handler}
                 key,
                 payload: ResourcePayload::Store(Box::new(store)),
             });
-            machine.frames.push(Frame::RetainedRootCompletion {
-                key,
-                origin: RetainedRootOrigin::Entered {
-                    root,
-                    handler: root,
-                    delivery: None,
-                },
-            });
+            machine.frames.push(Frame::RetainedRootCompletion { key });
             if let Some(limit) = budget {
                 assert!(limit == 0 || limit == machine.frames.len());
                 machine.instantiation_work = TypeWorkBudget::with_limit(limit);
@@ -14333,7 +13158,7 @@ value ignored => {handler}
             &crate::core::data::TupleNode,
             Environment,
         ) -> Result<Transition, RuntimeFailure> = enter_tuple;
-        let _: fn(NodeId, &crate::core::data::MatchNode, Environment) -> Transition = enter_match;
+        let _: fn(&crate::core::data::MatchNode, Environment) -> Transition = enter_match;
         let _: fn(&TypeAbstractionNode, Environment) -> Transition = enter_type_abstraction;
         let _: fn(&TypeApplicationNode, Environment) -> Transition = enter_type_application;
         let _: fn(BinderId, NodeId, Environment, Value) -> Result<Transition, RuntimeFailure> =
@@ -14546,7 +13371,6 @@ value ignored => {handler}
         assert!(matches!(
             dispatch_return(
                 Frame::Match {
-                    site: variable,
                     arms: Box::new([]),
                     environment: Environment::new(),
                 },

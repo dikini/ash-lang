@@ -18,20 +18,13 @@ use std::collections::{HashMap, HashSet};
 
 pub(super) struct WorkerEntryFact {
     pub(super) binder: crate::resolved::BinderId,
-    pub(super) initializer: crate::core::dialect::NodeId,
     pub(super) parameter: crate::types::TypeVariableId,
     pub(super) native_effects: Vec<crate::types::EffectInstance>,
 }
 
 pub(super) struct NetworkBodyFacts {
-    pub(super) entry_region: crate::core::dialect::NodeId,
     pub(super) linked_result: crate::core::dialect::NodeId,
     pub(super) entries: [WorkerEntryFact; 2],
-    /// Same-arena called closures whose mandatory parameter requires the sealed Worker.
-    /// These identities are inputs to an all-owner check, not release permission.
-    pub(super) direct_worker_calls: Vec<crate::core::dialect::NodeId>,
-    /// A called entry can reach the authenticated finish-receive operation.
-    pub(super) requests_completion: bool,
 }
 
 // This pass is a conservative precursor to full worker admission. Whole-graph,
@@ -264,71 +257,6 @@ pub(super) fn check_entry_bodies(
         return Err(invalid());
     }
 
-    // The existing traversal resolves actual Called definitions through the
-    // validated linked spine. Besides a direct Worker, admit only an actual
-    // linked global closure with the strict (Worker<N>, Bytes) parameter.
-    // Optional, returned and higher-order Worker values do not qualify.
-    validator.charge_type_work(visited.capacity())?;
-    let mut direct_worker_calls = Vec::new();
-    for &(node_id, mode) in &visited {
-        if mode != Visit::Called {
-            continue;
-        }
-        let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) =
-            &validator.node(node_id)?.kind
-        else {
-            continue;
-        };
-        let Some(function) = closure.code.function() else {
-            continue;
-        };
-        let parameter = function.parameter().ty();
-        let worker_parameter = match parameter {
-            Type::Application(_, _) => parameter,
-            Type::Tuple(fields) => {
-                let [worker, Type::Bytes] = fields.as_ref() else {
-                    continue;
-                };
-                let mut is_global = false;
-                for &initializer in &spine.initializers {
-                    let mut cursor = initializer;
-                    loop {
-                        validator.charge_type_work(1)?;
-                        match &validator.node(cursor)?.kind {
-                            EffectExprKind::Pure(PureExprKind::Computation(
-                                PureComputation::TypeAbstraction(abstraction),
-                            )) => cursor = abstraction.body(),
-                            _ => break,
-                        }
-                    }
-                    if super::super::region::closure_initializer::<EffectOperationFamily>(
-                        cursor,
-                        |candidate| validator.node(candidate).ok().map(|node| &node.kind),
-                    )
-                    .is_some_and(|(actual, _)| actual == node_id)
-                    {
-                        is_global = true;
-                    }
-                }
-                if !is_global {
-                    continue;
-                }
-                worker
-            }
-            _ => continue,
-        };
-        let Type::Application(worker, owner) = worker_parameter else {
-            continue;
-        };
-        if !matches!((&**worker, &**owner), (Type::Nominal(nominal), Type::Variable(_)) if *nominal == api.worker())
-        {
-            continue;
-        }
-        validator.charge_type_work(1)?;
-        direct_worker_calls.try_reserve(1).map_err(|_| resource())?;
-        direct_worker_calls.push(node_id);
-    }
-
     let mut entries = Vec::new();
     validator.charge_type_work(2)?;
     entries.try_reserve_exact(2).map_err(|_| resource())?;
@@ -413,23 +341,14 @@ pub(super) fn check_entry_bodies(
         }
         entries.push(WorkerEntryFact {
             binder: network.entries[slot],
-            initializer,
             parameter: *parameter,
             native_effects,
         });
     }
     let entries: [WorkerEntryFact; 2] = entries.try_into().map_err(|_| invalid())?;
-    let finish = validator.authenticate_network_call("finish_receive", 7)?;
-    validator.charge_type_work(3)?;
-    let requests_completion = [Visit::Evaluate, Visit::Body, Visit::Called]
-        .into_iter()
-        .any(|mode| visited.contains(&(finish, mode)));
     Ok(NetworkBodyFacts {
-        entry_region: spine.entry_region,
         linked_result: spine.result,
         entries,
-        direct_worker_calls,
-        requests_completion,
     })
 }
 
@@ -520,8 +439,6 @@ mod tests {
         let facts = check_entry_bodies(&validator, id, network, &spine, &native)
             .expect("worker entries should admit");
         assert_eq!(facts.entries[0].binder, network.entries[0]);
-        assert_eq!(facts.entries[0].initializer, spine.entries[0].unwrap());
-        assert_eq!(facts.entry_region, spine.entry_region);
         assert_eq!(facts.linked_result, spine.result);
         assert!(facts.entries[0].native_effects.is_empty());
         assert_ne!(facts.entries[0].parameter, facts.entries[1].parameter);

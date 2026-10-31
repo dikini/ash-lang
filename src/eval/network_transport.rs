@@ -298,9 +298,9 @@ impl NetworkTransport {
         self.refresh(&mut state);
         Ok(())
     }
-    // The caller must first authenticate genuine End and local completion.
-    // This lock serializes that checked worker's terminal receive transition
-    // against the peer's queue and send operations.
+    // Close the receive endpoint only while the incoming direction is sealed,
+    // empty, and has no reserved receive or send in progress. The lock
+    // serializes this transition with the peer's queue and send operations.
     pub(super) fn finish_receive(&self, side: Side) -> Result<(), Failure> {
         let mut state = self.lock()?;
         if state.settled {
