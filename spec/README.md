@@ -5,6 +5,11 @@ describes exactly the implemented language and runtime behavior.
 
 ## Current Ash
 
+The current dialect is `ffi-ash`. It includes the implemented foreign-call,
+generic-cell, lexical-region, retained-control and pinned-worker features below.
+The name identifies the current language on `main`; it adds no compiler mode or
+compatibility grammar. Earlier milestone tags retain their original contents.
+
 Ash is a rank-1 language whose programs are acyclic graphs of passive source
 modules. Each `.ash` source file defines one unnamed module containing
 imports followed by nominal data or `newtype` declarations, method-only
@@ -63,7 +68,7 @@ construction without ownership transfer or relocation. Values and actual capture
 retain their residency/dependencies, and required cleanup finishes before the
 original paired release bulk-reclaims that region. Ordinary blocks/calls create
 no region. Function records are created once; fresh call-body construction uses
-the caller's selection. Source value-function arrows include the default
+the caller's selection. Ordinary source value-function arrows include the default
 allocation requirement even when their written row is empty; extra provider
 effects remain visible. Core retains these requirements and controls explicitly.
 
@@ -159,7 +164,15 @@ verify them. Existing handlers and scoped cleanup govern ordinary completion,
 capture and checked discard. No Address-to-Bytes/String or arbitrary memory
 read/write API is supplied.
 
-`resource cell<R> c = initializer { body }` acquires one scoped mutable integer
+`@builtin.generic_cell` supplies `Cell<R,T>` for one fixed ordinary payload type.
+Acquisition owns a mutable slot and release; access handles are non-owning.
+Reads return snapshots, writes replace the current value, and dependency checks
+reject self-retention, younger retention and resource-owner cycles. An independent
+snapshot may escape its cell; a live reader cannot. Exact source handlers retain
+ordinary precedence. The [static](static-semantics.md#generic-cell-foundation)
+and [dynamic](dynamic-semantics.md#scoped-cell-execution) rules specify this API.
+
+The legacy `resource cell<R> c = initializer { body }` acquires one scoped mutable integer
 cell through the compiler-owned `@builtin.cell` API. The scope owns release;
 handles provide reusable access while it remains live. Inferred dependencies
 prevent handles, captured access and identity-indexed operations from escaping
@@ -238,10 +251,11 @@ effectful expressions with single-use, non-escaping handler continuations.
 Beyond the fixed builtin providers and the bounded source-resource forms
 described above, the effect kernel adds no general provider or resource
 declarations, first-class registration tokens, arbitrary removal or priorities,
-general destructor declarations, escaping or multi-shot resume, asynchronous
-execution, or dynamic loading.
-A linked nonempty effect row is a source rejection rather than an
-unhandled-operation runtime result.
+general destructor declarations, first-class continuation values, multi-shot
+resume, worker migration, shared-Store scheduling, or dynamic loading. Scoped
+retained control and the fixed pinned-worker network are implemented as described
+above. A linked row left nonempty after generated root and native discharge is
+a source rejection rather than an unhandled-operation runtime result.
 
 ## Module examples
 

@@ -10,6 +10,13 @@ The [specification](../../spec/README.md) answers “What is Ash now?” It is n
 
 Design notes answer “What are we considering, and what remains uncertain?” They hold research, alternatives, experiments, tradeoffs, and future pressure. They are informative, not normative.
 
+A note may also record an accepted design. `Status: accepted` records acceptance
+of its explicitly named scope. State which parts are implemented, which are not
+implemented, and which earlier choices are retired or superseded. Acceptance of
+the implemented scope does not accept the note's remaining alternatives. Current
+language rules stay in `spec/`; accepted non-language choices stay in
+architectural decisions. A note's status does not replace either source.
+
 A design note may govern a bounded disposable prototype when code is needed as evidence. Such a prototype tests a named question and comparison criteria. It is not product implementation, does not create specification truth, and must not become production architecture without a decision and task.
 
 ## Architectural decisions

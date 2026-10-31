@@ -1,7 +1,7 @@
 # DN-0054: Region Allocation and Lexical Ownership Contracts
 
 - ID: `DN-0054`
-- Status: exploring
+- Status: accepted
 - Related: [DN-0035](DN-0035-region-memory-management-and-verified-providers.md),
   [DN-0032](DN-0032-algebra-of-scoped-resource-composition.md),
   [DN-0036](DN-0036-foreign-library-and-memory-provider-experiments.md),
@@ -12,13 +12,23 @@
   [DN-0055](DN-0055-algebra-of-regions-lifetimes-and-ownership.md),
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md)
 
-> This informative note separates placement/allocation from ownership,
-> lifetimes and reclamation, and retains questions about broader compositions.
-> The lexical base is described by the [specification](../../spec/README.md).
-> Earlier candidate descriptions below explain the design boundary; they do not
-> override current syntax/semantics or authorize another implementation,
-> architecture or prototype. Nonlexical ownership, collection and transport
-> remain exploratory.
+## Accepted and implemented
+
+Lexical region allocation and ownership are accepted and implemented on `main`
+as part of `ffi-ash`. The accepted scope includes default placement, explicit
+`region` and `using`, fixed allocate/release pairs, actual supplied storage,
+closures, recursive immutable graphs, partial construction, allocation refusal
+and bulk release after required cleanup.
+
+The [specification](../../spec/static-semantics.md#lexical-regions-and-construction-dependencies)
+defines the implemented contract. [Model evidence](lexical-regions/evidence.md)
+records the finite region proof; [R5 #70](https://github.com/dikini/ash-lang/issues/70)
+records product evidence and acceptance.
+
+Usage- or lifetime-based placement inference, nonlexical ownership, individual
+object reclamation policies, moving collection and region ownership transfer
+are not implemented. The broader composition alternatives below remain
+unimplemented.
 
 ## Question
 
@@ -45,9 +55,8 @@ interpretation and cleanup, while native behavior remains an assumption.
 
 [DN-0035](DN-0035-region-memory-management-and-verified-providers.md) assigns
 placement and allocation to regions, with ownership, lifetimes, and reclamation
-as separate concepts composed with them. Lexical ownership comes first. M2
-must supply default placement as well as explicit selection under the agreed
-closest-live-context rule below.
+as separate concepts composed with them. Lexical ownership and default placement are implemented. M2
+supplied explicit selection under the closest-live-context rule below.
 [DN-0044](DN-0044-no-default-runtime.md) separates application policy selection,
 state acquisition, construction lowering, and service requirements.
 [DN-0037](DN-0037-ash-authored-foreign-library-interfaces.md) distinguishes
@@ -57,7 +66,7 @@ experiments implement this region base.
 The [scalar Arena evidence](provider-experiments/arena-results.md) transfers
 capacity, publication, activation, and completion cases. It establishes neither
 general graph layouts nor borrowing. Partial wider experiments are not accepted
-capabilities. The generic Cell candidate in
+capabilities. The implemented generic Cell in
 [DN-0053](DN-0053-scoped-generic-cells-without-native-owners.md) needs only valid
 payload dependencies, not successful completion of all this region work.
 
@@ -76,9 +85,9 @@ optimization; default placement itself is required.
 
 The [specification](../../spec/README.md) defines the implemented lexical base;
 the [bounded model evidence](lexical-regions/evidence.md) records the separate
-matched R1/R2 proof scope. The earlier candidate requirements in this note are
-informative design context, not pending M2 assignments or current language
-rules. The broader algebra in DN-0055 remains separate exploration.
+matched R1/R2 proof scope. The lexical requirements in this note are accepted and implemented;
+they are not pending M2 assignments. The broader algebra in DN-0055 is not
+implemented beyond the specified lexical base.
 
 Construction, actual closure captures, ordinary graph cycles, projection,
 failure, suspension, escape and refusal remain required cases. No new numeric
@@ -164,10 +173,11 @@ storage foundation, without an untracked fallback destination.
   host-backed storage and bulk reclamation; fixed capacity is a model instance.
   Generic Cell supplies mediated mutable
   state. Region-specific collection is a separate reclamation composition;
-  exclusive views, moving collection, other ownership schemes, and concurrency
-  remain later comparisons.
+  exclusive views, moving collection, other ownership schemes and shared-region
+  concurrency are not implemented. Copied-byte pinned workers are implemented
+  separately under AD-0017.
 
-## Candidate directions
+## Accepted lexical design and unimplemented extensions
 
 ### Roles and initial boundary
 
@@ -252,7 +262,7 @@ live or that a reference is a registered root.
 Lexical ownership could still determine that region's owner and lifetime while
 collection determines individual object reclamation. Other ownership schemes
 need their own rules for region lifetime and completion. Neither collection nor
-physical retention silently extends the scoped Cell candidate's access.
+physical retention silently extends the scoped Cell's access.
 These are future compositions, not capabilities established by the fixed-arena
 comparison or current scalar Arena evidence.
 

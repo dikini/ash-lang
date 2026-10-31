@@ -1,20 +1,28 @@
 # Design notes
 
-Design notes record exploration, research, alternatives, experiments, tradeoffs, uncertainty, and future architectural pressure. They are informative and do not define Ash semantics or accept architecture. A note may govern a disposable prototype limited to its stated question, comparison cases, and retention conditions when code is necessary to compare candidates; the prototype remains evidence rather than product implementation.
+Design notes record accepted designs, alternatives, experiments and unimplemented
+extensions. An `accepted` note identifies its accepted scope and implementation
+status. The specification defines current language rules; architectural decisions
+define accepted non-language choices. A note may also govern a bounded prototype
+whose results remain experimental evidence.
 
 Use [the template](template.md), allocate the next `DN-NNNN` ID, and link related artifacts. When a non-language choice converges, record it in an architectural decision. When a language-semantic change becomes concrete, write a change proposal.
 
-The userspace scheduling exploration is retained in
-[DN-0051](DN-0051-userspace-concurrency-and-scheduling.md).
-The checked FFI, region and local-control exploration is retained in
-[DN-0057](DN-0057-checked-ffi-module-boundaries.md),
-[DN-0055](DN-0055-algebra-of-regions-lifetimes-and-ownership.md) and
-[DN-0056](DN-0056-scoped-continuation-retention-and-library-scheduling.md).
-The pinned-worker host and channel exploration is in
-[DN-0058](DN-0058-pinned-worker-host-and-channel.md); its accepted non-language
-choice is [AD-0017](../decisions/AD-0017-pinned-worker-host-and-transport.md).
-The implemented [foreign-call boundary](../../spec/static-semantics.md#source-foreign-declarations)
-does not accept the wider region and control designs; these notes remain informative.
+## Accepted ffi-ash designs
+
+| Note | Accepted and implemented scope | Not implemented or retired |
+| --- | --- | --- |
+| [DN-0037](DN-0037-ash-authored-foreign-library-interfaces.md) | Passive pointer/void FFI, readonly synchronous Bytes and generated evaluator hosts | Full SQLite and richer ABI mappings are not implemented; earlier foreign owner/provider routes are retired. |
+| [DN-0053](DN-0053-scoped-generic-cells-without-native-owners.md) | Generic cells, snapshots, dependency admission and scope completion | Younger retention, owner cycles, linear payloads and new mutable syntax are not implemented. |
+| [DN-0054](DN-0054-base-lexical-region-memory-contracts.md) | Default/explicit placement, supplied storage, lexical ownership and bulk release | Placement inference, alternative ownership/reclamation and region transfer are not implemented. |
+| [DN-0056](DN-0056-scoped-continuation-retention-and-library-scheduling.md) | Stores, one-shot moves, drain checking, coroutine/cooperative/gas-safe-point scheduling and pinned-worker composition | Migration, shared Stores, cancellation and proof-plan integration are not implemented; protocol-specific compiler checks are retired. |
+| [DN-0058](DN-0058-pinned-worker-host-and-channel.md) | Two pinned workers, copied FIFO byte channels, watches and settlement under [AD-0017](../decisions/AD-0017-pinned-worker-host-and-transport.md) | Network generated images, region transfer and worker migration are not implemented. |
+
+[DN-0055](DN-0055-algebra-of-regions-lifetimes-and-ownership.md) retains the
+broader, unimplemented ownership algebra. [DN-0057](DN-0057-checked-ffi-module-boundaries.md)
+records the superseded checked-host programme. [DN-0051](DN-0051-userspace-concurrency-and-scheduling.md)
+retains the wider scheduling study; its local scheduling and fixed-worker
+mechanisms are implemented through the accepted notes above.
 
 Native storage, access, and packed data shapes are explored in
 [DN-0049](DN-0049-native-storage-access-and-packed-data-shapes.md).
@@ -23,15 +31,15 @@ for its pinned historical Diag Ash checkpoint; it does not describe current Ash.
 
 ## Implementation and evidence boundaries
 
-A note's `exploring` or `evaluating` status describes its design work, not the
-completion of every feature it discusses. Read each claim within its scope:
+Use explicit implementation status for each scope:
 
 - **Implemented** means a specified product slice, or an accepted architectural
   choice present in the implementation. It does not accept the rest of a note.
 - **Experimental** means a bounded prototype, formal model, or comparison with
   stated assumptions. Retention on `main` does not make it product semantics.
-- **Open** means a candidate, unresolved question, or incomplete delivery.
-  A delivery sketch or worked fragment does not establish the full capability.
+- **Not implemented** means the feature is absent from current Main.
+- **Retired** means an earlier implementation is absent from current Main.
+- **Superseded** means an earlier design or assignment has been replaced.
 
 The [specification](../../spec/README.md) owns language truth; accepted
 [decisions](../decisions/README.md) own non-language architecture. The
@@ -41,11 +49,11 @@ records milestone maturity. The following summary identifies scope rather
 than assigning new artifact statuses or authorizing work. Detailed evidence
 and exclusions remain at their linked owners.
 
-| Notes | Implemented or retained evidence | Open scope and limits |
+| Notes | Implemented or retained evidence | Not implemented and other limits |
 | --- | --- | --- |
 | DN-0001–0003: foundations, Core, parser | Accepted implementation, parser, front-end, Core, and evaluator choices are recorded in the [decisions](../decisions/README.md). | Broader foundation goals and unselected representation alternatives remain informative. |
 | DN-0005–0008: functions, typing, data, elaboration | Functions, rank-1 typing, tuples, nominal ADTs, patterns, and typed Core are specified. [Mini-Ash closure](mini-ash/closure.md) retains the bounded result. | Record forms and other unselected candidates are not current Ash. |
-| DN-0009–0013: effects, identities, composition, hooks, protocols | Exact effects, one-shot handlers/discard, scoped ownership, and synchronous hooks are implemented within the [Effect Ash boundary](effect-ash/milestone-closure-evidence.md). | General protocols, dynamic composition, multi-shot/escaping continuations, suspension, and concurrency remain open. |
+| DN-0009–0013: effects, identities, composition, hooks, protocols | Exact effects, one-shot handlers/discard, scoped ownership, and synchronous hooks are implemented within the [Effect Ash boundary](effect-ash/milestone-closure-evidence.md). | General protocols, dynamic composition and multi-shot source continuations are not implemented. Scoped suspension and fixed-worker concurrency are implemented by DN-0056/DN-0058. |
 | DN-0014: finite kinds and promotion | Current fixed higher kinds are distinct from this proposal. | Nominal finite kinds and datatype promotion are not implemented. |
 | DN-0015–0016, DN-0020: corpus and milestones | Mini-Ash and Modular Ash are complete; their [closure reports](modular-ash/closure.md) and tags retain evidence. | Historical milestone grammar is not a selectable current dialect. |
 | DN-0017–0018: storage and runtime-established evidence | Current resources supply scoped dependency and completion checks. | General storage policies, ownership transfer, and runtime-established proof evidence remain exploratory. |
@@ -53,12 +61,12 @@ and exclusions remain at their linked owners.
 | DN-0022–0023: modules and interfaces | Passive modules and method-only interfaces are implemented; [Modular Ash closure](modular-ash/closure.md) retains evidence. | Runtime module loading and interface lookup are not supplied by these increments. |
 | DN-0024: executable learning | [Migration evidence](migration-repair-evidence.md) records concrete compiler repairs and source outcomes. | The external learning programme is outlined; its adoption belongs to the external project. |
 | DN-0025: libraries and packages | Four bounded library increments are complete, with the final [relational-interface evidence](lib-ash/relational-interfaces-evidence.md). | Package resolution, persistent compiled modules, and separate object linking remain exploratory. |
-| DN-0026–0028: Effect Ash programme | The selected milestone is [complete and integrated](effect-ash/milestone-closure-evidence.md). | General foreign acquisition, suspension, and concurrency were excluded; planning forecasts are not active tasks. |
+| DN-0026–0028: Effect Ash programme | The selected milestone is [complete and integrated](effect-ash/milestone-closure-evidence.md). | General foreign acquisition, suspension and concurrency were excluded from that historical checkpoint. Scoped suspension and fixed-worker concurrency are implemented in current ffi-ash. |
 | DN-0029: diagnostics | [AD-0010](../decisions/AD-0010-human-diagnostic-presentation-and-localization.md) and the [tool guide](../tools/ash.md) record implemented human/localized and JSON output. | Editor protocols and interactive correction remain excluded from that checkpoint. |
 | DN-0030: compiler macros and hooks | Typed Core validation and runtime effect/resource contracts provide the foundation. | Macros, compiler-phase hooks, staged handlers, registration/selection, and specialized kernels are not implemented. |
 | DN-0031–0032: resource composition | Concept maps and [bounded algebraic derivations](DN-0032-algebra-of-scoped-resource-composition.md) relate candidates to current sequencing and scopes. | General contextual provision, composition laws, and combined soundness remain open. |
 | DN-0033–0034: direct effects and verification | The [one-shot formalization](direct-effects/one-shot/README.md#current-proof-status) establishes stated annotated-model admission, preservation, progress, and bounded execution results. | It is not a complete Ash compiler-correctness proof. Core alignment evidence remains branch-local and incomplete. |
-| DN-0035: regions and verified providers | Current resource dependency rules and historical scalar Arena experiments supply distinct evidence. | Arena experiments establish no current storage API. General region interfaces, borrowing, ordinary storage policy, and provider verification remain open. |
+| DN-0035: regions and verified providers | Current resource dependency rules and historical scalar Arena experiments supply distinct evidence. | Arena experiments establish no current storage API. Lexical region storage and fixed allocator pairs are implemented in DN-0054. General borrowing, alternative ownership and native provider verification are not implemented. |
 | DN-0036: foreign/provider experiments | The [earlier delivery record](provider-experiments/main-delivery-2026-10-08/README.md) preserves its pinned SQLite/scalar Arena observations. The experimental provider/owner execution routes are retired from the smaller foreign boundary. | Retention was not product adoption. Historical results supply no current lifecycle/storage API or wider borrowing/graph support. |
 | DN-0037: Ash-authored foreign interfaces | The smaller [foreign boundary](../../spec/static-semantics.md#source-foreign-declarations) uses passive symbols, opaque Address, readonly synchronous Bytes pointers and generated typed pointer/void bridges. [Binding examples](../../libraries/README.md) reuse ordinary handlers and cleanup. | Numeric/out-pointer slots, foreign text/memory interpretation and full SQLite remain gaps; no native lifecycle or compiler policy is inferred from this note. |
 | DN-0038: resource properties and mutation | Scoped cells already distinguish reusable access from scope-owned release. | General linear/unique usage, borrowing, disposal permissions, and mutable syntax remain candidates. |
@@ -264,8 +272,8 @@ and exclusions remain at their linked owners.
   properties; compare Rust-like regimes, semantics, Core, proofs, surface forms
   and memory/performance opportunities before choosing a design.
 - [DN-0037: Ash-Authored Foreign-Library Interfaces](DN-0037-ash-authored-foreign-library-interfaces.md)
-  — a separate program for typed foreign contracts, generic host ABI calls,
-  memory and linking, with Ash binding code and declarative native build inputs.
+  — accepted pointer/void foreign calls, ordinary Ash binding policy and
+  generated evaluator hosts; full SQLite and richer ABI mappings are not implemented.
 - [DN-0036: Foreign Library and Memory Provider Experiments](DN-0036-foreign-library-and-memory-provider-experiments.md)
   — coordinated SQLite and scoped-arena experiments, type-checking contracts,
   surface syntax and Core semantics, a foreign-library authoring blueprint,
@@ -283,7 +291,8 @@ and exclusions remain at their linked owners.
 ## Generic Cell follow-up
 
 - [DN-0053: Scoped Generic Cells Without Native Owners](DN-0053-scoped-generic-cells-without-native-owners.md)
-  records the rationale and remaining questions behind the
-  [generic cell checkpoint integrated into local Main](generic-cell/evidence.md).
+  records the accepted, implemented generic-cell design and its
+  [Main checkpoint evidence](generic-cell/evidence.md).
 - [DN-0054: Base Lexical Region Memory Contracts](DN-0054-base-lexical-region-memory-contracts.md)
-  remains separate design work and is outside the generic Cell implementation.
+  records the accepted, implemented lexical-region design; its alternative
+  ownership and reclamation extensions are not implemented.

@@ -315,7 +315,7 @@ tail already lacks `H`. Otherwise discharge is ambiguous. This relation adds
 no lacks fact and does not relax ordinary handler admission or exact removal.
 
 Let `delta` denote the exact canonical private `DefaultAlloc` instance.
-Every Source value-function arrow expands its codomain row by idempotent union
+Every ordinary Source value-function arrow expands its codomain row by idempotent union
 with `{delta}`, including nested arrows. Thus omitted rows and written `! {}`
 include allocation, and written `! {E}` includes allocation and E. A written row
 still attaches only to its own computation codomain. For example,
@@ -325,6 +325,10 @@ still attaches only to its own computation codomain. For example,
 The outer pure arrow of an effect operation declaration remains its required
 operation shape. Value-function types nested in its domain or result receive
 ordinary expansion. Host/control leaves retain their actual complete rows.
+The canonical `Bytes.length`, `Bytes.equal`, `String.byte_length` and
+`String.equal` callable arrows are non-allocating builtin exceptions: their
+outer rows remain empty in exported schemes. Client-written arrows retain the
+ordinary expansion even when a builtin supplies the function value.
 This expansion infers no unrelated omitted effects and hides no observable
 provider effect. Core has no implicit defaults.
 

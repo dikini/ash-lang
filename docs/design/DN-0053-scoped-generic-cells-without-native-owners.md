@@ -1,7 +1,7 @@
 # DN-0053: Scoped Generic Cells Without Native Owners
 
 - ID: `DN-0053`
-- Status: exploring
+- Status: accepted
 - Related: [generic cell checkpoint evidence](generic-cell/evidence.md),
   [DN-0035](DN-0035-region-memory-management-and-verified-providers.md),
   [DN-0038](DN-0038-resource-properties-and-mutable-variable-usage.md),
@@ -11,21 +11,22 @@
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md),
   [AD-0008](../decisions/AD-0008-explicit-evaluator-machine.md)
 
-> This note records the agreed candidate contract for a generic cell following
-> the ash-ffi checkpoint. It defines no current Ash semantics, accepts no
-> implementation architecture, and authorizes no product implementation or
-> prototype. Resource-scope lifetime and rejection of resource dependency
-> cycles are explicit initial restrictions.
+## Accepted and implemented
 
-The [product checkpoint integrated into local Main](generic-cell/evidence.md)
-retains the accepted transition's implementation, specification, tests and
-verification, together
-with commands for retrieving its proposal and task history from local Git.
-Its verified local Main integration is recorded there. This note retains the
-candidate's rationale, alternatives and future questions; the current
-specification supplies language
-rules. Broader region contracts remain in
-[DN-0054](DN-0054-base-lexical-region-memory-contracts.md).
+Generic cells are accepted and implemented on `main` as part of `ffi-ash`.
+The accepted scope includes fixed ordinary payload types, reusable non-owning
+access, read snapshots, exact handler interception, retained-payload dependency
+checks and scope-owned completion. The legacy integer API remains separate.
+
+The [specification](../../spec/static-semantics.md#generic-cell-foundation)
+defines the language rules. The [checkpoint evidence](generic-cell/evidence.md)
+records implementation, tests, verification and Main integration. Core uses the
+shared resource carrier, and execution uses the shared cell kernel with distinct
+generic and legacy identities.
+
+Temporary younger dependencies, resource-owner cycles, linear payloads and new
+mutable syntax are not implemented. The alternatives below do not extend the
+accepted scope.
 
 ## Question
 
@@ -47,7 +48,7 @@ State/data relationship; they are not general cell operations.
 
 [DN-0038](DN-0038-resource-properties-and-mutable-variable-usage.md) compares
 shared mediated access, linear successors, and uniqueness. This note selects
-shared access for the candidate, without selecting the other disciplines.
+shared access for the implemented cell, without selecting the other disciplines.
 [DN-0035](DN-0035-region-memory-management-and-verified-providers.md) separates
 name scope, storage lifetime, access authority, and completion.
 [DN-0054](DN-0054-base-lexical-region-memory-contracts.md) proposes the explicit
@@ -72,7 +73,7 @@ region-backed ordinary construction first.
 - Retain independent Core validation and finite, charged dependency analysis.
   An implementation side table alone is not authority.
 
-## Candidate directions
+## Accepted design and unimplemented alternatives
 
 ### Selected semantic approach
 
@@ -83,8 +84,8 @@ current scoped-cell model.
 A general declaration form for resources with arbitrary Ash state could later
 reuse this contract, but is a broader language change. Linear state threading
 would require additional use-accounting rules. Neither is a prerequisite.
-The concrete Core representation and any shared implementation with existing
-integer cells remain open.
+The implementation uses the shared resource Core carrier and cell runtime.
+The generic and legacy APIs retain distinct defining identities.
 
 ### Types and operations
 
@@ -226,25 +227,19 @@ no source cleanup, and divergence promises no eventual release.
 
 ### Composition with regions and mutable syntax
 
-`R` identifies the cell owner, not an allocator. If a later implementation
-places its slot in region A, A must remain valid for the slot, but closing the
-cell still revokes access at R. A region-backed payload retains its original
-region dependencies. Assignment neither relocates it nor extends its region.
+`R` identifies the cell owner, not an allocator. Its logical lifetime is the
+resource scope. Region-backed payloads retain their original region dependencies;
+assignment neither relocates them nor extends their region. Closing the cell
+revokes access even when other storage remains live.
 
-Regions provide placement and allocation. An ownership scheme determines who
-owns A and its allocated objects and determines A's lifetime; lexical scope is
-the first scheme explored in
-[DN-0054](DN-0054-base-lexical-region-memory-contracts.md). Each region type may
-specify an earlier object reclamation policy, including region-specific
-collection. That policy must preserve valid object use; reclaiming A reclaims
-all remaining objects allocated there together. A slot backed by A is subject
-to this storage lifetime while R still bounds its logical access and completion.
-None of these choices changes this cell candidate's resource-scope lifetime or
-retained payload restrictions.
+The implemented lexical-region contract supplies caller-selected default
+allocation and explicit `using` selection. Allocating helpers use that selection;
+they do not require an explicit region argument. Cell reads preserve the actual
+storage and dependency facts of the returned snapshot.
 
-Under [DN-0054](DN-0054-base-lexical-region-memory-contracts.md), allocating
-helpers initially receive explicit region access. That choice does not extend
-cell lifetimes or introduce implicit allocation-polymorphic closures.
+Individual object reclamation, moving collection, alternative ownership schemes
+and new mutable-variable syntax are not implemented. These extensions do not
+change the accepted cell lifetime or retained-payload restrictions.
 
 Mutable-variable syntax can later elaborate a declaration to a resource scope
 over its lexical remainder. Bare reads, explicit access sharing, assignment

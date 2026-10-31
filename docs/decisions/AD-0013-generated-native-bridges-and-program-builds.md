@@ -38,6 +38,10 @@ compatibility is promised. Startup independently reconstructs and validates Core
 and exact bridge registrations before evaluation. No live pointer is an image
 constant. Ordinary source handlers retain nearest-handler precedence.
 
+Generated images support generic cells, lexical regions and retained control.
+They do not support Network scopes or operations. Pinned-worker programs execute
+through the source-native interpreter, including admitted host callbacks.
+
 Bytes exposes one readonly pointer with managed backing retained through the
 synchronous call. Address preserves a data pointer without integer conversion;
 Unit results use actual void. Retention of a Bytes pointer beyond a call requires
@@ -67,7 +71,7 @@ preparation gas = 850 * (admitted source UTF8 bytes + validated main Core nodes)
 resolution gas  = max(327680, 80 * (canonical loaded source UTF8 bytes, including builtins))
 source gas      = 10000 * (canonical loaded source UTF8 bytes, including builtins)
 final gas       = 800 * (the same canonical source UTF8 closure)
-builder gas     = max(327680, 8 * (the same canonical source UTF8 closure)), per program arena
+builder gas     = max(327680, 12 * (the same canonical source UTF8 closure)), per program arena
 rewrite gas     = 16 * (the same canonical source UTF8 closure), per compiler arena
 Core gas        = 25000 * (the same canonical source UTF8 closure)
 startup gas     = 118 * (canonical image bytes + canonical expected-fact bytes)
@@ -144,7 +148,6 @@ restored exactly. The largest complete owner has a ceiling 25% reserve target
 of 15,647,273; the next 65,536-work-unit step is 15,663,104, giving 25.1265%
 reserve. This replaces the earlier fixed 720,896 fit, without a new scaling
 rule, changed capture semantics or work sharing between independent owners.
-
 
 On 2026-10-26 the unchanged 8,000-member recursive-group/call-chain test exposed
 the fixed primary builder cap and repeated whole-arena variable searches during

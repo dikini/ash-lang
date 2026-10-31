@@ -1,9 +1,17 @@
 # Dynamic Semantics
 
 Ash evaluation is defined by one small-step relation over configurations
-`CONFIG(heap, environment, control, continuation)`. Its Ash control transitions
-are deterministic relative to fixed admitted native bindings and the outcomes
-of their external calls; it does not determine or guarantee those outcomes.
+`CONFIG(heap, environment, control, continuation; workers, transport)`.
+The last two components retain pinned-worker configurations and shared channel
+state. They start empty; rules that do not access them leave them unchanged and
+omit them from the notation below. Each worker has its own heap, environment,
+control and continuation, with the same local rules.
+
+Sequential execution is deterministic relative to fixed admitted native bindings
+and external-call outcomes. Pinned-worker execution additionally depends on the
+interleaving of worker and transport steps. Ash does not fix that interleaving
+or promise fair scheduling. Fixing it and the external outcomes determines the
+corresponding Ash control steps.
 The heap is
 fresh for one evaluation and maps numeric locations to tuples, completed
 constructors, uninitialized slots for recursive data, or
@@ -660,6 +668,37 @@ over Boolean values. The left rules propagate a step in the left operand. The
 right rules apply only after the left operand is an integer value. The value
 rules compute the primitive result.
 
+## Byte and string execution
+
+Canonical byte/string callables evaluate the function and argument once by the
+ordinary application rules. Tuple operands evaluate in source order. The value
+operation then selects the following result; it does not invoke user code.
+
+| Operation and evaluated input | Selected result |
+| --- | --- |
+| `Bytes.empty ()` | Empty Bytes. |
+| `Bytes.length bytes` | The mathematical byte count. |
+| `Bytes.equal (left, right)` | True exactly when both byte sequences are equal. |
+| `Bytes.append_byte (bytes, n)` | `BytesAppended` containing the original sequence followed by byte n when `0 <= n <= 255`; otherwise `InvalidByte`. The input is unchanged. |
+| `Bytes.at (bytes, i)` | `ByteAt(n)` for the unsigned byte at zero-based index i; otherwise `InvalidIndex`. Negative, unrepresentable and out-of-range indices are invalid. |
+| `String.to_utf8 text` | Bytes containing exactly the text's UTF-8 encoding. |
+| `String.from_utf8 bytes` | `Decoded(text)` for valid UTF-8; otherwise `InvalidUtf8`. No replacement decoding occurs. |
+| `String.byte_length text` | The UTF-8 byte count. |
+| `String.equal (left, right)` | True exactly when the UTF-8 sequences are equal. No normalization occurs. |
+
+`Bytes` and `String` in this table name the canonical builtin modules, independent
+of import spelling. The operation retains its evaluated inputs and selected
+allocation context. Persistent output backing and result constructors then use
+the region request, pending initialization and publication steps above. Input
+evaluation and completed construction are not replayed after resume. Checked
+discard abandons only the unfinished construction and closes its owned control.
+Non-allocating primitive leaves return their immediate result directly.
+
+Complete traversal, size checks and result preparation are charged before
+publication. Declared allocation refusal follows ordinary effect/discard rules;
+internal work/storage exhaustion is terminal. Native invocation, foreign memory
+access and encoding conversion are not implicit in any of these operations.
+
 ## Native symbol execution
 
 Write `a_p` for an Address value whose private data pointer is `p`, and `a_null`
@@ -800,6 +839,37 @@ out-pointer storage or compiler-managed foreign lifecycle is supplied. Ordinary
 cleanup and resource completion rules below continue to govern Ash control.
 
 ## Pinned network execution
+
+The `workers` component records each carrier's local configuration and
+prepared, running, returned or terminal-held state. `transport` records each
+network's two FIFO directions, capacity, send/receive reservations, seals,
+receive closure, watches, generations, pending wakes and terminal state. The
+coordinator's continuation owns the network until settlement. Nested networks
+retain their own activations and owners.
+
+One step advances either an eligible local executor or one transport phase.
+The following table defines network phases of the same configuration relation;
+ordinary operand evaluation, source calls and result construction use the local
+rules between these phases. Atomic commit means the indicated state change
+cannot be observed halfway through by the other worker.
+
+| Step | Preconditions and state change |
+| --- | --- |
+| NetworkPrepare | Evaluate capacity, named entries and startup inputs before publication; prepare two carriers, two directions and independent startup copies. Failure publishes no successful network owner. |
+| WorkerStart | After entry commit, establish that worker's root, global records and local entry application on its carrier. Preserve the other worker's state. |
+| WorkerStep | Advance one eligible worker by an existing local rule. A local capture, retain, resume or cleanup step changes only that worker's control and Store ownership. |
+| SendPrepare | Authenticate the worker and side; evaluate operands and reserve send support. Closed or Full accepts no message. Prepare the copied payload before acceptance. |
+| SendCommit | Atomically append the copied envelope with its authenticated kind and sending side. Later result-allocation failure does not retract the accepted message. |
+| ReceiveReserve | Authenticate the receiving side and reserve its incoming FIFO head. No other receipt removes that head while reserved. Empty and End follow the queue/seal state. |
+| ReceiveCommit | After the complete receiver-owned result is initialized in the selected region, remove the reserved head atomically and return that result. Failed preparation restores the head. |
+| WatchPrepare/Publish | Reserve a fresh generation-associated watch, recheck readiness under synchronization and publish the registration only after reply preparation. Roll back an unpublished registration on failure. |
+| Wake/Poll/Cancel | Readiness marks a matching live registration pending. Poll consumes its pending notification; cancellation removes the registration and prevents new notifications. A stale generation is not a live registration. |
+| FinishSend | After earlier operations resolve, seal that sending direction. Subsequent sends are Closed. |
+| FinishReceive | Close only when the actual incoming direction is sealed and empty and no transport operation remains outstanding. |
+| WorkerReturn | Record actual local return while retaining that worker's root, evaluator and native support on its carrier. This does not authorize teardown or release channel backing. |
+| CarrierTeardown | After the coordinator observes both normal returns, finished endpoints and no transport users, authorize each carrier to dispose its own retained root and support and report its teardown result. A failed prerequisite retains that support. |
+| NetworkSettle | Require both normal worker returns, finished endpoints, no outstanding operations or watches and completed local teardown; join carriers and release backing. |
+| NetworkFailure | Mark transport terminal. If local completion cannot finish, retain the affected configuration and support on its carrier and report incomplete teardown. Do not report successful settlement. |
 
 A network acquisition prepares two worker carriers and two positive-capacity
 FIFO byte channels. Each worker runs its own Ash root on one carrier thread; any local Stores
@@ -1173,6 +1243,52 @@ family resource-boundary-steps:
     CONFIG(heap, environment_value, value, CELL(a, n) :: continuation) -> CONFIG(heap, environment_value, value, continuation)
 ```
 
+For generic cells, write `GCELL(a, T, payload)` for the corresponding owner
+frame. `GINIT` saves the checked payload type, body and preceding environment.
+`bind_generic` installs the fresh identity, handle, lexical instantiation and
+complete provider relation. `select_generic` searches in ordinary boundary order;
+it succeeds only for the exact instantiated `Ops<R,T>` and actual handle.
+`prepare_reply` includes fallible checking, copying and trace preparation before
+any payload replacement.
+
+```sequent
+family generic-cell-steps:
+  E-Generic-Initialize :=
+    ===>
+    CONFIG(H, E, resource Cell.Cell<R,T> c = initializer { body }, K) -> CONFIG(H, E, initializer, GINIT(R, T, c, body, E) :: K)
+
+  E-Generic-Acquire :=
+    payload has the checked fixed type T
+    acquisition preparation succeeds with fresh activation a
+    bind_generic(E_scope, R, T, c, a) = E_body
+    ===>
+    CONFIG(H, E_value, payload, GINIT(R, T, c, body, E_scope) :: K) -> CONFIG(H, E_body, body, GCELL(a, T, payload) :: K)
+
+  E-Generic-Read :=
+    select_generic(K, operation, instantiation, operand) = read, a, T, payload
+    prepare_reply(payload) succeeds
+    ===>
+    CONFIG(H, E, operand, REQUEST(operation, instantiation) :: K) -> CONFIG(H, E, payload, K)
+
+  E-Generic-Write :=
+    select_generic(K, operation, instantiation, operand) = write, a, T, old
+    operand is the authenticated pair of handle a and replacement
+    prepare_reply_and_replacement(replacement) succeeds
+    K_new replaces only GCELL(a, T, old) in K with GCELL(a, T, replacement)
+    ===>
+    CONFIG(H, E, operand, REQUEST(operation, instantiation) :: K) -> CONFIG(H, E, (), K_new)
+
+  E-Generic-Return :=
+    ===>
+    CONFIG(H, E, value, GCELL(a, T, payload) :: K) -> CONFIG(H, E, value, K)
+```
+
+These rules preserve the current shared payload value on read and change only
+the selected root on write. A nearer exact source handler selects its clause
+instead. Preparation failure leaves the slot unchanged; internal disposal failure
+after replacement terminates execution as described below. The alias `Cell` in
+the initialization rule denotes the canonical generic-cell family.
+
 Static checking ensures that the returning value does not depend on `a`.
 An inner return releases the inner cell before continuing inside its outer
 scope. An escaped independent snapshot retains its ordinary shared value after
@@ -1309,6 +1425,20 @@ evaluator work ledger. There is no machine-global registry, copied whole-chain
 snapshot, priority sort or second callback evaluator. Hook-free Pure execution
 allocates no registration owner or live-registration storage.
 
+The lowered registration control uses the following steps of the same relation.
+Handler requests and callback applications between these steps use the existing
+request, resume and application rules.
+
+| Step | Preconditions and state change |
+| --- | --- |
+| HookEnter | Install the exact identity handler for the qualifying publish operation. Ordinary handler return removes it. |
+| RegisterInitialize | Evaluate the transformer once before acquiring any registration owner. |
+| RegisterAcquire | After complete preparation, create a fresh owner retaining the transformer and enter its body under the generated exact handler. |
+| PublishForward | The generated clause requests the older chain through ordinary nearest-boundary selection. The selected older registration's owner remains outside its capture; younger registration owners and pending publication control may move into that capture. |
+| PublishTransform | After the older chain returns, apply the retained transformer once, then resume the publisher with that result. |
+| RegisterReturn | Remove the completed owner's entry once and pass the saved body result outward. |
+| RegisterDiscard | At the owner's structural close position, remove its entry without invoking an abandoned transformer or publication suffix. |
+
 ## Scoped cleanup actions
 
 A cleanup expression evaluates its action once in the preceding environment.
@@ -1334,6 +1464,22 @@ An invocation attempt is not a proof of termination or successful native
 release. Internal exhaustion or termination provides no source-cleanup
 guarantee. Host teardown remains iterative, does not replay completed actions
 and does not roll back effects already performed.
+
+The invocation owner moves through these explicit phases. Ordinary application
+steps evaluate the action between `CleanupStart` and `CleanupFinish`; capture
+and resume preserve its current phase and saved value.
+
+| Step | Preconditions and state change |
+| --- | --- |
+| CleanupInitialize | Evaluate the action once in the preceding context; acquire no invocation obligation yet. |
+| CleanupAcquire | Complete preparation and retain the action with its selected allocation context; publish one armed owner and enter the body. |
+| CleanupStart | On normal body return or admitted owned close, change the armed owner to running, save any normal body result and invoke the action with Unit under its required surviving context. |
+| CleanupFinish | After the action returns Unit, discharge the running owner. Restore the saved normal body value, or advance the owned close to its next structural owner. |
+
+An owner enters `CleanupStart` at most once. A running owner and unfinished
+owned close remain required completion and cannot be discarded. Removed source
+handlers are not restored to execute the action. Internal failure is terminal
+and does not promise that remaining armed actions will run.
 
 ### Typed failure reporting
 

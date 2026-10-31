@@ -1,7 +1,7 @@
 # DN-0056: Scoped Continuation Retention and Library Scheduling
 
 - ID: `DN-0056`
-- Status: exploring
+- Status: accepted
 - Related: [DN-0033](DN-0033-direct-effects-and-continuation-capabilities.md),
   [DN-0051](DN-0051-userspace-concurrency-and-scheduling.md),
   [DN-0038](DN-0038-resource-properties-and-mutable-variable-usage.md),
@@ -10,16 +10,30 @@
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md),
   [AD-0008](../decisions/AD-0008-explicit-evaluator-machine.md)
 
-> This design note is informative. It defines no current Ash semantics,
-> accepts no architecture, and authorizes no product implementation. The
-> bounded proof assignment below is experimental evidence. The rules below are
-> candidate obligations, not an established soundness result.
+## Accepted and implemented
 
-The local sequential subset is implemented and specified on the M3 milestone.
-The [retained product evidence](retained-control/README.md) records its bounded
-proofs and tests. The worker, migration and network discussions in this note
-remain design exploration, not implemented language contracts. Main delivery is
-separate from the retained milestone.
+Scoped continuation retention and library scheduling are accepted and implemented
+on `main` as part of `ffi-ash`. Stores own retained control; keys are non-owning;
+restoration is one-shot; active branch suffixes and cleanup count as unfinished
+work. Admission checks support and interpreter identity. Normal-return analysis
+and fresh Store-selected Probe facts govern release.
+
+[Scheduling.ash](../../libraries/scheduling.ash) implements coroutine selection,
+drain and cooperative FIFO scheduling. The [gas safe-point example](../../tests/fixtures/scheduling/gas.ash)
+and [scheduling tests](../../tests/scheduling.rs) implement explicit charged yielding. The fixed
+two-worker host and copied FIFO channels are also implemented under
+[AD-0017](../decisions/AD-0017-pinned-worker-host-and-transport.md). Work/Ack
+accounting and its error paths are ordinary Ash library code.
+
+The [specification](../../spec/static-semantics.md#scoped-retained-control)
+defines the accepted control contract. [Retained product evidence](retained-control/README.md)
+records the models, implementation, tests and Main integration.
+
+Worker migration, shared Stores, general cancellation, automatic checkpoint
+insertion and source proof-plan integration are not implemented. The former
+protocol-specific compiler checker and one-way completion checker are retired.
+Their derivations below are historical; the current compiler does not certify
+Work/Ack bookkeeping or per-message processing completion.
 
 ## Question
 
@@ -42,8 +56,8 @@ as its baseline. Migration is a separate ownership-transfer extension.
 - Cleanup alone proves neither quiescence nor eventual completion. Its
   ordinary `Unit -> Unit` callback type cannot certify that the callback drained
   retained control. A finite-execution induction proves quiescence on normal
-  return for the simple recursive drain below. A candidate finite analysis uses
-  recursive normal-return summaries and authenticated, fresh probe facts,
+  return for the simple recursive drain below. The implemented finite analysis
+  uses recursive normal-return summaries and authenticated, fresh probe facts,
   without a new gate primitive.
 - At the start of this study, Ash could not put its hidden continuation
   capability in storage. The retained local extension transfers owned control
@@ -83,8 +97,8 @@ as its baseline. Migration is a separate ownership-transfer extension.
   transformations. No general proof search or executable proof primitive is
   required; the restricted checking rules still need a soundness argument.
 
-These are design findings. They do not make a source library implementable
-using only today's public Ash APIs.
+The local Store and scheduling findings are implemented. The restricted proof
+integration and wider ownership extensions are not implemented.
 
 ## Context
 
@@ -130,7 +144,7 @@ not establish retained execution. [DN-0051](DN-0051-userspace-concurrency-and-sc
 records broader task, wait, cancellation, and parallel execution questions.
 This note tests a smaller mechanism without adopting a primitive task model.
 
-The generic cell candidate in [DN-0053](DN-0053-scoped-generic-cells-without-native-owners.md)
+The implemented generic cell in [DN-0053](DN-0053-scoped-generic-cells-without-native-owners.md)
 stores reusable, discardable ordinary values. It explicitly excludes restricted
 payload ownership. Replacing its payload type with a continuation does not
 establish the transfer or completion rules required here.
@@ -173,7 +187,7 @@ parallel; their local stores remain exclusive and their continuations pinned.
 | Candidate | Assessment |
 | --- | --- |
 | Dedicated scope and runtime closing loop | Duplicates lifetime/invocation. |
-| Owning resource, cleanup, checked drain | Preferred candidate. |
+| Owning resource, cleanup, checked drain | Accepted and implemented. |
 | Cell of functions or explicit states | Cannot retain arbitrary control. |
 
 The study's preferred direction reused resource and cleanup structure. At that
@@ -305,16 +319,12 @@ above; normal-return partial correctness alone does not admit that path.
 
 ### Required analysis extension
 
-The mathematical proof does not make quiescence a fact that today's checker
-already knows. Current structural capability states describe available and
-consumed continuation owners. Current cleanup analysis does not infer arbitrary
-facts about resource contents from ordinary returned constructors.
-
-The following candidate extends inferred completion summaries over existing
-Core control. It is not an implemented analysis or a proved soundness result.
-Its scope is the first local store fragment, with exclusive executor control.
-The later [protocol analysis](#protocol-aware-completion-analysis) adds the
-facts needed to compose those local proofs across the two-worker network.
+The local Store analysis is implemented. It tracks normal returns, recursive
+call summaries and current authenticated Probe observations, including branch
+suffixes and cleanup. The [static rules](../../spec/static-semantics.md#scoped-retained-control)
+and [C3 correspondence](retained-control/drain-correspondence.md) record the
+delivered analysis. Ordinary constructors do not certify arbitrary resource
+contents. The later protocol-aware analysis is retired.
 
 #### Store-state and normal-return summaries
 
@@ -685,8 +695,8 @@ deadlock freedom in the presence of joins and other waits by themselves.
 
 Kernel threads supply execution for library executors. The baseline gives each
 worker exclusive control of its own store and keeps its computations on that
-worker. Pinning here does not require CPU affinity. This is a candidate host
-composition, not a capability implemented by current Ash.
+worker. Pinning here does not require CPU affinity. This host composition is
+implemented for the fixed two-worker network under AD-0017.
 
 The following tree shows ownership and placement, rather than Ash syntax:
 
@@ -736,16 +746,14 @@ safe waiter registration, stale-notification handling, and backing protection
 through the last possible access. The baseline does not require synchronization
 on ordinary worker-local store operations. It does require synchronization at
 these cross-thread boundaries and for any runtime representation actually shared
-between workers. No concurrent memory model or channel algorithm is established
-by this note.
+between workers. The implemented copied-byte transport uses synchronized FIFO
+state, generation-checked watches and readiness rechecks. Region transfer and
+shared ordinary graphs are not implemented.
 
 A blocking host call occupies its worker, preventing that executor from running
-its other computations until the call returns. An admitted adapter can instead
-retain the waiter locally and submit fresh blocking work to another thread.
-Its inputs and resource obligations remain live through actual completion;
-notification returns to the owning executor for restoration. This requires its
-own host-operation contract, rather than arbitrary transfer of an active Ash
-or native stack.
+its other computations until the call returns. A general blocking-work adapter
+that submits work to another thread and restores a local waiter is not
+implemented. Active Ash and native stacks are not transferred between workers.
 
 #### Local quiescence and network completion
 
@@ -981,8 +989,11 @@ handling a message may send further messages through its send endpoint. Messages
 still carry copied, resource-free application data.
 There is no endpoint migration or shared ordinary application resource authority.
 
-This is a candidate normal-completion protocol. Its accounting laws must be
-verified or admitted; current Ash does not already implement or check them.
+The [ordinary Work/Ack library](../../libraries/network_protocol.ash) implements
+bidirectional accounting and error handling. The protocol-specific compiler
+checks discussed below were superseded on 2026-10-31 and are retired. The host
+authenticates transport origin and kind; it does not certify honest acknowledgements
+or per-message processing completion.
 An application activation below means an ordinary invocation of message-handling
 code, not a new task value or Core control form.
 
@@ -1194,7 +1205,8 @@ normal-return summaries already derived for local stores. It checks library
 orchestration against small accounting and transport contracts. It does not
 infer that an arbitrary map or counter represents all unfinished work.
 
-This is an analysis design, not an implemented checker or soundness result.
+The protocol-specific checker is retired. This section records its historical
+design; it is not a requirement of the implemented ordinary Work/Ack library.
 The current [control summaries](../../spec/elaboration.md#effect-core-lowering)
 and [independent validation](../../spec/elaboration.md#validation-boundary)
 provide the basis. They do not already establish these protocol facts or admit
@@ -1735,9 +1747,9 @@ of the candidate finite completion analysis. Checked use must authenticate:
 
 Ordinary privacy, callback types, or source assertions cannot supply those
 proofs. The [restricted integration mechanism](#restricted-proof-integration-at-the-core-validation-boundary)
-below is a candidate for checking them against Core. Its exact rule set and
-soundness remain open; the paper proof cannot yet replace admission in a
-checked program. A transform that changes removal, dispatch, or state flow
+below proposes checking them against Core and is not implemented. Its rule set
+and soundness questions are separate from the implemented ordinary protocol.
+A transform that changes removal, dispatch, or state flow
 must re-establish the affected lemmas and completion facts.
 
 With that integration, ledger-specific admission can be removed. The remaining
@@ -2251,12 +2263,9 @@ provider laws, termination, or the wider network claims in this note.
 
 The [C1 model](retained-control/README.md) checks its selected ownership
 transitions under explicit premises; it does not prove the compiler or
-evaluator correspondence. This
-note's recursive drain argument remains a paper derivation against the linked
-current specification, with no checked drain proof, executable retention
-implementation, benchmark, or new current-language example. Existing one-shot,
-cleanup, and resource evidence transfers only to the sequential invariants it
-actually tests.
+evaluator correspondence. The C3 drain model, executable Store implementation
+and scheduling examples are delivered and recorded in the same evidence index.
+No scheduling benchmark or whole-compiler correctness proof is supplied.
 
 The bidirectional accounting comparison draws on Dijkstra and Scholten's
 [termination detection for diffusing computations](https://www.cs.utexas.edu/~EWD/transcriptions/EWD06xx/EWD687a.html).
@@ -2266,11 +2275,10 @@ conceptual evidence for separating physical communication from completion
 dependencies. It is not a transferred proof of Ash's retained continuations,
 resource authority, cleanup, passivity restrictions, or provider contracts.
 
-The next comparison should exercise the same control under coroutine selection,
-cooperative queue selection, and guarded gas selection. It should use an
-owning resource plus existing cleanup as the baseline against a dedicated
-runtime closing loop. Compare semantic obligations and required Core/runtime
-changes before comparing performance.
+The [scheduling tests](../../tests/scheduling.rs) exercise coroutine selection,
+cooperative queue selection and guarded gas selection using the owning Store
+and existing cleanup. A performance comparison with a dedicated runtime closing
+loop has not been implemented.
 
 Required positive cases include:
 
@@ -2404,26 +2412,19 @@ Each move must preserve unique ownership and completion phase. A progress result
 must state its library/host assumptions rather than infer termination from
 these safety properties.
 
-Any later disposable prototype needs separate authorization. Its question is
-whether resource-plus-cleanup composition can validate these cases with less
-new machinery than a dedicated task or closing-scope node. Retain a bounded
-comparison and counterexamples as design evidence; discard experimental runtime
-machinery unless a later proposal explicitly selects it for product delivery.
+Resource-plus-cleanup composition, Store moves and local drain checking are
+implemented. The counterexamples for those features are covered by the linked
+product tests. Wider proof integration, migration and cancellation cases remain
+unimplemented.
 
 ## Open questions
 
-1. Is the candidate finite return relation sound and sufficiently precise for
-   store aliases, mutual recursion, imported control, and handler reinstatement?
-   How should validation bound its state space and retain probe freshness facts
-   through callback substitution and specialization?
-2. How should fresh root admission and retained control carry branch authority
-   without adding a general task primitive or assuming that duplicable resource
-   handles are safe to share between concurrent processes?
-3. Which external interpreter contexts can remain protected during normal drain
-   and outer abandonment, and what restrictions give the smallest useful case?
-4. What authenticated resource payload and operations admit owned captures while
-   preserving slot capacity, failure atomicity, administrative back-references,
-   and nonescape? Generic cell semantics do not answer this question.
+1. Which additional programs justify improving the precision or cost of the
+   implemented finite normal-return analysis?
+2. What additional authority rules would permit migration or shared Stores?
+3. Which additional interpreter contexts should a future extension admit?
+4. What additional resource payloads should extend the implemented Store
+   operations and their scope, capacity and failure rules?
 5. Which typed checkpoint coverage contracts would justify stronger gas or
    latency bounds, independently of source syntax and insertion machinery?
 6. Which wait, channel, and host-operation settlement contracts are needed

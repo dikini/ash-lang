@@ -1,26 +1,30 @@
 # DN-0057: Checked FFI Module Boundaries
 
 - ID: `DN-0057`
-- Status: exploring
+- Status: superseded
 - Related: [DN-0037](DN-0037-ash-authored-foreign-library-interfaces.md),
   [DN-0036](DN-0036-foreign-library-and-memory-provider-experiments.md),
   [DN-0018](DN-0018-runtime-established-static-evidence.md),
   [DN-0042](DN-0042-native-interaction-and-efficient-data.md),
   [DN-0054](DN-0054-base-lexical-region-memory-contracts.md)
 
-> This design note is informative. It defines no current Ash semantics,
-> accepts no architecture and authorizes no product implementation.
+## Current disposition
 
-The narrow owner-free scalar GNU in-process realization is now selected by
-[AD-0015](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0015-linux-scalar-inprocess-whole-images.md), under
-explicit trusted closure and refusal obligations. That accepted non-language
-choice does not adopt the remaining exploration here, approve an executable or
-complete isolated/SQLite/owner deployment evidence.
-[AD-0016](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0016-linux-owner-inprocess-whole-images.md) later
-selects the owner/resource GNU in-process whole-image mechanism under explicit
-trusted closure and host-loss premises. Per-image strict approval, connected
-checked runtime/admission and deployment enforcement remain separate gates;
-this informative note acquires no language authority from that decision.
+The checked-host programme in this note is superseded. Its protected launch,
+isolated execution, compiler-managed foreign owners and full SQLite boundary
+are not implemented in current `ffi-ash`.
+
+Historical [AD-0015](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0015-linux-scalar-inprocess-whole-images.md)
+and [AD-0016](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0016-linux-owner-inprocess-whole-images.md)
+selected whole-image mechanisms for that programme.
+Those choices are superseded. Their recorded probes are historical experiments.
+
+The accepted current boundary is [DN-0037](DN-0037-ash-authored-foreign-library-interfaces.md)
+and [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md):
+passive pointer/void declarations, synchronous readonly Bytes arguments and
+ordinary Ash binding policy. The [specification](../../spec/static-semantics.md#source-foreign-declarations)
+defines that implemented boundary. The remaining text records unimplemented
+checked-boundary designs and historical experiment results.
 
 ## Question
 

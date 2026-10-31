@@ -21,6 +21,12 @@ only source of current Ash semantics. An accepted architectural decision governs
 current non-language architecture. Proposals, tasks, plans, and design notes do
 not define current Ash.
 
+An accepted design note records the disposition of its selected design. Its
+implemented scope must link to the current specification and decisions; list
+unimplemented extensions and superseded choices separately. Do not describe
+implemented, accepted functionality as a draft or experiment because the note
+also contains unimplemented alternatives.
+
 Update these documents with the work they describe. An execution plan belongs to
 one active task, has no independent authority, and leaves the current tree when
 the task finishes. Other artifact lifecycles follow the artifact guide.

@@ -9,15 +9,16 @@ Ash is a rank-1 language with nominal data, interfaces, effects, lexical
 handlers and scoped resources. Programs are acyclic graphs of passive source
 modules. Each `.ash` file contains imports and declarations. Function signatures
 may state interface constraints and effect rows. The entry module supplies a
-local `main` function with an empty outward effect row:
+local `main` function. Its row may contain default allocation and required native
+symbol effects; the generated root and native interpretation discharge them:
 
 ```ash
 main : Unit -> Int
 main () = 42
 ```
 
-The [canonical specification](spec/README.md) defines the implemented language
-and runtime behavior.
+The current dialect is **ffi-ash**. The [canonical specification](spec/README.md)
+defines its implemented language and runtime behavior.
 The [`ash` tool guide](docs/tools/ash.md) explains module roots, invocation,
 output and failures, including [explicit native link inputs](docs/tools/ash.md#native-link-inputs)
 and [generated-host linkage checks](docs/tools/ash.md#generated-host-linkage-checks).
@@ -31,7 +32,9 @@ The annotated `mini-ash` and `modular-ash` Git tags retain the earlier single-fi
 and passive-module/interface milestones. The completed library and effect
 increments add explicit implementation selection, higher-kinded parameters,
 relational interfaces, module and local `newtype`, scoped evidence, checked
-one-shot resume/discard, cells, synchronous hooks and cleanup.
+one-shot resume/discard, cells, synchronous hooks and cleanup. ffi-ash also
+includes generic cells, lexical region storage, retained continuations,
+cooperative scheduling and two pinned workers with copied FIFO byte channels.
 Current source contains no dialect selector; the tags retain historical
 milestone states rather than selectable compiler modes.
 
@@ -43,7 +46,7 @@ identifies implemented slices, historical evidence and open directions.
 
 Project artifacts answer different questions:
 
-- [design notes](docs/design/README.md) explore options and uncertainty;
+- [design notes](docs/design/README.md) record accepted designs, alternatives and unimplemented extensions;
 - [architectural decisions](docs/decisions/README.md) record accepted non-language decisions;
 - [change proposals](docs/proposals/README.md) propose language-semantic changes;
 - [tasks](docs/tasks/README.md) organize active implementation work;

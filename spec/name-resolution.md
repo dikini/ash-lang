@@ -116,7 +116,8 @@ nominal type `SplitResult`, constructors `Parts((Int, Int))` and `Negative`,
 and `split_base256 : Int -> SplitResult`. The `Parts` tuple is quotient first,
 remainder second. Imports, aliases and public re-exports preserve all defining
 identities; an ordinary same-spelled function does not select builtin execution.
-The function has an empty outward row. Transparent construction of a value
+The source function arrow includes the canonical default allocation requirement.
+Transparent construction of a value
 with these constructors does not establish that an intrinsic call returned it.
 
 ### Independent byte and string modules
@@ -128,7 +129,12 @@ Ordinary string literals use the shared quoted-string syntax.
 `@builtin.bytes` and `@builtin.string` are passive canonical modules. Imports,
 aliases and re-exports preserve their original builtin function and result
 identities. Same-spelled client functions do not select builtin execution.
-Their ordinary functions have empty effect rows:
+`empty`, `append_byte`, `at`, `to_utf8` and `from_utf8` have the canonical default
+allocation requirement. Their signatures below omit that implicit member.
+The canonical `Bytes.length`, `Bytes.equal`, `String.byte_length` and
+`String.equal` callables are non-allocating and have empty rows, including in
+exported schemes. An ordinary client-written function arrow still receives
+default allocation expansion:
 
 | Module | Function | Result |
 | --- | --- | --- |

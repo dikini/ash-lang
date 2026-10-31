@@ -1,13 +1,13 @@
 # Implemented features
 
-This inventory describes the product boundaries in the connected smaller-FFI
-checkpoint. The [specification](../../spec/README.md) governs language semantics;
+This inventory describes the accepted, implemented `ffi-ash` dialect on `main`. The [specification](../../spec/README.md) governs language semantics;
 accepted [decisions](../decisions/README.md) govern non-language architecture.
 Test links identify regression obligations, not a new execution receipt.
 
-Main integration and final human acceptance remain separate gates; this inventory
-does not mark them complete. Historical experiments and receipts retain only
-their original input, scope and checkpoint claims.
+Generic cells, lexical regions, retained control, library scheduling and pinned
+workers are accepted and implemented. The status of unimplemented and retired
+features is listed explicitly below. Earlier milestone tags retain their
+original contents; `ffi-ash` adds no selectable compiler mode.
 
 ## Specified language features
 
@@ -33,13 +33,19 @@ retained evidence, rather than reporting a new test run.
 | Explicit method-local type parameters: one authenticated method scheme can be instantiated at different types. | [Interfaces and constrained schemes](../../spec/static-semantics.md#interfaces-and-constrained-schemes); [method-parameter evidence](../design/lib-ash/method-parameters-evidence.md). | [Interface corpus](../../tests/interface_corpus.rs), [method resource bounds](../../tests/method_parameter_resources.rs). |
 | Multi-parameter relational interfaces with one total forward determination edge, coherence checks and dependent-argument improvement. No associated-type projections or arbitrary dependency graphs. | [Constraint satisfaction](../../spec/static-semantics.md#constraint-satisfaction-and-checked-evidence); [relational-interface evidence](../design/lib-ash/relational-interfaces-evidence.md). | [Implementations](../../tests/implementations.rs), [selection](../../tests/interface_selection.rs), [summary authentication](../../tests/interface_generic_summary.rs). |
 | Scoped exact interface evidence through lexical `with`, tied to an active local nominal. Supplied methods may capture earlier values; this is not local implementation search or proof evidence. | [Scoped exact evidence](../../spec/static-semantics.md#scoped-exact-evidence); [scoped evidence report](../design/effect-ash/scoped-evidence-evidence.md). | [Scoped evidence](../../tests/scoped_evidence.rs), [interactions](../../tests/scoped_evidence_interactions.rs). |
-| Declared effects and computation rows, generic row tails, exact effect identities and checked row exclusions. A linked entry must have an empty effect row. | [Computation rows](../../spec/static-semantics.md#computation-types-and-effect-rows), [effects](../../spec/static-semantics.md#effects); [DN-0009](../design/DN-0009-effects-handlers-and-continuations.md). | [Effect rows](../../tests/effect_rows.rs), [typing](../../tests/effect_typing.rs), [modules](../../tests/effect_modules.rs). |
+| Declared effects and computation rows, generic row tails, exact effect identities and checked row exclusions. Source main may require default allocation and admitted native symbols; the generated root and native boundary discharge them, leaving the linked outer row empty. | [Computation rows](../../spec/static-semantics.md#computation-types-and-effect-rows), [effects](../../spec/static-semantics.md#effects); [DN-0009](../design/DN-0009-effects-handlers-and-continuations.md). | [Effect rows](../../tests/effect_rows.rs), [typing](../../tests/effect_typing.rs), [modules](../../tests/effect_modules.rs). |
 | Exhaustive lexical handlers, `perform`, single-use non-escaping `resume`, and checked owned `discard`. Discard closes recursively owned captures in structural order and skips abandoned results. | [Effects](../../spec/static-semantics.md#effects), [handler execution](../../spec/dynamic-semantics.md#effect-handlers-and-completion); [capture/discard evidence](../design/effect-ash/capture-discard-evidence.md), [DN-0033](../design/DN-0033-direct-effects-and-continuation-capabilities.md). | [Effect execution](../../tests/effect_runtime.rs), [independent Core](../../tests/effect_core.rs). |
 | Scoped mutable integer cells through sealed `@builtin.cell`: fresh runtime activations, reusable non-owning handles, dependency escape checks and one release on completion or owned abandonment. | [Cell typing](../../spec/static-semantics.md#scoped-cells-and-resource-dependencies), [execution](../../spec/dynamic-semantics.md#scoped-cell-execution); [resource evidence](../design/effect-ash/resource-scope-evidence.md). | [Resource typing](../../tests/resource_scope_typing.rs), [runtime](../../tests/resource_scope_runtime.rs), [Core](../../tests/resource_scope_core.rs). |
 | Synchronous typed hooks: lexical roots and registrations, outer-before-inner transformers, checked callback effects/dependencies and owner preservation across resume/discard. | [Hook typing](../../spec/static-semantics.md#synchronous-typed-hooks), [execution](../../spec/dynamic-semantics.md#synchronous-hook-execution); [hook evidence](../design/effect-ash/synchronous-hooks-evidence.md), [DN-0012](../design/DN-0012-coeffects-and-hooks.md). | [Hook runtime](../../tests/hooks_runtime.rs), [typing](../../tests/hooks_typing.rs), [Core](../../tests/hooks_core.rs). |
 | Scoped cleanup actions: retain one `Unit -> Unit` action, invoke it on normal completion or admitted abandonment, preserve the body result, and reject skipped outside/running completion. Typed reporting can keep ordered cleanup failures separate from body outcomes. | [Cleanup typing](../../spec/static-semantics.md#scoped-cleanup-actions), [execution/reporting](../../spec/dynamic-semantics.md#scoped-cleanup-actions); [cleanup evidence](../design/effect-ash/reliable-cleanup-evidence.md). | [Abandonment](../../tests/cleanup_abandonment.rs), [reporting](../../tests/cleanup_reporting.rs), [partial acquisition](../../tests/cleanup_partial_acquisition.rs). |
 | Managed immutable `Bytes`, UTF-8 `String`, string literals and ordinary construction, access, equality and UTF-8 conversion functions. No native binding is needed for these operations. | [Primitive expressions](../../spec/static-semantics.md#primitive-expressions), [byte/string modules](../../spec/name-resolution.md#independent-byte-and-string-modules). | [Byte/string tests](../../tests/bytes_strings.rs), [string literals](../../tests/string_literals.rs), [packed Core](../../tests/packed_core.rs). |
 | Generic cells through `@builtin.generic_cell`: fixed ordinary payload type, current contents and read snapshots, complete operation identity, dependency admission and scoped completion. | [Generic-cell foundation](../../spec/static-semantics.md#generic-cell-foundation), [cell execution](../../spec/dynamic-semantics.md#scoped-cell-execution). | [Resource typing](../../tests/resource_scope_typing.rs), [runtime](../../tests/resource_scope_runtime.rs), [Core](../../tests/resource_scope_core.rs). |
+| Lexical regions: default host-backed allocation, explicit `region`/`using`, fixed allocate/release pairs, supplied storage, stored closures and recursive graphs, pending construction and bulk release after cleanup. | [Region typing](../../spec/static-semantics.md#lexical-regions-and-construction-dependencies), [execution](../../spec/dynamic-semantics.md#region-construction-and-close-steps); accepted [DN-0054](../design/DN-0054-base-lexical-region-memory-contracts.md). | [Region runtime](../../tests/region_scope_runtime.rs), [actual native storage](../../tests/region_native_storage.rs). |
+| Scoped retained control: Store-owned captures, non-owning generation keys, one-shot restoration, exact support/interpreter checks and release after actual branch and cleanup completion. | [Retained-control typing](../../spec/static-semantics.md#scoped-retained-control), [execution](../../spec/dynamic-semantics.md#scoped-retained-control-execution); accepted [DN-0056](../design/DN-0056-scoped-continuation-retention-and-library-scheduling.md). | [Retained control](../../tests/retained_control.rs), [machine moves](../../src/eval/machine_retained_tests.rs). |
+| Ordinary scheduling library: coroutine selection, recursive drain, cooperative FIFO turns and explicit gas safe points. | [Library guide](../../libraries/README.md), [scheduling module](../../libraries/scheduling.ash). | [Scheduling](../../tests/scheduling.rs). |
+| Fixed two-worker network: independent roots and carrier-local Stores, copied FIFO byte channels, Application/Control kinds, watches, seal/End, endpoint settlement and terminal failure retention. | [Network typing](../../spec/static-semantics.md#pinned-worker-networks), [execution](../../spec/dynamic-semantics.md#pinned-network-execution); accepted [DN-0058](../design/DN-0058-pinned-worker-host-and-channel.md) and [AD-0017](../decisions/AD-0017-pinned-worker-host-and-transport.md). | [Pinned workers](../../tests/pinned_network.rs), [transport](../../src/eval/network_transport.rs). |
+| Ordinary Work/Ack protocol and canonical byte codec, including producing cleanup and error handling. The compiler does not certify application bookkeeping or honest acknowledgements. | [Library guide](../../libraries/README.md), [protocol](../../libraries/network_protocol.ash), [codec](../../libraries/network_codec.ash). | [Protocol cases](../../tests/pinned_network.rs), [codec cases](../../tests/network_codec.rs). |
+| Unbounded base-256 integer split with quotient/remainder results and selected-region result construction. | [Integer API](../../spec/name-resolution.md#compiler-owned-integer-module), [execution](../../spec/dynamic-semantics.md#region-construction-and-close-steps). | [Integer split](../../tests/integer_split.rs), [native storage stages](../../tests/region_native_storage.rs). |
 | Passive foreign symbols and canonical opaque Address with pure null/equality, readonly synchronous Bytes pointers and actual C void. Each symbol is an ordinary effect and may be handled by ordinary source handlers. Module-authored checks and cleanup supply policy. Raw Address adds no ownership, memory-access or resource escape authority. | [Foreign declarations](../../spec/static-semantics.md#source-foreign-declarations), [execution](../../spec/dynamic-semantics.md#native-symbol-execution). | [Slim FFI](../../tests/ffi_slim.rs), [source admission](../../tests/foreign_source_admission.rs), [native host cases](../../tests/program_build_native.rs). |
 
 ## Compiler and execution tools
@@ -85,13 +91,29 @@ rows and generic compiler validation remain separate product mechanisms.
 Nonbuiltin provider execution is unsupported. No current full SQLite, arena
 storage or compiler-managed foreign resource lifecycle is claimed.
 
-## Boundaries and verification
+## Execution support
 
-The source language remains rank-1. Proposition/proof terms, general associated
-projections, existential packaging, first-class polymorphic values and escaping
-or multi-shot resumptions have no delivered source support. General borrowing,
-regions, retained control, workers and concurrency remain separately scoped
-future work. The retained Float experiment does not introduce Float semantics.
+| Execution path | Supported features | Current limitation |
+| --- | --- | --- |
+| Source interpreter | Ordinary language, cells, regions, retained control, scheduling and pinned workers | Native calls need admitted host callbacks; the ordinary CLI does not build native bindings implicitly. |
+| Generated executable host | Ordinary language, cells, regions, retained control, scheduling and pointer/void native bridges | Network scopes and operations are not supported by private-image encoding. |
+
+## Not implemented
+
+General source borrowing, usage/lifetime-based automatic placement, region
+ownership transfer, moving collection, worker migration, shared-Store scheduling,
+general cancellation and automatic checkpoint insertion are not implemented.
+Neither are full SQLite bindings, richer ABI mappings, protected or isolated
+foreign execution, Float, filesystem and serialization APIs, a native Ash
+backend, source proof terms, general associated projections, existential
+packaging or first-class polymorphic source values.
+
+## Verification
+
+The source language remains rank-1. Continuations are owned by clauses or scoped
+Stores; they are not first-class source values. Multi-shot resumptions are not
+implemented. The retained Float prototype and finite proof models are experiments,
+not additional source features.
 
 Examples and regression references must match the connected implementation.
 The [normal verification guide](verification.md), final-head independent review

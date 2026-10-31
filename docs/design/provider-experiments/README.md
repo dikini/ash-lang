@@ -1,5 +1,17 @@
 # Foreign library and memory provider experiments
 
+## Retired implementation
+
+The provider, native-owner, SQLite and scalar Arena execution routes described
+here are retired from current Main. This package preserves historical experiment
+results. The APIs, source cases and reproduction commands below belong to the
+[pre-retirement source snapshot](https://github.com/dikini/ash-lang/tree/7949b6d9136b0152ee9104e67bd0451cb9db4727).
+Use that revision and its toolchain for those commands. Current `ffi-ash` uses
+the [accepted passive pointer/void boundary](../DN-0037-ash-authored-foreign-library-interfaces.md)
+and [lexical regions](../DN-0054-base-lexical-region-memory-contracts.md).
+
+## Historical experiment record
+
 > This package is informative and governed by
 > [DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md).
 > Candidate contracts, syntax, and Core rules are experimental. The
@@ -85,12 +97,12 @@ changing Cargo configuration. Their presence is not a new pass receipt:
 CARGO_BUILD_JOBS=1 RUSTC_WRAPPER= cargo test -p ash --test provider_sqlite_source copying_sqlite_session_executes_through_public_foreign_runtime -- --exact
 ```
 
-The SQLite [entry module](../../../tests/fixtures/provider-experiments/sqlite-copying/entry.ash)
+The SQLite [entry module](https://github.com/dikini/ash-lang/blob/7949b6d9136b0152ee9104e67bd0451cb9db4727/tests/fixtures/provider-experiments/sqlite-copying/entry.ash)
 opens an in-memory connection, prepares `SELECT ?1`, binds 42, steps and copies
 the integer. The test checks
 `Completed(Completed(Ok(42), Closed), Closed)` and observes statement
 finalization before connection close. The
-[SQLite helper](../../../tests/provider_sqlite_source.rs) shows the complete
+[SQLite helper](https://github.com/dikini/ash-lang/blob/7949b6d9136b0152ee9104e67bd0451cb9db4727/tests/provider_sqlite_source.rs) shows the complete
 public binding setup.
 
 The host example also runs all five
@@ -124,9 +136,9 @@ Check the complete source value and native observations against the package's
 required outcomes. A successful host exit alone does not establish source-level
 success or successful completion.
 
-The arena [entry module](../../../tests/fixtures/provider-experiments/arena-basic/entry.ash)
+The arena [entry module](https://github.com/dikini/ash-lang/blob/7949b6d9136b0152ee9104e67bd0451cb9db4727/tests/fixtures/provider-experiments/arena-basic/entry.ash)
 uses typed configuration `(64, 4)` and reads native usage `(0, 64, 0, 4)`.
-The [public driver setup](../../../tests/provider_arena_source.rs) registers the
+The [public driver setup](https://github.com/dikini/ash-lang/blob/7949b6d9136b0152ee9104e67bd0451cb9db4727/tests/provider_arena_source.rs) registers the
 original memory manifest and its executable adapter. Reproduce the lifecycle:
 
 ```bash
@@ -167,7 +179,7 @@ first slices. Reference counting and tracing remain later comparison questions.
 The system SQLite runtime reports `3.46.1`; its source ID, library hash, and
 59 compile options are retained in the environment record. Initial setup found
 no `/usr/include/sqlite3.h` or `pkg-config sqlite3` metadata. The copying
-[adapter](../../../foreign-adapter/README.md) now uses a pinned matching upstream
+[adapter](https://github.com/dikini/ash-lang/blob/7949b6d9136b0152ee9104e67bd0451cb9db4727/foreign-adapter/README.md) now uses a pinned matching upstream
 header, a checked C shim and the installed runtime soname. The same crate now
 also supplies physical arena storage. Its target, ABI checks and native evidence
 are recorded in the environment and execution records. Native setup and storage

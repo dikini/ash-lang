@@ -44,10 +44,10 @@ lifetime-based placement inference remains a later optimization, not a substitut
 for the implemented default. [DN-0054](DN-0054-base-lexical-region-memory-contracts.md)
 retains related composition questions.
 
-A future comparison considers sequential processes communicating through
-dedicated channels. It tests ownership across communication without requiring
-shared mutable storage. It remains separate from the first sequential proof
-model and defines no current concurrency facility.
+Copied-byte communication between two pinned workers is implemented under
+[AD-0017](../decisions/AD-0017-pinned-worker-host-and-transport.md). Transfer of
+region ownership, shared graphs and alternative ownership schemes in this
+algebra are not implemented.
 
 ## Context
 
@@ -87,8 +87,8 @@ remain constraints. This note changes neither current cells nor their evidence.
 DN-0035's [later process comparison](DN-0035-region-memory-management-and-verified-providers.md#later-process-ownership)
 starts with isolated storage and requires transport to establish receiver-owned
 data. [DN-0051](DN-0051-userspace-concurrency-and-scheduling.md) separates task
-ownership, suspension, and parallel sharing contracts. Neither supplies an
-implemented channel or proof of safe message transport. Their distinction
+ownership, suspension, and parallel sharing contracts. The implemented copied-byte channel is specified separately under AD-0017.
+Neither note implements region transfer or shared-graph transport. Their distinction
 between copying, sharing, and ownership transfer governs the comparison below.
 
 [DN-0038](DN-0038-resource-properties-and-mutable-variable-usage.md) separates

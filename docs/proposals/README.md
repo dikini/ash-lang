@@ -25,11 +25,11 @@ No proposed transitions are listed.
 
 No accepted transitions are listed.
 
-The [region specification](../../spec/README.md)
-records the lexical-region language rules; the bounded
-[model evidence](../design/lexical-regions/evidence.md) retains its separate proof
-scope. Proposal retirement prepares the product branch and does not replace
-separately authorized Main integration.
+The [specification](../../spec/README.md) records the accepted, implemented
+`ffi-ash` language, including generic cells, lexical regions, retained control
+and pinned workers. Their transitions are integrated into Main. The bounded
+[region model evidence](../design/lexical-regions/evidence.md) retains its
+separate proof scope.
 
 The [generic cell checkpoint evidence](../design/generic-cell/evidence.md)
 retains the completed transition, verified local Main integration and

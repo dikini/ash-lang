@@ -1,220 +1,78 @@
 # Development trajectory
 
-This is a dependency and maturity view, not a sequential roadmap. Maturity
-uses: `idea → speculative → outlined → designed → specified →
-implementation`. A completed row records `complete / implementation` to
-distinguish its result from its maturity.
+This is a dependency and implementation-status view. `ffi-ash` names the
+accepted current dialect on `main`. The [specification](../spec/README.md)
+defines its language rules; the [feature inventory](project/implemented-features.md)
+records implementation and execution support.
 
-The earlier bounded
-[`ffi-ash`](design/DN-0037-ash-authored-foreign-library-interfaces.md#agreed-ffi-ash-milestone)
-delivery contains Ash-authored foreign contracts and library policy, generated
-Rust native-call bridges and runnable evaluator hosts. Its earlier scope and sequence live in
-DN-0037; [DN-0042](design/DN-0042-native-interaction-and-efficient-data.md) supplies
-the broader context. [GitHub](https://github.com/dikini/ash-lang/milestone/1)
-owns live progress and PR status. That earlier transition's implementation,
-specification, tests, reviews and verification are retained on
-`integration/ffi-ash`. [AD-0013](decisions/AD-0013-generated-native-bridges-and-program-builds.md)
-records the build boundary. The existing [closure handoff](https://github.com/dikini/ash-lang/issues/7#issuecomment-6234064548)
-tracks final Main verification, acceptance and checkpoint lifecycle. It supersedes
-TASK-0041 for coordination; the [exact task history](https://github.com/dikini/ash-lang/blob/7471200efb1bd90782fcad81be54b992fbd92982/docs/tasks/TASK-0041-ffi-ash-milestone-closure.md)
-preserves its work and findings. Supersession does not satisfy the separate Main
-gate or the remaining original acceptance clauses.
+## Current ffi-ash
 
-The earlier local Main pin `7949b6d9136b0152ee9104e67bd0451cb9db4727` supplied
-bounded FFI and generic-cell foundations. The retained smaller M1 FFI checkpoint
-implements [passive pointer/void foreign calls](../spec/static-semantics.md#source-foreign-declarations),
-opaque raw Address values and readonly synchronous Bytes arguments, with ordinary
-Ash handlers and cleanup. [Native behavior and binding examples](../libraries/README.md)
-record the supported path and concrete gaps. The
-[accepted transition](https://github.com/dikini/ash-lang/blob/859741fc11f417d994f6139748cc8e263176e7cd/docs/proposals/CP-0024-checked-foreign-host-profile.md)
-and its [S1-S4 plan](https://github.com/dikini/ash-lang/blob/859741fc11f417d994f6139748cc8e263176e7cd/docs/tasks/plans/checked-ffi-regions-control.md)
-remain historical delivery records. [PR #143](https://github.com/dikini/ash-lang/pull/143)
-completed the separately authorized Main integration at
-`0d8df03d4db2e70294487fc2e61f3629ff33b246`; the specification describes that
-implemented boundary and M1 is complete. The previous F1-F8, checked-host,
-protected-launch, isolation and full SQLite assignments remain superseded or
-deferred, not completed.
+| Work | Current status | Accepted design and evidence |
+| --- | --- | --- |
+| Passive modules, interfaces, explicit kinds, method parameters and relational determination | Implemented | [Modular closure](design/modular-ash/closure.md) and [Lib Ash evidence](design/lib-ash/relational-interfaces-evidence.md) |
+| Module/local newtypes, scoped evidence, exact effects, one-shot resume/discard, legacy cells, hooks and cleanup | Implemented | [Effect Ash closure](design/effect-ash/milestone-closure-evidence.md) |
+| Human/localized diagnostics and JSON output | Implemented | [AD-0010](decisions/AD-0010-human-diagnostic-presentation-and-localization.md) and [tool guide](tools/ash.md) |
+| Passive pointer/void foreign declarations, Address and synchronous readonly Bytes | Accepted and implemented | [DN-0037](design/DN-0037-ash-authored-foreign-library-interfaces.md); [M1 Main integration](https://github.com/dikini/ash-lang/pull/143) |
+| Generated Rust bridges and evaluator hosts with explicit static/shared linkage | Accepted and implemented | [AD-0013](decisions/AD-0013-generated-native-bridges-and-program-builds.md); [native tests](../tests/program_build_native.rs) |
+| Generic cells, snapshots and retained-payload dependencies | Accepted and implemented | [DN-0053](design/DN-0053-scoped-generic-cells-without-native-owners.md); [checkpoint evidence](design/generic-cell/evidence.md) |
+| Lexical regions, default and explicit construction placement, supplied storage, closures, recursive graphs and bulk release | Accepted and implemented | [DN-0054](design/DN-0054-base-lexical-region-memory-contracts.md); [M2 Main integration](https://github.com/dikini/ash-lang/pull/157); [R5 product evidence](https://github.com/dikini/ash-lang/issues/70) |
+| Scoped retained continuations, exact restoration, current Probe facts and checked Store release | Accepted and implemented | [DN-0056](design/DN-0056-scoped-continuation-retention-and-library-scheduling.md); [C1-C5 evidence](design/retained-control/README.md); [M3 Main integration](https://github.com/dikini/ash-lang/pull/167) |
+| Coroutine selection, recursive drain, cooperative FIFO scheduling and explicit gas safe points | Accepted and implemented | [Scheduling library](../libraries/scheduling.ash); [tests](../tests/scheduling.rs) |
+| Two pinned workers, independent roots, copied FIFO byte channels, watches, endpoint settlement and terminal failure retention | Accepted and implemented | [DN-0058](design/DN-0058-pinned-worker-host-and-channel.md); [AD-0017](decisions/AD-0017-pinned-worker-host-and-transport.md); [M4 delivery](https://github.com/dikini/ash-lang/issues/55) |
+| Ordinary Work/Ack protocol, codec, producing cleanup and error handling | Implemented | [Source libraries](../libraries/README.md); [protocol tests](../tests/pinned_network.rs); [codec tests](../tests/network_codec.rs) |
 
-Overall [program #51](https://github.com/dikini/ash-lang/issues/51) records
-the milestone deliveries. M2 lexical regions and M3 retained control reached
-Main through [PR #157](https://github.com/dikini/ash-lang/pull/157) and
-[PR #167](https://github.com/dikini/ash-lang/pull/167); M4 workers are
-integrated through [issue #55](https://github.com/dikini/ash-lang/issues/55).
-[M2 #53](https://github.com/dikini/ash-lang/issues/53) covers default placement,
-explicit selection, lexical ownership, bulk reclamation, stored closures and
-recursive immutable graphs. The [specification](../spec/README.md) records the
-product language rules; [R5 #70](https://github.com/dikini/ash-lang/issues/70)
-records its retained checkpoint, review, verification and acceptance. The
-[finite model evidence](design/lexical-regions/evidence.md) retains the separate
-bounded R1/R2 result and its assumptions; it is not a whole-compiler or native
-allocator proof. Usage/lifetime placement inference and the wider explorations in
-[DN-0054](design/DN-0054-base-lexical-region-memory-contracts.md) and
-[DN-0055](design/DN-0055-algebra-of-regions-lifetimes-and-ownership.md) remain
-informative future work. The bounded models retain their stated scope after
-Main integration.
+Source-native interpretation supports the complete current dialect with admitted
+native callbacks. Generated executable images support cells, regions, retained
+control, scheduling and pointer/void bridges. They do not encode Network scopes
+or operations.
 
-The Mini-Ash milestone is retained historically at the `mini-ash` tag, whose
-peeled commit is `d62d3ba`. Its
-[closure report](design/mini-ash/closure.md) records the complete dialect
-inventory, simplification audit, retained budgets, ownership boundaries, and
-intentional exclusions. Historical comparisons build that tag separately;
-current source contains no Mini-Ash dialect selector or compatibility grammar.
+## Not implemented
 
-The [specification](../spec/README.md) combines four
-implemented bounded `lib-ash` increments, module and local `newtype`, scoped
-evidence, and the effect kernel on the completed Modular Ash base. The completed
-capture/discard checkpoint extends the kernel with consuming abandonment.
-This combined result is integrated into `main`. It retains
-passive source modules and method-only type-class-like interfaces; adds explicit
-implementation selection and targeted name and implementation re-exports; and
-adds explicit kinds, higher-kinded declaration parameters, explicit fixed-
-kinded method-local parameters with authenticated generated evidence, and
-complete relational interface applications with one optional total forward
-determination edge. Module `newtype` adds an allocation-free nominal
-abstraction with authenticated Core conversions. Local `newtype` adds stable
-lexical identity and an erased scope while permitting identity-free closure
-escape. The effect kernel adds
-identity-bearing computation rows, requests, exhaustive ordered lexical
-handlers, and non-escaping exactly-once completion. Checked discard now has
-inferred capture safety and runtime implementation, with reviews and full
-verification retained.
+| Work | Current status | Design owner |
+| --- | --- | --- |
+| Network operations in generated executable images | Not implemented | [Build architecture](decisions/AD-0013-generated-native-bridges-and-program-builds.md) |
+| Usage/lifetime-based automatic placement, nonlexical ownership, alternative object reclamation and moving collection | Not implemented | [DN-0054](design/DN-0054-base-lexical-region-memory-contracts.md), [DN-0055](design/DN-0055-algebra-of-regions-lifetimes-and-ownership.md) |
+| General borrowing, region ownership transfer and shared ordinary graphs | Not implemented | [DN-0035](design/DN-0035-region-memory-management-and-verified-providers.md), [DN-0055](design/DN-0055-algebra-of-regions-lifetimes-and-ownership.md) |
+| Worker migration, shared Stores, general cancellation and automatic checkpoint insertion | Not implemented | [DN-0051](design/DN-0051-userspace-concurrency-and-scheduling.md), [DN-0056](design/DN-0056-scoped-continuation-retention-and-library-scheduling.md) |
+| Full SQLite, numeric ABI slots, out-pointers, callbacks, variadics, structs by value and foreign text readback | Not implemented | [DN-0037](design/DN-0037-ash-authored-foreign-library-interfaces.md) |
+| Protected or isolated FFI execution and checked-host deployment | Not implemented; earlier programme superseded | [DN-0057](design/DN-0057-checked-ffi-module-boundaries.md) |
+| Source propositions/proofs, proof-plan integration and law-derived test generation | Not implemented | [Proof direction](design/DN-0001-reboot-foundations.md#14-propositions-laws-and-proofs), [DN-0056](design/DN-0056-scoped-continuation-retention-and-library-scheduling.md) |
+| Float, filesystem and serialization APIs | Not implemented | [DN-0040](design/DN-0040-floating-point-semantics-and-representation.md), [DN-0039](design/DN-0039-files-and-filesystem-resources.md), [DN-0041](design/DN-0041-typed-serialization-and-data-pipelines.md) |
+| Native Ash backend and interactive native execution | Not implemented | [DN-0045](design/DN-0045-native-compilation-and-interactive-execution.md) |
+| LSP and agent semantic exploration interface | Not implemented | [DN-0046](design/DN-0046-agent-semantic-exploration-and-feedback.md) |
+| Package resolution, persistent compiled modules and separate Ash object linking | Not implemented | [DN-0025](design/DN-0025-library-and-package-milestones.md) |
 
-Safe non-foreign resource scope is complete and locally integrated with full
-verification, independent reviews and transition cleanup. Its
-[evidence record](design/effect-ash/resource-scope-evidence.md) records the
-scope-owned cell, stored dependencies, runtime activation boundary and verified
-unsigned local merge. The specification on `main` includes that transition.
-The synchronous-hook product checkpoint `ad2b0d4` now retains its complete
-implementation, specification, tests, reviews and full verification. Its
-[evidence](design/effect-ash/synchronous-hooks-evidence.md) records ordered
-transformations, lexical registration ownership and dependency/completion
-checking. Unsigned local merge `7dacce7`, full merged-checkout verification
-and clean feature removal close its local lifecycle.
-The
-[`ash` tool guide](tools/ash.md) documents entry-module execution, named module
-roots, and interface- and effect-related source failures. The
-[passive-module evidence](design/modular-ash/evidence.md) and
-[interface implementation evidence](design/modular-ash/interfaces-evidence.md)
-retain the completed passive-module and method-only interface increments across
-implementation, resources, locality, Core assembly, runtime observations, and
-historical or future comparison baselines. The
-[core-and-library audit](design/modular-ash/core-library-evidence.md) and
-[Modular Ash closure report](design/modular-ash/closure.md) retain the completed
-audit, simplification analysis, and closure evidence.
+These extensions have no implied execution order. A later change names its
+dependencies and updates implementation, tests and specification together.
 
-The first Mini-Ash corpus consistency, component-comparison, and convergence
-gates are complete. Their retained results remain in the
-[DN-0016 experiment program](design/DN-0016-first-mini-ash-corpus.md#tracked-experiment-program)
-and its [convergence record](design/mini-ash/first-stratum/comparisons/component-convergence.md).
+## Retired and superseded work
 
-[DN-0020](design/DN-0020-ash-dialect-milestones.md) outlines two retained
-milestones. Mini-Ash, passive static modules, method-only interfaces and
-`impl`, the bounded core-versus-library audit, simplification, and Modular Ash
-closure are complete. Interfaces are type-class-like relationships, not module
-signatures. The final annotated unsigned `modular-ash` tag retains the completed
-current milestone checkpoint. [DN-0025](design/DN-0025-library-and-package-milestones.md)
-now gives `lib-ash` a dependency spine with decreasing planning detail. Its
-first bounded increment is complete; its reviewed implementation and evidence
-corpus are retained by the
-[explicit-import evidence report](design/lib-ash/imports-evidence.md). The
-second bounded increment is also complete; its reviewed explicit kinds and
-higher-kinded declaration parameters are retained by the
-[explicit-kind evidence report](design/lib-ash/kinds-evidence.md). The third
-bounded increment is complete; its reviewed method schemes, generated evidence
-adapters, resource bounds, migration, and runtime erasure are retained by the
-[method-parameter evidence report](design/lib-ash/method-parameters-evidence.md).
-The fourth bounded increment is complete; its reviewed
-product evidence is retained by the
-[relational-interface evidence report](design/lib-ash/relational-interfaces-evidence.md).
-Together, the four integrated increments close the revised `lib-ash` milestone.
-The retained `lib-ash` boundary omits associated projections, general
-determination graphs, defaults, proofs, and existentials. The module-`newtype`
-and local-`newtype` and resume-required effect-kernel product checkpoints are
-complete and retained on `main`. Scoped exact
-evidence is also integrated, with its
-[implementation evidence](design/effect-ash/scoped-evidence-evidence.md)
-recording behavioral coverage, authentication, resource bounds, and reviews.
-Capture and checked discard are complete in the retained checkpoint; its
-[evidence](design/effect-ash/capture-discard-evidence.md) records the reviewed
-inference and runtime boundary, full verification and transition cleanup.
-Safe resource scope and synchronous hooks now have complete product checkpoints.
-Reliable cleanup remains implemented. The earlier narrow native-buffer provider
-checkpoint is historical; its foreign policy execution route is retired by the
-smaller-boundary transition. General foreign acquisition and suspension remain
-future work.
-`effect-ash` has no total ordering with `proof-ash` or `pack-ash`;
-work may interleave only through
-explicitly named synchronization checkpoints.
-[DN-0026](design/DN-0026-effect-ash-resource-first-milestones.md) outlines a
-resource-first partial order for `effect-ash`: common pure and resource
-generativity and the effect kernel meet at resource scope, synchronous hooks
-follow early, and suspension and concurrency remain later work.
-The retained [module-`newtype` evidence](design/effect-ash/module-newtype-evidence.md)
-and [effect-kernel evidence](design/effect-ash/resume-required-effect-kernel-evidence.md)
-cover the two combined inputs. The
-[local-newtype evidence](design/effect-ash/local-newtype-evidence.md) covers the
-lexical checkpoint. The [scoped-evidence report](design/effect-ash/scoped-evidence-evidence.md)
-records the completed pure evidence checkpoint and local merge;
-capture and checked discard have passed their full gate, and safe resource scope
-is verified and integrated. Signed merge `5d126b2` retains all selected slices
-on `main`. Final merged-main verification passed, as recorded in the
-[milestone closure evidence](design/effect-ash/milestone-closure-evidence.md).
+The earlier ffi-ash programme delivered a wider foreign policy API and copying
+SQLite, native-buffer and Arena libraries. Its
+[original scope](https://github.com/dikini/ash-lang/blob/adddeffe5d135bd03bf5fc30051965e5da70ed24/docs/proposals/CP-0022-ash-authored-foreign-interfaces.md)
+and [closure task](https://github.com/dikini/ash-lang/blob/7471200efb1bd90782fcad81be54b992fbd92982/docs/tasks/TASK-0041-ffi-ash-milestone-closure.md)
+are historical. Those libraries and compiler-managed foreign owner/provider,
+status, window, codec and manifest/adapter execution routes are retired. The
+accepted pointer/void design supersedes that description of current Ash.
 
-The ash-doc migration exposed checked dependency-summary failures at the exact
-Lib Ash checkpoint. The compiler repairs are now verified on `main`, with no
-backports; the [repair evidence](design/migration-repair-evidence.md) records
-the causes and original-source outcomes. The ash-doc project owns its separate
-documentation migration.
-Human-first diagnostics, localized short output and structured JSON are
-implemented on `main` under
-[AD-0010](decisions/AD-0010-human-diagnostic-presentation-and-localization.md).
-Historical migration evidence and published tags remain unchanged. Ash-doc's
-automation adoption remains that project's responsibility.
+The checked-host F1-F8 assignments, whole-image AD-0015/AD-0016 choices,
+protected-launch programme and isolated/full-SQLite requirements are superseded.
+Their recorded probes remain historical evidence. The protocol-specific network
+checker and one-way completion checker are retired; ordinary Ash implements the
+current Work/Ack protocol and handles its errors.
 
-| Work | Maturity | Dependencies | Next evidence |
-| --- | --- | --- | --- |
-| [Mini-Ash phase](design/DN-0015-mini-ash-phase.md) | complete / implementation | historical `mini-ash` tag, reviewed [first corpus stratum](design/DN-0016-first-mini-ash-corpus.md), accepted component decisions, retained [data-and-pattern evidence](design/mini-ash/data-and-patterns/evidence.md), and retained [rank-1 evidence](design/mini-ash/rank-1-polymorphism/evidence.md) | Use the separately built tag only for bounded historical comparisons. |
-| [Executable learning and evidence stream](design/DN-0024-executable-learning-and-evidence-stream.md) | outlined | historical `mini-ash` tag, current [specification](../spec/README.md), [documentation policy](project/documentation.md), and retained [first corpus stratum](design/DN-0016-first-mini-ash-corpus.md) | Run an external-repository pilot that tests executable teaching, forward-only migration, source adaptation, and cooperative evidence exchange. |
-| [Passive static modules](design/DN-0022-passive-static-modules.md) | complete / implementation | completed Mini-Ash tag and closure evidence, current [specification](../spec/README.md), and retained [passive-module evidence](design/modular-ash/evidence.md) | Preserve the implemented export-summary and module-identity boundaries during later audits. |
-| [Interfaces and `impl`](design/DN-0023-interfaces-and-implementations.md) | complete / implementation | implemented passive static modules, current [specification](../spec/README.md), retained interface design, and [implementation evidence](design/modular-ash/interfaces-evidence.md) | Preserve the method-only, authenticated-evidence, and unspecialized-trace boundaries during separately authorized later interface work. |
-| [Modular core-versus-library audit](design/modular-ash/core-library-evidence.md) | complete / implementation | implemented passive modules and method-only interfaces, their retained evidence, and the [Modular Ash closure report](design/modular-ash/closure.md) | Treat exploratory `lib-ash` pressure as separate work that requires its own authorization, not as the next authorized step in a sequential roadmap. |
-| [Explicit implementation imports and re-exports](design/lib-ash/imports-evidence.md) | complete / implementation | completed `modular-ash` checkpoint, current [specification](../spec/README.md), stable module and interface identities, body-free summaries, scoped implementation evidence, and the prepared [library milestone sequence](design/DN-0025-library-and-package-milestones.md#prepared-lib-ash-sequence) | Preserve the explicit selection, identity, summary, authorization, validation, Core, runtime, and resource boundaries during separately authorized later `lib-ash` work. |
-| [Explicit kinds and higher-kinded parameters](design/lib-ash/kinds-evidence.md) | complete / implementation | integrated [explicit-import increment](design/lib-ash/imports-evidence.md), current [specification](../spec/README.md), accepted [ordered resolved-global authority](decisions/AD-0009-ordered-resolved-global-binder-authority.md), stable identities, body-free summaries, and independent Core validation | Preserve the phase-dependent inference boundary, authenticated ordered ownership, exact resource formulas, and runtime erasure during separately authorized later work. |
-| [Method-local type parameters](design/lib-ash/method-parameters-evidence.md) | complete / implementation | integrated [explicit-kind increment](design/lib-ash/kinds-evidence.md), current [specification](../spec/README.md), stable method identities, body-free summaries, linked evidence validation, authenticated generated adapters, and independent typed Core validation | Preserve exact method-scheme authority, occurrence-local instantiation, bounded adapter authentication, ordinary rank-1 source values, resource limits, and runtime erasure during separately authorized later work. |
-| [Multi-parameter relational interfaces](design/lib-ash/relational-interfaces-evidence.md) | complete / implementation | integrated [method-parameter increment](design/lib-ash/method-parameters-evidence.md), current relational [specification](../spec/README.md), stable identities, body-free summaries, occurrence-owned evidence, linked validation, typed Core erasure, and completed transition cleanup | Preserve forward-only improvement, full-application selection, and the effects, proofs, and existentials exclusions during separately authorized future work. |
-| [`effect-ash`: resource-first effects, handlers, and providers](design/DN-0026-effect-ash-resource-first-milestones.md) | complete / implementation; integrated into main; 100/100 planning units closed | retained [module-newtype](design/effect-ash/module-newtype-evidence.md), [local-newtype](design/effect-ash/local-newtype-evidence.md), [effect-kernel](design/effect-ash/resume-required-effect-kernel-evidence.md), [scoped-evidence](design/effect-ash/scoped-evidence-evidence.md), [capture/discard](design/effect-ash/capture-discard-evidence.md), [resource-scope](design/effect-ash/resource-scope-evidence.md), [hook](design/effect-ash/synchronous-hooks-evidence.md), [cleanup](design/effect-ash/reliable-cleanup-evidence.md) and [foreign-provider](design/effect-ash/narrow-foreign-provider-evidence.md) evidence; current [specification](../spec/README.md); accepted typed Core and evaluator boundaries; no ordering dependency on `proof-ash` or `pack-ash` | See merged-main verification and documentation checks in the [closure evidence](design/effect-ash/milestone-closure-evidence.md). Signed annotated tag `effect-ash` identifies the final documentation closeout above signed merge `5d126b2`; no push was performed. Preserve lexical identity, erasure, rows, handler order, one-shot non-escape, validation and resource accounting. Library-defined acquisition and a general FFI remain later work. |
-| [`proof-ash`: propositions, laws, program proofs, and law-derived testing](design/DN-0001-reboot-foundations.md#14-propositions-laws-and-proofs) | idea | current [specification](../spec/README.md), accepted [small-step semantic method](decisions/AD-0004-small-step-semantic-method.md) and [front-end](decisions/AD-0006-front-end-semantic-boundaries.md) and [typed Core](decisions/AD-0007-typed-core-dialects.md) boundaries, implemented [checked interface evidence flow](../spec/elaboration.md#interface-evidence-lowering), and exploratory [runtime-established static evidence](design/DN-0018-runtime-established-static-evidence.md) | Define a bounded pure proposition-and-law corpus and compare proof-evidence and program-logic models before selecting a calculus. Any work that requires effect semantics must name a synchronization checkpoint with `effect-ash` and state its required inputs and retained outputs. |
-| [DN-0045: Native compilation and interactive execution](design/DN-0045-native-compilation-and-interactive-execution.md) | outlined | current [specification](../spec/README.md), accepted backend-independent [implementation environment](decisions/AD-0001-implementation-environment.md) and [typed Core](decisions/AD-0007-typed-core-dialects.md), exploratory [FFI](design/DN-0037-ash-authored-foreign-library-interfaces.md) and [storage services](design/DN-0044-no-default-runtime.md) | Scope a comparison of native lowering, continuation representations and complete feedback costs before selecting a backend or control architecture. Both AOT delivery and interactive development are goals. |
-| [DN-0046: Agent semantic exploration and feedback](design/DN-0046-agent-semantic-exploration-and-feedback.md) | outlined | [DN-0045](design/DN-0045-native-compilation-and-interactive-execution.md) shared checking, source-version and execution boundaries; accepted [front-end](decisions/AD-0006-front-end-semantic-boundaries.md) and [diagnostic](decisions/AD-0010-human-diagnostic-presentation-and-localization.md) boundaries | Compare LSP-only, separate tools and an integrated agent interface on navigation, semantic search and repeatable probes. Interpreter-based exploration need not wait for completed optimizing AOT or JIT. |
-| [Core representation](decisions/AD-0007-typed-core-dialects.md) | implementation | accepted typed-dialect and pure-computation boundaries | Preserve the closed Pure dialect and shared operation-family seam under later feature pressure. |
-| [Parser architecture](decisions/AD-0005-parser-architecture.md) | implementation | accepted event-producing recursive-descent boundary and current grammar | Measure locality, recovery, and source coverage when a later proposal adds syntax. |
-| [Front-end semantic boundaries](decisions/AD-0006-front-end-semantic-boundaries.md) | implementation | accepted resolved-surface and bidirectional typed-elaboration boundaries | Extend stage interfaces and structured diagnostics only with an authorized semantic increment. |
-| [Evaluator architecture](decisions/AD-0008-explicit-evaluator-machine.md) | implementation | accepted first-order machine boundary and current dynamics | Preserve explicit first-order control under later resource, discard, and suspension pressure. |
-| [Specification methodology](decisions/AD-0004-small-step-semantic-method.md) | implementation | accepted small-step primary method and current dynamics | Keep future operational behavior derived from one normative small-step account. |
+## Historical checkpoints and proof evidence
 
-Planning detail must decrease with distance. The specification on `main` combines
-module and local `newtype`, scoped exact evidence, and the implemented
-resume-required kernel.
-The completed capture/discard checkpoint extends that kernel. Safe resource
-scope and its fixed provider are verified and locally integrated; synchronous
-hooks and reliable cleanup are also verified and locally integrated. The earlier
-native-buffer provider checkpoint remains historical evidence rather than a
-current foreign lifecycle API. General foreign acquisition, files and suspension
-remain future work toward typed interaction
-with external systems. `effect-ash` remains unordered with respect to
-`pack-ash`, so exploration and later separately authorized increments may
-proceed concurrently.
-`proof-ash` names propositions, laws, statically checked proof evidence,
-program logic, and law-derived test generation as a separate future milestone.
-`effect-ash` and `proof-ash` have no total ordering: work may interleave, but
-any increment that needs a semantic fact from the other milestone must declare
-an explicitly named synchronization checkpoint with required inputs, retained
-outputs, and authority on each side. Exploratory choices do not become
-cross-milestone dependencies before such a checkpoint. The current
-[`pack-ash` boundary](design/DN-0025-library-and-package-milestones.md#intentional-exclusions)
-excludes dynamic module loading and runtime interface lookup. Existential
-packaging and runtime-established identities are possible convergence pressure
-if later work admits dynamic composition; they do not create a current ordering
-dependency. Processes and optimizer search remain future design pressure, not
-planned language inventory. Immediate work should preserve relevant options
-without implementing those features.
+`mini-ash`, `modular-ash`, `lib-ash`, `effect-ash`, `diag-ash` and `ffi-base`
+retain earlier checkpoints. Their names and contents are unchanged. There is no
+current compiler dialect selector, compatibility grammar or new ffi-ash tag.
+The historical Mini-Ash and Modular Ash closure reports retain their original
+inventories and verification. The [migration repair evidence](design/migration-repair-evidence.md)
+records subsequent Main repairs; the external ash-doc project owns its migration.
+
+The [lexical-region model](design/lexical-regions/README.md),
+[retained-control models](design/retained-control/README.md) and
+[one-shot formalization](design/direct-effects/one-shot/README.md) are implemented
+proof models with their own theorem scopes. They are not extra source-language
+features. Historical worker/ledger and one-way checker results retain their
+original conditions; the current ordinary protocol does not use those checkers.

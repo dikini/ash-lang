@@ -172,6 +172,14 @@ Internal work/storage failures remain terminal. Failure after a completed native
 call neither retries it nor undoes external effects. Existing cell, handler,
 cleanup, capture, image-validation and work/depth rules remain in force.
 
+### Execution support
+
+The interpreter supports cells, lexical regions, retained control, scheduling
+and pinned-worker networks. Native calls require admitted host callbacks or a
+generated linked host. Generated executable images support cells, regions,
+retained control, scheduling and the pointer/void FFI. They do not support
+Network scopes or operations; `ash build` rejects those programs.
+
 ### Generated-host linkage checks
 
 `tests/program_build_native.rs` exercises the same pointer/Bytes/void fixture
@@ -243,8 +251,9 @@ once.
 `--root` option or filesystem lookup. `builtin` cannot be configured as a root:
 `--root builtin=path` reports `invocation.reserved-root` before inspecting
 configured paths. `@builtin.cell`, `@builtin.generic_cell`, `@builtin.bytes`,
-`@builtin.string` and
-`@builtin.foreign` are the fixed modules beneath this root; another path
+`@builtin.string`, `@builtin.integer`, `@builtin.foreign`, `@builtin.regions`,
+`@builtin.retained_control` and `@builtin.network` are the public fixed modules
+beneath this root; another path
 reports `module.unknown-builtin`. Ordinary aliases, targeted imports and
 facade re-exports preserve the API's identity. Legacy lowercase `resource cell`
 acquisition requires a direct builtin import. Named generic family acquisition
