@@ -254,6 +254,18 @@ N1. It does not authenticate a completion message, prove native visibility,
 or discharge local retained-control completion. The live N6 issue requires
 SQLite coverage and a gap assessment at the ordinary byte/pointer FFI boundary;
 historical checked or isolated FFI modes are not prerequisites.
+The N6 SQLite canary is the existing
+[`direct_sqlite_getters_return_nonnull_repeatable_addresses`](../../tests/program_build_native.rs)
+program-build test. Its declarations call `sqlite3_libversion` and
+`sqlite3_sourceid` as `Unit -> Address` and compare nonnull, repeatable pointer
+values; it does not read the returned strings or establish a full SQLite
+binding. The existing linked native EchoBytes fixture covers a synchronous
+`Bytes` argument separately. Open/prepare and ordinary result retrieval still
+need numeric C slots, output pointers and foreign-memory readback or byte
+results, which are not supported by the current FFI surface. The SQLite canary,
+connected cross-milestone example and full verification remain separate
+acceptance evidence; their presence here is not a fresh pass claim.
+
 The analysis limitations in [#165](https://github.com/dikini/ash-lang/issues/165)
 remain visible; this task neither adds a language restriction nor weakens the
 existing checks to work around them.

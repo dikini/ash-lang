@@ -76,5 +76,12 @@ base-256 representation and decodes only complete canonical frames. A decoded
 Work carries its child, parent and payload; the receiver is supplied separately by the authenticated delivery
 context. The codec is ordinary source code. A successful parse alone does not
 authenticate a peer or kind and does not establish a ledger transition,
-completion or release. The definition-bound checker and its integrated driver
-evidence remain under development.
+completion or release. `network_protocol.ash` contains the ordinary two-worker Work/Ack driver and
+its producing-cleanup example. The cleanup reserves a descendant before it is
+sent; its acknowledgement permits parent retirement and the upstream Ack. The
+driver retains a pending head on Full and services receives before retrying.
+A malformed frame or failed operation takes an ordinary failure path; it is not
+a completion certificate. The module does not prove honest acknowledgements,
+per-message processing, liveness or native behavior. The connected execution
+and remaining evidence are tracked in
+[TASK-0058](../docs/tasks/TASK-0058-pinned-worker-network.md).

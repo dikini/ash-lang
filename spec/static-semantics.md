@@ -1259,6 +1259,37 @@ checks `effect.duplicate`, while
 `effect_examples_have_exact_observations_and_reasons` checks the complete
 handled example plus `entry.main-effects` and `effect.resume-not-consumed`.
 
+## Pinned worker networks
+
+The canonical `@builtin.network` module provides opaque `Pair<N>`, `Worker<N>`
+and `Registration<N>`, sealed `IO<N>` and `Join<N>` effects, and ordinary
+result sums for its operations. Direct source `perform`, `handle`, `hook` or
+`register` of those effects is rejected. Calls to the module's functions use
+the network owner and worker interpreters instead.
+
+A network acquisition has the form
+`resource Network.Pair<N> pair = (capacity, start_a, start_b, input_a, input_b) { body }`.
+`N` is a fresh scoped identity. The initializer is checked in the preceding
+scope; its capacity is an `Int`, its inputs are `Bytes`, and each entry is an
+unconstrained named top-level function polymorphic in the worker identity, with
+type `(Worker<N>, Bytes) -> Unit`. Its effect row and the linked initializer
+rows are closed and contain only the worker's `IO<N>`, canonical default
+allocation and admitted native-symbol effects. Entry admission checks the
+linked definition, dependencies and captures; it
+does not transport a caller-owned closure, Store, cell, region or provider.
+The owner supplies `Join<N>` in the body, and each worker supplies its own
+`IO<N>`. The identity, handle and dependent effects cannot escape their owner.
+The ordinary resource, effect, capture and retained-control rules continue to
+apply to each worker and its local Store.
+
+The module's `try_send`, `send_control`, `try_receive`, `finish_send`,
+`finish_receive`, `watch`, `cancel_watch`, `poll_wake` and `settle` functions
+return ordinary result values. Application code implements any Work/Ack protocol
+and handles its errors; neither a parsed message nor a result constructor
+establishes that processing or cleanup happened. The
+[execution rules](dynamic-semantics.md#pinned-network-execution) distinguish
+transport endpoint state from worker and backing settlement.
+
 ## Scoped retained control
 
 The canonical `@builtin.retained_control` API supplies opaque `Store<N,D>` and

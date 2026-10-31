@@ -799,6 +799,49 @@ No arbitrary memory read/write, Address-to-Bytes/String conversion, numeric ABI,
 out-pointer storage or compiler-managed foreign lifecycle is supplied. Ordinary
 cleanup and resource completion rules below continue to govern Ash control.
 
+## Pinned network execution
+
+A network acquisition prepares two worker carriers and two positive-capacity
+FIFO byte channels. Each worker runs its own Ash root on one carrier thread; any local Stores
+remain on that carrier. A notification does not move a continuation or Store to
+the other worker. Startup inputs are independently copied. A capacity that cannot be
+represented or prepared fails acquisition without publishing the activation.
+
+`try_send` publishes an Application envelope and `send_control` a Control
+envelope. A successful send commits a channel-owned copy of the whole `Bytes`
+snapshot; `Full` and `Closed` commit no message. Both envelope kinds share a
+FIFO in each direction. `try_receive` returns `Empty`, failure, `End`, or a
+`Message(kind, bytes)` whose kind and opposite sending side come from the
+channel. Before committing a receipt, the interpreter copies its whole bytes
+into the receiving worker's selected region. A failed copy leaves the FIFO head
+available. Transport origin does not establish the meaning or honesty of the
+bytes.
+
+`finish_send` seals the sending polarity after its earlier operations resolve.
+`End` is available only after the opposite send polarity is sealed and its
+accepted queue is empty. `finish_receive` closes the receive polarity only when
+the actual incoming channel is sealed and empty, with no outstanding transport
+operation. This is a transport condition: it does not prove that each received
+message was processed or that its cleanup completed.
+
+`watch` registers a generation-associated interest with a readiness recheck;
+`poll_wake` returns a notification or no wake, and `cancel_watch` prevents new
+notifications for the registration. A wake is a hint and its user rechecks the
+channel. Readable includes a message, End or failure; writable includes an
+available send, Closed or failure. A wake does not restore a different Store
+or confer protocol authority.
+
+A normal `settle` requires both workers to return normally, their endpoint and
+channel operations and registrations to settle, and their carrier-local teardown
+to finish before the carriers join and backing is released. Generic Store and
+cleanup rules still apply. An unfinished endpoint, worker or backing user cannot
+be converted to successful settlement by an ordinary Boolean or result value.
+Terminal failure can retain the affected worker and transport support and report
+incomplete teardown; it does not claim successful cleanup. Native bindings and
+host synchronization remain trusted boundaries. This execution does not promise
+fair scheduling, deadlock freedom, termination, worker recovery or native memory
+safety.
+
 ## Effect handlers and completion
 
 `HANDLER(handler, instance, clauses, environment)` is an ordered lexical

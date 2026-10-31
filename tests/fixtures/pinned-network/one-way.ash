@@ -11,10 +11,11 @@ effect Checkpoint<S> {
 receive_all<N> : Network.Worker<N> -> Bool ! {Network.IO<N>, Native.EchoBytes}
 receive_all worker = match Network.try_receive worker {
     Network.Message(Network.Application, message) => {
-        let _ = resource Control.Store<S,(Unit -> Unit ! {Control.Drive<S>, Native.EchoBytes})> store = () {
+        let _ = Helper.process message
+        let _ = resource Control.Store<S,(Unit -> Unit ! {Control.Drive<S>})> store = () {
             handle {
                 let _ = perform Checkpoint<S>.checkpoint ()
-                Helper.process message
+                ()
             } with Checkpoint<S> using store {
                 checkpoint ignored => resume ()
             }

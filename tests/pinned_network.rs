@@ -1,5 +1,121 @@
 mod support;
 
+fn run_paired_protocol(
+    protocol: &str,
+    entry_source: &str,
+) -> Result<String, ash::driver::FileFailure> {
+    use ash::{
+        driver::{RunConfiguration, run_path},
+        module::ModuleRoots,
+    };
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    struct FixtureDir(std::path::PathBuf);
+    impl Drop for FixtureDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let directory = loop {
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "ash-paired-producing-cleanup-{}-{id}",
+            std::process::id()
+        ));
+        match fs::create_dir(&path) {
+            Ok(()) => break FixtureDir(path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("fixture directory: {error}"),
+        }
+    };
+    let entry = directory.0.join("paired-producing-cleanup.ash");
+    for (path, source) in [
+        (&entry, entry_source),
+        (
+            &directory.0.join("network_types.ash"),
+            include_str!("../libraries/network_types.ash"),
+        ),
+        (
+            &directory.0.join("network_codec.ash"),
+            include_str!("../libraries/network_codec.ash"),
+        ),
+        (&directory.0.join("network_protocol.ash"), protocol),
+    ] {
+        fs::write(path, source).expect("write paired protocol fixture");
+    }
+    run_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .map(|observation| observation.value_display())
+}
+
+#[test]
+fn paired_producing_cleanup_reaches_settlement() {
+    let result = run_paired_protocol(
+        include_str!("../libraries/network_protocol.ash"),
+        include_str!("fixtures/pinned-network/paired-producing-cleanup.ash"),
+    )
+    .expect("the paired producing-cleanup program completes");
+    assert_eq!(result, "42");
+}
+
+#[test]
+fn malformed_paired_frame_cannot_succeed() {
+    let protocol = include_str!("../libraries/network_protocol.ash");
+    assert_eq!(protocol.matches("Codec.encode head").count(), 1);
+    let malformed = protocol.replace("Codec.encode head", "Codec.Encoded(ByteOps.empty ())");
+    match run_paired_protocol(
+        &malformed,
+        include_str!("fixtures/pinned-network/paired-producing-cleanup.ash"),
+    ) {
+        Ok(value) => assert_ne!(value, "42"),
+        Err(error) => assert!(
+            matches!(
+                error.pipeline_failure(),
+                Some(ash::driver::PipelineFailure::Runtime(_))
+            ),
+            "expected runtime failure, got {error:?}"
+        ),
+    }
+}
+
+#[test]
+fn acknowledgements_preserve_unmatched_obligations() {
+    let protocol = format!(
+        "{}\n{}",
+        include_str!("../libraries/network_protocol.ash"),
+        r#"
+pub acknowledgement_cases : Unit -> Int
+acknowledgement_cases () = {
+    let (registered, status) = reserve_job (initial_root (), 0, LedgerTypes.Root, 1, ByteOps.empty ())
+    match status {
+        Rejected => 0
+        Registered(child) => {
+            let closed = close_record (registered, LedgerTypes.Root)
+            let wrong_peer = acknowledge (closed, LedgerTypes.Root, child, 0)
+            let missing_parent = acknowledge (wrong_peer, LedgerTypes.Work(9, 9), child, 1)
+            let missing_child = acknowledge (missing_parent, LedgerTypes.Root, LedgerTypes.Work(0, 1), 1)
+            let matched = acknowledge (missing_child, LedgerTypes.Root, child, 1)
+            let duplicate = acknowledge (matched, LedgerTypes.Root, child, 1)
+            match (root_quiet closed, root_quiet wrong_peer, root_quiet missing_parent, root_quiet missing_child, root_quiet matched, root_quiet duplicate) {
+                (false, false, false, false, true, true) => 42
+                _ => 0
+            }
+        }
+    }
+}
+"#
+    );
+    let entry = "import network_protocol as Protocol\nmain : Unit -> Int\nmain () = Protocol.acknowledgement_cases ()\n";
+    let result = run_paired_protocol(&protocol, entry).expect("ordinary acknowledgement cases run");
+    assert_eq!(result, "42");
+}
+
 #[test]
 fn validated_code_and_binding_tables_have_thread_safe_rust_ownership() {
     fn require_send_sync<T: Send + Sync>() {}
@@ -99,10 +215,11 @@ receive<N> : (Network.Worker<N>, Bytes) -> Bool ! {Network.IO<N>}
 receive (worker, expected) = match Network.try_receive worker {
     Network.Empty => receive (worker, expected)
     Network.Message(Network.Application, message) => {
+        let _ = check_bytes (message, expected)
         let _ = resource Control.Store<S,(Unit -> Unit ! {Control.Drive<S>})> store = () {
             handle {
                 let _ = perform Checkpoint<S>.checkpoint ()
-                check_bytes (message, expected)
+                ()
             } with Checkpoint<S> using store {
                 checkpoint ignored => resume ()
             }

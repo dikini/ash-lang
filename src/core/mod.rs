@@ -6,11 +6,6 @@ pub mod data;
 pub mod dialect;
 pub mod effect;
 pub mod function;
-#[allow(
-    dead_code,
-    reason = "Conditional ledger rules remain staged until their consumers are complete"
-)]
-pub(crate) mod ledger_checker;
 pub mod literal;
 pub mod packed;
 pub mod primitive;

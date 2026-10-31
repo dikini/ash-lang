@@ -119,6 +119,14 @@ guarantee. The [static](static-semantics.md#scoped-retained-control)
 and [dynamic](dynamic-semantics.md#scoped-retained-control-execution) rules
 specify these relationships.
 
+`@builtin.network` provides a scoped pair of pinned worker executions and
+copied FIFO byte channels. Worker entries are closed named functions; their
+local Stores retain ordinary resource and completion rules. Transport End,
+worker return and backing settlement are distinct. The
+[static](static-semantics.md#pinned-worker-networks) and
+[dynamic](dynamic-semantics.md#pinned-network-execution) rules describe the
+boundary; Work/Ack and its errors are ordinary Ash code.
+
 A passive `foreign library` declares a target profile and symbols with source
 signatures and C link names. Each symbol is an ordinary effect with one `call`
 operation. Imports preserve its defining identity and perform no native work.
