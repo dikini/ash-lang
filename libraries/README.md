@@ -84,3 +84,10 @@ a completion certificate. The module does not prove honest acknowledgements,
 per-message processing, liveness or native behavior. The connected execution
 and remaining evidence are tracked in
 [TASK-0058](../docs/tasks/TASK-0058-pinned-worker-network.md).
+
+The source-native interpreter can execute this protocol with admitted host
+callbacks. Generated native images do not currently support Network scope and
+operations. The combined retained-control, Cell, byte-binding and Network test uses a
+trusted Rust host callback. Separate generated-host real-C FFI and SQLite
+canaries cover their respective supported bindings; they do not establish a
+combined Network image.

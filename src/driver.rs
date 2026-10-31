@@ -2403,6 +2403,74 @@ mod tests {
         }
     }
 
+    #[test]
+    fn linked_native_binding_and_network_cleanup_share_one_program() {
+        use crate::foreign::source_runtime::{
+            NativeArgument, NativeCallError, NativeReply, SourceNativeBindings,
+        };
+        use std::sync::atomic::AtomicUsize;
+
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        fn echo_bytes(arguments: &[NativeArgument]) -> Result<NativeReply, NativeCallError> {
+            let [NativeArgument(address)] = arguments else {
+                return Err(NativeCallError);
+            };
+            if address.is_null() {
+                return Err(NativeCallError);
+            }
+            CALLS.fetch_add(1, Ordering::SeqCst);
+            Ok(NativeReply::Address(*address))
+        }
+
+        let fixture = TestSource::write(include_str!(
+            "../tests/fixtures/source-native/cases/network-binding.ash"
+        ));
+        for (name, source) in [
+            (
+                "native.ash",
+                include_str!("../tests/fixtures/source-native/native.ash"),
+            ),
+            (
+                "binding.ash",
+                include_str!("../tests/fixtures/source-native/network-echo-binding.ash"),
+            ),
+            (
+                "network_types.ash",
+                include_str!("../libraries/network_types.ash"),
+            ),
+            (
+                "network_codec.ash",
+                include_str!("../libraries/network_codec.ash"),
+            ),
+            (
+                "network_protocol.ash",
+                include_str!("../libraries/network_protocol.ash"),
+            ),
+        ] {
+            fixture.write_sibling(name, source);
+        }
+        let compiled = compile_path(fixture.configuration()).expect("combined source compiles");
+        let (_, boundary) = compiled
+            .source_native_entry()
+            .expect("native entry is present");
+        let mut bindings = SourceNativeBindings::default();
+        assert_eq!(boundary.interpretations().len(), 1);
+        let symbol = boundary.interpretations()[0].symbol();
+        assert_eq!(symbol.symbol().name(), "EchoBytes");
+        bindings
+            .insert(
+                Arc::clone(symbol),
+                echo_bytes,
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("checked symbol binds the trusted callback");
+        CALLS.store(0, Ordering::SeqCst);
+        let result = execute_with_source_native_bindings(&compiled, &mut bindings)
+            .expect("combined program executes and settles");
+        assert_eq!(result.value_display(), "42");
+        assert_eq!(CALLS.load(Ordering::SeqCst), 1);
+    }
+
     fn relational_interface_graph_source() -> TestSource {
         let source = TestSource::write(include_str!(
             "../tests/fixtures/relational-interfaces/linked-composite/entry.ash"
