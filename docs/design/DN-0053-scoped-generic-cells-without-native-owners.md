@@ -263,7 +263,7 @@ verified product results; this informative table supplies no additional rules.
 | Cycles | Ordinary immutable cycles with no prohibited owner dependency remain usable. | Direct and indirect resource dependency cycles reject, including hidden captures. |
 | Handlers | Exact overrides preserve reply dependencies and request order. | An override cannot create slot or completion authority. |
 | Control | Resume preserves the same payload; discard closes once after dependent cleanup. | Required outside or running completion cannot be skipped. |
-| Validation | Construction, copying, transforms, and restored Core preserve all retained facts. | Changed owner, payload type, operation, or dependency facts reject independently. |
+| Validation | Compiler construction, copying and transforms preserve retained facts; generated images reconstruct the verified result. | Independent compiler validation rejects changed owner, payload type, operation, or dependency facts before execution or packaging. |
 | Failure and cost | Exact, insufficient, and retry budgets preserve publication and mutation boundaries. | No partial authority or silent increase of work, stack, or capacity limits. |
 
 This note authorizes no prototype or product change. Any later experiment

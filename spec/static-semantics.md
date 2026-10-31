@@ -1059,9 +1059,10 @@ using the usual clause, continuation and row rules. For a native program entry,
 the generated linked host interprets the remaining required admitted symbol
 effects; only those exact instances are subtracted from the entry row. Residual
 ordinary effects and open rows reject under the existing entry rules. Compilation
-supplies no executable binding. Supplied callback entries are checked against
-original symbols before Ash runs; a selected native invocation requires its
-exact entry. This association check does not establish table completeness.
+supplies no executable binding. Separately supplied callback entries are checked
+against original symbols before Ash runs; a generated host sets up its
+compiler-established bridge associations. A selected native invocation requires
+its exact entry. These associations do not establish table completeness.
 
 A source signature and link name assert an `extern "C"` signature and behavior;
 the compiler does not establish the native assertion. Module-authored functions
@@ -1377,9 +1378,10 @@ forwarded only while intervening control preserves the relevant Store state;
 a possible change invalidates that fact. Completion, interpreter or work
 requirements that cannot be proved reject the relevant transfer or close.
 Exhaustion publishes no partial release permission. Independent linked Core
-validation reconstructs these relationships after transforms or image decoding;
-source summaries, same-typed callbacks and claimed producer facts do not grant
-permission.
+validation reconstructs these relationships after compiler-side transforms,
+before execution or packaging. A compiler-generated executable reconstructs
+the verified representation without repeating that proof. Source summaries, same-typed
+callbacks and claimed producer facts do not grant permission.
 
 ## Synchronous typed hooks
 

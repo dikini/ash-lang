@@ -234,7 +234,10 @@ actual independent Core running-completion mutation returns Unsafe/Cleanup.
 
 ### CELL-C03
 
-Original/copied/identity/folded/restored Core re-enters independent admission.
+Original/copied/identity/folded compiler Core re-enters independent admission.
+At this historical checkpoint, restored images also repeated that admission;
+the current generated-host boundary is recorded in
+[AD-0013](../../decisions/AD-0013-generated-native-bridges-and-program-builds.md).
 Imported snapshot/recursive/handler image values are 7/9/7; stateful P12/P13
 transformed values are 99/(7,42). Full ordered R,T handle/request/provider
 mutations and origin/operation/row controls reject ordinarily. Possible-target
@@ -323,8 +326,9 @@ at 7.
 `generic_cell_imported_flow_images_rebuild_with_exact_short_and_retry_work`
 restores snapshot7, recursion9, handler7, intercepted function7, scalar99/41/42,
 Tick99 and reply mutation(7,42). Tick's image is encoded from independently
-revalidated optimized Core. Images reconstruct proofs after original inputs
-have been dropped.
+revalidated optimized Core. At that checkpoint, images reconstructed proofs
+after original inputs had been dropped; current generated hosts reconstruct the
+compiler-validated representation without repeating the proof.
 
 N10 additionally retains the universal independent Core control
 `rejects_nested_forall_as_an_outer_instantiation_argument` in
@@ -381,8 +385,8 @@ executes the assertions; its shown output retains the reported costs.
 - Image restoration:
   `generic_cell_imported_flow_images_rebuild_with_exact_short_and_retry_work`
   measures one `TypeWorkBudget` across decode, expected-native-fact admission
-  and independently checked Core restoration. One-short publishes no restored
-  program; exact fresh retries rebuild it. Snapshot/recursion/handler and
+  and Core restoration under the then-current validation policy. One-short
+  publishes no restored program; exact fresh retries rebuild it. Snapshot/recursion/handler and
   stateful interceptor/Tick/reply-mutation fixtures execute their named values.
 - Runtime acquisition:
   `generic_cell_acquisition_work_refusal_is_atomic_and_retryable` measures

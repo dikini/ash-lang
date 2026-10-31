@@ -1,13 +1,16 @@
 # DN-0050: Native program gas estimates
 
 - ID: `DN-0050`
-- Status: calibration record; `3900S` source, `800S` final elaboration, `16S` compiler-arena rewrite, `6200S` Core, `850P` preparation and `118B` startup accepted
+- Status: historical calibration record; current policy is in [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md)
 - Related: [TASK-0040 transition history](https://github.com/dikini/ash-lang/blob/adddeffe5d135bd03bf5fc30051965e5da70ed24/docs/tasks/TASK-0040-ash-copying-sqlite-library.md),
   [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md),
   [CP-0022 transition history](https://github.com/dikini/ash-lang/blob/adddeffe5d135bd03bf5fc30051965e5da70ed24/docs/proposals/CP-0022-ash-authored-foreign-interfaces.md)
 
 This note records the initial native gas calibration and subsequent larger
-SQLite observations. The user approved preparation `24P` and initially startup
+SQLite observations. Its startup measurements include the independent image
+validation performed at those historical checkpoints. Current generated hosts
+trust the compiler-validated representation and reconstruct it under the policy
+in AD-0013. The user approved preparation `24P` and initially startup
 `7B`, then source checking `100S` and startup `11B` on 2026-10-15.
 [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md)
 governs the accepted policy. The earlier policy-only review excludes these
@@ -21,7 +24,7 @@ Independent local review cleared that bounded implementation after focused
 mechanism, normal-host and quality checks. The human then approved startup
 `22B` from the complete persistence observation below; focused independent review cleared that startup-only revision. The human then approved final elaboration `161S` and compiler Core `345S` from the compact-generic observations below. These bounded clearances and diagnostic completions remain separate from whole-port review and retaining verification.
 
-The current formulas are:
+The formulas at this calibration checkpoint were:
 
 ```text
 source checking = 3900 * canonical loaded source UTF8 bytes, including builtins
@@ -288,9 +291,9 @@ share, or establish removable redundant authentication.
 The receipt `sqlite-persistence-complete-startup-614-20261015.json`, numeric table
 `sqlite-persistence-startup-614-fit-table-20261015.json` and short report retain
 exact source/configuration, binary, image/facts, observer and before/after pins.
-The startup revision changes only its coefficient. Framing, canonical facts,
-restoration, fresh Core/capture and binding share the existing cumulative paid
-meter. Normal persistence verification follows focused checks and independent
+That startup revision changed only its coefficient. At the checkpoint, framing,
+canonical facts, restoration, fresh Core/capture and binding shared the cumulative
+paid meter. Normal persistence verification followed focused checks and independent
 review; all unfinished port and acceptance obligations remain separate.
 
 ## Revised policy verification
@@ -466,8 +469,8 @@ separate estimates, not measured current totals, and do not change 345.
 These four known fitting rows span different compiler versions and supply no
 holdout or universal prediction bound. The 25% reserve is an engineering choice.
 The byte proxy is loose for SQLite; unused allowance does not consume work.
-All other budgets and all authority, fresh-validation, capture, depth, stack
-and allocation checks remain. Normal complete-pipeline evidence and independent
+At that checkpoint all other budgets and authority, fresh-validation, capture,
+depth, stack and allocation checks remained. Normal complete-pipeline evidence and independent
 review remain separate from the diagnostic.
 
 ## Initial accepted pilot and its calibration
@@ -571,11 +574,11 @@ repeated resident Type children into the real structural encoder under `24P`.
 It refused at 792/792 units, preserving the 152-unit sizing/native-input prefix.
 This is an encoder-stage test, not a whole-public-construction adversary claim.
 
-The initial startup implementation uses its existing paid complete decoder, bounds/end-of-input checks and
+The initial startup implementation used its paid complete decoder, bounds/end-of-input checks and
 canonical expected-facts comparison as the framing gate before restoration.
-These charges stay inside `7B`, in the same meter through final native binding;
-there is no second parser, free census or spent-work top-up. Existing source,
-registry, Core, provenance, window and native-binding checks remain fresh.
+Those charges stayed inside `7B`, in the same meter through final native binding;
+there was no second parser, free census or spent-work top-up. Source, registry,
+Core, provenance, window and native-binding checks were then repeated.
 
 Normal adopted-formula host tests then passed for the product `SELECT 42`,
 imported buffer and frozen TRANSIENT/blob fixture. Fresh preparation totals were

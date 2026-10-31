@@ -46,9 +46,8 @@ pub(super) fn startup(image_bytes: usize, facts_bytes: usize) -> Result<TypeWork
         .checked_add(facts_bytes)
         .and_then(|bytes| bytes.checked_mul(STARTUP_PER_BYTE))
         .ok_or(())?;
-    // Private provisional framing allowance, not authenticated program gas.
-    // The caller must finish paid decoding/end-of-input and canonical fact
-    // comparison before restoration or native admission, in this SAME meter.
+    // Decoding, generated fact comparison, reconstruction and binding setup
+    // use this same cumulative startup allowance.
     Ok(TypeWorkBudget::with_limit(total))
 }
 

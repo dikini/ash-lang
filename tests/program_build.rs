@@ -7,7 +7,7 @@ use std::{
 
 use ash::{
     build::{BuildConfiguration, build_prepared, prepare_program},
-    driver::{RunConfiguration, compile_path},
+    driver::{RunConfiguration, compile_path, execute},
     module::ModuleRoots,
 };
 
@@ -99,6 +99,107 @@ fn generated_executable_runs_imported_core_after_the_original_source_graph_disap
         assert_eq!(output.stdout, b"42\n");
         assert!(output.stderr.is_empty());
     }
+}
+
+#[test]
+fn generated_parent_paths_host_runs_after_its_source_graph_disappears() {
+    let fixture = Fixture::new(include_str!("fixtures/parent-path-startup/main.ash"));
+    let buffer_root = fixture.0.join("buffers");
+    fs::create_dir(&buffer_root).unwrap();
+    fs::write(
+        buffer_root.join("buffer.ash"),
+        include_str!("fixtures/parent-path-startup/buffer.ash"),
+    )
+    .unwrap();
+    let source = RunConfiguration {
+        entry: fixture.0.join("entry.ash"),
+        roots: ModuleRoots::new([("buffers", &buffer_root)]).unwrap(),
+    };
+    let checked = compile_path(source).expect("parent paths compile");
+    let observed = execute(&checked).expect("parent paths interpret");
+    const VALUE: &str = "(Success(Success(Root(0, 4, 0), Root(0, 4, 0))), Success(Success(Root(0, 4, 3), Root(0, 2, 1))))";
+    assert_eq!(observed.value_display(), VALUE);
+    assert_eq!(
+        observed.type_display(),
+        "(Outcome<Outcome<(Lookup, Lookup)>>, Outcome<Outcome<(Lookup, Lookup)>>)"
+    );
+    eprintln!(
+        "parent paths compilation work: {:?}",
+        checked.compilation_work()
+    );
+
+    fs::rename(
+        fixture.0.join("entry.ash"),
+        fixture.0.join("entry-moved.ash"),
+    )
+    .unwrap();
+    fs::rename(buffer_root, fixture.0.join("buffers-moved")).unwrap();
+    let mut configuration = BuildConfiguration::new(fixture.0.join("program"));
+    let cache = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+    configuration.cargo_target_directory = Some(cache.join("ffi-native-hosts"));
+    let prepared = prepare_program(&checked, configuration).expect("parent paths prepare");
+    drop(checked);
+    let built = build_prepared(prepared).unwrap_or_else(|error| {
+        let log = error
+            .build_log()
+            .and_then(|path| fs::read_to_string(path).ok())
+            .unwrap_or_default();
+        panic!("{error}\n{log}");
+    });
+    let output = Command::new(built.executable())
+        .current_dir(&fixture.0)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, format!("{VALUE}\n").as_bytes());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn generated_direct_cell_handler_runs_after_source_disappears() {
+    let fixture = Fixture::new(include_str!(
+        "fixtures/parent-path-startup/direct-cell-handler.ash"
+    ));
+    let checked = compile_path(fixture.source()).expect("direct cell handler compiles");
+    let interpreted = execute(&checked).expect("direct cell handler interprets");
+    assert_eq!(interpreted.value_display(), "42");
+    assert_eq!(interpreted.type_display(), "Int");
+    fs::rename(
+        fixture.0.join("entry.ash"),
+        fixture.0.join("entry-moved.ash"),
+    )
+    .unwrap();
+    let mut configuration = BuildConfiguration::new(fixture.0.join("program"));
+    let cache = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+    configuration.cargo_target_directory = Some(cache.join("ffi-native-hosts"));
+    let prepared = prepare_program(&checked, configuration).expect("direct cell handler prepares");
+    drop(checked);
+    let built = build_prepared(prepared).unwrap_or_else(|error| {
+        let log = error
+            .build_log()
+            .and_then(|path| fs::read_to_string(path).ok())
+            .unwrap_or_default();
+        panic!("{error}\n{log}");
+    });
+    let output = Command::new(built.executable())
+        .current_dir(&fixture.0)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"42\n");
+    assert!(output.stderr.is_empty());
 }
 
 #[test]

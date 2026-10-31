@@ -1,5 +1,5 @@
 //! Matching-compiler storage for source lexical forwarding and ordinary helper evidence.
-//! Restored records remain claims until ordinary Core and source-scope admission.
+//! Reconstruction relocates records from the compiler-validated representation.
 //! This carrier preserves global/resource-family requirements and lexical/abstract
 //! helper selections. Concrete implementations, adapters and captured or ordinary
 //! non-resource lexical dictionaries remain explicitly unsupported.
@@ -9,8 +9,8 @@ use super::{
     WireOutput, WireReader, WireWriter, append, charge, get, index, push,
 };
 use crate::core::dialect::{
-    MethodEvidenceAnchorRole, MethodEvidenceCatalog, MethodEvidenceExpectedRole,
-    MethodEvidenceOwner, MethodEvidenceProducer,
+    MethodEvidenceAnchor, MethodEvidenceAnchorRole, MethodEvidenceCatalog,
+    MethodEvidenceExpectedRole, MethodEvidenceOwner, MethodEvidenceProducer,
 };
 use crate::interface::{
     EvidenceNode, EvidenceNodeId, InterfaceApplication, LexicalEvidenceId, MethodId, RequirementId,
@@ -821,20 +821,26 @@ impl Decoder<'_> {
         catalog.set_lexical_owners(owners);
         catalog
             .attach_final_occurrence_owners(pins, &keys, self.work)
-            .map_err(ImageFailure::Validation)?;
+            .map_err(|error| {
+                if error.reason() == crate::core::ValidationReason::Resource {
+                    ImageFailure::Resource
+                } else {
+                    ImageFailure::InvalidRecord
+                }
+            })?;
         charge(self.work, 1)?;
         Ok(Arc::new(catalog))
     }
     pub(super) fn source_method_anchors(
         &mut self,
-        builder: &mut crate::core::EffectCoreBuilder,
         nodes: &[NodeId],
         catalog: &MethodEvidenceCatalog,
         record: Slice,
-    ) -> Result<(), ImageFailure> {
+    ) -> Result<Vec<MethodEvidenceAnchor>, ImageFailure> {
         let bytes = record.get(&self.image.source_method_evidence)?;
         let mut offset = 0;
         let count: u32 = take(bytes, &mut offset, self.work)?;
+        let mut anchors = Vec::new();
         for _ in 0..count {
             let node = take(bytes, &mut offset, self.work)?;
             let owner = take(bytes, &mut offset, self.work)?;
@@ -893,9 +899,9 @@ impl Decoder<'_> {
                 .transpose()?;
             let method = self.method_identity(method)?;
             let node = *get(nodes, node)?;
-            charge(self.work, 8)?;
-            builder.with_caller_type_work(self.work, |builder| {
-                builder.authenticate_method_evidence(
+            push(
+                &mut anchors,
+                MethodEvidenceAnchor {
                     node,
                     owner,
                     requirement,
@@ -903,29 +909,15 @@ impl Decoder<'_> {
                     application,
                     role,
                     occurrence,
-                )
-            })?;
-            // Authentication may normalize the occurrence's owner. The wire
-            // must already claim that exact owner; do not silently repair it.
-            let anchor = builder
-                .method_evidence_anchors()
-                .last()
-                .ok_or(ImageFailure::InvalidRecord)?;
-            if anchor.node != node
-                || anchor.owner != owner
-                || anchor.requirement != requirement
-                || anchor.method != method
-                || anchor.role != role
-                || anchor.occurrence != occurrence
-                || anchor.expectation != expectation
-            {
-                return Err(ImageFailure::InvalidRecord);
-            }
+                    expectation,
+                },
+                self.work,
+            )?;
         }
         if offset != bytes.len() {
             return Err(ImageFailure::InvalidRecord);
         }
-        Ok(())
+        Ok(anchors)
     }
 }
 

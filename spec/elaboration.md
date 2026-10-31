@@ -58,10 +58,9 @@ same-operation donor allocation cannot replace the original symbol.
 The canonical Address functions lower to pure intrinsic nodes in either dialect.
 Validation checks their original builtin function identity, canonical nominal
 Address type, exact signatures, empty rows and source provenance. No live pointer
-is an image constant. Matching-compiler private images reconstruct unchecked
-nodes and independently validate them using resident defining source data without
-reopening source paths or running source semantic checking. Paid syntax-only
-provenance reconstruction adds no resolution or executable authority.
+is an image constant. A compiler-generated executable reconstructs the
+compiler-validated Core representation with fresh identities, without reopening
+source paths or repeating its semantic proof.
 
 A native entry lowers to an explicit Effect Core interpretation of its remaining
 required symbol effects. Each listed member retains the original checked symbol.
@@ -74,11 +73,12 @@ expression or host identity. Pure Core remains closed. Ordinary source handlers
 may target a symbol and retain nearest-handler precedence.
 
 Validation reconstructs the duplicate-free interpretation membership, body type,
-row subtraction and defining symbol correspondence. Transforms and image
-restoration rebuild those relations and return to independent validation.
-Compilation retains this boundary without executable bindings. Execution checks
-supplied callback entries against original symbols before running Ash; this is
-not a complete-binding preflight. A selected native call requires its exact
+row subtraction and defining symbol correspondence. Compiler-side transforms
+rebuild those relations and return to independent validation before packaging.
+Compilation retains this boundary without executable bindings. Separately
+supplied callback entries are checked against original symbols; a generated host
+sets up the associations established by compilation. Neither is a complete-binding
+preflight. A selected native call requires its exact
 matching entry when invoked. Bridge generation derives typed
 pointer arguments, Address results and actual void results from the supported
 source mapping. Bytes backing is retained through synchronous invocation. These
@@ -102,12 +102,11 @@ then reconstructs generic dependency admission. Copying and row replay retain
 the complete handle type and exact effect instance.
 
 Private program images distinguish the generic builtin module role from an
-ordinary module and authenticate its canonical source bytes. They retain the
-complete carrier through the existing handle, child, origin and acquisition
-records. Restoration performs the same ordinary and dependency checks. No
-restored image or body-free source summary gains unchecked contents authority.
-Pure computational signatures retain conditional relationships; Effect scopes
-require their independently reconstructed control/value proof.
+ordinary module. They retain the complete compiler-validated carrier through
+the existing handle, child, origin and acquisition records. The generated host
+reconstructs that representation without repeating the ordinary and dependency
+checks. Pure computational signatures retain conditional relationships; Effect
+scopes require the compiler's independently reconstructed control/value proof.
 
 The existing finite capture graphs retain immutable value ports and ordered
 control states. Generic cell states hold current root alternatives. Reads link their result ports
@@ -131,10 +130,12 @@ caller and escape checks.
 Public helper summaries retain the authenticated finite equations and ordered
 control relationships, with conditional target/payload ports. Actual imports
 and Type/Row/owner substitutions must discharge those relationships. Linked
-Core validation builds them again from actual admitted Core. Copying,
-transforms and image restoration repeat that reconstruction. No source-summary
-boolean substitutes for it. All graph insertion, state copying, joins and
-recursive replay charge their owning work ledger before proportional work;
+Core validation builds them again from actual admitted Core. Compiler-side
+copying and transforms repeat that reconstruction before packaging. A generated
+host preserves the verified result while reconstructing its representation.
+No source-summary boolean substitutes for the compiler proof. All graph
+insertion, state copying, joins and recursive replay charge their owning work
+ledger before proportional work;
 refusal publishes no partial checked module or permission.
 
 Execution admission remains separate from dependency proof. Interpreted and

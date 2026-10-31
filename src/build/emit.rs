@@ -2,8 +2,8 @@
 //!
 //! Private byte payloads cross into the generated crate as literals or fixed
 //! compile-time includes. Image records remain inside Ash; its hidden runtime
-//! entry independently restores and validates them before invoking the existing
-//! evaluator.
+//! entry reconstructs the compiler-validated representation before invoking
+//! the existing evaluator.
 
 use std::fmt;
 
