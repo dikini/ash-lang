@@ -2,12 +2,12 @@
 
 - ID: `AD-0017`
 - Status: accepted
-- Related: [CP-0027](../proposals/CP-0027-pinned-workers-and-copied-channels.md), [DN-0058](../design/DN-0058-pinned-worker-host-and-channel.md), [TASK-0058](../tasks/TASK-0058-pinned-worker-network.md)
+- Related: [specification](../../spec/README.md), [DN-0058](../design/DN-0058-pinned-worker-host-and-channel.md), [TASK-0058](../tasks/TASK-0058-pinned-worker-network.md)
 
 ## Decision
 
 Run the fixed two-worker network on two host threads, each with a separately
-constructed Ash root, executor and local Store. A worker remains on its carrier
+constructed Ash root and executor. Local Stores remain on that carrier. A worker remains on its carrier
 thread for its execution; CPU affinity is not required. The enclosing network
 owner retains both workers and two dedicated positive-capacity FIFO channels,
 one in each direction, through actual endpoint and backing settlement.
@@ -20,9 +20,9 @@ authenticated kind and sending side. Host operations authenticate transport
 origin only: ordinary Ash implements the ledger, acknowledgements and drain
 with ordinary error handling. The host does not certify ledger correctness,
 decode completion facts, or own another worker's retained control. The user
-superseded the earlier protocol-specific compiler checker on 2026-10-31; see
-[CP-0028](../proposals/CP-0028-checked-functional-network-ledger.md). This
-revision does not claim that the proposed ordinary program is implemented.
+superseded the earlier protocol-specific compiler checker on 2026-10-31. The
+ordinary protocol and host behavior are retained on the milestone; Main
+integration remains separate.
 
 Use synchronized state changes and level-triggered wait registration with an
 atomic readiness recheck. Readable includes a message, genuine End and failure;
@@ -54,9 +54,8 @@ completion or successful settlement; containment of arbitrary native behavior
 and process death are outside the decision. An implementation must not claim
 panic recovery unless its actual boundary preserves the affected support.
 
-This non-language choice does not make the proposed semantics current Ash.
-The accepted transition and its entry, operation and failure contracts are in
-[CP-0027](../proposals/CP-0027-pinned-workers-and-copied-channels.md).
+This non-language choice does not itself define Ash semantics. The entry,
+operation and failure contracts are in the [specification](../../spec/README.md).
 
 ## Context
 
@@ -96,9 +95,12 @@ contracts remain separate and are not discharged by a protocol result.
 
 ## Verification
 
-Before release relies on this decision, establish the bounded worker/channel
-preservation assignment and its correspondence to actual host and evaluator
-behavior. Exercise entry and capture rejection, partial startup, failures around
+Verify actual host and evaluator behavior with the required tests. Earlier
+worker/channel and one-way models are conditional historical evidence, not a
+proof of the current carrier or ordinary protocol. Retained M1–M3 generic
+ownership and drain-safety evidence keeps its original scope; generic C3
+regressions remain separate. Exercise entry and capture rejection, partial
+startup, failures around
 commit, capacity-one FIFO and visibility, receiver allocation failure,
 registration/poll/cancel races, stale wakes, terminal late registration, genuine
 End and settlement with outstanding callbacks. Separate actual native

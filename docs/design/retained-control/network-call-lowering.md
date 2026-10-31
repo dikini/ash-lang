@@ -1,6 +1,9 @@
 # Structural network call lowering
 
-This is an implementation design for the accepted [CP-0027](../../proposals/CP-0027-pinned-workers-and-copied-channels.md) and [AD-0017](../../decisions/AD-0017-pinned-worker-host-and-transport.md). It grants no completion or release permission. The one-way completion cut and its separate proof assignment remain required.
+> Historical design: protocol-specific completion checking was superseded
+> on 2026-10-31; this note is not a current implementation requirement.
+
+This is an implementation design for the accepted [CP-0027](https://github.com/dikini/ash-lang/blob/b3e16b7c31d55850ab6f879286a594b4f6cb2540/docs/proposals/CP-0027-pinned-workers-and-copied-channels.md) and [AD-0017](../../decisions/AD-0017-pinned-worker-host-and-transport.md). It granted no completion or release permission. The one-way completion cut and its separate proof assignment belonged to that historical design.
 
 The current request-based precursor is incomplete. In a worker-local `region` and `using` scope, source capture inference treats the network IO request as an unknown outward handler that can retain the local continuation. Moreover, re-executing an initializer's allocation-context query only in the evaluator would introduce control that the linked Core graph does not contain. Selecting the worker entry region directly also ignores a nested selected provider.
 

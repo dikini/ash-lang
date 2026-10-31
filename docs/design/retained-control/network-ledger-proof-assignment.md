@@ -1,6 +1,9 @@
 # N3 network ledger and checker proof assignment
 
-This bounded assignment supports accepted [CP-0028](../../proposals/CP-0028-checked-functional-network-ledger.md) and [TASK-0058](../../tasks/TASK-0058-pinned-worker-network.md). It is not current language semantics or evidence that a theorem has been proved. [DN-0056](../DN-0056-scoped-continuation-retention-and-library-scheduling.md#minimal-library-core-ledger-and-inductive-invariant) supplies the paper argument and [DN-0058](../DN-0058-pinned-worker-host-and-channel.md#proof-and-verification-obligations) sets the four N3 obligations. Product implementation requires an active assignment and the required evidence.
+> Historical assignment: the protocol-specific compiler checker was
+> superseded on 2026-10-31 and is not a current product requirement.
+
+This bounded assignment supported the then-accepted [CP-0028](https://github.com/dikini/ash-lang/blob/b3e16b7c31d55850ab6f879286a594b4f6cb2540/docs/proposals/CP-0028-checked-functional-network-ledger.md) and [TASK-0058](../../tasks/TASK-0058-pinned-worker-network.md). It is not current language semantics or evidence that a theorem has been proved. [DN-0056](../DN-0056-scoped-continuation-retention-and-library-scheduling.md#minimal-library-core-ledger-and-inductive-invariant) supplies the paper argument and [DN-0058](../DN-0058-pinned-worker-host-and-channel.md#proof-and-verification-obligations) sets the four N3 obligations. The then-proposed product implementation required an active assignment and the required evidence.
 
 ## Question and comparison
 

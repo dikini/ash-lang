@@ -71,8 +71,7 @@ results are Unit (C void) or Address (C pointer).
 
 `network_types.ash` defines the ordinary identities, parents and outgoing
 messages used by the codec and intended for the network ledger.
-`network_codec.ash` encodes Work and Ack frames with the CP-0030 tagged
-base-256 representation and decodes only complete canonical frames. A decoded
+`network_codec.ash` encodes Work and Ack frames with a tagged base-256 representation and decodes only complete canonical frames. A decoded
 Work carries its child, parent and payload; the receiver is supplied separately by the authenticated delivery
 context. The codec is ordinary source code. A successful parse alone does not
 authenticate a peer or kind and does not establish a ledger transition,
