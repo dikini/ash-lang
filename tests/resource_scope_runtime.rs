@@ -349,6 +349,73 @@ fn generic_runtime_observation(
 }
 
 #[test]
+fn generic_helper_reads_live_outer_cell_inside_nested_scope() {
+    generic_runtime_observation(
+        include_str!("fixtures/generic-cell/nested-helper-outer-read.ash"),
+        &[],
+        "42",
+        2,
+        0,
+    );
+}
+
+#[test]
+fn generic_helper_reads_live_outer_cell_inside_nested_generic_scope() {
+    let source = include_str!("fixtures/generic-cell/nested-helper-outer-read.ash").replace(
+        "resource cell<C> cursor",
+        "resource Scoped.Cell<C, Int> cursor",
+    );
+    generic_runtime_observation(&source, &[], "42", 2, 0);
+}
+
+#[test]
+fn legacy_helper_reads_live_outer_cell_inside_nested_legacy_scope() {
+    generic_runtime_observation(
+        include_str!("fixtures/generic-cell/nested-legacy-helper-outer-read.ash"),
+        &[],
+        "42",
+        2,
+        0,
+    );
+}
+
+#[test]
+fn imported_generic_helper_reads_live_outer_cell_inside_nested_scope() {
+    let helper = include_str!("fixtures/generic-cell/nested-helper-import.ash");
+    for helper in [
+        helper.to_owned(),
+        helper.replace(
+            "resource cell<C> cursor",
+            "resource Scoped.Cell<C, Int> cursor",
+        ),
+    ] {
+        generic_runtime_observation(
+            include_str!("fixtures/generic-cell/nested-helper-import-entry.ash"),
+            &[("helper.ash", &helper)],
+            "42",
+            2,
+            0,
+        );
+    }
+}
+
+#[test]
+fn callback_receiving_local_cell_still_mutates_that_cell() {
+    for (source, acquisitions) in [
+        (
+            include_str!("fixtures/generic-cell/local-owner-callback.ash"),
+            1,
+        ),
+        (
+            include_str!("fixtures/generic-cell/nested-local-callback.ash"),
+            2,
+        ),
+    ] {
+        generic_runtime_observation(source, &[], "42", acquisitions, 1);
+    }
+}
+
+#[test]
 fn generic_cell_p01_fixed_payload_shapes_share_aliases() {
     for (declarations, ty, initial, replacement, answer, expected) in [
         ("", "Int", "41", "42", "Cell.read c", "42"),

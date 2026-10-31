@@ -142,6 +142,29 @@ fn extend_possible_owner_pairs<'a>(
     Ok(true)
 }
 
+fn distinct_cell_owner_variables(
+    request: &Request,
+    target: &Request,
+) -> Option<(TypeVariableId, TypeVariableId)> {
+    if request.ambiguous_instance || target.ambiguous_instance {
+        return None;
+    }
+    let (Some(request), Some(target)) = (&request.effect, &target.effect) else {
+        return None;
+    };
+    if request.effect() != target.effect() {
+        return None;
+    }
+    let (
+        Some(KindedArgument::TypeArg(Type::Variable(outer))),
+        Some(KindedArgument::TypeArg(Type::Variable(inner))),
+    ) = (request.arguments().first(), target.arguments().first())
+    else {
+        return None;
+    };
+    (outer != inner).then_some((*outer, *inner))
+}
+
 /// Retain explicit owner RowArg equations alongside ordinary type equations.
 /// A closed actual prefix can identify a known member; an open actual row
 /// cannot select one instance on the basis of its prefix alone.
@@ -5846,6 +5869,49 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
+    // A callable's own type inputs are fixed before it can acquire a cell in
+    // its body. A standalone query has no caller frame for those inputs; its
+    // actual linked calls are checked separately with their substitutions.
+    fn symbolic_outer_cell_request(
+        &self,
+        state: &State,
+        event: Event,
+        frame: Frame,
+        target: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        if !state.symbolic_seed || self.inspecting || !self.is_cell(frame) {
+            return Ok(false);
+        }
+        let Frame::Resource {
+            code,
+            value_context,
+            focused,
+            ..
+        } = frame
+        else {
+            return Ok(false);
+        };
+        if self.focusing != focused {
+            return Ok(false);
+        }
+        let Some(owners) =
+            distinct_cell_owner_variables(&self.labels[event.label], &self.labels[target])
+        else {
+            return Ok(false);
+        };
+        self.data
+            .as_ref()
+            .ok_or(Failure::Invalid)?
+            .symbolic_cell_inputs(
+                code,
+                (value_context, state.value_context),
+                owners,
+                focused,
+                budget,
+            )
+    }
+
     fn requested_boundaries(
         &mut self,
         state: &State,
@@ -5927,7 +5993,15 @@ impl<'a> Analysis<'a> {
                 }
                 let target = self.label(code, context, budget)?;
                 let relation = self.match_labels(event.label, target, budget)?;
-                let relation = if self.is_cell(edge.frame)
+                let relation = if !relation.0 {
+                    // A definitely different effect cannot select this frame.
+                    // Its symbolic operand need not describe this cell API.
+                    relation
+                } else if self
+                    .symbolic_outer_cell_request(state, event, edge.frame, target, budget)?
+                {
+                    (false, true)
+                } else if self.is_cell(edge.frame)
                     && let Control::Request(request) = &self.graph.code[event.code]
                     && let Some(operation) = request.operation
                     && operation.owner().module().is_builtin_resource()
@@ -7485,6 +7559,52 @@ impl<'a> Analysis<'a> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn symbolic_cell_labels_require_distinct_unambiguous_owner_variables() {
+        let source = SourceFile::new("cell-labels", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let effect = EffectId::new(ModuleId::new(0), 0);
+        let other_effect = EffectId::new(ModuleId::new(0), 1);
+        let outer = TypeVariableId::new(0);
+        let inner = TypeVariableId::new(1);
+        let mut work = TypeWorkBudget::unbounded();
+        let mut request = |family, owner| {
+            Request::effect(
+                &EffectInstance::new(family, vec![owner].into_boxed_slice()),
+                span,
+                &mut work,
+            )
+            .unwrap()
+        };
+        let outer_label = request(effect, Type::Variable(outer));
+        let inner_label = request(effect, Type::Variable(inner));
+        let other_family = request(other_effect, Type::Variable(inner));
+        let concrete = request(effect, Type::Int);
+        assert_eq!(
+            distinct_cell_owner_variables(&outer_label, &inner_label),
+            Some((outer, inner))
+        );
+        assert_eq!(
+            distinct_cell_owner_variables(&inner_label, &inner_label),
+            None
+        );
+        assert_eq!(
+            distinct_cell_owner_variables(&outer_label, &other_family),
+            None
+        );
+        assert_eq!(distinct_cell_owner_variables(&concrete, &inner_label), None);
+        assert_eq!(
+            distinct_cell_owner_variables(&Request::unknown(span), &inner_label),
+            None
+        );
+        let mut ambiguous = outer_label;
+        ambiguous.ambiguous_instance = true;
+        assert_eq!(
+            distinct_cell_owner_variables(&ambiguous, &inner_label),
+            None
+        );
+    }
+
     #[test]
     fn native_return_edges_keep_the_actual_request_and_route() {
         let mut budget = TypeWorkBudget::unbounded();

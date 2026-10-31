@@ -50,7 +50,14 @@ impl Drop for Fixture {
 }
 
 fn assert_execution(text: &str) {
+    assert_execution_with_helper(text, None);
+}
+
+fn assert_execution_with_helper(text: &str, helper: Option<&str>) {
     let fixture = Fixture::new(text);
+    if let Some(helper) = helper {
+        fs::write(fixture.0.parent().unwrap().join("helper.ash"), helper).unwrap();
+    }
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("interaction fixture should load");
     let mut checked = Vec::new();
@@ -104,6 +111,23 @@ fn assert_execution(text: &str) {
         let observed = evaluate_effect(&validated).expect("transformed Core should execute");
         assert!(matches!(observed.value, Value::SmallInteger(value) if value.to_string() == "42"));
     }
+}
+
+#[test]
+fn nested_generic_helper_executes_after_core_transforms() {
+    let source = include_str!("fixtures/generic-cell/nested-helper-outer-read.ash").replace(
+        "resource cell<C> cursor",
+        "resource Scoped.Cell<C, Int> cursor",
+    );
+    assert_execution(&source);
+    let helper = include_str!("fixtures/generic-cell/nested-helper-import.ash").replace(
+        "resource cell<C> cursor",
+        "resource Scoped.Cell<C, Int> cursor",
+    );
+    assert_execution_with_helper(
+        include_str!("fixtures/generic-cell/nested-helper-import-entry.ash"),
+        Some(&helper),
+    );
 }
 
 fn resolve_entry(graph: &ModuleGraph) -> Result<ResolvedModule, ResolveModuleError> {
