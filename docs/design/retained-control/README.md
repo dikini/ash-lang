@@ -13,6 +13,10 @@ and reviewed product correspondence.
 | [Ownership](Ownership.lean) | Finite owner inventories, transfer and restore transitions, completion, support, generations and failure accounting. |
 | [OwnershipExamples](OwnershipExamples.lean) | Concrete positive and negative traces over those transitions. |
 | [DrainSafety](DrainSafety.lean) | Finite focused-State normal returns, port cases and the checked Store-close predecessor. |
+| [WorkerChannel](WorkerChannel.lean) | Bounded two-worker ownership, copied FIFO channels, held-delivery completion, endpoint closure and registration accounting. |
+| [NetworkLedgerTransitions](NetworkLedgerTransitions.lean) and [NetworkLedgerChecker](NetworkLedgerChecker.lean) | Finite ledger laws and definition-bound modeled checking. |
+| [NetworkLedgerHistoryControl](NetworkLedgerHistoryControl.lean) | Conditional currentness and history through modeled control steps. |
+| [NetworkLedgerCoverageClosure](NetworkLedgerCoverageClosure.lean) | Conditional correspondence between modeled ledger traces and protocol coverage. |
 
 The C1 candidate passed independent source review and a frozen scoped
 [AD-0012](../../decisions/AD-0012-proof-development-feedback-and-build-reuse.md)
@@ -25,6 +29,18 @@ control, value and completion premises used by the bounded analysis. Its
 reviewed source completed a separate frozen [gate](../../tasks/evidence/local-retained-control/c3-model/README.md);
 its receipt passed independent audit. Linked validation uses the drain analysis;
 the connected C2/C3 checkpoint is retained and accepted.
+
+The historical conditional M4 worker/channel model has a reviewed frozen
+[source gate](../../tasks/evidence/pinned-worker-channel-proof/README.md).
+Its [correspondence map](worker-channel-correspondence.md) states the runtime,
+C3, native binding and transport premises that remain outside the model proof.
+It is not a prerequisite proof of the current carrier or ordinary protocol,
+and does not establish native shutdown or language semantics.
+
+The N3 ledger model and its [correspondence](network-ledger-correspondence.md)
+record the assumptions needed to relate checked linked Core to the finite model.
+They are historical conditional evidence, not a proof of the current ordinary
+protocol, peer authentication, exclusive control or network release.
 
 ## Retained product evidence
 
@@ -65,3 +81,8 @@ records two analysis limitations and their reproductions. The
 [C5 checkpoint](https://github.com/dikini/ash-lang/issues/75#issuecomment-6476014597)
 and [separate Main handoff](https://github.com/dikini/ash-lang/issues/54#issuecomment-6476014971)
 remain open.
+
+The historical bounded [one-way completion source gate](../../tasks/evidence/pinned-one-way-proof/README.md)
+registers `OneWayCompletion` after the four retained parent modules. Its model
+proofs and implementation correspondence covered the superseded one-way checker;
+they are not current protocol or release prerequisites.

@@ -1,0 +1,190 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/m4-pinned-network)
+warning: function `check_nodes_with_release` is never used
+    --> src/core/capture.rs:3155:15
+     |
+3155 | pub(super) fn check_nodes_with_release<F: CoreOperationFamily>(
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `network_worker_processing_facts` is never used
+    --> src/core/capture.rs:3383:15
+     |
+3383 | pub(super) fn network_worker_processing_facts(
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `with_network_completion_analysis` is never used
+    --> src/core/capture.rs:3471:4
+     |
+3471 | fn with_network_completion_analysis<R>(
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `check_control_roots_with_rows` is never used
+    --> src/core/capture.rs:4353:4
+     |
+4353 | fn check_control_roots_with_rows(
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated items `new`, `focuses`, and `worker` are never used
+    --> src/core/capture/control.rs:1276:19
+     |
+1275 | impl<'a> IncompleteNativeFocuses<'a> {
+     | ------------------------------------ associated items in this implementation
+1276 |     pub(super) fn new() -> Self {
+     |                   ^^^
+...
+1282 |     pub(super) fn focuses(&self) -> &[CompletionFocus<'a>] {
+     |                   ^^^^^^^
+...
+1285 |     pub(super) fn worker(&self) -> Option<&CompletionFocus<'a>> {
+     |                   ^^^^^^
+
+warning: struct `IncompleteNativeIdentity` is never constructed
+    --> src/core/capture/control.rs:1292:19
+     |
+1292 | pub(super) struct IncompleteNativeIdentity<'scope, 'focus, 'graph> {
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `IgnoredUnitUse` is never constructed
+    --> src/core/capture/control.rs:1313:19
+     |
+1313 | pub(super) struct IgnoredUnitUse {
+     |                   ^^^^^^^^^^^^^^
+
+warning: associated items `reached_call_return`, `has_unique_live_frame`, and `visit_terminal_returns` are never used
+    --> src/core/capture/control.rs:1540:8
+     |
+1346 | impl CompletionTrace {
+     | -------------------- associated items in this implementation
+...
+1540 |     fn reached_call_return(
+     |        ^^^^^^^^^^^^^^^^^^^
+...
+1612 |     fn has_unique_live_frame(
+     |        ^^^^^^^^^^^^^^^^^^^^^
+...
+1676 |     pub(super) fn visit_terminal_returns(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `check_worker_entry`, `focus_worker_stores`, `first_native_identity`, and `restore_entry` are never used
+    --> src/core/capture/control.rs:3863:19
+     |
+2957 | impl<'a> Analysis<'a> {
+     | --------------------- methods in this implementation
+...
+3863 |     pub(super) fn check_worker_entry(
+     |                   ^^^^^^^^^^^^^^^^^^
+...
+4076 |     pub(super) fn focus_worker_stores(
+     |                   ^^^^^^^^^^^^^^^^^^^
+...
+4331 |     pub(super) fn first_native_identity<'scope, 'focus>(
+     |                   ^^^^^^^^^^^^^^^^^^^^^
+...
+6677 |     fn restore_entry(
+     |        ^^^^^^^^^^^^^
+
+warning: enum `ForwardingNode` is never used
+  --> src/core/capture/network_completion.rs:22:17
+   |
+22 | pub(super) enum ForwardingNode {
+   |                 ^^^^^^^^^^^^^^
+
+warning: fields `arguments` and `captures` are never read
+  --> src/core/capture/network_completion.rs:31:16
+   |
+29 | pub(super) struct MatchedReturn {
+   |                   ------------- fields in this struct
+30 |     pub(super) call: CompletionCall,
+31 |     pub(super) arguments: Vec<(usize, usize)>,
+   |                ^^^^^^^^^
+32 |     pub(super) captures: Vec<(usize, usize)>,
+   |                ^^^^^^^^
+
+warning: fields `focus` and `caller` are never read
+  --> src/core/capture/network_completion.rs:38:5
+   |
+37 | pub(super) struct EnteredCall<'focus, 'graph> {
+   |                   ----------- fields in this struct
+38 |     focus: &'focus CompletionFocus<'graph>,
+   |     ^^^^^
+39 |     call: CompletionCall,
+40 |     caller: HashSet<usize>,
+   |     ^^^^^^
+
+warning: function `return_call` is never used
+   --> src/core/capture/network_completion.rs:188:15
+    |
+188 | pub(super) fn return_call(
+    |               ^^^^^^^^^^^
+
+warning: function `forwarding_suffix` is never used
+   --> src/core/capture/network_completion.rs:359:15
+    |
+359 | pub(super) fn forwarding_suffix(
+    |               ^^^^^^^^^^^^^^^^^
+
+warning: method `start_worker_entry` is never used
+    --> src/core/capture/value.rs:2719:19
+     |
+ 492 | impl Graph {
+     | ---------- method in this implementation
+...
+2719 |     pub(super) fn start_worker_entry(
+     |                   ^^^^^^^^^^^^^^^^^^
+
+warning: methods `existing_worker_origin`, `existing_initializer_closures`, `existing_closures_at_port`, `existing_stored_capture_ports`, and `existing_original_capture_ports` are never used
+    --> src/core/capture/value.rs:4891:19
+     |
+4179 | impl<'a> Analysis<'a> {
+     | --------------------- methods in this implementation
+...
+4891 |     pub(super) fn existing_worker_origin(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^
+...
+4946 |     pub(super) fn existing_initializer_closures(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+4956 |     pub(super) fn existing_closures_at_port(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+4984 |     pub(super) fn existing_stored_capture_ports(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+5013 |     pub(super) fn existing_original_capture_ports(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `ash` (lib) generated 16 warnings
+warning: fields `analysis` and `worker` are never read
+    --> src/core/capture/control.rs:1294:16
+     |
+1292 | pub(super) struct IncompleteNativeIdentity<'scope, 'focus, 'graph> {
+     |                   ------------------------ fields in this struct
+1293 |     pub(super) scope: &'scope super::super::validate::NetworkNativeIdentityScope<'scope>,
+1294 |     pub(super) analysis: &'focus Analysis<'graph>,
+     |                ^^^^^^^^
+1295 |     pub(super) focus: &'focus CompletionFocus<'graph>,
+1296 |     pub(super) worker: &'focus CompletionFocus<'graph>,
+     |                ^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `inspect_worker_end` is never used
+  --> src/core/capture/network_end.rs:28:15
+   |
+28 | pub(super) fn inspect_worker_end(
+   |               ^^^^^^^^^^^^^^^^^^
+
+warning: method `existing_original_capture_ports` is never used
+    --> src/core/capture/value.rs:5013:19
+     |
+4179 | impl<'a> Analysis<'a> {
+     | --------------------- method in this implementation
+...
+5013 |     pub(super) fn existing_original_capture_ports(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `ash` (lib test) generated 3 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 01s
+  Executable unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-aa33375af3ec06d4)
+  Executable tests/pinned_network.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/pinned_network-9c9335ec3e020169)

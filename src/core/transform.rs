@@ -128,12 +128,21 @@ impl TransformFamily for EffectOperationFamily {
         let effects = copy_expression_row(builder, expression)?;
         let origin = copy_origin(builder, expression.origin()?)?;
         match operation {
+            EffectOperation::Network(_) => return Err(TransformError::InvalidValidatedInput),
             EffectOperation::RegionValueRequest(request) => builder.region_operation(
                 EffectOperation::RegionValueRequest(request.clone()),
                 ty.into_inner(),
                 effects,
                 origin,
             ),
+            EffectOperation::RegionBuffer(buffer)
+                if matches!(
+                    buffer.operation,
+                    super::region::RegionBufferOperation::Network { .. }
+                ) =>
+            {
+                return Err(TransformError::InvalidValidatedInput);
+            }
             EffectOperation::RegionBuffer(buffer) => builder.region_operation(
                 EffectOperation::RegionBuffer(super::region::RegionBufferNode {
                     api: buffer.api,

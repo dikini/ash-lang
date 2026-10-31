@@ -42,7 +42,8 @@ or filesystem source. `builtin` is a reserved root name: configuring it as a
 filesystem root fails with `invocation.reserved-root` before filesystem
 inspection. The modules specified beneath that root are `@builtin.cell`,
 `@builtin.generic_cell`, `@builtin.retained_control`, `@builtin.bytes`,
-`@builtin.string`, `@builtin.foreign` and `@builtin.regions`. Unknown paths,
+`@builtin.string`, `@builtin.integer`, `@builtin.foreign`,
+`@builtin.network` and `@builtin.regions`. Unknown paths,
 including `@builtin.cell.extra`, fail
 with `module.unknown-builtin`.
 
@@ -98,6 +99,25 @@ authenticate the descriptor and the actual association, not the import route.
 `Drive<N>` may occur in a row, but direct `perform`, `handle`, `hook` or
 `register` of that canonical effect is rejected, including through an alias.
 `Probe<N>` is an ordinary effect and retains normal handler precedence.
+
+### Compiler-owned network module
+
+`@builtin.network` is a canonical passive module. It supplies opaque `Pair<N>`,
+`Worker<N>` and `Registration<N>` types, the sealed effects `IO<N>` and
+`Join<N>`, result constructors, and the send, receive, finish, watch and settle
+functions described by the [network rules](static-semantics.md#pinned-worker-networks).
+Imports, aliases and re-exports preserve these identities; a same-spelled
+ordinary declaration does not create a network owner or endpoint.
+
+### Compiler-owned integer module
+
+`@builtin.integer` is a passive canonical module. It exports the transparent
+nominal type `SplitResult`, constructors `Parts((Int, Int))` and `Negative`,
+and `split_base256 : Int -> SplitResult`. The `Parts` tuple is quotient first,
+remainder second. Imports, aliases and public re-exports preserve all defining
+identities; an ordinary same-spelled function does not select builtin execution.
+The function has an empty outward row. Transparent construction of a value
+with these constructors does not establish that an intrinsic call returned it.
 
 ### Independent byte and string modules
 

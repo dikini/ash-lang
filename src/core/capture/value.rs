@@ -389,6 +389,9 @@ struct EvidenceIndex {
 #[derive(Debug)]
 pub(super) struct Graph {
     expressions: Vec<Expr>,
+    // The builder reserves this entire original-node prefix before it adds
+    // adapters, imported expressions, or query-local synthetic expressions.
+    original_nodes: usize,
     // Declaration bindings retain their original control initializer through
     // import relocation. Alias/opaque bindings have no initializer to execute.
     globals: Vec<(usize, usize, Option<usize>)>,
@@ -437,6 +440,7 @@ pub(super) fn observed_control_call_graph_for_test() -> Graph {
                 captures: Vec::new(),
             },
         ],
+        original_nodes: 0,
         globals: vec![(2, 1, None)],
         method_proxies: Vec::new(),
         sources: vec![span; 5],
@@ -450,8 +454,9 @@ pub(super) fn observed_control_call_graph_for_test() -> Graph {
 }
 
 pub(super) struct CallSuccessors {
-    // Actual control target, invocation context, and source Function port.
-    pub(super) targets: Vec<(usize, usize, usize)>,
+    // Actual control target, invocation context, source Function, and its
+    // exact creation context. A projected callee context cannot replace it.
+    pub(super) targets: Vec<(usize, usize, usize, usize)>,
     pub(super) unknown: bool,
     pub(super) returns: bool,
 }
@@ -1255,6 +1260,9 @@ impl Graph {
                 let parameter = self.push(Expr::Slot, source, budget)?;
                 let scalar = self.push(Expr::Scalar, source, budget)?;
                 let constructors = match intrinsic.operation() {
+                    crate::core::packed::Intrinsic::IntegerSplit256 { parts, negative } => {
+                        Some((parts, negative))
+                    }
                     crate::core::packed::Intrinsic::BytesAppendByte { appended, invalid } => {
                         Some((appended, invalid))
                     }
@@ -1267,11 +1275,23 @@ impl Graph {
                     _ => None,
                 };
                 let body = if let Some((success, invalid)) = constructors {
+                    let value = if matches!(
+                        intrinsic.operation(),
+                        crate::core::packed::Intrinsic::IntegerSplit256 { .. }
+                    ) {
+                        self.push(
+                            Expr::Tuple(copy_slice(&[scalar, scalar], budget)?),
+                            source,
+                            budget,
+                        )?
+                    } else {
+                        scalar
+                    };
                     let function = self.push(Expr::Constructor(success), source, budget)?;
                     let success = self.push(
                         Expr::Call {
                             function,
-                            arguments: copy_slice(&[scalar], budget)?,
+                            arguments: copy_slice(&[value], budget)?,
                             scalar: false,
                             type_application: false,
                         },
@@ -1612,6 +1632,222 @@ impl Graph {
         })
     }
 
+    // Keep buffer construction off the stack of unrelated operations.
+    #[inline(never)]
+    fn build_region_buffer(
+        &mut self,
+        buffer: &crate::core::region::RegionBufferNode,
+        source: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Expr, Failure> {
+        Ok({
+            use crate::core::{packed::Intrinsic, region::RegionBufferOperation};
+            let owner = index(buffer.context);
+            let payload = self.push(
+                Expr::ResidentTuple {
+                    constructor: None,
+                    fields: Vec::new(),
+                    owner,
+                },
+                source,
+                budget,
+            )?;
+            if let RegionBufferOperation::Network { effect, operation } = &buffer.operation {
+                let module = effect.effect().module();
+                let network =
+                    crate::resolved::NetworkApi::for_module(module).ok_or(Failure::Invalid)?;
+                let join = if effect.effect() == network.join() {
+                    if operation.operation() != 1 {
+                        return Err(Failure::Invalid);
+                    }
+                    true
+                } else if effect.effect() == network.io() {
+                    false
+                } else {
+                    return Err(Failure::Invalid);
+                };
+                let result_type = match (join, operation.operation()) {
+                    (true, 1) => 7,
+                    (false, 1 | 8) => 5,
+                    (false, 2) => 6,
+                    (false, 3) => 7,
+                    (false, 4) => 9,
+                    (false, 5) => 7,
+                    (false, 6) => 10,
+                    (false, 7) => 7,
+                    _ => return Err(Failure::Invalid),
+                };
+                // Both envelope kinds and all failure tags are possible
+                // observations. Keep their selected-region residency and
+                // full projectable payloads through ordinary matches.
+                let mut kinds = Vec::new();
+                charge(budget, 2)?;
+                kinds.try_reserve_exact(2).map_err(|_| Failure::Resource)?;
+                for case in 0..2 {
+                    kinds.push(self.push(
+                        Expr::ResidentTuple {
+                            constructor: Some(ConstructorId::new(
+                                crate::types::NominalTypeId::new(module, 3),
+                                case,
+                            )),
+                            fields: Vec::new(),
+                            owner,
+                        },
+                        source,
+                        budget,
+                    )?);
+                }
+                let kind = self.push(Expr::Merge(kinds), source, budget)?;
+                let pair = self.push(
+                    Expr::ResidentTuple {
+                        constructor: None,
+                        fields: copy_slice(&[kind, payload], budget)?,
+                        owner,
+                    },
+                    source,
+                    budget,
+                )?;
+                let mut failures = Vec::new();
+                charge(budget, 4)?;
+                failures
+                    .try_reserve_exact(4)
+                    .map_err(|_| Failure::Resource)?;
+                for case in 0..4 {
+                    failures.push(self.push(
+                        Expr::ResidentTuple {
+                            constructor: Some(ConstructorId::new(
+                                crate::types::NominalTypeId::new(module, 4),
+                                case,
+                            )),
+                            fields: Vec::new(),
+                            owner,
+                        },
+                        source,
+                        budget,
+                    )?);
+                }
+                let failure = self.push(Expr::Merge(failures), source, budget)?;
+                // A registration is a non-owning capability of this same
+                // network activation; preserve the worker dependency.
+                let registration = if operation.operation() == 4 {
+                    let operand = buffer.operand.ok_or(Failure::Invalid)?;
+                    self.push(
+                        Expr::Project {
+                            value: index(operand),
+                            field: 0,
+                            constructor: None,
+                        },
+                        source,
+                        budget,
+                    )?
+                } else if operation.operation() == 6 {
+                    index(buffer.operand.ok_or(Failure::Invalid)?)
+                } else {
+                    payload
+                };
+                let mut results = Vec::new();
+                let count = match (join, operation.operation()) {
+                    (true, 1) => 2,
+                    (false, 3 | 4 | 5 | 7) => 2,
+                    (false, 6) => 3,
+                    _ => 4,
+                };
+                charge(budget, count)?;
+                results
+                    .try_reserve_exact(count)
+                    .map_err(|_| Failure::Resource)?;
+                for case in 0..count as u32 {
+                    if join && case == 0 {
+                        continue;
+                    }
+                    let failure_case = match (join, operation.operation()) {
+                        (true, 1) | (false, 3 | 4 | 5 | 7) => 1,
+                        (false, 6) => 2,
+                        _ => 3,
+                    };
+                    let fields = if case == failure_case {
+                        copy_slice(&[failure], budget)?
+                    } else if matches!(operation.operation(), 4 | 6) && case == 0 {
+                        copy_slice(&[registration], budget)?
+                    } else if operation.operation() == 2 && case == 0 {
+                        copy_slice(&[pair], budget)?
+                    } else {
+                        Vec::new()
+                    };
+                    results.push(self.push(
+                        Expr::ResidentTuple {
+                            constructor: Some(ConstructorId::new(
+                                crate::types::NominalTypeId::new(module, result_type),
+                                case,
+                            )),
+                            fields,
+                            owner,
+                        },
+                        source,
+                        budget,
+                    )?);
+                }
+                Expr::Merge(results)
+            } else {
+                let alternatives = match buffer.operation {
+                    RegionBufferOperation::Intrinsic(intrinsic) => match intrinsic.operation() {
+                        Intrinsic::IntegerSplit256 { parts, negative } => {
+                            // The quotient conservatively retains the selected owner even
+                            // for an immediate runtime value; the remainder is bounded.
+                            let remainder = self.push(Expr::Scalar, source, budget)?;
+                            let pair = self.push(
+                                Expr::ResidentTuple {
+                                    constructor: None,
+                                    fields: copy_slice(&[payload, remainder], budget)?,
+                                    owner,
+                                },
+                                source,
+                                budget,
+                            )?;
+                            Some((parts, negative, pair))
+                        }
+                        Intrinsic::BytesAppendByte { appended, invalid } => {
+                            Some((appended, invalid, payload))
+                        }
+                        Intrinsic::StringFromUtf8 { decoded, invalid } => {
+                            Some((decoded, invalid, payload))
+                        }
+                        Intrinsic::BytesAt { found, invalid } => {
+                            let scalar = self.push(Expr::Scalar, source, budget)?;
+                            Some((found, invalid, scalar))
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some((success, invalid, payload)) = alternatives {
+                    let fields = copy_slice(&[payload], budget)?;
+                    let success = self.push(
+                        Expr::ResidentTuple {
+                            constructor: Some(success),
+                            fields,
+                            owner,
+                        },
+                        source,
+                        budget,
+                    )?;
+                    let invalid = self.push(
+                        Expr::ResidentTuple {
+                            constructor: Some(invalid),
+                            fields: Vec::new(),
+                            owner,
+                        },
+                        source,
+                        budget,
+                    )?;
+                    Expr::Merge(copy_slice(&[success, invalid], budget)?)
+                } else {
+                    Expr::Forward(payload)
+                }
+            }
+        })
+    }
+
     #[allow(clippy::too_many_arguments)] // Borrowed phase inputs avoid another owning environment.
     fn build_operation<F: CoreOperationFamily>(
         &mut self,
@@ -1655,57 +1891,7 @@ impl Graph {
                 Expr::Forward(index(closure.code.body()))
             }
             Some(EffectOperation::RegionBuffer(buffer)) => {
-                use crate::core::{packed::Intrinsic, region::RegionBufferOperation};
-                let owner = index(buffer.context);
-                let payload = self.push(
-                    Expr::ResidentTuple {
-                        constructor: None,
-                        fields: Vec::new(),
-                        owner,
-                    },
-                    source,
-                    budget,
-                )?;
-                let alternatives = match buffer.operation {
-                    RegionBufferOperation::Intrinsic(intrinsic) => match intrinsic.operation() {
-                        Intrinsic::BytesAppendByte { appended, invalid } => {
-                            Some((appended, invalid, payload))
-                        }
-                        Intrinsic::StringFromUtf8 { decoded, invalid } => {
-                            Some((decoded, invalid, payload))
-                        }
-                        Intrinsic::BytesAt { found, invalid } => {
-                            let scalar = self.push(Expr::Scalar, source, budget)?;
-                            Some((found, invalid, scalar))
-                        }
-                        _ => None,
-                    },
-                    _ => None,
-                };
-                if let Some((success, invalid, payload)) = alternatives {
-                    let fields = copy_slice(&[payload], budget)?;
-                    let success = self.push(
-                        Expr::ResidentTuple {
-                            constructor: Some(success),
-                            fields,
-                            owner,
-                        },
-                        source,
-                        budget,
-                    )?;
-                    let invalid = self.push(
-                        Expr::ResidentTuple {
-                            constructor: Some(invalid),
-                            fields: Vec::new(),
-                            owner,
-                        },
-                        source,
-                        budget,
-                    )?;
-                    Expr::Merge(copy_slice(&[success, invalid], budget)?)
-                } else {
-                    Expr::Forward(payload)
-                }
+                self.build_region_buffer(buffer, source, budget)?
             }
             Some(EffectOperation::RegionTuple(tuple)) => {
                 let mut fields = Vec::new();
@@ -1772,6 +1958,36 @@ impl Graph {
                     initializer: index(store.initializer),
                     body: index(store.body),
                     source: store.acquisition.span,
+                }
+            }
+            Some(EffectOperation::Network(network)) => {
+                crate::resolved::NetworkApi::for_module(network.acquisition.builtin)
+                    .ok_or(Failure::Invalid)?;
+                // The owner is created only after all three caller operands
+                // are available. They are preparation inputs; copied bytes do
+                // not become aliases in the fresh worker roots.
+                let inputs = self.push(
+                    Expr::Tuple(copy_slice(
+                        &[
+                            index(network.capacity),
+                            index(network.inputs[0]),
+                            index(network.inputs[1]),
+                        ],
+                        budget,
+                    )?),
+                    source,
+                    budget,
+                )?;
+                Expr::Resource {
+                    store: false,
+                    success: None,
+                    failure: None,
+                    failure_payload: None,
+                    handle: self.symbol(symbols, network.handle.id(), source, budget)?,
+                    identity: self.symbol(types, network.acquisition.identity, source, budget)?,
+                    initializer: inputs,
+                    body: index(network.body),
+                    source: network.acquisition.span,
                 }
             }
             Some(EffectOperation::RetainedRoot(root)) => Expr::RetainedRoot {
@@ -1928,6 +2144,7 @@ impl Graph {
         let mut headers = FunctionMetadataPreparation::new(nodes, operation);
         let mut graph = Self {
             expressions: Vec::new(),
+            original_nodes: nodes.len(),
             globals: Vec::new(),
             method_proxies: Vec::new(),
             sources: Vec::new(),
@@ -2396,6 +2613,10 @@ impl Graph {
         })
     }
 
+    pub(super) fn position_is_original(&self, code: usize, original: usize) -> bool {
+        self.positions.get(&code) == Some(&original) && original < self.original_nodes
+    }
+
     pub(super) fn append_global_initializers(
         &self,
         offset: usize,
@@ -2486,6 +2707,10 @@ enum Atom {
     MetadataNeutral,
     IndependentCallable,
     Unknown,
+    // A query-local symbolic entry input and its projected worker. Neither
+    // represents a dynamic runtime activation or a release certificate.
+    // The runtime-owned entry Region, seeded only at worker bootstrap. This
+    // is distinct from arbitrary Free and opaque RegionView values.
     // An authenticated context query returns this opaque, non-owning runtime
     // value. Its region support remains unknown, but it is not a Store handle.
     RegionView,
@@ -2544,7 +2769,7 @@ enum Transition {
 
 // Every nonempty canonical path shares its already published prefix. These
 // nodes own no recursive storage, values, environments or execution authority.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ContextPath {
     Empty,
     Step {
@@ -3825,6 +4050,8 @@ pub(super) struct Analysis<'a> {
     current: Option<usize>,
     frozen_contexts: usize,
     focus: Option<(usize, usize)>,
+    // Original creation context used by this exact resource-focus seed.
+    focus_creation: Option<usize>,
     cuts: HashMap<(usize, usize, usize), PreparedCut>,
 }
 
@@ -3864,13 +4091,23 @@ impl<'a> Analysis<'a> {
         // slots are completed values and which one receives the pending result.
         for root in [expression, input] {
             for value in self.graph.free_inputs(root, budget)? {
-                self.freeze_slot(value, creation, context, budget)?;
+                self.freeze_slot(value, creation, context, budget).inspect_err(|error| {
+                    #[cfg(test)] if position == usize::MAX - 6 { eprintln!("worker entry Region: free input={value} root={root} creation={creation} {error:?}"); }
+                    let _ = error;
+                })?;
             }
         }
         for code in completed {
             charge(budget, 1)?;
             if let Some(&value) = self.graph.positions.get(code) {
-                self.freeze_slot(value, creation, context, budget)?;
+                self.freeze_slot(value, creation, context, budget).inspect_err(|error| {
+                    #[cfg(test)] if position == usize::MAX - 6 {
+                        let source = self.indices.get(&(value, creation)).and_then(|id| self.slots.get(*id));
+                        let target = self.indices.get(&(value, context)).and_then(|id| self.slots.get(*id));
+                        eprintln!("worker entry Region: completed code={code} expression={value} creation={creation} source_present={} target={:?} {error:?}", source.is_some(), target.map(|slot| (slot.terminal, slot.atoms.len(), slot.edges.len())));
+                    }
+                    let _ = error;
+                })?;
             }
         }
         let input = self.slot(input, context, budget)?;
@@ -4017,6 +4254,7 @@ impl<'a> Analysis<'a> {
         }
         let context = query.context(0, Transition::Focus, budget)?;
         query.focus = Some((expression, context));
+        query.focus_creation = Some(creation);
         for input in self.graph.free_inputs(expression, budget)? {
             query.freeze_slot(input, creation, context, budget)?;
         }
@@ -4142,7 +4380,9 @@ impl<'a> Analysis<'a> {
                 }
                 // Actual c is reconstructed from original entry paths before
                 // any focused resource query or restored continuation replay.
-                Transition::Focus | Transition::Restore(..) => return Err(Failure::Invalid),
+                Transition::Focus | Transition::Restore(..) => {
+                    return Err(Failure::Invalid);
+                }
             });
         }
         Ok((request, output))
@@ -4170,6 +4410,9 @@ impl<'a> Analysis<'a> {
             .and_then(|expression| self.roots.get(expression))
             .copied())
     }
+
+    // Only a standalone-root ancestry qualifies; focused, restored and nested
+    // root contexts refuse. The prefix belongs to the authenticated node slice.
 
     pub(super) fn standalone_root(
         &self,
@@ -4199,6 +4442,9 @@ impl<'a> Analysis<'a> {
         let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
         self.slot(expression, context, budget)
     }
+
+    // Completion queries may only read an already closed focus. Unlike
+    // `slot`, these lookups never create a port, enqueue work or add watches.
 
     /// Read the actual scrutinee and ordered tests for a control choice.
     pub(super) fn case_choice(
@@ -4531,7 +4777,7 @@ impl<'a> Analysis<'a> {
                         self.invocation_context(context, expression, target, creation, budget)?;
                     let control = *self.graph.targets.get(&target).ok_or(Failure::Invalid)?;
                     targets.try_reserve(1).map_err(|_| Failure::Resource)?;
-                    targets.push((control, context, target));
+                    targets.push((control, context, target, creation));
                 }
                 Atom::Unknown => opaque |= 1,
                 Atom::Constructor(_) | Atom::IndependentCallable => opaque |= 2,
@@ -5654,6 +5900,7 @@ impl<'a> Analysis<'a> {
             current: None,
             frozen_contexts: 0,
             focus: None,
+            focus_creation: None,
             cuts: HashMap::new(),
         })
     }
@@ -6812,6 +7059,7 @@ mod tests {
         Graph {
             sources: vec![span; expressions.len()],
             expressions,
+            original_nodes: 0,
             globals: Vec::new(),
             method_proxies: Vec::new(),
             exports: Vec::new(),
@@ -8072,12 +8320,22 @@ mod tests {
         analysis
             .atom(function, Atom::Closure(5, creation), &mut work)
             .unwrap();
+        let other_creation = analysis
+            .context(0, Transition::Root(21), &mut work)
+            .unwrap();
+        let other_capture = analysis.slot(3, other_creation, &mut work).unwrap();
+        analysis.atom(other_capture, Atom::Free, &mut work).unwrap();
+        analysis
+            .atom(function, Atom::Closure(5, other_creation), &mut work)
+            .unwrap();
         let opaque = publication.publish(&mut work).unwrap();
         let (late, publication) = analysis
             .calls_after(6, 0, Some(&opaque), &mut work)
             .unwrap();
-        assert_eq!(late.targets.len(), 1);
-        assert_eq!(late.targets[0].0, 50);
+        assert_eq!(late.targets.len(), 2);
+        assert!(late.targets.iter().all(|target| target.0 == 50));
+        assert!(late.targets.iter().any(|target| target.3 == creation));
+        assert!(late.targets.iter().any(|target| target.3 == other_creation));
         assert!(late.unknown && late.returns);
         let opaque = publication.publish(&mut work).unwrap();
         assert_ne!(opaque.opaque, 0);

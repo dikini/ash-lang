@@ -239,6 +239,8 @@ define_kind_site_profiles! {
     FieldNativeBindingsShared => (Field, Shared, Registry, CarrierRetention, PreservedCarrier, Evaluation, Evaluation, TypeTree),
     FieldNativeBindingBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, Evaluation, Evaluation, TypeTreeAndResolvedTreeAndRegistryTree),
     FieldNativeProgramBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, Evaluation, Evaluation, CoreTreeAndResolvedTreeAndRegistryTree),
+    // Network checking borrows linked facts and the Core/registry owners.
+    FieldNetworkLinkedBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, EvidenceTree),
     // Actual module publication: summaries share only defining certificates;
     // checked code owners separately retain Core, canonical context and facts.
     FieldProviderEvidenceFactsBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, EvidenceValidation, EvidenceType, SummaryTree),
@@ -473,6 +475,54 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ImportedConstructorFact.original", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree, Shared),
     kind_site!("src/resolved/constructor_original.rs::ConstructorOriginal.0", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree, Shared),
     // Generic acquisition/row replay and runtime roots retain existing owner categories.
+    // Network carriers retain the original phase-specific owners and budgets.
+    // N3 checker witnesses retain borrowed linked Core and validated interface carriers.
+    kind_site!("src/eval/region.rs::PreparedBuffer.tuple_tail", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    // Actual arena, stored function and tuple views remain borrowed.
+    kind_site!("src/core/dialect.rs::CoreProgram.network_admissions", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::NetworkAdmission.entries", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::NetworkEntryAdmission.native_effects", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_range::Equation.Network.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
+    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_range::Equation.RegionBuffer.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
+    kind_site!("src/core/effect.rs::EffectOperation.Network.0", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/effect.rs::EffectOperation.RegionBuffer.0", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/effect.rs::NetworkScopeNode.handle", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/region.rs::RegionBufferNode.operation", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/region.rs::RegionBufferOperation.Network.effect", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/validate.rs::Validator.linked", FieldNetworkLinkedBorrow),
+    kind_site!("src/core/validate.rs::Validator.network_admissions", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
+    kind_site!("src/core/validate/network.rs::NetworkBodyFacts.entries", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
+    kind_site!("src/core/validate/network.rs::WorkerEntryFact.native_effects", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
+    kind_site!("src/elaborate.rs::ElaborationTask.FinishNetwork.0", FieldMixedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTreeAndTransientWork),
+    kind_site!("src/elaborate.rs::ElaborationTask.NetworkBody.network", FieldBorrowedResolvedCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTree),
+    kind_site!("src/elaborate.rs::NetworkProgress.capacity", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::NetworkProgress.handle", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::NetworkProgress.input_a", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::NetworkProgress.input_b", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::NetworkProgress.network", FieldBorrowedResolvedCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTree),
+    kind_site!("src/eval/machine.rs::CarrierInput.bindings", FieldNativeBindingsShared),
+    kind_site!("src/eval/machine.rs::CarrierInput.program", FieldNativeProgramBorrow, Shared),
+    kind_site!("src/eval/machine.rs::Frame.NetworkCapacity.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.NetworkInputA.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.NetworkInputB.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.NetworkInputB.first", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.NetworkReceiveKind.bytes", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.NetworkReceiveTuple.bytes", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.NetworkReceiveTuple.kind", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.NetworkReply.fields", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.WorkerApply.argument", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.WorkerInput.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.WorkerTuple.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.WorkerTuple.input", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/evidence_validation.rs::LinkedLocalScope.Network.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
+    kind_site!("src/kind.rs::BodyWork.NetworkBody.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
+    kind_site!("src/resolve.rs::ResolveTask.FinishNetwork.identity", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
+    kind_site!("src/resolve.rs::ResolveTask.FinishNetwork.initializer", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork, Mixed),
+    kind_site!("src/resolve.rs::ResolveTask.NetworkInitializer.source", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/resolved.rs::ResolvedExprKind.Network.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolved.rs::ResolvedNetworkExpr.body", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolved.rs::ResolvedNetworkExpr.identity", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolved.rs::ResolvedNetworkExpr.initializer", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_range::Equation.Resource.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
     kind_site!("src/eval/machine.rs::Frame.ResourceBoundary.payload", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Mixed),
     kind_site!("src/eval/machine.rs::ResourcePayload.Generic.instance", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState),
@@ -7451,6 +7501,53 @@ fn abstract_nominal_kind_publication_transfers_the_reserved_allocation() {
 
 #[test]
 fn core_and_evaluator_keep_interface_evidence_outside_their_closed_inventories() {
+    let validator_source = CORE_SOURCES
+        .iter()
+        .find(|(path, _)| *path == "src/core/validate.rs")
+        .expect("Core validator source is inventoried")
+        .1;
+    let validator = production_rust_code_tokens(validator_source);
+    // The borrowed validator handoffs and declaration-order reconstruction may
+    // name the linked interface capability.
+    for (name, expected) in [
+        ("evidence_validation", 3),
+        ("ValidatedInterfaceProgram", 3),
+        ("implementation_facts", 1),
+    ] {
+        assert_eq!(
+            validator.iter().filter(|token| **token == name).count(),
+            expected,
+            "unexpected linked-evidence use in Core validator: {name}"
+        );
+    }
+    let borrowed = ["linked", ":", "Option", "<", "&"];
+    assert_eq!(
+        validator
+            .windows(borrowed.len())
+            .filter(|window| *window == borrowed)
+            .count(),
+        2,
+        "linked evidence must remain borrowed at the validator boundary"
+    );
+    let drop_validator = ["drop", "(", "validator", ")"];
+    let into_parts = ["program", ".", "into_parts", "("];
+    let start = validator
+        .windows(2)
+        .position(|window| window == ["fn", "validate_effect_modules_internal"])
+        .expect("effect validator handoff exists");
+    let tail = &validator[start..];
+    let dropped = tail
+        .windows(drop_validator.len())
+        .position(|window| window == drop_validator)
+        .expect("borrowed validator is released");
+    let consumed = tail
+        .windows(into_parts.len())
+        .position(|window| window == into_parts)
+        .expect("validated Core is reconstructed");
+    assert!(
+        dropped < consumed,
+        "validator linked-evidence borrow must end before Core reconstruction"
+    );
     for (path, source) in EVALUATOR_SOURCES {
         for identifier in production_rust_code_tokens(source)
             .into_iter()
@@ -8164,8 +8261,13 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
             // the unpublished Core occurrence graph. None selects evaluator dispatch.
             "src/core/validate.rs" => matches!(
                 identifier,
+                // The validator borrows authenticated linked groups only to
+                // reconstruct the original Network declaration spine.
+                "evidence_validation"
+                    | "ValidatedInterfaceProgram"
+                    | "implementation_facts"
                 // Canonical Layout/family authentication; no runtime selection.
-                "LexicalEvidenceId"
+                    | "LexicalEvidenceId"
                     | "canonical_evidence_creation_row"
 
                 // Canonical owner-signature authentication, not selection or runtime dispatch.

@@ -746,6 +746,35 @@ fn run_native_with_c(name: &str, entry: &str, expected_trace: &[u8], c: &str) {
     fs::remove_dir_all(directory).unwrap();
 }
 
+const SPLIT_BODY: &str = "match I.split_base256 115792089237316195423570985008687907853269984665640564039457584007913129639936 {\n            I.Parts((q, r)) => match q == q {\n                true => match r == 0 {\n                    true => 42\n                    false => 0\n                }\n                false => 0\n            }\n            I.Negative => 0\n        }";
+
+#[test]
+fn integer_split_uses_supplied_backing_for_each_result_stage() {
+    let source = ENTRY
+        .replace(
+            "import native as Raw",
+            "import native as Raw\nimport @builtin.integer as I",
+        )
+        .replace(TUPLE_BODY, SPLIT_BODY);
+    run_native("integer-split", &source, b"maaaar");
+}
+
+#[test]
+fn integer_split_discard_keeps_only_completed_result_stages() {
+    for (at, expected) in [
+        (2, b"mar".as_slice()),
+        (3, b"maar".as_slice()),
+        (4, b"maaar".as_slice()),
+    ] {
+        let body = "let result = I.split_base256 115792089237316195423570985008687907853269984665640564039457584007913129639936\n42";
+        let source = suspended_entry(body, 4, Some(at)).replace(
+            "import native as Raw",
+            "import native as Raw\nimport @builtin.integer as I",
+        );
+        run_native(&format!("integer-split-discard-{at}"), &source, expected);
+    }
+}
+
 #[test]
 fn custom_region_stores_large_integer_digits_in_supplied_backing() {
     let source = ENTRY.replace(TUPLE_BODY, INTEGER_BODY);

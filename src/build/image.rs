@@ -856,12 +856,16 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
                     ModuleRoleRecord::BuiltinGenericCell
                 } else if module.is_builtin_retained_control() {
                     ModuleRoleRecord::BuiltinRetainedControl
+                } else if module.is_builtin_network() {
+                    ModuleRoleRecord::BuiltinNetwork
                 } else if module.is_builtin_cell() {
                     ModuleRoleRecord::BuiltinCell
                 } else if module.is_builtin_string() {
                     ModuleRoleRecord::BuiltinString
                 } else if module.is_builtin_bytes() {
                     ModuleRoleRecord::BuiltinBytes
+                } else if module.is_builtin_integer() {
+                    ModuleRoleRecord::BuiltinInteger
                 } else {
                     ModuleRoleRecord::Ordinary
                 },
@@ -1342,6 +1346,15 @@ impl Encoder<'_> {
                     use crate::core::packed::Intrinsic;
 
                     let bytes = match value.operation() {
+                        Intrinsic::IntegerSplit256 { parts, negative } => {
+                            let owner = NominalTypeId::new(value.module(), 0);
+                            if parts != ConstructorId::new(owner, 0)
+                                || negative != ConstructorId::new(owner, 1)
+                            {
+                                return Err(ImageFailure::InvalidRecord);
+                            }
+                            Some(5)
+                        }
                         Intrinsic::BytesEmpty => Some(0),
                         Intrinsic::BytesAppendByte { appended, invalid } => {
                             let owner = NominalTypeId::new(value.module(), 0);
@@ -1450,7 +1463,11 @@ impl Encoder<'_> {
                             operation,
                         }
                     } else if let Some(operation) = bytes {
-                        if !value.module().is_builtin_bytes() {
+                        if !(if operation == 5 {
+                            value.module().is_builtin_integer()
+                        } else {
+                            value.module().is_builtin_bytes()
+                        }) {
                             return Err(ImageFailure::InvalidRecord);
                         }
                         NodeTag::BytesIntrinsic {
@@ -3009,6 +3026,7 @@ impl PureImage {
         let mut seen_common = false;
         let mut seen_string = false;
         let mut seen_bytes = false;
+        let mut seen_integer = false;
         let mut seen_region = false;
         let mut seen_region_facade = false;
         for record in &self.sources {
@@ -3043,9 +3061,16 @@ impl PureImage {
                     }
                     crate::module::ImageModuleRole::BuiltinBytes
                 }
+                ModuleRoleRecord::BuiltinInteger => {
+                    if std::mem::replace(&mut seen_integer, true) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinInteger
+                }
                 ModuleRoleRecord::BuiltinCell
                 | ModuleRoleRecord::BuiltinGenericCell
-                | ModuleRoleRecord::BuiltinRetainedControl => {
+                | ModuleRoleRecord::BuiltinRetainedControl
+                | ModuleRoleRecord::BuiltinNetwork => {
                     return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
                 }
                 ModuleRoleRecord::BuiltinForeign => {
@@ -3584,11 +3609,22 @@ impl Decoder<'_> {
             }
             NodeTag::BytesIntrinsic { module, operation } => {
                 let module = *get(&self.modules, module)?;
-                if !module.is_builtin_bytes() {
+                if !(if operation == 5 {
+                    module.is_builtin_integer()
+                } else {
+                    module.is_builtin_bytes()
+                }) {
                     return Err(ImageFailure::InvalidRecord);
                 }
                 use crate::core::packed::Intrinsic;
                 let operation = match operation {
+                    5 => {
+                        let owner = NominalTypeId::new(module, 0);
+                        Intrinsic::IntegerSplit256 {
+                            parts: ConstructorId::new(owner, 0),
+                            negative: ConstructorId::new(owner, 1),
+                        }
+                    }
                     0 => Intrinsic::BytesEmpty,
                     1 => {
                         let owner = NominalTypeId::new(module, 0);
@@ -4401,6 +4437,14 @@ mod tests {
         assert_eq!(
             actual_captures.get(&decoded.node_children).unwrap(),
             expected_captures
+        );
+    }
+
+    #[test]
+    fn integer_split_image_preserves_canonical_identity_and_results() {
+        assert_effect_image(
+            "import @builtin.integer as I\nmain : Unit -> Int\nmain () = match I.split_base256 10752 {\nI.Parts((q, r)) => match r == 0 {\ntrue => q\nfalse => 0\n}\nI.Negative => 0\n}\n",
+            &[ModuleRoleRecord::BuiltinInteger],
         );
     }
 
@@ -6582,8 +6626,10 @@ enum ModuleRoleRecord {
     BuiltinCell,
     BuiltinGenericCell,
     BuiltinRetainedControl,
+    BuiltinNetwork,
     BuiltinString,
     BuiltinBytes,
+    BuiltinInteger,
 }
 
 // Add role: ModuleRoleRecord to SourceRecord. Never infer it from the path.
@@ -6827,6 +6873,8 @@ impl Wire for ModuleRoleRecord {
             Self::BuiltinRegion => 6,
             Self::BuiltinRegionFacade => 7,
             Self::BuiltinRetainedControl => 8,
+            Self::BuiltinNetwork => 9,
+            Self::BuiltinInteger => 10,
         }
         .write(writer)
     }
@@ -6841,6 +6889,8 @@ impl Wire for ModuleRoleRecord {
             6 => Ok(Self::BuiltinRegion),
             7 => Ok(Self::BuiltinRegionFacade),
             8 => Ok(Self::BuiltinRetainedControl),
+            9 => Ok(Self::BuiltinNetwork),
+            10 => Ok(Self::BuiltinInteger),
             _ => Err(ImageFailure::InvalidEncoding),
         }
     }
@@ -8353,6 +8403,9 @@ impl Encoder<'_> {
     ) -> Result<NodeTag, ImageFailure> {
         use crate::core::{EffectExprKind, EffectOperation};
         match kind {
+            EffectExprKind::Operation(EffectOperation::Network(_)) => {
+                Err(ImageFailure::Unsupported(Unsupported::EffectOperation))
+            }
             EffectExprKind::Operation(EffectOperation::RegionValueRequest(request)) => {
                 Ok(NodeTag::RegionValueRequest {
                     api: self.module(request.api)?,
@@ -8362,6 +8415,9 @@ impl Encoder<'_> {
             EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) => {
                 use crate::core::region::RegionBufferOperation;
                 let (source, module, operation, bytes) = match &buffer.operation {
+                    RegionBufferOperation::Network { .. } => {
+                        return Err(ImageFailure::Unsupported(Unsupported::EffectOperation));
+                    }
                     RegionBufferOperation::IntegerLiteral(integer) => {
                         charge(
                             self.work,
@@ -9263,10 +9319,12 @@ impl PureImage {
         let mut seen_cell = false;
         let mut seen_generic_cell = false;
         let mut seen_retained_control = false;
+        let mut seen_network = false;
         let mut seen_region = false;
         let mut seen_region_facade = false;
         let mut seen_string = false;
         let mut seen_bytes = false;
+        let mut seen_integer = false;
         for record in &self.sources {
             charge(decoder.work, 1)?;
             let path = decoder.text(record.path)?;
@@ -9286,6 +9344,12 @@ impl PureImage {
                         return Err(ImageFailure::InvalidRecord);
                     }
                     crate::module::ImageModuleRole::BuiltinBytes
+                }
+                ModuleRoleRecord::BuiltinInteger => {
+                    if std::mem::replace(&mut seen_integer, true) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinInteger
                 }
                 ModuleRoleRecord::BuiltinRegionFacade => {
                     if std::mem::replace(&mut seen_region_facade, true) {
@@ -9310,6 +9374,12 @@ impl PureImage {
                         return Err(ImageFailure::InvalidRecord);
                     }
                     crate::module::ImageModuleRole::BuiltinRetainedControl
+                }
+                ModuleRoleRecord::BuiltinNetwork => {
+                    if std::mem::replace(&mut seen_network, true) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinNetwork
                 }
                 ModuleRoleRecord::BuiltinCell => {
                     if std::mem::replace(&mut seen_cell, true) {
@@ -9590,6 +9660,10 @@ impl Decoder<'_> {
                         let owner = |local| NominalTypeId::new(module, local);
                         let operation = match (source, operation) {
                             (1, 0) => Intrinsic::BytesEmpty,
+                            (1, 5) => Intrinsic::IntegerSplit256 {
+                                parts: ConstructorId::new(owner(0), 0),
+                                negative: ConstructorId::new(owner(0), 1),
+                            },
                             (1, 1) => Intrinsic::BytesAppendByte {
                                 appended: ConstructorId::new(owner(0), 0),
                                 invalid: ConstructorId::new(owner(0), 1),

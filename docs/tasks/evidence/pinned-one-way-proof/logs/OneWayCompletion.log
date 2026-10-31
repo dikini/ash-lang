@@ -1,0 +1,180 @@
+'Ash.OneWayCompletion.receive_end_is_channel_step' does not depend on any axioms
+'Ash.OneWayCompletion.step_preserves_authentication' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.trace_preserves_authentication' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.empty_seed_authenticated' depends on axioms: [propext]
+'Ash.OneWayCompletion.returned_fact_has_genuine_event' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Summary.approx_mono' does not depend on any axioms
+'Ash.OneWayCompletion.Summary.finite_converges' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Summary.no_base_no_returns' does not depend on any axioms
+'Ash.OneWayCompletion.Summary.least' does not depend on any axioms
+'Ash.OneWayCompletion.Processing.cleanup_then_finish' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.finished_active_only_is_quiet' depends on axioms: [propext]
+'Ash.OneWayCompletion.Processing.network_cleanup_then_finish' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.receive_dispatch_cleanup_finish' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Suffix.checked_forward' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Suffix.checked_branch' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Suffix.forbidden_rejected' depends on axioms: [propext]
+'Ash.OneWayCompletion.Suffix.dependent_forward_rejected' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Suffix.checked_older_frame' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.step_preserves_frames' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.trace_preserves_frames' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.empty_seed_frames' depends on axioms: [propext]
+'Ash.OneWayCompletion.returned_frame_has_matching_call' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Region.branch_checks_both' depends on axioms: [propext]
+'Ash.OneWayCompletion.Region.forbidden_rejected' depends on axioms: [propext]
+'Ash.OneWayCompletion.Region.native_requires_binding' depends on axioms: [propext]
+'Ash.OneWayCompletion.Region.admitted_shape' depends on axioms: [propext]
+'Ash.OneWayCompletion.Suffix.checked_caller_frame' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.admitted_region_cleanup' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Region.check_step' depends on axioms: [propext]
+'Ash.OneWayCompletion.Region.checked_walk' depends on axioms: [propext]
+'Ash.OneWayCompletion.Region.accepted_marker_follows_cleanup' depends on axioms: [propext]
+'Ash.OneWayCompletion.Processing.network_trace_trans' depends on axioms: [propext]
+'Ash.OneWayCompletion.Processing.region_step_network' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.region_walk_network' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.checked_region_marker_finishes' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.finish_store_work' does not depend on any axioms
+'Ash.OneWayCompletion.Processing.Loop.normal_run_observes_end' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.Loop.normal_run_end_witness' depends on axioms: [propext]
+'Ash.OneWayCompletion.Suffix.step_fact_origin' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Suffix.trace_fact_origin' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Analysis.join_end_from_both' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Analysis.join_context_mismatch' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Analysis.join_dependency_from_left' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Analysis.join_dependency_from_right' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Analysis.joinFrom_end_all' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Analysis.joinAll_end_all' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.control_step_network' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.execution_step_network' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.execution_network' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.Projection.classify_work_sound' depends on axioms: [propext]
+'Ash.OneWayCompletion.Processing.execution_preserves_authentication' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.Projection.accepted_end' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.execution_accepted_finish_has_genuine_end' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.Projection.accepted_shape' depends on axioms: [propext]
+'Ash.OneWayCompletion.Processing.Projection.clear_phase' depends on axioms: [propext]
+'Ash.OneWayCompletion.Processing.certified_reached_finish_cut' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.execution_accepted_finish_cut' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.execution_preserves_taint' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Suffix.check_dependency_subset' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.normalized_frame_sites_sound' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.Analysis.normalized_dependency_edge' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.Analysis.normalized_dependency_closed' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.Analysis.dependencyClosure_contains_current' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.Analysis.certified_closed' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.execution_preserves_reply_consistency' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.execution_preserves_identity' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.step_preserves_frame_chain' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.execution_preserves_frame_chain' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.Analysis.solve_closed' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.Analysis.solved_replays' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.Analysis.revise_preserves_configuration' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.Analysis.solve_preserves_configuration' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.Analysis.solve_least' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.Analysis.solveFrom_no_base_returns' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.Region.checked_excludes_unverified' depends on axioms: [propext]
+'Ash.OneWayCompletion.Processing.Analysis.solveFrom_certified' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.CapturePlan.admitted_build_shape' depends on axioms: [propext]
+'Ash.OneWayCompletion.Processing.dispatch_successor_is_enumerated' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.checked_dispatch_selects_root' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.selected_root_matches' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_call_enters' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_matched_return_replayed' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_return_matches' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_stack_return_replayed' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_stack_call_enters' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_stack_return_matches' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_call_pending_clear' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_return_ready' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_other_return_impossible' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_control_successor' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_execution_successor' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_execution_reached' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_execution_finish' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Processing.matched_return_is_enumerated' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.call_successor_is_enumerated' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.checked_processing_projection' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Region.DataWalk.toWalk' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Region.outputs_step' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Region.outputs_walk' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Region.outputs_marker' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_dispatch_successor' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_receive_end_pending' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_receive_empty' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_receive_message' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_end_reply' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_branch_successor' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_forward_successor' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_processing_successor' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.processing_successor_is_enumerated' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Region.countCells_exact' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Region.debit_exact' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Region.preflight_output_count' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Region.preflight_work_exact' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Region.outputsBudgeted_exact' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Region.outputsBudgeted_marker' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.normal_return_is_enumerated' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_normal_return_replayed' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_normal_return_matches' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_stack_normal_return_replayed' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_stack_normal_return_matches' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.projection_frame_dependency_subset' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.driver_check_dependency_subset' depends on axioms: [propext]
+'Ash.OneWayCompletion.Processing.normalized_frame_sites_sound' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_receive_failed' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_result_successor' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_match_end_yes' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_match_end_no' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_match_end_unverified' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'Ash.OneWayCompletion.Processing.Projection.failed_finish_refused' depends on axioms: [propext, Quot.sound]
+'Ash.OneWayCompletion.Processing.certified_execution_coverage' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]

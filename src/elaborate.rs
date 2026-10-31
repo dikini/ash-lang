@@ -84,6 +84,8 @@ pub enum TypeReason {
     NotApplicable,
     /// A retained-control store needs a Unit-domain function descriptor.
     StoreDescriptor,
+    /// A worker entry does not have the required closed polymorphic shape.
+    NetworkEntry,
     /// Retain requires a checkpoint operation whose reply is Unit.
     RetainReply,
     /// The private root's outstanding completion cannot be discarded.
@@ -578,6 +580,7 @@ impl fmt::Display for TypeReason {
             Self::FunctionNeedsContext => formatter.write_str("type.function-needs-context"),
             Self::NotApplicable => formatter.write_str("type.not-applicable"),
             Self::StoreDescriptor => formatter.write_str("type.store-descriptor"),
+            Self::NetworkEntry => formatter.write_str("type.network-entry"),
             Self::RetainReply => formatter.write_str("effect.retain-reply"),
             Self::RetainedRootDiscard => formatter.write_str("effect.retained-root-discard"),
             Self::RetainedDriver => formatter.write_str("effect.retained-driver"),
@@ -3033,6 +3036,9 @@ impl CoreLoweringFamily for EffectOperationFamily {
         operation: EffectOperation,
     ) -> Result<NodeId, BuildError> {
         match operation {
+            EffectOperation::Network(network) => {
+                builder.network_scope(network, ty, effects, origin)
+            }
             EffectOperation::RegionValueRequest(request) => builder.region_operation(
                 EffectOperation::RegionValueRequest(request),
                 ty,
@@ -3193,6 +3199,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .push((ElaboratedBindingBuffer(members), group.span()));
         }
         let mut result = self.elaborate_result(program.result(), &mut context)?;
+        // This marker is an arena-local proposal, not admission evidence. Core
+        // validation must authenticate the enclosing linked global spine before
+        // any worker can use it.
+        if let Some(builder) = F::effect_builder(&mut self.builder) {
+            builder.set_network_linked_result(result.node)?;
+        }
         let assembly = (|| {
             while let Some((mut members, span)) = groups.0.pop() {
                 if members.0.is_empty() {
@@ -10712,14 +10724,24 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 _ => return Err(invalid_state()),
             }));
         }
-        if !module.is_builtin_bytes() && !module.is_builtin_string() {
+        if !module.is_builtin_bytes() && !module.is_builtin_string() && !module.is_builtin_integer()
+        {
             return Ok(None);
         }
         let result_owner = || match ty.function_view().map(|f| f.value()) {
             Some(Type::Nominal(owner)) if owner.module() == module => Ok(*owner),
             _ => Err(invalid_state()),
         };
-        let operation = if module.is_builtin_bytes() {
+        let operation = if module.is_builtin_integer() {
+            if name.spelling != "split_base256" {
+                return Err(invalid_state());
+            }
+            let owner = result_owner()?;
+            Intrinsic::IntegerSplit256 {
+                parts: crate::types::ConstructorId::new(owner, 0),
+                negative: crate::types::ConstructorId::new(owner, 1),
+            }
+        } else if module.is_builtin_bytes() {
             match name.spelling.as_str() {
                 "empty" => Intrinsic::BytesEmpty,
                 "append_byte" => {
@@ -10828,6 +10850,49 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             self.qualify_checking_type(&mut function_type, true)?;
                             let ty = self.clone_type(&function_type.ty)?;
                             let node = self.lower_store_advance(module, &ty, definition.span())?;
+                            TypedNode {
+                                node,
+                                ty,
+                                effects: EffectRow::empty(),
+                                provenance: function_type.provenance.clone(),
+                            }
+                        } else if F::EFFECTS
+                            && let Some(module) = equational.interface.name.id.module()
+                            && module.is_builtin_network()
+                            && matches!(
+                                equational.interface.name.spelling.as_str(),
+                                "try_send"
+                                    | "send_control"
+                                    | "try_receive"
+                                    | "finish_send"
+                                    | "watch"
+                                    | "cancel_watch"
+                                    | "poll_wake"
+                                    | "finish_receive"
+                                    | "settle"
+                            )
+                        {
+                            self.qualify_checking_type(&mut function_type, true)?;
+                            let ty = self.clone_type(&function_type.ty)?;
+                            let operation = match equational.interface.name.spelling.as_str() {
+                                "try_send" => 1,
+                                "send_control" => 8,
+                                "try_receive" => 2,
+                                "finish_send" => 3,
+                                "watch" => 4,
+                                "cancel_watch" => 5,
+                                "poll_wake" => 6,
+                                "finish_receive" => 7,
+                                "settle" => 1,
+                                _ => unreachable!(),
+                            };
+                            let node = self.lower_network_call(
+                                module,
+                                operation,
+                                equational.interface.name.spelling == "settle",
+                                &ty,
+                                definition.span(),
+                            )?;
                             TypedNode {
                                 node,
                                 ty,
@@ -13457,6 +13522,243 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
+    fn schedule_network<'a>(
+        &mut self,
+        network: &'a crate::resolved::ResolvedNetworkExpr,
+        span: Span,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
+        if !F::EFFECTS || !network.acquisition.owns(network) {
+            return Err(invalid_state());
+        }
+        let ResolvedExprKind::Tuple(operands) = &network.initializer.kind else {
+            return Err(invalid_state());
+        };
+        let [capacity, entry_a, entry_b, input_a, input_b] = operands.as_slice() else {
+            return Err(invalid_state());
+        };
+        let entry = |expression: &ResolvedExpr| match &expression.kind {
+            ResolvedExprKind::Occurrence(occurrence) => occurrence.global_binder(),
+            _ => None,
+        };
+        let entries = [
+            entry(entry_a).ok_or_else(invalid_state)?,
+            entry(entry_b).ok_or_else(invalid_state)?,
+        ];
+        self.type_work.charge(4).map_err(|()| type_resource())?;
+        tasks.0.try_reserve(4).map_err(|_| type_resource())?;
+        tasks.push(ElaborationTask::NetworkBody {
+            network,
+            entries,
+            span,
+        });
+        // The stack is last-in, first-out. The designators are never evaluated.
+        for (expression, ty) in [
+            (input_b, Type::Bytes),
+            (input_a, Type::Bytes),
+            (capacity, Type::Int),
+        ] {
+            tasks.push(ElaborationTask::Check {
+                expression,
+                expected: ProvenancedType {
+                    ty,
+                    provenance: TypeProvenance::atom(Some(expression.span)),
+                },
+                kind: CheckKind::General,
+            });
+        }
+        Ok(())
+    }
+
+    fn step_network_body<'a>(
+        &mut self,
+        network: &'a crate::resolved::ResolvedNetworkExpr,
+        entries: [BinderId; 2],
+        span: Span,
+        context: &mut TypeContext,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+        values: &mut TypedNodeBuffer,
+    ) -> Result<(), TypeError> {
+        let input_b = values.pop().ok_or_else(invalid_state)?;
+        let input_a = values.pop().ok_or_else(invalid_state)?;
+        let capacity = values.pop().ok_or_else(invalid_state)?;
+        let api = crate::resolved::NetworkApi::for_module(network.acquisition.builtin)
+            .ok_or_else(invalid_state)?;
+        for entry in entries {
+            self.check_network_entry_shape(entry, network.identity.id, api, context, span)?;
+        }
+        self.type_work.charge(5).map_err(|()| type_resource())?;
+        tasks.0.try_reserve(2).map_err(|_| type_resource())?;
+        context
+            .binders
+            .try_reserve(1)
+            .map_err(|_| type_resource())?;
+        let handle_type = IterativeTypeOwner::new(Type::Application(
+            Box::new(Type::Nominal(api.pair())),
+            Box::new(Type::Variable(network.identity.id)),
+        ));
+        let provenance =
+            self.at_span_provenance(&handle_type, network.handle.origin.primary_span())?;
+        let fact = self.clone_type(&handle_type)?;
+        if context.insert_with_provenance(network.handle.id, fact, provenance)? {
+            return Err(invalid_state());
+        }
+        let handle = self.builder.resolved_binder(
+            network.handle.id,
+            handle_type.into_inner(),
+            network.handle.origin.clone(),
+        )?;
+        tasks.push(ElaborationTask::FinishNetwork(Box::new(NetworkProgress {
+            network,
+            entries,
+            span,
+            capacity,
+            input_a,
+            input_b,
+            handle,
+        })));
+        tasks.push(ElaborationTask::Synthesize {
+            expression: &network.body,
+            cause: None,
+        });
+        Ok(())
+    }
+
+    fn step_network_completion(
+        &mut self,
+        progress: Box<NetworkProgress<'_>>,
+        context: &mut TypeContext,
+        values: &mut TypedNodeBuffer,
+    ) -> Result<(), TypeError> {
+        let NetworkProgress {
+            network,
+            entries,
+            span,
+            capacity,
+            input_a,
+            input_b,
+            handle,
+        } = *progress;
+        let body = values.pop().ok_or_else(invalid_state)?;
+        context.remove_and_discard(network.handle.id);
+        let ty = IterativeTypeOwner::new(self.zonk(&body.ty)?);
+        let body_effects = self.zonk_effect_row(&body.effects)?;
+        let api = crate::resolved::NetworkApi::for_module(network.acquisition.builtin)
+            .ok_or_else(invalid_state)?;
+        let join = EffectInstance::new(api.join(), Box::new([Type::Variable(network.identity.id)]));
+        let outward = self.remove_cleanup_effect(&body_effects, &join, span, true)?;
+        let effects = self.union_effects(&capacity.effects, &input_a.effects, span)?;
+        let effects = self.union_effects(&effects, &input_b.effects, span)?;
+        let effects = self.union_effects(&effects, &outward, span)?;
+        let row_type = IterativeTypeOwner::new(Type::function_computation(
+            Type::Unit,
+            ComputationType::new(Type::Unit, self.core_effect_row(&effects)?),
+        ));
+        for outward in [&*ty, &*row_type] {
+            self.defer_resource_escape(network.identity.id, outward, network.body.span, span)?;
+            if type_contains_variable(outward, network.identity.id, &mut self.constraint_work)
+                .map_err(|()| constraint_resource())?
+            {
+                return Err(self.resource_escape_failure(
+                    network.body.span,
+                    span,
+                    "this outward computation contains the network identity",
+                ));
+            }
+        }
+        self.type_work
+            .charge(context.binders.capacity())
+            .map_err(|()| type_resource())?;
+        for fact in context.binders.values() {
+            let fact_type = IterativeTypeOwner::new(self.zonk(&fact.ty)?);
+            let fact_span = fact.provenance.span().unwrap_or(network.body.span);
+            self.defer_resource_escape(network.identity.id, &fact_type, fact_span, span)?;
+            if type_contains_variable(&fact_type, network.identity.id, &mut self.constraint_work)
+                .map_err(|()| constraint_resource())?
+            {
+                return Err(self.resource_escape_failure(
+                    fact_span,
+                    span,
+                    "an enclosing binding contains the network identity",
+                ));
+            }
+        }
+        let core_type = self.clone_type(&ty)?;
+        let core_effects = self.core_effect_row(&effects)?;
+        let provenance = body.provenance.clone();
+        let node = self.push_effect_core(
+            core_type,
+            core_effects,
+            Origin::Source(span),
+            EffectOperation::Network(Box::new(crate::core::effect::NetworkScopeNode::new(
+                network.acquisition,
+                handle,
+                entries,
+                capacity.node,
+                [input_a.node, input_b.node],
+                body.node,
+            ))),
+        )?;
+        values.push(TypedNode {
+            node,
+            ty: ty.into_inner(),
+            effects,
+            provenance,
+        });
+        Ok(())
+    }
+
+    fn check_network_entry_shape(
+        &mut self,
+        binder: BinderId,
+        identity: TypeVariableId,
+        api: crate::resolved::NetworkApi,
+        context: &TypeContext,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        let invalid = || {
+            inference_failure(
+                TypeReason::NetworkEntry,
+                span,
+                "a worker entry must be an unconstrained function polymorphic in its network identity",
+            )
+        };
+        let fact = context.fact(binder).ok_or_else(invalid)?;
+        if fact.quantified.len() != 1 || fact.quantified[0].1 != Kind::Type {
+            return Err(invalid());
+        }
+        let instantiated = IterativeTypeOwner::new(self.instantiate_lowered_source_type(
+            &fact.quantified,
+            &fact.ty,
+            &[Type::Variable(identity)],
+            &[],
+        )?);
+        let Some(function) = instantiated.function_view() else {
+            return Err(invalid());
+        };
+        let Type::Tuple(arguments) = function.domain() else {
+            return Err(invalid());
+        };
+        let [worker, bytes] = arguments.as_ref() else {
+            return Err(invalid());
+        };
+        let expected_worker = IterativeTypeOwner::new(Type::Application(
+            Box::new(Type::Nominal(api.worker())),
+            Box::new(Type::Variable(identity)),
+        ));
+        if !same_type_with_budget(worker, &expected_worker, &mut self.type_work)
+            .map_err(|()| type_resource())?
+            || !matches!(bytes, Type::Bytes)
+            || !matches!(function.value(), Type::Unit)
+            || function.effects().is_some_and(|row| row.tail().is_some())
+        {
+            return Err(invalid());
+        }
+        // Imported native effects require the linked defining-module registry.
+        // Until that independent check exists, Network Core remains rejected.
+        Ok(())
+    }
+
     // The canonical builtin is a real callable, so aliases and imported
     // helpers retain the same structural Continue body.
     fn lower_store_advance(
@@ -15156,6 +15458,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ResolvedExprKind::Store(store) => {
                 self.schedule_store(store, current.span, tasks)?;
             }
+            ResolvedExprKind::Network(network) => {
+                self.schedule_network(network, current.span, tasks)?;
+            }
             ResolvedExprKind::Region(region) => {
                 self.schedule_region(region, current.span, tasks)?
             }
@@ -15308,6 +15613,16 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ElaborationTask::FinishHookBody { .. } => return Err(invalid_state()),
             ElaborationTask::ResourceBody { resource, span } => {
                 self.step_resource_body(resource, span, context, tasks, values)?;
+            }
+            ElaborationTask::NetworkBody {
+                network,
+                entries,
+                span,
+            } => {
+                self.step_network_body(network, entries, span, context, tasks, values)?;
+            }
+            ElaborationTask::FinishNetwork(progress) => {
+                self.step_network_completion(progress, context, values)?;
             }
             ElaborationTask::StoreBody { store, span } => {
                 self.step_store_body(store, span, context, tasks, values)?;
@@ -22461,6 +22776,12 @@ enum ElaborationTask<'a> {
         span: Span,
     },
     FinishResource(Box<ResourceProgress<'a>>),
+    NetworkBody {
+        network: &'a crate::resolved::ResolvedNetworkExpr,
+        entries: [BinderId; 2],
+        span: Span,
+    },
+    FinishNetwork(Box<NetworkProgress<'a>>),
     StoreBody {
         store: &'a crate::resolved::ResolvedStoreExpr,
         span: Span,
@@ -22861,6 +23182,16 @@ struct ResourceProgress<'a> {
     resource: &'a crate::resolved::ResolvedResourceExpr,
     span: Span,
     initializer: TypedNodeOwner,
+    handle: TypedBinder,
+}
+
+struct NetworkProgress<'a> {
+    network: &'a crate::resolved::ResolvedNetworkExpr,
+    entries: [BinderId; 2],
+    span: Span,
+    capacity: TypedNodeOwner,
+    input_a: TypedNodeOwner,
+    input_b: TypedNodeOwner,
     handle: TypedBinder,
 }
 
@@ -23819,6 +24150,8 @@ fn discard_elaboration_task(task: ElaborationTask<'_>) {
         | ElaborationTask::FinishSelection(_)
         | ElaborationTask::ResourceBody { .. }
         | ElaborationTask::StoreBody { .. }
+        | ElaborationTask::NetworkBody { .. }
+        | ElaborationTask::FinishNetwork(_)
         | ElaborationTask::FinishCleanup { .. }
         | ElaborationTask::BeginCleanupBinding { .. }
         | ElaborationTask::FinishHookBody { .. }
@@ -25067,6 +25400,10 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
             ResolvedExprKind::Store(store) => {
                 work.push(&store.body);
                 work.push(&store.initializer);
+            }
+            ResolvedExprKind::Network(network) => {
+                work.push(&network.body);
+                work.push(&network.initializer);
             }
             ResolvedExprKind::Cleanup(cleanup) => {
                 work.push(&cleanup.body);
@@ -27578,6 +27915,10 @@ fn resume_usage_with_budget(
                     push(&mut tasks, Task::Visit(&store.body), budget)?;
                     push(&mut tasks, Task::Visit(&store.initializer), budget)?;
                 }
+                ResolvedExprKind::Network(network) => {
+                    push(&mut tasks, Task::Visit(&network.body), budget)?;
+                    push(&mut tasks, Task::Visit(&network.initializer), budget)?;
+                }
                 ResolvedExprKind::Cleanup(cleanup) => {
                     push(&mut tasks, Task::Visit(&cleanup.action), budget)?;
                     push(&mut tasks, Task::Visit(&cleanup.body), budget)?;
@@ -27812,6 +28153,10 @@ fn contains_resume_owner_with_budget(
             ResolvedExprKind::Store(store) => {
                 schedule(&mut pending, &store.body, budget)?;
                 schedule(&mut pending, &store.initializer, budget)?;
+            }
+            ResolvedExprKind::Network(network) => {
+                schedule(&mut pending, &network.body, budget)?;
+                schedule(&mut pending, &network.initializer, budget)?;
             }
             ResolvedExprKind::Cleanup(cleanup) => {
                 schedule(&mut pending, &cleanup.body, budget)?;
@@ -28106,6 +28451,7 @@ fn effect_expression_work_contains_syntax(
             | ResolvedExprKind::RegionSelection(_)
             | ResolvedExprKind::Resource(_)
             | ResolvedExprKind::Store(_)
+            | ResolvedExprKind::Network(_)
             | ResolvedExprKind::Perform(_)
             | ResolvedExprKind::Handle(_)
             | ResolvedExprKind::Resume(_)
@@ -28379,6 +28725,11 @@ fn collect_expression_binders(binders: &mut Vec<BinderId>, mut expressions: Vec<
                 binders.push(store.handle.id);
                 expressions.push(&store.body);
                 expressions.push(&store.initializer);
+            }
+            ResolvedExprKind::Network(network) => {
+                binders.push(network.handle.id);
+                expressions.push(&network.body);
+                expressions.push(&network.initializer);
             }
             ResolvedExprKind::Cleanup(cleanup) => {
                 expressions.push(&cleanup.body);

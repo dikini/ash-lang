@@ -387,6 +387,26 @@ fn integer_local_arithmetic_is_conservatively_resident() {
 }
 
 #[test]
+fn integer_split_quotient_cannot_escape_its_selected_region() {
+    let failure = run_result(concat!(
+        "import @builtin.integer as I\n",
+        "main : Unit -> Int\nmain () = region<R> owner {\n",
+        "match I.split_base256 257 {\n",
+        "I.Parts((q, r)) => q\nI.Negative => 0\n}\n}\n",
+    ))
+    .unwrap_err();
+    let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+        panic!("expected source lifetime rejection");
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+        diagnostic.failure()
+    else {
+        panic!("expected source resource escape: {diagnostic:?}")
+    };
+    assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+}
+
+#[test]
 fn integer_arithmetic_can_select_the_surviving_outer_region() {
     assert_eq!(
         run(

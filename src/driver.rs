@@ -976,7 +976,7 @@ where
         configuration,
         &mut InterfaceConstraintBudget::default(),
         interface_validator,
-        |program, sources, modules| {
+        |program, sources, modules, _linked| {
             validator(program, sources, modules)
                 .map(|program| (program, None))
                 .map_err(|failure| (failure, None))
@@ -1011,7 +1011,7 @@ where
         configuration,
         constraint_work,
         interface_validator,
-        |program, sources, modules| {
+        |program, sources, modules, _linked| {
             validator(program, sources, modules)
                 .map(|program| (program, None))
                 .map_err(|failure| (failure, None))
@@ -1040,6 +1040,7 @@ where
         UnvalidatedEffectProgram,
         &[&SourceFile],
         &[(ModuleId, SourceId)],
+        &ValidatedInterfaceProgram,
     ) -> ModularEffectCoreResult,
     E: FnOnce(&CompiledCore) -> Result<Evaluation, RuntimeFailure>,
 {
@@ -1075,6 +1076,7 @@ where
         UnvalidatedEffectProgram,
         &[&SourceFile],
         &[(ModuleId, SourceId)],
+        &ValidatedInterfaceProgram,
     ) -> ModularEffectCoreResult,
 {
     let compilation_phase = crate::calibration::Phase::start("compilation");
@@ -1128,6 +1130,7 @@ where
         UnvalidatedEffectProgram,
         &[&SourceFile],
         &[(ModuleId, SourceId)],
+        &ValidatedInterfaceProgram,
     ) -> ModularEffectCoreResult,
 {
     let mut compilation_work = crate::compiler_work::CompilationWork::default();
@@ -1162,6 +1165,7 @@ where
         UnvalidatedEffectProgram,
         &[&SourceFile],
         &[(ModuleId, SourceId)],
+        &ValidatedInterfaceProgram,
     ) -> ModularEffectCoreResult,
 {
     let mut checked: Vec<crate::resolved::CheckedModule> =
@@ -1645,6 +1649,7 @@ fn validate_modular_effect_core(
     program: UnvalidatedEffectProgram,
     sources: &[&SourceFile],
     modules: &[(ModuleId, SourceId)],
+    linked: &ValidatedInterfaceProgram,
 ) -> ModularEffectCoreResult {
     let phase = crate::compiler_work::CompilationPhase::IndependentCore;
     let validation_phase = crate::calibration::Phase::start("independent-effect-core");
@@ -1654,8 +1659,8 @@ fn validate_modular_effect_core(
             return Err((ValidationError::resource_exhausted(program), None));
         }
     };
-    let result = crate::core::validate::validate_effect_modules_with_work(
-        program, sources, modules, &mut work,
+    let result = crate::core::validate::validate_effect_modules_linked_with_work(
+        program, sources, modules, linked, &mut work,
     );
     crate::calibration::work(
         "independent-effect-core",
@@ -1744,6 +1749,7 @@ where
         UnvalidatedEffectProgram,
         &[&SourceFile],
         &[(ModuleId, SourceId)],
+        &ValidatedInterfaceProgram,
     ) -> ModularEffectCoreResult,
 {
     let elaboration_phase = crate::calibration::Phase::start("final-elaboration");
@@ -1830,16 +1836,17 @@ where
         true,
     );
     elaboration_phase.finish(Some(final_work), final_normal_limit, final_limit);
-    drop(validated_interfaces);
     let (validated, core_work) =
-        validator(unchecked, sources, module_sources).map_err(|(failure, cost)| {
-            let failure = FileFailure::from(PipelineFailure::Validation(failure))
-                .with_compilation_work(*compilation_work);
-            match cost {
-                Some(cost) => failure.with_phase_work(cost),
-                None => failure,
-            }
-        })?;
+        validator(unchecked, sources, module_sources, &validated_interfaces).map_err(
+            |(failure, cost)| {
+                let failure = FileFailure::from(PipelineFailure::Validation(failure))
+                    .with_compilation_work(*compilation_work);
+                match cost {
+                    Some(cost) => failure.with_phase_work(cost),
+                    None => failure,
+                }
+            },
+        )?;
     compilation_work.independent_core = core_work;
     Ok(CompiledProgram {
         core: CompiledCore::Effect(validated),
@@ -2396,6 +2403,74 @@ mod tests {
         }
     }
 
+    #[test]
+    fn linked_native_binding_and_network_cleanup_share_one_program() {
+        use crate::foreign::source_runtime::{
+            NativeArgument, NativeCallError, NativeReply, SourceNativeBindings,
+        };
+        use std::sync::atomic::AtomicUsize;
+
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        fn echo_bytes(arguments: &[NativeArgument]) -> Result<NativeReply, NativeCallError> {
+            let [NativeArgument(address)] = arguments else {
+                return Err(NativeCallError);
+            };
+            if address.is_null() {
+                return Err(NativeCallError);
+            }
+            CALLS.fetch_add(1, Ordering::SeqCst);
+            Ok(NativeReply::Address(*address))
+        }
+
+        let fixture = TestSource::write(include_str!(
+            "../tests/fixtures/source-native/cases/network-binding.ash"
+        ));
+        for (name, source) in [
+            (
+                "native.ash",
+                include_str!("../tests/fixtures/source-native/native.ash"),
+            ),
+            (
+                "binding.ash",
+                include_str!("../tests/fixtures/source-native/network-echo-binding.ash"),
+            ),
+            (
+                "network_types.ash",
+                include_str!("../libraries/network_types.ash"),
+            ),
+            (
+                "network_codec.ash",
+                include_str!("../libraries/network_codec.ash"),
+            ),
+            (
+                "network_protocol.ash",
+                include_str!("../libraries/network_protocol.ash"),
+            ),
+        ] {
+            fixture.write_sibling(name, source);
+        }
+        let compiled = compile_path(fixture.configuration()).expect("combined source compiles");
+        let (_, boundary) = compiled
+            .source_native_entry()
+            .expect("native entry is present");
+        let mut bindings = SourceNativeBindings::default();
+        assert_eq!(boundary.interpretations().len(), 1);
+        let symbol = boundary.interpretations()[0].symbol();
+        assert_eq!(symbol.symbol().name(), "EchoBytes");
+        bindings
+            .insert(
+                Arc::clone(symbol),
+                echo_bytes,
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("checked symbol binds the trusted callback");
+        CALLS.store(0, Ordering::SeqCst);
+        let result = execute_with_source_native_bindings(&compiled, &mut bindings)
+            .expect("combined program executes and settles");
+        assert_eq!(result.value_display(), "42");
+        assert_eq!(CALLS.load(Ordering::SeqCst), 1);
+    }
+
     fn relational_interface_graph_source() -> TestSource {
         let source = TestSource::write(include_str!(
             "../tests/fixtures/relational-interfaces/linked-composite/entry.ash"
@@ -2822,7 +2897,9 @@ mod tests {
             source.configuration(),
             &mut InterfaceConstraintBudget::default(),
             validate_interface_evidence_with_budget,
-            |unchecked, sources, _| validate_modular_effect_core(unchecked, sources, &[]),
+            |unchecked, sources, _, linked| {
+                validate_modular_effect_core(unchecked, sources, &[], linked)
+            },
             |_| panic!("evaluation must not run after independent Core rejection"),
             true,
         )
@@ -3080,7 +3157,7 @@ mod tests {
     }
 
     #[test]
-    fn independent_core_validation_starts_with_only_the_core_registry_owner() {
+    fn independent_core_validation_releases_linked_registry_before_evaluation() {
         let source = TestSource::write("main : Unit -> Int\nmain () = 42\n");
         let registry_lifetime = RefCell::new(None);
 
@@ -3101,16 +3178,28 @@ mod tests {
                     .expect("interface validation should record the resolved registry");
                 assert_eq!(
                     registry.strong_count(),
-                    1,
-                    "only the unchecked Core program may own the registry when Core validation begins"
+                    2,
+                    "unchecked Core and linked interface evidence own the registry during validation"
                 );
                 validate_effect_modules(unchecked, sources, module_sources)
             },
-            evaluate_compiled_core,
+            |core| {
+                assert_eq!(
+                    registry_lifetime.borrow().as_ref().unwrap().strong_count(),
+                    1,
+                    "the linked interface owner is released before evaluation"
+                );
+                evaluate_compiled_core(core)
+            },
         )
         .expect("the ownership witness should complete the real pipeline");
 
         assert_eq!(observation.value_display(), "42");
+        drop(observation);
+        assert_eq!(
+            registry_lifetime.borrow().as_ref().unwrap().strong_count(),
+            0
+        );
     }
 
     #[test]

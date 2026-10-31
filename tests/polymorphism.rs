@@ -198,6 +198,7 @@ fn runtime_class(program: &ValidatedEffectProgram, event: &TraceEvent) -> &'stat
         EffectExprKind::Operation(EffectOperation::Registration(_)) => "registration",
         EffectExprKind::Operation(EffectOperation::Resource(_)) => "resource",
         EffectExprKind::Operation(EffectOperation::Store(_)) => "store",
+        EffectExprKind::Operation(EffectOperation::Network(_)) => "network",
         EffectExprKind::Operation(EffectOperation::Continue(_)) => "continue",
         EffectExprKind::Operation(EffectOperation::RetainedRoot(_)) => "retained-root",
         EffectExprKind::Operation(EffectOperation::Retain(_)) => "retain",
@@ -217,6 +218,7 @@ fn runtime_class(program: &ValidatedEffectProgram, event: &TraceEvent) -> &'stat
 fn runtime_value_class(value: &Value) -> &'static str {
     match value {
         Value::ResourceHandle(_) => "resource-handle",
+        Value::NetworkRegistration(_) => "network-registration",
         Value::RetainedKey(_) => "retained-key",
         Value::RegionRequest(_) => "region-request",
         Value::RegionStorage(_) => "region-storage",

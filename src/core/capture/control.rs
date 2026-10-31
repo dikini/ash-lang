@@ -37,7 +37,6 @@ use crate::{
 
 #[cfg(test)]
 thread_local! {
-    // A single test observation; the production projection carries no trace.
     static DRAIN_WITNESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static DRAIN_DISCARD_CLOSE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
@@ -245,6 +244,35 @@ fn retain_owner_row_universe<'a>(
     Ok(())
 }
 
+/// Network events are generated only while reconstructing linked Core. An
+/// observation is not a successful result; a Reply follows its complete
+/// selected-provider allocation path, and MessageCommit follows commit.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) enum NetworkEventStage {
+    Observed,
+    MessageCommit,
+    Reply,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) enum NetworkOutcome {
+    Message,
+    Empty,
+    End,
+    Failure,
+    Sent,
+    Full,
+    Closed,
+    Finished,
+    Watching,
+    WatchFailed,
+    Wake,
+    NoWake,
+    WakeFailed,
+    Cancelled,
+    CancelFailed,
+}
+
 #[derive(Debug)]
 pub(super) enum Control {
     NativeInterpret {
@@ -265,6 +293,14 @@ pub(super) enum Control {
     /// Forbidden control retained only in a private provider query graph.
     /// It remains a refusal whenever the actual selected callable reaches it.
     Unavailable,
+    /// A host outcome, commit, or successfully constructed reply. Its site
+    /// refers to the original linked operation, not this generated control.
+    NetworkEvent {
+        operation: crate::core::NodeId,
+        operation_control: usize,
+        stage: NetworkEventStage,
+        outcome: NetworkOutcome,
+    },
     Sequence(Vec<usize>),
     Choice(Vec<usize>),
     Call {
@@ -440,6 +476,19 @@ impl Control {
             }
             Self::Return => Self::Return,
             Self::Unavailable => Self::Unavailable,
+            Self::NetworkEvent {
+                operation,
+                operation_control,
+                stage,
+                outcome,
+            } => Self::NetworkEvent {
+                operation: *operation,
+                operation_control: operation_control
+                    .checked_add(code_offset)
+                    .ok_or(Failure::Resource)?,
+                stage: *stage,
+                outcome: *outcome,
+            },
             Self::Sequence(children) | Self::Choice(children) => {
                 let mut copy = copy_slice(children, budget)?;
                 for child in &mut copy {
@@ -589,13 +638,13 @@ pub(super) fn copy_slice<T: Copy>(
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct Position {
-    code: usize,
-    next: usize,
+pub(super) struct Position {
+    pub(super) code: usize,
+    pub(super) next: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-enum Site {
+pub(super) enum Site {
     Closing(usize, bool),
     RemovedHandler(usize),
     Cleanup(usize, bool),
@@ -611,7 +660,7 @@ enum Site {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-enum Region {
+pub(super) enum Region {
     Active,
     Capture(usize, usize),
     Completion(usize, usize),
@@ -619,7 +668,7 @@ enum Region {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-enum Address {
+pub(super) enum Address {
     Empty,
     End,
     Slot {
@@ -652,23 +701,23 @@ impl Address {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct Event {
-    code: usize,
-    label: usize,
-    unknown: bool,
-    port: Option<usize>,
+pub(super) struct Event {
+    pub(super) code: usize,
+    pub(super) label: usize,
+    pub(super) unknown: bool,
+    pub(super) port: Option<usize>,
 }
 
 /// The owner occurrence uses the existing finite value-context domain.
 /// An equal native effect never substitutes for this exact enclosing frame.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct ProviderResourceOccurrence {
-    code: usize,
-    value_context: usize,
+pub(super) struct ProviderResourceOccurrence {
+    pub(super) code: usize,
+    pub(super) value_context: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-enum Frame {
+pub(super) enum Frame {
     NativeInterpret {
         code: usize,
         context: usize,
@@ -718,6 +767,8 @@ enum Frame {
         body: usize,
         context: usize,
         value_context: usize,
+        // A focus-local trace witness. Ordinary C3 uses the sentinel.
+        witness: usize,
     },
     Handler {
         code: usize,
@@ -811,26 +862,26 @@ impl Frame {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct Edge {
-    address: Address,
-    frame: Frame,
-    next: Address,
+pub(super) struct Edge {
+    pub(super) address: Address,
+    pub(super) frame: Frame,
+    pub(super) next: Address,
 }
 
 /// A Store owns this capture; the locator and interpreter baseline do not.
 /// A spent entry preserves the bounded allocation coordinate for stale keys.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct RetainedCapture {
-    store: Address,
-    key: (usize, usize),
-    capture: Option<Address>,
-    baseline: Address,
-    root: usize,
-    root_context: usize,
-    root_value_context: usize,
-    handler: usize,
-    handler_context: usize,
-    event: Event,
+pub(super) struct RetainedCapture {
+    pub(super) store: Address,
+    pub(super) key: (usize, usize),
+    pub(super) capture: Option<Address>,
+    pub(super) baseline: Address,
+    pub(super) root: usize,
+    pub(super) root_context: usize,
+    pub(super) root_value_context: usize,
+    pub(super) handler: usize,
+    pub(super) handler_context: usize,
+    pub(super) event: Event,
 }
 
 // A Store in an owned cut also owns every live capture in its slots. Locator
@@ -857,13 +908,13 @@ fn push_store_captures(
 /// Current roots are immutable value ports. A later replacement changes only
 /// this control state's root; earlier read ports keep their original edge.
 #[derive(Debug, Eq, Hash, PartialEq)]
-struct CellContents {
-    occurrence: ProviderResourceOccurrence,
-    owner: (usize, usize),
-    roots: Vec<usize>,
-    enclosing: Arc<[(usize, usize)]>,
-    predecessors: Arc<[usize]>,
-    shared: bool,
+pub(super) struct CellContents {
+    pub(super) occurrence: ProviderResourceOccurrence,
+    pub(super) owner: (usize, usize),
+    pub(super) roots: Vec<usize>,
+    pub(super) enclosing: Arc<[(usize, usize)]>,
+    pub(super) predecessors: Arc<[usize]>,
+    pub(super) shared: bool,
 }
 
 impl CellContents {
@@ -966,7 +1017,7 @@ fn share_cell_birth_slice<T: Copy>(
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum DrainWork {
+pub(super) enum DrainWork {
     Empty,
     // The only work was the currently executing fresh root.
     ActiveOnly,
@@ -1005,9 +1056,9 @@ impl std::hash::Hash for DrainWitness {
 /// A path-local projection for one focused Store. Facts identify actual
 /// value ports; they never change ownership or grant a continuation move.
 #[derive(Debug, Eq, Hash, PartialEq)]
-struct DrainProjection {
-    work: DrainWork,
-    facts: Vec<(usize, super::value::CaseFact)>,
+pub(super) struct DrainProjection {
+    pub(super) work: DrainWork,
+    pub(super) facts: Vec<(usize, super::value::CaseFact)>,
     #[cfg(test)]
     witness: DrainWitness,
 }
@@ -1065,23 +1116,388 @@ impl DrainProjection {
         }
         Ok(())
     }
+
+    fn native_return(
+        &mut self,
+        eligible: bool,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let work = if eligible {
+            self.work
+        } else {
+            DrainWork::Unknown
+        };
+        self.changed(work, budget)?;
+        self.facts.clear();
+        Ok(())
+    }
+}
+
+// A focused completion query retains the exact normalized C3 state graph.
+// No edge alone grants network completion: operation, marker, and result
+// provenance must be checked against the linked Core and runtime separately.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub(super) enum CompletionTransition {
+    #[default]
+    Unclassified,
+    Choice {
+        ordinal: usize,
+    },
+    Sequence {
+        ordinal: usize,
+    },
+    Call {
+        target: usize,
+        value_context: usize,
+        expression: usize,
+        creation: usize,
+    },
+    Detail(usize),
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Copy trace details avoid allocation during bounded analysis"
+)]
+pub(super) enum CompletionDetail {
+    Return(Edge),
+    EnterRoot {
+        store: Address,
+        code: usize,
+        context: usize,
+        value_context: usize,
+    },
+    EnterBoundary(Frame),
+    /// An exact return edge from a selected interpreter, or an escape.
+    /// The source state and successor are carried by the trace edge itself.
+    NativeReturn {
+        event: Event,
+        boundary: Option<Edge>,
+        edge: Option<Edge>,
+    },
+}
+
+/// The exact call alternative carried by a focused return frame. These
+/// coordinates are meaningful only in the focus that owns the witness table.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) struct CompletionCall {
+    pub(super) code: usize,
+    pub(super) result: usize,
+    pub(super) body: usize,
+    pub(super) caller_context: usize,
+    pub(super) caller_value_context: usize,
+    pub(super) target: usize,
+    pub(super) callee_value_context: usize,
+    pub(super) expression: usize,
+    pub(super) creation: usize,
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+pub(super) struct CompletionTrace {
+    states: HashMap<State, usize>,
+    details: HashMap<CompletionDetail, usize>,
+    calls: HashMap<CompletionCall, usize>,
+    edges: HashSet<(usize, usize, CompletionTransition)>,
+    exits: HashSet<(usize, Edge)>,
+    terminal_returns: HashSet<usize>,
+    // Transient only during one request dispatch; never completion authority.
+    pending_native_route: Option<(Event, Option<Edge>)>,
+}
+
+impl CompletionTrace {
+    #[cfg(test)]
+    pub(super) fn visit_edges(
+        &self,
+        budget: &mut TypeWorkBudget,
+        mut visit: impl FnMut(
+            usize,
+            usize,
+            CompletionTransition,
+            &mut TypeWorkBudget,
+        ) -> Result<(), Failure>,
+    ) -> Result<(), Failure> {
+        charge(budget, self.edges.capacity())?;
+        for &(from, to, transition) in &self.edges {
+            charge(budget, 1)?;
+            visit(from, to, transition, budget)?;
+        }
+        Ok(())
+    }
+
+    fn intern(&mut self, state: &State, budget: &mut TypeWorkBudget) -> Result<usize, Failure> {
+        state.charge_key(budget)?;
+        if let Some(id) = self.states.get(state) {
+            return Ok(*id);
+        }
+        let copy = state.copy(budget)?;
+        charge(budget, 1)?;
+        self.states.try_reserve(1).map_err(|_| Failure::Resource)?;
+        let id = self.states.len();
+        self.states.insert(copy, id);
+        Ok(id)
+    }
+
+    fn detail(
+        &mut self,
+        detail: CompletionDetail,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        // Hashing and retaining a native route includes the complete event and
+        // both fixed-size edges, not just its interned identifier.
+        charge(
+            budget,
+            if matches!(detail, CompletionDetail::NativeReturn { .. }) {
+                12
+            } else {
+                1
+            },
+        )?;
+        if let Some(id) = self.details.get(&detail) {
+            return Ok(*id);
+        }
+        self.details.try_reserve(1).map_err(|_| Failure::Resource)?;
+        let id = self.details.len();
+        self.details.insert(detail, id);
+        Ok(id)
+    }
+
+    fn edge(
+        &mut self,
+        from: usize,
+        to: &State,
+        kind: CompletionTransition,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let to = self.intern(to, budget)?;
+        charge(budget, 1)?;
+        self.edges.try_reserve(1).map_err(|_| Failure::Resource)?;
+        self.edges.insert((from, to, kind));
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct CompletionQueue {
+    queue: VecDeque<State>,
+    trace: Option<Box<[CompletionTrace]>>,
+    current: Option<usize>,
+    transition: CompletionTransition,
+}
+
+impl CompletionQueue {
+    #[cfg(test)]
+    fn traced(budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
+        charge(budget, 1)?;
+        let mut traces = Vec::new();
+        traces.try_reserve_exact(1).map_err(|_| Failure::Resource)?;
+        traces.push(CompletionTrace::default());
+        Ok(Self {
+            trace: Some(traces.into_boxed_slice()),
+            ..Self::default()
+        })
+    }
+
+    fn begin(&mut self, state: &State, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        self.transition = CompletionTransition::Unclassified;
+        self.current = self
+            .trace
+            .as_mut()
+            .map(|traces| {
+                let trace = traces.first_mut().ok_or(Failure::Invalid)?;
+                trace.pending_native_route = None;
+                trace.intern(state, budget)
+            })
+            .transpose()?;
+        Ok(())
+    }
+
+    fn mark(&mut self, transition: CompletionTransition) {
+        self.transition = transition;
+    }
+
+    fn call_witness(
+        &mut self,
+        call: CompletionCall,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        let Some(traces) = &mut self.trace else {
+            return Ok(usize::MAX);
+        };
+        let trace = traces.first_mut().ok_or(Failure::Invalid)?;
+        charge(budget, 10)?;
+        if let Some(&id) = trace.calls.get(&call) {
+            return Ok(id);
+        }
+        let id = trace.calls.len();
+        if id == usize::MAX {
+            return Err(Failure::Resource);
+        }
+        trace.calls.try_reserve(1).map_err(|_| Failure::Resource)?;
+        trace.calls.insert(call, id);
+        Ok(id)
+    }
+
+    #[inline(never)]
+    fn mark_native_route(
+        &mut self,
+        event: Event,
+        boundary: Option<Edge>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if self.current.is_none() {
+            return Ok(());
+        }
+        if let Some(traces) = &mut self.trace {
+            charge(budget, 7)?;
+            traces
+                .first_mut()
+                .ok_or(Failure::Invalid)?
+                .pending_native_route = Some((event, boundary));
+        }
+        Ok(())
+    }
+
+    fn clear_native_route(&mut self) {
+        if let Some(trace) = self
+            .trace
+            .as_deref_mut()
+            .and_then(|traces| traces.first_mut())
+        {
+            trace.pending_native_route = None;
+        }
+    }
+
+    #[inline(never)]
+    fn mark_native_continuation(&mut self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        if let Some(trace) = self
+            .trace
+            .as_deref_mut()
+            .and_then(|traces| traces.first_mut())
+        {
+            let (event, boundary) = trace.pending_native_route.ok_or(Failure::Invalid)?;
+            self.transition = CompletionTransition::Detail(trace.detail(
+                CompletionDetail::NativeReturn {
+                    event,
+                    boundary,
+                    edge: None,
+                },
+                budget,
+            )?);
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn mark_return(&mut self, edge: &Edge, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        if let Some(traces) = &mut self.trace {
+            let trace = traces.first_mut().ok_or(Failure::Invalid)?;
+            let detail = match trace.pending_native_route {
+                Some((event, boundary)) => CompletionDetail::NativeReturn {
+                    event,
+                    boundary,
+                    edge: Some(*edge),
+                },
+                None => CompletionDetail::Return(*edge),
+            };
+            self.transition = CompletionTransition::Detail(trace.detail(detail, budget)?);
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn mark_boundary(&mut self, frame: &Frame, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        if let Some(traces) = &mut self.trace {
+            let trace = traces.first_mut().ok_or(Failure::Invalid)?;
+            self.transition = CompletionTransition::Detail(
+                trace.detail(CompletionDetail::EnterBoundary(*frame), budget)?,
+            );
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn mark_root(
+        &mut self,
+        store: &Address,
+        state: &State,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if let Some(traces) = &mut self.trace {
+            let trace = traces.first_mut().ok_or(Failure::Invalid)?;
+            self.transition = CompletionTransition::Detail(trace.detail(
+                CompletionDetail::EnterRoot {
+                    store: *store,
+                    code: state.position.code,
+                    context: state.context,
+                    value_context: state.value_context,
+                },
+                budget,
+            )?);
+        }
+        Ok(())
+    }
+
+    fn exit(&mut self, edge: &Edge, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        if let (Some(traces), Some(from)) = (&mut self.trace, self.current) {
+            let trace = traces.first_mut().ok_or(Failure::Invalid)?;
+            charge(budget, 1)?;
+            trace.exits.try_reserve(1).map_err(|_| Failure::Resource)?;
+            trace.exits.insert((from, *edge));
+        }
+        Ok(())
+    }
+
+    fn terminal_return(&mut self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        if let (Some(traces), Some(from)) = (&mut self.trace, self.current) {
+            let trace = traces.first_mut().ok_or(Failure::Invalid)?;
+            charge(budget, 1)?;
+            trace
+                .terminal_returns
+                .try_reserve(1)
+                .map_err(|_| Failure::Resource)?;
+            trace.terminal_returns.insert(from);
+        }
+        Ok(())
+    }
+
+    fn record(&mut self, state: &State, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        if let (Some(traces), Some(from)) = (&mut self.trace, self.current) {
+            let trace = traces.first_mut().ok_or(Failure::Invalid)?;
+            trace.edge(from, state, self.transition, budget)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::ops::Deref for CompletionQueue {
+    type Target = VecDeque<State>;
+    fn deref(&self) -> &Self::Target {
+        &self.queue
+    }
+}
+
+impl std::ops::DerefMut for CompletionQueue {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.queue
+    }
 }
 
 #[derive(Debug, Eq, Hash, PartialEq)]
-struct State {
-    position: Position,
-    context: usize,
-    value_context: usize,
-    stack: Address,
-    heap: Vec<Edge>,
-    retained: Vec<RetainedCapture>,
-    cells: Vec<CellContents>,
-    abandoned: Option<(usize, Event)>,
-    drain: Option<DrainProjection>,
+pub(super) struct State {
+    pub(super) position: Position,
+    pub(super) context: usize,
+    pub(super) value_context: usize,
+    pub(super) stack: Address,
+    pub(super) heap: Vec<Edge>,
+    pub(super) retained: Vec<RetainedCapture>,
+    pub(super) cells: Vec<CellContents>,
+    pub(super) abandoned: Option<(usize, Event)>,
+    pub(super) drain: Option<DrainProjection>,
     // This control starts at a standalone callable seed, rather than an
     // actual linked caller. Its missing enclosing Store is an obligation for
     // the actual call, not authority to perform a move.
-    symbolic_seed: bool,
+    pub(super) symbolic_seed: bool,
 }
 
 impl State {
@@ -1537,14 +1953,25 @@ fn selections(
     budget: &mut TypeWorkBudget,
 ) -> Result<(Vec<Selection>, bool), Failure> {
     let (boundaries, prefixes, escaped) = selection_boundaries(state, root, select, budget)?;
+    Ok((
+        selections_from_boundaries(&boundaries, &prefixes, budget)?,
+        escaped,
+    ))
+}
+
+fn selections_from_boundaries(
+    boundaries: &[Edge],
+    prefixes: &[Edge],
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<Selection>, Failure> {
     let mut result = Vec::new();
-    for boundary in boundaries {
+    for &boundary in boundaries {
         let mut reaches = HashSet::new();
         reaches.try_reserve(1).map_err(|_| Failure::Resource)?;
         reaches.insert(boundary.address);
         loop {
             let mut changed = false;
-            for edge in &prefixes {
+            for edge in prefixes {
                 charge(budget, 1)?;
                 if reaches.contains(&edge.next) && !reaches.contains(&edge.address) {
                     reaches.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -1561,7 +1988,7 @@ fn selections(
         prefix
             .try_reserve(prefixes.len() + 1)
             .map_err(|_| Failure::Resource)?;
-        for edge in &prefixes {
+        for edge in prefixes {
             if reaches.contains(&edge.next) {
                 prefix.push(*edge);
             }
@@ -1570,16 +1997,16 @@ fn selections(
         result.try_reserve(1).map_err(|_| Failure::Resource)?;
         result.push(Selection { boundary, prefix });
     }
-    Ok((result, escaped))
+    Ok(result)
 }
 
 #[derive(Debug, Eq, Hash, PartialEq)]
-struct Context {
+pub(super) struct Context {
     // Each replacement names an original type subtree; MAX is unproved.
     // There are no recursively extended substitution-context identities.
-    bindings: Vec<(TypeVariableId, usize)>,
+    pub(super) bindings: Vec<(TypeVariableId, usize)>,
     // Exact row keys stay distinct even when their callbacks share a caller.
-    rows: Vec<RowBinding>,
+    pub(super) rows: Vec<RowBinding>,
 }
 
 // Consumed only after the original formal-prefix removal has completed.
@@ -1590,14 +2017,14 @@ enum RowEquation<'r> {
 }
 
 #[derive(Debug, Eq, Hash, PartialEq)]
-struct RowBinding {
-    variable: TypeVariableId,
+pub(super) struct RowBinding {
+    pub(super) variable: TypeVariableId,
     // Labels use only arguments in the same original type-subtree universe.
-    known: Vec<usize>,
-    tail: Option<EffectRowVariable>,
-    lacks: Vec<usize>,
+    pub(super) known: Vec<usize>,
+    pub(super) tail: Option<EffectRowVariable>,
+    pub(super) lacks: Vec<usize>,
     // Conflicting equations never establish an empty or exact replacement.
-    unproved: bool,
+    pub(super) unproved: bool,
 }
 
 // Call observations outlive one dispatch, but their construction frame does not.
@@ -2752,7 +3179,7 @@ impl<'a> Analysis<'a> {
 
     fn enqueue(
         state: State,
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
@@ -2766,7 +3193,7 @@ impl<'a> Analysis<'a> {
     // roots use enqueue.
     fn enqueue_normalized(
         state: State,
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
@@ -2789,6 +3216,7 @@ impl<'a> Analysis<'a> {
                 state.abandoned = None;
             }
         }
+        pending.record(&state, budget)?;
         state.charge_key(budget)?;
         if visited.contains(&state) {
             return Ok(());
@@ -2805,7 +3233,7 @@ impl<'a> Analysis<'a> {
     fn enqueue_after_pop(
         mut state: State,
         root: Address,
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
@@ -2822,7 +3250,7 @@ impl<'a> Analysis<'a> {
         self.candidates.clear();
         self.inspect_stores.clear();
         self.payloads.clear();
-        self.discover(roots, None, budget)?;
+        let _ = self.discover(roots, None, budget)?;
         // Passive row records describe the whole original discovery. Focused
         // safety queries remain strict and do not invent additional row sites.
         self.collect_cleanup_rows = false;
@@ -2849,8 +3277,18 @@ impl<'a> Analysis<'a> {
         roots: &[usize],
         seed: Option<&State>,
         budget: &mut TypeWorkBudget,
-    ) -> Result<(), Failure> {
-        let mut pending = VecDeque::new();
+    ) -> Result<Option<Box<[CompletionTrace]>>, Failure> {
+        self.discover_with_parent(roots, seed, None, budget)
+    }
+
+    fn discover_with_parent(
+        &mut self,
+        roots: &[usize],
+        seed: Option<&State>,
+        parent: Option<&super::value::Analysis<'_>>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<Box<[CompletionTrace]>>, Failure> {
+        let mut pending = CompletionQueue::default();
         let mut visited = HashSet::new();
         let mut calls: Vec<ObservedCall> = Vec::new();
         let mut value_requests = HashSet::new();
@@ -2897,6 +3335,7 @@ impl<'a> Analysis<'a> {
         }
         loop {
             while let Some(state) = pending.pop_front() {
+                pending.begin(&state, budget)?;
                 charge(budget, 1)?;
                 let code = state.position.code;
                 match &self.graph.code[code] {
@@ -2933,6 +3372,7 @@ impl<'a> Analysis<'a> {
                         &mut unresolved_retained,
                         &mut pending,
                         &mut visited,
+                        parent,
                         budget,
                     )?,
                 }
@@ -2967,7 +3407,7 @@ impl<'a> Analysis<'a> {
         if !unresolved_retained.is_empty() {
             return Err(Failure::Invalid);
         }
-        Ok(())
+        Ok(pending.trace)
     }
 
     // Keep unrelated dispatch work off completion's bounded stack path.
@@ -2980,13 +3420,17 @@ impl<'a> Analysis<'a> {
         observed_calls: &mut HashMap<State, usize>,
         value_requests: &mut HashSet<State>,
         unresolved_retained: &mut HashSet<State>,
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
+        parent: Option<&super::value::Analysis<'_>>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
         let code = state.position.code;
         match &self.graph.code[code] {
             Control::Unavailable => return Err(Failure::Invalid),
+            Control::NetworkEvent { .. } => {
+                self.returned(state, pending, visited, budget)?;
+            }
             Control::Sequence(children) => {
                 self.discover_sequence(state, children, pending, visited, budget)?;
             }
@@ -3082,7 +3526,15 @@ impl<'a> Analysis<'a> {
                 )?;
             }
             Control::Call { .. } => {
-                self.discover_call(state, calls, observed_calls, pending, visited, budget)?;
+                self.discover_call(
+                    state,
+                    calls,
+                    observed_calls,
+                    pending,
+                    visited,
+                    parent,
+                    budget,
+                )?;
             }
             Control::Resume { value, .. } => {
                 let value = *value;
@@ -3113,7 +3565,7 @@ impl<'a> Analysis<'a> {
         &mut self,
         state: State,
         children: &[usize],
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
@@ -3128,6 +3580,18 @@ impl<'a> Analysis<'a> {
                 }
                 let fact = data.case_of(scrutinee, &drain.facts, budget)?;
                 Some((result_case, patterns, fact))
+            } else {
+                None
+            }
+        } else if pending.trace.is_some() {
+            let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+            if let Some((_, result_case, patterns)) =
+                data.case_choice(code, state.value_context, budget)?
+            {
+                if patterns.len() != children.len() {
+                    return Err(Failure::Invalid);
+                }
+                Some((result_case, patterns, None))
             } else {
                 None
             }
@@ -3152,24 +3616,24 @@ impl<'a> Analysis<'a> {
             }
             let mut next = state.copy(budget)?;
             let mut pushed = false;
-            if let (Some(drain), Some((result_case, _, _))) = (&mut next.drain, &cases) {
-                let data = self.data.as_mut().ok_or(Failure::Invalid)?;
-                for (binder, value) in
-                    data.case_arm_bindings(code, ordinal, state.value_context, budget)?
-                {
-                    let fact = data.case_of(value, &drain.facts, budget)?;
-                    drain.assign(binder, fact, budget)?;
+            if let Some((result_case, _, _)) = &cases {
+                if let Some(drain) = &mut next.drain {
+                    let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+                    for (binder, value) in
+                        data.case_arm_bindings(code, ordinal, state.value_context, budget)?
+                    {
+                        let fact = data.case_of(value, &drain.facts, budget)?;
+                        drain.assign(binder, fact, budget)?;
+                    }
                 }
-                if *result_case {
-                    next.push(
-                        Frame::CaseReturn {
-                            code,
-                            ordinal,
-                            context: state.context,
-                            value_context: state.value_context,
-                        },
-                        budget,
-                    )?;
+                if *result_case || pending.trace.is_some() {
+                    let frame = Frame::CaseReturn {
+                        code,
+                        ordinal,
+                        context: state.context,
+                        value_context: state.value_context,
+                    };
+                    next.push(frame, budget)?;
                     pushed = true;
                 }
             }
@@ -3177,6 +3641,7 @@ impl<'a> Analysis<'a> {
                 code: *child,
                 next: 0,
             };
+            pending.mark(CompletionTransition::Choice { ordinal });
             if pushed {
                 Self::enqueue(next, pending, visited, budget)?;
             } else {
@@ -3194,7 +3659,7 @@ impl<'a> Analysis<'a> {
         &mut self,
         mut state: State,
         children: &[usize],
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
@@ -3208,10 +3673,15 @@ impl<'a> Analysis<'a> {
         } else {
             None
         };
+        // Completion must examine actual operands and caller suffixes. The
+        // ordinary C3 query can elide return-only children, but doing so in a
+        // completion trace would erase the linked nodes and their order.
+        let preserve_pure = pending.trace.is_some();
         let mut ordinal = state.position.next;
-        while children
-            .get(ordinal)
-            .is_some_and(|child| matches!(self.graph.code[*child], Control::Return))
+        while !preserve_pure
+            && children
+                .get(ordinal)
+                .is_some_and(|child| matches!(self.graph.code[*child], Control::Return))
         {
             charge(budget, 1)?;
             ordinal += 1;
@@ -3228,9 +3698,10 @@ impl<'a> Analysis<'a> {
             // Pure trailing work has no continuation control. Keeping a
             // Next frame here multiplies recursive capture states.
             let mut following = ordinal + 1;
-            while children
-                .get(following)
-                .is_some_and(|child| matches!(self.graph.code[*child], Control::Return))
+            while !preserve_pure
+                && children
+                    .get(following)
+                    .is_some_and(|child| matches!(self.graph.code[*child], Control::Return))
             {
                 charge(budget, 1)?;
                 following += 1;
@@ -3258,6 +3729,7 @@ impl<'a> Analysis<'a> {
                 code: child,
                 next: 0,
             };
+            pending.mark(CompletionTransition::Sequence { ordinal });
             if following < children.len() {
                 Self::enqueue(next, pending, visited, budget)?;
             } else {
@@ -3482,7 +3954,7 @@ impl<'a> Analysis<'a> {
         body: usize,
         store: usize,
         unresolved: &mut HashSet<State>,
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
@@ -3509,6 +3981,9 @@ impl<'a> Analysis<'a> {
                 DrainWork::ActiveOnly | DrainWork::Unknown => DrainWork::Unknown,
             };
             drain.changed(work, budget)?;
+        }
+        if pending.trace.is_some() {
+            pending.mark_root(&selected.address, &next, budget)?;
         }
         next.push(
             Frame::RetainedRoot {
@@ -3891,7 +4366,7 @@ impl<'a> Analysis<'a> {
         some: usize,
         none: usize,
         unresolved: &mut HashSet<State>,
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
@@ -4035,7 +4510,7 @@ impl<'a> Analysis<'a> {
         &mut self,
         state: State,
         body: usize,
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
@@ -4107,6 +4582,9 @@ impl<'a> Analysis<'a> {
                 capture_context: next.value_context,
             }
         };
+        if pending.trace.is_some() {
+            pending.mark_boundary(&frame, budget)?;
+        }
         next.push(frame, budget)?;
         next.position = Position {
             code: body,
@@ -4116,14 +4594,18 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
-    #[inline(never)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the call step uses the existing focused worklist and budget"
+    )]
     fn discover_call(
         &mut self,
         state: State,
         calls: &mut Vec<ObservedCall>,
         observed_calls: &mut HashMap<State, usize>,
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
+        _parent: Option<&super::value::Analysis<'_>>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
         let code = state.position.code;
@@ -4171,7 +4653,12 @@ impl<'a> Analysis<'a> {
             targets
                 .try_reserve(value.targets.len())
                 .map_err(|_| Failure::Resource)?;
-            targets.extend(value.targets.iter().map(|target| (*target, 0, usize::MAX)));
+            targets.extend(
+                value
+                    .targets
+                    .iter()
+                    .map(|target| (*target, 0, usize::MAX, usize::MAX)),
+            );
             (
                 super::value::CallSuccessors {
                     targets,
@@ -4192,11 +4679,11 @@ impl<'a> Analysis<'a> {
             .transpose()?;
         let ty = *ty;
         let source = *source;
-        for (target, value_context, expression) in targets {
+        for (target, value_context, expression, creation) in targets {
             let context = self.call_context(code, target, state.context, budget)?;
             let mut next = state.copy(budget)?;
             let mut pushed = false;
-            if let Some(drain) = &mut next.drain {
+            if next.drain.is_some() || pending.trace.is_some() {
                 let data = self.data.as_mut().ok_or(Failure::Invalid)?;
                 let (result, body, pairs) = data.case_call_ports(
                     code,
@@ -4205,31 +4692,44 @@ impl<'a> Analysis<'a> {
                     value_context,
                     budget,
                 )?;
-                let mut transferred = Vec::new();
-                transferred
-                    .try_reserve(pairs.len())
-                    .map_err(|_| Failure::Resource)?;
-                for (formal, actual) in pairs {
-                    let fact = data.case_of(actual, &drain.facts, budget)?.map(|mut fact| {
-                        fact.origin = None;
-                        fact
-                    });
-                    transferred.push((formal, fact));
+                if let Some(drain) = &mut next.drain {
+                    let mut transferred = Vec::new();
+                    transferred
+                        .try_reserve(pairs.len())
+                        .map_err(|_| Failure::Resource)?;
+                    for (formal, actual) in pairs {
+                        let fact = data.case_of(actual, &drain.facts, budget)?.map(|mut fact| {
+                            fact.origin = None;
+                            fact
+                        });
+                        transferred.push((formal, fact));
+                    }
+                    drain.facts.clear();
+                    for (formal, fact) in transferred {
+                        drain.assign(formal, fact, budget)?;
+                    }
                 }
-                drain.facts.clear();
-                for (formal, fact) in transferred {
-                    drain.assign(formal, fact, budget)?;
-                }
-                next.push(
-                    Frame::CallReturn {
-                        code,
-                        result,
-                        body,
-                        context: state.context,
-                        value_context: state.value_context,
-                    },
-                    budget,
-                )?;
+                let call = CompletionCall {
+                    code,
+                    result,
+                    body,
+                    caller_context: state.context,
+                    caller_value_context: state.value_context,
+                    target,
+                    callee_value_context: value_context,
+                    expression,
+                    creation,
+                };
+                let witness = pending.call_witness(call, budget)?;
+                let frame = Frame::CallReturn {
+                    code,
+                    result,
+                    body,
+                    context: state.context,
+                    value_context: state.value_context,
+                    witness,
+                };
+                next.push(frame, budget)?;
                 pushed = true;
             }
             next.context = context;
@@ -4238,6 +4738,12 @@ impl<'a> Analysis<'a> {
                 code: self.graph.callables.get(target, budget)?.body,
                 next: 0,
             };
+            pending.mark(CompletionTransition::Call {
+                target,
+                value_context,
+                expression,
+                creation,
+            });
             if pushed {
                 Self::enqueue(next, pending, visited, budget)?;
             } else {
@@ -4372,9 +4878,7 @@ impl<'a> Analysis<'a> {
                 let (query, context) =
                     normal.focused(entry.position.code, entry.value_context, budget)?;
                 self.data = Some(query);
-                self.cell_retentions.clear();
-                self.retained_support.clear();
-                let mut seed = self.restore_entry(entry, context, budget)?;
+                let mut seed = self.restore_entry_with_trace(entry, context, budget)?;
                 let focused_store = self.is_store(Frame::Resource {
                     code: entry.position.code,
                     context: entry.context,
@@ -4388,31 +4892,37 @@ impl<'a> Analysis<'a> {
                         #[cfg(test)]
                         witness: DrainWitness::default(),
                     });
-                    self.release_unsafe = false;
                 }
-                self.payloads.clear();
-                self.discover(&[], Some(&seed), budget)?;
-                if self.check_retained_release && focused_store && self.release_unsafe {
-                    return Err(Failure::RetainedRelease);
-                }
-                self.check_cell_retentions(budget)?;
-                self.check_payloads(budget)?;
-                self.check_retained_support(budget)?;
-                let data = self.data.as_mut().ok_or(Failure::Invalid)?;
-                data.close(budget)?;
-                if let Err(failure) = data.check_resources(budget) {
-                    if matches!(&self.graph.code[entry.position.code], Control::Resource { effect, .. }
-                        if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_resource()))
-                    {
-                        return Err(data.cell_escape_failure(
-                            failure,
-                            None,
-                            entry.position.code,
-                            context,
-                            budget,
-                        )?);
+                {
+                    self.cell_retentions.clear();
+                    self.retained_support.clear();
+                    self.payloads.clear();
+                    if self.check_retained_release && focused_store {
+                        self.release_unsafe = false;
                     }
-                    return Err(failure);
+                    let _ = self.discover_with_parent(&[], Some(&seed), Some(&normal), budget)?;
+                    if self.check_retained_release && focused_store && self.release_unsafe {
+                        return Err(Failure::RetainedRelease);
+                    }
+                    self.check_cell_retentions(budget)?;
+                    self.check_payloads(budget)?;
+                    self.check_retained_support(budget)?;
+                    let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+                    data.close(budget)?;
+                    if let Err(failure) = data.check_resources(budget) {
+                        if matches!(&self.graph.code[entry.position.code], Control::Resource { effect, .. }
+                            if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_resource()))
+                        {
+                            return Err(data.cell_escape_failure(
+                                failure,
+                                None,
+                                entry.position.code,
+                                context,
+                                budget,
+                            )?);
+                        }
+                        return Err(failure);
+                    }
                 }
                 if self.inspect_stores.contains(&key) {
                     // Run potential retained cuts in a separate focused value
@@ -4426,8 +4936,8 @@ impl<'a> Analysis<'a> {
                     self.payloads.clear();
                     self.inspecting = true;
                     let inspection = (|| {
-                        let seed = self.restore_entry(entry, context, budget)?;
-                        self.discover(&[], Some(&seed), budget)?;
+                        let seed = self.restore_entry_with_trace(entry, context, budget)?;
+                        let _ = self.discover(&[], Some(&seed), budget)?;
                         self.check_cell_retentions(budget)?;
                         self.check_payloads(budget)?;
                         self.check_retained_support(budget)
@@ -4452,7 +4962,17 @@ impl<'a> Analysis<'a> {
         result
     }
 
+    #[cfg(test)]
     fn restore_entry(
+        &mut self,
+        entry: &State,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<State, Failure> {
+        self.restore_entry_with_trace(entry, context, budget)
+    }
+
+    fn restore_entry_with_trace(
         &mut self,
         entry: &State,
         context: usize,
@@ -4483,8 +5003,6 @@ impl<'a> Analysis<'a> {
             };
             let cut = match &mut edge.frame {
                 Frame::CaseReturn { .. } | Frame::CallReturn { .. } => {
-                    // Focus seeds are reconstructed from normal discovery,
-                    // before any Store-focused projection frames exist.
                     return Err(Failure::Invalid);
                 }
                 Frame::Closing {
@@ -4839,11 +5357,12 @@ impl<'a> Analysis<'a> {
     fn returned(
         &mut self,
         state: State,
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
         if state.stack == Address::Empty {
+            pending.terminal_return(budget)?;
             return Ok(());
         }
         for edge in state.edges(state.stack, budget)? {
@@ -4861,6 +5380,7 @@ impl<'a> Analysis<'a> {
                 continue;
             }
             if self.focusing && matches!(edge.frame, Frame::Resource { focused: true, .. }) {
+                pending.exit(edge, budget)?;
                 // This query ends with its designated activation. The final
                 // converged body-result check owns the exit obligation; later
                 // caller execution cannot acquire this fresh marker again.
@@ -4889,6 +5409,9 @@ impl<'a> Analysis<'a> {
                     DRAIN_DISCARD_CLOSE.set(DRAIN_DISCARD_CLOSE.get() | bit);
                 }
                 continue;
+            }
+            if pending.trace.is_some() {
+                pending.mark_return(edge, budget)?;
             }
             let mut next = state.copy(budget)?;
             next.stack = edge.next;
@@ -5189,7 +5712,7 @@ impl<'a> Analysis<'a> {
         &mut self,
         state: &State,
         event: Event,
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
@@ -5510,7 +6033,7 @@ impl<'a> Analysis<'a> {
         state: &State,
         event: Event,
         boundaries: (Vec<Selection>, bool),
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
@@ -5566,21 +6089,23 @@ impl<'a> Analysis<'a> {
         state: &State,
         event: Event,
         selected: &Selection,
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
+        let eligible = false;
+        pending.mark_native_route(event, Some(selected.boundary), budget)?;
         self.check_payload(state, event, &selected.prefix, budget)?;
         if let (Some(data), Some(port)) = (&mut self.data, event.port) {
             data.external_result(port, budget)?;
         }
         let mut next = state.copy(budget)?;
         if let Some(drain) = &mut next.drain {
-            drain.changed(DrainWork::Unknown, budget)?;
-            drain.facts.clear();
+            drain.native_return(eligible, budget)?;
         }
-        self.returned(next, pending, visited, budget)?;
-        Ok(())
+        let result = self.returned(next, pending, visited, budget);
+        pending.clear_native_route();
+        result
     }
 
     #[inline(never)]
@@ -5589,7 +6114,7 @@ impl<'a> Analysis<'a> {
         state: &State,
         event: Event,
         selected: &Selection,
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
@@ -5636,10 +6161,12 @@ impl<'a> Analysis<'a> {
         &mut self,
         state: &State,
         event: Event,
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
+        let eligible = false;
+        pending.mark_native_route(event, None, budget)?;
         if let (Some(data), Some(port)) = (&mut self.data, event.port) {
             data.external_result(port, budget)?;
         }
@@ -5657,15 +6184,16 @@ impl<'a> Analysis<'a> {
         }
         let mut next = state.copy(budget)?;
         if let Some(drain) = &mut next.drain {
-            drain.changed(DrainWork::Unknown, budget)?;
-            drain.facts.clear();
+            drain.native_return(eligible, budget)?;
         }
-        if event.unknown {
-            Self::enqueue(next, pending, visited, budget)?;
+        let result = if event.unknown {
+            pending.mark_native_continuation(budget)?;
+            Self::enqueue(next, pending, visited, budget)
         } else {
-            self.returned(next, pending, visited, budget)?;
-        }
-        Ok(())
+            self.returned(next, pending, visited, budget)
+        };
+        pending.clear_native_route();
+        result
     }
 
     fn is_cell(&self, frame: Frame) -> bool {
@@ -5855,7 +6383,7 @@ impl<'a> Analysis<'a> {
         state: &State,
         event: Event,
         selected: &Selection,
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
@@ -5982,7 +6510,7 @@ impl<'a> Analysis<'a> {
         state: &State,
         event: Event,
         selected: &Selection,
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
@@ -6056,7 +6584,7 @@ impl<'a> Analysis<'a> {
         state: &State,
         event: Event,
         clause: (&Selection, usize),
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
@@ -6485,7 +7013,7 @@ impl<'a> Analysis<'a> {
         state: State,
         owner: usize,
         completion: Completion,
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
@@ -6524,7 +7052,7 @@ impl<'a> Analysis<'a> {
         owner: usize,
         completion: Completion,
         mut selected: Selection,
-        pending: &mut VecDeque<State>,
+        pending: &mut CompletionQueue,
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
@@ -6958,6 +7486,112 @@ impl<'a> Analysis<'a> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn native_return_edges_keep_the_actual_request_and_route() {
+        let mut budget = TypeWorkBudget::unbounded();
+        let mut pending = CompletionQueue::traced(&mut budget).unwrap();
+        let source = observed_call_state(0);
+        let successor = observed_call_state(1);
+        let boundary = Edge {
+            address: Address::Empty,
+            frame: Frame::NativeInterpret {
+                code: 7,
+                context: 3,
+                value_context: 4,
+            },
+            next: Address::End,
+        };
+        let popped = Edge {
+            address: Address::Empty,
+            frame: boundary.frame,
+            next: Address::End,
+        };
+        let request = Event {
+            code: 11,
+            label: 12,
+            unknown: false,
+            port: Some(13),
+        };
+        pending.begin(&source, &mut budget).unwrap();
+        let from = pending.current.unwrap();
+        pending
+            .mark_native_route(request, Some(boundary), &mut budget)
+            .unwrap();
+        pending.mark_return(&popped, &mut budget).unwrap();
+        let selected = pending.transition;
+        pending.trace.as_mut().unwrap()[0]
+            .edge(from, &successor, selected, &mut budget)
+            .unwrap();
+
+        let other = Event {
+            label: 14,
+            ..request
+        };
+        pending
+            .mark_native_route(other, Some(boundary), &mut budget)
+            .unwrap();
+        pending.mark_return(&popped, &mut budget).unwrap();
+        let distinct_request = pending.transition;
+        pending.trace.as_mut().unwrap()[0]
+            .edge(from, &successor, distinct_request, &mut budget)
+            .unwrap();
+
+        pending
+            .mark_native_route(request, None, &mut budget)
+            .unwrap();
+        pending.mark_native_continuation(&mut budget).unwrap();
+        let escape = pending.transition;
+        pending.trace.as_mut().unwrap()[0]
+            .edge(from, &successor, escape, &mut budget)
+            .unwrap();
+        assert_ne!(selected, distinct_request);
+        assert_ne!(selected, escape);
+        assert_eq!(pending.trace.as_ref().unwrap()[0].edges.len(), 3);
+
+        pending.begin(&source, &mut budget).unwrap();
+        pending.mark_return(&popped, &mut budget).unwrap();
+        assert!(
+            pending.trace.as_ref().unwrap()[0]
+                .details
+                .contains_key(&CompletionDetail::Return(popped))
+        );
+    }
+
+    #[test]
+    fn native_return_preserves_work_only_for_eligible_routes_and_expires_facts() {
+        use super::super::value::{CaseFact, ValueCase};
+        let fact = CaseFact {
+            value: ValueCase::Boolean(true),
+            fresh_probe: true,
+            origin: Some(7),
+        };
+        for work in [
+            DrainWork::Empty,
+            DrainWork::ActiveOnly,
+            DrainWork::Pending,
+            DrainWork::Unknown,
+        ] {
+            for eligible in [false, true] {
+                let mut drain = DrainProjection {
+                    work,
+                    facts: vec![(3, fact)],
+                    witness: DrainWitness::default(),
+                };
+                assert!(matches!(
+                    drain.native_return(eligible, &mut TypeWorkBudget::with_limit(0)),
+                    Err(Failure::Resource)
+                ));
+                assert_eq!(drain.work, work);
+                assert_eq!(drain.facts, [(3, fact)]);
+                drain
+                    .native_return(eligible, &mut TypeWorkBudget::unbounded())
+                    .unwrap();
+                assert_eq!(drain.work, if eligible { work } else { DrainWork::Unknown });
+                assert!(drain.facts.is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn retained_drain_forgets_origins_when_an_unknown_result_is_assigned() {
         use super::super::value::{CaseFact, ValueCase};
 
@@ -7380,6 +8014,56 @@ mod tests {
     }
 
     #[test]
+    fn completion_trace_keeps_all_predecessors_and_duplicate_destinations() {
+        let mut work = TypeWorkBudget::default();
+        let first = observed_call_state(0);
+        let second = observed_call_state(1);
+        let destination = observed_call_state(2);
+        let mut pending = CompletionQueue::traced(&mut work).unwrap();
+        let mut visited = HashSet::new();
+        pending.begin(&first, &mut work).unwrap();
+        pending.mark(CompletionTransition::Choice { ordinal: 0 });
+        Analysis::enqueue(
+            destination.copy(&mut work).unwrap(),
+            &mut pending,
+            &mut visited,
+            &mut work,
+        )
+        .unwrap();
+        pending.mark(CompletionTransition::Choice { ordinal: 1 });
+        Analysis::enqueue(
+            destination.copy(&mut work).unwrap(),
+            &mut pending,
+            &mut visited,
+            &mut work,
+        )
+        .unwrap();
+        pending.begin(&second, &mut work).unwrap();
+        Analysis::enqueue(
+            destination.copy(&mut work).unwrap(),
+            &mut pending,
+            &mut visited,
+            &mut work,
+        )
+        .unwrap();
+        let trace = pending.trace.unwrap();
+        assert_eq!(trace[0].edges.len(), 3);
+        let mut visited_edges = 0;
+        trace[0]
+            .visit_edges(&mut work, |_, _, _, _| {
+                visited_edges += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(visited_edges, 3);
+        assert!(matches!(
+            trace[0].visit_edges(&mut TypeWorkBudget::with_limit(0), |_, _, _, _| Ok(())),
+            Err(Failure::Resource)
+        ));
+        assert_eq!(pending.queue.len(), 1);
+    }
+
+    #[test]
     fn generic_cell_state_insertion_pays_nested_roots_before_publication() {
         let make = || State {
             position: Position { code: 0, next: 0 },
@@ -7404,7 +8088,7 @@ mod tests {
             }],
         };
         let run = |work: &mut TypeWorkBudget| {
-            let mut pending = VecDeque::new();
+            let mut pending = CompletionQueue::default();
             let mut visited = HashSet::new();
             let result = Analysis::enqueue(make(), &mut pending, &mut visited, work);
             (result, pending.len(), visited.len())
@@ -7554,7 +8238,7 @@ mod tests {
                     state,
                     7,
                     Completion::Discard,
-                    &mut VecDeque::new(),
+                    &mut CompletionQueue::default(),
                     &mut HashSet::new(),
                     &mut budget
                 ),
@@ -7617,7 +8301,7 @@ mod tests {
                     state,
                     7,
                     Completion::Discard,
-                    &mut VecDeque::new(),
+                    &mut CompletionQueue::default(),
                     &mut HashSet::new(),
                     &mut budget,
                 )
@@ -7681,7 +8365,7 @@ mod tests {
                 analysis.requested(
                     &state,
                     event,
-                    &mut VecDeque::new(),
+                    &mut CompletionQueue::default(),
                     &mut HashSet::new(),
                     &mut budget
                 ),
@@ -7902,7 +8586,7 @@ mod tests {
     struct ObservedCallStage {
         calls: Vec<ObservedCall>,
         indices: HashMap<State, usize>,
-        pending: VecDeque<State>,
+        pending: CompletionQueue,
         visited: HashSet<State>,
     }
 
@@ -7919,6 +8603,7 @@ mod tests {
                 &mut self.indices,
                 &mut self.pending,
                 &mut self.visited,
+                None,
                 work,
             )
         }
@@ -8142,7 +8827,7 @@ mod tests {
                     ],
                 };
                 state.normalize(budget)?;
-                let mut pending = VecDeque::new();
+                let mut pending = CompletionQueue::default();
                 Analysis::new(&graph, None, budget)?.completed(
                     state,
                     3,
@@ -8266,7 +8951,7 @@ mod tests {
                 ],
             };
             state.normalize(budget)?;
-            let mut pending = VecDeque::new();
+            let mut pending = CompletionQueue::default();
             Analysis::new(&graph, None, budget)?.completed(
                 state,
                 3,
@@ -8345,7 +9030,7 @@ mod tests {
                     allocation_context: frame.allocation_context(),
                     old,
                 };
-                let mut pending = VecDeque::new();
+                let mut pending = CompletionQueue::default();
                 let mut visited = HashSet::new();
                 for port in [10, 20] {
                     Analysis::enqueue_normalized(
@@ -8423,7 +9108,7 @@ mod tests {
             };
             let run = |budget: &mut TypeWorkBudget| {
                 let input = state.copy(&mut TypeWorkBudget::unbounded()).unwrap();
-                let mut pending = VecDeque::new();
+                let mut pending = CompletionQueue::default();
                 let mut visited = HashSet::new();
                 Analysis::enqueue_normalized(input, &mut pending, &mut visited, budget)?;
                 Ok::<_, Failure>((pending, visited))
@@ -8444,7 +9129,7 @@ mod tests {
                 run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap(),
                 expected
             );
-            let mut pending = VecDeque::new();
+            let mut pending = CompletionQueue::default();
             let mut visited = HashSet::new();
             let mut short = TypeWorkBudget::with_limit(width - 1);
             assert!(matches!(
@@ -8489,7 +9174,7 @@ mod tests {
             allocation_context: 3,
             old: false,
         };
-        let mut pending = VecDeque::new();
+        let mut pending = CompletionQueue::default();
         let mut visited = HashSet::new();
         Analysis::enqueue(
             State {
@@ -8527,7 +9212,7 @@ mod tests {
     #[test]
     fn completed_discard_histories_join_before_later_computations() {
         let run = |budget: &mut TypeWorkBudget| {
-            let mut pending = VecDeque::new();
+            let mut pending = CompletionQueue::default();
             let mut visited = HashSet::new();
             for port in [None, Some(10), Some(20)] {
                 Analysis::enqueue_normalized(
@@ -8610,7 +9295,7 @@ mod tests {
                 }],
                 abandoned: None,
             };
-            let mut pending = VecDeque::new();
+            let mut pending = CompletionQueue::default();
             let mut visited = HashSet::new();
             if normalize {
                 Analysis::enqueue(state, &mut pending, &mut visited, budget)?;
@@ -8747,7 +9432,7 @@ mod tests {
                 ],
                 abandoned: None,
             };
-            let mut pending = VecDeque::new();
+            let mut pending = CompletionQueue::default();
             let mut visited = HashSet::new();
             if sort {
                 Analysis::enqueue(state, &mut pending, &mut visited, budget)?;

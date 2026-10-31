@@ -1804,6 +1804,21 @@ impl<F: CoreOperationFamily> Drop for UnvalidatedCoreProgram<F> {
     }
 }
 
+/// Network launch authority reconstructed from linked Core for this arena.
+#[derive(Debug)]
+pub(crate) struct NetworkAdmission {
+    pub(crate) owner: NodeId,
+    pub(crate) linked_result: NodeId,
+    pub(crate) entries: [NetworkEntryAdmission; 2],
+}
+
+#[derive(Debug)]
+pub(crate) struct NetworkEntryAdmission {
+    pub(crate) binder: crate::resolved::BinderId,
+    pub(crate) parameter: crate::types::TypeVariableId,
+    pub(crate) native_effects: Vec<crate::types::EffectInstance>,
+}
+
 /// A pure Core arena whose graph, types, scope, dialect, and provenance hold.
 #[derive(Debug)]
 pub struct CoreProgram<F: CoreOperationFamily> {
@@ -1813,6 +1828,7 @@ pub struct CoreProgram<F: CoreOperationFamily> {
     arena: ArenaId,
     nodes: Box<[CoreTypedExpr<F>]>,
     root: NodeId,
+    network_admissions: Vec<NetworkAdmission>,
 }
 
 /// A validated pure Core arena.
@@ -1834,7 +1850,18 @@ impl<F: CoreOperationFamily> CoreProgram<F> {
             arena,
             nodes: nodes.into_boxed_slice(),
             root,
+            network_admissions: Vec::new(),
         }
+    }
+
+    pub(super) fn set_network_admissions(&mut self, admissions: Vec<NetworkAdmission>) {
+        self.network_admissions = admissions;
+    }
+
+    pub(crate) fn network_admission(&self, owner: NodeId) -> Option<&NetworkAdmission> {
+        self.network_admissions
+            .iter()
+            .find(|admission| admission.owner == owner)
     }
 
     /// Returns the root expression.
@@ -2117,6 +2144,7 @@ pub struct CoreBuilder<F: CoreOperationFamily = PureOperationFamily> {
     requires_type_rewrite: bool,
     pub(super) settled_zonk_nodes: Vec<bool>,
     pub(super) source_resource_finalization_start: Option<usize>,
+    pub(super) contains_network: bool,
     deferred_cleanup_rows: HashSet<crate::types::InferenceVariableId>,
 }
 
@@ -2214,6 +2242,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             requires_type_rewrite: false,
             settled_zonk_nodes: Vec::new(),
             source_resource_finalization_start: None,
+            contains_network: false,
             deferred_cleanup_rows: HashSet::new(),
         }
     }

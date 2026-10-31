@@ -301,6 +301,10 @@ fn occurrences_in_expressions(
                 expressions.push(&store.initializer);
                 expressions.push(&store.body);
             }
+            ResolvedExprKind::Network(network) => {
+                expressions.push(&network.initializer);
+                expressions.push(&network.body);
+            }
             ResolvedExprKind::Region(region) => {
                 if let Some(provider) = &region.provider {
                     expressions.push(provider);

@@ -759,6 +759,8 @@ pub enum ResolveReason {
     SealedProvider,
     /// The compiler-owned store drive can be named in rows but not performed or handled.
     SealedDrive,
+    /// Network service effects cannot be directly performed or handled.
+    SealedNetwork,
     /// Resource acquisition requires a direct compiler-owned cell dependency.
     ResourceBuiltinRequired,
     /// An occurrence has no binding in lexical scope.
@@ -827,6 +829,7 @@ impl fmt::Display for ResolveReason {
             Self::ForeignContract => "foreign.contract",
             Self::SealedProvider => "resolve.sealed-provider",
             Self::SealedDrive => "resolve.sealed-drive",
+            Self::SealedNetwork => "resolve.sealed-network",
             Self::ResourceBuiltinRequired => "resolve.resource-builtin-required",
             Self::UnknownName => "resolve.unknown-name",
             Self::EquationNameMismatch => "resolve.equation-name-mismatch",
@@ -1105,6 +1108,9 @@ impl ResolveError {
             ResolveReason::SealedDrive => {
                 return Some((self.message()?, "sealed_store_drive"));
             }
+            ResolveReason::SealedNetwork => {
+                return Some((self.message()?, "sealed_network_service"));
+            }
             ResolveReason::ResourceBuiltinRequired => {
                 return Some((self.message()?, "resource_acquisition"));
             }
@@ -1262,6 +1268,7 @@ impl ResolveError {
             ResolveReason::EffectOperationShape
             | ResolveReason::SealedProvider
             | ResolveReason::SealedDrive
+            | ResolveReason::SealedNetwork
             | ResolveReason::DuplicateEffect => None,
             _ => Some(("name", "identifier", self.found.as_deref()?)),
         }
@@ -1344,6 +1351,9 @@ impl ResolveError {
             }
             ResolveReason::SealedDrive => {
                 return Some(crate::message::Message::resolve_sealed_drive());
+            }
+            ResolveReason::SealedNetwork => {
+                return Some(crate::message::Message::resolve_sealed_network());
             }
             ResolveReason::ResourceBuiltinRequired => {
                 return Some(crate::message::Message::resolve_builtin_required(
@@ -1709,6 +1719,7 @@ fn resolve_module_names_with_budget(
             && !owner.is_builtin_region()
             && !owner.is_builtin_region_facade()
             && !owner.is_builtin_retained_control()
+            && !owner.is_builtin_network()
         {
             return Ok(());
         }
@@ -1721,7 +1732,9 @@ fn resolve_module_names_with_budget(
                     "builtin source authentication exceeded its type-work budget",
                 )
             })?;
-        let canonical = if owner.is_builtin_retained_control() {
+        let canonical = if owner.is_builtin_network() {
+            crate::module::network_builtin_source_text()
+        } else if owner.is_builtin_retained_control() {
             crate::module::retained_control_builtin_source_text()
         } else if owner.is_builtin_region_facade() {
             crate::module::region_facade_builtin_source_text()
@@ -11165,6 +11178,165 @@ impl Resolver {
         Ok(())
     }
 
+    fn start_builtin_network<'a>(
+        &mut self,
+        source: &'a crate::surface::SurfaceProviderResourceExpr,
+        builtin: ModuleId,
+        span: Span,
+        tasks: &mut ResolveTaskBuffer<'a>,
+        expressions: &mut ResolvedExpressionBuffer,
+    ) -> Result<(), ResolveError> {
+        if source.arguments.len() != 1 {
+            return Err(error(
+                ResolveReason::TypeKind,
+                span,
+                "network requires one fresh identity",
+            ));
+        }
+        let SurfaceTypeKind::Named(SurfaceReference::Unqualified(identity_source)) =
+            &source.arguments[0].kind
+        else {
+            return Err(error(
+                ResolveReason::TypeKind,
+                source.arguments[0].span,
+                "network owner must be a fresh unqualified Type identity",
+            ));
+        };
+        let initializer = expressions.pop_owned().ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "network initializer is missing",
+            )
+        })?;
+        let ResolvedExprKind::Tuple(operands) = &initializer.kind else {
+            return Err(error(
+                ResolveReason::InternalState,
+                initializer.span,
+                "network initializer lost its tuple shape",
+            ));
+        };
+        if operands.len() != 5 {
+            return Err(error(
+                ResolveReason::InternalState,
+                initializer.span,
+                "network initializer lost its five operands",
+            ));
+        }
+        self.type_work.charge(2).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                initializer.span,
+                "network entry lookup exceeded its budget",
+            )
+        })?;
+        for entry in [&operands[1], &operands[2]] {
+            let ResolvedExprKind::Occurrence(occurrence) = &entry.kind else {
+                return Err(error(
+                    ResolveReason::TypeKind,
+                    entry.span,
+                    "network entry must name a top-level function",
+                ));
+            };
+            let Some(binder) = occurrence.global_binder() else {
+                return Err(error(
+                    ResolveReason::TypeKind,
+                    entry.span,
+                    "network entry must name a top-level function",
+                ));
+            };
+            if self.global_requirement_counts.get(&binder) != Some(&0) {
+                return Err(error(
+                    ResolveReason::TypeKind,
+                    entry.span,
+                    "network entry must name an unconstrained top-level function",
+                ));
+            }
+        }
+        let identity = self.allocate_type_variable(identity_source, None, Kind::Type)?;
+        let handle = self.allocate_binder(&source.handle.text, source.handle.span)?;
+        self.type_work.charge(6).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "network scope exceeded its budget",
+            )
+        })?;
+        self.lexical_method_parameters
+            .0
+            .try_reserve(1)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "network identity could not be reserved",
+                )
+            })?;
+        let retained = self.clone_type_variable_for_retention(
+            &identity,
+            span,
+            "network identity retention exceeded its budget",
+        )?;
+        self.lexical_method_parameters.push(retained);
+        let scope_checkpoint = self.scopes.len();
+        let type_scope_checkpoint = self.type_scopes.len();
+        let mut terms = HashMap::new();
+        terms.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "network handle scope could not be reserved",
+            )
+        })?;
+        terms.insert(
+            handle.spelling.clone(),
+            ResolvedTermBinding::local(ResolvedTermName::Global(handle.id)),
+        );
+        let mut types = HashMap::new();
+        types.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "network type scope could not be reserved",
+            )
+        })?;
+        types.insert(identity.spelling.clone(), identity.id);
+        self.scopes.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "network scope could not be reserved",
+            )
+        })?;
+        self.type_scopes.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "network type scope could not be reserved",
+            )
+        })?;
+        self.scopes.push(terms);
+        self.type_scopes.push(types);
+        tasks.0.try_reserve(2).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "network body could not be scheduled",
+            )
+        })?;
+        tasks.push(ResolveTask::FinishNetwork {
+            builtin,
+            identity,
+            handle,
+            initializer: Box::new(initializer),
+            scope_checkpoint,
+            type_scope_checkpoint,
+            span,
+        });
+        tasks.push(ResolveTask::VisitBlock(&source.body));
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn finish_resource_expression(
         &mut self,
@@ -11706,6 +11878,57 @@ impl Resolver {
                 span,
             } => {
                 self.start_builtin_store(source, builtin, span, tasks, expressions)?;
+            }
+            ResolveTask::NetworkInitializer {
+                source,
+                builtin,
+                span,
+            } => {
+                self.start_builtin_network(source, builtin, span, tasks, expressions)?;
+            }
+            ResolveTask::FinishNetwork {
+                builtin,
+                identity,
+                handle,
+                initializer,
+                scope_checkpoint,
+                type_scope_checkpoint,
+                span,
+            } => {
+                let body = expressions.pop_owned().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "network body is missing",
+                    )
+                })?;
+                self.scopes.truncate(scope_checkpoint);
+                self.type_scopes.truncate(type_scope_checkpoint);
+                self.type_work.charge(3).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "network owner retention exceeded its budget",
+                    )
+                })?;
+                let acquisition = crate::resolved::NetworkAcquisition {
+                    builtin,
+                    identity: identity.id,
+                    handle: handle.id,
+                    span,
+                };
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Network(Box::new(
+                        crate::resolved::ResolvedNetworkExpr {
+                            acquisition,
+                            identity,
+                            handle,
+                            initializer: Box::new(initializer.into_inner()),
+                            body: Box::new(body.into_inner()),
+                        },
+                    )),
+                    span,
+                });
             }
             ResolveTask::FinishStore {
                 builtin,
@@ -12409,6 +12632,16 @@ impl Resolver {
                 "the store drive cannot be handled directly",
             ));
         }
+        if crate::resolved::NetworkApi::for_module(effect.instance.effect().module()).is_some_and(
+            |api| effect.instance.effect() == api.io() || effect.instance.effect() == api.join(),
+        ) {
+            return Err(error(
+                ResolveReason::SealedNetwork,
+                handler.effect.span,
+                "network service effects cannot be used directly",
+            ));
+        }
+
         let store = handler
             .store
             .as_deref()
@@ -12566,6 +12799,19 @@ impl Resolver {
                         "the store drive cannot be registered directly",
                     ));
                 }
+                if crate::resolved::NetworkApi::for_module(effect.instance.effect().module())
+                    .is_some_and(|api| {
+                        effect.instance.effect() == api.io()
+                            || effect.instance.effect() == api.join()
+                    })
+                {
+                    return Err(error(
+                        ResolveReason::SealedNetwork,
+                        registration.effect.span,
+                        "network service effects cannot be used directly",
+                    ));
+                }
+
                 self.type_work.charge(3).map_err(|()| {
                     error(
                         ResolveReason::TypeResourceExhausted,
@@ -12602,6 +12848,19 @@ impl Resolver {
                         "the store drive cannot be hooked directly",
                     ));
                 }
+                if crate::resolved::NetworkApi::for_module(effect.instance.effect().module())
+                    .is_some_and(|api| {
+                        effect.instance.effect() == api.io()
+                            || effect.instance.effect() == api.join()
+                    })
+                {
+                    return Err(error(
+                        ResolveReason::SealedNetwork,
+                        hook.effect.span,
+                        "network service effects cannot be used directly",
+                    ));
+                }
+
                 self.type_work.charge(2).map_err(|()| {
                     error(
                         ResolveReason::TypeResourceExhausted,
@@ -12625,6 +12884,48 @@ impl Resolver {
 
             SurfaceExprKind::ProviderResource(source) => {
                 let family = self.nominal_reference(&source.family)?;
+                if let Some(api) = crate::resolved::NetworkApi::for_module(family.id.module())
+                    && family.id == api.pair()
+                {
+                    let SurfaceExprKind::Tuple(elements) = &source.initializer.kind else {
+                        return Err(error(
+                            ResolveReason::TypeKind,
+                            source.initializer.span,
+                            "network initializer requires five operands",
+                        ));
+                    };
+                    if elements.len() != 5
+                        || !matches!(elements[1].kind, SurfaceExprKind::Name(_))
+                        || !matches!(elements[2].kind, SurfaceExprKind::Name(_))
+                    {
+                        return Err(error(
+                            ResolveReason::TypeKind,
+                            source.initializer.span,
+                            "network entry operands must be named function designators",
+                        ));
+                    }
+                    self.type_work.charge(2).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            expression.span,
+                            "network scheduling exceeded its budget",
+                        )
+                    })?;
+                    tasks.0.try_reserve(2).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            expression.span,
+                            "network tasks could not reserve storage",
+                        )
+                    })?;
+                    tasks.push(ResolveTask::NetworkInitializer {
+                        source,
+                        builtin: family.id.module(),
+                        span: expression.span,
+                    });
+                    tasks.push(ResolveTask::VisitExpr(&source.initializer));
+                    return Ok(());
+                }
                 if let Some(api) = crate::resolved::StoreApi::for_module(family.id.module())
                     && family.id == api.store()
                 {
@@ -13012,6 +13313,20 @@ impl Resolver {
                         "the store drive cannot be performed directly",
                     ));
                 }
+                if crate::resolved::NetworkApi::for_module(effect.instance.effect().module())
+                    .is_some_and(|api| {
+                        effect.instance.effect() == api.io()
+                            || effect.instance.effect() == api.join()
+                    })
+                    && self.module != effect.instance.effect().module()
+                {
+                    return Err(error(
+                        ResolveReason::SealedNetwork,
+                        request.effect.span(),
+                        "network service effects cannot be used directly",
+                    ));
+                }
+
                 let operation =
                     self.resolved_operation(effect.instance.effect(), &request.operation)?;
                 self.type_work.charge(2).map_err(|()| {
@@ -13237,6 +13552,11 @@ enum ResolveTask<'a> {
         builtin: ModuleId,
         span: Span,
     },
+    NetworkInitializer {
+        source: &'a crate::surface::SurfaceProviderResourceExpr,
+        builtin: ModuleId,
+        span: Span,
+    },
     ResourceInitializer {
         source: &'a crate::surface::SurfaceResourceExpr,
         span: Span,
@@ -13254,6 +13574,15 @@ enum ResolveTask<'a> {
     FinishStore {
         builtin: ModuleId,
         descriptor: ResolvedStoreDescriptorOwner,
+        identity: ResolvedTypeVariable,
+        handle: Binder,
+        initializer: Box<ResolvedExpressionOwner>,
+        scope_checkpoint: usize,
+        type_scope_checkpoint: usize,
+        span: Span,
+    },
+    FinishNetwork {
+        builtin: ModuleId,
         identity: ResolvedTypeVariable,
         handle: Binder,
         initializer: Box<ResolvedExpressionOwner>,
@@ -13349,9 +13678,11 @@ impl ResolveTask<'_> {
             | Self::FinishRegistration { span, .. }
             | Self::GenericResourceInitializer { span, .. }
             | Self::StoreInitializer { span, .. }
+            | Self::NetworkInitializer { span, .. }
             | Self::ResourceInitializer { span, .. }
             | Self::FinishResource { span, .. }
             | Self::FinishStore { span, .. }
+            | Self::FinishNetwork { span, .. }
             | Self::FinishBinary { span, .. }
             | Self::FinishBlock { span, .. }
             | Self::FinishFunction { span, .. }

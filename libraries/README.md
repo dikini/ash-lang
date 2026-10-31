@@ -68,3 +68,26 @@ representation, output storage and foreign text readback remain future gaps,
 not implicit conversions or new compiler resource policy. Supported foreign
 arguments are Unit, Address, Bytes and flat tuples of pointer arguments;
 results are Unit (C void) or Address (C pointer).
+
+`network_types.ash` defines the ordinary identities, parents and outgoing
+messages used by the codec and intended for the network ledger.
+`network_codec.ash` encodes Work and Ack frames with a tagged base-256 representation and decodes only complete canonical frames. A decoded
+Work carries its child, parent and payload; the receiver is supplied separately by the authenticated delivery
+context. The codec is ordinary source code. A successful parse alone does not
+authenticate a peer or kind and does not establish a ledger transition,
+completion or release. `network_protocol.ash` contains the ordinary two-worker Work/Ack driver and
+its producing-cleanup example. The cleanup reserves a descendant before it is
+sent; its acknowledgement permits parent retirement and the upstream Ack. The
+driver retains a pending head on Full and services receives before retrying.
+A malformed frame or failed operation takes an ordinary failure path; it is not
+a completion certificate. The module does not prove honest acknowledgements,
+per-message processing, liveness or native behavior. The connected execution
+and remaining evidence are tracked in
+[TASK-0058](../docs/tasks/TASK-0058-pinned-worker-network.md).
+
+The source-native interpreter can execute this protocol with admitted host
+callbacks. Generated native images do not currently support Network scope and
+operations. The combined retained-control, Cell, byte-binding and Network test uses a
+trusted Rust host callback. Separate generated-host real-C FFI and SQLite
+canaries cover their respective supported bindings; they do not establish a
+combined Network image.

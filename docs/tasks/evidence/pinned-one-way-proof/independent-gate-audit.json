@@ -1,0 +1,18 @@
+{
+  "recorded_by": "root",
+  "reviewer": "/root/m4_native_plan",
+  "model": "Sol 6.1 high",
+  "verdict": "PASS",
+  "record_kind": "Root-recorded actual independent collaboration verdict; not an operator self-review",
+  "evidence_sha256": "f9856027f5a6828cb19bac639a79291fd1a4c6d6cfc538f11b54ed2194208dd2",
+  "checks": [
+    "Executed configuration differs from reviewed configuration only in output prefix",
+    "Reviewed source, checkpoint and review hashes agree",
+    "All seven manifest entries and five module artifacts and logs agree",
+    "283 ordered reports; standard axioms only; duplicate normalized_frame_sites_sound report retained explicitly",
+    "Four validated parent modules reused; OneWayCompletion compiled freshly; resource limits satisfied",
+    "Failed attempts stopped before compilation and grant no evidence"
+  ],
+  "scope": "Modeled source gate adoption only. No Rust, Core correspondence, native/runtime, refinement, N-core or full N2 acceptance.",
+  "findings": []
+}

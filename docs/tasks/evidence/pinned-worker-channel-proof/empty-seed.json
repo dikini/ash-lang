@@ -1,0 +1,27 @@
+{
+  "seed_kind": "empty-registration",
+  "proof_directory": "docs/design/retained-control",
+  "scope": "Truthful empty seed in disposable checkout; no existing module or build inherited.",
+  "registered_order": [],
+  "records": {},
+  "imports": {},
+  "reports": 0,
+  "manifest": {
+    "check.sh": "2c97695fbda9516e894fa4dfd1713f70dee3f38d237e21e003ee9536646a7d62",
+    "lean-toolchain": "3aac669c7a910ec2389f4e4f921b605adf6ebf2d1e0c9b9cd0be4d33f3f5db71"
+  },
+  "version": "Lean (version 4.33.1, x86_64-unknown-linux-gnu, commit 819816b2e0a3bf405af45ae5c7af2491d8f5bee6, Release)",
+  "compiler_library_hashes": {
+    "/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/bin/lean": "e8baaa71855a616dc351028f3ad2200051b0671f423a1696a100e809302d5550",
+    "/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/Init.olean": "9ed3667be31b6ce04b831418a8bc9e99c44804b8ddaf52f6ebbdebfd26d8409e",
+    "/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/Std.olean": "588b5b6ddf35e57a5d542cfb86c8752ddfa5c100eb559e569e90e06a54184f67",
+    "/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/libleanshared_1.so": "2f96493ac9046f64ec7bcb78102a4c1e7cd9a7042487f246af45eda8a96667f5",
+    "/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/libleanshared.so": "23d636cac1cadcba37beac30eff9b9b20d66cee726cf5defb4ae39f1284a3e5a",
+    "/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/libLake_shared.so": "b1d164bf248f35b9e9664e696f4cd05a79a7066065510fb9b459139c78beb354",
+    "/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/libInit_shared.so": "2f96493ac9046f64ec7bcb78102a4c1e7cd9a7042487f246af45eda8a96667f5",
+    "/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/lib/lean/libleanshared_2.so": "2f96493ac9046f64ec7bcb78102a4c1e7cd9a7042487f246af45eda8a96667f5"
+  },
+  "cache": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache",
+  "prior_compiler_pin_evidence": "/home/dikini/Projects/ash-lang/.worktree/m4-pinned-network/docs/tasks/evidence/local-retained-control/c1-model/parent-seed.json",
+  "prior_compiler_pin_evidence_sha256": "bd7e6590bfb2ca0dab265a0562bd1b3e6aa15241d9834355c0c05f8cd4600549"
+}

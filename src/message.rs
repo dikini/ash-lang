@@ -1365,6 +1365,7 @@ messages! {
     /// Source implementations/evidence cannot introduce builtin resource providers.
     resolve_sealed_provider => "resolve-sealed-provider" {},
     resolve_sealed_drive => "resolve-sealed-drive" {},
+    resolve_sealed_network => "resolve-sealed-network" {},
     /// Acquisition requires the corresponding direct builtin import.
     resolve_builtin_required => "resolve-builtin-required" { builtin: &'a str = "@builtin.cell" },
     /// Resume or discard occurs outside an operation clause.

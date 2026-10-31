@@ -618,6 +618,15 @@ fn retained_root_moves_only_the_nearest_associated_clause_owner() {
         machine.control.take(),
         Some(Control::Evaluate(..))
     ));
+    assert!(machine.frames.iter().any(|frame| matches!(
+        frame,
+        Frame::RetainedRootCompletion { key } if *key == activation
+    )));
+    assert!(machine.frames.iter().any(|frame| matches!(
+        frame,
+        Frame::HandlerBoundary { node, retained: Some(key), .. }
+            if *node == handler_node && *key == activation
+    )));
     let handler = machine.handler(handler_node).unwrap().id();
     let owner = machine.handler(handler_node).unwrap().clauses()[0].resume();
     machine

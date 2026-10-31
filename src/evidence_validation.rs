@@ -5356,6 +5356,16 @@ fn collect_method_evidence_expression_occurrences<'a>(
                 pending.push((&store.body, row_head));
                 pending.push((&store.initializer, row_head));
             }
+            ResolvedExprKind::Network(network) => {
+                reserve_method_context_expressions(
+                    &mut pending,
+                    2,
+                    constraint_work,
+                    expression.span,
+                )?;
+                pending.push((&network.body, row_head));
+                pending.push((&network.initializer, row_head));
+            }
             ResolvedExprKind::Cleanup(cleanup) => {
                 reserve_method_context_expressions(
                     &mut pending,
@@ -5627,6 +5637,7 @@ fn authenticate_linked_constructor_payloads<'a>(
 enum LinkedBinderOwner {
     Region(BinderId),
     Store(BinderId),
+    Network(BinderId),
     Resource(crate::interface::LexicalEvidenceId),
 
     LexicalMethod(crate::interface::LexicalEvidenceId, MethodId),
@@ -6269,6 +6280,7 @@ fn validate_pending_expressions<'a, 'body>(
                 if let Some(identity) = match local {
                     LinkedLocalScope::Resource(resource) => Some(resource.identity.id),
                     LinkedLocalScope::Store(store) => Some(store.identity.id),
+                    LinkedLocalScope::Network(network) => Some(network.identity.id),
                     LinkedLocalScope::Region(region) => Some(region.identity.id),
 
                     _ => None,
@@ -6515,6 +6527,63 @@ fn validate_pending_expressions<'a, 'body>(
                     expression.span,
                 )?;
                 pending.push(&acquisition.initializer);
+                resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
+            }
+            ResolvedExprKind::Network(network) => {
+                let canonical = program
+                    .registry()
+                    .type_variable(network.identity.id)
+                    .ok_or_else(|| invalid_root(expression.span))?;
+                charge(
+                    budget,
+                    canonical.spelling.len().saturating_add(2),
+                    expression.span,
+                )?;
+                if !network.acquisition.owns(network)
+                    || canonical.kind != Kind::Type
+                    || canonical.spelling != network.identity.spelling
+                    || canonical.origin.primary_span() != network.identity.origin.primary_span()
+                    || network.acquisition.span != expression.span
+                {
+                    return Err(invalid_root(expression.span));
+                }
+                let mut owners = registry.scoped_type_owners.borrow_mut();
+                owners
+                    .try_reserve(1)
+                    .map_err(|_| resource(expression.span))?;
+                match owners.entry(network.identity.id) {
+                    std::collections::hash_map::Entry::Vacant(slot) => {
+                        slot.insert((
+                            LinkedBinderOwner::Network(network.handle.id),
+                            expression.span,
+                        ));
+                    }
+                    std::collections::hash_map::Entry::Occupied(slot)
+                        if *slot.get()
+                            == (
+                                LinkedBinderOwner::Network(network.handle.id),
+                                expression.span,
+                            ) => {}
+                    _ => return Err(invalid_root(expression.span)),
+                }
+                drop(owners);
+                reserve_expressions(pending, 2, budget, expression.span)?;
+                resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
+                charge(budget, 1, expression.span)?;
+                method_scopes
+                    .try_reserve(1)
+                    .map_err(|_| resource(expression.span))?;
+                let body_scope = Some(method_scopes.len());
+                method_scopes.push((LinkedLocalScope::Network(network), head.1));
+                pending.push(&network.body);
+                resize_lexical_heads(
+                    &mut heads,
+                    pending.len(),
+                    (head.0, body_scope),
+                    budget,
+                    expression.span,
+                )?;
+                pending.push(&network.initializer);
                 resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
             }
             ResolvedExprKind::Store(store) => {
@@ -8075,6 +8144,7 @@ enum LinkedLocalScope<'a> {
     Nominal(NominalTypeId),
     Resource(&'a crate::resolved::ResolvedResourceExpr),
     Store(&'a crate::resolved::ResolvedStoreExpr),
+    Network(&'a crate::resolved::ResolvedNetworkExpr),
     Region(&'a crate::resolved::ResolvedRegionExpr),
 }
 

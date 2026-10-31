@@ -1,0 +1,2 @@
+{"module": "OneWayCompletion", "status": "compiled", "wall_seconds": 229.77107436899678, "peak_rss_kib": 1708856}
+{"modules": 5, "reports": 283, "changed_sources": 1, "affected_consumers": 1, "fresh_consumers": 1, "receipt_cache_hits": 0, "reused": 4, "timing": {"preparation_and_hash_checks_seconds": 0.7675147359987022, "batched_affected_compile_seconds": 230.7393550110064}, "evidence": "/tmp/ash-m4-oneway-gate-870b4f0f-escalated-evidence.json", "evidence_sha256": "f9856027f5a6828cb19bac639a79291fd1a4c6d6cfc538f11b54ed2194208dd2"}

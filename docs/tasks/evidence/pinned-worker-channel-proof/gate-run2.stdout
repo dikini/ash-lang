@@ -1,0 +1,5 @@
+{"module": "Ownership", "status": "cached", "wall_seconds": 0.0, "peak_rss_kib": 578968}
+{"module": "OwnershipExamples", "status": "cached", "wall_seconds": 0.0, "peak_rss_kib": 525500}
+{"module": "DrainSafety", "status": "cached", "wall_seconds": 0.0, "peak_rss_kib": 558000}
+{"module": "WorkerChannel", "status": "compiled", "wall_seconds": 5.1542173160005404, "peak_rss_kib": 850472}
+{"modules": 4, "reports": 153, "changed_sources": 4, "affected_consumers": 4, "fresh_consumers": 1, "receipt_cache_hits": 3, "reused": 3, "timing": {"preparation_and_hash_checks_seconds": 0.45743690000017523, "batched_affected_compile_seconds": 6.116211827999905}, "evidence": "/tmp/ash-m4-n2-gate-eecc-run2-evidence.json", "evidence_sha256": "7912a3af94493e8e9d91f22e39e88f9e9f2011421067e2f52b917a770e0fa3c7"}

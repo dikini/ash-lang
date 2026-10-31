@@ -104,6 +104,21 @@ and release remain the fixed ordinary pair of one successful region setup.
 | CloseBegin | Require that an ordinary result does not depend on the closing region; finish inner cleanup/dependent uses while backing is live. Root observation completes before root close. Begin the saved original release once; its unfinished completion remains required. |
 | CloseFinish | After successful release completion, revoke access and bulk-retire that region's records; restore enclosing control. Other regions/shared allocator state remain valid. Copies of access own no close. |
 
+The canonical `@builtin.integer.split_base256` uses ordinary call-by-value:
+the function and strict `Int` argument evaluate once before builtin entry. It
+then queries and saves the live caller-selected allocation context before
+reading the evaluated integer. For `n < 0`, it constructs `Negative` in that
+context. For `n >= 0`, it returns
+`Parts((q, r))` for the unique mathematical integers `n = 256*q + r`, `q >= 0`
+and `0 <= r < 256`; zero yields `(0, 0)`, and positive `n` has `q < n`.
+There is no native-word cutoff. It charges work and size before proportional
+traversal and allocation. For `Parts`, it initializes any needed quotient digit
+backing, the ordered pair and then the constructor in the saved context; the
+remainder is an immediate byte-valued integer. Each supplied record is fresh,
+compatible and fully initialized before publication. Input storage is unchanged.
+Declared allocation refusal follows ordinary effect/discard rules. Internal
+work, control or storage exhaustion is terminal and produces no normal result.
+
 A successful supplied layout includes the object's complete persistent
 representation: tuple fields, nominal discriminant/payload, actual closure
 captures, and persistent Bytes/String/large-Int backing where applicable.
@@ -783,6 +798,49 @@ does not capture or infer this relation.
 No arbitrary memory read/write, Address-to-Bytes/String conversion, numeric ABI,
 out-pointer storage or compiler-managed foreign lifecycle is supplied. Ordinary
 cleanup and resource completion rules below continue to govern Ash control.
+
+## Pinned network execution
+
+A network acquisition prepares two worker carriers and two positive-capacity
+FIFO byte channels. Each worker runs its own Ash root on one carrier thread; any local Stores
+remain on that carrier. A notification does not move a continuation or Store to
+the other worker. Startup inputs are independently copied. A capacity that cannot be
+represented or prepared fails acquisition without publishing the activation.
+
+`try_send` publishes an Application envelope and `send_control` a Control
+envelope. A successful send commits a channel-owned copy of the whole `Bytes`
+snapshot; `Full` and `Closed` commit no message. Both envelope kinds share a
+FIFO in each direction. `try_receive` returns `Empty`, failure, `End`, or a
+`Message(kind, bytes)` whose kind and opposite sending side come from the
+channel. Before committing a receipt, the interpreter copies its whole bytes
+into the receiving worker's selected region. A failed copy leaves the FIFO head
+available. Transport origin does not establish the meaning or honesty of the
+bytes.
+
+`finish_send` seals the sending polarity after its earlier operations resolve.
+`End` is available only after the opposite send polarity is sealed and its
+accepted queue is empty. `finish_receive` closes the receive polarity only when
+the actual incoming channel is sealed and empty, with no outstanding transport
+operation. This is a transport condition: it does not prove that each received
+message was processed or that its cleanup completed.
+
+`watch` registers a generation-associated interest with a readiness recheck;
+`poll_wake` returns a notification or no wake, and `cancel_watch` prevents new
+notifications for the registration. A wake is a hint and its user rechecks the
+channel. Readable includes a message, End or failure; writable includes an
+available send, Closed or failure. A wake does not restore a different Store
+or confer protocol authority.
+
+A normal `settle` requires both workers to return normally, their endpoint and
+channel operations and registrations to settle, and their carrier-local teardown
+to finish before the carriers join and backing is released. Generic Store and
+cleanup rules still apply. An unfinished endpoint, worker or backing user cannot
+be converted to successful settlement by an ordinary Boolean or result value.
+Terminal failure can retain the affected worker and transport support and report
+incomplete teardown; it does not claim successful cleanup. Native bindings and
+host synchronization remain trusted boundaries. This execution does not promise
+fair scheduling, deadlock freedom, termination, worker recovery or native memory
+safety.
 
 ## Effect handlers and completion
 

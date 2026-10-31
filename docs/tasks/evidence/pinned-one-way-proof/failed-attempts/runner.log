@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/home/dikini/.codex/worktrees/m4-n3-contract-delivery/ash-lang/tools/lean/integrate.py", line 178, in <module>
+    os.link(artifact, cache / artifact.name)
+OSError: [Errno 18] Invalid cross-device link: '/tmp/ash-m4-n2-gate-eecc-run2-review-cache/Ownership.olean' -> '/home/dikini/Projects/ash-lang/.worktree/m4-pinned-network/target/ash-m4-evidence/n2-one-way-integration-inputs/gate-review-cache/Ownership.olean'

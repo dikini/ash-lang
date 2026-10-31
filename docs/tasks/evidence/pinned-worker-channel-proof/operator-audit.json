@@ -1,0 +1,224 @@
+{
+  "reviewed_commit": "eecc85178641f4eaf41cae696653e80003c24432",
+  "status": "verified",
+  "compiler": "Lean (version 4.33.1, x86_64-unknown-linux-gnu, commit 819816b2e0a3bf405af45ae5c7af2491d8f5bee6, Release)",
+  "order": [
+    "Ownership",
+    "OwnershipExamples",
+    "DrainSafety",
+    "WorkerChannel"
+  ],
+  "report_counts": {
+    "Ownership": 18,
+    "OwnershipExamples": 31,
+    "DrainSafety": 33,
+    "WorkerChannel": 71
+  },
+  "axioms_observed": [
+    "Classical.choice",
+    "Quot.sound",
+    "propext"
+  ],
+  "axioms_allowed": [
+    "Classical.choice",
+    "Quot.sound",
+    "propext"
+  ],
+  "cache_hits": [
+    "Ownership",
+    "OwnershipExamples",
+    "DrainSafety"
+  ],
+  "fresh_compilation": [
+    "WorkerChannel"
+  ],
+  "generated_check_script": "exact reviewed baseline plus WorkerChannel registration",
+  "assertions": "Source snapshots equal reviewed git commit and supplied source pins; all report names/order and permitted axioms verified from logs; compiler/library, manifest, output artifacts, logs, seed, config and review hashes verified; copied bytes rehashed. The first run was resource-blocked before any compilation.",
+  "files": [
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-evidence.json",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/gate/evidence.json",
+      "sha256": "7912a3af94493e8e9d91f22e39e88f9e9f2011421067e2f52b917a770e0fa3c7"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-manifest.json",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/gate/manifest.json",
+      "sha256": "053c560574006262bcea12a3dd82a42fb626d33f6fb54025f55db1d2ca6881ed"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-module-progress.json",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/gate/module-progress.json",
+      "sha256": "dafaf732a663a5321a733e69962931916191996c811b9063e99ed502ebd60bd6"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-productive-replay.sh",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/gate/productive-replay.sh",
+      "sha256": "9098de6787fb5a7863e2c8a2eff774faa5d047accab9110837be518389652688"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-proof.log",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/gate/proof.log",
+      "sha256": "73c72de375a1426eb965afb7bb171dd685a4a58f0952a8f1fb8f79910dcf61ec"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-inputs-eecc/config-run2.json",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/inputs/config-run2.json",
+      "sha256": "455ccd91888c3696dace5a1e76fcf003527399cc06dd590e6e9de5a47de0659e"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-inputs-eecc/config.json",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/inputs/config.json",
+      "sha256": "107641ab08cf7b87ee79cbaa6c0273ff0e1c7f1ba070433b40ab98f735681847"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-inputs-eecc/checkpoint.json",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/inputs/checkpoint.json",
+      "sha256": "78faef94ea70f228bab3f34000fc1302b4002ad834fb2c4e340bc4d57fffb45a"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-inputs-eecc/empty-seed.json",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/inputs/empty-seed.json",
+      "sha256": "5be070ee96ea1e4333c988be47e2e99bd5b6e804e26e68bb2f74c0301b97b0f1"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-inputs-eecc/gate-run2.stdout",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/inputs/gate-run2.stdout",
+      "sha256": "655054a79207fda1a787281db35a790be7965b6cd7ac04c692f29760f6730250"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-inputs-eecc/gate.stdout",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/inputs/gate.stdout",
+      "sha256": "be12ebffb6375a8facfbac2a4471ba647631d5f21900f8681c6f82888c68a76b"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-inputs-eecc/prepare.py",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/inputs/prepare.py",
+      "sha256": "403ba6157249dd4eccfba7fd1bba4e87c9b01e3466666ddc0e660d4c65830272"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-inputs-eecc/worker-channel-correspondence.md",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/inputs/worker-channel-correspondence.md",
+      "sha256": "751a1b77f3217fa1fa43f17a3085abe76ad34292f65666ac5be949a67c32ab29"
+    },
+    {
+      "original": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/worker-channel-source-review-eecc8517.json",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/inputs/source-review.json",
+      "sha256": "b435d4733ff5bd0b52f3f72c5bd9878d0ccdd698b612584a2e87ea439578dc56"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-source-snapshot/lean-toolchain",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/source-snapshot/lean-toolchain",
+      "sha256": "3aac669c7a910ec2389f4e4f921b605adf6ebf2d1e0c9b9cd0be4d33f3f5db71"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-source-snapshot/check.sh",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/source-snapshot/check.sh",
+      "sha256": "8462e85b6a595d15238f5883d6b9099de5aa6fb8c7f8c91e7fba2738901f74ab"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-source-snapshot/WorkerChannel.lean",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/source-snapshot/WorkerChannel.lean",
+      "sha256": "d31d533006014f51865324b00799e5731ac909024a5b51e55e5071f4a9fac29b"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-source-snapshot/DrainSafety.lean",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/source-snapshot/DrainSafety.lean",
+      "sha256": "c676f253d761fe44dbf9d1d9240a6a6451affbfc410f60bbaaf6986d1fba6677"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-source-snapshot/OwnershipExamples.lean",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/source-snapshot/OwnershipExamples.lean",
+      "sha256": "0ca6f7915479fca02a8abc8099e845b27a6706e2030ea51a8350d44f7b194c99"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-source-snapshot/Ownership.lean",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/source-snapshot/Ownership.lean",
+      "sha256": "5103f2a5b155da16d98b75d8d65a8cb0edd9bf9056c2de033f35efe3e81b71ee"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-review-cache/WorkerChannel.olean",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/review-cache/WorkerChannel.olean",
+      "sha256": "09e1ce09b2346330ce5c043590810377ecee9f036b0ddaee1d94787c0c7141c6"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-review-cache/WorkerChannel.log",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/review-cache/WorkerChannel.log",
+      "sha256": "2c1faed1e0b81c408cdf31870244f5a822037965c568ec110aa5936b9b659989"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-review-cache/DrainSafety.log",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/review-cache/DrainSafety.log",
+      "sha256": "1a3fd523c8e61ca4828fd6418b6482649faf1fcf05f9a84c036812c0e1af0c50"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-review-cache/DrainSafety.olean",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/review-cache/DrainSafety.olean",
+      "sha256": "36c29ce221e6c3edc1204ec55a2f3725d96d14ef3ee7c39d38eadec194490216"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-review-cache/OwnershipExamples.log",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/review-cache/OwnershipExamples.log",
+      "sha256": "e70c6dd746b77459488acec3ae1fe5198a24822fb91afdd5ed126ace542b2c3e"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-review-cache/OwnershipExamples.olean",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/review-cache/OwnershipExamples.olean",
+      "sha256": "43bafc70d010c58c4c7aa367caebf3b4abcd54e12e93b351b440ecb96425b9d1"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-review-cache/Ownership.log",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/review-cache/Ownership.log",
+      "sha256": "729df22023784976e6a8fd3cf14db587677866b7ae37a20b9f532a757e877255"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run2-review-cache/Ownership.olean",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/review-cache/Ownership.olean",
+      "sha256": "320c06ef021f1e4df1d74e8b0d2327a16e96cc06d79a31ca6ae1b2a65b4fed37"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-inputs-eecc/sources/WorkerChannel.lean",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/inputs/sources/WorkerChannel.lean",
+      "sha256": "d31d533006014f51865324b00799e5731ac909024a5b51e55e5071f4a9fac29b"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-inputs-eecc/sources/DrainSafety.lean",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/inputs/sources/DrainSafety.lean",
+      "sha256": "c676f253d761fe44dbf9d1d9240a6a6451affbfc410f60bbaaf6986d1fba6677"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-inputs-eecc/sources/OwnershipExamples.lean",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/inputs/sources/OwnershipExamples.lean",
+      "sha256": "0ca6f7915479fca02a8abc8099e845b27a6706e2030ea51a8350d44f7b194c99"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-inputs-eecc/sources/Ownership.lean",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/inputs/sources/Ownership.lean",
+      "sha256": "5103f2a5b155da16d98b75d8d65a8cb0edd9bf9056c2de033f35efe3e81b71ee"
+    },
+    {
+      "original": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/7600aff46333c73025182f5127963e8fc2710c7256b140b1829169c01704da78/receipt.json",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/cache-receipts/Ownership.json",
+      "sha256": "ab0a9578fe7243ee6fdc32970b8a1b6cfd505ac44cf1f28265c0f6a21de2146c"
+    },
+    {
+      "original": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/a5663d4a72094b3ceeabb5de919897e8bbfada0d7f6eac4e242b9ab86773f868/receipt.json",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/cache-receipts/OwnershipExamples.json",
+      "sha256": "f31761c092df8ef282767eb11eb4dab1d670aad5a05af3671ff6304f53918a61"
+    },
+    {
+      "original": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/663fe2b7e63be331ce245d246626334b68e7307162ddd2c8d27d7d72c76277ef/receipt.json",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/cache-receipts/DrainSafety.json",
+      "sha256": "d96ab97e611daca169bdb6e12d6e3ffb243ed17bd706b05031270f2bff419cb2"
+    },
+    {
+      "original": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache/6cd015c437f295c30bfefa3589d70256cebdc63544848ecb83feb0c652b5369b/receipt.json",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/cache-receipts/WorkerChannel.json",
+      "sha256": "0357aeee419c5ff43190f630c58cc624c8510b8bdd74b8e27196a6fa439d2861"
+    },
+    {
+      "original": "/tmp/ash-m4-n2-gate-eecc-run1-module-progress.json",
+      "saved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/ash-m4-evidence/n2-frozen-eecc-run2/inputs/run1-module-progress.json",
+      "sha256": "ad4405a3bd89c38aa44cf1dbffb823848aa4a5fdd3bc5fc5ff3cf91f4429d3de"
+    }
+  ]
+}

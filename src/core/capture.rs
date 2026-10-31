@@ -14,7 +14,9 @@ use std::{
 
 mod control;
 mod value;
-use control::{Analysis, Clause, Control, copy_slice, query_required};
+use control::{
+    Analysis, Clause, Control, NetworkEventStage, NetworkOutcome, copy_slice, query_required,
+};
 
 use super::{
     CoreBuilder, NodeId, PureComputation, PureExprKind, PureValue,
@@ -1657,6 +1659,13 @@ impl<'a, F: CoreOperationFamily> FunctionMetadataPreparation<'a, F> {
                     .map_err(|_| Failure::Resource)?;
                 preparation.bound.push(store.acquisition.identity);
             }
+            if let Some(EffectOperation::Network(network)) = (self.operation)(&node.kind) {
+                preparation
+                    .bound
+                    .try_reserve(1)
+                    .map_err(|_| Failure::Resource)?;
+                preparation.bound.push(network.acquisition.identity);
+            }
             if let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
                 F::pure(&node.kind)
             {
@@ -1808,6 +1817,9 @@ impl<'a, F: CoreOperationFamily> FunctionMetadataPreparation<'a, F> {
         if let Some(EffectOperation::Store(store)) = (self.operation)(&node.kind) {
             retain_type_variables(&mut header, store.handle.ty(), budget)?;
         }
+        if let Some(EffectOperation::Network(network)) = (self.operation)(&node.kind) {
+            retain_type_variables(&mut header, network.handle.ty(), budget)?;
+        }
         if let Some(EffectOperation::Handler(handler)) = (self.operation)(&node.kind) {
             for argument in handler.effect().arguments() {
                 retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
@@ -1860,6 +1872,9 @@ impl NodeMetadataHeaders {
         retain_row_variables(&mut header, F::effect_row(&node.effects), budget)?;
         if let Some(EffectOperation::Store(store)) = operation(&node.kind) {
             retain_type_variables(&mut header, store.handle.ty(), budget)?;
+        }
+        if let Some(EffectOperation::Network(network)) = operation(&node.kind) {
+            retain_type_variables(&mut header, network.handle.ty(), budget)?;
         }
         if let Some(EffectOperation::Handler(handler)) = operation(&node.kind) {
             for argument in handler.effect().arguments() {
@@ -1934,6 +1949,10 @@ fn retain_function_metadata<F: CoreOperationFamily>(
         if let Some(EffectOperation::Store(store)) = operation(&node.kind) {
             bound.try_reserve(1).map_err(|_| Failure::Resource)?;
             bound.push(store.acquisition.identity);
+        }
+        if let Some(EffectOperation::Network(network)) = operation(&node.kind) {
+            bound.try_reserve(1).map_err(|_| Failure::Resource)?;
+            bound.push(network.acquisition.identity);
         }
         if let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
             F::pure(&node.kind)
@@ -2028,7 +2047,17 @@ fn compile<F: CoreOperationFamily>(
     data: &mut value::Graph,
     budget: &mut TypeWorkBudget,
 ) -> Result<(SummaryGraph, Vec<usize>), Failure> {
-    compile_with_boundary(nodes, values, &[], imported, operation, data, None, budget)
+    compile_with_boundary(
+        nodes,
+        values,
+        &[],
+        imported,
+        operation,
+        data,
+        None,
+        None,
+        budget,
+    )
 }
 
 // Import copying completes before per-node control construction, so its
@@ -2257,6 +2286,186 @@ fn compile_pure_capture_control<F: CoreOperationFamily>(
     })
 }
 
+#[derive(Clone, Copy)]
+struct NetworkPath {
+    observed: NetworkOutcome,
+    allocations: usize,
+    commit: bool,
+    failure_after: bool,
+    reply: NetworkOutcome,
+}
+
+const fn network_path(
+    observed: NetworkOutcome,
+    allocations: usize,
+    commit: bool,
+    failure_after: bool,
+    reply: NetworkOutcome,
+) -> NetworkPath {
+    NetworkPath {
+        observed,
+        allocations,
+        commit,
+        failure_after,
+        reply,
+    }
+}
+
+fn network_control_event(
+    graph: &mut SummaryGraph,
+    data: &mut value::Graph,
+    node: NodeId,
+    id: usize,
+    stage: NetworkEventStage,
+    outcome: NetworkOutcome,
+    budget: &mut TypeWorkBudget,
+) -> Result<usize, Failure> {
+    charge(budget, 1)?;
+    graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+    let code = graph.code.len();
+    data.position(code, id, budget)?;
+    graph.code.push(Control::NetworkEvent {
+        operation: node,
+        operation_control: id.checked_add(1).ok_or(Failure::Resource)?,
+        stage,
+        outcome,
+    });
+    Ok(code)
+}
+
+// Preserve host observations and successful replies as distinct control
+// points. The event's arena is a candidate until linked validation checks it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Lowering retains the original node, route and budget inputs"
+)]
+fn network_control_paths(
+    graph: &mut SummaryGraph,
+    data: &mut value::Graph,
+    node: NodeId,
+    id: usize,
+    service: usize,
+    operation: u32,
+    join: bool,
+    budget: &mut TypeWorkBudget,
+) -> Result<usize, Failure> {
+    use NetworkOutcome::{
+        CancelFailed, Cancelled, Closed, Empty, End, Failure as FailedOutcome, Finished, Full,
+        Message, NoWake, Sent, Wake, WakeFailed, WatchFailed, Watching,
+    };
+    let paths: &[NetworkPath] = match (join, operation) {
+        // Join currently returns only Failed(IncompleteTeardown), after its
+        // failure payload and result have both been constructed.
+        (true, 1) => &[network_path(FailedOutcome, 2, false, false, FailedOutcome)],
+        (false, 1 | 8) => &[
+            network_path(Sent, 1, false, false, Sent),
+            network_path(Full, 1, false, false, Full),
+            network_path(Closed, 1, false, false, Closed),
+            network_path(FailedOutcome, 2, false, false, FailedOutcome),
+        ],
+        (false, 2) => &[
+            network_path(Message, 4, true, false, Message),
+            network_path(Empty, 1, false, false, Empty),
+            network_path(End, 1, false, false, End),
+            network_path(FailedOutcome, 2, false, false, FailedOutcome),
+            network_path(Message, 0, false, true, FailedOutcome),
+            network_path(Message, 4, false, true, FailedOutcome),
+        ],
+        (false, 3) => &[
+            network_path(Finished, 1, false, false, Finished),
+            network_path(FailedOutcome, 2, false, false, FailedOutcome),
+        ],
+        // The current runtime has no checked completion path yet.
+        (false, 7) => &[network_path(FailedOutcome, 2, false, false, FailedOutcome)],
+        (false, 4) => &[
+            network_path(Watching, 1, false, false, Watching),
+            network_path(Watching, 1, false, true, WatchFailed),
+            network_path(WatchFailed, 2, false, false, WatchFailed),
+        ],
+        (false, 5) => &[
+            network_path(Cancelled, 1, false, false, Cancelled),
+            network_path(CancelFailed, 2, false, false, CancelFailed),
+        ],
+        (false, 6) => &[
+            network_path(Wake, 1, false, false, Wake),
+            network_path(NoWake, 1, false, false, NoWake),
+            network_path(WakeFailed, 2, false, false, WakeFailed),
+        ],
+        _ => return Err(Failure::Invalid),
+    };
+    charge(budget, paths.len())?;
+    let mut branches = Vec::new();
+    branches
+        .try_reserve_exact(paths.len())
+        .map_err(|_| Failure::Resource)?;
+    for path in paths {
+        let count = path
+            .allocations
+            .checked_add(if path.failure_after { 5 } else { 2 })
+            .and_then(|n| n.checked_add(usize::from(path.commit)))
+            .ok_or(Failure::Resource)?;
+        charge(budget, count)?;
+        let mut children = Vec::new();
+        children
+            .try_reserve_exact(count)
+            .map_err(|_| Failure::Resource)?;
+        children.push(network_control_event(
+            graph,
+            data,
+            node,
+            id,
+            NetworkEventStage::Observed,
+            path.observed,
+            budget,
+        )?);
+        children.extend(std::iter::repeat_n(service, path.allocations));
+        if path.commit {
+            children.push(network_control_event(
+                graph,
+                data,
+                node,
+                id,
+                NetworkEventStage::MessageCommit,
+                Message,
+                budget,
+            )?);
+        }
+        if path.failure_after {
+            children.push(network_control_event(
+                graph,
+                data,
+                node,
+                id,
+                NetworkEventStage::Observed,
+                FailedOutcome,
+                budget,
+            )?);
+            children.extend([service, service]);
+        }
+        children.push(network_control_event(
+            graph,
+            data,
+            node,
+            id,
+            NetworkEventStage::Reply,
+            path.reply,
+            budget,
+        )?);
+        charge(budget, 1)?;
+        graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+        let sequence = graph.code.len();
+        data.position(sequence, id, budget)?;
+        graph.code.push(Control::Sequence(children));
+        branches.push(sequence);
+    }
+    charge(budget, 1)?;
+    graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+    let choice = graph.code.len();
+    data.position(choice, id, budget)?;
+    graph.code.push(Control::Choice(branches));
+    Ok(choice)
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "capture control construction borrows nodes, metadata and the existing work owner"
@@ -2274,12 +2483,47 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
     budget: &mut TypeWorkBudget,
 ) -> Result<Control, Failure> {
     Ok(match operation {
+        Some(EffectOperation::Network(network)) => {
+            let api = crate::resolved::NetworkApi::for_module(network.acquisition.builtin)
+                .ok_or(Failure::Invalid)?;
+            charge(budget, 3)?;
+            graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+            let scope = graph.code.len();
+            data.position(scope, id, budget)?;
+            let join = EffectInstance::new(
+                api.join(),
+                Box::new([Type::Variable(network.acquisition.identity)]),
+            );
+            graph.code.push(Control::Resource {
+                body: index(network.body) + 1,
+                effect: Request::effect(&join, network.acquisition.span, budget)?,
+            });
+            Control::Sequence(copy_slice(
+                &[
+                    index(network.capacity) + 1,
+                    index(network.inputs[0]) + 1,
+                    index(network.inputs[1]) + 1,
+                    scope,
+                ],
+                budget,
+            )?)
+        }
         Some(EffectOperation::RegionValueRequest(_)) => Control::Return,
         Some(EffectOperation::RegionBuffer(buffer)) => {
             use crate::core::{packed::Intrinsic, region::RegionBufferOperation};
             let api = crate::resolved::RegionApi::for_module(buffer.api).ok_or(Failure::Invalid)?;
-            charge(budget, 3)?;
-            graph.code.try_reserve(3).map_err(|_| Failure::Resource)?;
+            let nodes = if matches!(&buffer.operation, RegionBufferOperation::Intrinsic(intrinsic)
+                if matches!(intrinsic.operation(), Intrinsic::IntegerSplit256 { .. }))
+            {
+                4
+            } else {
+                3
+            };
+            charge(budget, nodes)?;
+            graph
+                .code
+                .try_reserve(nodes)
+                .map_err(|_| Failure::Resource)?;
             let service = graph.code.len();
             data.position_region_request(service, id, index(buffer.context), budget)?;
             let mut request = Request::effect(
@@ -2290,7 +2534,53 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
             request.operation = Some(crate::types::OperationId::new(api.default_alloc(), 0));
             request.region_service = true;
             graph.code.push(Control::Request(request));
-            let service = if matches!(&buffer.operation,RegionBufferOperation::Intrinsic(intrinsic) if matches!(intrinsic.operation(),Intrinsic::BytesAppendByte {..}|Intrinsic::StringFromUtf8 {..}))
+            let service = if let RegionBufferOperation::Network { effect, operation } =
+                &buffer.operation
+            {
+                let network = crate::resolved::NetworkApi::for_module(effect.effect().module())
+                    .ok_or(Failure::Invalid)?;
+                let join = if effect.effect() == network.join() {
+                    true
+                } else if effect.effect() == network.io() {
+                    false
+                } else {
+                    return Err(Failure::Invalid);
+                };
+                let node = NodeId::new(
+                    buffer.context.arena(),
+                    u32::try_from(id).map_err(|_| Failure::Resource)?,
+                );
+                network_control_paths(
+                    graph,
+                    data,
+                    node,
+                    id,
+                    service,
+                    operation.operation(),
+                    join,
+                    budget,
+                )?
+            } else if matches!(&buffer.operation, RegionBufferOperation::Intrinsic(intrinsic) if matches!(intrinsic.operation(), Intrinsic::IntegerSplit256 { .. }))
+            {
+                let twice = graph.code.len();
+                data.position(twice, id, budget)?;
+                graph
+                    .code
+                    .push(Control::Sequence(copy_slice(&[service, service], budget)?));
+                let thrice = graph.code.len();
+                data.position(thrice, id, budget)?;
+                graph.code.push(Control::Sequence(copy_slice(
+                    &[service, service, service],
+                    budget,
+                )?));
+                let either = graph.code.len();
+                data.position(either, id, budget)?;
+                graph.code.push(Control::Choice(copy_slice(
+                    &[service, twice, thrice],
+                    budget,
+                )?));
+                either
+            } else if matches!(&buffer.operation,RegionBufferOperation::Intrinsic(intrinsic) if matches!(intrinsic.operation(),Intrinsic::BytesAppendByte {..}|Intrinsic::StringFromUtf8 {..}))
             {
                 let twice = graph.code.len();
                 data.position(twice, id, budget)?;
@@ -2678,6 +2968,7 @@ fn compile_with_boundary<F: CoreOperationFamily>(
     operation: fn(&F::Kind) -> Option<&EffectOperation>,
     data: &mut value::Graph,
     domain: Option<&HashSet<usize>>,
+    preserve_case: Option<usize>,
     budget: &mut TypeWorkBudget,
 ) -> Result<(SummaryGraph, Vec<usize>), Failure> {
     let mut graph = SummaryGraph {
@@ -2828,7 +3119,9 @@ fn compile_with_boundary<F: CoreOperationFamily>(
             if let Control::Sequence(children) | Control::Choice(children) = &graph.code[id] {
                 // A pure match can still produce the case observed by a
                 // later Store probe check. Preserve that result port.
-                if data.case_result_required(id) {
+                if data.case_result_required(id)
+                    || preserve_case.is_some_and(|original| data.position_is_original(id, original))
+                {
                     continue;
                 }
                 charge(budget, children.len())?;
@@ -3167,6 +3460,26 @@ fn build_capture_graph<F: CoreOperationFamily>(
     domain: Option<&HashSet<usize>>,
     budget: &mut TypeWorkBudget,
 ) -> Result<Option<BuiltCaptureGraph>, Failure> {
+    build_capture_graph_preserving_case(
+        nodes, globals, imports, operation, methods, adapters, domain, None, budget,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the private checked codec match is an additional exact graph input"
+)]
+fn build_capture_graph_preserving_case<F: CoreOperationFamily>(
+    nodes: &[StoredNode<F>],
+    globals: &[(BinderId, NodeId)],
+    imports: &[(BinderId, &CaptureValueSummary)],
+    operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    methods: &[MethodUse],
+    adapters: &[MethodAdapter],
+    domain: Option<&HashSet<usize>>,
+    preserve_case: Option<usize>,
+    budget: &mut TypeWorkBudget,
+) -> Result<Option<BuiltCaptureGraph>, Failure> {
     charge(budget, nodes.len() + globals.len())?;
     let mut bindings = HashMap::new();
     bindings
@@ -3193,6 +3506,9 @@ fn build_capture_graph<F: CoreOperationFamily>(
             }
             if let Some(EffectOperation::Store(store)) = operation(&node.kind) {
                 resource_scope.get_or_insert(store.acquisition.span);
+            }
+            if let Some(EffectOperation::Network(network)) = operation(&node.kind) {
+                resource_scope.get_or_insert(network.acquisition.span);
             }
             if let Some(EffectOperation::Registration(scope)) = operation(&node.kind) {
                 resource_scope.get_or_insert(scope.span);
@@ -3260,7 +3576,15 @@ fn build_capture_graph<F: CoreOperationFamily>(
         nodes, globals, imports, &imported, operation, methods, adapters, domain, budget,
     )?;
     let (mut graph, roots) = compile_with_boundary(
-        nodes, &values, globals, &imported, operation, &mut data, domain, budget,
+        nodes,
+        &values,
+        globals,
+        &imported,
+        operation,
+        &mut data,
+        domain,
+        preserve_case,
+        budget,
     )?;
     graph.data = Some(Arc::new(data));
     Ok(Some(BuiltCaptureGraph {
@@ -3426,6 +3750,9 @@ fn solve_capture_values<F: CoreOperationFamily>(
                     }
                     Some(EffectOperation::Store(store)) => {
                         value = values[index(store.body)].copy(budget)?;
+                    }
+                    Some(EffectOperation::Network(network)) => {
+                        value = values[index(network.body)].copy(budget)?;
                     }
                     Some(EffectOperation::RetainedRoot(root)) => {
                         value = values[index(root.handler)].copy(budget)?;
@@ -4694,6 +5021,61 @@ mod tests {
         panic!("entry module is present");
     }
 
+    // Use the public driver's source-closure allowance for this larger
+    // fixture, sharing the type-work ledger across its dependency graph.
+    fn checked_codec_entry_with_dependencies(
+        graph: &crate::module::ModuleGraph,
+    ) -> (
+        crate::resolved::CheckedModule,
+        Vec<crate::resolved::CheckedModule>,
+    ) {
+        use crate::resolve::{DependencyExports, resolve_module};
+        let (mut work, source_bytes) = crate::compiler_work::source_work(graph).unwrap();
+        let mut coverage = crate::pattern::UsefulnessBudget::default();
+        let mut constraints = crate::interface::InterfaceConstraintBudget::default();
+        let primary = crate::calibration::limit(
+            crate::compiler_work::primary_total(source_bytes).unwrap(),
+            crate::calibration::DiagnosticOwner::Structural,
+        );
+        let rewrite = crate::calibration::limit(
+            crate::compiler_work::rewrite_total(source_bytes).unwrap(),
+            crate::calibration::DiagnosticOwner::Structural,
+        );
+        let mut checked = Vec::<crate::resolved::CheckedModule>::new();
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|item| item.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(module, &dependencies).unwrap();
+            let item = crate::elaborate::check_module_with_budget_and_rewrite_work(
+                resolved,
+                &mut work,
+                &mut coverage,
+                &mut constraints,
+                Some(TypeWorkBudget::with_limit(primary)),
+                Some(TypeWorkBudget::with_limit(rewrite)),
+            )
+            .expect("codec source must fit the resident-closure allowance");
+            if module.id() == graph.entry() {
+                return (item, checked);
+            }
+            checked.push(item);
+        }
+        panic!("entry module is present");
+    }
+
     fn validate_checked_core(
         core: super::super::effect::UnvalidatedEffectProgram,
         provenance: &[(crate::module::ModuleId, SourceFile)],
@@ -5255,6 +5637,43 @@ mod tests {
         super::super::UnvalidatedEffectProgram,
         Vec<(crate::module::ModuleId, SourceFile)>,
     ) {
+        let (core, provenance, _) = retained_drain_fixture_with_linked(source);
+        (core, provenance)
+    }
+
+    pub(super) fn retained_drain_fixture_with_linked(
+        source: &str,
+    ) -> (
+        super::super::UnvalidatedEffectProgram,
+        Vec<(crate::module::ModuleId, SourceFile)>,
+        crate::evidence_validation::ValidatedInterfaceProgram,
+    ) {
+        retained_drain_fixture_with_helper(
+            source,
+            include_str!("../../tests/fixtures/pinned-network/worker_helper.ash"),
+        )
+    }
+
+    fn retained_drain_fixture_with_helper(
+        source: &str,
+        worker_helper: &str,
+    ) -> (
+        super::super::UnvalidatedEffectProgram,
+        Vec<(crate::module::ModuleId, SourceFile)>,
+        crate::evidence_validation::ValidatedInterfaceProgram,
+    ) {
+        retained_drain_fixture_with_modules(source, worker_helper, None)
+    }
+
+    fn retained_drain_fixture_with_modules(
+        source: &str,
+        worker_helper: &str,
+        ledger_module: Option<&str>,
+    ) -> (
+        super::super::UnvalidatedEffectProgram,
+        Vec<(crate::module::ModuleId, SourceFile)>,
+        crate::evidence_validation::ValidatedInterfaceProgram,
+    ) {
         use crate::{
             elaborate::{EffectElaborator, check_module, link_modules},
             evidence_validation::validate_interface_evidence,
@@ -5270,16 +5689,44 @@ mod tests {
         ));
         std::fs::create_dir(&directory).unwrap();
         std::fs::write(directory.join("entry.ash"), source).unwrap();
+        if let Some(ledger_module) = ledger_module {
+            std::fs::write(directory.join("ledger_helper.ash"), ledger_module).unwrap();
+        }
         std::fs::write(
             directory.join("probe_helper.ash"),
             include_str!("../../tests/fixtures/retained-drain/probe_helper.ash"),
         )
         .unwrap();
+        std::fs::write(directory.join("worker_helper.ash"), worker_helper).unwrap();
+        std::fs::write(
+            directory.join("network_codec.ash"),
+            include_str!("../../libraries/network_codec.ash"),
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("network_types.ash"),
+            include_str!("../../libraries/network_types.ash"),
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("network_native.ash"),
+            include_str!("../../tests/fixtures/pinned-network/network_native.ash"),
+        )
+        .unwrap();
         let loaded = load_module_graph(&directory.join("entry.ash"), &ModuleRoots::empty());
         std::fs::remove_dir_all(directory).unwrap();
         let graph = loaded.unwrap();
-        let (resolved, mut dependencies) = resolved_entry_with_checked_dependencies(&graph);
-        let checked = check_module(resolved).expect("source fixture must elaborate");
+        let (checked, mut dependencies) = if worker_helper.contains("import network_codec as Codec")
+            || source.contains("import network_codec as Codec")
+        {
+            checked_codec_entry_with_dependencies(&graph)
+        } else {
+            let (resolved, dependencies) = resolved_entry_with_checked_dependencies(&graph);
+            (
+                check_module(resolved).expect("source fixture must elaborate"),
+                dependencies,
+            )
+        };
         let main = checked
             .schemes()
             .iter()
@@ -5312,7 +5759,352 @@ mod tests {
             .iter()
             .map(|module| (module.id(), module.source().clone()))
             .collect();
-        (core, provenance)
+        (core, provenance, linked)
+    }
+
+    #[test]
+    fn linked_store_generative_identity_rejects_forgery() {
+        use super::super::effect::EffectExprKind;
+        let source = include_str!("../../tests/fixtures/pinned-network/one-way.ash");
+        let (mut core, provenance, linked) = retained_drain_fixture_with_linked(source);
+        let owner_index = core
+            .nodes
+            .iter()
+            .position(|node| {
+                matches!(
+                    &node.kind,
+                    EffectExprKind::Operation(EffectOperation::Network(_))
+                )
+            })
+            .expect("the linked fixture has its Network owner");
+        let owner = NodeId::new(core.arena, u32::try_from(owner_index).unwrap());
+        let store_index = core
+            .nodes
+            .iter()
+            .position(|node| {
+                matches!(
+                    &node.kind,
+                    EffectExprKind::Operation(EffectOperation::Store(_))
+                )
+            })
+            .expect("the Message arm contains its Store");
+        let EffectExprKind::Operation(EffectOperation::Store(store)) =
+            &mut core.nodes[store_index].kind
+        else {
+            unreachable!();
+        };
+        let acquisition = store.acquisition;
+        store.acquisition.identity = crate::types::TypeVariableId::generated(u32::MAX);
+        let mut forged_work = TypeWorkBudget::with_limit(10_000_000);
+        let forged = super::super::validate::network_spine_for_completion_diagnostic(
+            &core,
+            &provenance,
+            &linked,
+            owner,
+            &mut forged_work,
+        );
+        assert!(
+            matches!(
+                forged,
+                Err(error) if error.reason() == super::super::validate::ValidationReason::Registry
+            ),
+            "a forged Store acquisition cannot authenticate the spine"
+        );
+        let EffectExprKind::Operation(EffectOperation::Store(store)) =
+            &mut core.nodes[store_index].kind
+        else {
+            unreachable!();
+        };
+        store.acquisition = acquisition;
+        let mut work = TypeWorkBudget::with_limit(10_000_000);
+        super::super::validate::network_spine_for_completion_diagnostic(
+            &core,
+            &provenance,
+            &linked,
+            owner,
+            &mut work,
+        )
+        .expect("the actual Store and linked worker spine authenticate");
+    }
+
+    fn native_one_way_source() -> String {
+        include_str!("../../tests/fixtures/pinned-network/one-way.ash")
+            .replace(
+                "main : Unit -> Int\n",
+                "main : Unit -> Int ! {Native.EchoBytes}\n",
+            )
+            .replace(
+                "main () = {\n",
+                "main () = {\n    let _ = perform Native.EchoBytes.call (ByteOps.empty ())\n",
+            )
+    }
+
+    #[test]
+    fn linked_native_worker_fixture_supplies_native_interpretation() {
+        use super::super::effect::EffectExprKind;
+        use crate::foreign::{
+            checked_source::NativeResult,
+            source_bindings::SourceNativeBindings,
+            source_runtime::{NativeArgument, NativeCallError, NativeReply},
+        };
+        fn fixture_network_bytes(args: &[NativeArgument]) -> Result<NativeReply, NativeCallError> {
+            let [_] = args else {
+                return Err(NativeCallError);
+            };
+            Ok(NativeReply::Void)
+        }
+        let source = native_one_way_source();
+        let (core, provenance, linked) = retained_drain_fixture_with_linked(&source);
+        let EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) =
+            &core.nodes[index(core.root)].kind
+        else {
+            panic!("actual native interpretation")
+        };
+        let [interpretation] = boundary.interpretations() else {
+            panic!("unique native interpretation")
+        };
+        let symbol = interpretation.symbol();
+        assert_eq!(symbol.result(), NativeResult::Void);
+        assert!(std::sync::Arc::ptr_eq(
+            core.registry.native_symbol(symbol.operation()).unwrap(),
+            symbol
+        ));
+        let mut bindings = SourceNativeBindings::default();
+        let mut binding_work = TypeWorkBudget::unbounded();
+        bindings
+            .insert(
+                std::sync::Arc::clone(symbol),
+                fixture_network_bytes,
+                &mut binding_work,
+            )
+            .unwrap();
+        assert!(bindings.contains_checked_symbol(symbol));
+        assert_eq!(
+            bindings
+                .invoke(symbol, &[NativeArgument(std::ptr::null_mut())])
+                .unwrap(),
+            NativeReply::Void
+        );
+        let owner_index = core
+            .nodes
+            .iter()
+            .position(|node| {
+                matches!(
+                    &node.kind,
+                    EffectExprKind::Operation(EffectOperation::Network(_))
+                )
+            })
+            .expect("the linked fixture has its Network owner");
+        let owner = NodeId::new(core.arena, u32::try_from(owner_index).unwrap());
+        let mut work = TypeWorkBudget::with_limit(10_000_000);
+        super::super::validate::network_spine_for_completion_diagnostic(
+            &core,
+            &provenance,
+            &linked,
+            owner,
+            &mut work,
+        )
+        .expect("the native entry and actual linked spine authenticate");
+    }
+
+    #[test]
+    fn linked_receive_keeps_host_commit_and_reply_edges_distinct() {
+        use super::super::effect::{EffectExprKind, EffectOperationFamily};
+        use super::super::region::RegionBufferOperation;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+        let core = retained_drain_fixture(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (worker, _) = match Network.try_receive worker {\n",
+            "Network.Message(_, _) => ()\nNetwork.Empty => ()\nNetwork.End => ()\n",
+            "Network.ReceiveFailed(_) => ()\n}\nmain : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (id, buffer) = core
+            .nodes
+            .iter()
+            .enumerate()
+            .find_map(|(id, node)| match operation(&node.kind) {
+                Some(EffectOperation::RegionBuffer(buffer))
+                    if matches!(
+                        &buffer.operation, RegionBufferOperation::Network { operation, .. }
+                            if operation.operation() == 2
+                    ) =>
+                {
+                    Some((id, buffer))
+                }
+                _ => None,
+            })
+            .expect("the linked receive must use a structural network operation");
+        let expected = NodeId::new(buffer.context.arena(), u32::try_from(id).unwrap());
+        let mut work = TypeWorkBudget::unbounded();
+        let built = build_capture_graph::<EffectOperationFamily>(
+            &core.nodes,
+            &[],
+            &[],
+            operation,
+            &[],
+            &[],
+            None,
+            &mut work,
+        )
+        .unwrap()
+        .unwrap();
+        let Control::Sequence(operands) = &built.graph.code[id + 1] else {
+            panic!("receive sequence");
+        };
+        assert_eq!(operands.first(), Some(&(index(buffer.context) + 1)));
+        let expected_operand = buffer.operand.map(|node| index(node) + 1);
+        let expected_right = buffer.right.map(|node| index(node) + 1);
+        let actual_inputs = &operands[1..operands.len() - 1];
+        let expected_inputs: Vec<_> = expected_operand.into_iter().chain(expected_right).collect();
+        assert_eq!(actual_inputs, expected_inputs);
+        let Control::Choice(branches) = &built.graph.code[*operands.last().unwrap()] else {
+            panic!("receive outcomes");
+        };
+        let mut message = false;
+        let mut end = false;
+        let mut failed = 0;
+        for &branch in branches {
+            let Control::Sequence(steps) = &built.graph.code[branch] else {
+                panic!("outcome sequence");
+            };
+            let events: Vec<_> = steps
+                .iter()
+                .filter_map(|&step| match &built.graph.code[step] {
+                    Control::NetworkEvent {
+                        operation,
+                        operation_control,
+                        stage,
+                        outcome,
+                    } => {
+                        assert_eq!((*operation, *operation_control), (expected, id + 1));
+                        Some((*stage, *outcome))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let allocations = steps
+                .iter()
+                .filter(|&&step| matches!(built.graph.code[step], Control::Request(_)))
+                .count();
+            match events.as_slice() {
+                [
+                    (NetworkEventStage::Observed, NetworkOutcome::Message),
+                    (NetworkEventStage::MessageCommit, NetworkOutcome::Message),
+                    (NetworkEventStage::Reply, NetworkOutcome::Message),
+                ] => {
+                    assert_eq!(allocations, 4);
+                    message = true;
+                }
+                [
+                    (NetworkEventStage::Observed, NetworkOutcome::End),
+                    (NetworkEventStage::Reply, NetworkOutcome::End),
+                ] => {
+                    assert_eq!(allocations, 1);
+                    end = true;
+                }
+                events
+                    if matches!(
+                        events.last(),
+                        Some((NetworkEventStage::Reply, NetworkOutcome::Failure))
+                    ) =>
+                {
+                    assert!(allocations >= 2);
+                    assert!(
+                        !events
+                            .iter()
+                            .any(|(stage, outcome)| *stage == NetworkEventStage::Reply
+                                && *outcome == NetworkOutcome::End)
+                    );
+                    failed += 1;
+                }
+                _ => {}
+            }
+        }
+        assert!(message && end && failed >= 2);
+    }
+
+    #[test]
+    fn linked_watch_preserves_failed_publication_after_watching_allocation() {
+        use super::super::effect::{EffectExprKind, EffectOperationFamily};
+        use super::super::region::RegionBufferOperation;
+        fn operation(kind: &EffectExprKind) -> Option<&EffectOperation> {
+            match kind {
+                EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            }
+        }
+        let core = retained_drain_fixture(concat!(
+            "import @builtin.network as Network\n",
+            "start<N> : (Network.Worker<N>, Bytes) -> Unit ! {Network.IO<N>}\n",
+            "start (worker, _) = {\n let _ = Network.watch (worker, Network.Readable)\n ()\n}\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        let (id, buffer) = core
+            .nodes
+            .iter()
+            .enumerate()
+            .find_map(|(id, node)| match operation(&node.kind) {
+                Some(EffectOperation::RegionBuffer(buffer))
+                    if matches!(&buffer.operation, RegionBufferOperation::Network { operation, .. }
+                        if operation.operation() == 4) =>
+                {
+                    Some((id, buffer))
+                }
+                _ => None,
+            })
+            .expect("the actual linked watch wrapper contains operation 4");
+        let expected = NodeId::new(buffer.context.arena(), u32::try_from(id).unwrap());
+        let mut work = TypeWorkBudget::unbounded();
+        let built = build_capture_graph::<EffectOperationFamily>(
+            &core.nodes,
+            &[],
+            &[],
+            operation,
+            &[],
+            &[],
+            None,
+            &mut work,
+        )
+        .unwrap()
+        .unwrap();
+        let Control::Sequence(operands) = &built.graph.code[id + 1] else {
+            panic!("watch sequence");
+        };
+        let Control::Choice(branches) = &built.graph.code[*operands.last().unwrap()] else {
+            panic!("watch outcomes");
+        };
+        let mut found = false;
+        for &branch in branches {
+            let Control::Sequence(steps) = &built.graph.code[branch] else {
+                panic!("watch outcome sequence");
+            };
+            if let [observed, first, failed, payload, reply_alloc, reply] = steps.as_slice()
+                && matches!(built.graph.code[*observed], Control::NetworkEvent {
+                    operation, stage: NetworkEventStage::Observed, outcome: NetworkOutcome::Watching, ..
+                } if operation == expected)
+                && matches!(built.graph.code[*first], Control::Request(_))
+                && matches!(built.graph.code[*failed], Control::NetworkEvent {
+                    operation, stage: NetworkEventStage::Observed, outcome: NetworkOutcome::Failure, ..
+                } if operation == expected)
+                && matches!(built.graph.code[*payload], Control::Request(_))
+                && matches!(built.graph.code[*reply_alloc], Control::Request(_))
+                && matches!(built.graph.code[*reply], Control::NetworkEvent {
+                    operation, stage: NetworkEventStage::Reply, outcome: NetworkOutcome::WatchFailed, ..
+                } if operation == expected)
+            {
+                found = true;
+            }
+        }
+        assert!(
+            found,
+            "publication failure must follow Watching construction and precede both failure allocations"
+        );
     }
 
     #[test]

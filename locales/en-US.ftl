@@ -265,6 +265,7 @@ first-effect-instance = The first occurrence of this effect instance is here.
 resolve-operation-shape = An effect operation needs an outer function arrow without an explicit effect row.
 resolve-sealed-provider = Only resource acquisition may introduce a compiler-owned resource provider.
 resolve-sealed-drive = The store drive can be named in effect rows but cannot be performed or handled directly.
+resolve-sealed-network = Network service effects can be named in effect rows but cannot be performed or handled directly.
 resolve-builtin-required = This resource acquisition requires a direct import of `{ $builtin }`.
 resolve-continuation-outside = `{ $operation }` is only available inside an effect operation clause.
 resolve-retain-outside-root = `retain` is only available in the nearest clause of a private checkpoint root.

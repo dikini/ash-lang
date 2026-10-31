@@ -419,7 +419,9 @@ constructor/intrinsic value, or known immediate literal has row `{}`. Persistent
 construction adds the canonical allocation requirement to its strict-child rows;
 this includes tuples, nominal records, buffers, large integers and materialized
 ordinary function records. Potentially large arithmetic carries that requirement
-even when a particular result is immediate. Erased newtype conversions add no
+even when a particular result is immediate. The canonical integer split call
+adds that same allocation requirement for its arithmetic and result construction.
+Erased newtype conversions add no
 allocation. Generated wrappers allocate only when lowered to ordinary Function.
 An ordinary strict form with evaluated expression children `e_1` through `e_n`
 otherwise has the partial union of their rows, accumulated in the existing
@@ -1257,6 +1259,37 @@ checks `effect.duplicate`, while
 `effect_examples_have_exact_observations_and_reasons` checks the complete
 handled example plus `entry.main-effects` and `effect.resume-not-consumed`.
 
+## Pinned worker networks
+
+The canonical `@builtin.network` module provides opaque `Pair<N>`, `Worker<N>`
+and `Registration<N>`, sealed `IO<N>` and `Join<N>` effects, and ordinary
+result sums for its operations. Direct source `perform`, `handle`, `hook` or
+`register` of those effects is rejected. Calls to the module's functions use
+the network owner and worker interpreters instead.
+
+A network acquisition has the form
+`resource Network.Pair<N> pair = (capacity, start_a, start_b, input_a, input_b) { body }`.
+`N` is a fresh scoped identity. The initializer is checked in the preceding
+scope; its capacity is an `Int`, its inputs are `Bytes`, and each entry is an
+unconstrained named top-level function polymorphic in the worker identity, with
+type `(Worker<N>, Bytes) -> Unit`. Its effect row and the linked initializer
+rows are closed and contain only the worker's `IO<N>`, canonical default
+allocation and admitted native-symbol effects. Entry admission checks the
+linked definition, dependencies and captures; it
+does not transport a caller-owned closure, Store, cell, region or provider.
+The owner supplies `Join<N>` in the body, and each worker supplies its own
+`IO<N>`. The identity, handle and dependent effects cannot escape their owner.
+The ordinary resource, effect, capture and retained-control rules continue to
+apply to each worker and its local Store.
+
+The module's `try_send`, `send_control`, `try_receive`, `finish_send`,
+`finish_receive`, `watch`, `cancel_watch`, `poll_wake` and `settle` functions
+return ordinary result values. Application code implements any Work/Ack protocol
+and handles its errors; neither a parsed message nor a result constructor
+establishes that processing or cleanup happened. The
+[execution rules](dynamic-semantics.md#pinned-network-execution) distinguish
+transport endpoint state from worker and backing settlement.
+
 ## Scoped retained control
 
 The canonical `@builtin.retained_control` API supplies opaque `Store<N,D>` and
@@ -1583,7 +1616,10 @@ Known immediate literals and intrinsically bounded leaves are independent only
 when their complete persistent representation is immediate. Large literals
 retain digit-backing residency. Unknown results, potentially large addition and
 multiplication conservatively retain selected residency even for a small runtime
-result; aliases, projections, calls and Cell reads preserve actual facts. Thus
+result. The quotient of `@builtin.integer.split_base256` also retains selected
+residency even if immediate; its byte-valued remainder is independent. Its tuple
+and nominal result retain their actual field dependencies and their own selected
+residency. Aliases, projections, calls and Cell reads preserve actual facts. Thus
 literal `42` may leave an inner region, while `20 + 22` cannot acquire independence
 from its numeric result. Selecting an outer region before arithmetic can make
 that result survive an inner close without relocation. No range propagation or

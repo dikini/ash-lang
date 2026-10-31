@@ -1,0 +1,16 @@
+
+running 1 test
+native worker entry context: side=1 context=1 parameter=Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 2 } owner_identity=Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 6 } bindings=[(Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 2 }, 121)]
+worker focus: preflight ok, 68 entries, 1 candidates
+processing source refusal at 918
+pure cut: source fragment rejected: Invalid
+worker cut negative message escapes Store result: Ok((Some(NetworkProcessingRoute { owner: NodeId { arena: ArenaId(8), index: 402 }, entry: Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 1 }, side: 1, receive: NodeId { arena: ArenaId(8), index: 25 }, message_match: NodeId { arena: ArenaId(8), index: 260 }, arm: 0, root: NodeId { arena: ArenaId(8), index: 242 }, handler: NodeId { arena: ArenaId(8), index: 241 }, store: NodeId { arena: ArenaId(8), index: 243 } }), None)); work=120001700
+native worker entry context: side=1 context=1 parameter=Resolved { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, local: 2 } owner_identity=Resolved { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, local: 6 } bindings=[(Resolved { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, local: 2 }, 121)]
+worker focus: preflight ok, 68 entries, 1 candidates
+processing source refusal at 934
+pure cut: source fragment rejected: Invalid
+worker cut negative saved suffix uses message: Ok((Some(NetworkProcessingRoute { owner: NodeId { arena: ArenaId(17), index: 402 }, entry: Resolved { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, local: 1 }, side: 1, receive: NodeId { arena: ArenaId(17), index: 25 }, message_match: NodeId { arena: ArenaId(17), index: 260 }, arm: 0, root: NodeId { arena: ArenaId(17), index: 242 }, handler: NodeId { arena: ArenaId(17), index: 241 }, store: NodeId { arena: ArenaId(17), index: 243 } }), None)); work=121816497
+test core::capture::tests::worker_cut_refuses_message_escape_and_saved_suffix_use ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1772 filtered out; finished in 36.31s
+
