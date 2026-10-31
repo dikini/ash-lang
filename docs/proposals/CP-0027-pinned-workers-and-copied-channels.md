@@ -7,7 +7,10 @@
 > This accepted transition authorizes bounded product work; it is not current
 > Ash. The independent contract review covered head
 > `b296e17ce9e4f1760ce73df4f4716ef0c0fb2093`. Required product, proof and
-> integration evidence remains pending.
+> integration evidence remains pending. On 2026-10-31 the user superseded
+> protocol-specific compiler checking and later ruled out new runtime checking
+> machinery beyond ordinary error handling. The endpoint and settlement
+> refinement below is proposed under that direction, not implemented truth.
 
 ## Current behavior
 
@@ -135,9 +138,9 @@ The first host implementation uses these sealed, nonblocking operations:
 | --- | --- |
 | `try_send(worker, bytes)` | `Sent`, `Full`, `Closed` or terminal failure. `Sent` atomically accepts and publishes a complete copied snapshot. `Full` and `Closed` commit nothing. |
 | `try_receive(worker)` | `Message(kind, bytes)`, `Empty`, `End` or terminal failure. `Message` commits only after a complete receiver-region copy; a failed copy leaves the entry. |
-| `send_control(worker, bytes)` | Sends a control envelope using the same queue, commit and failure rules as `try_send`; only the checked protocol driver may invoke it. |
+| `send_control(worker, bytes)` | Sends a control envelope using the same queue, commit and failure rules as `try_send`; its actual sealed operation establishes the sending side and Control kind. |
 | `finish_send(worker)` | Irreversibly seals this send polarity after earlier operations resolve. |
-| `finish_receive(worker)` | Completes the receive polarity only after genuine End and checked actual completion of earlier processing and required local cleanup. |
+| `finish_receive(worker)` | Completes the receive polarity after actual transport End and applicable transport operations resolve; it does not attest that each message was processed or cleaned up. |
 | `settle(pair)` | Returns normally only after worker scopes and endpoints complete, backing users settle and no later callback is possible. |
 | `watch(worker, interest)` | Registers readiness interest for this side and activation, rechecks the predicate, and returns an opaque local registration. |
 | `cancel_watch(worker, registration)` | Cancels that registration and settles possible notifications before its support can be released. |
@@ -235,100 +238,55 @@ origin only. `try_send` always emits Application; `send_control` emits Control.
 Both use one FIFO in each direction, so receive never skips an earlier envelope.
 The actual interpreter associates the returned `Message` case with the tag and
 peer of that delivery. Constructing the same result in source or intercepting
-the request cannot establish that association. The linked validator admits
-`send_control` only on the designated ordinary Ash protocol-driver path whose
-actual body, callers and transitive captures are checked under N3/N4; source
-application paths cannot call it or access the raw endpoint. The host checks the
-sealed operation identity and side, but does not interpret the control bytes.
-Registration, ledger transition, local completion, acknowledgement
-and application-drain control remain ordinary linked Ash definitions checked
-under N3/N4. The checker must reconstruct their actual relationships and prove
-the codec correspondence for identifiers; the host does not certify the ledger
-or assert completion merely because it emitted an envelope.
-For N4, access to raw application publication must be confined to the checked
-driver path; analysis follows actual calls, captures and selected evidence through
-imports to reject bypasses. A `finish_receive` call likewise cannot obtain
-permission from an ordinary Boolean or a runtime claim that processing finished:
-the actual local Store and required suffixes must have completed under the
-accepted completion analysis.
+the request cannot establish that association. The sealed operation and side
+establish transport origin; the host does not interpret control bytes or certify
+an application's ledger, acknowledgement or completion. The earlier requirement
+that a compiler follow the protocol driver's bodies, captures and imports to
+confine raw publication and `send_control` is superseded. Applications must not
+infer protocol correctness or honest completion merely from a Control tag.
 
 #### One-way receive completion refinement
 
-This refinement was independently reviewed at
-`1e336f6c0c292b48696e5bf61a24408d7a98268f` and is accepted as a contract.
-Its bounded proof and actual implementation correspondence remain pending
-before product reliance. It supplies a sufficient one-way N2 fragment; N3/N4
-retain their separate full ledger and bidirectional obligations. The checked
-caller cut requires allocation-free Core forwarding nodes.
+The earlier one-way refinement required linked analysis to attach a separate
+processing obligation to each received Message, prove its local completion and
+suffix, and allow `finish_receive` only after all such obligations were
+cleared. That refinement, including its checked source fragment and per-message
+completion guarantee, is superseded on 2026-10-31. `finish_receive` completes a
+transport receive polarity only after the actual incoming channel is sealed,
+empty and free of pending transport operations. It may occur while ordinary
+application processing continues; it does not assert that any particular
+message's application work or cleanup completed. Constructed End,
+intercepted results, and an ordinary Boolean do not establish transport End or
+settlement.
 
-A sealed successful receive commits a fresh internal obligation for the actual
-network activation `N`, receiving side and delivery identity. Only its actual
-`Message` result branch introduces that obligation. It stays associated with
-the receiver-held entry after dequeue. A source value, byte contents, position
-in a loop or ordinary Boolean cannot create or clear it. The actual `End` branch
-likewise supplies a control fact for that same activation and side only when
-the sealed interpreter reports genuine End. A constructed result or intercepted
-request supplies neither fact.
+The proposed replacement relies on actual worker lifetime: a successful owner
+settlement waits for both worker executions to return normally, their existing
+generic Store and cleanup obligations, endpoints and backing users, and actual
+carrier teardown and joins. Worker-local copies and their support remain owned
+by the carrier through its return and owner teardown. Terminal failure follows
+AD-0017's retention and incomplete-teardown contract; it does not claim normal
+settlement. This is a narrower guarantee than the former per-message rule: a
+program can return without carrying out its intended protocol. Work/Ack and
+ordinary error handling are application behavior under CP-0028; the host does
+not prove that behavior.
 
-The checker accepts a deliberately narrow receive loop. On `Message`
-it runs a checked processing computation to its actual local completion before
-calling the loop again. That computation may use the message but must not make
-it, a derived value, a capture, callback, Store entry or cleanup escape into a
-caller, mutable cell, returned value or later work. The matching C1 root marker,
-selected handler and clause suffixes and owned cleanup must actually return;
-the existing C3 retained-control judgment for that same Store must exclude
-pending or unknown work at the cut. Native operations are synchronous only
-under the binding's documented assumptions, and their effect is complete only
-on actual return. The marker is a modeled correspondence obligation, not a new
-source annotation or an assertion that the implementation already provides it.
-
-Before recursion, the checker must also establish that every remaining caller
-suffix for this Message arm is inert: after the recursive call it only forwards
-the authenticated End-success return through checked allocation-free Core
-aliases, construction or projection and matching returns. No suffix node may
-allocate, invoke a provider, perform an effect, use a message-derived value or
-run a callback, cleanup, endpoint operation or retained capture. The checker
-examines actual linked nodes and transitive captures; source-level constructor
-syntax and tail position do not establish these properties. Effectful allocation
-or provider control needs a separately reviewed nonreentry rule. Processing
-inside the completed root may allocate under its own checked rules.
-The `Empty` arm may retry through the same checked loop. The `End` arm returns
-a distinct End-success path; the caller may perform `finish_receive` only on
-that path. A normal return of a helper or a new receive alone does not discharge
-an older Message. Any unsupported escape, suffix, target, operation or failure
-case yields no completion permission.
-
-The analysis and proof are specified in the
-[one-way completion assignment](../design/retained-control/one-way-completion-proof-assignment.md).
-It defines the finite abstract state, authenticated facts, transfers, joins,
-matched call/return summaries and recursive least fixed point. It requires an
-acceptance-to-control-step argument for every rule, including actual C1/C3
-completion and the identified `WorkerChannel` held-entry and finish transitions.
-The finite worklist starts with no possible normal returns, rechecks actual
-linked bodies and their selected evidence, and refuses unresolved work,
-unsupported transformations or budget exhaustion. Its evidence is not a
-runtime ledger and it grants no release authority by itself. Receive polarity
-completion still requires genuine End and all earlier obligations discharged;
-endpoint, worker, watch, callback and backing settlement remain separate.
+The retained N2 implementation has per-delivery tracking and a settlement gate
+that must be reconciled with this revised worker-lifetime contract. Removing a
+finish precondition alone does not establish correct delivery retention or
+settlement. Review the actual receive, failure, worker return and owner teardown
+paths together; keep generic C3 and native resource contracts. The earlier
+one-way proof and checker evidence remains evidence of its original contract,
+not of this revision.
 
 Lower acquisition to an explicit Core network owner carrying the fresh identity,
 resolved entry binders and instantiations, capacity and startup operands. Lower
 operations to sealed, identity-indexed Core operations with the actual
 activation and injected side, and explicit normal and terminal-failure paths.
-Independent linked Core validation reconstructs the entry definitions, type and
-row instantiations, selected evidence, admitted captures and services, side and
-lexical owner. It checks normal and abandoned close predecessors and authentic
-result/state relationships; source summaries, names, serialized origin claims
-and same-typed operations grant no authority. Imports and transforms must leave a
-reconstructible form or reject. The separate N3 contract must define how the
-restricted checker validates the ordinary ledger and its control dependencies.
-[CP-0028](CP-0028-checked-functional-network-ledger.md#source-access-and-linked-driver-designation)
-records the accepted source-access and linked driver-designation refinement:
-`send_control` is publicly resolvable as a sealed operation, but actual use
-requires the specified N4 checks for driver confinement and emission. This
-refinement was independently reviewed at
-`94c0be0375d19f8e60900d5d77be2f5caa746eb0`. It does not change the accepted
-one-way transport behavior or establish a proof or product gate.
+Independent linked Core validation continues to enforce generic entry, type,
+effect, resource and retained-control requirements and the authenticated network
+boundary. It does not reconstruct the application protocol, confer per-message
+completion facts, or enforce confinement of protocol producers. Generic
+validation exhaustion cannot publish partial permission.
 
 The Core owner records `(N, capacity, entry_a, entry_b, input_a, input_b, body)`.
 Entry records carry resolved defining binders and their N instantiations,
@@ -411,17 +369,18 @@ publication and receipt order. Publication commits the initialized entry into
 the queue and makes its bytes visible to the receiver. Receipt commits only
 when a receiver-owned copy is complete and responsibility for the delivery is
 established; before that commit a failed copy leaves the queue entry intact.
-Once receipt commits, later processing and cleanup remain receiver obligations.
+Once receipt commits, its copy and support remain worker-local; application
+processing and cleanup are not certified by transport receipt.
 
 The abstract accounting is `accepted = received ++ queued ++ pending`, in
 acceptance order, with `length(queued) + length(pending) <= capacity`. The
 implementation may make acceptance and publication one atomic transition; it
 must still preserve the pending-state obligation if it separates them. It must
 not allow later publication or `End` to overtake an earlier accepted send.
-There is no implicit discard or redelivery. If failure prevents the normal
-policy of processing all accepted messages, the network reports terminal
-failure and retains or disposes support only under an explicit failure contract;
-it does not claim successful drain.
+Transport does not implicitly redeliver a committed receipt. Application
+processing is the ordinary program's responsibility. A reported terminal
+failure retains or disposes support only under the explicit failure contract;
+it does not claim normal settlement.
 
 A full send or empty receive may wait without losing the operation or its
 owner. Registration and a subsequent readiness recheck must prevent a wakeup
@@ -439,10 +398,10 @@ returns authenticated `End` only when the polarity is sealed, no accepted
 publication remains pending, and every earlier queued message has been
 received. A temporarily empty queue or application bytes spelling `End` cannot
 establish this fact. The receiver continues to service the bounded queue while
-the sender finishes; its local completion also waits for processing, handler
-suffixes and cleanup, including any retained work.
+the sender finishes. Endpoint completion alone is not worker return or cleanup.
 
-Backing may be released only after both endpoint completions and all pending
+Backing may be released only after both workers actually return, both endpoint
+completions and all pending
 operations, wait registrations, callbacks, notifications and other backing
 users have actually settled, and no future callback or wake can be issued
 against that activation. A worker's local quiescence, receipt of `End`, or
@@ -454,7 +413,7 @@ unproved close into a release permission.
 ## Semantic delta
 
 The proposal adds admitted worker entry, dedicated copied transport, and
-authenticated endpoint and completion facts. It does not reinterpret existing
+authenticated transport and endpoint behavior. It does not reinterpret existing
 Store, region, cell, effect or cleanup ownership. Shared process address space
 does not itself grant Ash authority, cross-thread representation safety or
 visibility. The exact source surface is not yet selected; accepting this
@@ -467,7 +426,7 @@ The completed change must update [static semantics](../../spec/static-semantics.
 [elaboration and independent validation](../../spec/elaboration.md#validation-boundary),
 and the specification index for any new surface and runtime operations. It must
 also update applicable resource, foreign and cleanup sections when the actual
-representation is selected. A later checker proposal must govern N3/N4 facts.
+representation is selected. No new protocol checker is proposed.
 
 ## Resulting specification truth
 
@@ -477,15 +436,12 @@ no current language truth; it does not prove native code correct.
 
 ## Interactions
 
-The [N3 issue](https://github.com/dikini/ash-lang/issues/78) requires a separate
-finite-list ledger proof and restricted checker. For bidirectional work, a child
-is registered before publication, and its parent remains covered until an
-authentic acknowledgement. A reply delivered to an already covered continuation
-must not create a causal cycle. [N4](https://github.com/dikini/ash-lang/issues/79)
-must reconstruct these facts on actual linked Core before release, and
-[N5](https://github.com/dikini/ash-lang/issues/80) must first seal fresh roots
-while allowing covered descendants, then settle service, endpoints and backing.
-Neither a local empty Store nor an application payload certifies network drain.
+[CP-0028](CP-0028-checked-functional-network-ledger.md) describes the
+ordinary Work/Ack program and its intended register-before-publication,
+coverage and drain behavior. The application program is not certified by the
+transport. [N5](https://github.com/dikini/ash-lang/issues/80) includes producing
+cleanup and settlement. Neither a local empty Store nor application bytes
+certifies transport End or network settlement.
 
 ## Non-goals
 
@@ -504,7 +460,8 @@ FIFO with accepted pending work, visibility, receive allocation failure,
 registration races and stale notifications, genuine versus false `End`, and
 release with outstanding waiters and backing users. Include capacity-one feedback
 and producing cleanup, normal and abandonment paths, actual native observations
-and separately labelled injected failures. Prove bounded preservation of local
-ownership, delivery coverage, FIFO and settlement for every transition before
-using those facts for release. The N3 proof and checker, N-core, N-proof and
-N-final gates remain separate; see [TASK-0058](../tasks/TASK-0058-pinned-worker-network.md).
+and separately labelled injected failures. Establish local ownership, FIFO, worker lifetime, failure retention and actual
+settlement for the revised implementation; distinguish transport receipt from
+application processing. Existing N2 model and per-message checker evidence
+retains only its original scope. Generic control and final gates remain; see
+[TASK-0058](../tasks/TASK-0058-pinned-worker-network.md).

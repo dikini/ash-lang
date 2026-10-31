@@ -17,10 +17,12 @@ acceptance/publication, and reconstructs bytes in the receiver's selected region
 before committing receipt. Source and destination roots remain independent.
 Application and control envelopes share each direction's FIFO but carry an
 authenticated kind and sending side. Host operations authenticate transport
-origin only: ordinary linked Ash implements the ledger, acknowledgements and
-drain, and the separately accepted checker must reconstruct their relationships.
-The host does not certify ledger correctness, decode completion facts, or own
-another worker's retained control.
+origin only: ordinary Ash implements the ledger, acknowledgements and drain
+with ordinary error handling. The host does not certify ledger correctness,
+decode completion facts, or own another worker's retained control. The user
+superseded the earlier protocol-specific compiler checker on 2026-10-31; see
+[CP-0028](../proposals/CP-0028-checked-functional-network-ledger.md). This
+revision does not claim that the proposed ordinary program is implemented.
 
 Use synchronized state changes and level-triggered wait registration with an
 atomic readiness recheck. Readable includes a message, genuine End and failure;
@@ -88,9 +90,9 @@ to keep receiving and servicing control while application work waits.
 No endpoint migration, general graph transfer, worker recovery, native-stack
 suspension, process containment, fairness, deadlock freedom, termination or
 proof of native memory safety follows. Application bytes and copied identifiers
-cannot authenticate a completion or control envelope. The protocol checker must
-validate actual linked code and reject bypasses before completion analysis uses
-these transport facts.
+cannot authenticate a completion or control envelope. The ordinary protocol
+program handles its data; existing generic retained-control and host settlement
+contracts remain separate and are not discharged by a protocol result.
 
 ## Verification
 
@@ -101,6 +103,7 @@ commit, capacity-one FIFO and visibility, receiver allocation failure,
 registration/poll/cancel races, stale wakes, terminal late registration, genuine
 End and settlement with outstanding callbacks. Separate actual native
 observations from injected failure evidence and state Rust/OS assumptions.
-The N3 finite-ledger proof and linked-Core checker have separate contracts and
-gates; N-core, N-proof and N-final remain required under
+Earlier N3 ledger and checker evidence retains its original scope; it is not
+evidence of the revised ordinary protocol program. Apply the remaining native,
+generic control and final delivery gates under
 [TASK-0058](../tasks/TASK-0058-pinned-worker-network.md).
