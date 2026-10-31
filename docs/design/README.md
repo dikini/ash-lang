@@ -182,6 +182,9 @@ and exclusions remain at their linked owners.
 
 ### Surface language, typing, and elaboration
 
+- [DN-0059: Compositional Contracts and Evidence](DN-0059-compositional-contracts-and-evidence.md)
+  — successive replacement of behavioral reconstruction with explicit contracts;
+  support and continuation composition, axiomatic laws, evidence and inference.
 - [DN-0005: Surface Function Definitions](DN-0005-surface-function-definitions.md) — equational and operational function presentations and their elaboration.
 - [DN-0006: Initial Type System](DN-0006-initial-type-system.md) — candidate first-nucleus kinds, types, polymorphism, inference, and unification.
 - [DN-0007: Data and Pattern Typing](DN-0007-data-and-pattern-typing.md) — products, ADTs, visibility, patterns, irrefutability, and coverage.
