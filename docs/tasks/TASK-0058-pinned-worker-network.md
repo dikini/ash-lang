@@ -21,7 +21,12 @@ On 2026-10-31 the user directed ordinary Ash protocol code and ordinary error
 handling, without compiler protocol reconstruction or a new runtime checking
 framework. AD-0017 records the host decision and the milestone specification
 records the implemented language boundary, including the codec's integer
-module. The
+module. A linked program combining the protocol with an unused discard-bearing
+native binding exhausted the normal final-elaboration allowance during generic
+cleanup inference; a smaller binding containing only the used byte operation
+passed that phase. This is a compiler cost limitation, not a change to the
+allowance or to generic C3. Generated native images also do not yet serialize
+Network scopes and operations. The
 previous N3 review and proof establish only their recorded historical scope,
 not a prerequisite checker gate or a completed ordinary protocol. Main
 integration remains a separate gate.
@@ -32,9 +37,15 @@ The live [M4 ledger](https://github.com/dikini/ash-lang/issues/55) records
 milestone inputs and outstanding gates. The ordinary Work/Ack and producing
 cleanup implementation, tests, specification, review and fresh seven-stage
 gate were retained on the milestone in [PR #187](https://github.com/dikini/ash-lang/pull/187)
-at `45676a607ac7565cc4c9f9cc926dd3dbe274baa1`. N6 and Main integration remain
-separate. Historical checker receipts do not establish the revised program's
-guarantees. The source-order limitation discussed in earlier evidence remains
+at `45676a607ac7565cc4c9f9cc926dd3dbe274baa1`. The focused N6 linked
+interpreter test passed with normal work limits: a retained continuation's
+result gates a local Cell, the checked Bytes-to-Address host callback and the
+ordinary network program, which returns `42` after settlement. The trusted
+Rust callback is observed once with a nonnull pointer; this combined test is
+not a generated Network image or a real-C call. Separate generated-host FFI
+and SQLite canaries cover their stated boundaries. N6 final verification,
+retention and acceptance, and Main integration remain separate. Historical
+checker receipts do not establish the revised program's guarantees. The source-order limitation discussed in earlier evidence remains
 a generic validator issue; source ordering is not a language requirement.
 
 ## Work
@@ -266,7 +277,7 @@ binding. The existing linked native EchoBytes fixture covers a synchronous
 need numeric C slots, output pointers and foreign-memory readback or byte
 results, which are not supported by the current FFI surface. The SQLite canary,
 connected cross-milestone example and full verification remain separate
-acceptance evidence; their presence here is not a fresh pass claim.
+acceptance evidence.
 
 The analysis limitations in [#165](https://github.com/dikini/ash-lang/issues/165)
 remain visible; this task neither adds a language restriction nor weakens the
