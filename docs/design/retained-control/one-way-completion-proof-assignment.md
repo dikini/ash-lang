@@ -1,10 +1,13 @@
 # One-way receive completion: bounded checker and proof assignment
 
+> Historical assignment: the one-way protocol completion checker was
+> superseded on 2026-10-31 and is not a current release requirement.
+
 This assignment specifies the one-way section of
-[CP-0027](../../proposals/CP-0027-pinned-workers-and-copied-channels.md#one-way-receive-completion-refinement),
+[CP-0027](https://github.com/dikini/ash-lang/blob/b3e16b7c31d55850ab6f879286a594b4f6cb2540/docs/proposals/CP-0027-pinned-workers-and-copied-channels.md#one-way-receive-completion-refinement),
 independently reviewed at `1e336f6c0c292b48696e5bf61a24408d7a98268f` and
-accepted as a contract. Its allocation-free caller cut and rule-by-rule bounded
-proof remain required; this assignment is not a proof, implementation,
+accepted as a contract at that checkpoint. Its allocation-free caller cut and
+rule-by-rule bounded proof were proposed for that transition; this assignment is not a proof, implementation,
 language restriction or permission to release a network. The retained
 [worker/channel model](worker-channel-correspondence.md) supplies the target
 transitions, and [C3 correspondence](drain-correspondence.md) describes the

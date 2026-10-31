@@ -1,5 +1,9 @@
 # Pinned worker network execution plan
 
+> Historical plan: the 2026-10-31 ordinary Ash direction supersedes its
+> protocol-checker and one-way completion requirements. See the
+> [active plan](pinned-worker-ordinary-protocol.md).
+
 Owned by [TASK-0058](../TASK-0058-pinned-worker-network.md). This plan orders
 work and does not define semantics or authorize implementation. Original issue
 acceptance remains authoritative for scope; no criterion is complete here.
@@ -30,7 +34,7 @@ acceptance remains authoritative for scope; no criterion is complete here.
    with N2 only when assigned, freeze the finite-list model and prove
    registration, retirement, acknowledgement, whole-entry and order-preserving
    RemoveById, freshness and successor state, and restricted checking-rule
-   soundness. [CP-0028](../../proposals/CP-0028-checked-functional-network-ledger.md)
+   soundness. [CP-0028](https://github.com/dikini/ash-lang/blob/b3e16b7c31d55850ab6f879286a594b4f6cb2540/docs/proposals/CP-0028-checked-functional-network-ledger.md)
    and its bounded proof assignment were independently reviewed at
    `94c0be0375d19f8e60900d5d77be2f5caa746eb0`; the transition is accepted,
    without proof or product acceptance. Adopt any required verifier decision
@@ -67,7 +71,7 @@ acceptance remains authoritative for scope; no criterion is complete here.
 ### Native completion sequence for the current N2 candidate
 
 This sequence closes the native part of N2 under accepted
-[CP-0027](../../proposals/CP-0027-pinned-workers-and-copied-channels.md),
+[CP-0027](https://github.com/dikini/ash-lang/blob/b3e16b7c31d55850ab6f879286a594b4f6cb2540/docs/proposals/CP-0027-pinned-workers-and-copied-channels.md),
 [AD-0017](../../decisions/AD-0017-pinned-worker-host-and-transport.md) and the
 [one-way assignment](../../design/retained-control/one-way-completion-proof-assignment.md).
 It does not close N3–N6 or change C3. The local source baseline is

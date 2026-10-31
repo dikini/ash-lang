@@ -1,13 +1,11 @@
 # Pinned worker ordinary protocol delivery
 
 This execution plan belongs to [TASK-0058](../TASK-0058-pinned-worker-network.md).
-It has no independent semantic authority. The 2026-10-31 revisions of
-[CP-0027](../../proposals/CP-0027-pinned-workers-and-copied-channels.md),
-[CP-0028](../../proposals/CP-0028-checked-functional-network-ledger.md),
-[CP-0030](../../proposals/CP-0030-checked-network-codec.md), and
-[AD-0017](../../decisions/AD-0017-pinned-worker-host-and-transport.md) govern
-the direction. Preserve the original issue outcomes and existing generic and
-native contracts; old checker-specific acceptance text follows the revision.
+It has no independent semantic authority. The 2026-10-31 user direction
+superseded protocol-specific compiler checks. The milestone's implemented
+[specification](../../../spec/README.md) and
+[AD-0017](../../decisions/AD-0017-pinned-worker-host-and-transport.md) record
+the language boundary and host decision. Main integration remains separate.
 
 ## Connected slice
 

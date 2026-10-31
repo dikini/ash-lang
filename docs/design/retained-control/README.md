@@ -30,16 +30,17 @@ reviewed source completed a separate frozen [gate](../../tasks/evidence/local-re
 its receipt passed independent audit. Linked validation uses the drain analysis;
 the connected C2/C3 checkpoint is retained and accepted.
 
-The conditional M4 worker/channel model has a reviewed frozen
+The historical conditional M4 worker/channel model has a reviewed frozen
 [source gate](../../tasks/evidence/pinned-worker-channel-proof/README.md).
 Its [correspondence map](worker-channel-correspondence.md) states the runtime,
 C3, native binding and transport premises that remain outside the model proof.
-This prerequisite does not establish successful native shutdown, full N2
-acceptance or current Ash language semantics.
+It is not a prerequisite proof of the current carrier or ordinary protocol,
+and does not establish native shutdown or language semantics.
 
 The N3 ledger model and its [correspondence](network-ledger-correspondence.md)
 record the assumptions needed to relate checked linked Core to the finite model.
-They do not establish peer authentication, exclusive control or network release.
+They are historical conditional evidence, not a proof of the current ordinary
+protocol, peer authentication, exclusive control or network release.
 
 ## Retained product evidence
 
@@ -81,6 +82,7 @@ records two analysis limitations and their reproductions. The
 and [separate Main handoff](https://github.com/dikini/ash-lang/issues/54#issuecomment-6476014971)
 remain open.
 
-The bounded [one-way completion source gate](../../tasks/evidence/pinned-one-way-proof/README.md)
+The historical bounded [one-way completion source gate](../../tasks/evidence/pinned-one-way-proof/README.md)
 registers `OneWayCompletion` after the four retained parent modules. Its model
-proofs and implementation correspondence have separate acceptance obligations.
+proofs and implementation correspondence covered the superseded one-way checker;
+they are not current protocol or release prerequisites.

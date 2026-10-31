@@ -1,5 +1,8 @@
 # Checked codec normal-return correspondence
 
+> Historical evidence for the superseded codec checker; it does not govern
+> the ordinary Ash codec retained on the milestone.
+
 This is an argument for the accepted CP-0030 transition, scoped to the linked
 codec matcher retained at `b94895c4db210cfd1817b21daed72e36ed7e4ee1`. It is not
 current Main semantics or an independent proof about Rust. The actual invocation
@@ -62,7 +65,7 @@ fixed authenticated receiver supplies the unique destination in that context.
 
 The matcher reconstructs actual linked initializer, closure, captures, nominal
 constructors, operands, branches and returns. Its source rules are in
-[`src/core/codec.rs`](../../../../src/core/codec.rs); the ordinary definitions
+[`src/core/codec.rs`](https://github.com/dikini/ash-lang/blob/b3e16b7c31d55850ab6f879286a594b4f6cb2540/src/core/codec.rs); the ordinary definitions
 are in [`libraries/network_codec.ash`](../../../../libraries/network_codec.ash).
 The trusted implementation correspondence uses the existing call-by-value
 application order, `lower_buffer_intrinsic`, `return_region_buffer`, and

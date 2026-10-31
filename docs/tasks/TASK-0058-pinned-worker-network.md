@@ -2,7 +2,7 @@
 
 - ID: `TASK-0058`
 - Status: active
-- Related: [CP-0027](../proposals/CP-0027-pinned-workers-and-copied-channels.md), [CP-0028](../proposals/CP-0028-checked-functional-network-ledger.md), [AD-0017](../decisions/AD-0017-pinned-worker-host-and-transport.md), [DN-0058](../design/DN-0058-pinned-worker-host-and-channel.md), [M4 issue #55](https://github.com/dikini/ash-lang/issues/55)
+- Related: [specification](../../spec/README.md), [AD-0017](../decisions/AD-0017-pinned-worker-host-and-transport.md), [DN-0058](../design/DN-0058-pinned-worker-host-and-channel.md), [M4 issue #55](https://github.com/dikini/ash-lang/issues/55)
 
 > This task organizes work. It does not define Ash semantics.
 
@@ -11,38 +11,40 @@
 M1–M3 are complete on Main at `67c79ddc32a813cc0c9ddab2962f9e2aa849b028`;
 their acceptance is recorded in [#51](https://github.com/dikini/ash-lang/issues/51).
 N1 contract and host/channel choice were independently reviewed at
-`b296e17ce9e4f1760ce73df4f4716ef0c0fb2093` and are accepted in CP-0027 and
-AD-0017. Product reliance additionally needs the assigned bounded preservation
-evidence. The
+`b296e17ce9e4f1760ce73df4f4716ef0c0fb2093`. AD-0017 records the
+current host choice. The
 [focused execution plan](plans/pinned-worker-ordinary-protocol.md) sequences
 the revised ordinary Ash protocol delivery. The earlier
 [execution plan](plans/pinned-worker-network.md) records the superseded checker
 approach and is historical for N4/N5; it does not authorize that approach.
 On 2026-10-31 the user directed ordinary Ash protocol code and ordinary error
 handling, without compiler protocol reconstruction or a new runtime checking
-framework. [CP-0028](../proposals/CP-0028-checked-functional-network-ledger.md),
-[CP-0030](../proposals/CP-0030-checked-network-codec.md), and AD-0017 record
-this revision. CP-0029 remains the selected codec's integer dependency. The
+framework. AD-0017 records the host decision and the milestone specification
+records the implemented language boundary, including the codec's integer
+module. The
 previous N3 review and proof establish only their recorded historical scope,
 not a prerequisite checker gate or a completed ordinary protocol. Main
 integration remains a separate gate.
+
 ## Current delivery status
 
 The live [M4 ledger](https://github.com/dikini/ash-lang/issues/55) records
-milestone inputs and outstanding gates. N3 and partial N4 checker slices were
-retained before the 2026-10-31 direction. Their receipts cover only the tested
-model or implementation and do not establish the revised connected program,
-actual settlement, or N4/N5 completion. The source-order limitation discussed
-in earlier evidence remains a generic validator issue; source ordering is not a
-language requirement.
+milestone inputs and outstanding gates. The ordinary Work/Ack and producing
+cleanup implementation, tests, specification, review and fresh seven-stage
+gate were retained on the milestone in [PR #187](https://github.com/dikini/ash-lang/pull/187)
+at `45676a607ac7565cc4c9f9cc926dd3dbe274baa1`. N6 and Main integration remain
+separate. Historical checker receipts do not establish the revised program's
+guarantees. The source-order limitation discussed in earlier evidence remains
+a generic validator issue; source ordering is not a language requirement.
 
 ## Work
 
-Deliver the ordinary Work/Ack/drain program using existing Ash and N2 network
-facilities, then producing cleanup and the cross-milestone program. Preserve
+The ordinary Work/Ack/drain and producing-cleanup slice is retained on the
+milestone. Complete the cross-milestone program, remaining verification and
+Main delivery. Preserve
 original user-visible outcomes from [#76](https://github.com/dikini/ash-lang/issues/76)
 through [#81](https://github.com/dikini/ash-lang/issues/81), applying the
-revised proposal to superseded checker-specific implementation criteria. The
+revised direction to superseded checker-specific implementation criteria. The
 focused plan names the connected acceptance path, negative cases, removal work
 and performance measurement. Complete generic and native gates, independent
 review, the specification update and full verification before final delivery.
@@ -230,19 +232,19 @@ Required N2 evidence still to reconcile against the existing receipts:
   and independently review the N2 and N-core evidence, retain the delivery, and
   run the required workspace gates.
 
-Formal evidence covers the required model laws. The Rust-to-model mapping and
+At the historical checkpoint, formal evidence covered the then-required model laws. The Rust-to-model mapping and
 ordinary runtime/primitive correspondence are trusted boundaries checked by
 independent review and required tests; this task does not formally verify Rust.
-Code and model proofs proceed in parallel against the accepted contract and
-meet at integration. Add helper proof detail only to resolve a concrete gap.
+Those historical protocol-checker obligations were superseded by the 2026-10-31 direction.
 
 ## Verification
 
 For N1 check artifact authority, relevant links and cases, independently
 review adoption bookkeeping and verify the retained result. For
-product slices freeze source/configuration inputs, run focused positive,
-negative, regression, proof and native checks required by the governing
-artifacts, obtain independent review and verify actual retained commits. Run
+product slices freeze source/configuration inputs, run the required focused
+positive, negative, generic C3, regression and native checks, obtain independent
+review and verify actual retained commits. Retained generic proof evidence keeps
+its original scope; historical protocol-checker models are not new gates. Run
 fresh full workspace gates at the plan's checkpoints and before Main, reusing a
 receipt only under its documented equality conditions. Use one Cargo job and
 the compatible shared cache under the project workflow.
@@ -274,6 +276,6 @@ existing checks to work around them.
 
 On 2026-10-31 the user superseded the protocol-specific compiler checker and
 then ruled out new runtime checking machinery beyond ordinary error handling.
-The revised proposals govern the remaining work; retained evidence keeps its
-original scope. Return any missing language, bridge or lifecycle contract to
-the governing proposal before implementation.
+The milestone specification and accepted decisions govern retained behavior;
+evidence keeps its original scope. Return a missing language, bridge or lifecycle
+contract to design and a proposal before implementation.
