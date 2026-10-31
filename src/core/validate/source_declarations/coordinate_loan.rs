@@ -1,10 +1,8 @@
 //! Operation-local, source-only coordinate loans. No registry proof is retained.
 
-use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+#[cfg(test)]
+use std::collections::HashSet;
+use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
 use super::{
     DeclarationCoordinates, ModuleId, SourceFile, SourceId, TypeWorkBudget, ValidationError,
@@ -22,6 +20,7 @@ pub(crate) struct DeclarationCoordinateLoan<'source> {
 }
 
 impl<'source> DeclarationCoordinateLoan<'source> {
+    #[cfg(test)]
     pub(crate) fn new(
         sources: &'source [SourceFile],
         modules: &[ModuleId],

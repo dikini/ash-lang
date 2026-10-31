@@ -221,7 +221,7 @@ macro_rules! define_kind_site_profiles {
 define_kind_site_profiles! {
     // Build/image work uses the cumulative TypeWorkBudget. Borrowed encoder
     // trees and identity indices retain original owners; restored buffers guard
-    // canonical trees until final independent Core admission transfers them.
+    // canonical trees until reconstruction transfers them.
     FieldBuildTypeAndKindBorrow => (Field, Borrowed, Canonical, CarrierRetention, PreservedCarrier, CoreAdmission, Type, TypeTreeAndKindTree),
     FieldCompletedFactShared => (Field, Shared, Checked, CarrierRetention, PreservedCarrier, Resolution, ResolutionType, CheckedTree),
     FieldBuildKindBorrow => (Field, Borrowed, Canonical, CarrierRetention, PreservedCarrier, CoreAdmission, Type, KindTree),

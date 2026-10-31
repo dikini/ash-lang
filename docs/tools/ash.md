@@ -28,8 +28,9 @@ configure imports as in ordinary execution. Diagnostic options may precede
 Build options must precede the entry path; `--output` is required exactly once.
 Success prints the executable's absolute path. The resulting program prints its
 result value on one line. It can run after the original Ash source files are
-removed. Startup reconstructs fresh Core identities, independently validates
-the construction data, and invokes the evaluator without source compilation.
+removed. The compiler validates the final Core representation before packaging.
+Startup reconstructs it with fresh identities and invokes the evaluator without
+repeating source or Core validation.
 
 Building requires the matching Ash checkout, Rust toolchain and cached Cargo
 dependencies. Native tools run offline with one build job. `--cargo-target-dir`
@@ -116,8 +117,8 @@ canonicalizes the paths and checks the supported file kind: a regular static
 archive or an ELF64 little-endian x86-64 shared library. It preserves input
 order, including archive dependency order. These inputs do not supply Ash
 contract facts or prove that a binary follows the authored signature and foreign
-assumptions. The generated host checks its supplied linked bridge registrations against
-its independently validated original contracts before Ash execution.
+assumptions. The generated host sets up the linked bridge registrations and their
+compiler-established associations before Ash execution.
 
 Shared dependencies use the system loader. The build emits no automatic rpath
 and provides no runtime library-name resolver. Install dependencies in the
@@ -170,7 +171,7 @@ not verify them. Binding authors express null/length checks, ordinary errors
 and scoped cleanup in Ash. A returned Address alone is no allocation witness.
 Internal work/storage failures remain terminal. Failure after a completed native
 call neither retries it nor undoes external effects. Existing cell, handler,
-cleanup, capture, image-validation and work/depth rules remain in force.
+cleanup, capture, compiler validation and work/depth rules remain in force.
 
 ### Execution support
 
@@ -411,8 +412,8 @@ main () = resource Cell.Cell<R,Bool> c = false {
 It prints `true : Bool` followed by a newline. Reads preserve ordinary value
 sharing and earlier snapshots; replacing the slot does not change an earlier
 read. Handles and values depending on the scope still cannot escape it.
-Interpreted execution and generated executables require the same independent
-source/Core dependency proof.
+Interpreted execution and generated executables use the same independent
+source/Core dependency proof established by compilation.
 
 The executable test `synchronous_hooks_documentation_example_has_exact_cli_output`
 checks this complete hook program:
@@ -813,8 +814,9 @@ Entry failures are ordered as `entry.missing-main`, `entry.main-polymorphic`,
 `entry.main-constrained`. The generated root discharges the default allocation
 requirement, and exact native interpretation discharges required admitted symbols.
 Any residual ordinary effect requirement or open entry row is a source rejection.
-Supplied native callback entries are checked against original symbols before
-Ash execution. A selected native invocation requires its exact entry; a missing
+Separately supplied native callback entries are checked against original symbols
+before Ash execution; generated hosts set up their compiler-established bridge
+associations. A selected native invocation requires its exact entry; a missing
 entry is a terminal runtime failure after operand evaluation and boundary
 selection. Ordinary execution refuses entries requiring native interpretation
 rather than building or linking implicitly. Execution has no source-level

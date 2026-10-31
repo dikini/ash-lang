@@ -7,7 +7,8 @@
 ## Decision
 
 The retained Mini-Ash evaluator is an explicit first-order machine over
-validated typed Core.
+compiler-validated typed Core. A generated executable reconstructs the verified
+representation before evaluation as described in [AD-0013](AD-0013-generated-native-bridges-and-program-builds.md).
 
 The machine runs through an explicit control loop. Its current evaluation
 contexts are typed frame data rather than Rust activation records or closures.
@@ -58,7 +59,8 @@ future effects.
   frame data needed to suspend surrounding work.
 - Lexical capture, code, environments, and current control remain inspectable
   compiler/runtime data.
-- The evaluator consumes only independently validated Core dialects.
+- The evaluator consumes Core independently validated by the compiler, including
+  its representation reconstructed by a compiler-generated executable.
 - Machine behavior is tested against AD-0004's small-step rules and does not
   define language semantics itself.
 - A direct recursive evaluator may remain a disposable differential oracle but

@@ -2,8 +2,9 @@
 //!
 //! This initial carrier deliberately refuses unsupported metadata. It contains
 //! flat indices and bytes, never parser trees, recursive Type serialization or
-//! validated capabilities. Restoration builds unchecked Core and invokes the
-//! existing modular validator. These records are not a stable file format.
+//! validated capabilities. Reconstruction preserves the compiler-validated
+//! representation for its linked executable. These records are not a stable
+//! file format.
 
 use std::{
     borrow::Borrow,
@@ -48,7 +49,6 @@ pub(crate) enum ImageFailure {
     SourceAdmission,
     RegistryAdmission,
     CoreAdmission(crate::core::BuildError),
-    Validation(crate::core::ValidationError),
 }
 
 impl From<crate::core::BuildError> for ImageFailure {
@@ -85,7 +85,6 @@ impl fmt::Display for ImageFailure {
             Self::CoreAdmission(error) => {
                 write!(formatter, "Pure image Core admission refused: {error}")
             }
-            Self::Validation(error) => write!(formatter, "Pure image validation refused: {error}"),
         }
     }
 }
@@ -2979,7 +2978,7 @@ impl PureImage {
 }
 
 impl PureImage {
-    /// Restores ordinary identities, builds unchecked Core, and validates it.
+    /// Reconstructs compiler-validated Core with fresh identities.
     /// No source loader, resolver, source checker or evaluator runs here.
     pub(crate) fn restore(
         &self,
@@ -3139,20 +3138,10 @@ impl PureImage {
             nodes.push(node);
         }
         let root = *get(&nodes, self.root)?;
-        let unchecked = builder.finish_image(root, decoder.work)?;
-        let mut sources = Vec::new();
-        let mut module_sources = Vec::new();
-        for (module, source) in decoder.modules.iter().zip(decoder.sources.iter()) {
-            push(&mut sources, source, decoder.work)?;
-            push(&mut module_sources, (*module, source.id()), decoder.work)?;
-        }
-        crate::core::validate::validate_modules_with_work(
-            unchecked,
-            &sources,
-            &module_sources,
-            decoder.work,
-        )
-        .map_err(ImageFailure::Validation)
+        builder
+            .finish_image(root, Vec::new(), decoder.work)?
+            .into_compiler_image(decoder.work)
+            .map_err(ImageFailure::from)
     }
 }
 
@@ -3916,7 +3905,7 @@ mod tests {
     }
 
     #[test]
-    fn retained_continue_image_rebuilds_the_actual_adapter_and_revalidates_it() {
+    fn retained_continue_image_rebuilds_the_actual_adapter() {
         let tree = retained_continue_source_tree();
         let compiled = compile_path(tree.configuration()).unwrap();
         let (program, provenance) = compiled.effect_build_input().unwrap();
@@ -3946,14 +3935,7 @@ mod tests {
             .iter()
             .position(|node| matches!(node.tag, NodeTag::Continue { .. }))
             .unwrap();
-        let NodeTag::Continue {
-            store,
-            key,
-            answer,
-            some,
-            none,
-        } = image.nodes[index].tag
-        else {
+        let NodeTag::Continue { some, none, .. } = image.nodes[index].tag else {
             unreachable!()
         };
         assert_ne!(some, none);
@@ -4011,24 +3993,6 @@ mod tests {
                 Err(ImageFailure::InvalidRecord)
             ));
         }
-
-        // Both adapters stay reachable, but swapping their Some/None roles
-        // must fail the independently reconstructed Core checks.
-        let mut changed = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
-        changed.nodes[index].tag = NodeTag::Continue {
-            store,
-            key,
-            answer,
-            some: none,
-            none: some,
-        };
-        changed
-            .admit_expected_native_facts(&expected, &mut TypeWorkBudget::default())
-            .unwrap();
-        assert!(matches!(
-            changed.restore_effect(&mut TypeWorkBudget::default()),
-            Err(ImageFailure::Validation(_))
-        ));
     }
 
     #[test]
@@ -4204,7 +4168,7 @@ mod tests {
     }
 
     #[test]
-    fn retained_empty_store_image_revalidates_and_executes() {
+    fn retained_empty_store_image_reconstructs_and_executes() {
         assert_effect_image(
             concat!(
                 "import @builtin.retained_control as Control\n",
@@ -4238,7 +4202,7 @@ mod tests {
             let (program, provenance) = compiled.effect_build_input().unwrap();
             let mut preparation =
                 super::super::gas::preparation(provenance, program.nodes().len()).unwrap();
-            let mut image = encode_effect_for_build(
+            let image = encode_effect_for_build(
                 program,
                 provenance,
                 super::super::NATIVE_TARGET,
@@ -4274,65 +4238,8 @@ mod tests {
                 &[],
                 None,
             )
-            .expect("the generated-host entry must revalidate and run the image");
+            .expect("the generated-host entry must reconstruct and run the image");
             assert_eq!(result.to_string(), answer, "{name}");
-
-            if name == "recursive" {
-                let start = u32::try_from(source.find("match quiet {").unwrap()).unwrap();
-                let matches = image
-                    .nodes
-                    .iter()
-                    .filter_map(|node| {
-                        let NodeTag::Match { arms, .. } = node.tag else {
-                            return None;
-                        };
-                        let mut origin = node.origin;
-                        let span = loop {
-                            match image.origins[usize::try_from(origin).unwrap()] {
-                                OriginRecord::Source(span) => break span,
-                                OriginRecord::Generated { cause, .. }
-                                | OriginRecord::Related { primary: cause, .. } => origin = cause,
-                            }
-                        };
-                        let source_record = &image.sources[usize::try_from(span.source).unwrap()];
-                        (span.start == start
-                            && source_record.text.get(&image.bytes).unwrap() == source.as_bytes())
-                        .then_some(arms)
-                    })
-                    .collect::<Vec<_>>();
-                assert_eq!(matches.len(), 1);
-                let arms = matches[0];
-                let pair = arms.get(&image.arms).unwrap();
-                assert_eq!(pair.len(), 2);
-                assert!(matches!(
-                    image.patterns[usize::try_from(pair[0].pattern).unwrap()].tag,
-                    PatternTag::Bool(true)
-                ));
-                assert!(matches!(
-                    image.patterns[usize::try_from(pair[1].pattern).unwrap()].tag,
-                    PatternTag::Bool(false)
-                ));
-                let first = usize::try_from(arms.start).unwrap();
-                let first_pattern = image.arms[first].pattern;
-                image.arms[first].pattern = image.arms[first + 1].pattern;
-                image.arms[first + 1].pattern = first_pattern;
-                let changed = image.encode_bytes(&mut preparation).unwrap();
-                let Err(failure) = super::super::__run_private_effect_image(
-                    &super::super::runtime_fingerprint(),
-                    &changed,
-                    facts,
-                    &[],
-                    None,
-                ) else {
-                    panic!("a decoded image cannot authorize an undrained Store");
-                };
-                assert!(matches!(
-                    failure,
-                    super::super::PrivateProgramFailure(super::super::PrivateFailure::Image(
-                        ImageFailure::Validation(error)
-                    )) if error.reason() == crate::core::ValidationReason::RetainedRelease
-                ));
-            }
         }
     }
 
@@ -4514,12 +4421,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generic_cell_private_image_reconstructs_dependency_proof_and_executes() {
+    fn generic_cell_private_image_reconstructs_and_executes() {
         let (donor, sources, relation) =
             crate::core::validate::generic_cell_source_fixture_for_test(
                 "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, Int> c = 41 {\nCell.read c + 1\n}\n",
                 None,
             );
+        let anchor_count = donor.method_evidence_anchors().len();
+        assert!(anchor_count > 0);
         let provenance = relation
             .iter()
             .map(|(module, identity)| {
@@ -4567,124 +4476,44 @@ mod tests {
             .unwrap();
         let restored = decoded.restore_effect(&mut work).unwrap();
         assert_eq!(
+            restored.program.method_evidence_anchors().len(),
+            anchor_count
+        );
+        assert_eq!(
             crate::eval::evaluate_effect(&restored.program)
                 .unwrap()
                 .value
                 .to_string(),
             "42"
         );
-    }
-
-    #[test]
-    fn generic_cell_image_rejects_missing_duplicate_donor_and_unsealed_scope_facts() {
-        let (program, sources, relation) =
-            crate::core::validate::generic_cell_source_fixture_for_test(
-                include_str!("../../tests/fixtures/generic-cell/retention-entry.ash"),
-                Some(include_str!(
-                    "../../tests/fixtures/generic-cell/dependency-helper.ash"
-                )),
-            );
-        let provenance = relation
+        // Compiler-side codec oracle: transformed reconstructed records must
+        // still satisfy the ordinary independent Core validator.
+        let source_refs = restored._sources.iter().collect::<Vec<_>>();
+        let module_sources = restored
+            .modules
             .iter()
-            .map(|(module, id)| {
-                (
-                    *module,
-                    Arc::new(
-                        sources
-                            .iter()
-                            .find(|source| source.id() == *id)
-                            .unwrap()
-                            .clone(),
-                    ),
-                )
-            })
+            .copied()
+            .zip(restored._sources.iter().map(SourceFile::id))
             .collect::<Vec<_>>();
-        let build = encode_effect_for_build(
-            &program,
-            &provenance,
-            super::super::NATIVE_TARGET,
-            &mut TypeWorkBudget::default(),
-        )
-        .unwrap();
-        let original = build
-            .image
-            .encode_bytes(&mut TypeWorkBudget::default())
-            .unwrap();
-        let expected = build
-            .image
-            .encode_native_expectations(&mut TypeWorkBudget::default())
-            .unwrap();
-        for case in [
-            "missing",
-            "duplicate",
-            "declaration",
-            "donor",
-            "kind",
-            "prefix",
+        for transformed in [
+            crate::core::transform::identity_effect_traversal(&restored.program).unwrap(),
+            crate::core::transform::fold_effect_literal_primitives(&restored.program).unwrap(),
         ] {
-            let mut image =
-                PureImage::decode_bytes(&original, &mut TypeWorkBudget::default()).unwrap();
-            let slot = *image
-                .scope_parameters
-                .first()
-                .expect("Cell scope has a canonical identity");
-            match case {
-                "missing" => {
-                    image.scope_parameters.remove(0);
-                }
-                "duplicate" => image.scope_parameters.push(slot),
-                "declaration" => {
-                    image.scope_parameters[0] = (0..image.native_fact_prefixes.unwrap().parameters)
-                        .find(|slot| !image.scope_parameters.contains(slot))
-                        .expect("Cell declaration parameters are separate from scopes");
-                }
-                "donor" => {
-                    let TypeVariableIdentity::Resolved { module, .. } =
-                        image.parameters[slot as usize].id
-                    else {
-                        panic!("source scope identity must be resolved")
-                    };
-                    image.parameters[slot as usize].id = TypeVariableIdentity::Resolved {
-                        module,
-                        local: u32::MAX,
-                    };
-                }
-                "kind" => {
-                    let kind = image.parameters[slot as usize].kind;
-                    assert_eq!(image.kinds[kind as usize], KindRecord::Type);
-                    image.kinds[kind as usize] = KindRecord::EffectRow;
-                }
-                "prefix" => {
-                    let parameter = image.parameters[slot as usize];
-                    let outside = image.native_fact_prefixes.unwrap().parameters;
-                    image.parameters.push(parameter);
-                    image.scope_parameters[0] = outside;
-                }
-                _ => unreachable!(),
-            }
-            let encoded = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
-            let image = PureImage::decode_bytes(&encoded, &mut TypeWorkBudget::default()).unwrap();
-            assert!(
-                image
-                    .admit_expected_native_facts(&expected, &mut TypeWorkBudget::default())
-                    .is_err(),
-                "startup must refuse changed expected facts: {case}"
-            );
-            // A caller without expected bytes must still face the complete
-            // canonical inventory and independent source/Core validation.
-            let image = PureImage::decode_bytes(&encoded, &mut TypeWorkBudget::default()).unwrap();
-            assert!(
-                image
-                    .restore_effect(&mut TypeWorkBudget::default())
-                    .is_err(),
-                "restoration must independently reject malformed scope facts: {case}"
+            let checked =
+                crate::core::validate_effect_modules(transformed, &source_refs, &module_sources)
+                    .unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&checked)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
             );
         }
     }
 
     #[test]
     fn generic_cell_imported_flow_images_rebuild_with_exact_short_and_retry_work() {
-        let mut default_refusal_checked = false;
         let mut case = 0;
         for (source, helper, value) in [
             (
@@ -4783,34 +4612,7 @@ mod tests {
                 image.admit_expected_native_facts(&expected, work)?;
                 image.restore_effect(work)
             };
-            let mut standalone = TypeWorkBudget::default();
-            let standalone_outcome = match restore(&mut standalone) {
-                Ok(restored) => {
-                    drop(restored);
-                    "complete"
-                }
-                Err(ImageFailure::Resource) => {
-                    default_refusal_checked = true;
-                    "resource-refusal"
-                }
-                Err(ImageFailure::Validation(error))
-                    if error.reason() == crate::core::ValidationReason::Resource =>
-                {
-                    default_refusal_checked = true;
-                    "validation-resource-refusal"
-                }
-                Err(error) => panic!("standalone image refusal must be capacity: {error:?}"),
-            };
-            eprintln!(
-                "imported-flow startup case={case} standalone={standalone_outcome} used={}/{}",
-                standalone.used(),
-                standalone.limit()
-            );
-            // Use the same startup owner as the generated runner, carrying
-            // framing, expected facts and reconstruction in one cumulative meter.
-            if case == 2 {
-                assert_eq!(standalone_outcome, "validation-resource-refusal");
-            }
+            // Keep decoding, fact handling and reconstruction in one startup meter.
             let mut measured = super::super::gas::startup(bytes.len(), expected.len()).unwrap();
             let restored = restore(&mut measured).unwrap_or_else(|error| {
                 panic!(
@@ -4844,122 +4646,6 @@ mod tests {
                 assert_eq!(exact.used(), measured.used());
             }
         }
-        assert!(
-            default_refusal_checked,
-            "the unchanged standalone allowance refuses at least one retained flow"
-        );
-    }
-
-    #[test]
-    fn generic_cell_image_reconstructs_hidden_capture_instead_of_trusting_prior_proof() {
-        let (program, sources, relation) =
-            crate::core::validate::generic_cell_source_fixture_for_test(
-                include_str!("../../tests/fixtures/generic-cell/retention-entry.ash"),
-                Some(include_str!(
-                    "../../tests/fixtures/generic-cell/dependency-helper.ash"
-                )),
-            );
-        let provenance = relation
-            .iter()
-            .map(|(module, id)| {
-                (
-                    *module,
-                    Arc::new(
-                        sources
-                            .iter()
-                            .find(|source| source.id() == *id)
-                            .unwrap()
-                            .clone(),
-                    ),
-                )
-            })
-            .collect::<Vec<_>>();
-        let build = encode_effect_for_build(
-            &program,
-            &provenance,
-            super::super::NATIVE_TARGET,
-            &mut TypeWorkBudget::default(),
-        )
-        .unwrap();
-        let expected = build
-            .image
-            .encode_native_expectations(&mut TypeWorkBudget::default())
-            .unwrap();
-        let mut image = build.image;
-        let handles = image
-            .nodes
-            .iter()
-            .filter_map(|node| match node.tag {
-                NodeTag::CellScope {
-                    handle,
-                    initializer,
-                    ..
-                } => Some((
-                    handle,
-                    matches!(image.nodes[initializer as usize].tag, NodeTag::Integer(41)),
-                )),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(handles.len(), 2);
-        let scalar = image.binders[handles.iter().find(|(_, scalar)| *scalar).unwrap().0 as usize];
-        let function =
-            image.binders[handles.iter().find(|(_, scalar)| !*scalar).unwrap().0 as usize];
-        let same_binder = |left, right| match (left, right) {
-            (
-                BinderIdentity::Resolved {
-                    module: a,
-                    local: b,
-                },
-                BinderIdentity::Resolved {
-                    module: c,
-                    local: d,
-                },
-            ) => a == c && b == d,
-            (BinderIdentity::Generated(a), BinderIdentity::Generated(b)) => a == b,
-            _ => false,
-        };
-        let changed = image
-            .nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(index, node)| {
-                matches!(node.tag, NodeTag::Variable(id) if same_binder(id,scalar.id))
-                    .then_some(index)
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(changed.len(), 1);
-        let changed = changed[0];
-        image.nodes[changed].tag = NodeTag::Variable(function.id);
-        image.nodes[changed].ty = function.ty;
-        let mut binders = 0;
-        for node in &image.nodes {
-            if let NodeTag::Bind {
-                binder,
-                initializer,
-                ..
-            } = node.tag
-                && initializer as usize == changed
-            {
-                image.binders[binder as usize].ty = function.ty;
-                binders += 1;
-            }
-        }
-        assert_eq!(binders, 1);
-        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
-        let decoded = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
-        decoded
-            .admit_expected_native_facts(&expected, &mut TypeWorkBudget::default())
-            .unwrap();
-        let error = match decoded.restore_effect(&mut TypeWorkBudget::default()) {
-            Err(error) => error,
-            Ok(_) => panic!("changed hidden retention must fail independent image validation"),
-        };
-        assert!(
-            matches!(error, ImageFailure::Validation(ref error)
-            if error.reason() == crate::core::ValidationReason::ResourceEscape),
-            "{error:?}"
-        );
     }
 
     #[test]
@@ -5379,7 +5065,7 @@ mod tests {
                 .unwrap();
             let restored = image
                 .restore_effect(&mut work)
-                .expect("recursive image independently validates");
+                .expect("recursive compiler image reconstructs");
             let evaluation = crate::eval::evaluate_effect(&restored.program).unwrap();
             assert_eq!(evaluation.value.to_string(), expected);
         }
@@ -5562,7 +5248,7 @@ mod tests {
                 restored_cost.map_or_else(TypeWorkBudget::default, TypeWorkBudget::with_limit);
             let restored = image
                 .restore_effect(&mut restore_work)
-                .expect("independent reconstruction validates");
+                .expect("compiler image reconstructs");
             restored_cost = Some(restore_work.used());
             assert_ne!(
                 restored
@@ -5622,34 +5308,6 @@ mod tests {
             image.restore_effect(&mut work),
             Err(ImageFailure::Resource)
         ));
-        // Malformed structural claims reach the same independent validator;
-        // no image API can construct a ValidatedProgram directly.
-        let mut corrupt = image;
-        let literal = corrupt
-            .nodes
-            .iter_mut()
-            .find(|record| matches!(record.tag, NodeTag::Integer(_)))
-            .unwrap();
-        assert!(
-            matches!(
-                corrupt.types[usize::try_from(literal.ty).unwrap()].tag,
-                TypeTag::Int
-            ),
-            "the current retained integer record must have its admitted Int type before corruption"
-        );
-        literal.ty = push(
-            &mut corrupt.types,
-            TypeRecord {
-                tag: TypeTag::Bool,
-                children: Slice { start: 0, len: 0 },
-            },
-            &mut TypeWorkBudget::default(),
-        )
-        .unwrap();
-        assert!(matches!(
-            corrupt.restore_effect(&mut TypeWorkBudget::default()),
-            Err(ImageFailure::Validation(_))
-        ));
     }
 
     #[test]
@@ -5659,8 +5317,8 @@ mod tests {
         let module = ModuleId::from(source.id());
         let modules = [module];
 
-        // Only construction shape is under test. Final registry/kind/Core
-        // authentication remains mandatory before any image can execute.
+        // Only bounded construction shape is under test; compiled images carry
+        // the compiler-verified registry, kinds and Core.
         fn record(image: &mut PureImage, tag: TypeTag, children: &[u32]) -> u32 {
             let start = image.type_children.len();
             image.type_children.extend_from_slice(children);
@@ -5962,7 +5620,7 @@ main () = {
             short.charge(prefix).unwrap();
             assert!(
                 restore(&bytes, &mut short).is_err(),
-                "one-short work can refuse during final Core validation as well as decoding"
+                "one-short work can refuse during reconstruction as well as decoding"
             );
             for _ in 0..2 {
                 let mut exact = TypeWorkBudget::with_limit(prefix + required);
@@ -5970,68 +5628,6 @@ main () = {
                 restore(&bytes, &mut exact).unwrap();
                 assert_eq!(exact.used(), prefix + required);
             }
-        }
-        let canonical = || PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
-        for change in 0..5 {
-            let mut changed = canonical();
-            let builtin = changed
-                .sources
-                .iter()
-                .position(|s| matches!(s.role, ModuleRoleRecord::BuiltinBytes))
-                .unwrap();
-            match change {
-                0 => changed.sources[builtin].role = ModuleRoleRecord::Ordinary,
-                1 => {
-                    let range = changed.sources[builtin].text;
-                    changed.bytes[usize::try_from(range.start).unwrap()] = b'X';
-                }
-                2 => {
-                    let record = changed.sources[builtin];
-                    changed.sources.push(record);
-                }
-                3 | 4 => {
-                    let ordinary = index(
-                        changed
-                            .sources
-                            .iter()
-                            .position(|s| matches!(s.role, ModuleRoleRecord::Ordinary))
-                            .unwrap(),
-                    )
-                    .unwrap();
-                    let node = changed
-                        .nodes
-                        .iter_mut()
-                        .find(|node| {
-                            matches!(
-                                node.tag,
-                                NodeTag::RegionBuffer {
-                                    source: 1,
-                                    operation: 4,
-                                    ..
-                                }
-                            )
-                        })
-                        .unwrap();
-                    let NodeTag::RegionBuffer {
-                        module, operation, ..
-                    } = &mut node.tag
-                    else {
-                        unreachable!()
-                    };
-                    if change == 3 {
-                        *module = Some(ordinary);
-                    } else {
-                        *operation = 255;
-                    }
-                }
-                _ => unreachable!(),
-            }
-            assert!(
-                changed
-                    .restore_effect(&mut TypeWorkBudget::default())
-                    .is_err(),
-                "forged Bytes authority {change}"
-            );
         }
     }
 
@@ -8394,8 +7990,8 @@ impl Encoder<'_> {
         Ok(())
     }
 }
-// Native-image extensions: these share the existing flat tables, wire codec,
-// meter, Core builders and independent validators. No source frontend runs.
+// Native-image extensions share the existing flat tables, wire codec, meter and
+// Core builders. The compiler validates the input before encoding it.
 impl Encoder<'_> {
     fn encode_effect_node(
         &mut self,
@@ -9283,9 +8879,8 @@ struct RestoredNativeRegistry {
     symbols: Vec<Arc<crate::foreign::checked_source::CheckedForeignSymbol>>,
 }
 
-/// Holds independently validated Core and its original restored allocation
-/// coordinates. These handles are needed by the generated-registration gate;
-/// returning them alone never admits an executable callback.
+/// Holds reconstructed compiler-validated Core and relocated allocation
+/// coordinates used to set up generated registrations.
 pub(crate) struct RestoredEffectImage {
     _provenance: Option<RestoredProvenance>,
     pub(crate) program: crate::core::ValidatedEffectProgram,
@@ -9408,9 +9003,8 @@ impl PureImage {
         charge(decoder.work, 1)?;
         let registry = Arc::new(registry);
         let binder_ids = decoder.source_binder_reservations()?;
-        // Freeze ownership of the admitted coordinate arena outside the
-        // decoder. The syntax loan borrows these exact immutable objects;
-        // original registry/forest sessions remain separate per template.
+        // Keep the relocated source and module identities alive with the
+        // reconstructed program and its native bindings.
         let Decoder {
             image,
             expected_fact_prefixes,
@@ -9423,12 +9017,6 @@ impl PureImage {
         } = decoder;
         let source_arena = sources.into_owned()?;
         let module_arena = modules.into_owned()?;
-        let coordinate_loan = crate::core::validate::DeclarationCoordinateLoan::new(
-            &source_arena,
-            &module_arena,
-            work,
-        )
-        .map_err(ImageFailure::Validation)?;
         let mut decoder = Decoder {
             image,
             expected_fact_prefixes,
@@ -9443,10 +9031,10 @@ impl PureImage {
             self.main_method_catalog
                 .ok_or(ImageFailure::InvalidRecord)?,
         )?;
-        let mut builder = crate::core::EffectCoreBuilder::with_registry_and_method_evidence(
+        let mut builder = crate::core::EffectCoreBuilder::with_registry_for_image(
             Arc::clone(&registry),
             Arc::clone(&catalog),
-        )?;
+        );
         builder.reserve_image_reconstruction_storage(
             self.nodes.len(),
             self.binders.len(),
@@ -9475,42 +9063,17 @@ impl PureImage {
             )?;
             nodes.push(node);
         }
-        decoder.source_method_anchors(
-            &mut builder,
+        let anchors = decoder.source_method_anchors(
             &nodes,
             &catalog,
             self.source_method_anchors
                 .ok_or(ImageFailure::InvalidRecord)?,
         )?;
-        let unchecked = builder.finish_image(*get(&nodes, self.root)?, decoder.work)?;
-        let mut sources = Vec::new();
-        let mut module_sources = Vec::new();
-        for (module, source) in decoder.modules.iter().zip(decoder.sources.iter()) {
-            push(&mut sources, source, decoder.work)?;
-            push(&mut module_sources, (*module, source.id()), decoder.work)?;
-        }
-        let program = crate::core::validate::validate_effect_modules_with_work(
-            unchecked,
-            &sources,
-            &module_sources,
-            decoder.work,
-        )
-        .map_err(ImageFailure::Validation)?;
-        charge(decoder.work, 1)?;
-        if !program
-            .node(program.root())
-            .ok_or(ImageFailure::InvalidRecord)?
-            .effects()
-            .is_empty()
-        {
-            return Err(ImageFailure::InvalidRecord);
-        }
-        // Validation source views end here. Transfer the already admitted flat
-        // coordinate arena into its private registration owner without copying.
-        drop(sources);
-        drop(module_sources);
+        let program = builder
+            .finish_image(*get(&nodes, self.root)?, anchors, decoder.work)?
+            .into_compiler_image(decoder.work)?;
+        // Transfer the relocated coordinate arena without copying it.
         drop(decoder);
-        drop(coordinate_loan);
 
         let sources = source_arena;
         let modules = module_arena;

@@ -73,8 +73,11 @@ and exercise ordinary Probe interception. The
 [linked validation tests](../../../src/core/validate.rs) reject a same-typed
 cleanup callback substitution and recheck transformed control. The runtime
 `retained_move_prepares_storage_before_taking_either_owner` test covers failed
-preparation and retry without a partial move. Images are independently decoded
-and validated before execution. These tests and reviewed correspondences
+preparation and retry without a partial move. At that checkpoint, images were
+independently validated before execution; current generated hosts reconstruct
+compiler-validated representations as described in
+[AD-0013](../../decisions/AD-0013-generated-native-bridges-and-program-builds.md).
+These tests and reviewed correspondences
 connect the bounded models to the implementation; the Lean results do not
 mechanically prove the compiler or evaluator. [Issue #165](https://github.com/dikini/ash-lang/issues/165)
 records two analysis limitations and their reproductions. The C5 checkpoint and Main handoff completed with

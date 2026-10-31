@@ -1,9 +1,8 @@
 //! Native hosts containing matching-compiler private Core construction data.
 //!
-//! Supports the established monomorphic Pure subset and a closed owner-free
-//! scalar/void native Effect slice. Both preserve the existing evaluator and
-//! independently validate reconstructed Core. There is no runtime Ash compiler
-//! or stable Core file format; ownership/access remain explicit exclusions.
+//! Hosts reconstruct the compiler-validated Pure or Effect representation and
+//! use the existing evaluator and generated native bridges. There is no runtime
+//! Ash compiler or stable Core file format.
 
 mod artifacts;
 mod bridge;
@@ -30,7 +29,7 @@ impl fmt::Display for PrivateProgramOutput {
     }
 }
 
-/// Startup failure from private data admission or the existing evaluator.
+/// Startup failure from private reconstruction or the existing evaluator.
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct PrivateProgramFailure(PrivateFailure);
@@ -93,16 +92,18 @@ pub const fn __private_runtime_matches(expected: &[u8; 32]) -> bool {
     true
 }
 
-/// Restores unvalidated matching-compiler private data and runs checked Core.
+/// Reconstructs matching-compiler verified Core and runs it.
 ///
-/// This entry is for generated hosts; it provides no stable image format or
-/// unchecked executable capability. Fingerprint admission precedes decoding.
-/// One cumulative bounded meter covers decoding, reconstruction and independent
-/// validation before evaluation, with fresh program/runtime identities per call.
+/// This entry is for generated hosts; it provides no stable image format.
+/// Fingerprint compatibility precedes decoding.
+/// One cumulative bounded meter covers decoding and reconstruction before
+/// evaluation, with fresh program/runtime identities per call. The compiler
+/// verifies the representation before producing the linked executable.
 ///
 /// # Errors
-/// Refuses mismatched runtimes, malformed/unsupported Core, work/storage
-/// exhaustion, and existing evaluator failures. It reads no original source path.
+/// Reports incompatible runtimes, decode or reconstruction failures,
+/// work/storage exhaustion, and evaluator failures. It reads no original source
+/// path.
 #[doc(hidden)]
 pub fn __run_private_pure_image(
     expected_runtime: &[u8; 32],
@@ -217,15 +218,14 @@ pub fn __run_private_effect_image(
     let runtime_error = |error| PrivateProgramFailure(PrivateFailure::Evaluation(error));
     let mut work = gas::startup(bytes.len(), expected_facts.len())
         .map_err(|()| image_error(image::ImageFailure::Resource))?;
-    // Framing/end-of-input and the complete canonical fact comparison precede
-    // all semantic reconstruction and consume this same input-derived meter.
+    // Framing, fact comparison and reconstruction consume the same meter.
     let image = image::PureImage::decode_bytes(bytes, &mut work).map_err(image_error)?;
     image
         .admit_expected_native_facts(expected_facts, &mut work)
         .map_err(image_error)?;
     let restored = image.restore_effect(&mut work).map_err(image_error)?;
-    // Source admission, reconstruction and independent validation have now
-    // completed. The correspondence gate consumes that inaccessible phase.
+    // Reconstructed coordinates connect the compiler-generated bridge entries
+    // to their fresh runtime symbols.
     let mut seen_libraries = HashSet::new();
     work.charge(libraries.len())
         .map_err(|()| image_error(image::ImageFailure::Resource))?;
@@ -290,12 +290,6 @@ pub fn __run_private_effect_image(
             {
                 return Err(image_error(image::ImageFailure::InvalidRecord));
             }
-            crate::foreign::checked_source::authenticate_foreign_symbol(
-                source,
-                restored.program.registry(),
-                &mut work,
-            )
-            .map_err(|_| runtime_error(crate::eval::RuntimeFailure::ForeignBinding))?;
             // Consume the private callback only after original fact/identity
             // checks; it cannot be replaced through a public member field.
             let PrivateNativeCallback::Scalar(callback) = bridge.callback;

@@ -7,7 +7,7 @@ The alias builds xtask with the optimized `verification` profile for receipt
 hashing. Its child product checks use their existing default profiles.
 The matching-compiler fingerprint includes product source, the root manifest
 and lockfile. Tooling and host changes therefore have their own identity. An
-adopted candidate needs native and embedded-image proof matched to its compiler
+adopted candidate needs native and embedded-image execution evidence matched to its compiler
 and runtime; historical overlay/original binaries do not supply that equality.
 
 ## Required stages

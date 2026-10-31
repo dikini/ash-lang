@@ -431,8 +431,8 @@ fn fresh_project(parent: &Path) -> Result<PathBuf, BuildFailure> {
 /// Generated source, private compile-time payloads and native logs remain beside
 /// the requested output in a fresh `.ash-build` project. Linking uses the matching
 /// Ash source/toolchain;
-/// the resulting executable reconstructs and validates private Core at startup
-/// without invoking the Ash compiler or reading original source files.
+/// the resulting executable reconstructs compiler-validated private Core at
+/// startup without invoking the compiler or reading original source files.
 /// Generated Cargo root artifacts are removed after copying. Shared dependency
 /// caches remain; a private cache inside the generated project is temporary.
 ///

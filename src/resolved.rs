@@ -20024,8 +20024,7 @@ impl ResolvedRegistry {
         Ok(self)
     }
 
-    /// Restores unchecked global scheme rows and their original canonical facts.
-    /// Independent Core validation must still match each row to its lexical owner.
+    /// Reconstructs compiler-validated global scheme rows and their facts.
     pub(crate) fn with_image_global_parameters(
         mut self,
         rows: Vec<(BinderId, Vec<ResolvedTypeVariable>)>,
@@ -20119,9 +20118,8 @@ impl ResolvedRegistry {
         Ok(self)
     }
 
-    // This is a supported-subset inventory, not a validation capability;
-    // the caller already holds independently validated
-    // Core and restoration must return through that same independent validator.
+    // This is a supported-subset inventory for compiler-validated Core and its
+    // private reconstructed representation.
     pub(crate) fn image_abstract_nominal_name(&self, id: NominalTypeId) -> Option<&str> {
         self.abstract_nominal_names.get(&id).map(String::as_str)
     }
@@ -20261,8 +20259,8 @@ impl ResolvedRegistry {
         // An exact retained original view can contain lexical window binders
         // from another declaration in the same defining checker universe. They
         // need not occur in the instantiated original forest. The image records
-        // that complete view canonically; this inventory grants no authority
-        // and original/main validation still runs independently afterward.
+        // that complete compiler-validated view canonically; this inventory
+        // preserves the data needed by reconstruction.
         for identity in original_variables {
             work.charge(1).map_err(|()| resource())?;
             let Some(variable) = self.type_variable(*identity) else {
@@ -20404,7 +20402,7 @@ impl ResolvedRegistry {
         }
     }
 
-    /// Reconstructs an unchecked image registry with guarded payload ownership.
+    /// Reconstructs image registry storage with guarded payload ownership.
     pub(crate) fn new_with_budget(
         nominals: Vec<ResolvedNominalType>,
         constructors: Vec<ResolvedConstructor>,

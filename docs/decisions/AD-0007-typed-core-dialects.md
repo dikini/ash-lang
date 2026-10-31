@@ -18,9 +18,12 @@ that structure rather than an independent arity. Nodes retain causal source
 provenance sufficient for validation and diagnostics.
 
 Each retained Core dialect has an independent validator. Validation checks node
-types, binder scope, dialect membership, and provenance after construction,
-deserialization, and transformation. Construction APIs may prevent common
-mistakes but do not replace the validation boundary.
+types, binder scope, dialect membership, and provenance after compiler
+construction and transformation, before the final representation is packaged.
+Construction APIs may prevent common mistakes but do not replace that boundary.
+A linked compiler-generated executable reconstructs this verified representation
+without repeating the proof; [AD-0013](AD-0013-generated-native-bridges-and-program-builds.md)
+defines that execution boundary.
 
 Core separates ordinary values and computations and provides a typed
 operation-family boundary in the spirit of a Freer representation. The pure

@@ -34,9 +34,12 @@ The compiler does not verify native behavior or manage foreign ownership.
 Program build takes the checked graph and explicit native inputs, emits typed
 Rust bridges and an evaluator host, then compiles and links an executable.
 Private images require the matching compiler/runtime version; no cross-version
-compatibility is promised. Startup independently reconstructs and validates Core
-and exact bridge registrations before evaluation. No live pointer is an image
-constant. Ordinary source handlers retain nearest-handler precedence.
+compatibility is promised. The compiler validates the final Core representation
+before serialization and linking. Its generated executable trusts that
+representation, reconstructs it with fresh runtime identities, and sets up its
+generated bridge registrations before evaluation. Startup does not repeat the
+source, Core or capture proof. No live pointer is an image constant. Ordinary
+source handlers retain nearest-handler precedence.
 
 Generated images support generic cells, lexical regions and retained control.
 They do not support Network scopes or operations. Pinned-worker programs execute
@@ -52,9 +55,10 @@ mutated or freed. No hidden length, terminator or inferred ownership is supplied
 
 Keep compile, prepare and build phases explicit. Immutable checked symbol facts
 remain shared authority for module summaries, Core operands and generated bridge
-plans. Binding tables authenticate the original symbol allocation and exact
-signature rather than selecting by native link name alone. Independent Core
-validation rejects stale or transformed correspondence.
+plans. Separately supplied callback tables authenticate the original symbol
+allocation and exact signature rather than selecting by native link name alone.
+Independent compiler Core validation rejects stale or transformed correspondence;
+generated bridge registrations retain their compiler-established associations.
 
 Reuse keys include exact source/dependency identities, profile, compiler version
 and native build inputs. Phase completion or cache reuse does not establish
@@ -228,20 +232,24 @@ finite source-count-derived sizing allowance; carry those charges inside the
 computed total. Native-input validation and all subsequent emission work consume
 that same meter. Refuse checked-arithmetic overflow or a total below spent work.
 
-Startup derives only a private provisional meter from actual resident payload
-lengths. Complete paid canonical decoding, bounds/end-of-input checks and the
-independently emitted expected-facts comparison before semantic reconstruction.
-Keep all framing, source/original/Core/capture and final native-binding admission
-charges in the same meter. Invalid framing cannot reach semantic admission or C.
-There are no per-module resets, spent-work top-ups or static overall gas ceiling.
+Startup derives a private meter from actual resident payload lengths. Paid
+decoding, bounds/end-of-input checks, generated expected-facts comparison,
+representation reconstruction and native-binding setup share that meter.
+The generated executable uses the representation already verified by the
+compiler; startup does not rerun source, Core or capture validation. There are
+no per-module resets, spent-work top-ups or static overall gas ceiling.
 
 These estimates do not prove a universal complexity bound or grant authority.
 The actual meter still refuses amplified work. Valid unused framed records or
 source whitespace can increase estimates linearly; compact DAGs cannot obtain
-exponential credit. Standalone Core validation defaults, depth, stack, fallible
-allocation and all identity/semantic checks remain unchanged. The compiler Core
+exponential credit. Compiler Core validation defaults, runtime semantics, depth,
+stack and fallible allocation remain unchanged. The compiler Core
 formula does not grant additional startup work or alter generic validator APIs.
 The established non-native Pure build policy is separate.
+
+The following calibration history records the checks performed at each
+checkpoint. Earlier startup measurements include repeated Core validation;
+the current reconstruction boundary is the decision above.
 
 The user approved preparation `24P`, then source `100S` / startup `11B`, and
 subsequently preparation `51P`, final elaboration `33S` and compiler Core `108S`,
@@ -393,7 +401,8 @@ or full SQLite results do not enlarge the supported ABI.
 - Native validity, retention and release remain binding assumptions. Address is
   neither a resource nor proof of allocation or lifetime.
 - Ordinary resources, cells, cleanup, handlers, work/depth limits and independent
-  source/Core/image validation retain their existing responsibilities.
+  compiler source/Core validation retain their existing responsibilities.
+  Generated executables reconstruct the validated representation for execution.
 - There is no mandatory header-checking tool, FFI-specific artifact protocol,
   protected approval or security receipt gate.
 - Numeric ABI, out-pointers, callbacks, structs and foreign text/memory
@@ -404,8 +413,8 @@ or full SQLite results do not enlarge the supported ABI.
 Require real pointer/void/Bytes calls, ordinary source-handler overrides, missing
 binding refusal, null/equality, unsupported-signature rejection and ordinary
 cleanup on normal, error and checked-discard paths. Exercise static/shared native
-inputs, repeated source-independent embedded-image startup and malformed
-Core/image/registration rejection without weakening validation.
+inputs, repeated source-independent embedded-image startup, bounded structural
+reconstruction, and independent compiler Core rejection of invalid inputs.
 
 The direct SQLite version/source-id getter canary is required. Non-null/equality
 observations do not read its text or establish full database coverage. Numeric
