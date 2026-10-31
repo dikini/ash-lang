@@ -2907,6 +2907,30 @@ impl ContextPaths {
         Ok(root)
     }
 
+    // Focus replay may follow ordinary calls and dispatches, but a restored
+    // cut is a different control history and cannot reuse this proof.
+    fn focus_descendant(
+        &self,
+        mut context: usize,
+        focus: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        let length = self.paths.get(context).ok_or(Failure::Invalid)?.length();
+        charge(budget, length.checked_add(1).ok_or(Failure::Resource)?)?;
+        while context != focus {
+            match *self.paths.get(context).ok_or(Failure::Invalid)? {
+                ContextPath::Step {
+                    parent,
+                    transition:
+                        Transition::Call(_) | Transition::Invoke(..) | Transition::Dispatch(..),
+                    ..
+                } => context = parent,
+                _ => return Ok(false),
+            }
+        }
+        Ok(true)
+    }
+
     // A rootless ordinary path is used for linked entry and the initial
     // resource seed. Neither is a creation within a standalone callable root.
     // Focused, restored, and malformed nested-root paths prove no such fact.
@@ -4411,6 +4435,113 @@ impl<'a> Analysis<'a> {
             .copied())
     }
 
+    /// Prove that the requested owner belongs to the standalone callable's
+    /// type inputs while the target is the identity acquired inside its body.
+    pub(super) fn symbolic_cell_inputs(
+        &self,
+        code: usize,
+        contexts: (usize, usize),
+        owners: (crate::types::TypeVariableId, crate::types::TypeVariableId),
+        focused: bool,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        let Some(&resource) = self.graph.positions.get(&code) else {
+            return Err(Failure::Invalid);
+        };
+        if !matches!(
+            self.graph.expressions.get(resource),
+            Some(Expr::Resource { .. })
+        ) {
+            return Err(Failure::Invalid);
+        }
+        self.symbolic_cell_owner_inputs(resource, contexts, owners, focused, budget)
+    }
+
+    /// Apply the same proof to an authenticated resource-owner occurrence.
+    pub(super) fn symbolic_cell_owner_inputs(
+        &self,
+        resource: usize,
+        contexts: (usize, usize),
+        owners: (crate::types::TypeVariableId, crate::types::TypeVariableId),
+        focused: bool,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        let (frame, current) = contexts;
+        let (outer, inner) = owners;
+        let Some(Expr::Resource { identity, .. }) = self.graph.expressions.get(resource) else {
+            return Ok(false);
+        };
+        if self.graph.metadata.get(identity) != Some(&inner) {
+            return Ok(false);
+        }
+        let creation = if focused {
+            if self.focus != Some((resource, frame))
+                || !self.contexts.focus_descendant(current, frame, budget)?
+            {
+                return Ok(false);
+            }
+            self.focus_creation.ok_or(Failure::Invalid)?
+        } else {
+            if self.focus.is_some() {
+                return Ok(false);
+            }
+            frame
+        };
+        let Some(root) = self.contexts.standalone_root(creation, budget)? else {
+            return Ok(false);
+        };
+        if !focused && self.contexts.standalone_root(current, budget)? != Some(root) {
+            return Ok(false);
+        }
+        let Expr::Function {
+            parameters,
+            captures,
+            ..
+        } = &self.graph.expressions[root]
+        else {
+            return Err(Failure::Invalid);
+        };
+        charge(budget, parameters.len() + captures.len() + 1)?;
+        let variables = parameters.iter().chain(captures);
+        let mut has_outer = false;
+        for slot in variables {
+            let variable = self.graph.metadata.get(slot);
+            if variable == Some(&inner) {
+                return Ok(false);
+            }
+            has_outer |= variable == Some(&outer);
+        }
+        Ok(has_outer)
+    }
+
+    /// Every possible handler owner must have the original fresh-owner proof.
+    pub(super) fn symbolic_cell_handler_inputs(
+        &mut self,
+        code: usize,
+        contexts: (usize, usize),
+        owners: (crate::types::TypeVariableId, crate::types::TypeVariableId),
+        focused: bool,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        let (handler, current) = contexts;
+        let Some(targets) = self.handler_cell_owners(code, handler, budget)? else {
+            return Ok(false);
+        };
+        for (resource, creation) in targets {
+            charge(budget, 1)?;
+            if !self.symbolic_cell_owner_inputs(
+                resource,
+                (creation, current),
+                owners,
+                focused,
+                budget,
+            )? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     // Only a standalone-root ancestry qualifies; focused, restored and nested
     // root contexts refuse. The prefix belongs to the authenticated node slice.
 
@@ -5423,17 +5554,50 @@ impl<'a> Analysis<'a> {
         };
         let expression = *self.graph.positions.get(&owner).ok_or(Failure::Invalid)?;
         let (port, source) = if let Some(request) = request {
-            let (expression, creation) = self.slots[request].key;
-            let Expr::Request { operand, .. } = self.graph.expressions[expression] else {
-                return Err(Failure::Invalid);
-            };
-            (
-                *self
+            let (request_expression, creation) = self.slots[request].key;
+            let port = match &self.graph.expressions[request_expression] {
+                Expr::Request { operand, .. } => *self
                     .indices
-                    .get(&(operand, creation))
+                    .get(&(*operand, creation))
                     .ok_or(Failure::Invalid)?,
-                source,
-            )
+                Expr::Call { arguments, .. } => {
+                    // check_payload already proved that an input retains this
+                    // owner. Recover that exact input, rather than the call's
+                    // result, to preserve the dependency's origin.
+                    let count = arguments.len().checked_add(1).ok_or(Failure::Resource)?;
+                    charge(budget, count)?;
+                    let mut selected = None;
+                    for position in 0..count {
+                        charge(budget, 1)?;
+                        let Expr::Call {
+                            function,
+                            arguments,
+                            ..
+                        } = &self.graph.expressions[request_expression]
+                        else {
+                            return Err(Failure::Invalid);
+                        };
+                        let operand = if position == 0 {
+                            *function
+                        } else {
+                            arguments[position - 1]
+                        };
+                        let port = *self
+                            .indices
+                            .get(&(operand, creation))
+                            .ok_or(Failure::Invalid)?;
+                        let dependencies = self.dependencies(port, budget)?;
+                        charge(budget, dependencies.len())?;
+                        if dependencies.contains(&Atom::Resource(expression, context)) {
+                            selected = Some(port);
+                            break;
+                        }
+                    }
+                    selected.ok_or(Failure::Invalid)?
+                }
+                _ => return Err(Failure::Invalid),
+            };
+            (port, source)
         } else {
             let Expr::Resource { body, .. } = self.graph.expressions[expression] else {
                 return Err(Failure::Invalid);
@@ -7011,6 +7175,445 @@ type EvidenceKey = (crate::interface::RequirementId, crate::interface::MethodId)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn symbolic_cell_inputs_require_original_root_and_exact_focus() {
+        let outer = crate::types::TypeVariableId::new(0);
+        let inner = crate::types::TypeVariableId::new(1);
+        let make_graph = |capture_inner: bool| {
+            let mut graph = observed_control_call_graph_for_test();
+            let source = graph.sources[0];
+            let resource = || Expr::Resource {
+                store: false,
+                success: None,
+                failure: None,
+                failure_payload: None,
+                handle: 1,
+                identity: 1,
+                initializer: 4,
+                body: 4,
+                source,
+            };
+            graph.expressions = vec![
+                Expr::Slot,
+                Expr::Slot,
+                Expr::Function {
+                    parameters: vec![0],
+                    body: 3,
+                    captures: if capture_inner { vec![1] } else { vec![] },
+                },
+                resource(),
+                Expr::Scalar,
+                resource(),
+                Expr::Function {
+                    parameters: vec![],
+                    body: 4,
+                    captures: vec![],
+                },
+            ];
+            graph.sources = vec![source; graph.expressions.len()];
+            graph.globals.clear();
+            graph.positions = HashMap::from([(11, 3), (12, 5), (13, 4)]);
+            graph.metadata = HashMap::from([(0, outer), (1, inner)]);
+            graph
+        };
+        let graph = make_graph(false);
+        let mut setup = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut setup).unwrap();
+        let root = analysis
+            .context(0, Transition::Root(2), &mut setup)
+            .unwrap();
+        let child = analysis
+            .context(root, Transition::Invoke(0, 6, 0), &mut setup)
+            .unwrap();
+        let other = analysis
+            .context(0, Transition::Root(6), &mut setup)
+            .unwrap();
+        let focus = analysis.context(0, Transition::Focus, &mut setup).unwrap();
+        let focused_child = analysis
+            .context(focus, Transition::Invoke(0, 6, 0), &mut setup)
+            .unwrap();
+        let restored = analysis
+            .context(focus, Transition::Restore(root, 11, 0), &mut setup)
+            .unwrap();
+        let owners = (outer, inner);
+        assert!(
+            analysis
+                .symbolic_cell_inputs(11, (root, child), owners, false, &mut setup)
+                .unwrap()
+        );
+        assert!(
+            !analysis
+                .symbolic_cell_inputs(11, (root, other), owners, false, &mut setup)
+                .unwrap()
+        );
+        assert!(
+            !analysis
+                .symbolic_cell_inputs(11, (root, child), (inner, inner), false, &mut setup)
+                .unwrap()
+        );
+        assert!(
+            !analysis
+                .symbolic_cell_inputs(11, (root, child), (outer, outer), false, &mut setup)
+                .unwrap()
+        );
+        assert!(matches!(
+            analysis.symbolic_cell_inputs(13, (root, child), owners, false, &mut setup),
+            Err(Failure::Invalid)
+        ));
+        analysis.focus = Some((3, focus));
+        analysis.focus_creation = Some(root);
+        assert!(
+            analysis
+                .symbolic_cell_inputs(11, (focus, focused_child), owners, true, &mut setup)
+                .unwrap()
+        );
+        assert!(
+            !analysis
+                .symbolic_cell_inputs(11, (focus, restored), owners, true, &mut setup)
+                .unwrap()
+        );
+        assert!(
+            !analysis
+                .symbolic_cell_inputs(11, (focus, root), owners, true, &mut setup)
+                .unwrap()
+        );
+        assert!(
+            !analysis
+                .symbolic_cell_inputs(11, (other, focus), owners, true, &mut setup)
+                .unwrap()
+        );
+        assert!(
+            !analysis
+                .symbolic_cell_inputs(12, (focus, focus), owners, true, &mut setup)
+                .unwrap()
+        );
+        assert!(
+            !analysis
+                .symbolic_cell_inputs(11, (root, child), owners, false, &mut setup)
+                .unwrap()
+        );
+        let mut measured = TypeWorkBudget::unbounded();
+        assert!(
+            analysis
+                .symbolic_cell_inputs(11, (focus, focused_child), owners, true, &mut measured)
+                .unwrap()
+        );
+        let exact = measured.used();
+        assert!(matches!(
+            analysis.symbolic_cell_inputs(
+                11,
+                (focus, focused_child),
+                owners,
+                true,
+                &mut TypeWorkBudget::with_limit(exact - 1)
+            ),
+            Err(Failure::Resource)
+        ));
+        assert!(
+            analysis
+                .symbolic_cell_inputs(
+                    11,
+                    (focus, focused_child),
+                    owners,
+                    true,
+                    &mut TypeWorkBudget::with_limit(exact)
+                )
+                .unwrap()
+        );
+        assert!(
+            analysis
+                .symbolic_cell_inputs(
+                    11,
+                    (focus, focused_child),
+                    owners,
+                    true,
+                    &mut TypeWorkBudget::with_limit(exact)
+                )
+                .unwrap()
+        );
+        analysis.focus_creation = Some(other);
+        assert!(
+            !analysis
+                .symbolic_cell_inputs(11, (focus, focus), owners, true, &mut setup)
+                .unwrap()
+        );
+
+        let graph = make_graph(true);
+        let mut analysis = Analysis::new(&graph, &mut setup).unwrap();
+        let root = analysis
+            .context(0, Transition::Root(2), &mut setup)
+            .unwrap();
+        assert!(
+            !analysis
+                .symbolic_cell_inputs(11, (root, root), owners, false, &mut setup)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn symbolic_cell_handler_inputs_require_every_exact_owner() {
+        let outer = crate::types::TypeVariableId::new(0);
+        let inner = crate::types::TypeVariableId::new(1);
+        let source = crate::source::SourceFile::new("handler-owner.ash", "x").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 1).unwrap())
+            .unwrap();
+        let resource = || Expr::Resource {
+            store: false,
+            success: None,
+            failure: None,
+            failure_payload: None,
+            handle: 1,
+            identity: 1,
+            initializer: 5,
+            body: 5,
+            source: span,
+        };
+        let mut graph = graph(vec![
+            Expr::Slot,
+            Expr::Slot,
+            Expr::Slot,
+            Expr::Function {
+                parameters: vec![0],
+                body: 4,
+                captures: vec![],
+            },
+            resource(),
+            Expr::Scalar,
+            Expr::Handler {
+                body: 5,
+                clauses: vec![],
+                cell_owner: Some(2),
+            },
+            resource(),
+            Expr::Function {
+                parameters: vec![],
+                body: 5,
+                captures: vec![],
+            },
+        ]);
+        graph.positions.insert(11, 6);
+        graph.metadata = HashMap::from([(0, outer), (1, inner)]);
+
+        for (case, expected) in [
+            (0, false),  // No owner is not proof.
+            (1, false),  // Unknown alone is not proof.
+            (2, true),   // A fresh owner under the original root is proof.
+            (3, false),  // A fresh owner plus an unknown remains unresolved.
+            (4, false),  // An unrelated owner cannot ride along with a fresh one.
+            (5, false),  // A malformed owner cannot establish the proof.
+            (6, true),   // Exact focused owner and descendant.
+            (7, false),  // A different focused resource is not the focus.
+            (8, false),  // A restored path cannot use the focus proof.
+            (9, false),  // Every focused alternative must be the exact focus.
+            (10, false), // The original occurrence is not the replay focus.
+        ] {
+            let mut setup = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(&graph, &mut setup).unwrap();
+            let root = analysis
+                .context(0, Transition::Root(3), &mut setup)
+                .unwrap();
+            let other = analysis
+                .context(0, Transition::Root(8), &mut setup)
+                .unwrap();
+            let focus = analysis.context(0, Transition::Focus, &mut setup).unwrap();
+            let child = analysis
+                .context(focus, Transition::Invoke(0, 8, 0), &mut setup)
+                .unwrap();
+            let restored = analysis
+                .context(focus, Transition::Restore(root, 11, 0), &mut setup)
+                .unwrap();
+            let focused = case >= 6;
+            let handler = if focused { focus } else { root };
+            let current = if case == 8 {
+                restored
+            } else if focused {
+                child
+            } else {
+                root
+            };
+            if focused {
+                analysis.focus = Some((4, focus));
+                analysis.focus_creation = Some(root);
+            }
+            let port = analysis.slot(2, handler, &mut setup).unwrap();
+            let atoms = match case {
+                0 => vec![],
+                1 => vec![Atom::Unknown],
+                2 => vec![Atom::Resource(4, root)],
+                3 => vec![Atom::Resource(4, root), Atom::Unknown],
+                4 => vec![Atom::Resource(4, root), Atom::Resource(7, other)],
+                5 => vec![Atom::Resource(4, root), Atom::Resource(99, root)],
+                6 | 8 => vec![Atom::Resource(4, focus)],
+                7 => vec![Atom::Resource(7, focus)],
+                9 => vec![Atom::Resource(4, focus), Atom::Resource(7, focus)],
+                10 => vec![Atom::Resource(4, root)],
+                _ => unreachable!(),
+            };
+            for atom in atoms {
+                analysis.atom(port, atom, &mut setup).unwrap();
+            }
+            analysis.close(&mut setup).unwrap();
+            let mut measured = TypeWorkBudget::unbounded();
+            assert_eq!(
+                analysis
+                    .symbolic_cell_handler_inputs(
+                        11,
+                        (handler, current),
+                        (outer, inner),
+                        focused,
+                        &mut measured,
+                    )
+                    .unwrap(),
+                expected,
+                "case {case}"
+            );
+            if case == 6 {
+                let exact = measured.used();
+                assert!(matches!(
+                    analysis.symbolic_cell_handler_inputs(
+                        11,
+                        (handler, current),
+                        (outer, inner),
+                        focused,
+                        &mut TypeWorkBudget::with_limit(exact - 1),
+                    ),
+                    Err(Failure::Resource)
+                ));
+                for _ in 0..2 {
+                    assert!(
+                        analysis
+                            .symbolic_cell_handler_inputs(
+                                11,
+                                (handler, current),
+                                (outer, inner),
+                                focused,
+                                &mut TypeWorkBudget::with_limit(exact),
+                            )
+                            .unwrap()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cell_escape_call_uses_an_existing_dependent_input() {
+        let source = crate::source::SourceFile::new("call-escape.ash", "x").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 1).unwrap())
+            .unwrap();
+        let mut graph = graph(vec![
+            Expr::Slot, // Callable input.
+            Expr::Slot, // First argument.
+            Expr::Slot, // Second argument.
+            Expr::Slot, // Callable capture.
+            Expr::Resource {
+                store: false,
+                success: None,
+                failure: None,
+                failure_payload: None,
+                handle: 3,
+                identity: 3,
+                initializer: 6,
+                body: 6,
+                source: span,
+            },
+            Expr::Function {
+                parameters: vec![],
+                body: 6,
+                captures: vec![3],
+            },
+            Expr::Scalar,
+            Expr::Call {
+                function: 0,
+                arguments: vec![1, 2],
+                scalar: true,
+                type_application: false,
+            },
+            Expr::Call {
+                function: 0,
+                arguments: vec![],
+                scalar: true,
+                type_application: false,
+            },
+        ]);
+        graph.positions.insert(11, 4);
+
+        for case in 0..4 {
+            let mut setup = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(&graph, &mut setup).unwrap();
+            let function = analysis.slot(0, 0, &mut setup).unwrap();
+            let first = analysis.slot(1, 0, &mut setup).unwrap();
+            analysis.atom(first, Atom::Free, &mut setup).unwrap();
+            if case != 3 {
+                let second = analysis.slot(2, 0, &mut setup).unwrap();
+                let value = if case == 0 {
+                    Atom::Resource(4, 0)
+                } else {
+                    Atom::Free
+                };
+                analysis.atom(second, value, &mut setup).unwrap();
+            }
+            if case == 1 {
+                let captured = analysis.slot(3, 0, &mut setup).unwrap();
+                analysis
+                    .atom(captured, Atom::Resource(4, 0), &mut setup)
+                    .unwrap();
+                analysis
+                    .atom(function, Atom::Closure(5, 0), &mut setup)
+                    .unwrap();
+            } else {
+                analysis
+                    .atom(function, Atom::IndependentCallable, &mut setup)
+                    .unwrap();
+            }
+            let request = analysis
+                .slot(if case == 1 { 8 } else { 7 }, 0, &mut setup)
+                .unwrap();
+            let escape = || Failure::Escape {
+                source: span,
+                acquisition: span,
+            };
+            let mut measured = TypeWorkBudget::unbounded();
+            let result =
+                analysis.cell_escape_failure(escape(), Some(request), 11, 0, &mut measured);
+            match case {
+                0 => assert!(matches!(result, Ok(Failure::Dependency { .. }))),
+                1 => {
+                    let Ok(Failure::Dependency { causes, .. }) = result else {
+                        panic!("captured callable should supply the dependency witness")
+                    };
+                    assert_eq!(causes[0], Some(graph.sources[5]));
+                    let exact = measured.used();
+                    assert!(matches!(
+                        analysis.cell_escape_failure(
+                            escape(),
+                            Some(request),
+                            11,
+                            0,
+                            &mut TypeWorkBudget::with_limit(exact - 1),
+                        ),
+                        Err(Failure::Resource)
+                    ));
+                    for _ in 0..2 {
+                        assert!(matches!(
+                            analysis.cell_escape_failure(
+                                escape(),
+                                Some(request),
+                                11,
+                                0,
+                                &mut TypeWorkBudget::with_limit(exact),
+                            ),
+                            Ok(Failure::Dependency { .. })
+                        ));
+                    }
+                }
+                _ => assert!(matches!(result, Err(Failure::Invalid))),
+            }
+        }
+    }
 
     #[test]
     fn retained_standalone_owner_paths_reject_same_root_and_focus() {

@@ -24141,6 +24141,87 @@ mod tests {
     }
 
     #[test]
+    fn generic_cell_inner_handler_outer_write_rejects_hidden_younger_capture_after_transforms() {
+        use super::super::{
+            effect::{EffectExprKind, EffectOperation},
+            variable::VariableNode,
+        };
+        let (donor, sources, relation) = generic_cell_source_fixture(
+            include_str!("../../tests/fixtures/generic-cell/nested-handler-outer-write-donor.ash"),
+            None,
+        );
+        assert_eq!(
+            crate::eval::evaluate_effect(&donor)
+                .unwrap()
+                .value
+                .to_string(),
+            "42"
+        );
+        let refs = sources.iter().collect::<Vec<_>>();
+        for transform in [
+            crate::core::transform::identity_effect_traversal,
+            crate::core::transform::fold_effect_literal_primitives,
+        ] {
+            let valid =
+                super::super::validate_effect_modules(transform(&donor).unwrap(), &refs, &relation)
+                    .unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&valid)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
+            );
+            let mut copied = transform(&donor).unwrap();
+            let inner = copied
+                .nodes
+                .iter()
+                .find_map(|node| match &node.kind {
+                    EffectExprKind::Operation(EffectOperation::Resource(scope))
+                        if copied
+                            .registry
+                            .type_variable(scope.acquisition.identity)
+                            .unwrap()
+                            .spelling
+                            == "C" =>
+                    {
+                        Some(scope.handle.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let changed = copied.nodes.iter().enumerate().find_map(|(index, node)| {
+                matches!(&node.kind, EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(value))) if value.value().to_string() == "9999").then_some(index)
+            }).unwrap();
+            copied.nodes[changed].kind =
+                EffectExprKind::Pure(PureExprKind::Variable(VariableNode::new(inner.id())));
+            copied.nodes[changed].ty = inner.ty().clone();
+            let changed = node_id(copied.arena, changed).unwrap();
+            let mut bindings = 0;
+            for node in &mut copied.nodes {
+                if let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                    binding,
+                ))) = &mut node.kind
+                    && binding.initializer() == changed
+                {
+                    binding.binder_mut().replace_type(inner.ty().clone());
+                    bindings += 1;
+                }
+            }
+            assert_eq!(bindings, 1);
+            retain_mutated_cell_capture(&mut copied, changed);
+            // The outer write and exact inner handler retain their original
+            // operation, provider, payload, arrow and effect facts.
+            assert_eq!(
+                super::super::validate_effect_modules(copied, &refs, &relation)
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::ResourceEscape
+            );
+        }
+    }
+
+    #[test]
     fn generic_cell_possible_target_owners_rebuild_after_transforms() {
         use super::super::{
             effect::{EffectExprKind, EffectOperation},

@@ -349,6 +349,122 @@ fn generic_runtime_observation(
 }
 
 #[test]
+fn generic_helper_reads_live_outer_cell_inside_nested_scope() {
+    generic_runtime_observation(
+        include_str!("fixtures/generic-cell/nested-helper-outer-read.ash"),
+        &[],
+        "42",
+        2,
+        0,
+    );
+}
+
+#[test]
+fn generic_helper_reads_live_outer_cell_inside_nested_generic_scope() {
+    let source = include_str!("fixtures/generic-cell/nested-helper-outer-read.ash").replace(
+        "resource cell<C> cursor",
+        "resource Scoped.Cell<C, Int> cursor",
+    );
+    generic_runtime_observation(&source, &[], "42", 2, 0);
+}
+
+#[test]
+fn generic_helper_outer_read_passes_inner_cell_source_handler() {
+    let source = include_str!("fixtures/generic-cell/nested-helper-inner-handler.ash");
+    generic_runtime_observation(source, &[], "42", 2, 0);
+    let local = source
+        .replace(
+            "let _ = Scoped.read cursor\n        Scoped.read outer",
+            "let local = Scoped.read cursor\n        let value = Scoped.read outer\n        local + value",
+        )
+        .replace("read ignored => resume 0", "read ignored => resume 7");
+    generic_runtime_observation(&local, &[], "49", 2, 0);
+}
+
+#[test]
+fn legacy_helper_outer_read_passes_inner_cell_source_handler() {
+    generic_runtime_observation(
+        include_str!("fixtures/generic-cell/nested-legacy-helper-inner-handler.ash"),
+        &[],
+        "42",
+        2,
+        0,
+    );
+}
+
+#[test]
+fn imported_helper_outer_read_passes_inner_cell_source_handler() {
+    generic_runtime_observation(
+        include_str!("fixtures/generic-cell/nested-helper-import-entry.ash"),
+        &[(
+            "helper.ash",
+            include_str!("fixtures/generic-cell/nested-handler-import.ash"),
+        )],
+        "42",
+        2,
+        0,
+    );
+}
+
+#[test]
+fn source_handler_for_outer_cell_still_intercepts_outer_read() {
+    generic_runtime_observation(
+        include_str!("fixtures/generic-cell/nested-helper-outer-handler.ash"),
+        &[],
+        "42",
+        2,
+        0,
+    );
+}
+
+#[test]
+fn legacy_helper_reads_live_outer_cell_inside_nested_legacy_scope() {
+    generic_runtime_observation(
+        include_str!("fixtures/generic-cell/nested-legacy-helper-outer-read.ash"),
+        &[],
+        "42",
+        2,
+        0,
+    );
+}
+
+#[test]
+fn imported_generic_helper_reads_live_outer_cell_inside_nested_scope() {
+    let helper = include_str!("fixtures/generic-cell/nested-helper-import.ash");
+    for helper in [
+        helper.to_owned(),
+        helper.replace(
+            "resource cell<C> cursor",
+            "resource Scoped.Cell<C, Int> cursor",
+        ),
+    ] {
+        generic_runtime_observation(
+            include_str!("fixtures/generic-cell/nested-helper-import-entry.ash"),
+            &[("helper.ash", &helper)],
+            "42",
+            2,
+            0,
+        );
+    }
+}
+
+#[test]
+fn callback_receiving_local_cell_still_mutates_that_cell() {
+    for (source, acquisitions) in [
+        (
+            include_str!("fixtures/generic-cell/local-owner-callback.ash"),
+            1,
+        ),
+        (
+            include_str!("fixtures/generic-cell/nested-local-callback.ash"),
+            2,
+        ),
+    ] {
+        generic_runtime_observation(source, &[], "42", acquisitions, 1);
+    }
+}
+
+#[test]
 fn generic_cell_p01_fixed_payload_shapes_share_aliases() {
     for (declarations, ty, initial, replacement, answer, expected) in [
         ("", "Int", "41", "42", "Cell.read c", "42"),

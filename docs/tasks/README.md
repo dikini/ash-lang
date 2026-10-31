@@ -9,9 +9,8 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-No active implementation tasks are listed. The documentation alignment records
-the accepted functionality already implemented on Main; it introduces no
-implementation task.
+- [TASK-0059: Nested Cell Validation](TASK-0059-nested-cell-validation.md) tracks
+  the correction for [issue #195](https://github.com/dikini/ash-lang/issues/195).
 
 The retained-control [specification](../../spec/README.md) and
 [bounded evidence](../design/retained-control/README.md) are integrated on
