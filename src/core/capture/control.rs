@@ -2097,6 +2097,7 @@ pub(super) struct Analysis<'a> {
     candidates: HashSet<(usize, usize)>,
     focusing: bool,
     payloads: Vec<(usize, usize, usize)>,
+    payload_index: HashSet<(usize, usize, usize)>,
     cell_retentions: Vec<CellRetention>,
     retained_support: Vec<RetainedSupport>,
     inspect_stores: HashSet<(usize, usize)>,
@@ -2574,6 +2575,7 @@ impl<'a> Analysis<'a> {
             candidates: HashSet::new(),
             focusing: false,
             payloads: Vec::new(),
+            payload_index: HashSet::new(),
             cell_retentions: Vec::new(),
             retained_support: Vec::new(),
             inspect_stores: HashSet::new(),
@@ -3272,7 +3274,7 @@ impl<'a> Analysis<'a> {
         self.entries.clear();
         self.candidates.clear();
         self.inspect_stores.clear();
-        self.payloads.clear();
+        self.clear_payloads(budget)?;
         let _ = self.discover(roots, None, budget)?;
         // Passive row records describe the whole original discovery. Focused
         // safety queries remain strict and do not invent additional row sites.
@@ -4919,7 +4921,7 @@ impl<'a> Analysis<'a> {
                 {
                     self.cell_retentions.clear();
                     self.retained_support.clear();
-                    self.payloads.clear();
+                    self.clear_payloads(budget)?;
                     if self.check_retained_release && focused_store {
                         self.release_unsafe = false;
                     }
@@ -4956,7 +4958,7 @@ impl<'a> Analysis<'a> {
                     self.data = Some(query);
                     self.cell_retentions.clear();
                     self.retained_support.clear();
-                    self.payloads.clear();
+                    self.clear_payloads(budget)?;
                     self.inspecting = true;
                     let inspection = (|| {
                         let seed = self.restore_entry_with_trace(entry, context, budget)?;
@@ -7498,6 +7500,13 @@ impl<'a> Analysis<'a> {
         Ok(((store, baseline, code, context, value_context), inspection))
     }
 
+    fn clear_payloads(&mut self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        charge(budget, self.payload_index.capacity())?;
+        self.payloads.clear();
+        self.payload_index.clear();
+        Ok(())
+    }
+
     fn check_payload(
         &mut self,
         _state: &State,
@@ -7519,11 +7528,16 @@ impl<'a> Analysis<'a> {
                         continue;
                     }
                     let payload = (port, code, value_context);
-                    charge(budget, self.payloads.len() + 1)?;
-                    if !self.payloads.contains(&payload) {
+                    charge(budget, 1)?;
+                    if !self.payload_index.contains(&payload) {
+                        charge(budget, 2)?;
+                        self.payload_index
+                            .try_reserve(1)
+                            .map_err(|_| Failure::Resource)?;
                         self.payloads
                             .try_reserve(1)
                             .map_err(|_| Failure::Resource)?;
+                        self.payload_index.insert(payload);
                         self.payloads.push(payload);
                     }
                 }
@@ -8716,6 +8730,95 @@ mod tests {
                 predecessors: vec![1, 2].into(),
                 shared: true,
             }],
+        }
+    }
+
+    #[test]
+    fn payload_membership_preserves_order_and_retries_after_refusal() {
+        fn record(
+            analysis: &mut Analysis<'_>,
+            state: &State,
+            (port, code, value_context): (usize, usize, usize),
+            work: &mut TypeWorkBudget,
+        ) -> Result<(), Failure> {
+            analysis.check_payload(
+                state,
+                Event {
+                    code: 0,
+                    label: 0,
+                    unknown: false,
+                    port: Some(port),
+                },
+                &[Edge {
+                    address: Address::Empty,
+                    frame: Frame::Resource {
+                        code,
+                        context: 0,
+                        value_context,
+                        focused: false,
+                    },
+                    next: Address::Empty,
+                }],
+                work,
+            )
+        }
+
+        let graph = observed_call_graph();
+        let state = observed_call_state(0);
+        let mut keys = vec![(3, 7, 11), (3, 8, 11), (3, 7, 12), (4, 7, 11)];
+        keys.extend((0..64).map(|code| (3, 100 + code, 11)));
+        for available in 0..4 {
+            let mut analysis = observed_call_analysis(&graph);
+            let mut setup = TypeWorkBudget::unbounded();
+            for &key in &keys {
+                record(&mut analysis, &state, key, &mut setup).unwrap();
+            }
+            assert_eq!(analysis.payloads, keys);
+
+            let mut duplicate = TypeWorkBudget::with_limit(2);
+            record(&mut analysis, &state, keys[0], &mut duplicate).unwrap();
+            assert_eq!(duplicate.used(), 2);
+            assert_eq!(analysis.payloads, keys);
+
+            let next = (3, 999, 11);
+            let mut short = TypeWorkBudget::with_limit(available);
+            assert!(matches!(
+                record(&mut analysis, &state, next, &mut short),
+                Err(Failure::Resource)
+            ));
+            assert_eq!(analysis.payloads, keys);
+            let mut retry = TypeWorkBudget::with_limit(4);
+            record(&mut analysis, &state, next, &mut retry).unwrap();
+            assert_eq!(retry.used(), 4);
+            assert_eq!(analysis.payloads.last(), Some(&next));
+
+            let before_clear = analysis.payloads.clone();
+            let capacity = analysis.payload_index.capacity();
+            assert!(capacity > 0);
+            let mut short_clear = TypeWorkBudget::with_limit(capacity - 1);
+            assert!(matches!(
+                analysis.clear_payloads(&mut short_clear),
+                Err(Failure::Resource)
+            ));
+            assert_eq!(analysis.payloads, before_clear);
+            assert_eq!(analysis.payload_index.len(), before_clear.len());
+            assert!(
+                before_clear
+                    .iter()
+                    .all(|key| analysis.payload_index.contains(key))
+            );
+            let mut exact_clear = TypeWorkBudget::with_limit(capacity);
+            analysis.clear_payloads(&mut exact_clear).unwrap();
+            assert_eq!(exact_clear.used(), capacity);
+            assert!(analysis.payloads.is_empty());
+            assert!(analysis.payload_index.is_empty());
+            record(&mut analysis, &state, keys[0], &mut setup).unwrap();
+            assert_eq!(analysis.payloads, [keys[0]]);
+
+            analysis.check(&[], &mut setup).unwrap();
+            assert!(analysis.payloads.is_empty());
+            record(&mut analysis, &state, keys[0], &mut setup).unwrap();
+            assert_eq!(analysis.payloads, [keys[0]]);
         }
     }
 

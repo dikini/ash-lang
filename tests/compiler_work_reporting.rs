@@ -7,10 +7,54 @@ use ash::{
 };
 use std::{
     fs,
+    path::PathBuf,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+#[test]
+fn composed_frames_execute_through_independent_core() {
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/frame-composition");
+    let configuration = RunConfiguration {
+        entry: fixture.join("main.ash"),
+        roots: ModuleRoots::new([
+            ("buffers", fixture.join("buffers")),
+            ("frames", fixture.join("frames")),
+        ])
+        .unwrap(),
+    };
+    let graph = load_module_graph(&configuration.entry, &configuration.roots).unwrap();
+    let bytes: usize = graph
+        .modules()
+        .iter()
+        .map(|module| module.source().text().len())
+        .sum();
+    let result = run_path(configuration)
+        .unwrap_or_else(|failure| panic!("frame composition refused: {}", failure.reason_code()));
+    assert_eq!(
+        result.value_display(),
+        concat!(
+            "(Success(Success(Decoded(Ping))), ",
+            "Success(Success(Decoded(Reading(0)))), ",
+            "Success(Success(Decoded(Reading(255)))), ",
+            "Success(Success(Decoded(Pair(0, 255)))), ",
+            "Success(Success(Decoded(Pair(255, 0)))))"
+        )
+    );
+    let work = result.compilation_work();
+    eprintln!("frame composition compilation work: {work:?}");
+    for (cost, coefficient) in [
+        (work.source_checking.unwrap(), 10000),
+        (work.final_elaboration.unwrap(), 800),
+        (work.independent_core.unwrap(), 25000),
+    ] {
+        assert!(cost.completed);
+        assert_eq!(cost.allowance, Some(coefficient * bytes));
+        assert!(cost.used <= cost.allowance.unwrap());
+    }
+}
 
 fn with_source<T>(source: &str, run: impl FnOnce(RunConfiguration) -> T) -> T {
     let path = std::env::temp_dir().join(format!(
