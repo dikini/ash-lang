@@ -8,7 +8,7 @@ that separation. [Proposal](proposal.json) binds the exact image, static receipt
 proposed premise, policy, harness and source-derived rendering.
 
 The fresh [harness](diagnostic.py) adapts the separately reviewed scalar harness
-with a [visible diff](scalar-to-owner.patch): owner 128 MiB / PH 64 / receipt 256 KiB / 
+with a [visible diff](scalar-to-owner.patch): owner 128 MiB / PH 64 / receipt 256 KiB /
 approval 64 KiB / output 16 KiB / deadline 30 seconds, exact malloc/free image/receipt/premise,
 new purpose/context/mode and no old scalar or reporter approval. The old source,
 policy and tests remain unchanged. Context is the explicit trusted manual

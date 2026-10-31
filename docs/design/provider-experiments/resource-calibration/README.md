@@ -1,6 +1,6 @@
 # Retained-baseline resource calibration, 2026-10-08
 
-This is isolated [TASK-0035](../../../tasks/TASK-0035-resource-analysis-relevance-and-fusion.md)
+This is isolated [TASK-0035](https://github.com/dikini/ash-lang/blob/ed3764a15f7f00e7059c3eb3eae1f6e74309040f/docs/tasks/TASK-0035-resource-analysis-relevance-and-fusion.md)
 evidence under [DN-0036](../../DN-0036-foreign-library-and-memory-provider-experiments.md).
 It changes neither Ash semantics nor production resource policy. Further
 optimization is paused; the user accepts current measured physical costs for
@@ -171,7 +171,7 @@ observation-off physical measurements. GNU wall time is formatted in 10 ms
 steps; `0.00` does not mean zero elapsed time.
 
 | Existing fixture | Source units | Final units | Core units | OFF CPU median (ms) | OFF CPU range (ms) | OFF wall median (s) | OFF peak RSS median (MiB) |
-|---|---:|---:|---:|---:|---:|---:|---:|
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Higher-order application | 180 | 200 | 326 | 9.734 | 6.401–10.518 | 0.00 | 12.28 |
 | Global recursive scope | 238 | 262 | 377 | 6.795 | 6.509–7.129 | 0.00 | 12.31 |
 | Local recursive scope | 166 | 180 | 388 | 7.417 | 7.016–8.619 | 0.00 | 12.08 |
@@ -338,7 +338,7 @@ their checking obligations. A program is a witness of those structures, not
 the definition of complexity. Surface node totals and the five SQLite programs
 alone cannot justify a language-wide allowance or checker design.
 
-The [follow-up measurement plan](../resource-calibration-plan.md#language-structure-follow-up)
+The historical [follow-up measurement plan](https://github.com/dikini/ash-lang/blob/ed3764a15f7f00e7059c3eb3eae1f6e74309040f/docs/design/provider-experiments/resource-calibration-plan.md#language-structure-follow-up)
 derives measures from current type instantiation, evidence selection, exact
 effect instances, recursive bindings and resource-dependency rules. It pairs
 those structures with actual implementation visits, retained structures and

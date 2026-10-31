@@ -9,6 +9,7 @@
   [DN-0039](DN-0039-files-and-filesystem-resources.md),
   [DN-0040](DN-0040-floating-point-semantics-and-representation.md),
   [DN-0041](DN-0041-typed-serialization-and-data-pipelines.md),
+  [DN-0049](DN-0049-native-storage-access-and-packed-data-shapes.md),
   [DN-0024](DN-0024-executable-learning-and-evidence-stream.md)
 
 > This note connects a development direction for planning, scheduling and
@@ -33,21 +34,25 @@ of that capability. They are starting points, not a complete account of it.
 The [current specification](../../spec/README.md) supplies modules, interfaces,
 algebraic data, effects, handlers and scoped builtin resources. Its
 [integer operations](../../spec/dynamic-semantics.md#primitive-operations)
-use mathematical integers. These foundations do not establish a general FFI,
-region-selected storage or an efficient contiguous collection model.
+use mathematical integers. Pointer/void FFI, lexical region storage, generic
+cells, retained control and copied-byte pinned workers are implemented in
+current `ffi-ash`. General native-memory access, borrowing and packed typed
+collections are not implemented.
 
 [DN-0036](DN-0036-foreign-library-and-memory-provider-experiments.md) supplies
 experimental evidence from SQLite and arenas. The
 [readiness review](foreign-authoring/dn-0036-readiness.md) distinguishes verified
 mechanics from unfinished work and the remaining Ash-authoring boundary.
-Retained experimental implementation does not make these additions normative.
+Those experimental foreign provider/owner routes are retired. Current native
+calls and lexical-region construction are specified independently.
 
 ## Connected facets
 
 | Facet | Motivation and relationship |
 | --- | --- |
 | [Ash-authored FFI, DN-0037](DN-0037-ash-authored-foreign-library-interfaces.md) | Express native declarations, behavioral contracts, conversions and linking without handwritten per-library host adapters. SQLite, native arenas and files are contrasting use cases for the same mechanisms. |
-| [Regions, DN-0035](DN-0035-region-memory-management-and-verified-providers.md), and [resource properties, DN-0038](DN-0038-resource-properties-and-mutable-variable-usage.md) | Make storage and state useful under explicit lifetime, mutation, alias and completion rules. They connect FFI access to memory management and supply pressure from mutable-variable use. |
+| [Regions, DN-0035](DN-0035-region-memory-management-and-verified-providers.md), and [resource properties, DN-0038](DN-0038-resource-properties-and-mutable-variable-usage.md) | Regions provide placement and allocation; region types may specify earlier object reclamation. Lexical scope is the first ownership scheme for the region and its objects. It determines region lifetime, preserving valid object use; reclaiming the region reclaims all remaining objects together. Mutation and access rules compose separately. |
+| [Native storage and packed data shapes, DN-0049](DN-0049-native-storage-access-and-packed-data-shapes.md) | Treat FFI allocation as the prerequisite for the selected native-backed storage route. Connect Ash-library storage policy, checked layouts, sharing, borrowing, mutation, packed collections, and calculated positions over memory. |
 | [Files, DN-0039](DN-0039-files-and-filesystem-resources.md) | Exercise buffers, partial progress, irreversible operations, native errors and fallible completion; supply input/output for data pipelines. |
 | SQLite and [typed serialization, DN-0041](DN-0041-typed-serialization-and-data-pipelines.md) | Supply realistic programs combining types, interfaces, state, conversions and data movement. Their failures and costs test whether the foundations compose beyond isolated examples. |
 | [Floating point, DN-0040](DN-0040-floating-point-semantics-and-representation.md) | Define numerical behavior for foreign calls and data processing. Optional machine integers are a separate, still undesigned concern; checked conversion from mathematical `Int` can serve bounded native calls first. |
@@ -101,10 +106,14 @@ invalidation still determine what each operation can promise.
 
 ### Concerns still needing design
 
-- **Indexed contiguous arrays and vectors:** efficient groups of values need
-  an account of element representation, bounds, initialization, growth,
-  mutation and access. This connects native buffers, serialization and
-  region-backed storage without prescribing a collection API or allocator.
+- **Native storage, access, and packed collections:**
+  [DN-0049](DN-0049-native-storage-access-and-packed-data-shapes.md) records the
+  agreed planning direction from native backing through region placement and
+  allocation, ownership and reclamation, representation, access permissions,
+  and library-defined shapes. The intended arrays and vectors use inline
+  representations with defined alignment and stride;
+  sharing, borrowing, and mutation are initial usability questions. The generic
+  memory-operation boundary and concrete collection contracts remain open.
 - **Machine integers:** native widths and efficient element storage may
   motivate explicit bounded types. They require their own arithmetic and
   conversion choices; JSON does not itself require fixed-width Ash integers.
@@ -120,8 +129,13 @@ does not select their mechanisms.
 
 Schedule bounded capabilities rather than complete subjects. General borrowing
 need not precede copying FFI; selectable regions need not precede owned
-in-memory serialization. Files, serialization and memory work can develop
-alongside FFI, then connect when the contracts they need are ready. Broader
+in-memory serialization. For the native-backed heap-like storage direction,
+FFI supplies allocation and release; sharing, borrowing, mutation, and layout
+need design together to make that storage useful. File, serialization, and
+memory design can develop alongside FFI, then connect when their required
+contracts are ready. Explicit library-managed storage and later routing of
+new packed representations through selected storage remain distinct scopes.
+Ordinary construction already uses selected lexical-region storage. Broader
 zero-copy and SIMD cases draw on additional storage and numeric decisions.
 
 For a planned capability, distinguish an actual prerequisite from a useful

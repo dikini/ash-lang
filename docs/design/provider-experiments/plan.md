@@ -548,7 +548,6 @@ model. Report setup failure separately. Preserve the copying baseline when a
 borrowing candidate fails. Passing checks alone cannot make a failed design
 eligible for merge.
 
-
 ## Calibrated public-driver admission, 2026-10-08
 
 The user accepted the completed practical costs and selected finite phase

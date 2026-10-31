@@ -1,5 +1,10 @@
 # Minimal FFI contract consistency review
 
+> Status: superseded checked-host design. These contracts are not implemented
+> by current ffi-ash. [DN-0057](../DN-0057-checked-ffi-module-boundaries.md)
+> records their disposition; [DN-0037](../DN-0037-ash-authored-foreign-library-interfaces.md)
+> records the accepted current foreign-call boundary.
+
 This review belongs to [DN-0057](../DN-0057-checked-ffi-module-boundaries.md).
 It concerns the copied-text and connection/statement cases before source
 syntax. Earlier and revised-table findings now have proposed canonical

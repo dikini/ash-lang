@@ -10,6 +10,9 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 ## Accepted ffi-ash designs
 
+The [ffi-ash closure report](ffi-ash/closure.md) records the official checkpoint,
+design-branch reconciliation, execution support and verification method.
+
 | Note | Accepted and implemented scope | Not implemented or retired |
 | --- | --- | --- |
 | [DN-0037](DN-0037-ash-authored-foreign-library-interfaces.md) | Passive pointer/void FFI, readonly synchronous Bytes and generated evaluator hosts | Full SQLite and richer ABI mappings are not implemented; earlier foreign owner/provider routes are retired. |

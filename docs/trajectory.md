@@ -64,8 +64,10 @@ current Work/Ack protocol and handles its errors.
 ## Historical checkpoints and proof evidence
 
 `mini-ash`, `modular-ash`, `lib-ash`, `effect-ash`, `diag-ash` and `ffi-base`
-retain earlier checkpoints. Their names and contents are unchanged. There is no
-current compiler dialect selector, compatibility grammar or new ffi-ash tag.
+retain earlier checkpoints. Their names and contents are unchanged. The signed
+annotated `ffi-ash` tag retains the official current checkpoint; its
+[closure report](design/ffi-ash/closure.md) records scope and verification.
+There is no current compiler dialect selector or compatibility grammar.
 The historical Mini-Ash and Modular Ash closure reports retain their original
 inventories and verification. The [migration repair evidence](design/migration-repair-evidence.md)
 records subsequent Main repairs; the external ash-doc project owns its migration.

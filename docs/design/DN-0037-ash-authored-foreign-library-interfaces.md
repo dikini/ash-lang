@@ -31,8 +31,9 @@ defines the language contract. AD-0013 defines the build architecture.
 earlier module, interface, diagnostic and effect features, plus generic cells,
 lexical regions, retained control, library scheduling and the fixed two-worker
 network. The [feature inventory](../project/implemented-features.md) records the
-complete current boundary and execution support. The name adds no compiler mode
-and creates no Git tag.
+complete current boundary and execution support. The name adds no compiler mode.
+The signed annotated `ffi-ash` tag freezes the official checkpoint described by
+the [closure report](ffi-ash/closure.md).
 
 The current foreign scope is the pointer/void boundary above. The earlier
 copying SQLite, native-buffer and Arena libraries used the retired foreign

@@ -1,5 +1,10 @@
 # Minimal FFI ABI profile for the worked SQLite cases
 
+> Status: superseded checked-host design. These contracts are not implemented
+> by current ffi-ash. [DN-0057](../DN-0057-checked-ffi-module-boundaries.md)
+> records their disposition; [DN-0037](../DN-0037-ash-authored-foreign-library-interfaces.md)
+> records the accepted current foreign-call boundary.
+
 This design refinement belongs to
 [DN-0057](../DN-0057-checked-ffi-module-boundaries.md) and the
 [worked contract cases](minimal-ffi-contract-cases.md). It supplies only concrete
@@ -31,7 +36,7 @@ values are marshalled rather than passed using their internal representation.
 
 The bridge build checks sizes, alignments, integer bounds, exact function
 prototypes and required constant values against its selected headers. The
-repository's [SQLite header](../../../foreign-adapter/vendor/sqlite3.h) supplies
+historical [SQLite header](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/foreign-adapter/vendor/sqlite3.h) supplies
 the reference inventory; delivery must identify its actual headers and binary.
 Compilation against headers does not prove the binary matches them.
 Function-pointer sentinels use typed native C expressions, not a guessed

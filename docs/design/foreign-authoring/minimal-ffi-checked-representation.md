@@ -1,5 +1,10 @@
 # Checked representation for the minimal FFI cases
 
+> Status: superseded checked-host design. These contracts are not implemented
+> by current ffi-ash. [DN-0057](../DN-0057-checked-ffi-module-boundaries.md)
+> records their disposition; [DN-0037](../DN-0037-ash-authored-foreign-library-interfaces.md)
+> records the accepted current foreign-call boundary.
+
 This design refinement belongs to
 [DN-0057](../DN-0057-checked-ffi-module-boundaries.md). It specifies candidate
 checked contracts, effects and dependencies for the
@@ -28,8 +33,8 @@ activations from static identities.
 [AD-0007](../../decisions/AD-0007-typed-core-dialects.md) requires structural
 types, causal provenance and independent dialect validation.
 
-The experimental [foreign facts](../../../src/foreign.rs) and
-[runtime](../../../src/foreign/runtime.rs) already separate defining operation,
+The retired experimental [foreign facts](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/src/foreign.rs) and
+[runtime](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/src/foreign/runtime.rs) separate defining operation,
 state lineage, independent results, acquisition and consumption/retention.
 This transfers as evidence for those distinctions, not as adopted source
 semantics. The existing manifest or its in-memory allocation identity is not

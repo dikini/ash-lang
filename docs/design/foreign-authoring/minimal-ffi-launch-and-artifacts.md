@@ -1,5 +1,10 @@
 # Linux launch profile and common artifact admission for minimal FFI
 
+> Status: superseded checked-host design. These contracts are not implemented
+> by current ffi-ash. [DN-0057](../DN-0057-checked-ffi-module-boundaries.md)
+> records their disposition; [DN-0037](../DN-0037-ash-authored-foreign-library-interfaces.md)
+> records the accepted current foreign-call boundary.
+
 This refinement belongs to
 [DN-0057](../DN-0057-checked-ffi-module-boundaries.md) and the
 [copied-text and connection/statement cases](minimal-ffi-contract-cases.md).
@@ -9,15 +14,15 @@ resolve this blocker's policy at design level, subject to review and delivery
 evidence. They accept no architecture, define no current Ash semantics and
 select no source syntax.
 
-The accepted narrow owner-free scalar GNU in-process architecture is
+The historical, superseded owner-free scalar GNU in-process choice is
 [AD-0015](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0015-linux-scalar-inprocess-whole-images.md). It
-selects exact-closure receipt/independent approval, protected deployment context
+selected exact-closure receipt/independent approval, protected deployment context
 and immutable fd execution under explicit trusted runtime/native premises.
 It supplies no strict per-image approval, product implementation or isolated,
 SQLite or owner/resource acceptance. The remaining exploration below retains
 its design status; current language truth still comes from the specification.
 [AD-0016](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0016-linux-owner-inprocess-whole-images.md) later
-selects the owner/resource extension of those mechanisms with finite trusted
+selected the now-superseded owner/resource extension of those mechanisms with finite trusted
 native/allocator/closure premises. It grants no strict executable approval,
 checked activation or isolated/SQLite deployment acceptance.
 

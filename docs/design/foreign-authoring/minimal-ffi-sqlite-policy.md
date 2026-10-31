@@ -1,5 +1,10 @@
 # SQLite policy for the minimal FFI cases
 
+> Status: superseded checked-host design. These contracts are not implemented
+> by current ffi-ash. [DN-0057](../DN-0057-checked-ffi-module-boundaries.md)
+> records their disposition; [DN-0037](../DN-0037-ash-authored-foreign-library-interfaces.md)
+> records the accepted current foreign-call boundary.
+
 This library contract belongs to
 [DN-0057](../DN-0057-checked-ffi-module-boundaries.md). It owns the portable
 SQLite signatures, constants, input and output roles, conversion assumptions

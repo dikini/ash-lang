@@ -1,5 +1,10 @@
 # Exhaustion-safe FFI reporting and ownership preservation
 
+> Status: superseded checked-host design. These contracts are not implemented
+> by current ffi-ash. [DN-0057](../DN-0057-checked-ffi-module-boundaries.md)
+> records their disposition; [DN-0037](../DN-0037-ash-authored-foreign-library-interfaces.md)
+> records the accepted current foreign-call boundary.
+
 This design refinement belongs to
 [DN-0057](../DN-0057-checked-ffi-module-boundaries.md) and the
 [copied-text and connection/statement cases](minimal-ffi-contract-cases.md).
@@ -16,7 +21,7 @@ termination requests and observation of actual process termination. Exact
 platform mechanisms belong to a deployment profile; this document requires
 no particular executable format, syscall, allocator or process-control API.
 
-Current Ash's [native-buffer execution](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/spec/dynamic-semantics.md#scoped-native-buffer-execution)
+The retired native-buffer implementation's [execution](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/spec/dynamic-semantics.md#scoped-native-buffer-execution)
 prepares storage and release work before native allocation, keeps internal
 exhaustion terminal, and gives no unconditional teardown guarantee. Its
 [typed failure reporting](../../../spec/dynamic-semantics.md#typed-failure-reporting)

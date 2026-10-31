@@ -61,7 +61,7 @@ extension. It is not evidence for experimental foreign-library or arena cases.
 
 ## 2026-10-01: copying adapter evidence
 
-The [native adapter](../../../foreign-adapter/README.md) now builds against the
+The historical [native adapter](https://github.com/dikini/ash-lang/blob/7949b6d9136b0152ee9104e67bd0451cb9db4727/foreign-adapter/README.md) builds against the
 recorded SQLite 3.46.1 header and installed runtime. Twenty-one adapter tests
 passed, with independent contract and Rust safety review. The tests cover real
 acquisition, partial failure, copied BLOB input/output, empty BLOB versus null,
@@ -174,11 +174,11 @@ checking. Nine nested byte constructors exceeded the structural depth budget;
 equivalent local bindings construct the same `SELECT ?1` bytes. The planned
 client's four nested matches also exhausted that budget: each match has weight
 32 and the limit is 128. The exact client is retained in
-[entry-deep.ash](../../../tests/fixtures/provider-experiments/sqlite-copying/entry-deep.ash)
+[entry-deep.ash](https://github.com/dikini/ash-lang/blob/7949b6d9136b0152ee9104e67bd0451cb9db4727/tests/fixtures/provider-experiments/sqlite-copying/entry-deep.ash)
 with a precise frontend failure regression.
 
 The candidate client source in
-[entry.ash](../../../tests/fixtures/provider-experiments/sqlite-copying/entry.ash)
+[entry.ash](https://github.com/dikini/ash-lang/blob/7949b6d9136b0152ee9104e67bd0451cb9db4727/tests/fixtures/provider-experiments/sqlite-copying/entry.ash)
 factors the post-bind computation through one ordinary `after_bind<S,C>` helper.
 Its argument is `Statement<S,C>`, its result is `Result<Int>`, and its declared
 row and requirement are `StatementOps<S,C>` and `StatementProvider<S,C>`.
@@ -2666,7 +2666,6 @@ signature and native state roles. These repairs and their refusal cases are
 applied but await fresh compiler, public and bounded regression checks. They
 do not complete or integrate Batch 3.
 
-
 The common branch reconciles the independently verified packed-value merge
 `8adf4b2` from the original branch. Fresh all-targets receipt21 passes; public
 control receipt21 passes fourteen cases, including the mixed local helper, and
@@ -2702,7 +2701,6 @@ Formatting and changed-document review pass. Unsigned original integration
 127 capture library cases and 136 public cases. SQLite merges that checkpoint
 while preserving its pending files. This changes execution order, not the P-1
 goal or current Ash semantics.
-
 
 ## 2026-10-05: connected common control and refusal evidence
 
@@ -2873,7 +2871,6 @@ program permits a bounded comparison of helper declaration admission, call
 transport and body shape. Common owns those shared compiler repairs and their
 integration. Diagnostic success does not satisfy the original acceptance gate.
 
-
 ## 2026-10-07: completed-phase preparation checkpoint
 
 The selected shared source records a delivered control-call prefix only after
@@ -2892,7 +2889,6 @@ alone is insufficient when measured work rises. A private typed-route/frame
 candidate targets contextual expansion and has no execution claim yet. Shared
 compiler ownership remains Common's, native/library ownership remains SQLite's,
 and engine windows remain serial. DN-0036 retains experimental authority.
-
 
 ## 2026-10-07: completed-phase integration
 
@@ -2946,7 +2942,6 @@ independent normal typing limits. Their measured completed-native observations
 do not constitute normal-limit acceptance. Fusion remains an unverified
 follow-on. Experimental DN-0036 evidence does not establish current Ash
 semantics, production architecture, or an intrinsic lower bound.
-
 
 ## 2026-10-08: SQLite copying execution under calibrated admission
 

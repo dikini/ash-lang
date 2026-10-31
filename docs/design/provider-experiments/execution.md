@@ -196,7 +196,6 @@ unsigned preserving SQLite merge back into `codex/provider-experiments` follow
 normal acceptance of the larger programs. This is DN-0036 experiment tracking
 with no independent semantic or architectural authority.
 
-
 ## Previous SQLite checkpoint before the context-extension import
 
 The verified completed-phase compiler delivery is imported through unsigned merge
@@ -251,7 +250,6 @@ are imported before rerunning the original programs. Combined review and an
 unsigned preserving SQLite merge back into `codex/provider-experiments` follow
 normal acceptance of the larger programs. This is DN-0036 experiment tracking
 with no independent semantic or architectural authority.
-
 
 ## Previous SQLite checkpoint before the receipt 284 import
 
@@ -731,7 +729,6 @@ the current completed costs and unchanged owner endpoints. Production work and
 depth limits remain unchanged. The measured remaining deficits are not evidence
 that larger quotas are necessary. Common coordinates shared ownership and serial
 engine windows with SQLite, arena, proof and the algebraic-analysis workstream.
-
 
 ## Previous Common checkpoint before the receipt 259 import
 
@@ -4216,7 +4213,6 @@ architecture checks, commit and merge unsigned, and verify the integrated
 original branch. Original identities, full anchor validation, lexical watches,
 existing work/depth limits and unrelated drafts remain required invariants.
 
-
 Receipt 110 retained the same four public refusals and restored the exact
 productive receipt-108 source after a temporary capture-index probe. Complete
 copying graphs contained one duplicate among 104 capture entries; reset
@@ -4229,7 +4225,6 @@ These counts do not justify a capture deduplication change. Evidence and the
 source-only assessment are retained in `provider-capture-duplicates-110/` and
 `/tmp/ash-function-capture-duplicates-analysis-20261005-frozen-01/`. No probe
 remains in productive source and no new execution capability is claimed.
-
 
 ## Separate generic cost delivery (2026-10-05)
 
@@ -4253,7 +4248,6 @@ mutation regressions accompany the occurrence index. Independent Core
 reconstruction remains required. Verification, unsigned commit, original-branch
 merge and integrated verification are pending at this preparation point.
 
-
 Receipts 112 and 113 verify this isolated twelve-operation snapshot: 1,595
 library cases, 139 connected public cases and 43 architecture cases pass with
 no ignores. All-targets checking, workspace Clippy with warnings denied and
@@ -4272,7 +4266,6 @@ program, with exact source pins and explicit truncation boundaries. No trace
 or speculative shortcut is part of this delivery. Unsigned integration and
 verification in the original worktree remain required.
 
-
 The coherent fourteen-operation preparation is restored after the separate
 cost commit `50f4b6b` and unsigned original-branch merge `c97e0f3`. Its generic
 compiler files include that verified common snapshot; pending package files
@@ -4280,7 +4273,6 @@ retain their preserved contents. Integrated original-branch verification is
 still pending. The next diagnosis is the requested ordered trace on the
 unchanged reset program. No uncompiled bound-port or borrowed-projection
 candidate has been applied, and no larger-program acceptance is claimed.
-
 
 ## Ordered reset execution trace and propagation review (115–117)
 
@@ -4338,7 +4330,6 @@ Original merge c97e0f3 is now undergoing the complete gate 116. The verified
 cost-only handoff will be released to SQLite only after that gate passes.
 Connected verification 117 of the new propagation candidate remains pending.
 This work changes neither `spec/` nor the experimental authority of DN-0036.
-
 
 ## Verified shared cost integration and SQLite handoff (2026-10-05)
 
@@ -5413,7 +5404,6 @@ failures remain pending acceptance, as does the verified SQLite delivery merge.
 The following common-workstream records are retained alongside the SQLite
 records above. Each receipt keeps its original scope and limitations.
 
-
 ## Borrowed propagation connected check (117)
 
 The diagnostic-free propagation candidate compiles and passes the complete
@@ -5439,7 +5429,6 @@ checkpoint stays verified at original tracking tip `7cf295e`. SQLite receives
 the next bounded workspace check window; reduced diagnostic variants will
 use the exact preceding compiler source to isolate program-shape effects.
 Original acceptance programs remain required.
-
 
 ## Ready setup and helper isolation (123–124)
 
@@ -5480,7 +5469,6 @@ program acceptance and connected independent validation, then an unsigned common
 commit, an unsigned original-branch merge and integrated verification before
 SQLite imports it. This remains DN-0036 evidence, not current Ash semantics or a
 mechanized P-1 proof.
-
 
 ## Current preparation cost and typed reuse boundary (125–131)
 
@@ -5541,7 +5529,6 @@ Receipt directories `provider-zonk-cost-125`, `provider-ready-notify-cost-126`,
 They retain commands, exact source pins, raw logs and explicit engine returns.
 Temporary diagnostic changes are restored before subsequent work. Original
 integration remains `7cf295ee` over `c97e0f3`; no new completed delivery is claimed.
-
 
 Receipt 132 verifies the same diagnostic-free hash/scalar candidate with all
 1,601 library cases, 139 connected public cases and 43 architecture cases
@@ -5607,7 +5594,6 @@ Receipts `provider-preparation-phases-133`, `provider-preparation-phases-134`,
 `provider-typed-preparation-136` are in the same evidence directory. The
 integrated original branch remains `7cf295ee` over `c97e0f3`.
 
-
 Receipt 137 measures the diagnostic-free typed preparation candidate with the
 same five representative public programs. Original group authentication occurs
 once per source entry, at 1,809 units. Each selected template's state associations
@@ -5641,7 +5627,6 @@ Receipts `provider-preparation-phases-137` and
 `provider-preparation-phases-138` are in the same evidence directory. The typed
 preparation candidate and passing reset program remain uncommitted and unmerged;
 original integration remains `7cf295ee` over `c97e0f3`.
-
 
 Receipt 138b checks the diagnostic-free typed preparation boundaries. All 66
 external-provider cases pass. Architecture enters its 43 cases but the combined
@@ -6218,7 +6203,6 @@ Provider admission and copied-template preparation are the next causal targets.
 Direct collection of caller identities remains a source-only consolidation
 candidate; no saving, cache or additional work allowance is claimed.
 
-
 ### Copied input preparation consolidation (2026-10-06, receipts 180–181)
 
 The retained working source now collects the original Type/row payload identity
@@ -6251,7 +6235,6 @@ The next delivery isolates the ten generic source/test files against the origina
 twelve-operation SQLite contract, preserving all pending SQLite manifest,
 adapter, library and program work. Required verification, unsigned integration
 and checks in the original worktree remain pending for this shared follow-on.
-
 
 ### Separate shared follow-on verification (2026-10-06, receipts 182–184)
 
@@ -6309,7 +6292,6 @@ and run fresh `CARGO_BUILD_JOBS=1 cargo xtask verify` there before naming a
 completed follow-on delivery. These cost repairs change no selected experiment
 contract or normative language semantics. They establish no mechanized
 whole-P-1 correspondence proof or completed String/TEXT package.
-
 
 ### Integrated preparation-cost delivery (2026-10-06, receipt 186)
 
@@ -6565,7 +6547,6 @@ can pass and the reviewed SQLite delivery can merge back unsigned. The shared
 compiler/Core/capture/provider/runtime ownership remains Common's. Compiler work,
 parser depth and validation requirements stay unchanged.
 
-
 ### Follow-on reductions in registry and capture work (2026-10-06)
 
 This common delivery changes three shared files. Contextual registry ordering
@@ -6650,7 +6631,6 @@ source reversals, independent reviews and returns remain in
 evidence directory. At that checkpoint, the unsigned merge and integrated full verification
 remained required before naming a completed delivery.
 
-
 ### Integrated registry and capture reductions (2026-10-06, receipt 204)
 
 Unsigned common commit `b87e9a5d186f27855729a05afc426fee0a142bef` is integrated
@@ -6674,7 +6654,6 @@ Ash semantics. The larger SQLite package remains 14
 passes and three original typing-resource failures; this common merge does not
 complete those copying, NUL-input or persistence cases. The source-only registry
 phase and live-startup investigations remain unimplemented.
-
 
 Receipt 204 runs the unfiltered `CARGO_BUILD_JOBS=1 cargo xtask verify` in
 the original worktree at the merge commit. Formatting, metadata, all-targets
@@ -6702,7 +6681,6 @@ and persistence failures remain outstanding. Later arena allocation, Layout,
 references, containment, borrowing, sharing and storage families remain separate.
 These are tested DN-0036 experimental properties and foreign assumptions, not
 current Ash semantics or a mechanized whole-P-1 correspondence proof.
-
 
 ### Prepared type lookup and structural capture installation (2026-10-06)
 
@@ -6789,7 +6767,6 @@ both histories into `codex/provider-experiments`, integrated verification, then
 SQLite's preserving import. No merge targets `main`. This remains the bounded
 DN-0036 experiment; it creates no current Ash semantics or whole-contract proof.
 
-
 ### Integrated prepared lookup and capture checkpoint (2026-10-06, receipt 232)
 
 Unsigned common commit `e59d231679cfa98759deed3a0574c2458a22cefc` is integrated
@@ -6845,7 +6822,6 @@ depth limit, source assertion, language rule or foreign assumption changes.
 This remains bounded DN-0036 experimental evidence. Later typed arena allocation,
 Layout, references, containment, borrowing, sharing and storage families remain
 separate, as do DN-0037 and DN-0038.
-
 
 ### Productive cursor borrowing and binary method charges (2026-10-07)
 
@@ -6927,7 +6903,6 @@ measured-result and connected-quality reviews pass. The verified source and
 this record are prepared for an unsigned common commit and preserving merge;
 the integration hash and complete original-worktree gate are recorded next.
 
-
 ### Exact method-probe mirror repair (2026-10-07, receipt 246)
 
 The full original-worktree gate at unsigned merge
@@ -6960,7 +6935,6 @@ validator cases and formatting. It returns at
 restored, normal policies and no engine. Independent concrete source/formula
 review passes. Full original-worktree verification must still pass after the
 unsigned corrective commit and preserving merge.
-
 
 ### Integrated cursor and method delivery (2026-10-07, receipt 246)
 
@@ -7022,7 +6996,6 @@ remain private investigation. This delivery supplies experimental DN-0036
 evidence; it changes no normative Ash rule and proves no whole-contract or
 intrinsic resource lower bound. The exclusions recorded above remain.
 
-
 ### Dependency progress and queued output delivery (2026-10-07)
 
 This candidate joins exact dependency watch membership and linked-prefix progress
@@ -7049,7 +7022,7 @@ are removed after each run. Relative to the integrated cursor/method baseline,
 the selected source reports these completed costs:
 
 | Program | Source checking | Independent Effect Core |
-|---|---:|---:|
+| --- | ---: | ---: |
 | Copying | 1,328,833 | 951,107 |
 | Persistence | 621,950 | 1,658,241 |
 | Resume | 207,434 | 298,216 |
@@ -7112,7 +7085,6 @@ All these checks use normal limits with no measurement observer. Full guards
 preserve unrelated Common, SQLite and Original sources, indexes and histories.
 Independent review authenticates the raw logs and the sole selected compiler
 change. The unsigned Original merge and full `cargo xtask verify` pass, as recorded below.
-
 
 ### Integrated dependency progress and output links (2026-10-07, receipt 259)
 
@@ -7213,7 +7185,6 @@ This remains tested finite evidence for the bounded
 experiment. It does not establish current Ash semantics, a complete formal
 resource proof, a foreign ABI change or accepted production architecture.
 
-
 ### Integrated value-context prefixes (2026-10-07, receipt 278)
 
 Unsigned Common commit `4a6c50cdb769043a93a934cca3d6ebfd7c1fe368` is integrated by
@@ -7251,7 +7222,6 @@ production work or depth limit changed. This is tested finite evidence under
 Ash semantics, a complete formal resource proof or accepted production
 architecture. The algebraic-analysis workstream has a separately bounded
 lexical/evidence product study; it is not part of this delivered code.
-
 
 ### Queued setup, capture products and final binder preparation (2026-10-07, receipts 279–281)
 
@@ -7344,7 +7314,6 @@ evidence for
 Ash semantics, a complete formal resource proof or accepted production
 architecture.
 
-
 ### Integration receipt (2026-10-07)
 
 The pending integration status above is superseded by the actual return.
@@ -7371,7 +7340,6 @@ parents are retained in `preparation-delivery-282/fusion-docs-integration/`.
 Production work and depth limits remain unchanged. The larger copying,
 persistence and bound-NUL cases still lack normal-budget completion; the
 completed diagnostic measurements above do not establish that completion.
-
 
 ### Completed-phase control preparation (2026-10-07, receipt 284)
 
@@ -7431,7 +7399,6 @@ Root's independent normal/raw/native/contract reviews are in
 `call-prefix-and-row-delivery-284/`. Source commit, preserving unsigned original
 merge and integrated full verification remain pending at this source checkpoint.
 Diagnostic completion remains separate from normal-policy acceptance.
-
 
 ### Completed-phase integration receipt (2026-10-07)
 

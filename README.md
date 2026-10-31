@@ -38,6 +38,10 @@ cooperative scheduling and two pinned workers with copied FIFO byte channels.
 Current source contains no dialect selector; the tags retain historical
 milestone states rather than selectable compiler modes.
 
+The signed annotated `ffi-ash` tag retains the official current-dialect
+checkpoint. Its [closure report](docs/design/ffi-ash/closure.md) records the
+scope, design-branch reconciliation, execution support and verification method.
+
 The [feature inventory](docs/project/implemented-features.md) records current
 product boundaries and distinguishes historical experimental evidence from the
 specified foreign interface. The

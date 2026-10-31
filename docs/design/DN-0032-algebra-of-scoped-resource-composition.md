@@ -2,7 +2,7 @@
 
 - ID: `DN-0032`
 - Status: exploring
-- Related: [DN-0031](DN-0031-resource-composition-concept-map.md), [DN-0009](DN-0009-effects-handlers-and-continuations.md), [DN-0010](DN-0010-identities-and-resource-lifetimes.md), [DN-0013](DN-0013-session-and-resource-protocol-stress-tests.md)
+- Related: [DN-0031](DN-0031-resource-composition-concept-map.md), [DN-0009](DN-0009-effects-handlers-and-continuations.md), [DN-0010](DN-0010-identities-and-resource-lifetimes.md), [DN-0013](DN-0013-session-and-resource-protocol-stress-tests.md), [DN-0055](DN-0055-algebra-of-regions-lifetimes-and-ownership.md)
 
 > This is a candidate algebra, not current Ash semantics or an accepted
 > architecture. The equations below distinguish definitions, bounded
@@ -35,6 +35,11 @@ This derives the intended `A[A'] · B[B'] = (A,B)[A';B']` for open, compatible
 resource expressions. It does not identify that operator with running and
 closing two scopes separately. Equivalence of such execution schedules is a
 further theorem, illustrated below.
+
+[DN-0055](DN-0055-algebra-of-regions-lifetimes-and-ownership.md) explores a
+region, lifetime, and ownership algebra. It separates storage placement and
+reclamation from the context product and lifetime envelope used here; these
+composition laws do not by themselves merge regions or transfer their owners.
 
 ## Literature and transfer boundaries
 

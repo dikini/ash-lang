@@ -1,5 +1,10 @@
 # Minimal FFI contract: copied text and scoped statements
 
+> Status: superseded checked-host design. These contracts are not implemented
+> by current ffi-ash. [DN-0057](../DN-0057-checked-ffi-module-boundaries.md)
+> records their disposition; [DN-0037](../DN-0037-ash-authored-foreign-library-interfaces.md)
+> records the accepted current foreign-call boundary.
+
 This worked design belongs to
 [DN-0057](../DN-0057-checked-ffi-module-boundaries.md). The choices below are
 candidates for review, not current Ash semantics, an accepted architecture or
