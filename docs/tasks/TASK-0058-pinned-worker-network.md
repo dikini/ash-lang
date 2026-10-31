@@ -14,58 +14,45 @@ N1 contract and host/channel choice were independently reviewed at
 `b296e17ce9e4f1760ce73df4f4716ef0c0fb2093` and are accepted in CP-0027 and
 AD-0017. Product reliance additionally needs the assigned bounded preservation
 evidence. The
-[owned execution plan](plans/pinned-worker-network.md) sequences the original
-[N1–N6 issues](https://github.com/dikini/ash-lang/issues/55) and their gates.
-The checker contract in CP-0028 and its bounded proof assignment were
-independently reviewed at `94c0be0375d19f8e60900d5d77be2f5caa746eb0` and the
-transition is accepted. Its proof and actual Core reconstruction gate precede
-N4/N5 release reasoning. N4 also requires a separately accepted, sound codec
-extension before codec-dependent completion or release permission. Main
-integration requires separate authorization. Accepted [CP-0029](../proposals/CP-0029-exact-base-256-integer-split.md)
-and [CP-0030](../proposals/CP-0030-checked-network-codec.md) establish the
-bounded N4 codec contracts. After independent review and retention of their
-accepted metadata, this task authorizes their implementation and required
-evidence. The N4 driver, native and release obligations remain open; N3 and the bounded
-Control producer slice were subsequently retained as recorded below.
-
+[focused execution plan](plans/pinned-worker-ordinary-protocol.md) sequences
+the revised ordinary Ash protocol delivery. The earlier
+[execution plan](plans/pinned-worker-network.md) records the superseded checker
+approach and is historical for N4/N5; it does not authorize that approach.
+On 2026-10-31 the user directed ordinary Ash protocol code and ordinary error
+handling, without compiler protocol reconstruction or a new runtime checking
+framework. [CP-0028](../proposals/CP-0028-checked-functional-network-ledger.md),
+[CP-0030](../proposals/CP-0030-checked-network-codec.md), and AD-0017 record
+this revision. CP-0029 remains the selected codec's integer dependency. The
+previous N3 review and proof establish only their recorded historical scope,
+not a prerequisite checker gate or a completed ordinary protocol. Main
+integration remains a separate gate.
 ## Current delivery status
 
-The live [M4 ledger](https://github.com/dikini/ash-lang/issues/55) records the
-current milestone inputs and outstanding gates. N3 was accepted through
-[PR #180](https://github.com/dikini/ash-lang/pull/180). The outbound codec
-connection in [PR #181](https://github.com/dikini/ash-lang/pull/181) and the
-conditional receive slice in [PR #182](https://github.com/dikini/ash-lang/pull/182)
-are retained partial N4 work; neither closes N4 or grants delivery, peer or
-completion authority. The PR #182 Store-cut fixture does not establish
-convergence when Empty is retried. The bounded codec argument and its remaining
-correspondence obligations are recorded in
-[normal-return correspondence](evidence/pinned-network-codec/normal-return-correspondence.md).
-
-The linked receipt helper's decoder call passes within the existing work
-allowance. Its provisional returns are sealed against converged call, capture,
-query and provider witnesses before a worker focus is exposed. The installation
-checker is a conditional source witness; connected receipt and currentness
-remain open.
-
-The current Core validator can reject a Network acquisition whose source
-position precedes later generic declarations: its source-order fallback
-recognizes Store identities but not the actual Network identity carrier. The
-receipt test places `main` after those declarations to exercise the same
-network behavior. This is a validator limitation, not a language ordering
-requirement; its general repair and evidence remain open.
+The live [M4 ledger](https://github.com/dikini/ash-lang/issues/55) records
+milestone inputs and outstanding gates. N3 and partial N4 checker slices were
+retained before the 2026-10-31 direction. Their receipts cover only the tested
+model or implementation and do not establish the revised connected program,
+actual settlement, or N4/N5 completion. The source-order limitation discussed
+in earlier evidence remains a generic validator issue; source ordering is not a
+language requirement.
 
 ## Work
 
-Retain all original criteria in [#76](https://github.com/dikini/ash-lang/issues/76)
-through [#81](https://github.com/dikini/ash-lang/issues/81). Prepare, review
-and adopt N1; deliver worker/channel ownership and one-way completion; prove
-the functional ledger and restricted checker; implement checked bidirectional
-completion and two-phase shutdown; then demonstrate the cross-milestone program,
-update the specification, verify and close. The linked plan assigns each
-original acceptance obligation and verification boundary. Partial slices do
-not close a whole criterion.
+Deliver the ordinary Work/Ack/drain program using existing Ash and N2 network
+facilities, then producing cleanup and the cross-milestone program. Preserve
+original user-visible outcomes from [#76](https://github.com/dikini/ash-lang/issues/76)
+through [#81](https://github.com/dikini/ash-lang/issues/81), applying the
+revised proposal to superseded checker-specific implementation criteria. The
+focused plan names the connected acceptance path, negative cases, removal work
+and performance measurement. Complete generic and native gates, independent
+review, the specification update and full verification before final delivery.
+Partial slices do not close a whole criterion.
 
 ## Historical progress
+
+The following entries record the decisions and status at those checkpoints.
+Earlier requirements to finish the protocol checker are superseded by the
+2026-10-31 revision above; no historical entry claims revised acceptance.
 
 The N1 source/Core contract and host/channel choice are accepted and retained
 through [PR #168](https://github.com/dikini/ash-lang/pull/168) at
@@ -273,5 +260,8 @@ existing checks to work around them.
 
 ## Deviations
 
-None. Return any source/Core or control-envelope semantic gap found in review
-to the proposal before implementation.
+On 2026-10-31 the user superseded the protocol-specific compiler checker and
+then ruled out new runtime checking machinery beyond ordinary error handling.
+The revised proposals govern the remaining work; retained evidence keeps its
+original scope. Return any missing language, bridge or lifecycle contract to
+the governing proposal before implementation.
