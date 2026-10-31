@@ -13,13 +13,12 @@ Review the resolved transitive graph as well as the direct package.
 ## License compatibility
 
 Evaluate license compatibility as
-`compatible(Ash license, dependency license, distribution role)`. The Ash
-license is currently an unspecified parameter. Do not replace it with a
-provisional allowlist or claim compatibility before the project selects it.
+`compatible(Ash license, dependency license, distribution role)`. Ash is
+licensed under [GPL-3.0-only](../../LICENSE).
 
-Before that selection, require a machine-readable SPDX expression or a reviewed
-license file and record all obligations needed for the later evaluation.
-Missing, ambiguous, or unverified license information prevents approval.
+Require a machine-readable SPDX expression or a reviewed license file for every
+dependency, and record the obligations for its distribution role. Missing,
+ambiguous, or unverified license information prevents approval.
 
 ## Review procedure
 

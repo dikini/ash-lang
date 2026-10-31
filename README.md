@@ -71,3 +71,8 @@ checks, and proof-backed facts in one consistent language story.
 Human contributors should start with [CONTRIBUTING.md](CONTRIBUTING.md). Agents
 should start with [AGENTS.md](AGENTS.md) and reconstruct only the context needed
 for their task.
+
+## License
+
+Ash is licensed under the [GNU General Public License version 3](LICENSE)
+(`GPL-3.0-only`).

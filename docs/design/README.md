@@ -16,6 +16,11 @@ choice is [AD-0017](../decisions/AD-0017-pinned-worker-host-and-transport.md).
 The implemented [foreign-call boundary](../../spec/static-semantics.md#source-foreign-declarations)
 does not accept the wider region and control designs; these notes remain informative.
 
+Native storage, access, and packed data shapes are explored in
+[DN-0049](DN-0049-native-storage-access-and-packed-data-shapes.md).
+[DN-0052](DN-0052-diag-ash-case-studies-and-teaching.md) proposes teaching studies
+for its pinned historical Diag Ash checkpoint; it does not describe current Ash.
+
 ## Implementation and evidence boundaries
 
 A note's `exploring` or `evaluating` status describes its design work, not the
