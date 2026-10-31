@@ -5873,26 +5873,14 @@ impl<'a> Analysis<'a> {
     // its body. A standalone query has no caller frame for those inputs; its
     // actual linked calls are checked separately with their substitutions.
     fn symbolic_outer_cell_request(
-        &self,
+        &mut self,
         state: &State,
         event: Event,
         frame: Frame,
         target: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<bool, Failure> {
-        if !state.symbolic_seed || self.inspecting || !self.is_cell(frame) {
-            return Ok(false);
-        }
-        let Frame::Resource {
-            code,
-            value_context,
-            focused,
-            ..
-        } = frame
-        else {
-            return Ok(false);
-        };
-        if self.focusing != focused {
+        if !state.symbolic_seed || self.inspecting {
             return Ok(false);
         }
         let Some(owners) =
@@ -5900,16 +5888,45 @@ impl<'a> Analysis<'a> {
         else {
             return Ok(false);
         };
-        self.data
-            .as_ref()
-            .ok_or(Failure::Invalid)?
-            .symbolic_cell_inputs(
+        match frame {
+            Frame::Resource {
                 code,
-                (value_context, state.value_context),
-                owners,
+                value_context,
                 focused,
-                budget,
-            )
+                ..
+            } if self.is_cell(frame) && self.focusing == focused => self
+                .data
+                .as_ref()
+                .ok_or(Failure::Invalid)?
+                .symbolic_cell_inputs(
+                    code,
+                    (value_context, state.value_context),
+                    owners,
+                    focused,
+                    budget,
+                ),
+            Frame::Handler {
+                code,
+                value_context,
+                ..
+            }
+            | Frame::RemovedHandler {
+                code,
+                value_context,
+                ..
+            } if self.is_cell_handler(frame) => self
+                .data
+                .as_mut()
+                .ok_or(Failure::Invalid)?
+                .symbolic_cell_handler_inputs(
+                    code,
+                    (value_context, state.value_context),
+                    owners,
+                    self.focusing,
+                    budget,
+                ),
+            _ => Ok(false),
+        }
     }
 
     fn requested_boundaries(

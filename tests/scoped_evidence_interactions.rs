@@ -128,6 +128,15 @@ fn nested_generic_helper_executes_after_core_transforms() {
         include_str!("fixtures/generic-cell/nested-helper-import-entry.ash"),
         Some(&helper),
     );
+    assert_execution(include_str!(
+        "fixtures/generic-cell/nested-helper-inner-handler.ash"
+    ));
+    assert_execution_with_helper(
+        include_str!("fixtures/generic-cell/nested-helper-import-entry.ash"),
+        Some(include_str!(
+            "fixtures/generic-cell/nested-handler-import.ash"
+        )),
+    );
 }
 
 fn resolve_entry(graph: &ModuleGraph) -> Result<ResolvedModule, ResolveModuleError> {
