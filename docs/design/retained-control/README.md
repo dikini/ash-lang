@@ -77,10 +77,9 @@ preparation and retry without a partial move. Images are independently decoded
 and validated before execution. These tests and reviewed correspondences
 connect the bounded models to the implementation; the Lean results do not
 mechanically prove the compiler or evaluator. [Issue #165](https://github.com/dikini/ash-lang/issues/165)
-records two analysis limitations and their reproductions. The
-[C5 checkpoint](https://github.com/dikini/ash-lang/issues/75#issuecomment-6476014597)
-and [separate Main handoff](https://github.com/dikini/ash-lang/issues/54#issuecomment-6476014971)
-remain open.
+records two analysis limitations and their reproductions. The C5 checkpoint and Main handoff completed with
+[PR #167](https://github.com/dikini/ash-lang/pull/167) retained at
+`67c79ddc32a813cc0c9ddab2962f9e2aa849b028`.
 
 The historical bounded [one-way completion source gate](../../tasks/evidence/pinned-one-way-proof/README.md)
 registers `OneWayCompletion` after the four retained parent modules. Its model

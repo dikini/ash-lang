@@ -2,7 +2,7 @@
 
 - ID: `AD-0017`
 - Status: accepted
-- Related: [specification](../../spec/README.md), [DN-0058](../design/DN-0058-pinned-worker-host-and-channel.md), [TASK-0058](../tasks/TASK-0058-pinned-worker-network.md)
+- Related: [specification](../../spec/README.md), [DN-0058](../design/DN-0058-pinned-worker-host-and-channel.md)
 
 ## Decision
 
@@ -21,8 +21,8 @@ origin only: ordinary Ash implements the ledger, acknowledgements and drain
 with ordinary error handling. The host does not certify ledger correctness,
 decode completion facts, or own another worker's retained control. The user
 superseded the earlier protocol-specific compiler checker on 2026-10-31. The
-ordinary protocol and host behavior are retained on the milestone; Main
-integration remains separate.
+ordinary protocol and host behavior are integrated into Main; the
+[delivery record](https://github.com/dikini/ash-lang/issues/55) states its scope.
 
 Use synchronized state changes and level-triggered wait registration with an
 atomic readiness recheck. Readable includes a message, genuine End and failure;
@@ -106,6 +106,5 @@ registration/poll/cancel races, stale wakes, terminal late registration, genuine
 End and settlement with outstanding callbacks. Separate actual native
 observations from injected failure evidence and state Rust/OS assumptions.
 Earlier N3 ledger and checker evidence retains its original scope; it is not
-evidence of the revised ordinary protocol program. Apply the remaining native,
-generic control and final delivery gates under
-[TASK-0058](../tasks/TASK-0058-pinned-worker-network.md).
+evidence of the ordinary protocol program. The historical
+[TASK-0058](https://github.com/dikini/ash-lang/blob/b5c62bf25b87bc1c2ce9f87e4efc3ca0e0107c9a/docs/tasks/TASK-0058-pinned-worker-network.md) records the delivery and its separate evidence.

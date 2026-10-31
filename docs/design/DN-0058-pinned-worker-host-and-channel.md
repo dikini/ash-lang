@@ -5,7 +5,7 @@
 
 - ID: `DN-0058`
 - Status: exploring
-- Related: [AD-0017](../decisions/AD-0017-pinned-worker-host-and-transport.md), [CP-0027](https://github.com/dikini/ash-lang/blob/b3e16b7c31d55850ab6f879286a594b4f6cb2540/docs/proposals/CP-0027-pinned-workers-and-copied-channels.md), [DN-0055](DN-0055-algebra-of-regions-lifetimes-and-ownership.md), [DN-0056](DN-0056-scoped-continuation-retention-and-library-scheduling.md), [TASK-0058](../tasks/TASK-0058-pinned-worker-network.md)
+- Related: [AD-0017](../decisions/AD-0017-pinned-worker-host-and-transport.md), [CP-0027](https://github.com/dikini/ash-lang/blob/b3e16b7c31d55850ab6f879286a594b4f6cb2540/docs/proposals/CP-0027-pinned-workers-and-copied-channels.md), [DN-0055](DN-0055-algebra-of-regions-lifetimes-and-ownership.md), [DN-0056](DN-0056-scoped-continuation-retention-and-library-scheduling.md), [historical TASK-0058](https://github.com/dikini/ash-lang/blob/b5c62bf25b87bc1c2ce9f87e4efc3ca0e0107c9a/docs/tasks/TASK-0058-pinned-worker-network.md)
 
 This note retains the exploration and proof questions behind the accepted
 [AD-0017](../decisions/AD-0017-pinned-worker-host-and-transport.md). It is
