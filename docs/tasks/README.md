@@ -9,13 +9,13 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-- [TASK-0058: Pinned worker network](TASK-0058-pinned-worker-network.md)
+No active tasks are listed.
 
 The retained-control [specification](../../spec/README.md) and
-[bounded evidence](../design/retained-control/README.md) are retained on the M3
-milestone. The [C5 handoff](https://github.com/dikini/ash-lang/issues/75#issuecomment-6476014597)
-owns the final checkpoint; the [Main handoff](https://github.com/dikini/ash-lang/issues/54#issuecomment-6476014971)
-is separate. [Issue #165](https://github.com/dikini/ash-lang/issues/165) records
+[bounded evidence](../design/retained-control/README.md) are integrated on
+Main through [PR #167](https://github.com/dikini/ash-lang/pull/167) at
+`67c79ddc32a813cc0c9ddab2962f9e2aa849b028`. The C5 and Main handoffs are
+complete. [Issue #165](https://github.com/dikini/ash-lang/issues/165) records
 two analysis limitations without adding language restrictions.
 
 The lexical-region product's language rules are in the

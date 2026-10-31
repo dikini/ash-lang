@@ -17,8 +17,9 @@ handler outside the Store. The current release analysis conservatively refuses
 the empty-queue example when its only allocator is the host default; an
 enclosing `region` and `using` supplies the supported context.
 
-The module uses the accepted retained-control change on the M3 milestone; the
-current Main specification remains subject to the final C5 update.
+The retained-control change is integrated into Main in
+[PR #167](https://github.com/dikini/ash-lang/pull/167) at
+`67c79ddc32a813cc0c9ddab2962f9e2aa849b028`.
 
 The former Arena, native-buffer and SQLite libraries depended on the retired
 foreign policy API and have been removed for the implemented
@@ -81,13 +82,15 @@ sent; its acknowledgement permits parent retirement and the upstream Ack. The
 driver retains a pending head on Full and services receives before retrying.
 A malformed frame or failed operation takes an ordinary failure path; it is not
 a completion certificate. The module does not prove honest acknowledgements,
-per-message processing, liveness or native behavior. The connected execution
-and remaining evidence are tracked in
-[TASK-0058](../docs/tasks/TASK-0058-pinned-worker-network.md).
+per-message processing, liveness or native behavior. The connected execution and its evidence are recorded in the historical
+[TASK-0058](https://github.com/dikini/ash-lang/blob/b5c62bf25b87bc1c2ce9f87e4efc3ca0e0107c9a/docs/tasks/TASK-0058-pinned-worker-network.md).
 
 The source-native interpreter can execute this protocol with admitted host
 callbacks. Generated native images do not currently support Network scope and
 operations. The combined retained-control, Cell, byte-binding and Network test uses a
 trusted Rust host callback. Separate generated-host real-C FFI and SQLite
 canaries cover their respective supported bindings; they do not establish a
-combined Network image.
+combined Network image. A larger unused discard-bearing native binding can
+exhaust generic cleanup-inference work when composed with this protocol;
+[issue #190](https://github.com/dikini/ash-lang/issues/190) tracks the compiler
+cost limitation.

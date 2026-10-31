@@ -35,10 +35,11 @@ implemented boundary and M1 is complete. The previous F1-F8, checked-host,
 protected-launch, isolation and full SQLite assignments remain superseded or
 deferred, not completed.
 
-Overall [program #51](https://github.com/dikini/ash-lang/issues/51) still tracks
-separately authorized Main delivery of the lexical-region product and later
-[M3 #54](https://github.com/dikini/ash-lang/issues/54) and
-[M4 #55](https://github.com/dikini/ash-lang/issues/55).
+Overall [program #51](https://github.com/dikini/ash-lang/issues/51) records
+the milestone deliveries. M2 lexical regions and M3 retained control reached
+Main through [PR #157](https://github.com/dikini/ash-lang/pull/157) and
+[PR #167](https://github.com/dikini/ash-lang/pull/167); M4 workers are
+integrated through [issue #55](https://github.com/dikini/ash-lang/issues/55).
 [M2 #53](https://github.com/dikini/ash-lang/issues/53) covers default placement,
 explicit selection, lexical ownership, bulk reclamation, stored closures and
 recursive immutable graphs. The [specification](../spec/README.md) records the
@@ -49,8 +50,8 @@ bounded R1/R2 result and its assumptions; it is not a whole-compiler or native
 allocator proof. Usage/lifetime placement inference and the wider explorations in
 [DN-0054](design/DN-0054-base-lexical-region-memory-contracts.md) and
 [DN-0055](design/DN-0055-algebra-of-regions-lifetimes-and-ownership.md) remain
-informative future work. Product retirement does not complete Main integration,
-M3 retained control, M4 workers or the overall program.
+informative future work. The bounded models retain their stated scope after
+Main integration.
 
 The Mini-Ash milestone is retained historically at the `mini-ash` tag, whose
 peeled commit is `d62d3ba`. Its
