@@ -9,6 +9,12 @@
 > Ash. The [specification](../../spec/README.md) is the source of current
 > language behavior.
 
+The linked reproof and lowering order below describes the retained checkpoint.
+Under [AD-0006](../decisions/AD-0006-front-end-semantic-boundaries.md) and
+[AD-0007](../decisions/AD-0007-typed-core-dialects.md), completed modules
+publish their lowering and metadata; imports and linking reuse them and check
+new connections. The assembled Core then receives independent validation once.
+
 ## Question
 
 What is the smallest coherent type-class-like `interface` and `impl` increment

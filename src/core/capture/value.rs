@@ -392,6 +392,13 @@ pub(super) struct Graph {
     // The builder reserves this entire original-node prefix before it adds
     // adapters, imported expressions, or query-local synthetic expressions.
     original_nodes: usize,
+    // Includes local adapters and proxies built before imported graphs. Later
+    // service expressions contain no standalone Function bodies.
+    local_expressions: usize,
+    // Global initializer control roots and their exact creation queries.
+    local_initializer_queries: Vec<(usize, usize)>,
+    // Replies already established by defining-module initializer control.
+    initializer_replies: Vec<InitializerReply>,
     // Declaration bindings retain their original control initializer through
     // import relocation. Alias/opaque bindings have no initializer to execute.
     globals: Vec<(usize, usize, Option<usize>)>,
@@ -441,6 +448,9 @@ pub(super) fn observed_control_call_graph_for_test() -> Graph {
             },
         ],
         original_nodes: 0,
+        local_expressions: 5,
+        local_initializer_queries: Vec::new(),
+        initializer_replies: Vec::new(),
         globals: vec![(2, 1, None)],
         method_proxies: Vec::new(),
         sources: vec![span; 5],
@@ -514,6 +524,19 @@ impl Graph {
                 code.map(|code| code.checked_add(code_offset).ok_or(Failure::Resource))
                     .transpose()?,
             ));
+        }
+        charge(budget, imported.initializer_replies.len())?;
+        self.initializer_replies
+            .try_reserve(imported.initializer_replies.len())
+            .map_err(|_| Failure::Resource)?;
+        for reply in &imported.initializer_replies {
+            self.initializer_replies.push(InitializerReply {
+                expression: reply
+                    .expression
+                    .checked_add(offset)
+                    .ok_or(Failure::Resource)?,
+                atom: reply.atom,
+            });
         }
         for (&code, &expression) in &imported.positions {
             self.position(code + code_offset, expression + offset, budget)?;
@@ -2145,6 +2168,9 @@ impl Graph {
         let mut graph = Self {
             expressions: Vec::new(),
             original_nodes: nodes.len(),
+            local_expressions: 0,
+            local_initializer_queries: Vec::new(),
+            initializer_replies: Vec::new(),
             globals: Vec::new(),
             method_proxies: Vec::new(),
             sources: Vec::new(),
@@ -2343,6 +2369,7 @@ impl Graph {
         graph
             .metadata
             .extend(types.iter().map(|(variable, slot)| (*slot, *variable)));
+        graph.local_expressions = graph.expressions.len();
         let mut retained = Vec::new();
         for (binder, summary) in imports {
             charge(budget, retained.len() + 1)?;
@@ -2617,39 +2644,117 @@ impl Graph {
         self.positions.get(&code) == Some(&original) && original < self.original_nodes
     }
 
-    pub(super) fn append_global_initializers(
-        &self,
-        offset: usize,
-        roots: &mut Vec<usize>,
+    pub(super) fn prepare_local_initializer_queries<F: CoreOperationFamily>(
+        &mut self,
+        nodes: &[StoredNode<F>],
+        globals: &[(BinderId, crate::core::NodeId)],
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        charge(budget, self.globals.len())?;
-        roots
-            .try_reserve(self.globals.len())
+        charge(budget, globals.len())?;
+        self.local_initializer_queries
+            .try_reserve(globals.len())
             .map_err(|_| Failure::Resource)?;
-        for &(_, initializer, code) in &self.globals {
-            charge(budget, 1)?;
-            let Some(code) = code else {
+        for &(_, initializer) in globals {
+            let original = nodes.get(index(initializer)).ok_or(Failure::Invalid)?;
+            let root = match F::pure(&original.kind) {
+                Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) => {
+                    abstraction.body()
+                }
+                _ => initializer,
+            };
+            let kind = &nodes.get(index(root)).ok_or(Failure::Invalid)?.kind;
+            let Some(PureExprKind::Computation(PureComputation::Bind(binding))) = F::pure(kind)
+            else {
                 continue;
             };
-            if self.positions.get(&code) != Some(&initializer) {
+            if crate::core::region::closure_initializer::<F>(root, |id| {
+                nodes.get(index(id)).map(|node| &node.kind)
+            })
+            .is_none()
+            {
+                continue;
+            }
+            let query = index(binding.initializer());
+            if !matches!(
+                self.expressions.get(query),
+                Some(Expr::Request {
+                    scalar: false,
+                    region_view: true,
+                    ..
+                })
+            ) {
                 return Err(Failure::Invalid);
             }
-            roots.push(code.checked_add(offset).ok_or(Failure::Resource)?);
+            let root = index(initializer).checked_add(1).ok_or(Failure::Resource)?;
+            self.local_initializer_queries.push((root, query));
         }
         Ok(())
     }
 
+    pub(super) fn needs_initializer_replies(&self) -> bool {
+        !self.local_initializer_queries.is_empty()
+    }
+
+    pub(super) fn append_local_initializer_roots(
+        &self,
+        roots: &mut Vec<usize>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, self.local_initializer_queries.len())?;
+        roots
+            .try_reserve(self.local_initializer_queries.len())
+            .map_err(|_| Failure::Resource)?;
+        roots.extend(self.local_initializer_queries.iter().map(|(root, _)| *root));
+        Ok(())
+    }
+
+    pub(super) fn publish_initializer_replies(
+        &mut self,
+        replies: ObservedInitializerReplies,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if replies.0.len() != self.local_initializer_queries.len() {
+            return Err(Failure::Invalid);
+        }
+        charge(budget, replies.0.len())?;
+        self.initializer_replies
+            .try_reserve(replies.0.len())
+            .map_err(|_| Failure::Resource)?;
+        self.initializer_replies.extend(replies.0);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn global_initializer_source(&self, code: usize) -> Option<Span> {
+        self.globals
+            .iter()
+            .find_map(|&(_, initializer, candidate)| {
+                (candidate == Some(code))
+                    .then(|| self.sources.get(initializer).copied())
+                    .flatten()
+            })
+    }
+
     pub(super) fn start(&self, budget: &mut TypeWorkBudget) -> Result<Analysis<'_>, Failure> {
         let mut analysis = Analysis::new(self, budget)?;
+        for reply in &self.initializer_replies {
+            charge(budget, 1)?;
+            if reply.expression >= self.local_expressions {
+                let slot = analysis.slot(reply.expression, 0, budget)?;
+                analysis.atom(slot, reply.atom, budget)?;
+            }
+        }
         for &(binder, value, _) in &self.globals {
             let initializer = analysis.slot(value, 0, budget)?;
             let binder = analysis.slot(binder, 0, budget)?;
             analysis.edge(binder, initializer, budget)?;
         }
-        // Every source function body has a symbolic entry, including functions
-        // that are only exported. Actual calls receive separate contexts.
-        for (id, expression) in self.expressions.iter().enumerate() {
+        // Every local function body has a symbolic entry, including functions
+        // that are only exported. Imported functions enter through actual calls.
+        for (id, expression) in self.expressions[..self.local_expressions]
+            .iter()
+            .enumerate()
+        {
             if let Expr::Function {
                 parameters,
                 body,
@@ -2675,7 +2780,7 @@ impl Graph {
             }
         }
         if self.globals.is_empty() {
-            for id in 0..self.expressions.len() {
+            for id in 0..self.local_expressions {
                 if matches!(self.expressions[id], Expr::Resource { .. }) {
                     analysis.slot(id, 0, budget)?;
                 }
@@ -2726,6 +2831,28 @@ enum Atom {
     RetainedKey(usize, usize),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct InitializerReply {
+    expression: usize,
+    atom: Atom,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct ObservedInitializerReplies(Vec<InitializerReply>);
+
+impl ObservedInitializerReplies {
+    pub(super) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ObservedExternalResult {
+    Free,
+    Unknown,
+    RegionView,
+}
+
 #[derive(Debug)]
 struct Slot {
     key: (usize, usize),
@@ -2734,6 +2861,8 @@ struct Slot {
     readers: Vec<usize>,
     queued: bool,
     terminal: bool,
+    // Set only after the ordinary external result is successfully installed.
+    observed_external_result: Option<ObservedExternalResult>,
     // Fixed setup and Evidence input watches carry separate completed phases.
     // Neither grants frozen/cut authority or a cached live answer.
     preparation: SlotPreparation,
@@ -4273,6 +4402,7 @@ impl<'a> Analysis<'a> {
                 readers: Vec::new(),
                 queued: false,
                 terminal: true,
+                observed_external_result: None,
                 preparation: SlotPreparation::Pending,
             });
         }
@@ -5851,7 +5981,7 @@ impl<'a> Analysis<'a> {
         request: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        let (expression, _context) = self.slots[request].key;
+        let (expression, context) = self.slots[request].key;
         let atom = match self.graph.expressions[expression] {
             Expr::Request { scalar: true, .. } | Expr::Call { scalar: true, .. } => Atom::Free,
             Expr::Request {
@@ -5859,7 +5989,64 @@ impl<'a> Analysis<'a> {
             } => Atom::RegionView,
             _ => Atom::Unknown,
         };
-        self.atom(request, atom, budget)
+        self.atom(request, atom, budget)?;
+        if context == 0
+            && expression < self.graph.local_expressions
+            && self.graph.needs_initializer_replies()
+            && self.focus.is_none()
+        {
+            charge(budget, 1)?;
+            let observed = match atom {
+                Atom::Free => ObservedExternalResult::Free,
+                Atom::Unknown => ObservedExternalResult::Unknown,
+                Atom::RegionView => ObservedExternalResult::RegionView,
+                _ => return Err(Failure::Invalid),
+            };
+            let slot = &mut self.slots[request];
+            if slot
+                .observed_external_result
+                .is_some_and(|previous| previous != observed)
+            {
+                return Err(Failure::Invalid);
+            }
+            slot.observed_external_result = Some(observed);
+        }
+        Ok(())
+    }
+
+    pub(super) fn initializer_replies(
+        &self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<ObservedInitializerReplies, Failure> {
+        if self.focus.is_some() {
+            return Err(Failure::Invalid);
+        }
+        let queries = &self.graph.local_initializer_queries;
+        charge(
+            budget,
+            queries.len().checked_mul(2).ok_or(Failure::Resource)?,
+        )?;
+        let mut replies = Vec::new();
+        replies
+            .try_reserve(queries.len())
+            .map_err(|_| Failure::Resource)?;
+        for &(_, expression) in queries {
+            let slot = *self.indices.get(&(expression, 0)).ok_or(Failure::Invalid)?;
+            if self
+                .slots
+                .get(slot)
+                .ok_or(Failure::Invalid)?
+                .observed_external_result
+                != Some(ObservedExternalResult::RegionView)
+            {
+                return Err(Failure::Invalid);
+            }
+            replies.push(InitializerReply {
+                expression,
+                atom: Atom::RegionView,
+            });
+        }
+        Ok(ObservedInitializerReplies(replies))
     }
 
     /// A private retained checkpoint's checked reply is exactly Unit. This
@@ -6144,6 +6331,7 @@ impl<'a> Analysis<'a> {
             readers: Vec::new(),
             queued: false,
             terminal: context < self.frozen_contexts,
+            observed_external_result: None,
             preparation: SlotPreparation::Pending,
         });
         self.indices.insert(key, id);
@@ -7661,6 +7849,9 @@ mod tests {
             .unwrap();
         Graph {
             sources: vec![span; expressions.len()],
+            local_expressions: expressions.len(),
+            local_initializer_queries: Vec::new(),
+            initializer_replies: Vec::new(),
             expressions,
             original_nodes: 0,
             globals: Vec::new(),
@@ -7671,6 +7862,119 @@ mod tests {
             metadata: HashMap::new(),
             evidence: Vec::new(),
             evidence_index: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn initializer_reply_is_published_and_relocated_exactly() {
+        let mut provider = graph(vec![
+            Expr::Scalar,
+            Expr::Request {
+                operand: 0,
+                scalar: false,
+                region_view: true,
+                descriptor: None,
+            },
+        ]);
+        provider.local_initializer_queries.push((2, 1));
+        assert!(matches!(
+            provider.publish_initializer_replies(
+                ObservedInitializerReplies::default(),
+                &mut TypeWorkBudget::default()
+            ),
+            Err(Failure::Invalid)
+        ));
+        assert!(provider.initializer_replies.is_empty());
+
+        let mut work = TypeWorkBudget::default();
+        let mut analysis = provider.start(&mut work).unwrap();
+        assert!(matches!(
+            analysis.initializer_replies(&mut work),
+            Err(Failure::Invalid)
+        ));
+        let request = analysis.slot(1, 0, &mut work).unwrap();
+        analysis.atom(request, Atom::RegionView, &mut work).unwrap();
+        for observed in [
+            None,
+            Some(ObservedExternalResult::Free),
+            Some(ObservedExternalResult::Unknown),
+        ] {
+            analysis.slots[request].observed_external_result = observed;
+            assert!(matches!(
+                analysis.initializer_replies(&mut work),
+                Err(Failure::Invalid)
+            ));
+        }
+        analysis.slots[request].observed_external_result = None;
+        analysis.focus = Some((1, 0));
+        analysis.external_result(request, &mut work).unwrap();
+        assert_eq!(analysis.slots[request].observed_external_result, None);
+        assert!(matches!(
+            analysis.initializer_replies(&mut work),
+            Err(Failure::Invalid)
+        ));
+        analysis.focus = None;
+        analysis.external_result(request, &mut work).unwrap();
+        let mut short = TypeWorkBudget::with_limit(1);
+        assert!(matches!(
+            analysis.initializer_replies(&mut short),
+            Err(Failure::Resource)
+        ));
+        assert_eq!(short.used(), 0);
+        let mut exact = TypeWorkBudget::with_limit(2);
+        let replies = analysis.initializer_replies(&mut exact).unwrap();
+        assert_eq!(exact.used(), 2);
+        let mut retry = TypeWorkBudget::with_limit(2);
+        assert_eq!(analysis.initializer_replies(&mut retry).unwrap().0.len(), 1);
+        assert_eq!(retry.used(), 2);
+        drop(analysis);
+        assert_eq!(replies.0.len(), 1);
+
+        let mut short = TypeWorkBudget::with_limit(0);
+        assert!(matches!(
+            provider.publish_initializer_replies(replies.clone(), &mut short),
+            Err(Failure::Resource)
+        ));
+        assert_eq!(short.used(), 0);
+        assert!(provider.initializer_replies.is_empty());
+        let mut exact = TypeWorkBudget::with_limit(1);
+        provider
+            .publish_initializer_replies(replies, &mut exact)
+            .unwrap();
+        assert_eq!(exact.used(), 1);
+        let local = provider.start(&mut TypeWorkBudget::default()).unwrap();
+        assert!(!local.indices.contains_key(&(1, 0)));
+        drop(local);
+
+        // Two expression copies, their carrier, and the one retained reply
+        // cost five units. A refused copy leaves the defining graph reusable.
+        let mut refused = graph(vec![Expr::Scalar]);
+        let mut short = TypeWorkBudget::with_limit(4);
+        assert!(matches!(
+            refused.import_graph(&provider, 0, 0, &mut short),
+            Err(Failure::Resource)
+        ));
+        assert_eq!(short.used(), 4);
+        for _ in 0..2 {
+            let mut importer = graph(vec![Expr::Scalar]);
+            let mut exact = TypeWorkBudget::with_limit(5);
+            assert_eq!(
+                importer.import_graph(&provider, 0, 0, &mut exact).unwrap(),
+                1
+            );
+            assert_eq!(exact.used(), 5);
+            let imported = importer.start(&mut TypeWorkBudget::default()).unwrap();
+            let port = imported.indices[&(2, 0)];
+            assert!(imported.slots[port].atoms.contains(&Atom::RegionView));
+            drop(imported);
+
+            let mut transitive = graph(vec![Expr::Scalar]);
+            transitive
+                .import_graph(&importer, 0, 0, &mut TypeWorkBudget::default())
+                .unwrap();
+            let imported = transitive.start(&mut TypeWorkBudget::default()).unwrap();
+            let port = imported.indices[&(3, 0)];
+            assert!(imported.slots[port].atoms.contains(&Atom::RegionView));
         }
     }
 

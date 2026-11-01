@@ -1409,11 +1409,190 @@ struct ScopedEvidenceBinder {
 #[derive(Debug)]
 struct EvidenceLowering {
     lexical_binders: HashMap<(crate::interface::LexicalEvidenceId, MethodId), ActiveEvidenceBinder>,
-    interfaces: HashMap<InterfaceId, LoweredInterface>,
-    interface_methods: HashMap<MethodId, LoweredInterfaceMethod>,
-    global_schemes: HashMap<BinderId, LoweredScheme>,
-    implementation_methods: HashMap<ImplMethodId, LoweredImplementationMethod>,
+    interfaces: HashMap<InterfaceId, Arc<LoweredInterface>>,
+    interface_methods: HashMap<MethodId, Arc<LoweredInterfaceMethod>>,
+    global_schemes: HashMap<BinderId, Arc<LoweredScheme>>,
+    implementation_methods: HashMap<ImplMethodId, Arc<LoweredImplementationMethod>>,
     active_binders: HashMap<(RequirementId, MethodId), ActiveEvidenceBinder>,
+}
+
+/// The physical declarations produced once by a defining module. Importers
+/// share these records and relocate their identities into their own arena.
+#[derive(Debug)]
+struct ModuleLowering {
+    module: crate::module::ModuleId,
+    type_origins: HashMap<TypeVariableId, GeneratedTypeOrigin>,
+    abi_variables: Vec<(TypeVariableId, GeneratedTypeVariableFact)>,
+    catalog: Option<Arc<crate::core::dialect::MethodEvidenceCatalog>>,
+    interfaces: HashMap<InterfaceId, Arc<LoweredInterface>>,
+    interface_methods: HashMap<MethodId, Arc<LoweredInterfaceMethod>>,
+    global_schemes: HashMap<BinderId, Arc<LoweredScheme>>,
+    implementation_methods: HashMap<ImplMethodId, Arc<LoweredImplementationMethod>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct GeneratedTypeOrigin {
+    module: crate::module::ModuleId,
+    variable: TypeVariableId,
+}
+
+/// One immutable defining publication, shared through re-exports.
+#[derive(Clone, Debug)]
+pub(crate) struct SharedModuleLowering(Arc<ModuleLowering>);
+
+impl SharedModuleLowering {
+    pub(crate) fn module(&self) -> crate::module::ModuleId {
+        self.0.module
+    }
+
+    pub(crate) fn catalog(&self) -> Option<&Arc<crate::core::dialect::MethodEvidenceCatalog>> {
+        self.0.catalog.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn owned_abi_variables(&self) -> impl Iterator<Item = TypeVariableId> + '_ {
+        self.0.abi_variables.iter().filter_map(|(identity, _)| {
+            (!self.0.type_origins.contains_key(identity)).then_some(*identity)
+        })
+    }
+}
+
+impl PartialEq for SharedModuleLowering {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for SharedModuleLowering {}
+
+fn retain_lowering_records<K: Copy + Eq + std::hash::Hash, V>(
+    source: &HashMap<K, Arc<V>>,
+    destination: &mut HashMap<K, Arc<V>>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), TypeError> {
+    work.charge(source.len().checked_mul(2).ok_or_else(type_resource)?)
+        .map_err(|()| type_resource())?;
+    destination
+        .try_reserve(source.len())
+        .map_err(|_| type_resource())?;
+    for (identity, record) in source {
+        if destination.insert(*identity, Arc::clone(record)).is_some() {
+            return Err(invalid_state());
+        }
+    }
+    Ok(())
+}
+
+fn retain_abi_variable(
+    identity: TypeVariableId,
+    variables: &mut HashSet<TypeVariableId>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    if !matches!(identity, TypeVariableId::Generated(_)) {
+        return Ok(());
+    }
+    work.charge(1)?;
+    if !variables.contains(&identity) {
+        work.charge(1)?;
+        variables.try_reserve(1).map_err(|_| ())?;
+        variables.insert(identity);
+    }
+    Ok(())
+}
+
+fn retain_abi_type_variables(
+    ty: &Type,
+    variables: &mut HashSet<TypeVariableId>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    crate::types::visit_type_structure_with_budget(ty, work, |node, work| {
+        match node {
+            crate::types::TypeStructureNode::Type(Type::Variable(identity)) => {
+                retain_abi_variable(*identity, variables, work)?;
+            }
+            crate::types::TypeStructureNode::Type(Type::Forall(parameters, _)) => {
+                work.charge(parameters.len())?;
+                for (identity, _) in parameters.iter() {
+                    retain_abi_variable(*identity, variables, work)?;
+                }
+            }
+            crate::types::TypeStructureNode::Tail(tail) => {
+                if let EffectRowVariable::Rigid(identity) = tail.variable() {
+                    retain_abi_variable(identity, variables, work)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(false)
+    })?;
+    Ok(())
+}
+
+fn retain_abi_argument_variables(
+    argument: &crate::types::KindedArgument,
+    variables: &mut HashSet<TypeVariableId>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    crate::types::visit_argument_structure_with_budget(argument, work, |node, work| {
+        match node {
+            crate::types::TypeStructureNode::Type(Type::Variable(identity)) => {
+                retain_abi_variable(*identity, variables, work)?;
+            }
+            crate::types::TypeStructureNode::Type(Type::Forall(parameters, _)) => {
+                work.charge(parameters.len())?;
+                for (identity, _) in parameters.iter() {
+                    retain_abi_variable(*identity, variables, work)?;
+                }
+            }
+            crate::types::TypeStructureNode::Tail(tail) => {
+                if let EffectRowVariable::Rigid(identity) = tail.variable() {
+                    retain_abi_variable(identity, variables, work)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(false)
+    })?;
+    Ok(())
+}
+
+fn retain_abi_application_variables(
+    application: &InterfaceApplication,
+    variables: &mut HashSet<TypeVariableId>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    work.charge(application.arguments().len())?;
+    for argument in application.arguments() {
+        retain_abi_argument_variables(argument, variables, work)?;
+    }
+    Ok(())
+}
+
+fn retain_abi_scheme_variables(
+    scheme: &LoweredScheme,
+    variables: &mut HashSet<TypeVariableId>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    work.charge(
+        scheme
+            .type_parameters
+            .len()
+            .checked_add(scheme.requirements.len())
+            .ok_or(())?,
+    )?;
+    for (identity, _) in &scheme.type_parameters {
+        retain_abi_variable(*identity, variables, work)?;
+    }
+    retain_abi_type_variables(&scheme.value_type, variables, work)?;
+    retain_abi_type_variables(&scheme.core_scheme, variables, work)?;
+    for requirement in &scheme.requirements {
+        work.charge(requirement.methods.len())?;
+        for method in &requirement.methods {
+            retain_abi_application_variables(&method.application, variables, work)?;
+            retain_abi_type_variables(&method.ty, variables, work)?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2857,16 +3036,18 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     purpose: ElaborationPurpose,
     state: ElaboratorState,
     final_root: Option<NodeId>,
+    completed_module_prefix: Option<crate::core::dialect::TypeRewriteCheckpoint>,
     next_inference: u32,
     inference_variables: InferenceVariableRegistry,
     next_generated_type_variable: u32,
     generated_type_variables: GeneratedTypeVariableRegistry,
+    imported_type_origins: HashMap<TypeVariableId, GeneratedTypeOrigin>,
     inference_solutions: InferenceSolutionMap,
     row_inference_solutions: RowInferenceSolutionMap,
     row_inference_obligations: RowInferenceSolutionMap,
     cleanup_rows: cleanup_rows::CleanupRows,
     pending_region_closures: Vec<(NodeId, NodeId)>,
-    pending_cleanup_regions: Vec<(NodeId, Span)>,
+    pending_cleanup_regions: Vec<(NodeId, Span, Option<BinderId>)>,
     authenticated_inference_solutions: HashSet<InferenceVariableId>,
     deferred_local_nominal_escapes: Vec<(NominalTypeId, InferenceVariableId, Span)>,
     deferred_resource_escapes: Vec<(TypeVariableId, InferenceVariableId, Span, Span)>,
@@ -2878,6 +3059,7 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     // Prior fully typed module roots, borrowed only while checking one body.
     monomorphic_recursive: HashSet<BinderId>,
     current_implementation_method: Option<CurrentImplementationMethod>,
+    checked_body_owner: Option<(MethodEvidenceOwner, BinderId)>,
     method_binders: HashMap<MethodId, BinderId>,
     selection: Option<EvidenceSelector>,
     evidence_lowering: Option<EvidenceLowering>,
@@ -2889,14 +3071,22 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     // Addresses identify only immutably borrowed source occurrences during one
     // module synthesis. They are never dereferenced or retained in Core.
     lexical_capture_uses: Vec<LexicalCaptureUse>,
-    method_capture_uses: Vec<(NodeId, usize, MethodId, Option<NodeId>)>,
+    pending_checked_captures: Vec<PendingCheckedCapture>,
+    checked_lexical_captures: Vec<CheckedLexicalCapture>,
+    checked_scoped_owners: Vec<CheckedScopedOwner>,
+    method_capture_uses: Vec<CheckedMethodUse>,
     method_capture_binders: Vec<(crate::interface::LexicalEvidenceId, MethodId, BinderId)>,
-    global_capture_uses: Vec<(NodeId, RequirementId, usize)>,
+    checked_lexical_sources: Vec<CheckedLexicalSource>,
+    global_capture_uses: Vec<CheckedGlobalUse>,
 
     implementation_capture_roots: Vec<(BinderId, NodeId)>,
     expected_effect_rows: Vec<EffectRow>,
     expected_scheme_rows: Vec<HashMap<TypeVariableId, EffectRow>>,
     next_handler: u32,
+    fragment_identities:
+        HashMap<crate::module::ModuleId, crate::core::transform::FragmentIdentities>,
+    fragment_catalog_offsets:
+        HashMap<crate::module::ModuleId, crate::core::dialect::CompletedCatalogOffsets>,
 }
 
 /// Pure Core elaboration with its uninhabited operation family.
@@ -2950,7 +3140,22 @@ pub trait CoreLoweringFamily: CoreOperationFamily {
         handler: HandlerId,
         owner: ResumeId,
     ) -> Result<(), BuildError>;
+    fn recompute_clause_effect_rows_in_nodes(
+        _builder: &mut CoreBuilder<Self>,
+        _nodes: &[usize],
+        _output: &EffectRow,
+        _handler: HandlerId,
+        _owner: ResumeId,
+    ) -> Result<(), BuildError> {
+        Ok(())
+    }
     fn finish_cleanup_effect_rows(_builder: &mut CoreBuilder<Self>) -> Result<(), BuildError> {
+        Ok(())
+    }
+    fn finish_cleanup_effect_rows_after(
+        _builder: &mut CoreBuilder<Self>,
+        _start: usize,
+    ) -> Result<(), BuildError> {
         Ok(())
     }
 }
@@ -3122,6 +3327,21 @@ impl CoreLoweringFamily for EffectOperationFamily {
     fn finish_cleanup_effect_rows(builder: &mut CoreBuilder<Self>) -> Result<(), BuildError> {
         builder.finish_cleanup_effect_rows()
     }
+    fn recompute_clause_effect_rows_in_nodes(
+        builder: &mut CoreBuilder<Self>,
+        nodes: &[usize],
+        output: &EffectRow,
+        handler: HandlerId,
+        owner: ResumeId,
+    ) -> Result<(), BuildError> {
+        builder.recompute_effect_rows_in_nodes(nodes, output, handler, owner)
+    }
+    fn finish_cleanup_effect_rows_after(
+        builder: &mut CoreBuilder<Self>,
+        start: usize,
+    ) -> Result<(), BuildError> {
+        builder.finish_cleanup_effect_rows_after(start)
+    }
 }
 
 #[derive(Debug)]
@@ -3180,6 +3400,83 @@ enum ElaborationPurpose {
     FinalSynthesis,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum ObservedModuleBody {
+    Global,
+    Method,
+}
+
+#[cfg(test)]
+thread_local! {
+    static OBSERVED_MODULE_BODIES: RefCell<Option<Vec<(Span, ObservedModuleBody, bool)>>> =
+        const { RefCell::new(None) };
+    static OBSERVED_FRAGMENT_TYPES: RefCell<Option<Vec<(crate::module::ModuleId, TypeVariableId, TypeVariableId)>>> =
+        const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) struct FragmentTypeObservation;
+
+#[cfg(test)]
+impl FragmentTypeObservation {
+    pub(crate) fn start() -> Self {
+        OBSERVED_FRAGMENT_TYPES.with(|observed| {
+            assert!(observed.borrow_mut().replace(Vec::new()).is_none());
+        });
+        Self
+    }
+
+    pub(crate) fn finish(self) -> Vec<(crate::module::ModuleId, TypeVariableId, TypeVariableId)> {
+        OBSERVED_FRAGMENT_TYPES.with(|observed| observed.borrow_mut().take().unwrap_or_default())
+    }
+}
+
+#[cfg(test)]
+impl Drop for FragmentTypeObservation {
+    fn drop(&mut self) {
+        OBSERVED_FRAGMENT_TYPES.with(|observed| *observed.borrow_mut() = None);
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct ModuleBodyObservation;
+
+#[cfg(test)]
+impl ModuleBodyObservation {
+    pub(crate) fn start() -> Self {
+        OBSERVED_MODULE_BODIES.with(|observed| {
+            assert!(observed.borrow_mut().replace(Vec::new()).is_none());
+        });
+        Self
+    }
+
+    pub(crate) fn finish(self) -> Vec<(Span, ObservedModuleBody, bool)> {
+        OBSERVED_MODULE_BODIES.with(|observed| observed.borrow_mut().take().unwrap_or_default())
+    }
+}
+
+#[cfg(test)]
+impl Drop for ModuleBodyObservation {
+    fn drop(&mut self) {
+        OBSERVED_MODULE_BODIES.with(|observed| *observed.borrow_mut() = None);
+    }
+}
+
+#[cfg(test)]
+fn observe_module_body(span: Span, kind: ObservedModuleBody, purpose: ElaborationPurpose) {
+    let final_synthesis = match purpose {
+        ElaborationPurpose::ModuleCheck => false,
+        ElaborationPurpose::FinalSynthesis => true,
+        ElaborationPurpose::Standalone => return,
+    };
+    OBSERVED_MODULE_BODIES.with(|observed| {
+        if let Some(entries) = observed.borrow_mut().as_mut() {
+            entries.push((span, kind, final_synthesis));
+        }
+    });
+}
+
 impl<F: CoreLoweringFamily> CoreElaborator<F> {
     fn elaborate_module_program_plain(
         &mut self,
@@ -3198,6 +3495,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .0
                 .push((ElaboratedBindingBuffer(members), group.span()));
         }
+        if self.builder.requires_type_rewrite()
+            || !self.cleanup_rows.is_empty()
+            || !self.pending_region_closures.is_empty()
+            || !self.pending_cleanup_regions.is_empty()
+        {
+            return Err(invalid_state());
+        }
+        let entry_checkpoint = self.builder.type_rewrite_checkpoint();
         let mut result = self.elaborate_result(program.result(), &mut context)?;
         // This marker is an arena-local proposal, not admission evidence. Core
         // validation must authenticate the enclosing linked global spine before
@@ -3262,7 +3567,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Err(error);
         }
 
-        self.solve_cleanup_rows(&[], &[], &[], &[])?;
+        // Linked entry construction is the compiler-generated `main(())`
+        // expression and recursive binding glue. Provider cleanup equations
+        // were already settled before their modules were published.
+        if !self.cleanup_rows.is_empty()
+            || !self.pending_region_closures.is_empty()
+            || !self.pending_cleanup_regions.is_empty()
+        {
+            return Err(invalid_state());
+        }
+        self.zonk_builder_types_after_closed_prefix(entry_checkpoint, true)
+            .map_err(TypeError::Internal)?;
+        F::finish_cleanup_effect_rows_after(&mut self.builder, entry_checkpoint.index())?;
+        self.completed_module_prefix = Some(entry_checkpoint);
         Ok(result)
     }
 
@@ -3296,9 +3613,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 scheme,
                 span: method.span,
             };
+            self.type_work.charge(1).map_err(|()| type_resource())?;
             if lowering
                 .implementation_methods
-                .insert(method.id, lowered)
+                .insert(method.id, Arc::new(lowered))
                 .is_some()
             {
                 return Err(invalid_state());
@@ -3340,10 +3658,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             purpose: ElaborationPurpose::Standalone,
             state: ElaboratorState::Ready,
             final_root: None,
+            completed_module_prefix: None,
             next_inference: 0,
             inference_variables: InferenceVariableRegistry::default(),
             next_generated_type_variable: u32::MAX,
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
+            imported_type_origins: HashMap::new(),
             inference_solutions: InferenceSolutionMap::default(),
             row_inference_solutions: RowInferenceSolutionMap::default(),
             row_inference_obligations: RowInferenceSolutionMap::default(),
@@ -3359,6 +3679,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
 
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
+            checked_body_owner: None,
             method_binders: HashMap::new(),
             selection: None,
             evidence_lowering: None,
@@ -3368,14 +3689,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
             lexical_capture_uses: Vec::new(),
+            pending_checked_captures: Vec::new(),
+            checked_lexical_captures: Vec::new(),
+            checked_scoped_owners: Vec::new(),
             method_capture_uses: Vec::new(),
             method_capture_binders: Vec::new(),
+            checked_lexical_sources: Vec::new(),
             global_capture_uses: Vec::new(),
 
             implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
             expected_scheme_rows: Vec::new(),
             next_handler: 0,
+            fragment_identities: HashMap::new(),
+            fragment_catalog_offsets: HashMap::new(),
         }
     }
 
@@ -3483,10 +3810,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             purpose: ElaborationPurpose::ModuleCheck,
             state: ElaboratorState::Ready,
             final_root: None,
+            completed_module_prefix: None,
             next_inference: 0,
             inference_variables: InferenceVariableRegistry::default(),
             next_generated_type_variable: u32::MAX,
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
+            imported_type_origins: HashMap::new(),
             inference_solutions: InferenceSolutionMap::default(),
             row_inference_solutions: RowInferenceSolutionMap::default(),
             row_inference_obligations: RowInferenceSolutionMap::default(),
@@ -3502,6 +3831,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
 
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
+            checked_body_owner: None,
             method_binders: HashMap::new(),
             selection: None,
             evidence_lowering: None,
@@ -3511,14 +3841,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             base_context,
             active_resumes: Vec::new(),
             lexical_capture_uses: Vec::new(),
+            pending_checked_captures: Vec::new(),
+            checked_lexical_captures: Vec::new(),
+            checked_scoped_owners: Vec::new(),
             method_capture_uses: Vec::new(),
             method_capture_binders: Vec::new(),
+            checked_lexical_sources: Vec::new(),
             global_capture_uses: Vec::new(),
 
             implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
             expected_scheme_rows: Vec::new(),
             next_handler: 0,
+            fragment_identities: HashMap::new(),
+            fragment_catalog_offsets: HashMap::new(),
         })
     }
 
@@ -3558,12 +3894,67 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             program.registry(),
             program.groups(),
             program.result(),
-            Arc::clone(program.method_evidence()),
             type_work,
             primary_work,
             rewrite_work,
         )
         .map_err(|failure| (failure, prefix))?;
+
+        elaborator
+            .prepare_fragment_identities(program.groups())
+            .map_err(|error| match error {
+                TypeError::Internal(failure) => failure,
+                TypeError::Source(_) | TypeError::Interface(_) | TypeError::Mismatch(_) => {
+                    ElaborationFailure::InvalidState
+                }
+            })
+            .map_err(|failure| (failure, elaborator.type_work.used()))?;
+
+        let catalogs = (|| {
+            elaborator
+                .type_work
+                .charge(
+                    program
+                        .groups()
+                        .len()
+                        .checked_mul(2)
+                        .ok_or_else(type_resource)?,
+                )
+                .map_err(|()| type_resource())?;
+            let mut catalogs = Vec::new();
+            catalogs
+                .try_reserve_exact(program.groups().len())
+                .map_err(|_| type_resource())?;
+            for group in program.groups() {
+                let catalog = group
+                    .local_lowering()
+                    .and_then(|lowering| lowering.catalog())
+                    .ok_or_else(invalid_state)?;
+                catalogs.push((group.module(), Arc::clone(catalog)));
+            }
+            let (catalog, offsets) = crate::core::dialect::compose_completed_catalogs(
+                catalogs,
+                &elaborator.fragment_identities,
+                &mut elaborator.type_work,
+            )?;
+            elaborator
+                .type_work
+                .charge(1)
+                .map_err(|()| type_resource())?;
+            elaborator
+                .builder
+                .install_completed_method_evidence(Arc::new(catalog))?;
+            elaborator.fragment_catalog_offsets = offsets;
+            Ok::<(), TypeError>(())
+        })();
+        catalogs
+            .map_err(|error| match error {
+                TypeError::Internal(failure) => failure,
+                TypeError::Source(_) | TypeError::Interface(_) | TypeError::Mismatch(_) => {
+                    ElaborationFailure::InvalidState
+                }
+            })
+            .map_err(|failure| (failure, elaborator.type_work.used()))?;
 
         elaborator.evidence_lowering = Some(
             elaborator
@@ -3579,48 +3970,217 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(elaborator)
     }
 
+    fn prepare_fragment_identities(
+        &mut self,
+        groups: &[ResolvedModuleGroup],
+    ) -> Result<(), TypeError> {
+        self.type_work
+            .charge(groups.len())
+            .map_err(|()| type_resource())?;
+        self.fragment_identities
+            .try_reserve(groups.len())
+            .map_err(|_| type_resource())?;
+        let mut generated_binders = Vec::new();
+        let mut next_binder = 0u32;
+        for group in groups {
+            let fragment = group.typed_fragment().ok_or_else(invalid_state)?;
+            let identities = match fragment {
+                CheckedTypedModule::Pure(fragment) => self.fragment_identities_for(
+                    fragment,
+                    &mut generated_binders,
+                    &mut next_binder,
+                )?,
+                CheckedTypedModule::Effect(fragment) => self.fragment_identities_for(
+                    fragment,
+                    &mut generated_binders,
+                    &mut next_binder,
+                )?,
+            };
+            if self
+                .fragment_identities
+                .insert(group.module(), identities)
+                .is_some()
+            {
+                return Err(invalid_state());
+            }
+        }
+        // A module-local alias denotes the defining module's generated ABI
+        // identity. Resolve aliases only after every defining map exists, so
+        // independently checked modules may use the same local numbers.
+        for group in groups {
+            let fragment = group.typed_fragment().ok_or_else(invalid_state)?;
+            let origins = match fragment {
+                CheckedTypedModule::Pure(fragment) => &fragment.imported_type_origins,
+                CheckedTypedModule::Effect(fragment) => &fragment.imported_type_origins,
+            };
+            self.type_work
+                .charge(origins.len().checked_mul(3).ok_or_else(type_resource)?)
+                .map_err(|()| type_resource())?;
+            let mut identities = self
+                .fragment_identities
+                .remove(&group.module())
+                .ok_or_else(invalid_state)?;
+            for (alias, origin) in origins {
+                if origin.module == group.module() {
+                    return Err(invalid_state());
+                }
+                let destination = self
+                    .fragment_identities
+                    .get(&origin.module)
+                    .and_then(|provider| provider.variables.get(&origin.variable))
+                    .copied()
+                    .ok_or_else(invalid_state)?;
+                if identities.variables.insert(*alias, destination).is_some() {
+                    return Err(invalid_state());
+                }
+            }
+            if self
+                .fragment_identities
+                .insert(group.module(), identities)
+                .is_some()
+            {
+                return Err(invalid_state());
+            }
+        }
+        #[cfg(test)]
+        OBSERVED_FRAGMENT_TYPES.with(|observed| {
+            if let Some(entries) = observed.borrow_mut().as_mut() {
+                for (module, identities) in &self.fragment_identities {
+                    entries.extend(
+                        identities
+                            .variables
+                            .iter()
+                            .map(|(source, destination)| (*module, *source, *destination)),
+                    );
+                }
+            }
+        });
+        // All source identities and all generated fragment identities are
+        // reserved before evidence wrappers allocate any further binders.
+        self.builder.reserve_resolved_binders(generated_binders)?;
+        Ok(())
+    }
+
+    fn fragment_identities_for<S: CoreOperationFamily>(
+        &mut self,
+        fragment: &CheckedTypedFragment<S>,
+        generated_binders: &mut Vec<BinderId>,
+        next_binder: &mut u32,
+    ) -> Result<crate::core::transform::FragmentIdentities, TypeError> {
+        let binders = fragment
+            .builder
+            .fragment_generated_binders(&mut self.type_work)?;
+        let variable_count = fragment.generated_type_variables.len();
+        let variable_count_u32 = u32::try_from(variable_count).map_err(|_| type_resource())?;
+        if u32::MAX.checked_sub(variable_count_u32) != Some(fragment.next_generated_type_variable) {
+            return Err(invalid_state());
+        }
+        let handler_count = usize::try_from(fragment.next_handler).map_err(|_| type_resource())?;
+        let retained = binders
+            .len()
+            .checked_mul(2)
+            .and_then(|count| count.checked_add(variable_count))
+            .and_then(|count| count.checked_add(handler_count))
+            .ok_or_else(type_resource)?;
+        self.type_work
+            .charge(retained)
+            .map_err(|()| type_resource())?;
+        let mut identities = crate::core::transform::FragmentIdentities::default();
+        identities
+            .binders
+            .try_reserve(binders.len())
+            .map_err(|_| type_resource())?;
+        identities
+            .variables
+            .try_reserve(variable_count)
+            .map_err(|_| type_resource())?;
+        identities
+            .handlers
+            .try_reserve(handler_count)
+            .map_err(|_| type_resource())?;
+        generated_binders
+            .try_reserve(binders.len())
+            .map_err(|_| type_resource())?;
+        for source in binders {
+            let destination = BinderId::generated(*next_binder);
+            *next_binder = next_binder.checked_add(1).ok_or_else(type_resource)?;
+            if identities.binders.insert(source, destination).is_some() {
+                return Err(invalid_state());
+            }
+            generated_binders.push(destination);
+        }
+        for (index, fact) in fragment.generated_type_variables.0.iter().enumerate() {
+            let fact = fact.as_ref().ok_or_else(invalid_state)?;
+            let index = u32::try_from(index).map_err(|_| type_resource())?;
+            let source =
+                TypeVariableId::generated(u32::MAX.checked_sub(index).ok_or_else(type_resource)?);
+            if fragment.imported_type_origins.contains_key(&source) {
+                continue;
+            }
+            let destination = self.fresh_type_variable(&fact.kind, fact.origin)?;
+            if identities.variables.insert(source, destination).is_some() {
+                return Err(invalid_state());
+            }
+        }
+        for index in 0..fragment.next_handler {
+            let destination = HandlerId::new(self.next_handler);
+            self.next_handler = self.next_handler.checked_add(1).ok_or_else(type_resource)?;
+            if identities
+                .handlers
+                .insert(HandlerId::new(index), destination)
+                .is_some()
+            {
+                return Err(invalid_state());
+            }
+        }
+        Ok(identities)
+    }
+
     fn for_module_program_inputs(
         registry: &Arc<ResolvedRegistry>,
         groups: &[crate::resolved::ResolvedModuleGroup],
         result: &ResolvedExpr,
-        catalog: Arc<crate::core::dialect::MethodEvidenceCatalog>,
-        type_work: TypeWorkBudget,
+        mut type_work: TypeWorkBudget,
         primary_work: TypeWorkBudget,
         rewrite_work: TypeWorkBudget,
     ) -> Result<Self, ElaborationFailure> {
         let registry = Arc::clone(registry);
-        let mut builder = CoreBuilder::<F>::with_registry_method_evidence_and_arena_work(
+        let mut builder = CoreBuilder::<F>::with_registry_and_arena_work(
             Arc::clone(&registry),
-            catalog,
             primary_work,
             rewrite_work,
-        )?;
+        );
         let mut binders = Vec::new();
-        let mut expressions = vec![result];
-        for group in groups {
-            for definition in group.definitions() {
-                collect_definition_kind_binders(definition.kind(), &mut binders, &mut expressions);
-            }
-            for implementation in group.implementations() {
-                collect_implementation_binders(
-                    std::slice::from_ref(implementation.source()),
-                    &mut binders,
-                    &mut expressions,
-                );
-            }
-        }
-        collect_expression_binders(&mut binders, expressions);
+        collect_expression_binders(&mut binders, vec![result]);
         builder.reserve_resolved_binders(binders)?;
+        // Each checked module already owns its resolver binder namespace.
+        // Reserve that retained data rather than walking its source bodies again.
+        for group in groups {
+            let fragment = group
+                .typed_fragment()
+                .ok_or(ElaborationFailure::InvalidState)?;
+            let retained = match fragment {
+                CheckedTypedModule::Pure(fragment) => {
+                    fragment.builder.fragment_resolved_binders(&mut type_work)?
+                }
+                CheckedTypedModule::Effect(fragment) => {
+                    fragment.builder.fragment_resolved_binders(&mut type_work)?
+                }
+            };
+            builder.reserve_resolved_binders(retained)?;
+        }
         let elaborator = Self {
             builder,
             registry,
             purpose: ElaborationPurpose::FinalSynthesis,
             state: ElaboratorState::Ready,
             final_root: None,
+            completed_module_prefix: None,
             next_inference: 0,
             inference_variables: InferenceVariableRegistry::default(),
             next_generated_type_variable: u32::MAX,
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
+            imported_type_origins: HashMap::new(),
             inference_solutions: InferenceSolutionMap::default(),
             row_inference_solutions: RowInferenceSolutionMap::default(),
             row_inference_obligations: RowInferenceSolutionMap::default(),
@@ -3636,6 +4196,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
 
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
+            checked_body_owner: None,
             method_binders: HashMap::new(),
             selection: None,
             evidence_lowering: None,
@@ -3645,14 +4206,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
             lexical_capture_uses: Vec::new(),
+            pending_checked_captures: Vec::new(),
+            checked_lexical_captures: Vec::new(),
+            checked_scoped_owners: Vec::new(),
             method_capture_uses: Vec::new(),
             method_capture_binders: Vec::new(),
+            checked_lexical_sources: Vec::new(),
             global_capture_uses: Vec::new(),
 
             implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
             expected_scheme_rows: Vec::new(),
             next_handler: 0,
+            fragment_identities: HashMap::new(),
+            fragment_catalog_offsets: HashMap::new(),
         };
         Ok(elaborator)
     }
@@ -3661,165 +4228,624 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         program: &ValidatedInterfaceProgram,
     ) -> Result<EvidenceLowering, TypeError> {
-        let interface_count: usize = program
-            .groups()
-            .iter()
-            .map(|group| group.interface_facts().len())
-            .sum();
-        let method_count: usize = program
-            .groups()
-            .iter()
-            .flat_map(|group| group.interface_facts())
-            .map(|interface| interface.methods.len())
-            .sum();
-        let global_count: usize = program
-            .groups()
-            .iter()
-            .map(|group| group.schemes().len())
-            .sum();
-        let implementation_method_count: usize = program
-            .groups()
-            .iter()
-            .flat_map(|group| group.implementation_facts())
-            .map(|implementation| implementation.methods.len())
-            .sum();
-        self.type_work
-            .charge(
-                interface_count
-                    .saturating_add(method_count)
-                    .saturating_add(global_count)
-                    .saturating_add(implementation_method_count),
-            )
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let mut interfaces = HashMap::new();
-        interfaces
-            .try_reserve(interface_count)
-            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let mut interface_methods = HashMap::new();
-        interface_methods
-            .try_reserve(method_count)
-            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        for group in program.groups() {
-            for interface in group.interface_facts() {
-                let mut methods = Vec::new();
-                self.type_work
-                    .charge(interface.methods.len())
-                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                methods
-                    .try_reserve(interface.methods.len())
-                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                for method in &interface.methods {
-                    methods.push(method.id);
-                    let mut type_parameters = Vec::new();
-                    self.type_work
-                        .charge(method.authoritative_type_parameters().len())
-                        .map_err(|()| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
-                    type_parameters
-                        .try_reserve(method.authoritative_type_parameters().len())
-                        .map_err(|_| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
-                    for parameter in method.authoritative_type_parameters() {
-                        type_parameters.push((
-                            parameter.id,
-                            clone_kind_with_budget(&parameter.kind, &mut self.type_work).map_err(
-                                |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
-                            )?,
-                        ));
-                    }
-                    self.type_work
-                        .charge(interface.parameters.len())
-                        .map_err(|()| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
-                    let mut interface_parameters = Vec::new();
-                    interface_parameters
-                        .try_reserve(interface.parameters.len())
-                        .map_err(|_| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
-                    interface_parameters
-                        .extend(interface.parameters.iter().map(|parameter| parameter.id));
-                    let lowered = LoweredInterfaceMethod {
-                        interface: interface.id,
-                        parameters: interface_parameters.into_boxed_slice(),
-                        type_parameters: type_parameters.into_boxed_slice(),
-                        value_type: self.clone_type(&method.value_type)?,
-                        declaration_span: method.span,
-                    };
-                    if interface_methods.insert(method.id, lowered).is_some() {
-                        return Err(invalid_state());
-                    }
-                }
-                let determination = interface
-                    .determination()
-                    .map(|determination| {
-                        self.constraint_work
-                            .charge(determination.positions().len())
-                            .map_err(|()| constraint_resource())?;
-                        let mut positions = Vec::new();
-                        positions
-                            .try_reserve_exact(determination.positions().len())
-                            .map_err(|_| constraint_resource())?;
-                        positions.extend_from_slice(determination.positions());
-                        Ok::<_, TypeError>(positions.into_boxed_slice())
-                    })
-                    .transpose()?;
-                if interfaces
-                    .insert(
-                        interface.id,
-                        LoweredInterface {
-                            methods: methods.into_boxed_slice(),
-                            determination,
-                        },
-                    )
-                    .is_some()
-                {
-                    return Err(invalid_state());
-                }
-            }
-        }
-
         let mut lowering = EvidenceLowering {
             lexical_binders: HashMap::new(),
-            interfaces,
-            interface_methods,
+            interfaces: HashMap::new(),
+            interface_methods: HashMap::new(),
             global_schemes: HashMap::new(),
             implementation_methods: HashMap::new(),
             active_binders: HashMap::new(),
         };
-        lowering
-            .global_schemes
-            .try_reserve(global_count)
-            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        lowering
-            .implementation_methods
-            .try_reserve(implementation_method_count)
-            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         for group in program.groups() {
-            for checked in group.schemes() {
-                let scheme = self.lower_constrained_scheme(
-                    &checked.scheme,
-                    &lowering,
-                    MethodEvidenceOwner::Global(checked.binder),
-                    false,
-                    checked.origin.primary_span(),
-                )?;
+            let local = group.local_lowering().ok_or_else(invalid_state)?;
+            let identities = self
+                .fragment_identities
+                .remove(&group.module())
+                .ok_or_else(invalid_state)?;
+            retain_lowering_records(
+                &local.0.interfaces,
+                &mut lowering.interfaces,
+                &mut self.type_work,
+            )?;
+            retain_lowering_records(
+                &local.0.interface_methods,
+                &mut lowering.interface_methods,
+                &mut self.type_work,
+            )?;
+            self.type_work
+                .charge(
+                    local
+                        .0
+                        .global_schemes
+                        .len()
+                        .checked_add(local.0.implementation_methods.len())
+                        .ok_or_else(type_resource)?,
+                )
+                .map_err(|()| type_resource())?;
+            lowering
+                .global_schemes
+                .try_reserve(local.0.global_schemes.len())
+                .map_err(|_| type_resource())?;
+            lowering
+                .implementation_methods
+                .try_reserve(local.0.implementation_methods.len())
+                .map_err(|_| type_resource())?;
+            let view = crate::core::transform::FragmentIdentityView::new(&identities, None);
+            for (binder, scheme) in &local.0.global_schemes {
+                let scheme = self.relocate_lowered_scheme(scheme, view)?;
+                self.type_work.charge(1).map_err(|()| type_resource())?;
                 if lowering
                     .global_schemes
-                    .insert(checked.binder, scheme)
+                    .insert(*binder, Arc::new(scheme))
                     .is_some()
                 {
                     return Err(invalid_state());
                 }
             }
-            for implementation in group.implementation_facts() {
-                self.retain_completed_implementation_lowering(&mut lowering, implementation)?;
+            for (identity, method) in &local.0.implementation_methods {
+                let relocated = LoweredImplementationMethod {
+                    binder: method.binder,
+                    head_type_parameter_count: method.head_type_parameter_count,
+                    application: self.relocate_lowered_application(&method.application, view)?,
+                    scheme: self.relocate_lowered_scheme(&method.scheme, view)?,
+                    span: method.span,
+                };
+                self.type_work.charge(1).map_err(|()| type_resource())?;
+                if lowering
+                    .implementation_methods
+                    .insert(*identity, Arc::new(relocated))
+                    .is_some()
+                {
+                    return Err(invalid_state());
+                }
+            }
+            if self
+                .fragment_identities
+                .insert(group.module(), identities)
+                .is_some()
+            {
+                return Err(invalid_state());
             }
         }
         Ok(lowering)
+    }
+
+    fn relocate_lowered_application(
+        &mut self,
+        application: &InterfaceApplication,
+        identities: crate::core::transform::FragmentIdentityView<'_>,
+    ) -> Result<InterfaceApplication, TypeError> {
+        self.type_work
+            .charge(application.arguments().len())
+            .map_err(|()| type_resource())?;
+        let mut staged = OwnedArgumentBuffer(Vec::new());
+        staged
+            .0
+            .try_reserve_exact(application.arguments().len())
+            .map_err(|_| type_resource())?;
+        for argument in application.arguments() {
+            staged.0.push(crate::types::IterativeArgumentOwner::new(
+                crate::types::rename_fragment_argument_with(
+                    argument,
+                    &identities.base.variables,
+                    identities.variables,
+                    |units| self.type_work.charge(units),
+                    || (),
+                )
+                .map_err(|()| type_resource())?
+                .map_err(|_| invalid_state())?,
+            ));
+        }
+        self.type_work
+            .charge(staged.0.len())
+            .map_err(|()| type_resource())?;
+        let mut arguments = Vec::new();
+        arguments
+            .try_reserve_exact(staged.0.len())
+            .map_err(|_| type_resource())?;
+        arguments.extend(
+            staged
+                .0
+                .into_iter()
+                .map(crate::types::IterativeArgumentOwner::into_inner),
+        );
+        Ok(InterfaceApplication::new_kinded(
+            application.interface(),
+            arguments.into_boxed_slice(),
+        ))
+    }
+
+    fn relocate_lowered_scheme(
+        &mut self,
+        scheme: &LoweredScheme,
+        identities: crate::core::transform::FragmentIdentityView<'_>,
+    ) -> Result<LoweredScheme, TypeError> {
+        let source_type_parameters = scheme
+            .source_type_parameters
+            .as_deref()
+            .map(|parameters| {
+                clone_kinded_type_parameters_with_budget(parameters, &mut self.type_work)
+                    .map(Vec::into_boxed_slice)
+                    .map_err(|()| type_resource())
+            })
+            .transpose()?;
+        self.type_work
+            .charge(
+                scheme
+                    .type_parameters
+                    .len()
+                    .checked_add(scheme.requirements.len())
+                    .ok_or_else(type_resource)?,
+            )
+            .map_err(|()| type_resource())?;
+        let mut parameters = Vec::new();
+        parameters
+            .try_reserve_exact(scheme.type_parameters.len())
+            .map_err(|_| type_resource())?;
+        for (identity, kind) in &scheme.type_parameters {
+            let identity = match identity {
+                TypeVariableId::Generated(_) => {
+                    identities.variable(identity).ok_or_else(invalid_state)?
+                }
+                TypeVariableId::Resolved { .. } => *identity,
+            };
+            parameters.push((
+                identity,
+                clone_kind_with_budget(kind, &mut self.type_work).map_err(|()| type_resource())?,
+            ));
+        }
+        let mut requirements = Vec::new();
+        requirements
+            .try_reserve_exact(scheme.requirements.len())
+            .map_err(|_| type_resource())?;
+        for requirement in &scheme.requirements {
+            self.type_work
+                .charge(requirement.methods.len())
+                .map_err(|()| type_resource())?;
+            let mut methods = Vec::new();
+            methods
+                .try_reserve_exact(requirement.methods.len())
+                .map_err(|_| type_resource())?;
+            for method in &requirement.methods {
+                methods.push(LoweredRequirementMethod {
+                    method: method.method,
+                    application: self
+                        .relocate_lowered_application(&method.application, identities)?,
+                    ty: self.relocated_fragment_type(&method.ty, identities)?,
+                });
+            }
+            requirements.push(LoweredRequirement {
+                owner: requirement.owner,
+                id: requirement.id,
+                methods: methods.into_boxed_slice(),
+            });
+        }
+        let value_type =
+            IterativeTypeOwner::new(self.relocated_fragment_type(&scheme.value_type, identities)?);
+        let core_scheme =
+            IterativeTypeOwner::new(self.relocated_fragment_type(&scheme.core_scheme, identities)?);
+        Ok(LoweredScheme {
+            source_type_parameters,
+            type_parameters: parameters.into_boxed_slice(),
+            requirements: requirements.into_boxed_slice(),
+            value_type: value_type.into_inner(),
+            core_scheme: core_scheme.into_inner(),
+        })
+    }
+
+    fn retain_interface_lowering(
+        &mut self,
+        interface: &CheckedInterfaceFact,
+        interfaces: &mut HashMap<InterfaceId, Arc<LoweredInterface>>,
+        interface_methods: &mut HashMap<MethodId, Arc<LoweredInterfaceMethod>>,
+    ) -> Result<(), TypeError> {
+        self.type_work
+            .charge(
+                interface
+                    .methods
+                    .len()
+                    .checked_add(1)
+                    .ok_or_else(type_resource)?,
+            )
+            .map_err(|()| type_resource())?;
+        interfaces.try_reserve(1).map_err(|_| type_resource())?;
+        interface_methods
+            .try_reserve(interface.methods.len())
+            .map_err(|_| type_resource())?;
+        let mut methods = Vec::new();
+        methods
+            .try_reserve_exact(interface.methods.len())
+            .map_err(|_| type_resource())?;
+        for method in &interface.methods {
+            methods.push(method.id);
+            let parameters = method.authoritative_type_parameters();
+            self.type_work
+                .charge(
+                    parameters
+                        .len()
+                        .checked_add(interface.parameters.len())
+                        .ok_or_else(type_resource)?,
+                )
+                .map_err(|()| type_resource())?;
+            let mut type_parameters = Vec::new();
+            type_parameters
+                .try_reserve_exact(parameters.len())
+                .map_err(|_| type_resource())?;
+            for parameter in parameters {
+                type_parameters.push((
+                    parameter.id,
+                    clone_kind_with_budget(&parameter.kind, &mut self.type_work)
+                        .map_err(|()| type_resource())?,
+                ));
+            }
+            let mut interface_parameters = Vec::new();
+            interface_parameters
+                .try_reserve_exact(interface.parameters.len())
+                .map_err(|_| type_resource())?;
+            interface_parameters.extend(interface.parameters.iter().map(|parameter| parameter.id));
+            let lowered = LoweredInterfaceMethod {
+                interface: interface.id,
+                parameters: interface_parameters.into_boxed_slice(),
+                type_parameters: type_parameters.into_boxed_slice(),
+                value_type: self.clone_type(&method.value_type)?,
+                declaration_span: method.span,
+            };
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            if interface_methods
+                .insert(method.id, Arc::new(lowered))
+                .is_some()
+            {
+                return Err(invalid_state());
+            }
+        }
+        let determination = interface
+            .determination()
+            .map(|determination| {
+                self.constraint_work
+                    .charge(determination.positions().len())
+                    .map_err(|()| constraint_resource())?;
+                let mut positions = Vec::new();
+                positions
+                    .try_reserve_exact(determination.positions().len())
+                    .map_err(|_| constraint_resource())?;
+                positions.extend_from_slice(determination.positions());
+                Ok::<_, TypeError>(positions.into_boxed_slice())
+            })
+            .transpose()?;
+        self.type_work.charge(1).map_err(|()| type_resource())?;
+        if interfaces
+            .insert(
+                interface.id,
+                Arc::new(LoweredInterface {
+                    methods: methods.into_boxed_slice(),
+                    determination,
+                }),
+            )
+            .is_some()
+        {
+            return Err(invalid_state());
+        }
+        Ok(())
+    }
+
+    fn build_module_evidence_lowering(
+        &mut self,
+        module: &ResolvedModule,
+        schemes: &[CheckedGlobalScheme],
+        interfaces: &[crate::resolved::SharedCheckedInterfaceFact],
+        implementations: &[CheckedImplementationFact],
+    ) -> Result<(EvidenceLowering, SharedModuleLowering), TypeError> {
+        let mut lowering = EvidenceLowering {
+            lexical_binders: HashMap::new(),
+            interfaces: HashMap::new(),
+            interface_methods: HashMap::new(),
+            global_schemes: HashMap::new(),
+            implementation_methods: HashMap::new(),
+            active_binders: HashMap::new(),
+        };
+        let mut aliases = HashMap::new();
+        for imported in module.imported_lowerings() {
+            retain_lowering_records(
+                &imported.0.interfaces,
+                &mut lowering.interfaces,
+                &mut self.type_work,
+            )?;
+            retain_lowering_records(
+                &imported.0.interface_methods,
+                &mut lowering.interface_methods,
+                &mut self.type_work,
+            )?;
+            let count = imported.0.abi_variables.len();
+            if count == 0 {
+                retain_lowering_records(
+                    &imported.0.global_schemes,
+                    &mut lowering.global_schemes,
+                    &mut self.type_work,
+                )?;
+                retain_lowering_records(
+                    &imported.0.implementation_methods,
+                    &mut lowering.implementation_methods,
+                    &mut self.type_work,
+                )?;
+                continue;
+            }
+            self.type_work
+                .charge(count.checked_mul(3).ok_or_else(type_resource)?)
+                .map_err(|()| type_resource())?;
+            let mut identities = crate::core::transform::FragmentIdentities::default();
+            identities
+                .variables
+                .try_reserve(count)
+                .map_err(|_| type_resource())?;
+            aliases.try_reserve(count).map_err(|_| type_resource())?;
+            self.imported_type_origins
+                .try_reserve(count)
+                .map_err(|_| type_resource())?;
+            for (source, fact) in &imported.0.abi_variables {
+                let origin =
+                    imported
+                        .0
+                        .type_origins
+                        .get(source)
+                        .copied()
+                        .unwrap_or(GeneratedTypeOrigin {
+                            module: imported.0.module,
+                            variable: *source,
+                        });
+                let destination = if let Some(destination) = aliases.get(&origin) {
+                    *destination
+                } else {
+                    let destination = self.fresh_type_variable(&fact.kind, fact.origin)?;
+                    if aliases.insert(origin, destination).is_some()
+                        || self
+                            .imported_type_origins
+                            .insert(destination, origin)
+                            .is_some()
+                    {
+                        return Err(invalid_state());
+                    }
+                    destination
+                };
+                if identities.variables.insert(*source, destination).is_some() {
+                    return Err(invalid_state());
+                }
+            }
+            self.type_work
+                .charge(
+                    imported
+                        .0
+                        .global_schemes
+                        .len()
+                        .checked_add(imported.0.implementation_methods.len())
+                        .ok_or_else(type_resource)?,
+                )
+                .map_err(|()| type_resource())?;
+            lowering
+                .global_schemes
+                .try_reserve(imported.0.global_schemes.len())
+                .map_err(|_| type_resource())?;
+            lowering
+                .implementation_methods
+                .try_reserve(imported.0.implementation_methods.len())
+                .map_err(|_| type_resource())?;
+            let view = crate::core::transform::FragmentIdentityView::new(&identities, None);
+            for (binder, scheme) in &imported.0.global_schemes {
+                let scheme = self.relocate_lowered_scheme(scheme, view)?;
+                self.type_work.charge(1).map_err(|()| type_resource())?;
+                if lowering
+                    .global_schemes
+                    .insert(*binder, Arc::new(scheme))
+                    .is_some()
+                {
+                    return Err(invalid_state());
+                }
+            }
+            for (identity, method) in &imported.0.implementation_methods {
+                let relocated = LoweredImplementationMethod {
+                    binder: method.binder,
+                    head_type_parameter_count: method.head_type_parameter_count,
+                    application: self.relocate_lowered_application(&method.application, view)?,
+                    scheme: self.relocate_lowered_scheme(&method.scheme, view)?,
+                    span: method.span,
+                };
+                self.type_work.charge(1).map_err(|()| type_resource())?;
+                if lowering
+                    .implementation_methods
+                    .insert(*identity, Arc::new(relocated))
+                    .is_some()
+                {
+                    return Err(invalid_state());
+                }
+            }
+        }
+        let mut local = ModuleLowering {
+            module: module.module(),
+            type_origins: HashMap::new(),
+            abi_variables: Vec::new(),
+            catalog: None,
+            interfaces: HashMap::new(),
+            interface_methods: HashMap::new(),
+            global_schemes: HashMap::new(),
+            implementation_methods: HashMap::new(),
+        };
+        for interface in interfaces {
+            self.retain_interface_lowering(
+                interface,
+                &mut lowering.interfaces,
+                &mut lowering.interface_methods,
+            )?;
+            self.type_work
+                .charge(
+                    interface
+                        .methods
+                        .len()
+                        .checked_add(1)
+                        .ok_or_else(type_resource)?,
+                )
+                .map_err(|()| type_resource())?;
+            local
+                .interfaces
+                .try_reserve(1)
+                .map_err(|_| type_resource())?;
+            local
+                .interface_methods
+                .try_reserve(interface.methods.len())
+                .map_err(|_| type_resource())?;
+            let record = lowering
+                .interfaces
+                .get(&interface.id)
+                .ok_or_else(invalid_state)?;
+            if local
+                .interfaces
+                .insert(interface.id, Arc::clone(record))
+                .is_some()
+            {
+                return Err(invalid_state());
+            }
+            for method in &interface.methods {
+                let record = lowering
+                    .interface_methods
+                    .get(&method.id)
+                    .ok_or_else(invalid_state)?;
+                if local
+                    .interface_methods
+                    .insert(method.id, Arc::clone(record))
+                    .is_some()
+                {
+                    return Err(invalid_state());
+                }
+            }
+        }
+        self.type_work
+            .charge(schemes.len().checked_mul(2).ok_or_else(type_resource)?)
+            .map_err(|()| type_resource())?;
+        local
+            .global_schemes
+            .try_reserve(schemes.len())
+            .map_err(|_| type_resource())?;
+        lowering
+            .global_schemes
+            .try_reserve(schemes.len())
+            .map_err(|_| type_resource())?;
+        for checked in schemes {
+            let scheme = self.lower_constrained_scheme(
+                &checked.scheme,
+                &lowering,
+                MethodEvidenceOwner::Global(checked.binder),
+                false,
+                checked.origin.primary_span(),
+            )?;
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            let record = Arc::new(scheme);
+            if local
+                .global_schemes
+                .insert(checked.binder, Arc::clone(&record))
+                .is_some()
+                || lowering
+                    .global_schemes
+                    .insert(checked.binder, record)
+                    .is_some()
+            {
+                return Err(invalid_state());
+            }
+        }
+        for implementation in implementations {
+            self.retain_completed_implementation_lowering(&mut lowering, implementation)?;
+            self.type_work
+                .charge(implementation.methods.len())
+                .map_err(|()| type_resource())?;
+            local
+                .implementation_methods
+                .try_reserve(implementation.methods.len())
+                .map_err(|_| type_resource())?;
+            for method in &implementation.methods {
+                let record = lowering
+                    .implementation_methods
+                    .get(&method.id)
+                    .ok_or_else(invalid_state)?;
+                if local
+                    .implementation_methods
+                    .insert(method.id, Arc::clone(record))
+                    .is_some()
+                {
+                    return Err(invalid_state());
+                }
+            }
+        }
+        self.retain_module_abi_variables(&mut local)?;
+        self.type_work.charge(1).map_err(|()| type_resource())?;
+        Ok((lowering, SharedModuleLowering(Arc::new(local))))
+    }
+
+    fn retain_module_abi_variables(&mut self, local: &mut ModuleLowering) -> Result<(), TypeError> {
+        let mut variables = HashSet::new();
+        self.type_work
+            .charge(
+                local
+                    .global_schemes
+                    .len()
+                    .checked_add(local.implementation_methods.len())
+                    .ok_or_else(type_resource)?,
+            )
+            .map_err(|()| type_resource())?;
+        for scheme in local.global_schemes.values() {
+            retain_abi_scheme_variables(scheme, &mut variables, &mut self.type_work)
+                .map_err(|()| type_resource())?;
+        }
+        for method in local.implementation_methods.values() {
+            retain_abi_application_variables(
+                &method.application,
+                &mut variables,
+                &mut self.type_work,
+            )
+            .map_err(|()| type_resource())?;
+            retain_abi_scheme_variables(&method.scheme, &mut variables, &mut self.type_work)
+                .map_err(|()| type_resource())?;
+        }
+        let count = variables.len();
+        self.type_work
+            .charge(
+                count
+                    .checked_mul(2)
+                    .and_then(|units| units.checked_add(self.generated_type_variables.len()))
+                    .ok_or_else(type_resource)?,
+            )
+            .map_err(|()| type_resource())?;
+        local
+            .abi_variables
+            .try_reserve_exact(count)
+            .map_err(|_| type_resource())?;
+        local
+            .type_origins
+            .try_reserve(count)
+            .map_err(|_| type_resource())?;
+        // The registry's allocation order makes alias assignment deterministic
+        // even though the retained schemes are indexed by hash maps.
+        for (index, fact) in self.generated_type_variables.0.iter().enumerate() {
+            let index = u32::try_from(index).map_err(|_| type_resource())?;
+            let identity =
+                TypeVariableId::generated(u32::MAX.checked_sub(index).ok_or_else(type_resource)?);
+            if !variables.remove(&identity) {
+                continue;
+            }
+            let fact = fact.as_ref().ok_or_else(invalid_state)?;
+            let kind = clone_kind_with_budget(&fact.kind, &mut self.type_work)
+                .map_err(|()| type_resource())?;
+            local.abi_variables.push((
+                identity,
+                GeneratedTypeVariableFact {
+                    origin: fact.origin,
+                    kind,
+                },
+            ));
+            if let Some(origin) = self.imported_type_origins.get(&identity) {
+                local.type_origins.insert(identity, *origin);
+            }
+        }
+        if !variables.is_empty() {
+            return Err(invalid_state());
+        }
+        Ok(())
     }
 
     fn lower_constrained_scheme(
@@ -4057,10 +5083,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             purpose: ElaborationPurpose::Standalone,
             state: ElaboratorState::Ready,
             final_root: None,
+            completed_module_prefix: None,
             next_inference: 0,
             inference_variables: InferenceVariableRegistry::default(),
             next_generated_type_variable: u32::MAX,
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
+            imported_type_origins: HashMap::new(),
             inference_solutions: InferenceSolutionMap::default(),
             row_inference_solutions: RowInferenceSolutionMap::default(),
             row_inference_obligations: RowInferenceSolutionMap::default(),
@@ -4076,6 +5104,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
 
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
+            checked_body_owner: None,
             method_binders: HashMap::new(),
             selection: None,
             evidence_lowering: None,
@@ -4085,14 +5114,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
             lexical_capture_uses: Vec::new(),
+            pending_checked_captures: Vec::new(),
+            checked_lexical_captures: Vec::new(),
+            checked_scoped_owners: Vec::new(),
             method_capture_uses: Vec::new(),
             method_capture_binders: Vec::new(),
+            checked_lexical_sources: Vec::new(),
             global_capture_uses: Vec::new(),
 
             implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
             expected_scheme_rows: Vec::new(),
             next_handler: 0,
+            fragment_identities: HashMap::new(),
+            fragment_catalog_offsets: HashMap::new(),
         })
     }
 
@@ -4304,7 +5339,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         checked_implementations: &[CheckedImplementation],
         started: &mut Vec<ModuleBodyChecking>,
         constraint_work: &mut InterfaceConstraintBudget,
-    ) -> Result<(Box<[CheckedImplementationFact]>, PendingEvidencePublication), TypeError> {
+    ) -> Result<
+        (
+            Box<[CheckedImplementationFact]>,
+            PendingEvidencePublication,
+            ElaboratedBindingBuffer,
+        ),
+        TypeError,
+    > {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
         }
@@ -4329,7 +5371,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         _interface_facts: &[crate::resolved::SharedCheckedInterfaceFact],
         checked_implementations: &[CheckedImplementation],
         started: &mut Vec<ModuleBodyChecking>,
-    ) -> Result<(Box<[CheckedImplementationFact]>, PendingEvidencePublication), TypeError> {
+    ) -> Result<
+        (
+            Box<[CheckedImplementationFact]>,
+            PendingEvidencePublication,
+            ElaboratedBindingBuffer,
+        ),
+        TypeError,
+    > {
         if started.len() > 1 {
             return Err(invalid_state());
         }
@@ -4411,7 +5460,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .definitions()
                     .get(source_index)
                     .ok_or_else(invalid_state)?;
-                self.elaborate_prepared_definition(definition, &mut checking.globals)?;
+                let binder = match &definition.kind {
+                    ResolvedDefinitionKind::Equational(global)
+                    | ResolvedDefinitionKind::ForeignConstant(global) => global.interface.name.id,
+                    ResolvedDefinitionKind::InlineOperational(global) => global.header.name.id,
+                };
+                let owner = (MethodEvidenceOwner::Global(binder), binder);
+                if self.checked_body_owner.replace(owner).is_some() {
+                    return Err(invalid_state());
+                }
+                let result = self.elaborate_prepared_definition(definition, &mut checking.globals);
+                if self.checked_body_owner.take() != Some(owner) {
+                    return Err(invalid_state());
+                }
+                result?;
                 checking.next_global = checking
                     .next_global
                     .checked_add(1)
@@ -4459,13 +5521,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     fn finish_module_body_checking(
         &mut self,
         module: &ResolvedModule,
-        checked_schemes: &mut [CheckedGlobalScheme],
+        _checked_schemes: &mut [CheckedGlobalScheme],
         checked_implementation_count: usize,
         checking: ModuleBodyChecking,
-    ) -> Result<(Box<[CheckedImplementationFact]>, PendingEvidencePublication), TypeError> {
+    ) -> Result<
+        (
+            Box<[CheckedImplementationFact]>,
+            PendingEvidencePublication,
+            ElaboratedBindingBuffer,
+        ),
+        TypeError,
+    > {
         let ModuleBodyChecking {
             globals,
-            mut facts,
+            facts,
             next_global,
             next_implementation,
             ..
@@ -4478,6 +5547,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
 
         let (globals, mut context) = self.finish_prepared_definitions(globals)?;
+        let globals = ElaboratedBindingBuffer(globals);
         let result = ResolvedExpr {
             kind: ResolvedExprKind::Unit,
             span: module.span(),
@@ -4490,6 +5560,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             self.zonk_builder_types_since(None, false)
                 .map_err(TypeError::Internal)?;
         }
+        Ok((facts.into_boxed_slice(), publication, globals))
+    }
+
+    fn complete_module_captures(
+        &mut self,
+        module: &ResolvedModule,
+        checked_schemes: &mut [CheckedGlobalScheme],
+        facts: &mut [CheckedImplementationFact],
+        roots: &[(BinderId, NodeId)],
+        publication: &PendingEvidencePublication,
+        physical: bool,
+    ) -> Result<(), TypeError> {
         let generic_type_origin = self
             .builder
             .cell_dependency_origin(&mut self.type_work)
@@ -4500,34 +5582,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .is_some()
             || self.capture_publication_required(module, checked_schemes)?
         {
-            self.type_work
-                .charge(globals.len())
-                .map_err(|()| type_resource())?;
-            let mut roots = Vec::new();
-            roots
-                .try_reserve_exact(globals.len())
-                .map_err(|_| type_resource())?;
-            roots.extend(
-                globals
-                    .iter()
-                    .map(|global| (global.binder.id(), global.initializer)),
-            );
-            self.type_work
-                .charge(self.implementation_capture_roots.len())
-                .map_err(|()| type_resource())?;
-            roots
-                .try_reserve(self.implementation_capture_roots.len())
-                .map_err(|_| type_resource())?;
-            roots.extend_from_slice(&self.implementation_capture_roots);
             let captures =
-                self.capture_completed_module_roots(module, &roots, &facts.0, &publication)?;
-            if globals.len() != checked_schemes.len() || captures.len() != roots.len() {
+                self.capture_completed_module_roots(module, roots, facts, publication, physical)?;
+            if captures.len() != roots.len() || roots.len() < checked_schemes.len() {
                 return Err(invalid_state());
             }
             let mut captures = captures.into_iter();
             for (((binder, _), capture), scheme) in roots
                 .iter()
-                .take(globals.len())
+                .take(checked_schemes.len())
                 .zip(captures.by_ref())
                 .zip(checked_schemes.iter_mut())
             {
@@ -4537,7 +5600,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 }
                 scheme.capture = capture;
             }
-            for fact in &mut facts.0 {
+            for fact in facts {
                 for method in &mut fact.methods {
                     self.type_work.charge(1).map_err(|()| type_resource())?;
                     method.capture = captures.next().ok_or_else(invalid_state)?;
@@ -4546,8 +5609,180 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             if captures.next().is_some() {
                 return Err(invalid_state());
             }
+        } else if physical {
+            // Physical closures must be settled even when no export needs a
+            // capture summary.
+            self.solve_cleanup_rows(roots, &[], &[], &[])?;
         }
-        Ok((facts.into_boxed_slice(), publication))
+        Ok(())
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the checked module facts and pending evidence transaction enter finalization together"
+    )]
+    fn finalize_checked_module_graph(
+        &mut self,
+        module: &ResolvedModule,
+        schemes: &[CheckedGlobalScheme],
+        implementations: &[CheckedImplementationFact],
+        globals: ElaboratedBindingBuffer,
+        lowering: EvidenceLowering,
+        catalog: Arc<crate::core::dialect::MethodEvidenceCatalog>,
+        publication: &PendingEvidencePublication,
+    ) -> Result<ElaboratedBindingBuffer, TypeError>
+    where
+        F: CheckedFragmentSource,
+    {
+        let needs_cleanup_transfer =
+            !self.cleanup_rows.is_empty() || !self.pending_cleanup_regions.is_empty();
+        let binders = self
+            .builder
+            .fragment_generated_binders(&mut self.type_work)?;
+        let variable_count = self.generated_type_variables.len();
+        let handler_count = usize::try_from(self.next_handler).map_err(|_| type_resource())?;
+        self.type_work
+            .charge(
+                binders
+                    .len()
+                    .checked_mul(2)
+                    .and_then(|count| count.checked_add(variable_count))
+                    .and_then(|count| count.checked_add(handler_count))
+                    .ok_or_else(type_resource)?,
+            )
+            .map_err(|()| type_resource())?;
+        let mut identities = crate::core::transform::FragmentIdentities::default();
+        identities
+            .binders
+            .try_reserve(binders.len())
+            .map_err(|_| type_resource())?;
+        identities
+            .variables
+            .try_reserve(variable_count)
+            .map_err(|_| type_resource())?;
+        identities
+            .handlers
+            .try_reserve(handler_count)
+            .map_err(|_| type_resource())?;
+        for binder in &binders {
+            if identities.binders.insert(*binder, *binder).is_some() {
+                return Err(invalid_state());
+            }
+        }
+        for index in 0..variable_count {
+            let index = u32::try_from(index).map_err(|_| type_resource())?;
+            let identity =
+                TypeVariableId::generated(u32::MAX.checked_sub(index).ok_or_else(type_resource)?);
+            if identities.variables.insert(identity, identity).is_some() {
+                return Err(invalid_state());
+            }
+        }
+        for index in 0..self.next_handler {
+            let identity = HandlerId::new(index);
+            if identities.handlers.insert(identity, identity).is_some() {
+                return Err(invalid_state());
+            }
+        }
+        let resolved = self
+            .builder
+            .fragment_resolved_binders(&mut self.type_work)?;
+        let (primary_work, rewrite_work) = self.builder.take_work_budgets();
+        let mut destination = CoreBuilder::<F>::with_registry_method_evidence_and_arena_work(
+            Arc::clone(&self.registry),
+            catalog,
+            primary_work,
+            rewrite_work,
+        )?;
+        destination.reserve_resolved_binders(resolved)?;
+        destination.reserve_resolved_binders(binders)?;
+        let source = CheckedTypedFragment {
+            builder: std::mem::replace(&mut self.builder, destination),
+            globals,
+            physical_bindings: None,
+            methods: std::mem::take(&mut self.implementation_capture_roots),
+            method_uses: std::mem::take(&mut self.method_capture_uses),
+            method_binders: std::mem::take(&mut self.method_capture_binders),
+            lexical_sources: std::mem::take(&mut self.checked_lexical_sources),
+            lexical_captures: std::mem::take(&mut self.checked_lexical_captures),
+            scoped_owners: std::mem::take(&mut self.checked_scoped_owners),
+            global_uses: std::mem::take(&mut self.global_capture_uses),
+            generated_type_variables: GeneratedTypeVariableRegistry::default(),
+            imported_type_origins: HashMap::new(),
+            next_generated_type_variable: u32::MAX,
+            next_handler: 0,
+        };
+        self.register_transferred_cleanup_rows()?;
+        self.pending_region_closures.clear();
+        self.evidence_lowering = Some(lowering);
+        let context = self.base_context.clone();
+        let mut cleanup_transfer =
+            needs_cleanup_transfer.then(cleanup_rows::CleanupTransfer::default);
+        let result = self.elaborate_retained_module_group(
+            module.declaration_order(),
+            schemes,
+            implementations,
+            &source,
+            &identities,
+            context,
+            Some(publication),
+            &mut cleanup_transfer,
+        );
+        self.method_capture_uses = source.method_uses;
+        self.method_capture_binders = source.method_binders;
+        self.checked_lexical_sources = source.lexical_sources;
+        self.checked_lexical_captures = source.lexical_captures;
+        self.checked_scoped_owners = source.scoped_owners;
+        self.global_capture_uses = source.global_uses;
+        let (bindings, _context) = result?;
+        if let Some(transfer) = cleanup_transfer {
+            self.finish_cleanup_transfer(transfer)?;
+        }
+        Ok(ElaboratedBindingBuffer(bindings))
+    }
+
+    fn completed_module_roots(
+        &mut self,
+        schemes: &[CheckedGlobalScheme],
+        implementations: &[CheckedImplementationFact],
+        bindings: &ElaboratedBindingBuffer,
+    ) -> Result<Vec<(BinderId, NodeId)>, TypeError> {
+        self.type_work
+            .charge(bindings.0.len().checked_mul(3).ok_or_else(type_resource)?)
+            .map_err(|()| type_resource())?;
+        let mut positions = HashMap::new();
+        positions
+            .try_reserve(bindings.0.len())
+            .map_err(|_| type_resource())?;
+        for binding in &bindings.0 {
+            if positions
+                .insert(binding.binder.id(), binding.initializer)
+                .is_some()
+            {
+                return Err(invalid_state());
+            }
+        }
+        let mut roots = Vec::new();
+        roots
+            .try_reserve_exact(bindings.0.len())
+            .map_err(|_| type_resource())?;
+        for scheme in schemes {
+            roots.push((
+                scheme.binder,
+                positions.remove(&scheme.binder).ok_or_else(invalid_state)?,
+            ));
+        }
+        for implementation in implementations {
+            for method in &implementation.methods {
+                roots.push((
+                    method.binder,
+                    positions.remove(&method.binder).ok_or_else(invalid_state)?,
+                ));
+            }
+        }
+        if !positions.is_empty() || roots.len() != bindings.0.len() {
+            return Err(invalid_state());
+        }
+        Ok(roots)
     }
 
     /// Reconstructs actual completed roots and their selected method routes.
@@ -4559,6 +5794,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         roots: &[(BinderId, NodeId)],
         facts: &[CheckedImplementationFact],
         publication: &PendingEvidencePublication,
+        physical: bool,
     ) -> Result<Vec<crate::core::capture::CaptureValueSummary>, TypeError> {
         let mut imports = Vec::new();
         for global in module.imported_facts().globals() {
@@ -4573,8 +5809,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 imports.push((method.binder, &method.capture));
             }
         }
-        let (method_routes, method_adapters) =
-            self.capture_method_routes(publication, module, facts)?;
+        let (method_routes, method_adapters) = if physical {
+            (Vec::new(), Vec::new())
+        } else {
+            self.capture_method_routes(publication, module, facts)?
+        };
         self.solve_cleanup_rows(roots, &imports, &method_routes, &method_adapters)?;
         let captures = crate::core::capture::check_builder(
             &self.builder,
@@ -4702,6 +5941,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .method_groups
                 .get(checked_method.source_group)
                 .ok_or_else(invalid_state)?;
+            #[cfg(test)]
+            observe_module_body(group.span, ObservedModuleBody::Method, self.purpose);
             if method.id() != checked_method.method
                 || group.method != Some(method.id())
                 || group.identity != Some(checked_method.id)
@@ -4732,6 +5973,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 method.span(),
                 method.annotation_span(),
             );
+            // The checked fact keeps the cross-module relation for source
+            // diagnostics. Core nodes use the local primary cause, as the
+            // former final method elaboration did.
+            let core_presentation = Origin::Source(presentation.primary_span());
             if self.current_implementation_method.is_some() {
                 return Err(invalid_state());
             }
@@ -4759,6 +6004,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             };
             let evidence_marker = self.enter_implementation_evidence_scope(implementation.id)?;
             self.current_implementation_method = Some(current_method);
+            let owner = (
+                MethodEvidenceOwner::Implementation(checked_method.id),
+                checked_method.binder,
+            );
+            if self.checked_body_owner.replace(owner).is_some() {
+                return Err(invalid_state());
+            }
             let body_result = self.elaborate_equations(
                 &group.equations,
                 ProvenancedType {
@@ -4767,8 +6019,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 },
                 context,
                 group.span,
-                &presentation,
+                &core_presentation,
             );
+            if self.checked_body_owner.take() != Some(owner) {
+                return Err(invalid_state());
+            }
             let current_method = self
                 .current_implementation_method
                 .take()
@@ -4826,7 +6081,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     parameters,
                     root,
                     abstraction_type,
-                    presentation.clone(),
+                    core_presentation,
                 )?;
             }
             self.type_work.charge(1).map_err(|()| type_resource())?;
@@ -5095,8 +6350,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         if self.state == ElaboratorState::Poisoned || !root_is_authorized {
             return Err((ElaborationFailure::InvalidState, self.type_work.used()));
         }
-        self.zonk_builder_types()
-            .map_err(|failure| (failure, self.type_work.used()))?;
+        if let Some(checkpoint) = self.completed_module_prefix {
+            self.zonk_builder_types_after_closed_prefix(checkpoint, true)
+        } else {
+            self.zonk_builder_types()
+        }
+        .map_err(|failure| (failure, self.type_work.used()))?;
         let used = self.type_work.used();
         self.builder
             .finish(root)
@@ -5116,6 +6375,23 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         checkpoint: Option<crate::core::dialect::TypeRewriteCheckpoint>,
         strict: bool,
+    ) -> Result<(), ElaborationFailure> {
+        self.zonk_builder_types_at(checkpoint, strict, false)
+    }
+
+    fn zonk_builder_types_after_closed_prefix(
+        &mut self,
+        checkpoint: crate::core::dialect::TypeRewriteCheckpoint,
+        strict: bool,
+    ) -> Result<(), ElaborationFailure> {
+        self.zonk_builder_types_at(Some(checkpoint), strict, true)
+    }
+
+    fn zonk_builder_types_at(
+        &mut self,
+        checkpoint: Option<crate::core::dialect::TypeRewriteCheckpoint>,
+        strict: bool,
+        closed_prefix: bool,
     ) -> Result<(), ElaborationFailure> {
         if self.builder.requires_type_rewrite() {
             let solutions = &self.inference_solutions;
@@ -5145,7 +6421,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     strict,
                 )
             };
-            if !strict && checkpoint.is_none() {
+            if closed_prefix {
+                self.builder.rewrite_types_and_rows_after_closed_prefix(
+                    checkpoint.ok_or(ElaborationFailure::InvalidState)?,
+                    rewrite,
+                    rewrite_row,
+                )?;
+            } else if !strict && checkpoint.is_none() {
                 self.builder
                     .zonk_types_and_rows(&type_work, rewrite, rewrite_row)?;
             } else {
@@ -5973,10 +7255,25 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
+    fn retain_checked_scoped_owner(&mut self, owner: CheckedScopedOwner) -> Result<(), TypeError> {
+        if self.purpose == ElaborationPurpose::ModuleCheck {
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            self.checked_scoped_owners
+                .try_reserve(1)
+                .map_err(|_| type_resource())?;
+            self.checked_scoped_owners.push(owner);
+        }
+        Ok(())
+    }
+
     fn clear_capture_uses(&mut self) {
         self.lexical_capture_uses.clear();
+        self.pending_checked_captures.clear();
+        self.checked_lexical_captures.clear();
+        self.checked_scoped_owners.clear();
         self.method_capture_uses.clear();
         self.method_capture_binders.clear();
+        self.checked_lexical_sources.clear();
         self.global_capture_uses.clear();
         self.implementation_capture_roots.clear();
     }
@@ -6012,7 +7309,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut routes = Vec::new();
         let mut adapters = Vec::new();
         for index in 0..self.method_capture_uses.len() {
-            let (node, slot, method, context) = self.method_capture_uses[index];
+            let occurrence = &self.method_capture_uses[index];
+            let (node, slot, method, context) = (
+                occurrence.node,
+                occurrence.slot.storage_id(),
+                occurrence.method,
+                occurrence.context,
+            );
             let (selection, arguments) = publication
                 .capture_selection(slot, Some(method), &mut self.type_work)
                 .map_err(|failure| selection_failure(failure, None))?;
@@ -6040,7 +7343,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             });
         }
         for index in 0..self.global_capture_uses.len() {
-            let (node, requirement, slot) = self.global_capture_uses[index];
+            let occurrence = &self.global_capture_uses[index];
+            let (node, requirement, slot) = (
+                occurrence.node,
+                occurrence.requirement,
+                occurrence.slot.storage_id(),
+            );
             let (selection, _) = publication
                 .capture_selection(slot, None, &mut self.type_work)
                 .map_err(|failure| selection_failure(failure, None))?;
@@ -6148,18 +7456,30 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Err(invalid_state());
         }
         self.type_work
-            .charge(occurrence.evidence.len())
+            .charge(
+                occurrence
+                    .evidence
+                    .len()
+                    .checked_mul(2)
+                    .ok_or_else(type_resource)?,
+            )
             .map_err(|()| type_resource())?;
         self.global_capture_uses
             .try_reserve(occurrence.evidence.len())
             .map_err(|_| type_resource())?;
-        self.global_capture_uses.extend(
-            scheme
-                .requirements
-                .iter()
-                .zip(&occurrence.evidence)
-                .map(|(requirement, slot)| (node, requirement.id, slot.storage_id())),
-        );
+        let scope = self.checked_body_owner;
+        let span = occurrence.origin.primary_span();
+        self.global_capture_uses
+            .extend(scheme.requirements.iter().zip(&occurrence.evidence).map(
+                |(requirement, slot)| CheckedGlobalUse {
+                    node,
+                    binder,
+                    requirement: requirement.id,
+                    slot: slot.retain_exact(),
+                    scope,
+                    span,
+                },
+            ));
         Ok(())
     }
 
@@ -6456,16 +7776,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     occurrence.origin.clone(),
                 )?;
             }
-            self.type_work.charge(1).map_err(|()| type_resource())?;
+            self.type_work.charge(2).map_err(|()| type_resource())?;
             self.method_capture_uses
                 .try_reserve(1)
                 .map_err(|_| type_resource())?;
-            self.method_capture_uses.push((
-                method_node,
-                occurrence.evidence[0].storage_id(),
+            self.method_capture_uses.push(CheckedMethodUse {
+                node: method_node,
+                whole: node,
+                slot: occurrence.evidence[0].retain_exact(),
                 method,
-                context_value,
-            ));
+                context: context_value,
+                scope: self.checked_body_owner,
+                span: occurrence.origin.primary_span(),
+            });
 
             let TypeFact {
                 ty: fact_ty,
@@ -6505,7 +7828,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut lowering = self.evidence_lowering.take().ok_or_else(invalid_state)?;
         let result = self.lower_checked_method_occurrence(
             method,
-            occurrence,
+            slot,
+            &occurrence.origin,
             method_arguments,
             checked_value_type,
             selection,
@@ -6515,18 +7839,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         result
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the selected occurrence and its checked instantiation are retained separately"
+    )]
     fn lower_checked_method_occurrence(
         &mut self,
         method: MethodId,
-        occurrence: &crate::resolved::ResolvedOccurrence,
+        slot: &crate::interface::EvidenceSlot,
+        origin: &Origin,
         method_arguments: &[Type],
         checked_value_type: &Type,
         selection: &EvidenceSelection,
         lowering: &mut EvidenceLowering,
     ) -> Result<TypedNode, TypeError> {
-        let [slot] = occurrence.evidence.as_ref() else {
-            return Err(invalid_state());
-        };
         if selection.interface() != method.interface() {
             return Err(invalid_state());
         }
@@ -6539,7 +7865,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut methods = self.lower_evidence_selection(
             selection,
             lowering,
-            &occurrence.origin,
+            origin,
             Some(method),
             slot.storage_id(),
         )?;
@@ -6591,7 +7917,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 selected.node,
                 arguments.into_vec(),
                 application_type,
-                occurrence.origin.clone(),
+                origin.clone(),
             )?;
             if let Some((requirement, binder)) = authentication {
                 let application = InterfaceApplication::new_kinded(
@@ -7084,7 +8410,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .ok_or_else(invalid_state)?;
         let core_scheme = IterativeTypeOwner::new(self.clone_type(&scheme.core_scheme)?);
         let variable_ty = self.clone_type(&core_scheme)?;
-        let mut current = TypedNodeOwner::new(TypedNode {
+        let current = TypedNodeOwner::new(TypedNode {
             node: self
                 .builder
                 .variable(binder, variable_ty, occurrence.origin.clone())?,
@@ -7125,6 +8451,42 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             lowering,
             publication,
         )?;
+        self.finish_lowered_global_occurrence(
+            binder,
+            &occurrence.origin,
+            occurrence.evidence.iter(),
+            current,
+            arguments,
+            row_arguments,
+            current_arguments,
+            current_row_arguments,
+            ty,
+            provenance,
+            lowering,
+            publication,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish_lowered_global_occurrence<'a>(
+        &mut self,
+        binder: BinderId,
+        origin: &Origin,
+        slots: impl ExactSizeIterator<Item = &'a crate::interface::EvidenceSlot>,
+        mut current: TypedNodeOwner,
+        arguments: OwnedTypeBuffer,
+        row_arguments: Vec<EffectRow>,
+        current_arguments: OwnedTypeBuffer,
+        current_row_arguments: Vec<EffectRow>,
+        ty: &Type,
+        provenance: TypeProvenance,
+        lowering: &mut EvidenceLowering,
+        publication: Option<&PendingEvidencePublication>,
+    ) -> Result<TypedNode, TypeError> {
+        let scheme = lowering
+            .global_schemes
+            .get(&binder)
+            .ok_or_else(invalid_state)?;
         if !arguments.is_empty() || !row_arguments.is_empty() {
             let core_ty = IterativeTypeOwner::new(self.instantiate_lowered_core_body(
                 scheme,
@@ -7137,7 +8499,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 arguments.into_vec(),
                 row_arguments,
                 application_ty,
-                occurrence.origin.clone(),
+                origin.clone(),
             )?;
             current.set_node(node);
             current.replace_type(core_ty.into_inner());
@@ -7149,10 +8511,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .ok_or_else(invalid_state)?
             .requirements
             .len();
-        if occurrence.evidence.len() != requirement_count {
+        if slots.len() != requirement_count {
             return Err(invalid_state());
         }
-        for (requirement_index, slot) in occurrence.evidence.iter().enumerate() {
+        for (requirement_index, slot) in slots.enumerate() {
             let selection = match publication {
                 Some(publication) => {
                     publication
@@ -7166,7 +8528,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let methods = self.lower_evidence_selection(
                 selection,
                 lowering,
-                &occurrence.origin,
+                origin,
                 None,
                 slot.storage_id(),
             )?;
@@ -7202,7 +8564,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     &target_application,
                     canonical_method,
                     None,
-                    &occurrence.origin,
+                    origin,
                     slot.storage_id(),
                 )?);
             }
@@ -9978,25 +11340,423 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         group: &ResolvedModuleGroup,
         context: TypeContext,
     ) -> Result<(Vec<ElaboratedBinding>, TypeContext), TypeError> {
-        let mut prepared = self.prepare_definition_views(
-            group.definitions().iter(),
-            Some(group.schemes()),
-            context,
-        )?;
-        self.prepare_implementation_method_views(group, &mut prepared)?;
+        self.type_work
+            .charge(group.implementations().len())
+            .map_err(|()| type_resource())?;
+        if group.definitions().len() != group.schemes().len()
+            || group.implementations().len() != group.implementation_facts().len()
+            || group
+                .implementations()
+                .iter()
+                .zip(group.implementation_facts())
+                .any(|(source, fact)| source.id() != fact.id)
+        {
+            return Err(invalid_state());
+        }
+        let identities = self
+            .fragment_identities
+            .remove(&group.module())
+            .ok_or_else(invalid_state)?;
+        match group.typed_fragment().ok_or_else(invalid_state)? {
+            CheckedTypedModule::Pure(fragment) => {
+                self.relocate_completed_module_group(group, fragment, &identities, context)
+            }
+            CheckedTypedModule::Effect(fragment) => {
+                self.relocate_completed_module_group(group, fragment, &identities, context)
+            }
+        }
+    }
+
+    fn relocate_completed_module_group<S: CheckedFragmentSource>(
+        &mut self,
+        group: &ResolvedModuleGroup,
+        fragment: &CheckedTypedFragment<S>,
+        identities: &crate::core::transform::FragmentIdentities,
+        mut context: TypeContext,
+    ) -> Result<(Vec<ElaboratedBinding>, TypeContext), TypeError> {
+        let bindings = fragment
+            .physical_bindings
+            .as_ref()
+            .ok_or_else(invalid_state)?;
+        let offsets = *self
+            .fragment_catalog_offsets
+            .get(&group.module())
+            .ok_or_else(invalid_state)?;
+        for scheme in group.schemes() {
+            let value_type = IterativeTypeOwner::new(self.clone_type(&scheme.scheme.value_type)?);
+            let provenance = self.at_span_provenance(&value_type, scheme.origin.primary_span())?;
+            let quantified = clone_kinded_type_parameters_with_budget(
+                &scheme.scheme.type_parameters,
+                &mut self.type_work,
+            )
+            .map_err(|()| type_resource())?
+            .into_boxed_slice();
+            if context.insert_with_provenance(scheme.binder, value_type.into_inner(), provenance)? {
+                return Err(invalid_state());
+            }
+            context.set_quantified(scheme.binder, quantified)?;
+        }
+        for implementation in group.implementation_facts() {
+            for method in &implementation.methods {
+                let value_type =
+                    IterativeTypeOwner::new(self.clone_type(&method.scheme.value_type)?);
+                let provenance = self.at_span_provenance(&value_type, method.span)?;
+                let quantified = clone_kinded_type_parameters_with_budget(
+                    &method.scheme.type_parameters,
+                    &mut self.type_work,
+                )
+                .map_err(|()| type_resource())?
+                .into_boxed_slice();
+                if context.insert_with_provenance(
+                    method.binder,
+                    value_type.into_inner(),
+                    provenance,
+                )? {
+                    return Err(invalid_state());
+                }
+                context.set_quantified(method.binder, quantified)?;
+            }
+        }
+        self.type_work
+            .charge(bindings.0.len())
+            .map_err(|()| type_resource())?;
+        let mut result = Vec::new();
+        result
+            .try_reserve_exact(bindings.0.len())
+            .map_err(|_| type_resource())?;
+        let Some(first) = bindings.0.first() else {
+            if !fragment.builder.module_method_evidence_anchors().is_empty() {
+                return Err(invalid_state());
+            }
+            return Ok((result, context));
+        };
+        let mut workspace =
+            crate::core::transform::FragmentWorkspace::new(&fragment.builder, &mut self.builder)
+                .map_err(fragment_transfer_error)?;
+        let view = crate::core::transform::FragmentIdentityView::completed(identities);
+        let mut transfer = crate::core::transform::FragmentNodeMap::new(
+            &mut workspace,
+            &fragment.builder,
+            first.initializer,
+            &mut self.builder,
+            view,
+        )
+        .map_err(fragment_transfer_error)?;
+        for binding in &bindings.0 {
+            let mut tasks = vec![(binding.initializer, false)];
+            while let Some((node, finishing)) = tasks.pop() {
+                if finishing {
+                    copy_checked_fragment(
+                        &mut transfer,
+                        &fragment.builder,
+                        node,
+                        &mut self.builder,
+                    )
+                    .map_err(fragment_transfer_error)?;
+                    continue;
+                }
+                let entering = transfer
+                    .enter(&fragment.builder, node, &mut self.builder)
+                    .map_err(fragment_transfer_error)?;
+                if !entering {
+                    continue;
+                }
+                let expression = fragment
+                    .builder
+                    .checked_fragment_node(node, &mut self.type_work)?;
+                let count = S::child_count(expression.kind);
+                self.type_work
+                    .charge(count.checked_add(1).ok_or_else(type_resource)?)
+                    .map_err(|()| type_resource())?;
+                tasks
+                    .try_reserve(count.checked_add(1).ok_or_else(type_resource)?)
+                    .map_err(|_| type_resource())?;
+                tasks.push((node, true));
+                for index in (0..count).rev() {
+                    tasks.push((
+                        S::child_at(expression.kind, index).ok_or_else(invalid_state)?,
+                        false,
+                    ));
+                }
+            }
+            let source = binding.binder.id();
+            let binder = match source {
+                BinderId::Resolved { .. } => source,
+                BinderId::Generated(_) => {
+                    *identities.binders.get(&source).ok_or_else(invalid_state)?
+                }
+            };
+            let ty = self.relocated_fragment_type(binding.binder.ty(), view)?;
+            let binder =
+                self.builder
+                    .resolved_binder(binder, ty, binding.binder.origin().clone())?;
+            result.push(ElaboratedBinding {
+                binder,
+                initializer: transfer
+                    .mapped(binding.initializer)
+                    .map_err(fragment_transfer_error)?,
+                foreign_constant: binding.foreign_constant,
+            });
+        }
+        let retained = fragment.builder.module_method_evidence_anchors();
+        self.type_work
+            .charge(retained.len())
+            .map_err(|()| type_resource())?;
+        let mut anchors = Vec::new();
+        anchors
+            .try_reserve_exact(retained.len())
+            .map_err(|_| type_resource())?;
+        for anchor in retained {
+            anchors.push(crate::core::dialect::relocate_completed_anchor(
+                anchor,
+                identities,
+                offsets,
+                |node| {
+                    transfer.mapped(node).map_err(|error| match error {
+                        crate::core::transform::TransformError::Build(error) => error,
+                        crate::core::transform::TransformError::InvalidValidatedInput => {
+                            BuildError::InvalidPayload
+                        }
+                    })
+                },
+                &mut self.type_work,
+            )?);
+        }
+        self.builder.retain_completed_method_evidence(anchors)?;
+        Ok((result, context))
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the checked declarations and owner-scoped transfer state remain separate inputs"
+    )]
+    fn elaborate_retained_module_group<S: CheckedFragmentSource>(
+        &mut self,
+        declarations: &[ResolvedDeclarationIndex],
+        schemes: &[CheckedGlobalScheme],
+        implementations: &[CheckedImplementationFact],
+        fragment: &CheckedTypedFragment<S>,
+        identities: &crate::core::transform::FragmentIdentities,
+        context: TypeContext,
+        publication: Option<&PendingEvidencePublication>,
+        cleanup_transfer: &mut Option<cleanup_rows::CleanupTransfer>,
+    ) -> Result<(Vec<ElaboratedBinding>, TypeContext), TypeError> {
+        self.type_work
+            .charge(
+                fragment
+                    .method_uses
+                    .len()
+                    .checked_add(
+                        fragment
+                            .global_uses
+                            .len()
+                            .checked_mul(2)
+                            .ok_or_else(type_resource)?,
+                    )
+                    .ok_or_else(type_resource)?,
+            )
+            .map_err(|()| type_resource())?;
+        let mut methods = HashMap::new();
+        methods
+            .try_reserve(fragment.method_uses.len())
+            .map_err(|_| type_resource())?;
+        for method in &fragment.method_uses {
+            if methods.insert(method.whole, method).is_some() {
+                return Err(invalid_state());
+            }
+        }
+        let mut globals = HashMap::new();
+        globals
+            .try_reserve(fragment.global_uses.len())
+            .map_err(|_| type_resource())?;
+        let mut start = 0;
+        while start < fragment.global_uses.len() {
+            let first = &fragment.global_uses[start];
+            let mut end = start + 1;
+            while end < fragment.global_uses.len() && fragment.global_uses[end].node == first.node {
+                if fragment.global_uses[end].binder != first.binder {
+                    return Err(invalid_state());
+                }
+                end += 1;
+            }
+            if methods.contains_key(&first.node) || globals.insert(first.node, start..end).is_some()
+            {
+                return Err(invalid_state());
+            }
+            start = end;
+        }
+        self.type_work
+            .charge(
+                fragment
+                    .method_binders
+                    .len()
+                    .checked_mul(3)
+                    .and_then(|work| work.checked_add(fragment.lexical_sources.len()))
+                    .ok_or_else(type_resource)?,
+            )
+            .map_err(|()| type_resource())?;
+        let mut owners = HashMap::new();
+        let mut lexical = HashMap::new();
+        let mut lexical_order = Vec::new();
+        owners
+            .try_reserve(fragment.method_binders.len())
+            .map_err(|_| type_resource())?;
+        lexical
+            .try_reserve(fragment.method_binders.len())
+            .map_err(|_| type_resource())?;
+        lexical_order
+            .try_reserve(fragment.method_binders.len())
+            .map_err(|_| type_resource())?;
+        for (source, method, binder) in &fragment.method_binders {
+            if owners.insert(*binder, (*source, *method)).is_some() {
+                return Err(invalid_state());
+            }
+        }
+        for retained in &fragment.lexical_sources {
+            let source = retained.slot.get().ok_or_else(invalid_state)?;
+            for method in &source.methods {
+                if owners.remove(&method.binder) != Some((source.id, method.method))
+                    || lexical
+                        .insert(
+                            method.binder,
+                            FragmentLexicalScope {
+                                source,
+                                method,
+                                span: retained.span,
+                            },
+                        )
+                        .is_some()
+                {
+                    return Err(invalid_state());
+                }
+                lexical_order.push(method.binder);
+            }
+        }
+        if !owners.is_empty() {
+            return Err(invalid_state());
+        }
+        // Resolver contextual parameters are unique to a lexical method.
+        // Freshen each once for the physical graph, while retaining source
+        // coordinates in the evidence catalogue and selection certificates.
+        let mut lexical_variables = HashMap::new();
+        let mut lexical_replacements = Vec::new();
+        for binder in lexical_order {
+            let scope = lexical.get(&binder).ok_or_else(invalid_state)?;
+            let parameter_count = self
+                .evidence_lowering
+                .as_ref()
+                .and_then(|lowering| lowering.interface_methods.get(&scope.method.method))
+                .ok_or_else(invalid_state)?
+                .type_parameters
+                .len();
+            if parameter_count == 0 {
+                continue;
+            }
+            let Type::Forall(parameters, _) = &scope.method.scheme else {
+                return Err(invalid_state());
+            };
+            if parameters.len() != parameter_count {
+                return Err(invalid_state());
+            }
+            self.type_work
+                .charge(parameter_count.checked_mul(2).ok_or_else(type_resource)?)
+                .map_err(|()| type_resource())?;
+            lexical_variables
+                .try_reserve(parameter_count)
+                .map_err(|_| type_resource())?;
+            lexical_replacements
+                .try_reserve(parameter_count)
+                .map_err(|_| type_resource())?;
+            for (source, kind) in parameters.iter() {
+                let target = self.fresh_type_variable(kind, scope.span)?;
+                if lexical_variables.insert(*source, target).is_some() {
+                    return Err(invalid_state());
+                }
+                lexical_replacements.push((*source, target, matches!(kind, Kind::EffectRow)));
+            }
+        }
+        self.type_work
+            .charge(
+                fragment
+                    .lexical_captures
+                    .len()
+                    .checked_mul(2)
+                    .ok_or_else(type_resource)?,
+            )
+            .map_err(|()| type_resource())?;
+        let mut captures: HashMap<NodeId, Vec<CheckedLexicalCapture>> = HashMap::new();
+        captures
+            .try_reserve(fragment.lexical_captures.len())
+            .map_err(|_| type_resource())?;
+        for capture in &fragment.lexical_captures {
+            let entries = captures.entry(capture.node).or_default();
+            entries.try_reserve(1).map_err(|_| type_resource())?;
+            entries.push(*capture);
+        }
+        let uses = FragmentEvidenceIndex {
+            methods,
+            globals,
+            lexical,
+            captures,
+        };
+        let mut workspace =
+            crate::core::transform::FragmentWorkspace::new(&fragment.builder, &mut self.builder)
+                .map_err(fragment_transfer_error)?;
+        let mut prepared = self.prepare_retained_globals(schemes, context)?;
+        self.prepare_implementation_method_views(implementations, &mut prepared)?;
         let mut next_global = 0usize;
         let mut next_implementation = 0usize;
-        for declaration in group.declaration_order() {
+        for declaration in declarations {
             match *declaration {
                 ResolvedDeclarationIndex::Global(index) if index == next_global => {
-                    let definition = group.definitions().get(index).ok_or_else(invalid_state)?;
-
-                    self.elaborate_prepared_definition(definition, &mut prepared)?;
+                    let binding = fragment.globals.0.get(index).ok_or_else(invalid_state)?;
+                    let scheme = schemes.get(index).ok_or_else(invalid_state)?;
+                    if binding.binder.id() != scheme.binder {
+                        return Err(invalid_state());
+                    }
+                    self.lower_retained_global(
+                        fragment,
+                        binding,
+                        scheme,
+                        crate::core::transform::FragmentIdentityView::new(
+                            identities,
+                            (!lexical_variables.is_empty()).then_some(&lexical_variables),
+                        ),
+                        &lexical_replacements,
+                        &uses,
+                        &mut workspace,
+                        &mut prepared,
+                        publication,
+                        cleanup_transfer,
+                    )?;
 
                     next_global = next_global.checked_add(1).ok_or_else(invalid_state)?;
                 }
                 ResolvedDeclarationIndex::Implementation(index) if index == next_implementation => {
-                    self.elaborate_prepared_implementation(group, index, &mut prepared)?;
+                    let implementation = implementations.get(index).ok_or_else(invalid_state)?;
+                    for method in &implementation.methods {
+                        self.type_work
+                            .charge(fragment.methods.len())
+                            .map_err(|()| type_resource())?;
+                        let root = fragment
+                            .methods
+                            .iter()
+                            .find_map(|(binder, root)| (*binder == method.binder).then_some(*root))
+                            .ok_or_else(invalid_state)?;
+                        self.lower_retained_method(
+                            fragment,
+                            root,
+                            method,
+                            identities,
+                            &mut lexical_variables,
+                            &mut lexical_replacements,
+                            &uses,
+                            &mut workspace,
+                            &mut prepared,
+                            publication,
+                            cleanup_transfer,
+                        )?;
+                    }
 
                     next_implementation = next_implementation
                         .checked_add(1)
@@ -10010,24 +11770,927 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 | ResolvedDeclarationIndex::Implementation(_) => return Err(invalid_state()),
             }
         }
-        if next_global != group.definitions().len()
-            || next_implementation != group.implementations().len()
-        {
+        if next_global != schemes.len() || next_implementation != implementations.len() {
             return Err(invalid_state());
         }
         self.finish_prepared_definitions(prepared)
     }
 
-    fn prepare_implementation_method_views(
+    fn prepare_retained_globals(
         &mut self,
-        group: &ResolvedModuleGroup,
-        prepared: &mut PreparedGlobals,
+        schemes: &[CheckedGlobalScheme],
+        mut context: TypeContext,
+    ) -> Result<PreparedGlobals, TypeError> {
+        self.type_work
+            .charge(schemes.len().checked_mul(3).ok_or_else(type_resource)?)
+            .map_err(|()| type_resource())?;
+        let mut globals = Vec::new();
+        let mut binders = HashMap::new();
+        let mut quantifiers = HashMap::new();
+        globals
+            .try_reserve(schemes.len())
+            .map_err(|_| type_resource())?;
+        binders
+            .try_reserve(schemes.len())
+            .map_err(|_| type_resource())?;
+        quantifiers
+            .try_reserve(schemes.len())
+            .map_err(|_| type_resource())?;
+        for checked in schemes {
+            let lowered = self
+                .evidence_lowering
+                .as_ref()
+                .and_then(|lowering| lowering.global_schemes.get(&checked.binder))
+                .ok_or_else(invalid_state)?;
+            let binder_type = clone_type_with_budget(&lowered.core_scheme, &mut self.type_work)
+                .map_err(|()| type_resource())?;
+            let binder = self.builder.resolved_binder(
+                checked.binder,
+                binder_type,
+                Origin::Generated {
+                    cause: Box::new(checked.origin.clone()),
+                    reason: GeneratedReason::BindingLowering,
+                },
+            )?;
+            let value_type = IterativeTypeOwner::new(
+                clone_type_with_budget(&checked.scheme.value_type, &mut self.type_work)
+                    .map_err(|()| type_resource())?,
+            );
+            let provenance = self.at_span_provenance(&value_type, checked.origin.primary_span())?;
+            let quantified = clone_kinded_type_parameters_with_budget(
+                &checked.scheme.type_parameters,
+                &mut self.type_work,
+            )
+            .map_err(|()| type_resource())?
+            .into_boxed_slice();
+            let context_quantified =
+                clone_kinded_type_parameters_with_budget(&quantified, &mut self.type_work)
+                    .map_err(|()| type_resource())?
+                    .into_boxed_slice();
+            if context.insert_with_provenance(
+                checked.binder,
+                value_type.into_inner(),
+                provenance,
+            )? || binders.insert(checked.binder, binder).is_some()
+                || quantifiers.insert(checked.binder, quantified).is_some()
+            {
+                return Err(invalid_state());
+            }
+            context.set_quantified(checked.binder, context_quantified)?;
+        }
+        Ok(PreparedGlobals {
+            context,
+            globals,
+            binders,
+            quantifiers,
+        })
+    }
+
+    fn relocated_fragment_type(
+        &mut self,
+        ty: &Type,
+        identities: crate::core::transform::FragmentIdentityView<'_>,
+    ) -> Result<Type, TypeError> {
+        crate::types::rename_fragment_type_with(
+            ty,
+            &identities.base.variables,
+            identities.variables,
+            |units| self.type_work.charge(units),
+            || (),
+        )
+        .map_err(|()| type_resource())?
+        .map_err(|_| invalid_state())
+    }
+
+    fn require_unchanged_fragment_selection(
+        &mut self,
+        selection: &EvidenceSelection,
+        identities: crate::core::transform::FragmentIdentityView<'_>,
     ) -> Result<(), TypeError> {
-        if group.implementations().len() != group.implementation_facts().len() {
+        for argument in selection.arguments() {
+            let mapped = crate::types::rename_fragment_argument_with(
+                argument,
+                &identities.base.variables,
+                identities.variables,
+                |units| self.type_work.charge(units),
+                || (),
+            )
+            .map_err(|()| type_resource())?
+            .map_err(|_| invalid_state())?;
+            let equal = crate::types::same_kinded_argument_with_budget(
+                argument,
+                &mapped,
+                &mut self.type_work,
+            );
+            crate::types::discard_kinded_argument_iteratively(mapped);
+            if !equal.map_err(|()| type_resource())? {
+                return Err(invalid_state());
+            }
+        }
+        for index in 0..selection.node_count() {
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            if let Some(EvidenceNode::Implementation { substitution, .. }) =
+                selection.node(crate::interface::EvidenceNodeId::new(index))
+            {
+                for replacement in substitution {
+                    // The key is a provider formal, not an occurrence actual.
+                    let mapped = IterativeTypeOwner::new(
+                        self.relocated_fragment_type(replacement.argument(), identities)?,
+                    );
+                    if !same_type_with_budget(replacement.argument(), &mapped, &mut self.type_work)
+                        .map_err(|()| type_resource())?
+                    {
+                        return Err(invalid_state());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn authenticate_retained_lexical_captures(
+        &mut self,
+        node: NodeId,
+        captures: Option<&Vec<CheckedLexicalCapture>>,
+    ) -> Result<(), TypeError> {
+        if let Some(captures) = captures {
+            self.type_work
+                .charge(captures.len())
+                .map_err(|()| type_resource())?;
+            for capture in captures {
+                let owner = self
+                    .builder
+                    .lexical_capture_owner(capture.source, capture.method)?;
+                self.builder
+                    .authenticate_lexical_capture_use(node, owner, capture.ordinal)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn lower_retained_global_occurrence<S: CheckedFragmentSource>(
+        &mut self,
+        fragment: &CheckedTypedFragment<S>,
+        expression: crate::core::dialect::CheckedFragmentNode<'_, S>,
+        retained: &[CheckedGlobalUse],
+        identities: crate::core::transform::FragmentIdentityView<'_>,
+        captures: &HashMap<NodeId, Vec<CheckedLexicalCapture>>,
+        publication: Option<&PendingEvidencePublication>,
+    ) -> Result<TypedNode, TypeError> {
+        use crate::core::{PureComputation, PureExprKind};
+
+        let first = retained.first().ok_or_else(invalid_state)?;
+        let (variable, variable_node, source_arguments, source_rows) =
+            match S::pure(expression.kind) {
+                Some(PureExprKind::Variable(variable)) => (*variable, first.node, &[][..], &[][..]),
+                Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) => {
+                    let function = fragment
+                        .builder
+                        .checked_fragment_node(application.function(), &mut self.type_work)?;
+                    let Some(PureExprKind::Variable(variable)) = S::pure(function.kind) else {
+                        return Err(invalid_state());
+                    };
+                    (
+                        *variable,
+                        application.function(),
+                        application.arguments(),
+                        application.row_arguments(),
+                    )
+                }
+                _ => return Err(invalid_state()),
+            };
+        if variable.binder() != first.binder {
             return Err(invalid_state());
         }
-        let method_count: usize = group
-            .implementation_facts()
+        self.type_work
+            .charge(retained.len().checked_mul(2).ok_or_else(type_resource)?)
+            .map_err(|()| type_resource())?;
+        let scheme = self
+            .evidence_lowering
+            .as_ref()
+            .and_then(|lowering| lowering.global_schemes.get(&first.binder))
+            .ok_or_else(invalid_state)?;
+        if scheme.requirements.len() != retained.len()
+            || retained
+                .iter()
+                .zip(&scheme.requirements)
+                .any(|(use_, requirement)| {
+                    use_.binder != first.binder || use_.requirement != requirement.id
+                })
+        {
+            return Err(invalid_state());
+        }
+        let core_scheme = IterativeTypeOwner::new(
+            clone_type_with_budget(&scheme.core_scheme, &mut self.type_work)
+                .map_err(|()| type_resource())?,
+        );
+        for use_ in retained {
+            let selection = match publication {
+                Some(publication) => {
+                    publication
+                        .occurrence(use_.slot.storage_id(), None, &mut self.type_work)
+                        .map_err(|failure| selection_failure(failure, None))?
+                        .selection
+                }
+                None => use_.slot.selection().ok_or_else(invalid_state)?,
+            };
+            self.require_unchanged_fragment_selection(selection, identities)?;
+        }
+
+        let retained_work = source_arguments
+            .len()
+            .checked_add(source_rows.len())
+            .and_then(|count| count.checked_mul(2))
+            .ok_or_else(type_resource)?;
+        self.type_work
+            .charge(retained_work)
+            .map_err(|()| type_resource())?;
+        let mut arguments = OwnedTypeBuffer(Vec::new());
+        let mut current_arguments = OwnedTypeBuffer(Vec::new());
+        let mut row_arguments = Vec::new();
+        let mut current_row_arguments = Vec::new();
+        arguments
+            .try_reserve(source_arguments.len())
+            .map_err(|_| type_resource())?;
+        current_arguments
+            .try_reserve(source_arguments.len())
+            .map_err(|_| type_resource())?;
+        row_arguments
+            .try_reserve(source_rows.len())
+            .map_err(|_| type_resource())?;
+        current_row_arguments
+            .try_reserve(source_rows.len())
+            .map_err(|_| type_resource())?;
+        for argument in source_arguments {
+            let argument =
+                IterativeTypeOwner::new(self.relocated_fragment_type(argument, identities)?);
+            current_arguments.push(self.clone_type(&argument)?);
+            arguments.push(argument.into_inner());
+        }
+        for row in source_rows {
+            let row = crate::types::rename_fragment_row_with(
+                row,
+                &identities.base.variables,
+                identities.variables,
+                |units| self.type_work.charge(units),
+                || (),
+            )
+            .map_err(|()| type_resource())?
+            .map_err(|_| invalid_state())?;
+            current_row_arguments.push(
+                clone_effect_row_with_budget(&row, &mut self.type_work)
+                    .map_err(|()| type_resource())?,
+            );
+            row_arguments.push(row);
+        }
+
+        let ty = IterativeTypeOwner::new(self.relocated_fragment_type(expression.ty, identities)?);
+        let provenance = self.at_span_provenance(&ty, expression.origin.primary_span())?;
+        let variable_ty = self.clone_type(&core_scheme)?;
+        let current = TypedNodeOwner::new(TypedNode {
+            node: self
+                .builder
+                .variable(first.binder, variable_ty, expression.origin.clone())?,
+            ty: core_scheme.into_inner(),
+            effects: EffectRow::empty(),
+            provenance: provenance.clone(),
+        });
+        self.authenticate_retained_lexical_captures(current.node, captures.get(&variable_node))?;
+        let mut lowering = self.evidence_lowering.take().ok_or_else(invalid_state)?;
+        let result = self.finish_lowered_global_occurrence(
+            first.binder,
+            expression.origin,
+            retained.iter().map(|use_| &use_.slot),
+            current,
+            arguments,
+            row_arguments,
+            current_arguments,
+            current_row_arguments,
+            &ty,
+            provenance,
+            &mut lowering,
+            publication,
+        );
+        self.evidence_lowering = Some(lowering);
+        result
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each root carries its fragment, owner mapping, evidence and cleanup transaction"
+    )]
+    fn transfer_checked_root<S: CheckedFragmentSource>(
+        &mut self,
+        fragment: &CheckedTypedFragment<S>,
+        root: NodeId,
+        identities: crate::core::transform::FragmentIdentityView<'_>,
+        owner_replacements: &[(TypeVariableId, TypeVariableId, bool)],
+        uses: &FragmentEvidenceIndex<'_>,
+        workspace: &mut crate::core::transform::FragmentWorkspace,
+        publication: Option<&PendingEvidencePublication>,
+        owner: BinderId,
+        cleanup_transfer: &mut Option<cleanup_rows::CleanupTransfer>,
+    ) -> Result<NodeId, TypeError> {
+        enum Task {
+            Enter(NodeId),
+            Finish(NodeId),
+            EnterLexical(BinderId),
+            ExitLexical(BinderId),
+        }
+        if let Some(cleanup) = cleanup_transfer.as_mut() {
+            self.relocate_cleanup_owner(cleanup, owner, identities)?;
+        }
+        let mut transfer = crate::core::transform::FragmentNodeMap::new(
+            workspace,
+            &fragment.builder,
+            root,
+            &mut self.builder,
+            identities,
+        )
+        .map_err(fragment_transfer_error)?;
+        let mut tasks = vec![Task::Enter(root)];
+        while let Some(task) = tasks.pop() {
+            let (id, finishing) = match task {
+                Task::Enter(id) => (id, false),
+                Task::Finish(id) => (id, true),
+                Task::EnterLexical(binder) => {
+                    let scope = uses.lexical.get(&binder).ok_or_else(invalid_state)?;
+                    let parameter_count = self
+                        .evidence_lowering
+                        .as_ref()
+                        .and_then(|lowering| lowering.interface_methods.get(&scope.method.method))
+                        .ok_or_else(invalid_state)?
+                        .type_parameters
+                        .len();
+                    let mut local_variables = HashMap::new();
+                    if parameter_count != 0 {
+                        let Type::Forall(parameters, _) = &scope.method.scheme else {
+                            return Err(invalid_state());
+                        };
+                        if parameters.len() != parameter_count {
+                            return Err(invalid_state());
+                        }
+                        self.type_work
+                            .charge(parameter_count)
+                            .map_err(|()| type_resource())?;
+                        local_variables
+                            .try_reserve(parameter_count)
+                            .map_err(|_| type_resource())?;
+                        for (source, _) in parameters.iter() {
+                            let target = identities.variable(source).ok_or_else(invalid_state)?;
+                            if local_variables.insert(*source, target).is_some() {
+                                return Err(invalid_state());
+                            }
+                        }
+                    }
+                    let application = scope
+                        .source
+                        .application
+                        .clone_with_budget(&mut self.type_work)
+                        .map_err(|()| type_resource())?;
+                    // Outer implementation parameters stay in source
+                    // coordinates until the emitted evidence suffix is
+                    // rewritten for that owner.
+                    let local_view = crate::core::transform::FragmentIdentityView::new(
+                        identities.base,
+                        (!local_variables.is_empty()).then_some(&local_variables),
+                    );
+                    let ty = IterativeTypeOwner::new(
+                        self.relocated_fragment_type(&scope.method.scheme, local_view)?,
+                    );
+                    self.type_work.charge(1).map_err(|()| type_resource())?;
+                    let lowering = self.evidence_lowering.as_mut().ok_or_else(invalid_state)?;
+                    lowering
+                        .lexical_binders
+                        .try_reserve(1)
+                        .map_err(|_| type_resource())?;
+                    if lowering
+                        .lexical_binders
+                        .insert(
+                            (scope.source.id, scope.method.method),
+                            ActiveEvidenceBinder {
+                                binder,
+                                application,
+                                ty: ty.into_inner(),
+                            },
+                        )
+                        .is_some()
+                    {
+                        return Err(invalid_state());
+                    }
+                    continue;
+                }
+                Task::ExitLexical(binder) => {
+                    let scope = uses.lexical.get(&binder).ok_or_else(invalid_state)?;
+                    let lowering = self.evidence_lowering.as_mut().ok_or_else(invalid_state)?;
+                    if lowering
+                        .lexical_binders
+                        .remove(&(scope.source.id, scope.method.method))
+                        .is_none_or(|active| active.binder != binder)
+                    {
+                        return Err(invalid_state());
+                    }
+                    continue;
+                }
+            };
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            if finishing {
+                let start = self.builder.node_checkpoint();
+                let expression = fragment
+                    .builder
+                    .checked_fragment_node(id, &mut self.type_work)?;
+                let storage = S::region_closure(expression.kind)
+                    .map(|closure| transfer.mapped(closure.storage))
+                    .transpose()
+                    .map_err(fragment_transfer_error)?;
+                let request = if let Some(storage) = storage {
+                    let destination =
+                        F::effect_builder(&mut self.builder).ok_or_else(invalid_state)?;
+                    let node = destination.checked_fragment_node(storage, &mut self.type_work)?;
+                    let crate::core::effect::EffectExprKind::Operation(
+                        EffectOperation::RegionAllocate(allocation),
+                    ) = node.kind
+                    else {
+                        return Err(invalid_state());
+                    };
+                    Some(allocation.request)
+                } else {
+                    None
+                };
+                let rebuilt =
+                    copy_checked_fragment(&mut transfer, &fragment.builder, id, &mut self.builder)
+                        .map_err(fragment_transfer_error)?;
+                self.authenticate_retained_lexical_captures(rebuilt, uses.captures.get(&id))?;
+                if let Some(request) = request {
+                    self.type_work.charge(1).map_err(|()| type_resource())?;
+                    self.pending_region_closures
+                        .try_reserve(1)
+                        .map_err(|_| type_resource())?;
+                    self.pending_region_closures.push((rebuilt, request));
+                }
+                if let Some(crate::core::PureExprKind::Computation(
+                    crate::core::PureComputation::Bind(binding),
+                )) = S::pure(expression.kind)
+                    && let Some(scope) = uses.lexical.get(&binding.binder().id())
+                {
+                    let application = scope
+                        .source
+                        .application
+                        .clone_with_budget(&mut self.type_work)
+                        .map_err(|()| type_resource())?;
+                    self.builder.authenticate_method_evidence(
+                        rebuilt,
+                        None,
+                        None,
+                        scope.method.method,
+                        application,
+                        MethodEvidenceAnchorRole::LexicalOwner {
+                            source: scope.source.id,
+                            binder: scope.method.binder,
+                        },
+                        None,
+                    )?;
+                }
+                if let Some(cleanup) = cleanup_transfer.as_mut() {
+                    cleanup.record(
+                        owner,
+                        id,
+                        rebuilt,
+                        start..self.builder.node_checkpoint(),
+                        &mut self.type_work,
+                    )?;
+                }
+                continue;
+            }
+            let entering = transfer
+                .enter(&fragment.builder, id, &mut self.builder)
+                .map_err(fragment_transfer_error)?;
+            if !entering {
+                continue;
+            }
+            let expression = fragment
+                .builder
+                .checked_fragment_node(id, &mut self.type_work)?;
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            if let Some(range) = uses.globals.get(&id) {
+                let retained = fragment
+                    .global_uses
+                    .get(range.clone())
+                    .ok_or_else(invalid_state)?;
+                let checkpoint = self.builder.type_rewrite_checkpoint();
+                let certificate =
+                    crate::core::transform::FragmentIdentityView::new(identities.base, None);
+                let result = TypedNodeOwner::new(self.lower_retained_global_occurrence(
+                    fragment,
+                    expression,
+                    retained,
+                    certificate,
+                    &uses.captures,
+                    publication,
+                )?);
+                if !owner_replacements.is_empty() {
+                    // Only the rewritten node is retained by the transfer;
+                    // this temporary TypedNode's source type is discarded.
+                    self.rewrite_method_core_parameters(checkpoint, owner_replacements)?;
+                }
+                transfer
+                    .replace(&fragment.builder, id, &mut self.builder, result.node)
+                    .map_err(fragment_transfer_error)?;
+                if let Some(cleanup) = cleanup_transfer.as_mut() {
+                    cleanup.record(
+                        owner,
+                        id,
+                        result.node,
+                        checkpoint.index()..self.builder.node_checkpoint(),
+                        &mut self.type_work,
+                    )?;
+                }
+                continue;
+            }
+            if let Some(method_use) = uses.methods.get(&id) {
+                let (method, arguments, checked_type, selection) = match publication {
+                    Some(publication) => {
+                        let occurrence = publication
+                            .occurrence(
+                                method_use.slot.storage_id(),
+                                Some(method_use.method),
+                                &mut self.type_work,
+                            )
+                            .map_err(|failure| selection_failure(failure, None))?;
+                        (
+                            method_use.method,
+                            occurrence.method_arguments,
+                            occurrence.checked_value_type.ok_or_else(invalid_state)?,
+                            occurrence.selection,
+                        )
+                    }
+                    None => {
+                        let (method, _, arguments, checked_type, selection) =
+                            method_use.slot.filled_method().ok_or_else(invalid_state)?;
+                        (method, arguments, checked_type, selection)
+                    }
+                };
+                if method != method_use.method {
+                    return Err(invalid_state());
+                }
+                let certificate =
+                    crate::core::transform::FragmentIdentityView::new(identities.base, None);
+                self.require_unchanged_fragment_selection(selection, certificate)?;
+                for argument in arguments {
+                    let mapped = IterativeTypeOwner::new(
+                        self.relocated_fragment_type(argument, certificate)?,
+                    );
+                    if !same_type_with_budget(argument, &mapped, &mut self.type_work)
+                        .map_err(|()| type_resource())?
+                    {
+                        return Err(invalid_state());
+                    }
+                }
+                let mapped_type = IterativeTypeOwner::new(
+                    self.relocated_fragment_type(checked_type, certificate)?,
+                );
+                if !same_type_with_budget(checked_type, &mapped_type, &mut self.type_work)
+                    .map_err(|()| type_resource())?
+                {
+                    return Err(invalid_state());
+                }
+                let checkpoint = self.builder.type_rewrite_checkpoint();
+                let mut lowering = self.evidence_lowering.take().ok_or_else(invalid_state)?;
+                let result = self.lower_checked_method_occurrence(
+                    method,
+                    &method_use.slot,
+                    expression.origin,
+                    arguments,
+                    checked_type,
+                    selection,
+                    &mut lowering,
+                );
+                self.evidence_lowering = Some(lowering);
+                let result = TypedNodeOwner::new(result?);
+                if !owner_replacements.is_empty() {
+                    self.rewrite_method_core_parameters(checkpoint, owner_replacements)?;
+                }
+                transfer
+                    .replace(&fragment.builder, id, &mut self.builder, result.node)
+                    .map_err(fragment_transfer_error)?;
+                if let Some(cleanup) = cleanup_transfer.as_mut() {
+                    cleanup.record(
+                        owner,
+                        id,
+                        result.node,
+                        checkpoint.index()..self.builder.node_checkpoint(),
+                        &mut self.type_work,
+                    )?;
+                }
+                continue;
+            }
+            if let Some(crate::core::PureExprKind::Computation(crate::core::PureComputation::Bind(
+                binding,
+            ))) = S::pure(expression.kind)
+                && uses.lexical.contains_key(&binding.binder().id())
+            {
+                self.type_work.charge(5).map_err(|()| type_resource())?;
+                tasks.try_reserve(5).map_err(|_| type_resource())?;
+                let binder = binding.binder().id();
+                tasks.push(Task::Finish(id));
+                tasks.push(Task::ExitLexical(binder));
+                tasks.push(Task::Enter(binding.body()));
+                tasks.push(Task::EnterLexical(binder));
+                tasks.push(Task::Enter(binding.initializer()));
+                continue;
+            }
+            let child_count = S::child_count(expression.kind);
+            self.type_work
+                .charge(child_count.checked_add(1).ok_or_else(type_resource)?)
+                .map_err(|()| type_resource())?;
+            tasks
+                .try_reserve(child_count + 1)
+                .map_err(|_| type_resource())?;
+            tasks.push(Task::Finish(id));
+            let capture_count =
+                S::region_closure(expression.kind).map_or(0, |closure| closure.captures.len());
+            for child in (0..child_count).rev() {
+                if (1..=capture_count).contains(&child) {
+                    continue;
+                }
+                tasks.push(Task::Enter(
+                    S::child_at(expression.kind, child).ok_or_else(invalid_state)?,
+                ));
+            }
+        }
+        transfer.mapped(root).map_err(fragment_transfer_error)
+    }
+
+    fn retained_body_root<S: CoreOperationFamily>(
+        &mut self,
+        fragment: &CheckedTypedFragment<S>,
+        root: NodeId,
+    ) -> Result<(NodeId, bool), TypeError> {
+        let node = fragment
+            .builder
+            .checked_fragment_node(root, &mut self.type_work)?;
+        match S::pure(node.kind) {
+            Some(crate::core::PureExprKind::Computation(
+                crate::core::PureComputation::TypeAbstraction(abstraction),
+            )) => Ok((abstraction.body(), true)),
+            _ => Ok((root, false)),
+        }
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each body carries its fragment, owner mapping, evidence and cleanup transaction"
+    )]
+    fn transfer_retained_body<S: CheckedFragmentSource>(
+        &mut self,
+        fragment: &CheckedTypedFragment<S>,
+        root: NodeId,
+        identities: crate::core::transform::FragmentIdentityView<'_>,
+        owner_replacements: &[(TypeVariableId, TypeVariableId, bool)],
+        uses: &FragmentEvidenceIndex<'_>,
+        workspace: &mut crate::core::transform::FragmentWorkspace,
+        publication: Option<&PendingEvidencePublication>,
+        owner: BinderId,
+        cleanup_transfer: &mut Option<cleanup_rows::CleanupTransfer>,
+    ) -> Result<TypedNode, TypeError> {
+        let source = fragment
+            .builder
+            .checked_fragment_node(root, &mut self.type_work)?;
+        let ty = IterativeTypeOwner::new(self.relocated_fragment_type(source.ty, identities)?);
+        let provenance = self.at_span_provenance(&ty, source.origin.primary_span())?;
+        let node = self.transfer_checked_root(
+            fragment,
+            root,
+            identities,
+            owner_replacements,
+            uses,
+            workspace,
+            publication,
+            owner,
+            cleanup_transfer,
+        )?;
+        let effects = self
+            .builder
+            .clone_node_effects_with_budget(node, &mut self.type_work)?;
+        Ok(TypedNode {
+            node,
+            ty: ty.into_inner(),
+            effects,
+            provenance,
+        })
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the checked global and its transfer, evidence and cleanup state are distinct inputs"
+    )]
+    fn lower_retained_global<S: CheckedFragmentSource>(
+        &mut self,
+        fragment: &CheckedTypedFragment<S>,
+        binding: &ElaboratedBinding,
+        scheme: &CheckedGlobalScheme,
+        identities: crate::core::transform::FragmentIdentityView<'_>,
+        lexical_replacements: &[(TypeVariableId, TypeVariableId, bool)],
+        uses: &FragmentEvidenceIndex<'_>,
+        workspace: &mut crate::core::transform::FragmentWorkspace,
+        prepared: &mut PreparedGlobals,
+        publication: Option<&PendingEvidencePublication>,
+        cleanup_transfer: &mut Option<cleanup_rows::CleanupTransfer>,
+    ) -> Result<(), TypeError> {
+        let (body, had_abstraction) = self.retained_body_root(fragment, binding.initializer)?;
+        let evidence = self.enter_lowered_global_evidence_scope(scheme.binder, &scheme.origin)?;
+        let body = match self.transfer_retained_body(
+            fragment,
+            body,
+            identities,
+            lexical_replacements,
+            uses,
+            workspace,
+            publication,
+            scheme.binder,
+            cleanup_transfer,
+        ) {
+            Ok(body) => body,
+            Err(error) => {
+                self.clear_lowered_evidence_scope(evidence)?;
+                return Err(error);
+            }
+        };
+        let mut function = TypedNodeOwner::new(self.wrap_lowered_evidence_scope(
+            body,
+            evidence,
+            &scheme.origin,
+        )?);
+        let lowered = self
+            .evidence_lowering
+            .as_ref()
+            .and_then(|lowering| lowering.global_schemes.get(&scheme.binder))
+            .ok_or_else(invalid_state)?;
+        let parameters = clone_kinded_type_parameters_with_budget(
+            lowered.binder_parameters(),
+            &mut self.type_work,
+        )
+        .map_err(|()| type_resource())?;
+        let core_scheme = IterativeTypeOwner::new(
+            clone_type_with_budget(&lowered.core_scheme, &mut self.type_work)
+                .map_err(|()| type_resource())?,
+        );
+        if had_abstraction != !parameters.is_empty() {
+            return Err(invalid_state());
+        }
+        let expected = match &*core_scheme {
+            Type::Forall(_, body) if had_abstraction => &**body,
+            _ if !had_abstraction => &*core_scheme,
+            _ => return Err(invalid_state()),
+        };
+        if !same_type_with_budget(&function.ty, expected, &mut self.type_work)
+            .map_err(|()| type_resource())?
+        {
+            return Err(invalid_state());
+        }
+        if had_abstraction {
+            let node = self.builder.type_abstraction(
+                parameters,
+                function.node,
+                core_scheme.into_inner(),
+                Origin::Generated {
+                    cause: Box::new(scheme.origin.clone()),
+                    reason: GeneratedReason::TypeChecking,
+                },
+            )?;
+            function.set_node(node);
+        }
+        let binder = prepared
+            .binders
+            .remove(&scheme.binder)
+            .ok_or_else(invalid_state)?;
+        prepared.globals.push(ElaboratedBinding {
+            binder,
+            initializer: function.node,
+            foreign_constant: binding.foreign_constant,
+        });
+        Ok(())
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the method owner, freshening state, evidence and cleanup transaction are separate inputs"
+    )]
+    fn lower_retained_method<S: CheckedFragmentSource>(
+        &mut self,
+        fragment: &CheckedTypedFragment<S>,
+        root: NodeId,
+        fact: &CheckedImplementationMethodFact,
+        base: &crate::core::transform::FragmentIdentities,
+        overlay: &mut HashMap<TypeVariableId, TypeVariableId>,
+        replacements: &mut Vec<(TypeVariableId, TypeVariableId, bool)>,
+        uses: &FragmentEvidenceIndex<'_>,
+        workspace: &mut crate::core::transform::FragmentWorkspace,
+        prepared: &mut PreparedGlobals,
+        publication: Option<&PendingEvidencePublication>,
+        cleanup_transfer: &mut Option<cleanup_rows::CleanupTransfer>,
+    ) -> Result<(), TypeError> {
+        let lowered = self
+            .evidence_lowering
+            .as_ref()
+            .and_then(|lowering| lowering.implementation_methods.get(&fact.id))
+            .ok_or_else(invalid_state)?;
+        let source_parameters = lowered
+            .scheme
+            .source_binder_parameters()
+            .ok_or_else(invalid_state)?;
+        let core_parameters = lowered.scheme.binder_parameters();
+        if source_parameters.len() != core_parameters.len() {
+            return Err(invalid_state());
+        }
+        let map_work = source_parameters
+            .len()
+            .checked_mul(2)
+            .ok_or_else(type_resource)?;
+        self.type_work
+            .charge(map_work)
+            .map_err(|()| type_resource())?;
+        overlay
+            .try_reserve(source_parameters.len())
+            .map_err(|_| type_resource())?;
+        replacements
+            .try_reserve(source_parameters.len())
+            .map_err(|_| type_resource())?;
+        let lexical_count = replacements.len();
+        for ((source, source_kind), (target, target_kind)) in
+            source_parameters.iter().zip(core_parameters)
+        {
+            if source_kind != target_kind {
+                return Err(invalid_state());
+            }
+            // Each method owns its fresh Core parameters; the source owner is
+            // not renamed in other fragments or in another method's transfer.
+            if overlay.insert(*source, *target).is_some() {
+                return Err(invalid_state());
+            }
+            replacements.push((*source, *target, matches!(source_kind, Kind::EffectRow)));
+        }
+        let has_type_parameters = !source_parameters.is_empty();
+        let core_origin = implementation_method_core_origin(fact);
+        let (body, had_abstraction) = self.retained_body_root(fragment, root)?;
+        if had_abstraction != has_type_parameters {
+            return Err(invalid_state());
+        }
+        let evidence = self.enter_lowered_implementation_evidence_scope(fact.id, &core_origin)?;
+        let identities = crate::core::transform::FragmentIdentityView::new(
+            base,
+            (!overlay.is_empty()).then_some(&*overlay),
+        );
+        let body = match self.transfer_retained_body(
+            fragment,
+            body,
+            identities,
+            replacements,
+            uses,
+            workspace,
+            publication,
+            fact.binder,
+            cleanup_transfer,
+        ) {
+            Ok(body) => body,
+            Err(error) => {
+                self.clear_lowered_evidence_scope(evidence)?;
+                return Err(error);
+            }
+        };
+        for (source, target, _) in &replacements[lexical_count..] {
+            if overlay.remove(source) != Some(*target) {
+                return Err(invalid_state());
+            }
+        }
+        let wrapper_checkpoint = self.builder.type_rewrite_checkpoint();
+        let mut function =
+            TypedNodeOwner::new(self.wrap_lowered_evidence_scope(body, evidence, &core_origin)?);
+        if replacements.len() != lexical_count {
+            // The retained body was already relocated with this owner's map.
+            // Only newly built evidence wrappers still carry source parameters.
+            self.rewrite_method_core_parameters(
+                wrapper_checkpoint,
+                &replacements[lexical_count..],
+            )?;
+            let renamed = substitute_fresh_type_variables_in_order(
+                &function.ty,
+                &replacements[lexical_count..],
+                &mut self.type_work,
+            )
+            .map_err(|()| type_resource())?;
+            function.replace_type(renamed);
+        }
+        replacements.truncate(lexical_count);
+        self.finish_prepared_implementation_method(fact, prepared, function, core_origin)
+    }
+
+    fn prepare_implementation_method_views(
+        &mut self,
+        implementations: &[CheckedImplementationFact],
+        prepared: &mut PreparedGlobals,
+    ) -> Result<(), TypeError> {
+        let method_count: usize = implementations
             .iter()
             .map(|implementation| implementation.methods.len())
             .sum();
@@ -10043,14 +12706,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .quantifiers
             .try_reserve(method_count)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        for (implementation, fact) in group
-            .implementations()
-            .iter()
-            .zip(group.implementation_facts())
-        {
-            if implementation.id() != fact.id {
-                return Err(invalid_state());
-            }
+        for fact in implementations {
             for method in &fact.methods {
                 let lowered = self
                     .evidence_lowering
@@ -10132,47 +12788,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
-    fn elaborate_prepared_implementation(
-        &mut self,
-        group: &ResolvedModuleGroup,
-        implementation_index: usize,
-        prepared: &mut PreparedGlobals,
-    ) -> Result<(), TypeError> {
-        let implementation = group
-            .implementations()
-            .get(implementation_index)
-            .ok_or_else(invalid_state)?;
-        let checked = group
-            .checked_implementations()
-            .get(implementation_index)
-            .ok_or_else(invalid_state)?;
-        let fact = group
-            .implementation_facts()
-            .get(implementation_index)
-            .ok_or_else(invalid_state)?;
-        if implementation.id() != checked.id
-            || implementation.id() != fact.id
-            || checked.methods.len() != fact.methods.len()
-        {
-            return Err(invalid_state());
-        }
-        for (checked_method, fact_method) in checked.methods.iter().zip(&fact.methods) {
-            let source = implementation
-                .method_groups()
-                .get(checked_method.source_group)
-                .ok_or_else(invalid_state)?;
-            if checked_method.id != fact_method.id
-                || checked_method.binder != fact_method.binder
-                || source.identity != Some(fact_method.id)
-                || source.binder.id != fact_method.binder
-            {
-                return Err(invalid_state());
-            }
-            self.elaborate_prepared_implementation_method(source, fact_method, prepared)?;
-        }
-        Ok(())
-    }
-
     fn rewrite_method_core_parameters(
         &mut self,
         checkpoint: crate::core::dialect::TypeRewriteCheckpoint,
@@ -10230,115 +12845,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
-    fn elaborate_prepared_implementation_method(
+    fn finish_prepared_implementation_method(
         &mut self,
-        source: &crate::resolved::ResolvedImplementationMethodGroup,
         fact: &CheckedImplementationMethodFact,
         prepared: &mut PreparedGlobals,
+        mut function: TypedNodeOwner,
+        core_origin: Origin,
     ) -> Result<(), TypeError> {
-        if !self.monomorphic_recursive.insert(fact.binder) {
-            return Err(invalid_state());
-        }
-        let rewrite_checkpoint = self.builder.type_rewrite_checkpoint();
-        let mut core_type_replacements = Vec::new();
-        {
-            let lowered = self
-                .evidence_lowering
-                .as_ref()
-                .and_then(|lowering| lowering.implementation_methods.get(&fact.id))
-                .ok_or_else(invalid_state)?;
-            let source_type_parameters = lowered
-                .scheme
-                .source_binder_parameters()
-                .ok_or_else(invalid_state)?;
-            if source_type_parameters.len() != lowered.scheme.binder_parameters().len() {
-                return Err(invalid_state());
-            }
-            self.type_work
-                .charge(
-                    lowered
-                        .scheme
-                        .binder_parameters()
-                        .len()
-                        .checked_mul(2)
-                        .ok_or_else(invalid_state)?,
-                )
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            core_type_replacements
-                .try_reserve_exact(lowered.scheme.binder_parameters().len())
-                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            for ((source, source_kind), (core, core_kind)) in source_type_parameters
-                .iter()
-                .zip(lowered.scheme.binder_parameters())
-            {
-                if source_kind != core_kind {
-                    return Err(invalid_state());
-                }
-                if core_type_replacements
-                    .iter()
-                    .any(|(retained, _, _)| retained == source)
-                {
-                    return Err(invalid_state());
-                }
-                core_type_replacements.push((
-                    *source,
-                    *core,
-                    matches!(source_kind, Kind::EffectRow),
-                ));
-            }
-        }
-        let core_origin = implementation_method_core_origin(fact);
-        let evidence = self.enter_lowered_implementation_evidence_scope(fact.id, &core_origin)?;
-        let source_ty = self
-            .evidence_lowering
-            .as_ref()
-            .and_then(|lowering| lowering.implementation_methods.get(&fact.id))
-            .map(|method| &method.scheme.value_type)
-            .ok_or_else(invalid_state)?;
-        let function_type = IterativeTypeOwner::new(
-            clone_type_with_budget(source_ty, &mut self.type_work)
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
-        );
-        let function_provenance = self.at_span_provenance(&function_type, fact.span)?;
-        let body_result = self.elaborate_equations(
-            &source.equations,
-            ProvenancedType {
-                provenance: function_provenance,
-                ty: function_type.into_inner(),
-            },
-            &mut prepared.context,
-            source.span,
-            &core_origin,
-        );
-        let mut function = TypedNodeOwner::new(match body_result {
-            Ok(function) => function,
-            Err(error) => {
-                self.clear_lowered_evidence_scope(evidence)?;
-                self.monomorphic_recursive.remove(&fact.binder);
-                return Err(error);
-            }
-        });
-        function = TypedNodeOwner::new(self.wrap_lowered_evidence_scope(
-            function.into_inner(),
-            evidence,
-            &core_origin,
-        )?);
-        if !core_type_replacements.is_empty() {
-            self.rewrite_method_core_parameters(rewrite_checkpoint, &core_type_replacements)?;
-            let zonked_function_type = IterativeTypeOwner::new(self.zonk(&function.ty)?);
-            let renamed_function_type = IterativeTypeOwner::new(
-                substitute_fresh_type_variables_in_order(
-                    &zonked_function_type,
-                    &core_type_replacements,
-                    &mut self.type_work,
-                )
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
-            );
-            function.replace_type(renamed_function_type.into_inner());
-        }
-        if !self.monomorphic_recursive.remove(&fact.binder) {
-            return Err(invalid_state());
-        }
         let lowered = self
             .evidence_lowering
             .as_ref()
@@ -10788,6 +13301,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     where
         D: DefinitionView,
     {
+        #[cfg(test)]
+        observe_module_body(definition.span(), ObservedModuleBody::Global, self.purpose);
         let recursive_binder = match definition.kind() {
             ResolvedDefinitionKind::Equational(equational)
             | ResolvedDefinitionKind::ForeignConstant(equational) => equational.interface.name.id,
@@ -13200,6 +15715,26 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         )?;
         let resumes = std::mem::take(&mut self.active_resumes);
         let capture_checkpoint = self.lexical_capture_uses.len();
+        let checked_capture_checkpoint = self.pending_checked_captures.len();
+        if self.purpose == ElaborationPurpose::ModuleCheck {
+            let captures =
+                crate::resolved::lexical_method_capture_occurrences(group, &mut self.type_work)
+                    .map_err(|()| type_resource())?;
+            self.type_work
+                .charge(captures.len())
+                .map_err(|()| type_resource())?;
+            self.pending_checked_captures
+                .try_reserve(captures.len())
+                .map_err(|_| type_resource())?;
+            for (ordinal, occurrence) in captures.iter().enumerate() {
+                self.pending_checked_captures.push(PendingCheckedCapture {
+                    occurrence_address: std::ptr::from_ref(*occurrence) as usize,
+                    source: progress.source.id,
+                    method: id,
+                    ordinal,
+                });
+            }
+        }
         if self.purpose == ElaborationPurpose::FinalSynthesis {
             let owner = self.builder.lexical_capture_owner(progress.source.id, id)?;
             let captures =
@@ -13225,6 +15760,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 rewrite_checkpoint,
                 resumes,
                 capture_checkpoint,
+                checked_capture_checkpoint,
             },
         ));
         tasks.push(ElaborationTask::Equation(EquationTask::ContinueEquations(
@@ -13377,6 +15913,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
         }
         if let Some(selector) = self.selection.as_mut() {
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            self.checked_lexical_sources
+                .try_reserve(1)
+                .map_err(|_| type_resource())?;
             let fact_application = application
                 .clone_with_budget(&mut self.type_work)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
@@ -13397,6 +15937,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     methods: checked_methods.into_boxed_slice(),
                 })
                 .map_err(|()| invalid_state())?;
+            // Clone only after filling: unfilled lexical slots clone as a new
+            // transaction, whereas this fragment must retain the exact fact.
+            self.checked_lexical_sources.push(CheckedLexicalSource {
+                slot: source.checked.clone(),
+                span: source.span,
+            });
         }
         Ok(ElaboratedDeclaration::Evidence {
             source: source.id,
@@ -13423,6 +15969,24 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     capture.owner,
                     capture.ordinal,
                 )?;
+            }
+        }
+        self.type_work
+            .charge(self.pending_checked_captures.len())
+            .map_err(|()| type_resource())?;
+        for index in 0..self.pending_checked_captures.len() {
+            let capture = self.pending_checked_captures[index];
+            if capture.occurrence_address == address {
+                self.type_work.charge(1).map_err(|()| type_resource())?;
+                self.checked_lexical_captures
+                    .try_reserve(1)
+                    .map_err(|_| type_resource())?;
+                self.checked_lexical_captures.push(CheckedLexicalCapture {
+                    node,
+                    source: capture.source,
+                    method: capture.method,
+                    ordinal: capture.ordinal,
+                });
             }
         }
         Ok(())
@@ -13455,11 +16019,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 rewrite_checkpoint,
                 resumes,
                 capture_checkpoint,
+                checked_capture_checkpoint,
             } => {
                 self.active_resumes = resumes;
                 let body = values.pop().ok_or_else(invalid_state)?;
                 self.finish_lexical_method(&mut progress, body, rewrite_checkpoint)?;
                 self.lexical_capture_uses.truncate(capture_checkpoint);
+                self.pending_checked_captures
+                    .truncate(checked_capture_checkpoint);
                 tasks.push(ElaborationTask::Equation(
                     EquationTask::ContinueLexicalEvidence(progress),
                 ));
@@ -14370,7 +16937,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             self.pending_cleanup_regions
                 .try_reserve(1)
                 .map_err(|_| type_resource())?;
-            self.pending_cleanup_regions.push((node, span));
+            self.pending_cleanup_regions.push((
+                node,
+                span,
+                self.checked_body_owner.map(|(_, binder)| binder),
+            ));
         }
         if let Some((_, (view, query))) = saved {
             let result_type = self.clone_type(&body.ty)?;
@@ -15456,12 +18027,30 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 self.schedule_resource(resource, current.span, tasks)?;
             }
             ResolvedExprKind::Store(store) => {
+                self.retain_checked_scoped_owner(CheckedScopedOwner {
+                    kind: CheckedScopedOwnerKind::Store,
+                    identity: store.identity.id,
+                    handle: store.handle.id,
+                    span: current.span,
+                })?;
                 self.schedule_store(store, current.span, tasks)?;
             }
             ResolvedExprKind::Network(network) => {
+                self.retain_checked_scoped_owner(CheckedScopedOwner {
+                    kind: CheckedScopedOwnerKind::Network,
+                    identity: network.identity.id,
+                    handle: network.handle.id,
+                    span: current.span,
+                })?;
                 self.schedule_network(network, current.span, tasks)?;
             }
             ResolvedExprKind::Region(region) => {
+                self.retain_checked_scoped_owner(CheckedScopedOwner {
+                    kind: CheckedScopedOwnerKind::Region,
+                    identity: region.identity.id,
+                    handle: region.handle.id,
+                    span: current.span,
+                })?;
                 self.schedule_region(region, current.span, tasks)?
             }
             ResolvedExprKind::RegionSelection(selection) => {
@@ -22127,11 +24716,33 @@ pub(crate) fn check_module_with_budget_and_rewrite_work(
     }
 }
 
+/// Checks one module for the public file pipeline's established Effect
+/// profile, including compiler-owned modules with otherwise pure bodies.
+pub(crate) fn check_module_in_effect_profile_with_rewrite_work(
+    resolved: ResolvedModule,
+    type_work: &mut TypeWorkBudget,
+    coverage_work: &mut UsefulnessBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
+    primary_work: Option<TypeWorkBudget>,
+    rewrite_work: Option<TypeWorkBudget>,
+) -> Result<CheckedModule, TypeError> {
+    check_module_with_budget_family::<EffectOperationFamily>(
+        resolved,
+        type_work,
+        coverage_work,
+        constraint_work,
+        primary_work,
+        rewrite_work,
+    )
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "source and rewrite work retain separate owners alongside the test observer"
 )]
-fn check_module_with_budget_family<F: CoreLoweringFamily>(
+fn check_module_with_budget_family<
+    F: CoreLoweringFamily + RetainCheckedFragment + CheckedFragmentSource,
+>(
     mut resolved: ResolvedModule,
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut UsefulnessBudget,
@@ -22141,14 +24752,6 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
 ) -> Result<CheckedModule, TypeError> {
     resolved
         .authenticate_owner_definitions(type_work)
-        .map_err(resolved_build_error)?;
-    resolved
-        .imported_facts()
-        .authenticate_implementation_publications(type_work, constraint_work)
-        .map_err(resolved_build_error)?;
-    resolved
-        .imported_facts()
-        .authenticate_constructor_originals(type_work, constraint_work)
         .map_err(resolved_build_error)?;
     let checked_interfaces = check_interface_declarations(&resolved, constraint_work)?;
     check_global_requirements(&resolved, &checked_interfaces, constraint_work)?;
@@ -22191,7 +24794,7 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             constraint_work,
         )?);
         let mut started_bodies = Vec::new();
-        let (implementation_facts, publication) = elaborator.check_module_bodies(
+        let (mut implementation_facts, publication, globals) = elaborator.check_module_bodies(
             &resolved,
             &mut schemes,
             &checked_interfaces,
@@ -22213,7 +24816,97 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             EvidenceAuditFailure::InvalidState => invalid_state(),
             EvidenceAuditFailure::ConstraintResource => constraint_resource(),
         })?;
-        let exports = ExportSummary::freeze(
+        std::mem::swap(&mut elaborator.constraint_work, constraint_work);
+        let lowering = elaborator.build_module_evidence_lowering(
+            &resolved,
+            &schemes,
+            &interface_facts,
+            &implementation_facts,
+        );
+        std::mem::swap(&mut elaborator.constraint_work, constraint_work);
+        let (environment, mut local_lowering) = lowering?;
+        let mut catalog = crate::evidence_validation::build_module_method_evidence_catalog(
+            &resolved,
+            &elaborator.registry,
+            &schemes,
+            &interface_facts,
+            &implementation_facts,
+            &elaborator.method_capture_uses,
+            &elaborator.global_capture_uses,
+            &elaborator.checked_lexical_sources,
+            &publication,
+            constraint_work,
+            &mut elaborator.type_work,
+        )
+        .map_err(|failure| match failure.reason() {
+            crate::evidence_validation::EvidenceValidationReason::TypeResourceExhausted => {
+                type_resource()
+            }
+            crate::evidence_validation::EvidenceValidationReason::ConstraintResourceExhausted => {
+                constraint_resource()
+            }
+            _ => invalid_state(),
+        })?;
+        catalog
+            .retain_source_occurrences(
+                elaborator
+                    .method_capture_uses
+                    .iter()
+                    .map(|occurrence| &occurrence.slot)
+                    .chain(
+                        elaborator
+                            .global_capture_uses
+                            .iter()
+                            .map(|occurrence| &occurrence.slot),
+                    ),
+                elaborator
+                    .method_capture_uses
+                    .len()
+                    .checked_add(elaborator.global_capture_uses.len())
+                    .ok_or_else(type_resource)?,
+                &mut elaborator.type_work,
+            )
+            .map_err(|()| type_resource())?;
+        elaborator
+            .type_work
+            .charge(1)
+            .map_err(|()| type_resource())?;
+        let catalog = Arc::new(catalog);
+        Arc::get_mut(&mut local_lowering.0)
+            .ok_or_else(invalid_state)?
+            .catalog = Some(Arc::clone(&catalog));
+        std::mem::swap(&mut elaborator.constraint_work, constraint_work);
+        let finalization: Result<_, TypeError> = (|| {
+            let physical = elaborator.finalize_checked_module_graph(
+                &resolved,
+                &schemes,
+                &implementation_facts,
+                globals,
+                environment,
+                catalog,
+                &publication,
+            )?;
+            let roots =
+                elaborator.completed_module_roots(&schemes, &implementation_facts, &physical)?;
+            elaborator.complete_module_captures(
+                &resolved,
+                &mut schemes,
+                &mut implementation_facts,
+                &roots,
+                &publication,
+                true,
+            )?;
+            if !elaborator.pending_region_closures.is_empty()
+                || !elaborator.pending_cleanup_regions.is_empty()
+            {
+                return Err(invalid_state());
+            }
+            elaborator.builder.finish_module_metadata()?;
+            Ok((ElaboratedBindingBuffer(Vec::new()), Some(physical)))
+        })();
+        std::mem::swap(&mut elaborator.constraint_work, constraint_work);
+        let (globals, physical_bindings) = finalization?;
+        let mut exports = ExportSummary::freeze(
             &resolved,
             &schemes,
             &interface_facts,
@@ -22223,6 +24916,9 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             constraint_work,
         )
         .map_err(resolved_build_error)?;
+        exports
+            .retain_local_lowering(local_lowering, &mut elaborator.type_work)
+            .map_err(resolved_build_error)?;
 
         Ok((
             schemes,
@@ -22231,6 +24927,8 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             implementation_facts,
             exports,
             publication,
+            globals,
+            physical_bindings,
         ))
     })();
     *type_work = std::mem::take(&mut elaborator.type_work);
@@ -22242,6 +24940,8 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
         implementation_facts,
         exports,
         publication,
+        globals,
+        physical_bindings,
     ) = result?;
     let imported_implementation_count = resolved.imported_facts().implementations().count();
     let local_implementation_count = resolved.implementations().len();
@@ -22279,6 +24979,22 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
         resolved.definitions().len(),
         resolved.implementations().len(),
     )?;
+    let typed_fragment = F::retain_checked_fragment(CheckedTypedFragment {
+        builder: elaborator.builder,
+        globals,
+        physical_bindings,
+        methods: elaborator.implementation_capture_roots,
+        method_uses: elaborator.method_capture_uses,
+        method_binders: elaborator.method_capture_binders,
+        lexical_sources: elaborator.checked_lexical_sources,
+        lexical_captures: elaborator.checked_lexical_captures,
+        scoped_owners: elaborator.checked_scoped_owners,
+        global_uses: elaborator.global_capture_uses,
+        generated_type_variables: elaborator.generated_type_variables,
+        imported_type_origins: elaborator.imported_type_origins,
+        next_generated_type_variable: elaborator.next_generated_type_variable,
+        next_handler: elaborator.next_handler,
+    });
     let evidence = publication
         .prepare_publication()
         .map_err(|failure| selection_failure(failure, None))?;
@@ -22311,6 +25027,7 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             interface_facts,
             implementation_facts,
             exports,
+            typed_fragment: Some(typed_fragment),
         },
     ))
 }
@@ -22490,7 +25207,7 @@ fn checked_interface_facts(
     Ok(facts.into_boxed_slice())
 }
 
-/// Assembles dependency-ordered checked modules for one final Core lowering.
+/// Links dependency-ordered completed modules for structural Core assembly.
 ///
 /// # Errors
 ///
@@ -22707,6 +25424,22 @@ struct LexicalCaptureUse {
     ordinal: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PendingCheckedCapture {
+    occurrence_address: usize,
+    source: crate::interface::LexicalEvidenceId,
+    method: MethodId,
+    ordinal: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CheckedLexicalCapture {
+    node: NodeId,
+    source: crate::interface::LexicalEvidenceId,
+    method: MethodId,
+    ordinal: usize,
+}
+
 enum EquationTask<'a> {
     ContinueLexicalEvidence(Box<LexicalEvidenceProgress<'a>>),
     FinishLexicalMethod {
@@ -22714,6 +25447,7 @@ enum EquationTask<'a> {
         rewrite_checkpoint: crate::core::dialect::TypeRewriteCheckpoint,
         resumes: Vec<ActiveResume>,
         capture_checkpoint: usize,
+        checked_capture_checkpoint: usize,
     },
     ContinueEquations(Box<EquationsProgress<'a>>),
     FinishEquationClause {
@@ -23088,12 +25822,14 @@ struct CheckedPattern {
     pattern_count: usize,
 }
 
+#[derive(Debug)]
 struct ElaboratedBinding {
     binder: TypedBinder,
     initializer: NodeId,
     foreign_constant: bool,
 }
 
+#[derive(Debug)]
 struct ElaboratedBindingBuffer(Vec<ElaboratedBinding>);
 
 impl Drop for ElaboratedBindingBuffer {
@@ -23101,6 +25837,251 @@ impl Drop for ElaboratedBindingBuffer {
         for binding in self.0.drain(..) {
             binding.binder.discard_metadata();
         }
+    }
+}
+
+/// One method occurrence in the checked graph. Its slot remains owned across
+/// publication so its selection cannot be confused with a recycled address.
+#[derive(Debug)]
+pub(crate) struct CheckedMethodUse {
+    node: NodeId,
+    whole: NodeId,
+    pub(crate) slot: crate::interface::EvidenceSlot,
+    pub(crate) method: MethodId,
+    context: Option<NodeId>,
+    pub(crate) scope: Option<(MethodEvidenceOwner, BinderId)>,
+    pub(crate) span: Span,
+}
+
+/// One ordered requirement attached to a checked global occurrence.
+#[derive(Debug)]
+pub(crate) struct CheckedGlobalUse {
+    node: NodeId,
+    pub(crate) binder: BinderId,
+    pub(crate) requirement: RequirementId,
+    pub(crate) slot: crate::interface::EvidenceSlot,
+    pub(crate) scope: Option<(MethodEvidenceOwner, BinderId)>,
+    pub(crate) span: Span,
+}
+
+#[derive(Debug)]
+pub(crate) struct CheckedLexicalSource {
+    pub(crate) slot: crate::interface::LexicalEvidenceSlot,
+    pub(crate) span: Span,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum CheckedScopedOwnerKind {
+    Region,
+    Network,
+    Store,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CheckedScopedOwner {
+    pub(crate) kind: CheckedScopedOwnerKind,
+    pub(crate) identity: TypeVariableId,
+    pub(crate) handle: BinderId,
+    pub(crate) span: Span,
+}
+
+/// The owned, completed result of checking one module. The assembled linked
+/// Core receives independent validation after structural linking.
+#[derive(Debug)]
+pub(crate) struct CheckedTypedFragment<F: CoreOperationFamily> {
+    builder: CoreBuilder<F>,
+    globals: ElaboratedBindingBuffer,
+    physical_bindings: Option<ElaboratedBindingBuffer>,
+    methods: Vec<(BinderId, NodeId)>,
+    method_uses: Vec<CheckedMethodUse>,
+    method_binders: Vec<(crate::interface::LexicalEvidenceId, MethodId, BinderId)>,
+    lexical_sources: Vec<CheckedLexicalSource>,
+    lexical_captures: Vec<CheckedLexicalCapture>,
+    scoped_owners: Vec<CheckedScopedOwner>,
+    global_uses: Vec<CheckedGlobalUse>,
+    generated_type_variables: GeneratedTypeVariableRegistry,
+    imported_type_origins: HashMap<TypeVariableId, GeneratedTypeOrigin>,
+    next_generated_type_variable: u32,
+    next_handler: u32,
+}
+
+#[derive(Debug)]
+pub(crate) enum CheckedTypedModule {
+    Pure(CheckedTypedFragment<PureOperationFamily>),
+    Effect(CheckedTypedFragment<EffectOperationFamily>),
+}
+
+impl CheckedTypedModule {
+    #[cfg(test)]
+    pub(crate) fn has_completed_physical_bindings(&self) -> bool {
+        match self {
+            Self::Pure(fragment) => fragment.physical_bindings.is_some(),
+            Self::Effect(fragment) => fragment.physical_bindings.is_some(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn owns_generated_variable(&self, identity: TypeVariableId) -> bool {
+        let (registry, origins) = match self {
+            Self::Pure(fragment) => (
+                &fragment.generated_type_variables,
+                &fragment.imported_type_origins,
+            ),
+            Self::Effect(fragment) => (
+                &fragment.generated_type_variables,
+                &fragment.imported_type_origins,
+            ),
+        };
+        let TypeVariableId::Generated(local) = identity else {
+            return false;
+        };
+        usize::try_from(u32::MAX - local)
+            .ok()
+            .and_then(|index| registry.0.get(index))
+            .is_some_and(Option::is_some)
+            && !origins.contains_key(&identity)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn imported_type_aliases(
+        &self,
+    ) -> impl Iterator<Item = (TypeVariableId, crate::module::ModuleId, TypeVariableId)> + '_ {
+        let origins = match self {
+            Self::Pure(fragment) => &fragment.imported_type_origins,
+            Self::Effect(fragment) => &fragment.imported_type_origins,
+        };
+        origins
+            .iter()
+            .map(|(alias, origin)| (*alias, origin.module, origin.variable))
+    }
+
+    pub(crate) fn evidence_inventory(
+        &self,
+    ) -> (
+        &[CheckedMethodUse],
+        &[CheckedGlobalUse],
+        &[CheckedLexicalSource],
+        &[CheckedScopedOwner],
+    ) {
+        match self {
+            Self::Pure(fragment) => (
+                &fragment.method_uses,
+                &fragment.global_uses,
+                &fragment.lexical_sources,
+                &fragment.scoped_owners,
+            ),
+            Self::Effect(fragment) => (
+                &fragment.method_uses,
+                &fragment.global_uses,
+                &fragment.lexical_sources,
+                &fragment.scoped_owners,
+            ),
+        }
+    }
+}
+
+trait CheckedFragmentSource: CoreOperationFamily {
+    fn copy_to_pure(
+        _transfer: &mut crate::core::transform::FragmentNodeMap<'_>,
+        _source: &CoreBuilder<Self>,
+        _original: NodeId,
+        _destination: &mut CoreBuilder<PureOperationFamily>,
+    ) -> Result<NodeId, crate::core::transform::TransformError> {
+        Err(crate::core::transform::TransformError::InvalidValidatedInput)
+    }
+
+    fn copy_to_effect(
+        transfer: &mut crate::core::transform::FragmentNodeMap<'_>,
+        source: &CoreBuilder<Self>,
+        original: NodeId,
+        destination: &mut CoreBuilder<EffectOperationFamily>,
+    ) -> Result<NodeId, crate::core::transform::TransformError>;
+}
+
+impl CheckedFragmentSource for PureOperationFamily {
+    fn copy_to_pure(
+        transfer: &mut crate::core::transform::FragmentNodeMap<'_>,
+        source: &CoreBuilder<Self>,
+        original: NodeId,
+        destination: &mut CoreBuilder<PureOperationFamily>,
+    ) -> Result<NodeId, crate::core::transform::TransformError> {
+        transfer.copy_pure(source, original, destination)
+    }
+
+    fn copy_to_effect(
+        transfer: &mut crate::core::transform::FragmentNodeMap<'_>,
+        source: &CoreBuilder<Self>,
+        original: NodeId,
+        destination: &mut CoreBuilder<EffectOperationFamily>,
+    ) -> Result<NodeId, crate::core::transform::TransformError> {
+        transfer.copy_foreign_pure_as_effect(source, original, destination)
+    }
+}
+
+fn copy_checked_fragment<S: CheckedFragmentSource, D: CoreLoweringFamily>(
+    transfer: &mut crate::core::transform::FragmentNodeMap<'_>,
+    source: &CoreBuilder<S>,
+    original: NodeId,
+    destination: &mut CoreBuilder<D>,
+) -> Result<NodeId, crate::core::transform::TransformError> {
+    if D::EFFECTS {
+        let destination = D::effect_builder(destination)
+            .ok_or(crate::core::transform::TransformError::InvalidValidatedInput)?;
+        S::copy_to_effect(transfer, source, original, destination)
+    } else {
+        // Only the compiler's Pure family has a Pure destination. Keep this
+        // private adapter out of the public lowering-family contract.
+        let destination = (destination as &mut dyn std::any::Any)
+            .downcast_mut::<CoreBuilder<PureOperationFamily>>()
+            .ok_or(crate::core::transform::TransformError::InvalidValidatedInput)?;
+        S::copy_to_pure(transfer, source, original, destination)
+    }
+}
+
+impl CheckedFragmentSource for EffectOperationFamily {
+    fn copy_to_effect(
+        transfer: &mut crate::core::transform::FragmentNodeMap<'_>,
+        source: &CoreBuilder<Self>,
+        original: NodeId,
+        destination: &mut CoreBuilder<EffectOperationFamily>,
+    ) -> Result<NodeId, crate::core::transform::TransformError> {
+        transfer.copy_effect(source, original, destination)
+    }
+}
+
+struct FragmentEvidenceIndex<'a> {
+    methods: HashMap<NodeId, &'a CheckedMethodUse>,
+    globals: HashMap<NodeId, std::ops::Range<usize>>,
+    lexical: HashMap<BinderId, FragmentLexicalScope<'a>>,
+    captures: HashMap<NodeId, Vec<CheckedLexicalCapture>>,
+}
+
+struct FragmentLexicalScope<'a> {
+    source: &'a crate::interface::CheckedLexicalEvidence,
+    method: &'a crate::interface::CheckedLexicalMethod,
+    span: Span,
+}
+
+fn fragment_transfer_error(error: crate::core::transform::TransformError) -> TypeError {
+    match error {
+        crate::core::transform::TransformError::Build(error) => TypeError::from(error),
+        crate::core::transform::TransformError::InvalidValidatedInput => invalid_state(),
+    }
+}
+
+trait RetainCheckedFragment: CoreLoweringFamily {
+    fn retain_checked_fragment(fragment: CheckedTypedFragment<Self>) -> CheckedTypedModule;
+}
+
+impl RetainCheckedFragment for PureOperationFamily {
+    fn retain_checked_fragment(fragment: CheckedTypedFragment<Self>) -> CheckedTypedModule {
+        CheckedTypedModule::Pure(fragment)
+    }
+}
+
+impl RetainCheckedFragment for EffectOperationFamily {
+    fn retain_checked_fragment(fragment: CheckedTypedFragment<Self>) -> CheckedTypedModule {
+        CheckedTypedModule::Effect(fragment)
     }
 }
 
@@ -25530,8 +28511,8 @@ fn implementation_method_origin(
 }
 
 fn implementation_method_core_origin(method: &CheckedImplementationMethodFact) -> Origin {
-    // Linked evidence has already authenticated the complete cross-module
-    // relation. Core retains only the implementation-local primary cause.
+    // The defining module checks the cross-module relation. Core retains only
+    // the implementation-local primary cause.
     Origin::Source(method.origin.primary_span())
 }
 
@@ -28840,8 +31821,12 @@ impl CoreElaborator<EffectOperationFamily> {
                 self.type_work.used(),
             ));
         }
-        self.zonk_builder_types()
-            .map_err(|failure| (Elaboration(failure), self.type_work.used()))?;
+        if let Some(checkpoint) = self.completed_module_prefix {
+            self.zonk_builder_types_after_closed_prefix(checkpoint, true)
+        } else {
+            self.zonk_builder_types()
+        }
+        .map_err(|failure| (Elaboration(failure), self.type_work.used()))?;
         let root = self
             .builder
             .prepare_owner_free_native_entry(root, origin, &mut self.type_work)
@@ -30448,6 +33433,72 @@ mod tests {
         (resolved, dependencies)
     }
 
+    #[test]
+    fn manually_checked_pure_module_publishes_complete_graph_before_linking() {
+        let (resolved, sources, _, _) = cell_module_fixture_sources_at(
+            "manual-pure-module.ash",
+            "main : Unit -> Int ! {}\nmain () = 42\n",
+        );
+        let module = resolved.module();
+        let span = resolved.span();
+        let mut definitions = resolved.definitions().to_vec();
+        let ResolvedDefinitionKind::Equational(main) = &mut definitions[0].kind else {
+            panic!("the fixture has one equational entry");
+        };
+        // The public file resolver adds Region's DefaultAlloc to ordinary
+        // arrows. This manual resolved fixture intentionally has no Region
+        // dependency and therefore supplies an actually Pure annotation.
+        main.interface.annotation.ty = Type::function(Type::Unit, Type::Int);
+        main.interface.annotation.provenance = ResolvedTypeProvenance::new(
+            vec![
+                ResolvedTypeProvenanceNode::Fact(span),
+                ResolvedTypeProvenanceNode::Fact(span),
+                ResolvedTypeProvenanceNode::Function {
+                    span,
+                    domain: 0,
+                    codomain: 1,
+                    effect_arguments: Box::new([]),
+                },
+            ],
+            2,
+        );
+        let pure = ResolvedModule::new(ResolvedModuleParts {
+            module,
+            registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
+            imported: ImportedFacts::default(),
+            direct_dependencies: Vec::new(),
+            declaration_order: vec![ResolvedDeclarationIndex::Global(0)],
+            interfaces: Vec::new(),
+            effects: Vec::new(),
+            implementations: Vec::new(),
+            definitions,
+            export_candidate: ResolvedExportCandidate::default(),
+            resources: Vec::new(),
+            span,
+        });
+        let checked = check_module(pure).expect("the manual pure module should check");
+        let Some(CheckedTypedModule::Pure(fragment)) = checked.typed_fragment_for_test() else {
+            panic!("the manual module should retain Pure Core");
+        };
+        assert!(fragment.physical_bindings.is_some());
+        let linked = link_modules(vec![checked], module).expect("the completed module should link");
+        let linked = crate::evidence_validation::validate_interface_evidence(linked)
+            .expect("the linked interface should validate");
+        let mut elaborator = Elaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator.synthesize_module_program(&linked).unwrap();
+        let program = elaborator.finish(typed.node).unwrap();
+        let source = sources
+            .iter()
+            .find(|source| source.id() == span.source())
+            .unwrap();
+        let program = crate::core::validate_modules(program, &[source], &[(module, source.id())])
+            .expect("the assembled Pure Core should independently validate");
+        assert_eq!(
+            crate::eval::evaluate(&program).unwrap().value.to_string(),
+            "42"
+        );
+    }
+
     fn cell_resource_fixture(result: &str) -> ResolvedModule {
         cell_resource_fixture_sources(result).0
     }
@@ -31468,6 +34519,7 @@ mod tests {
         let prepare = || {
             let mut elaborator =
                 Elaborator::for_module_program(&program).expect("final elaborator");
+            elaborator.purpose = ElaborationPurpose::ModuleCheck;
             let progress = elaborator
                 .prepare_lexical_evidence(&source)
                 .expect("method header");
@@ -31475,23 +34527,22 @@ mod tests {
             (elaborator, progress)
         };
         let (mut baseline, progress) = prepare();
-        baseline.purpose = ElaborationPurpose::ModuleCheck;
         baseline
             .schedule_lexical_method(progress, &mut ElaborationTaskBuffer(Vec::new()))
-            .expect("ordinary scheduling without final capture collection");
-        let ordinary_work = baseline.type_work.used();
+            .expect("source checking collects the pending capture routes");
+        let collection_work = baseline.type_work.used();
+        assert_eq!(baseline.pending_checked_captures.len(), 3);
         let captures = crate::resolved::lexical_method_capture_occurrences(
             &source.method_groups[0],
             &mut TypeWorkBudget::unbounded(),
         )
         .expect("three capture occurrences");
         assert_eq!(captures.len(), 3);
-        // Walker 11 + retained routes 3; each of three uses scans all 3
-        // active routes. Builder authentication owns a separate meter.
-        const COLLECTION: usize = 11 + 3;
-        const CAPTURE_WORK: usize = COLLECTION + 3 * 3;
+        // Each use scans all three pending routes and retains one matching
+        // checked capture. Physical anchors are constructed after selection.
+        const ROUTING_WORK: usize = 3 * (3 + 1);
         let (mut short, progress) = prepare();
-        short.type_work = TypeWorkBudget::with_limit(ordinary_work + COLLECTION - 1);
+        short.type_work = TypeWorkBudget::with_limit(collection_work - 1);
         let mut tasks = ElaborationTaskBuffer(Vec::new());
         assert_eq!(
             short.schedule_lexical_method(progress, &mut tasks),
@@ -31499,24 +34550,27 @@ mod tests {
                 ElaborationFailure::TypeResourceExhausted
             ))
         );
-        assert!(short.lexical_capture_uses.is_empty());
+        assert!(short.pending_checked_captures.is_empty());
         assert!(tasks.is_empty());
         for one_short in [true, false, false] {
             let (mut elaborator, progress) = prepare();
             elaborator.type_work =
-                TypeWorkBudget::with_limit(ordinary_work + CAPTURE_WORK - usize::from(one_short));
+                TypeWorkBudget::with_limit(collection_work + ROUTING_WORK - usize::from(one_short));
             let mut tasks = ElaborationTaskBuffer(Vec::new());
             elaborator
                 .schedule_lexical_method(progress, &mut tasks)
                 .expect("exact collection");
-            assert_eq!(elaborator.type_work.used(), ordinary_work + COLLECTION);
-            assert_eq!(elaborator.lexical_capture_uses.len(), 3);
+            assert_eq!(elaborator.type_work.used(), collection_work);
+            assert_eq!(elaborator.pending_checked_captures.len(), 3);
             for (ordinal, occurrence) in captures.iter().enumerate() {
                 assert_eq!(
-                    elaborator.lexical_capture_uses[ordinal].occurrence_address,
+                    elaborator.pending_checked_captures[ordinal].occurrence_address,
                     std::ptr::from_ref(*occurrence) as usize
                 );
-                assert_eq!(elaborator.lexical_capture_uses[ordinal].ordinal, ordinal);
+                assert_eq!(
+                    elaborator.pending_checked_captures[ordinal].ordinal,
+                    ordinal
+                );
                 let crate::resolved::ResolvedTermName::Global(binder) = occurrence.term else {
                     panic!("outer captured value")
                 };
@@ -31537,13 +34591,30 @@ mod tests {
                 }
             }
             if !one_short {
-                assert_eq!(elaborator.type_work.used(), ordinary_work + CAPTURE_WORK);
+                assert_eq!(elaborator.type_work.used(), collection_work + ROUTING_WORK);
+                assert_eq!(elaborator.checked_lexical_captures.len(), 3);
+                for (ordinal, capture) in elaborator.checked_lexical_captures.iter().enumerate() {
+                    assert_eq!(capture.ordinal, ordinal);
+                }
+            } else {
+                assert_eq!(elaborator.checked_lexical_captures.len(), 2);
             }
             let outsider = (*captures[0]).clone();
             let node = elaborator
                 .builder
                 .variable(
-                    program.method_evidence().lexical_owners()[0].captures[0],
+                    program
+                        .groups()
+                        .iter()
+                        .filter_map(|group| {
+                            group
+                                .local_lowering()
+                                .and_then(|lowering| lowering.catalog())
+                        })
+                        .flat_map(|catalog| catalog.lexical_owners())
+                        .next()
+                        .expect("the fixture retains a lexical owner")
+                        .captures[0],
                     Type::Int,
                     outsider.origin.clone(),
                 )
@@ -31561,7 +34632,7 @@ mod tests {
                 .authenticate_lexical_capture_occurrence(&outsider, node)
                 .expect("a nonmatching occurrence still charges all active routes");
             assert_eq!(elaborator.type_work.used(), 3);
-            elaborator.lexical_capture_uses.clear();
+            elaborator.pending_checked_captures.clear();
             elaborator.type_work = TypeWorkBudget::with_limit(0);
             elaborator
                 .authenticate_lexical_capture_occurrence(&outsider, node)
@@ -31664,10 +34735,10 @@ mod tests {
                 lexical_binders: HashMap::new(),
                 interfaces: HashMap::from([(
                     fact.id,
-                    LoweredInterface {
+                    Arc::new(LoweredInterface {
                         methods: fact.methods.iter().map(|method| method.id).collect(),
                         determination: fact.determination().map(|key| key.positions().into()),
-                    },
+                    }),
                 )]),
                 interface_methods: fact
                     .methods
@@ -31675,7 +34746,7 @@ mod tests {
                     .map(|method| {
                         (
                             method.id,
-                            LoweredInterfaceMethod {
+                            Arc::new(LoweredInterfaceMethod {
                                 interface: fact.id,
                                 parameters: fact
                                     .parameters
@@ -31685,7 +34756,7 @@ mod tests {
                                 type_parameters: Box::new([]),
                                 value_type: method.value_type.clone(),
                                 declaration_span: method.span,
-                            },
+                            }),
                         )
                     })
                     .collect(),
@@ -32015,7 +35086,7 @@ mod tests {
         measured
             .synthesize_effect_module_program(&program)
             .expect("measure final synthesis");
-        let work = measured.constraint_work.used();
+        let work = measured.type_work.used();
         assert!(work > 0);
         let mut short = EffectElaborator::for_module_program(&program).expect("final elaborator");
         let private = short
@@ -32032,15 +35103,15 @@ mod tests {
                 ),
             )
             .expect("private Core");
-        short.type_work = TypeWorkBudget::with_limit(usize::MAX);
-        short.constraint_work = InterfaceConstraintBudget::with_limit(work - 1);
+        short.type_work = TypeWorkBudget::with_limit(work - 1);
+        short.constraint_work = InterfaceConstraintBudget::with_limit(usize::MAX);
         assert_eq!(
             short.synthesize_effect_module_program(&program).map(|_| ()),
-            Err(constraint_resource())
+            Err(type_resource())
         );
         assert_eq!(short.state, ElaboratorState::Poisoned);
         assert!(short.final_root.is_none());
-        short.constraint_work = InterfaceConstraintBudget::with_limit(work);
+        short.type_work = TypeWorkBudget::with_limit(work);
         assert_eq!(
             short.synthesize_effect_module_program(&program).map(|_| ()),
             Err(invalid_state())
@@ -32051,12 +35122,12 @@ mod tests {
         ));
         let mut retry =
             EffectElaborator::for_module_program(&program).expect("fresh final elaborator");
-        retry.type_work = TypeWorkBudget::with_limit(usize::MAX);
-        retry.constraint_work = InterfaceConstraintBudget::with_limit(work);
+        retry.type_work = TypeWorkBudget::with_limit(work);
+        retry.constraint_work = InterfaceConstraintBudget::with_limit(usize::MAX);
         let root = retry
             .synthesize_effect_module_program(&program)
             .expect("fresh exact synthesis");
-        assert_eq!(retry.constraint_work.used(), work);
+        assert_eq!(retry.type_work.used(), work);
         retry
             .finish(root.node)
             .expect("only successful synthesis may publish Core");
@@ -32177,6 +35248,90 @@ mod tests {
             crate::core::capture::CaptureValueSummary::default(),
             "implementation methods demand summaries without a public global"
         );
+    }
+
+    #[test]
+    fn checked_module_moves_owned_graph_and_selected_occurrences_into_group() {
+        fn inspect<F: CoreOperationFamily>(
+            fragment: &CheckedTypedFragment<F>,
+        ) -> (Vec<NodeId>, Vec<NodeId>, Vec<usize>) {
+            assert!(fragment.globals.0.is_empty());
+            assert!(fragment.methods.is_empty());
+            let physical = fragment
+                .physical_bindings
+                .as_ref()
+                .expect("module metadata is completed before publication");
+            assert_eq!(physical.0.len(), 3);
+            assert_eq!(fragment.method_uses.len(), 1);
+            assert_eq!(fragment.global_uses.len(), 1);
+            let global = &fragment.global_uses[0];
+            assert!(
+                physical
+                    .0
+                    .iter()
+                    .any(|binding| binding.binder.id() == global.binder)
+            );
+            assert!(global.slot.filled().is_some());
+            let method = &fragment.method_uses[0];
+            assert!(method.slot.filled_method().is_some());
+            let roots: Vec<_> = physical
+                .0
+                .iter()
+                .map(|binding| binding.initializer)
+                .collect();
+            let anchors: Vec<_> = fragment
+                .builder
+                .module_method_evidence_anchors()
+                .iter()
+                .map(|anchor| anchor.node)
+                .collect();
+            assert!(!anchors.is_empty());
+            let mut work = TypeWorkBudget::unbounded();
+            for node in roots.iter().chain(&anchors).copied() {
+                fragment
+                    .builder
+                    .clone_node_effects_with_budget(node, &mut work)
+                    .expect("the completed node belongs to its owned arena");
+            }
+            (
+                roots,
+                anchors,
+                vec![global.slot.storage_id(), method.slot.storage_id()],
+            )
+        }
+
+        fn view(module: &CheckedTypedModule) -> (Vec<NodeId>, Vec<NodeId>, Vec<usize>) {
+            match module {
+                CheckedTypedModule::Pure(fragment) => inspect(fragment),
+                CheckedTypedModule::Effect(fragment) => inspect(fragment),
+            }
+        }
+
+        let module = resolved_module_fixture(
+            "retained-typed-module.ash",
+            concat!(
+                "interface Read<A> {\nread<T> : (A, T) -> Int\n}\n",
+                "impl Read<Int> {\nread (value, ignored) = value + 1\n}\n",
+                "pass<A> : A -> Int where Read<A>\npass value = read (value, ())\n",
+            ),
+            "Int",
+            "pass(41)",
+        );
+        let checked = check_module(module).expect("source module checks");
+        let before = view(
+            checked
+                .typed_fragment_for_test()
+                .expect("checked graph retained"),
+        );
+        let group = checked
+            .into_group(&mut InterfaceConstraintBudget::default())
+            .expect("checked module becomes a group");
+        let after = view(
+            group
+                .typed_fragment_for_test()
+                .expect("checked graph moved"),
+        );
+        assert_eq!(after, before);
     }
 
     #[test]
@@ -32549,6 +35704,7 @@ mod tests {
             .global_schemes
             .get_mut(&binder)
             .unwrap();
+        let lowered = Arc::get_mut(lowered).expect("the test owns its relocated record");
         let old = std::mem::replace(&mut lowered.value_type, Type::Bool);
         drop(IterativeTypeOwner::new(old));
         mismatched.type_work = TypeWorkBudget::unbounded();
@@ -39616,18 +42772,18 @@ mod tests {
                     interfaces: HashMap::new(),
                     interface_methods: HashMap::from([(
                         method,
-                        LoweredInterfaceMethod {
+                        Arc::new(LoweredInterfaceMethod {
                             interface,
                             parameters: Box::new([TypeVariableId::resolved(module, 0)]),
                             type_parameters: Box::new([]),
                             value_type: Type::Unit,
                             declaration_span: span,
-                        },
+                        }),
                     )]),
                     global_schemes: HashMap::new(),
                     implementation_methods: HashMap::from([(
                         implementation_method,
-                        LoweredImplementationMethod {
+                        Arc::new(LoweredImplementationMethod {
                             binder: BinderId::resolved(module, 0),
                             head_type_parameter_count: 0,
                             application: InterfaceApplication::new(
@@ -39642,7 +42798,7 @@ mod tests {
                                 core_scheme: deep_application_type(DEPTH),
                             },
                             span,
-                        },
+                        }),
                     )]),
                     active_binders: HashMap::new(),
                 };
@@ -40359,20 +43515,20 @@ mod tests {
             lexical_binders: HashMap::new(),
             interfaces: HashMap::from([(
                 interface,
-                LoweredInterface {
+                Arc::new(LoweredInterface {
                     methods: Box::new([method]),
                     determination: None,
-                },
+                }),
             )]),
             interface_methods: HashMap::from([(
                 method,
-                LoweredInterfaceMethod {
+                Arc::new(LoweredInterfaceMethod {
                     interface,
                     parameters: Box::new([parameter]),
                     type_parameters: Box::new([]),
                     value_type: Type::Variable(parameter),
                     declaration_span: span,
-                },
+                }),
             )]),
             global_schemes: HashMap::new(),
             implementation_methods: HashMap::new(),

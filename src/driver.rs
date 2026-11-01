@@ -9,7 +9,6 @@ use {
     crate::diagnostic::compare_source_spans, crate::elaborate::EffectElaborator,
     crate::elaborate::Elaborator, crate::elaborate::TypeError,
     crate::elaborate::check_module_with_budget_and_rewrite_work,
-    crate::elaborate::checked_program_contains_effect_syntax,
     crate::elaborate::link_modules_with_budget, crate::eval::Evaluation, crate::eval::ObservedHeap,
     crate::eval::RuntimeFailure, crate::eval::Value, crate::eval::evaluate,
     crate::eval::evaluate_effect, crate::evidence_validation::EvidenceValidationFailure,
@@ -1246,20 +1245,33 @@ where
         );
         drop(dependencies);
         let source_phase = crate::calibration::Phase::start("source-checking");
-        let checked_module = check_module_with_budget_and_rewrite_work(
-            resolved,
-            &mut checking_type_work,
-            &mut coverage_work,
-            constraint_work,
-            Some(TypeWorkBudget::with_limit(
-                modular_primary_limit(source_bytes).map_err(|()| {
-                    FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
-                        crate::elaborate::ElaborationFailure::TypeResourceExhausted,
-                    )))
-                })?,
-            )),
-            Some(TypeWorkBudget::with_limit(rewrite_limit)),
-        )
+        let primary_work = Some(TypeWorkBudget::with_limit(
+            modular_primary_limit(source_bytes).map_err(|()| {
+                FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                    crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                )))
+            })?,
+        ));
+        let rewrite_work = Some(TypeWorkBudget::with_limit(rewrite_limit));
+        let checked_module = if select_effect_core {
+            crate::elaborate::check_module_in_effect_profile_with_rewrite_work(
+                resolved,
+                &mut checking_type_work,
+                &mut coverage_work,
+                constraint_work,
+                primary_work,
+                rewrite_work,
+            )
+        } else {
+            check_module_with_budget_and_rewrite_work(
+                resolved,
+                &mut checking_type_work,
+                &mut coverage_work,
+                constraint_work,
+                primary_work,
+                rewrite_work,
+            )
+        }
         .map_err(|failure| {
             FileFailure::from(PipelineFailure::Typing(failure)).with_phase_work(
                 crate::compiler_work::CompilationPhase::SourceChecking
@@ -1441,15 +1453,9 @@ where
             interface_validator(linked, constraint_work, &mut linked_type_work)
                 .map_err(PipelineFailure::EvidenceValidation)
                 .map_err(FileFailure::from)?;
-        if select_effect_core
-            && (main_has_effects
-                || checked_program_contains_effect_syntax(
-                    &validated_interfaces,
-                    &mut linked_type_work,
-                )
-                .map_err(PipelineFailure::Typing)
-                .map_err(FileFailure::from)?)
-        {
+        // Every admitted file graph retains the compiler-owned Region module,
+        // whose checked schemes select Effect Core even for an empty-row main.
+        if select_effect_core {
             interface_phase.finish(
                 Some(linked_type_work.used()),
                 crate::types::TYPE_WORK_LIMIT,
@@ -2017,7 +2023,7 @@ pub fn execute_with_source_native_bindings(
 #[cfg(test)]
 mod tests {
     use crate::core::{validate_effect_modules, validate_modules};
-    use crate::elaborate::check_module_with_budget;
+    use crate::elaborate::check_module_in_effect_profile_with_rewrite_work;
     use std::{
         cell::{Cell, RefCell},
         fs,
@@ -2404,6 +2410,373 @@ mod tests {
     }
 
     #[test]
+    fn empty_row_file_entry_uses_the_effect_profile() {
+        let fixture = TestSource::write("main : Unit -> Int ! {}\nmain () = 42\n");
+        let compiled = compile_path(fixture.configuration()).expect("the file graph compiles");
+        assert!(compiled.effect_build_input().is_some());
+        assert_eq!(
+            execute(&compiled)
+                .expect("the entry executes")
+                .value_display(),
+            "42"
+        );
+    }
+
+    #[test]
+    fn shared_verified_module_bodies_are_checked_once_before_execution() {
+        use crate::core::capture::InitializerRootObservation;
+        use crate::elaborate::{ModuleBodyObservation, ObservedModuleBody};
+        use crate::resolved::ModuleSummaryObservation;
+        use std::collections::{HashMap, HashSet};
+
+        let fixture = TestSource::write(concat!(
+            "import left (Some, Observe, observe, impl Observe)\n",
+            "import right (relay)\n",
+            "main : Unit -> Int\n",
+            "main () = observe(relay(Some(1)))\n",
+        ));
+        fixture.write_sibling(
+            "base.ash",
+            concat!(
+                "import @builtin.cell as Cell\n",
+                "pub type Option<A> =\n    None\n    | Some(A)\n",
+                "pub interface Observe<F : Type -> Type> {\n    observe : F<Int> -> Int\n}\n",
+                "pub impl Observe<Option> {\n",
+                "    observe (Some(value)) = resource cell<R> c = value {\n",
+                "        41 + Cell.read c\n    }\n    observe None = 0\n}\n",
+                "pub relay<F : Type -> Type> : F<Int> -> F<Int>\n",
+                "relay value = value\n",
+            ),
+        );
+        fixture.write_sibling(
+            "left.ash",
+            "pub import base (Some, Observe, observe, impl Observe)\n",
+        );
+        fixture.write_sibling("right.ash", "pub import base (relay)\n");
+
+        let observer = ModuleBodyObservation::start();
+        let summary_observer = ModuleSummaryObservation::start();
+        let initializer_observer = InitializerRootObservation::start();
+        let compiled = compile_path_with_consumers_internal(
+            fixture.configuration(),
+            &mut InterfaceConstraintBudget::default(),
+            |program, constraint_work, type_work| {
+                let group = |spelling: &str| {
+                    program
+                        .groups()
+                        .iter()
+                        .find(|group| {
+                            group
+                                .schemes()
+                                .iter()
+                                .any(|scheme| scheme.spelling == spelling)
+                        })
+                        .expect("the authored module is linked")
+                };
+                let base = group("relay");
+                let entry = group("main");
+                for group in [base, entry] {
+                    assert!(
+                        group
+                            .typed_fragment()
+                            .expect("the checked module retains its fragment")
+                            .has_completed_physical_bindings(),
+                        "the module's physical graph must be complete before linking"
+                    );
+                }
+                assert!(
+                    base.local_lowering()
+                        .expect("the base retains its lowered metadata")
+                        .catalog()
+                        .expect("the base retains its evidence catalog")
+                        .method_count()
+                        > 0
+                );
+                validate_interface_evidence_with_budget(program, constraint_work, type_work)
+            },
+            validate_modular_effect_core,
+            true,
+            ProvenanceRetention::Retain,
+        )
+        .expect("the linked graph compiles");
+        let observed = observer.finish();
+        let summaries = summary_observer.finish();
+        let initializers = initializer_observer.finish();
+        let authored_sources: HashSet<_> = compiled
+            .provenance
+            .iter()
+            .filter_map(|(_, source)| {
+                let name = std::path::Path::new(source.display_path()).file_name()?;
+                (name == "base.ash" || name == "entry.ash").then_some(source.id())
+            })
+            .collect();
+        assert_eq!(authored_sources.len(), 2);
+        let base_source = compiled
+            .provenance
+            .iter()
+            .find(|(_, source)| {
+                std::path::Path::new(source.display_path())
+                    .file_name()
+                    .is_some_and(|name| name == "base.ash")
+            })
+            .expect("the shared provider source is retained")
+            .1
+            .id();
+        let mut initializer_counts = HashMap::new();
+        for span in initializers {
+            if span.source() == base_source {
+                *initializer_counts.entry(span).or_insert(0usize) += 1;
+            }
+        }
+        assert!(
+            !initializer_counts.is_empty(),
+            "the provider initializer reaches the safety checker"
+        );
+        assert!(
+            initializer_counts.values().all(|&count| count == 1),
+            "the provider's initializers must be checked once: {initializer_counts:?}"
+        );
+        for (module, source) in &compiled.provenance {
+            if authored_sources.contains(&source.id()) {
+                assert_eq!(
+                    summaries
+                        .iter()
+                        .filter(|candidate| *candidate == module)
+                        .count(),
+                    1,
+                    "a verified module summary must be checked once, not once per importer"
+                );
+            }
+        }
+        let result = execute(&compiled).expect("the linked graph executes");
+        assert_eq!(result.value_display(), "42");
+        let mut counts = HashMap::new();
+        for (span, kind, final_synthesis) in observed {
+            if !authored_sources.contains(&span.source()) {
+                continue;
+            }
+            let count = counts.entry((span, kind)).or_insert((0, 0));
+            if final_synthesis {
+                count.1 += 1;
+            } else {
+                count.0 += 1;
+            }
+        }
+        assert_eq!(counts.len(), 3);
+        assert!(
+            counts
+                .keys()
+                .any(|(_, kind)| *kind == ObservedModuleBody::Method)
+        );
+        assert!(
+            counts.values().all(|&count| count == (1, 0)),
+            "every module body must be checked once and reused: {counts:?}"
+        );
+    }
+
+    #[test]
+    fn imported_checked_constrained_global_uses_selected_evidence() {
+        let fixture = TestSource::write(concat!(
+            "import base (apply, Observe, impl Observe)\n",
+            "main : Unit -> Int\n",
+            "main () = apply(1)\n",
+        ));
+        fixture.write_sibling(
+            "base.ash",
+            concat!(
+                "pub interface Observe<A> {\n    observe : A -> Int\n}\n",
+                "pub impl Observe<Int> {\n    observe value = 41 + value\n}\n",
+                "pub apply<A> : A -> Int where Observe<A>\n",
+                "apply value = observe value\n",
+            ),
+        );
+        let compiled = compile_path(fixture.configuration())
+            .expect("the imported checked global and selected evidence compile");
+        let result = execute(&compiled).expect("the imported checked global executes");
+        assert_eq!(result.value_display(), "42");
+    }
+
+    #[test]
+    fn imported_recursive_generic_implementation_preserves_evidence() {
+        let fixture = TestSource::write(concat!(
+            "import base (Nil, Cons, measure, impl Measure)\n",
+            "main : Unit -> Int\n",
+            "main () = measure(Cons(40, Cons(2, Nil)))\n",
+        ));
+        fixture.write_sibling(
+            "base.ash",
+            concat!(
+                "pub type List<A> =\n    Nil\n    | Cons(A, List<A>)\n",
+                "pub interface Measure<A> {\n    measure : A -> Int\n}\n",
+                "pub impl Measure<Int> {\n    measure value = value\n}\n",
+                "pub impl<A> Measure<List<A>> where Measure<A> {\n",
+                "    measure Nil = 0\n",
+                "    measure (Cons(value, rest)) = measure(value) + measure(rest)\n",
+                "}\n",
+            ),
+        );
+        let compiled = compile_path(fixture.configuration())
+            .expect("the imported recursive generic implementation compiles");
+        let result = execute(&compiled).expect("the recursive implementation executes");
+        assert_eq!(result.value_display(), "42");
+    }
+
+    #[test]
+    fn imported_generic_abis_preserve_colliding_module_local_identities() {
+        use crate::elaborate::FragmentTypeObservation;
+
+        let fixture = TestSource::write(concat!(
+            "import base (measure, impl Measure)\n",
+            "import left (Left, impl Measure)\n",
+            "import right (Right, impl Measure)\n",
+            "main : Unit -> Int\n",
+            "main () = measure(Left(40)) + measure(Right(2))\n",
+        ));
+        fixture.write_sibling(
+            "base.ash",
+            concat!(
+                "pub interface Measure<A> {\n    measure : A -> Int\n}\n",
+                "pub impl Measure<Int> {\n    measure value = value\n}\n",
+            ),
+        );
+        fixture.write_sibling(
+            "left.ash",
+            concat!(
+                "pub import base (Measure, measure, impl Measure)\n",
+                "pub type Left<A> = Left(A)\n",
+                "pub impl<A> Measure<Left<A>> where Measure<A> {\n",
+                "    measure (Left(value)) = measure(value)\n}\n",
+                "pub left_marker : Unit -> Int\nleft_marker () = 0\n",
+            ),
+        );
+        fixture.write_sibling(
+            "right.ash",
+            concat!(
+                "pub import base (Measure, measure, impl Measure)\n",
+                "pub type Right<A> = Right(A)\n",
+                "pub impl<A> Measure<Right<A>> where Measure<A> {\n",
+                "    measure (Right(value)) = measure(value)\n}\n",
+                "pub right_marker : Unit -> Int\nright_marker () = 0\n",
+            ),
+        );
+        let observer = FragmentTypeObservation::start();
+        let mut expected = None;
+        let compiled = compile_path_with_consumers_internal(
+            fixture.configuration(),
+            &mut InterfaceConstraintBudget::default(),
+            |program, constraint_work, type_work| {
+                let group = |spelling: &str| {
+                    program
+                        .groups()
+                        .iter()
+                        .find(|group| {
+                            group
+                                .schemes()
+                                .iter()
+                                .any(|scheme| scheme.spelling == spelling)
+                        })
+                        .expect("the authored module is linked")
+                };
+                let left = group("left_marker");
+                let right = group("right_marker");
+                let entry = group("main");
+                let left_ids: std::collections::HashSet<_> = left
+                    .local_lowering()
+                    .expect("left retains its physical schemes")
+                    .owned_abi_variables()
+                    .collect();
+                let collision = right
+                    .local_lowering()
+                    .expect("right retains its physical schemes")
+                    .owned_abi_variables()
+                    .find(|id| left_ids.contains(id))
+                    .expect("the independently generated ABI identities collide locally");
+                let entry_fragment = entry
+                    .typed_fragment()
+                    .expect("entry retains its checked fragment");
+                assert!(entry_fragment.owns_generated_variable(collision));
+                let aliases: Vec<_> = entry_fragment
+                    .imported_type_aliases()
+                    .filter(|(_, module, id)| {
+                        *id == collision && (*module == left.module() || *module == right.module())
+                    })
+                    .collect();
+                assert_eq!(aliases.len(), 2);
+                assert_ne!(aliases[0].0, aliases[1].0);
+                let left_alias = aliases
+                    .iter()
+                    .find(|(_, module, _)| *module == left.module())
+                    .expect("left's alias exists")
+                    .0;
+                let right_alias = aliases
+                    .iter()
+                    .find(|(_, module, _)| *module == right.module())
+                    .expect("right's alias exists")
+                    .0;
+                expected = Some((
+                    entry.module(),
+                    left.module(),
+                    right.module(),
+                    collision,
+                    left_alias,
+                    right_alias,
+                ));
+                validate_interface_evidence_with_budget(program, constraint_work, type_work)
+            },
+            validate_modular_effect_core,
+            true,
+            ProvenanceRetention::Retain,
+        )
+        .expect("the independently generated imported ABIs compile");
+        let entries = observer.finish();
+        let (entry, left, right, source, left_alias, right_alias) =
+            expected.expect("the linked groups were observed");
+        let destination = |module, identity| {
+            entries
+                .iter()
+                .find_map(|(candidate, source, destination)| {
+                    (*candidate == module && *source == identity).then_some(*destination)
+                })
+                .expect("the final identity was mapped")
+        };
+        let left_destination = destination(left, source);
+        let right_destination = destination(right, source);
+        assert_eq!(destination(entry, left_alias), left_destination);
+        assert_eq!(destination(entry, right_alias), right_destination);
+        assert_ne!(left_destination, right_destination);
+        let entry_destination = destination(entry, source);
+        assert_ne!(entry_destination, left_destination);
+        assert_ne!(entry_destination, right_destination);
+        let result = execute(&compiled).expect("both selected implementations execute");
+        assert_eq!(result.value_display(), "42");
+    }
+
+    #[test]
+    fn importer_rejects_argument_incompatible_with_verified_method() {
+        let fixture = TestSource::write(concat!(
+            "import base (Some, Observe, observe, impl Observe)\n",
+            "main : Unit -> Int\n",
+            "main () = observe(Some(true))\n",
+        ));
+        fixture.write_sibling(
+            "base.ash",
+            concat!(
+                "pub type Option<A> =\n    None\n    | Some(A)\n",
+                "pub interface Observe<F : Type -> Type> {\n    observe : F<Int> -> Int\n}\n",
+                "pub impl Observe<Option> {\n",
+                "    observe (Some(value)) = 41 + value\n    observe None = 0\n}\n",
+            ),
+        );
+
+        let failure = compile_path(fixture.configuration()).expect_err("the argument is Bool");
+        assert!(matches!(
+            failure.pipeline_failure(),
+            Some(PipelineFailure::Typing(TypeError::Source(_)))
+        ));
+        assert_eq!(failure.reason_code(), "type.argument");
+    }
+
+    #[test]
     fn linked_native_binding_and_network_cleanup_share_one_program() {
         use crate::foreign::source_runtime::{
             NativeArgument, NativeCallError, NativeReply, SourceNativeBindings,
@@ -2432,7 +2805,7 @@ mod tests {
             ),
             (
                 "binding.ash",
-                include_str!("../tests/fixtures/source-native/network-echo-binding.ash"),
+                include_str!("../tests/fixtures/source-native/binding.ash"),
             ),
             (
                 "network_types.ash",
@@ -2450,13 +2823,27 @@ mod tests {
             fixture.write_sibling(name, source);
         }
         let compiled = compile_path(fixture.configuration()).expect("combined source compiles");
+        let directory = fixture.0.parent().expect("the fixture has a directory");
+        for name in [
+            "entry.ash",
+            "native.ash",
+            "binding.ash",
+            "network_types.ash",
+            "network_codec.ash",
+            "network_protocol.ash",
+        ] {
+            fs::remove_file(directory.join(name)).expect("compiled source should be removable");
+        }
         let (_, boundary) = compiled
             .source_native_entry()
             .expect("native entry is present");
         let mut bindings = SourceNativeBindings::default();
-        assert_eq!(boundary.interpretations().len(), 1);
-        let symbol = boundary.interpretations()[0].symbol();
-        assert_eq!(symbol.symbol().name(), "EchoBytes");
+        let symbol = boundary
+            .interpretations()
+            .iter()
+            .map(|interpretation| interpretation.symbol())
+            .find(|symbol| symbol.symbol().name() == "EchoBytes")
+            .expect("the checked boundary retains EchoBytes");
         bindings
             .insert(
                 Arc::clone(symbol),
@@ -3204,7 +3591,7 @@ mod tests {
 
     #[test]
     fn explicit_constraint_owners_retain_wide_graph_refusal_and_fresh_recovery() {
-        const SHARED_LIMIT: usize = 400_000;
+        const SHARED_LIMIT: usize = 380_000;
         const ORIGINAL_LIMIT: usize = 327_680;
         let source = TestSource::write(concat!(
             "import dependency as Dependency\n",
@@ -3226,7 +3613,7 @@ mod tests {
                 evaluate_compiled_core,
             )
             .expect_err("the continuous owner must retain admission work during validation");
-            assert_eq!(prefix.get(), 365_559);
+            assert_eq!(prefix.get(), 367_893);
             assert_eq!(failure.reason_code(), "internal.resource.constraint-work");
             let PipelineFailure::EvidenceValidation(error) = failure.pipeline_failure().unwrap()
             else {
@@ -3245,10 +3632,10 @@ mod tests {
             source.configuration(),
             &mut admission,
             |linked, budget, types| {
-                assert_eq!(budget.used(), 365_559);
+                assert_eq!(budget.used(), 367_893);
                 let mut fresh = InterfaceConstraintBudget::with_limit(SHARED_LIMIT);
                 let result = validate_interface_evidence_with_budget(linked, &mut fresh, types);
-                assert_eq!(fresh.used(), 225_417);
+                assert_eq!(fresh.used(), 18_032);
                 result
             },
             validate_effect_modules,
@@ -3382,15 +3769,14 @@ mod tests {
         // Foreign, Region, base, short, long_one, long_two and entry, then
         // linking and independent evidence. The two service modules contribute
         // their real declarations/rows; user modules retain their full closure.
-        // Resolve/check debits: Foreign 0/127, Region 76/241, base 204/1476,
-        // short 1397/1000, long_one 1397/1000, long_two 1389/1005,
-        // entry 2119/564; link 222 and evidence 2237. Thus the evidence prefix
-        // is 12217 and complete work is 14454.
+        // Resolve/check debits: Foreign 0/129, Region 14/243, base 74/1532,
+        // short 727/399, long_one 727/399, long_two 731/410, entry 845/581;
+        // structural linking adds 214 and the new entry evidence adds 129.
         const EXPECTED_BOUNDARIES: [usize; 17] = [
-            0, 0, 127, 203, 444, 648, 2_124, 3_521, 4_521, 5_918, 6_918, 8_307, 9_312, 11_431,
-            11_995, 12_217, 14_454,
+            0, 0, 129, 143, 386, 460, 1_992, 2_719, 3_118, 3_845, 4_244, 4_975, 5_385, 6_230,
+            6_811, 7_025, 7_154,
         ];
-        const EXACT_CONSTRAINT_WORK: usize = 14_454;
+        const EXACT_CONSTRAINT_WORK: usize = 7_154;
         let source = relational_interface_graph_source();
         let directory = source
             .0
@@ -3438,11 +3824,13 @@ mod tests {
             .expect("relational resolution should fit");
             boundaries.push(measured.used());
             drop(dependencies);
-            let checked_module = check_module_with_budget(
+            let checked_module = check_module_in_effect_profile_with_rewrite_work(
                 resolved,
                 &mut checking_type_work,
                 &mut coverage_work,
                 &mut measured,
+                None,
+                None,
             )
             .expect("relational checking and summary publication should fit");
             boundaries.push(measured.used());
@@ -3565,28 +3953,20 @@ mod tests {
 
     #[test]
     fn wide_interface_graph_records_the_exact_validation_prefix() {
-        // Keep the original 327,680-unit reference boundary; the complete
-        // implicit Foreign/Region prefix is 444 and dependency resolution adds
-        // 203. Interface arrows now retain their DefaultAlloc row/closure.
+        // Keep the original 327,680-unit reference boundary and the complete
+        // implicit Foreign/Region service modules.
         const ORIGINAL_ALLOWANCE: usize = 327_680;
-        const WIDTH: usize = (ORIGINAL_ALLOWANCE - 1_060) / 81;
-        const {
-            assert!(WIDTH == 4_032);
-        }
-        // Dependency checking adds 44W+55 after that 647-cell prefix.
-        const DEPENDENCY_CHECKED: usize = 44 * WIDTH + 702;
-        // Entry resolution adds 23W+217: full summary authentication and
-        // canonical interface/effect/nominal closure retention on both routes.
-        const ENTRY_RESOLVED: usize = 67 * WIDTH + 919;
-        // Checking adds 11W+58, retaining the complete imported rows and main.
-        const ENTRY_CHECKED: usize = 78 * WIDTH + 977;
-        // Linking adds 3W+82 across all four modules, without duplicating the
-        // consuming evidence validator's complete interface mirror.
-        const LINKED: usize = 81 * WIDTH + 1_059;
-        // Independent evidence adds 50W+417 for the full row-bearing graph.
-        // The same affine debits were checked at widths 7 and 5200; neither
-        // removes implicit service facts or changes the production allowance.
-        const VALIDATED: usize = 131 * WIDTH + 1_476;
+        const WIDTH: usize = 3_990;
+        // Local checking adds 48W+56; entry resolution adds 16W+74, and
+        // checking adds 14W+59 for the imported rows and main.
+        const DEPENDENCY_CHECKED: usize = 48 * WIDTH + 515;
+        const ENTRY_RESOLVED: usize = 64 * WIDTH + 589;
+        const ENTRY_CHECKED: usize = 78 * WIDTH + 648;
+        // The fixture's generated-variable map has 7,168 occupied capacity
+        // cells; linking charges those in addition to 2W+77 other work.
+        const LINKED: usize = ENTRY_CHECKED + 2 * WIDTH + 7_168 + 77;
+        // Interface indexes and the new entry add 4W+32.
+        const VALIDATED: usize = LINKED + 4 * WIDTH + 32;
         let source = TestSource::write(concat!(
             "import dependency as Dependency\n",
             "main : Unit -> Int\n",
@@ -3652,11 +4032,13 @@ mod tests {
                 );
             }
             phase_boundaries.push(measured.used());
-            let checked_module = check_module_with_budget(
+            let checked_module = check_module_in_effect_profile_with_rewrite_work(
                 resolved,
                 &mut checking_type_work,
                 &mut coverage_work,
                 &mut measured,
+                None,
+                None,
             )
             .expect("the unbounded checking stage should fit");
             phase_boundaries.push(measured.used());
@@ -3679,10 +4061,10 @@ mod tests {
             phase_boundaries,
             [
                 0,
-                127,
-                203,
-                444,
-                647,
+                129,
+                143,
+                386,
+                459,
                 DEPENDENCY_CHECKED,
                 ENTRY_RESOLVED,
                 ENTRY_CHECKED,
@@ -3690,11 +4072,8 @@ mod tests {
                 VALIDATED,
             ],
         );
-        const {
-            assert!(LINKED < ORIGINAL_ALLOWANCE);
-            assert!(LINKED + 81 >= ORIGINAL_ALLOWANCE);
-            assert!(VALIDATED > ORIGINAL_ALLOWANCE);
-        }
+        const { assert!(LINKED < ORIGINAL_ALLOWANCE) };
+        const { assert!(VALIDATED > ORIGINAL_ALLOWANCE) };
     }
 
     #[test]

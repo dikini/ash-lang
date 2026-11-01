@@ -1,8 +1,7 @@
 //! Original ordinary lexical context and row qualification.
 use super::{
-    EvidenceScope, EvidenceValidationFailure, ExpectedEquation, LinkedInterfaceRegistry,
-    LinkedLocalScope, OwnerReplacements, charge, invalid_root, same_argument_charged,
-    type_resource, unknown,
+    EvidenceScope, EvidenceValidationFailure, LinkedInterfaceRegistry, LinkedLocalScope,
+    OwnerReplacements, charge, invalid_root, same_argument_charged, type_resource, unknown,
 };
 use crate::{
     interface::{InterfaceApplication, InterfaceConstraintBudget},
@@ -16,14 +15,12 @@ use crate::{
 use std::collections::HashMap;
 #[derive(Clone, Copy)]
 pub(super) struct OriginalLexicalContext {
-    pub(super) equation: Option<ExpectedEquation>,
     pub(super) owner: Option<crate::interface::RequirementOwner>,
     pub(super) local_head: Option<usize>,
 }
 impl OriginalLexicalContext {
     #[cfg(test)]
     pub(super) const NONE: Self = Self {
-        equation: None,
         owner: None,
         local_head: None,
     };
@@ -74,7 +71,6 @@ impl<'a> LinkedLexicalSource<'a> {
                     registry,
                     source,
                     EvidenceScope {
-                        expected_equation: original.equation,
                         owner: original.owner,
                         ..scope
                     },
@@ -130,7 +126,7 @@ pub(super) fn lexical_context_rows(
     EvidenceValidationFailure,
 > {
     let span = source.span;
-    if scope.expected_equation.is_none() && scope.owner.is_none() && head.is_none() {
+    if scope.owner.is_none() && head.is_none() {
         return Ok(Vec::new());
     }
     if !crate::types::kinded_arguments_have_rigid_rows_with_budget(
@@ -179,9 +175,7 @@ pub(super) fn lexical_context_rows(
                 }
                 Ok(())
             };
-        if scope.expected_equation.is_none()
-            && let Some(crate::interface::RequirementOwner::Global(binder)) = scope.owner
-        {
+        if let Some(crate::interface::RequirementOwner::Global(binder)) = scope.owner {
             charge(budget, 1, span)?;
             retain(
                 &registry
@@ -190,33 +184,6 @@ pub(super) fn lexical_context_rows(
                     .value_type,
                 work,
             )?;
-        }
-        if let Some(equation) = scope.expected_equation {
-            charge(budget, 1, span)?;
-            let scheme = match equation {
-                ExpectedEquation::Global { binder, .. }
-                    if scope.owner == Some(crate::interface::RequirementOwner::Global(binder)) =>
-                {
-                    &registry
-                        .scheme(program, binder)
-                        .ok_or_else(|| unknown(span))?
-                        .value_type
-                }
-                ExpectedEquation::Implementation { method, .. }
-                    if scope.owner
-                        == Some(crate::interface::RequirementOwner::Impl(
-                            method.implementation(),
-                        )) =>
-                {
-                    &registry
-                        .implementation_method(program, method)
-                        .ok_or_else(|| unknown(span))?
-                        .scheme
-                        .value_type
-                }
-                _ => return Err(invalid_root(span)),
-            };
-            retain(scheme, work)?;
         }
     }
     for local in enclosing.into_iter().rev() {

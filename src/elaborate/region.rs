@@ -85,7 +85,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     }
 
     pub(super) fn finish_pending_cleanup_regions(&mut self) -> Result<(), TypeError> {
-        for (node, span) in std::mem::take(&mut self.pending_cleanup_regions) {
+        for (node, span, _) in std::mem::take(&mut self.pending_cleanup_regions) {
             let action = F::effect_builder(&mut self.builder)
                 .ok_or_else(invalid_state)?
                 .pending_cleanup_action(node)?;

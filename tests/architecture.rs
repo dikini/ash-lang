@@ -453,11 +453,11 @@ const TASK_4_PHASE_CONSTRAINT: &str = "kind inference is intentionally absent on
 const KIND_SITES: &[KindSite] = &[
     // Current ordinary originals, row-image data and borrowed traversal carriers.
     kind_site!("src/evidence_validation/lexical_sources.rs::LinkedLexicalSource.Declared.0", FieldProviderEvidenceFactsBorrow),
-    kind_site!("src/core/transform.rs::$fn_rebuild_pattern::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
-    kind_site!("src/core/transform.rs::$fn_rebuild_pattern::Task.FinishTuple.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
-    kind_site!("src/core/transform.rs::$fn_rebuild_pattern::Task.FinishConstructor.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
-    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_163_1::Value.Argument.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
-    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_163_1::Value.Type.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
+    kind_site!("src/core/transform.rs::$fn_rebuild_pattern_in_context::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/transform.rs::$fn_rebuild_pattern_in_context::Task.FinishTuple.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/transform.rs::$fn_rebuild_pattern_in_context::Task.FinishConstructor.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_175_1::Value.Argument.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
+    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_175_1::Value.Type.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
     kind_site!("src/build/image.rs::ArgumentBuffer.0", FieldBuildTypeOwned),
     kind_site!("src/build/image.rs::DecodedRow.value", FieldBuildTypeOwned),
     kind_site!("src/build/image.rs::Decoder.decoded_rows", FieldBuildTypeOwned),
@@ -482,8 +482,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/dialect.rs::CoreProgram.network_admissions", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::NetworkAdmission.entries", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::NetworkEntryAdmission.native_effects", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
-    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_range::Equation.Network.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
-    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_range::Equation.RegionBuffer.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
+    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_indices::Equation.Network.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
+    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_indices::Equation.RegionBuffer.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
     kind_site!("src/core/effect.rs::EffectOperation.Network.0", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/effect.rs::EffectOperation.RegionBuffer.0", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/effect.rs::NetworkScopeNode.handle", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
@@ -523,7 +523,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ResolvedNetworkExpr.body", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedNetworkExpr.identity", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedNetworkExpr.initializer", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
-    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_range::Equation.Resource.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
+    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_indices::Equation.Resource.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
     kind_site!("src/eval/machine.rs::Frame.ResourceBoundary.payload", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Mixed),
     kind_site!("src/eval/machine.rs::ResourcePayload.Generic.instance", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState),
     kind_site!("src/eval/machine.rs::ResourcePayload.Generic.value", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
@@ -533,8 +533,8 @@ const KIND_SITES: &[KindSite] = &[
 
     // Retained control keeps the existing Core, Source and runtime owners:
     // store slots own captured frames whose environments remain shared.
-    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_range::Equation.Store.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
-    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_range::Equation.Store.1", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
+    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_indices::Equation.Store.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
+    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_indices::Equation.Store.1", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
     kind_site!("src/core/effect.rs::ContinueAdapter.answer", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/effect.rs::ContinueNode.adapter", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/effect.rs::EffectOperation.Continue.0", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
@@ -622,7 +622,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/effect.rs::EffectOperation.NativeInterpret.0", FieldNativeCoreMixed),
     kind_site!("src/core/mod.rs::NativeInterpretNode.$alias", FieldNativeCoreMixed),
     kind_site!("src/core/mod.rs::NativeInterpretation.$alias", FieldNativeCoreMixed),
-    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_range::Equation.NativeInterpret.1", FieldNativeReplayMixed),
+    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_indices::Equation.NativeInterpret.1", FieldNativeReplayMixed),
     kind_site!("src/core/validate.rs::AuthenticatedNativeRegistry.registry", FieldProviderRegistryBorrow),
     kind_site!("src/core/capture/control.rs::Control.NativeInterpret.effects", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree, Shared),
     kind_site!("src/eval/machine.rs::Frame.NativeInterpretBoundary.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
@@ -1139,14 +1139,11 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/kind.rs::KindExpectation.Exact.0", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
     kind_site!("src/kind.rs::KindExpectation.Function.domain", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
     kind_site!("src/kind.rs::KindFact.kind", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
-    kind_site!("src/kind.rs::KindFact.retained_mirrors", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/kind.rs::DeclaredKindFact.fact", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/kind.rs::KindFailure.Source.0", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
     kind_site!("src/kind.rs::NominalKindFact.kind", FieldTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/kind.rs::CompleteInterfaceApplication.arguments", FieldBorrowedTransientInterfaceArgumentInterfaceParameterResolvedKindResolutionTypeResolvedTree),
     kind_site!("src/kind.rs::CompleteInterfaceApplication.parameters", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
-    kind_site!("src/kind.rs::RetainedKindMirrors.Two.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
-    kind_site!("src/kind.rs::RetainedKindMirrors.Two.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/resolve.rs::ResolveModuleError.Kind.0", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
     kind_site!("src/resolve.rs::ResolveModuleError.Representation.0", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
     kind_site!("src/resolve.rs::ResolvedModuleAdmission.parts", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree, Mixed),
@@ -1263,8 +1260,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ResolvedResourceExpr.body", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedResourceExpr.identity", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedResourceExpr.initializer", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
-    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_range::Equation.Handler.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
-    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_range::Equation.Request.1", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
+    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_indices::Equation.Handler.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
+    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_indices::Equation.Request.1", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
     kind_site!("src/core/effect.rs::HandlerNode.clauses", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/effect.rs::HandlerNode.effect", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/effect.rs::HandlerNode.hook_root", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
@@ -1455,7 +1452,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::EquationsProgress.ambient_rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::FunctionCheck.ambient_rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::ElaborationTask.CheckFunction.ambient_rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::CoreElaborator.evidence_lowering", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::CoreElaborator.evidence_lowering", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Mixed),
     kind_site!("src/elaborate.rs::CoreElaborator.generated_type_variables", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CoreElaborator.inference_solutions", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CoreElaborator.inference_variables", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
@@ -1483,9 +1480,9 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::EffectElaborator.$alias", FieldMixedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeCoreTreeAndRegistryTree),
     kind_site!("src/elaborate.rs::Elaborator.$alias", FieldMixedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeCoreTreeAndRegistryTree),
     kind_site!("src/elaborate.rs::EvidenceLowering.active_binders", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::EvidenceLowering.global_schemes", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::EvidenceLowering.implementation_methods", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::EvidenceLowering.interface_methods", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::EvidenceLowering.global_schemes", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Shared),
+    kind_site!("src/elaborate.rs::EvidenceLowering.implementation_methods", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Shared),
+    kind_site!("src/elaborate.rs::EvidenceLowering.interface_methods", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Shared),
     kind_site!("src/elaborate.rs::EvidenceSpecificationBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::EvidenceSpecificationSequence.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::FunctionBody.Block.0", FieldBorrowedResolvedCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTree),
@@ -1660,7 +1657,6 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/evidence_validation.rs::PendingGoals.0", FieldTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeTransientWork),
     kind_site!("src/evidence_validation.rs::TypeBuffer.0", FieldTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeTransientWork),
     kind_site!("src/evidence_validation.rs::ValidatedInterfaceProgram.source", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeEvidenceTree, Mixed),
-    kind_site!("src/evidence_validation.rs::ValidatedInterfaceProgram.method_evidence", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeEvidenceTree, Shared),
     kind_site!("src/interface.rs::$impl_InterfaceConstraintBudget::$fn_charge_type::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationInterfaceTypeTypeTree),
     kind_site!("src/interface.rs::$impl_InterfaceConstraintBudget::$fn_charge_type::Task.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationInterfaceTypeTypeTree),
     kind_site!("src/interface.rs::$impl_InterfaceConstraintBudget::$fn_charge_equal_types::Task.Compare.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationInterfaceTypeTypeTree),
@@ -2178,7 +2174,7 @@ const KIND_SITES: &[KindSite] = &[
     // binder metadata, borrowed Source work, owned lowering rows, and shared
     // runtime code/instantiation. Captured continuation segments remain Mixed.
     kind_site!("src/core/capture/control.rs::Control.Call.prefix", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree, Shared),
-    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_range::Equation.Region.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
+    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_indices::Equation.Region.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
     kind_site!("src/core/effect.rs::EffectOperation.Region.0", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/effect.rs::EffectOperation.RegionClosure.0", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/region.rs::RegionClosureCode.Function.0", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
@@ -2242,6 +2238,58 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/surface.rs::SurfaceRegionExpr.provider", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
     kind_site!("src/surface.rs::SurfaceRegionSelectionExpr.body", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
     kind_site!("src/surface.rs::SurfaceRegionSelectionExpr.region", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    // Completed module fragments and their structural evidence transfer.
+    kind_site!("src/core/dialect.rs::CheckedFragmentNode.kind", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::CheckedFragmentNode.ty", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/transform.rs::RebuildContext.builder", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.defining_catalogs", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree, Shared),
+    kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.source_occurrence_slots", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree, Shared),
+    kind_site!("src/core/dialect/catalog_relocation.rs::AdapterEdges.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
+    kind_site!("src/core/dialect/catalog_relocation.rs::TypeBuffer.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
+    kind_site!("src/core/transform.rs::IterativeArgumentBuffer.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
+    kind_site!("src/elaborate.rs::CheckedGlobalUse.slot", FieldSharedEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
+    kind_site!("src/elaborate.rs::CheckedLexicalSource.slot", FieldSharedEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
+    kind_site!("src/elaborate.rs::CheckedMethodUse.slot", FieldSharedEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
+    kind_site!("src/elaborate.rs::CheckedTypedFragment.builder", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
+    kind_site!("src/elaborate.rs::CheckedTypedModule.Effect.0", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
+    kind_site!("src/elaborate.rs::CheckedTypedModule.Pure.0", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
+    kind_site!("src/resolved.rs::CheckedModule.typed_fragment", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
+    kind_site!("src/resolved.rs::CheckedModuleParts.typed_fragment", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
+    kind_site!("src/resolved.rs::ResolvedModuleGroup.typed_fragment", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
+    kind_site!("src/elaborate.rs::CheckedTypedFragment.generated_type_variables", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree),
+    kind_site!("src/elaborate.rs::CheckedTypedFragment.globals", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree),
+    kind_site!("src/elaborate.rs::CheckedTypedFragment.physical_bindings", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree),
+    kind_site!("src/elaborate.rs::ModuleLowering.abi_variables", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree),
+    kind_site!("src/elaborate.rs::CheckedTypedFragment.global_uses", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Shared),
+    kind_site!("src/elaborate.rs::CheckedTypedFragment.lexical_sources", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Shared),
+    kind_site!("src/elaborate.rs::CheckedTypedFragment.method_uses", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Shared),
+    kind_site!("src/elaborate.rs::CoreElaborator.checked_lexical_sources", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Shared),
+    kind_site!("src/elaborate.rs::CoreElaborator.global_capture_uses", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Shared),
+    kind_site!("src/elaborate.rs::CoreElaborator.method_capture_uses", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Shared),
+    kind_site!("src/elaborate.rs::ModuleLowering.catalog", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Shared),
+    kind_site!("src/elaborate.rs::ModuleLowering.global_schemes", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Shared),
+    kind_site!("src/elaborate.rs::ModuleLowering.implementation_methods", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Shared),
+    kind_site!("src/elaborate.rs::ModuleLowering.interface_methods", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Shared),
+    kind_site!("src/elaborate.rs::SharedModuleLowering.0", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Shared),
+    kind_site!("src/resolved.rs::ExportSummary.lowerings", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Shared),
+    kind_site!("src/resolved.rs::ResolvedModule.imported_lowerings", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Shared),
+    kind_site!("src/resolved.rs::ResolvedModuleGroup.local_lowering", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Shared),
+    kind_site!("src/elaborate.rs::FragmentEvidenceIndex.lexical", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
+    kind_site!("src/elaborate.rs::FragmentEvidenceIndex.methods", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
+    kind_site!("src/elaborate.rs::FragmentLexicalScope.method", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
+    kind_site!("src/elaborate.rs::FragmentLexicalScope.source", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
+    kind_site!("src/evidence.rs::PendingOccurrence.checked_value_type", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTypeTree),
+    kind_site!("src/evidence_validation.rs::ModuleEvidenceInputs.global_uses", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
+    kind_site!("src/evidence_validation.rs::ModuleEvidenceInputs.implementations", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
+    kind_site!("src/evidence_validation.rs::ModuleEvidenceInputs.interfaces", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
+    kind_site!("src/evidence_validation.rs::ModuleEvidenceInputs.lexical_sources", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
+    kind_site!("src/evidence_validation.rs::ModuleEvidenceInputs.method_uses", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
+    kind_site!("src/evidence_validation.rs::ModuleEvidenceInputs.module", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
+    kind_site!("src/evidence_validation.rs::ModuleEvidenceInputs.publication", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
+    kind_site!("src/evidence_validation.rs::ModuleEvidenceInputs.registry", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
+    kind_site!("src/evidence_validation.rs::ModuleEvidenceInputs.schemes", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
+    kind_site!("src/interface.rs::EvidencePlanRelocations.plans", FieldSharedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
+    kind_site!("src/types.rs::SubstitutionRoot.Row.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
 ];
 
 #[rustfmt::skip]
@@ -2474,10 +2522,7 @@ const EXPECTED_SHARED_KIND_ENGINE_SITES: &[KindSite] = &[
     kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_core_with_ledger::State.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_core_with_ledger::State.Visit.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/kind.rs::KindFact.kind", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
-    kind_site!("src/kind.rs::KindFact.retained_mirrors", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/kind.rs::NominalKindFact.kind", FieldTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
-    kind_site!("src/kind.rs::RetainedKindMirrors.Two.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
-    kind_site!("src/kind.rs::RetainedKindMirrors.Two.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/kind.rs::$local.KindEnvironments.synthesize.work", TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTreeAndKindTree),
 ];
 
@@ -2776,6 +2821,10 @@ const CORE_SOURCES: &[(&str, &str)] = &[
         include_str!("../src/core/dialect.rs"),
     ),
     (
+        "src/core/dialect/catalog_relocation.rs",
+        include_str!("../src/core/dialect/catalog_relocation.rs"),
+    ),
+    (
         "src/core/function.rs",
         include_str!("../src/core/function.rs"),
     ),
@@ -3010,10 +3059,22 @@ const METHOD_PARAMETER_CARRIERS: &[MethodParameterCarrier] = &[
         "struct CurrentImplementationMethod"
     ),
     method_parameter_carrier!(
-        "linked.authenticated_program_catalog",
-        "src/evidence_validation.rs",
-        EVIDENCE_VALIDATION_SOURCE,
-        "method_evidence: Arc<MethodEvidenceCatalog>"
+        "linked.defining_module_catalog",
+        "src/elaborate.rs",
+        ELABORATE_SOURCE,
+        "catalog: Option<Arc<crate::core::dialect::MethodEvidenceCatalog>>"
+    ),
+    method_parameter_carrier!(
+        "linked.group_defining_module_lowering",
+        "src/resolved.rs",
+        RESOLVED_SOURCE,
+        "local_lowering: Option<crate::elaborate::SharedModuleLowering>"
+    ),
+    method_parameter_carrier!(
+        "linked.composed_module_catalogs",
+        "src/elaborate.rs",
+        ELABORATE_SOURCE,
+        "crate::core::dialect::compose_completed_catalogs("
     ),
     method_parameter_carrier!(
         "linked.authentication_capability",
@@ -3206,6 +3267,12 @@ const METHOD_PARAMETER_CARRIERS: &[MethodParameterCarrier] = &[
         "src/elaborate.rs",
         ELABORATE_SOURCE,
         "struct EvidenceLowering"
+    ),
+    method_parameter_carrier!(
+        "core_authentication.fragment_evidence_index",
+        "src/elaborate.rs",
+        ELABORATE_SOURCE,
+        "struct FragmentEvidenceIndex"
     ),
     method_parameter_carrier!(
         "core_authentication.lexical_evidence_progress",
@@ -8211,6 +8278,7 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                 identifier,
                 // Canonical Layout/family authentication; no runtime selection.
                 "MethodEvidenceResourceOwner"
+                    | "EvidenceSlot"
                     | "MethodEvidenceAdapter"
                     | "MethodEvidenceLexicalOwner"
                     | "LexicalEvidenceId"
@@ -8241,6 +8309,9 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "implementation_owner_count"
                     | "implementation_owners_mut_for_core_test"
                     | "method_evidence"
+                    | "install_completed_method_evidence"
+                    | "module_method_evidence_anchors"
+                    | "retain_completed_method_evidence"
                     | "method_evidence_adapter_application_matches"
                     | "method_evidence_adapter_interface_matches"
                     | "method_evidence_anchor_matches_expectation"
@@ -8256,6 +8327,37 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "with_registry_method_evidence_and_rewrite_work"
                     | "with_registry_method_evidence_and_type_work"
                     | "with_registry_method_evidence_and_arena_work"
+            ),
+            // Structural relocation of the defining catalogues and anchors;
+            // this path does not select evidence or dispatch at runtime.
+            "src/core/dialect/catalog_relocation.rs" => matches!(
+                identifier,
+                "EvidencePlanRelocations"
+                    | "ImplMethodId"
+                    | "Implementation"
+                    | "ImplementationOwner"
+                    | "InterfaceApplication"
+                    | "MethodEvidenceAdapter"
+                    | "MethodEvidenceAdapterEdge"
+                    | "MethodEvidenceAnchor"
+                    | "MethodEvidenceAnchorRole"
+                    | "MethodEvidenceCatalog"
+                    | "MethodEvidenceConcreteSource"
+                    | "MethodEvidenceDomain"
+                    | "MethodEvidenceExpectation"
+                    | "MethodEvidenceExpectedProducer"
+                    | "MethodEvidenceExpectedRole"
+                    | "MethodEvidenceImplementationOwner"
+                    | "MethodEvidenceLexicalOwner"
+                    | "MethodEvidenceMethod"
+                    | "MethodEvidenceOccurrence"
+                    | "MethodEvidenceOwner"
+                    | "MethodEvidenceResourceOwner"
+                    | "RequirementId"
+                    | "implementation"
+                    | "implementation_owners"
+                    | "interface"
+                    | "interface_parameters"
             ),
             // These names reconstruct canonical imported catalogs and authenticate
             // the unpublished Core occurrence graph. None selects evaluator dispatch.

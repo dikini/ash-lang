@@ -25,6 +25,15 @@ A linked compiler-generated executable reconstructs this verified representation
 without repeating the proof; [AD-0013](AD-0013-generated-native-bridges-and-program-builds.md)
 defines that execution boundary.
 
+Before publication, each checked module completes and retains its lowering,
+evidence, closure layouts and cleanup metadata. These fragments are not yet
+independently validated Core programs.
+Linking relocates them into a new Core representation, which receives its
+independent validation once. Importing a checked module does not repeat its
+source-body proof or rebuild its metadata, and later consumers of unchanged
+validated Core preserve that proof. A compiler transformation that changes Core
+still validates its new result before packaging.
+
 Core separates ordinary values and computations and provides a typed
 operation-family boundary in the spirit of a Freer representation. The pure
 Mini-Ash dialect instantiates that boundary with no inhabitable effect

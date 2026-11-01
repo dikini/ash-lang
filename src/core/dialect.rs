@@ -10,7 +10,12 @@ use std::{
     },
 };
 
+mod catalog_relocation;
 mod zonk;
+
+pub(crate) use catalog_relocation::{
+    CompletedCatalogOffsets, compose_completed_catalogs, relocate_completed_anchor,
+};
 
 fn empty_registry() -> &'static Arc<ResolvedRegistry> {
     static EMPTY: OnceLock<Arc<ResolvedRegistry>> = OnceLock::new();
@@ -79,6 +84,8 @@ pub(crate) struct MethodEvidenceCatalog {
     domains: Vec<MethodEvidenceDomain>,
     occurrences: Vec<MethodEvidenceOccurrence>,
     final_occurrence_owners: Vec<crate::interface::FinalOccurrenceOwner>,
+    source_occurrence_slots: Vec<crate::interface::EvidenceSlot>,
+    defining_catalogs: Vec<Arc<MethodEvidenceCatalog>>,
     adapters: Vec<MethodEvidenceAdapter>,
     concrete_sources: Vec<MethodEvidenceConcreteSource>,
     expectations: Vec<MethodEvidenceExpectation>,
@@ -371,6 +378,8 @@ impl MethodEvidenceCatalog {
             domains,
             occurrences,
             final_occurrence_owners: Vec::new(),
+            source_occurrence_slots: Vec::new(),
+            defining_catalogs: Vec::new(),
             adapters,
             concrete_sources,
             expectations,
@@ -433,6 +442,39 @@ impl MethodEvidenceCatalog {
 
     pub(crate) fn occurrences(&self) -> &[MethodEvidenceOccurrence] {
         &self.occurrences
+    }
+
+    /// Pins the original occurrence allocations before their one-shot
+    /// publication, so their keys remain live with this defining catalogue.
+    pub(crate) fn retain_source_occurrences<'a>(
+        &mut self,
+        slots: impl Iterator<Item = &'a crate::interface::EvidenceSlot>,
+        count: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        if !self.source_occurrence_slots.is_empty() {
+            return Err(());
+        }
+        work.charge(count)?;
+        self.source_occurrence_slots
+            .try_reserve_exact(count)
+            .map_err(|_| ())?;
+        for slot in slots {
+            if self.source_occurrence_slots.len() == count {
+                return Err(());
+            }
+            self.source_occurrence_slots.push(slot.retain_exact());
+        }
+        if self.source_occurrence_slots.len() != count {
+            return Err(());
+        }
+        Ok(())
+    }
+
+    /// Keeps defining catalogues (and their original allocation pins) alive
+    /// with a structurally assembled linked catalogue.
+    pub(crate) fn retain_defining_catalogs(&mut self, catalogs: Vec<Arc<MethodEvidenceCatalog>>) {
+        self.defining_catalogs = catalogs;
     }
 
     /// Attaches readonly allocation pins for the complete supplied fresh-key
@@ -1724,6 +1766,13 @@ pub(super) struct StoredNode<F: CoreOperationFamily> {
     pub(super) kind: F::Kind,
 }
 
+/// A borrowed source-check node. This view does not confer Core validation.
+pub(crate) struct CheckedFragmentNode<'a, F: CoreOperationFamily> {
+    pub(crate) ty: &'a Type,
+    pub(crate) origin: &'a Origin,
+    pub(crate) kind: &'a F::Kind,
+}
+
 /// An unchecked compiler-built Core arena which must cross [`super::validate()`]
 /// before use. A linked compiler image reconstructs an already-validated arena.
 #[derive(Debug)]
@@ -2223,6 +2272,12 @@ impl CoreBuilder<PureOperationFamily> {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TypeRewriteCheckpoint(usize);
 
+impl TypeRewriteCheckpoint {
+    pub(crate) const fn index(self) -> usize {
+        self.0
+    }
+}
+
 /// Captures the builder-owned state that constructor lowering may append.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CoreBuilderCheckpoint {
@@ -2234,6 +2289,198 @@ pub(crate) struct CoreBuilderCheckpoint {
 }
 
 impl<F: CoreOperationFamily> CoreBuilder<F> {
+    /// Moves the remaining arena and rewrite ledgers to the module's final
+    /// destination builder before its checked graph is transferred.
+    pub(crate) fn take_work_budgets(&mut self) -> (TypeWorkBudget, TypeWorkBudget) {
+        (
+            std::mem::take(&mut self.type_work),
+            std::mem::take(&mut self.rewrite_type_work),
+        )
+    }
+
+    /// Completes the module-local metadata transaction without manufacturing a
+    /// closed program root. Linked assembly will relocate these owned records.
+    pub(crate) fn finish_module_metadata(&mut self) -> Result<(), BuildError> {
+        if !self.deferred_cleanup_rows.is_empty() || self.requires_type_rewrite() {
+            return Err(BuildError::InvalidPayload);
+        }
+        self.type_work
+            .charge(self.consumed_method_evidence.len())
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        if self
+            .consumed_method_evidence
+            .iter()
+            .any(|consumed| !consumed)
+        {
+            return Err(BuildError::InvalidPayload);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn module_method_evidence_anchors(&self) -> &[MethodEvidenceAnchor] {
+        &self.method_evidence_anchors
+    }
+
+    /// Installs the structurally assembled catalogue before any node or binder
+    /// has been materialized in this arena.
+    pub(crate) fn install_completed_method_evidence(
+        &mut self,
+        catalog: Arc<MethodEvidenceCatalog>,
+    ) -> Result<(), BuildError> {
+        if self.arena.is_some() || self.binder_phase_started || !self.nodes.is_empty() {
+            return Err(BuildError::InvalidPayload);
+        }
+        let (primary, rewrite) = self.take_work_budgets();
+        let mut replacement = Self::with_catalogs_and_type_work(
+            Arc::clone(&self.registry),
+            catalog,
+            primary,
+            rewrite,
+        )?;
+        replacement.reserved_resolved = std::mem::take(&mut self.reserved_resolved);
+        *self = replacement;
+        Ok(())
+    }
+
+    /// Transfers completed anchors without reselecting or reauthenticating
+    /// their compiler-owned evidence. All storage is reserved before the
+    /// first anchor is published to the destination.
+    pub(crate) fn retain_completed_method_evidence(
+        &mut self,
+        anchors: Vec<MethodEvidenceAnchor>,
+    ) -> Result<(), BuildError> {
+        let count = anchors.len();
+        self.type_work
+            .charge(count.checked_mul(5).ok_or(BuildError::TypeWorkExceeded)?)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        self.method_evidence_anchors
+            .try_reserve(count)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        self.method_evidence_anchor_keys
+            .try_reserve(count)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        let mut keys = HashSet::new();
+        keys.try_reserve(count)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        let mut expectations = HashSet::new();
+        expectations
+            .try_reserve(count)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        for anchor in &anchors {
+            let index = anchor.node.index()?;
+            self.node_at_ordinal(anchor.node, index)?;
+            let consumed = self
+                .consumed_method_evidence
+                .get(anchor.expectation)
+                .ok_or(BuildError::InvalidPayload)?;
+            let key = (anchor.node, anchor.role, anchor.occurrence);
+            if *consumed
+                || self.method_evidence_anchor_keys.contains(&key)
+                || !keys.insert(key)
+                || !expectations.insert(anchor.expectation)
+            {
+                return Err(BuildError::InvalidPayload);
+            }
+        }
+        for anchor in anchors {
+            self.consumed_method_evidence[anchor.expectation] = true;
+            self.method_evidence_anchor_keys
+                .insert((anchor.node, anchor.role, anchor.occurrence));
+            self.method_evidence_anchors.push(anchor);
+        }
+        Ok(())
+    }
+
+    /// Returns the resolver-owned namespace already retained by this module.
+    /// Generated binders are relocated separately for the destination arena.
+    pub(crate) fn fragment_resolved_binders(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Vec<BinderId>, BuildError> {
+        work.charge(
+            self.reserved_resolved
+                .capacity()
+                .checked_add(self.reserved_resolved.len())
+                .ok_or(BuildError::TypeWorkExceeded)?,
+        )
+        .map_err(|()| BuildError::TypeWorkExceeded)?;
+        let mut retained = Vec::new();
+        retained
+            .try_reserve(self.reserved_resolved.len())
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        retained.extend(
+            self.reserved_resolved
+                .iter()
+                .copied()
+                .filter(|binder| matches!(binder, BinderId::Resolved { .. })),
+        );
+        Ok(retained)
+    }
+
+    pub(crate) fn checked_fragment_node<'a>(
+        &'a self,
+        id: NodeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<CheckedFragmentNode<'a, F>, BuildError> {
+        work.charge(1).map_err(|()| BuildError::TypeWorkExceeded)?;
+        let index = id.index()?;
+        if self.arena != Some(id.arena()) {
+            return Err(BuildError::InvalidNodeId);
+        }
+        let node = self.nodes.get(index).ok_or(BuildError::InvalidNodeId)?;
+        Ok(CheckedFragmentNode {
+            ty: &node.ty,
+            origin: node.origin.as_ref().ok_or(BuildError::InvalidPayload)?,
+            kind: &node.kind,
+        })
+    }
+
+    /// Inventories every generated binder in one retained source-check arena.
+    /// The ordered scan makes relocation independent of hash iteration order.
+    pub(crate) fn fragment_generated_binders(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Vec<BinderId>, BuildError> {
+        work.charge(self.reserved_resolved.capacity())
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        let mut upper = u64::from(self.next_binder);
+        let mut reserved = 0usize;
+        for binder in &self.reserved_resolved {
+            if let BinderId::Generated(local) = binder {
+                upper = upper.max(u64::from(*local) + 1);
+                reserved = reserved
+                    .checked_add(1)
+                    .ok_or(BuildError::TypeWorkExceeded)?;
+            }
+        }
+        let upper = usize::try_from(upper).map_err(|_| BuildError::TypeWorkExceeded)?;
+        let retained = self
+            .generated_binders
+            .len()
+            .checked_add(reserved)
+            .ok_or(BuildError::TypeWorkExceeded)?;
+        work.charge(
+            upper
+                .checked_mul(2)
+                .and_then(|scan| scan.checked_add(retained))
+                .ok_or(BuildError::TypeWorkExceeded)?,
+        )
+        .map_err(|()| BuildError::TypeWorkExceeded)?;
+        let mut binders = Vec::new();
+        binders
+            .try_reserve_exact(retained)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        for index in 0..upper {
+            let local = u32::try_from(index).map_err(|_| BuildError::TypeWorkExceeded)?;
+            let binder = BinderId::generated(local);
+            if self.generated_binders.contains(&binder) || self.reserved_resolved.contains(&binder)
+            {
+                binders.push(binder);
+            }
+        }
+        Ok(binders)
+    }
+
     pub(crate) fn cell_dependency_origin(
         &self,
         work: &mut TypeWorkBudget,
@@ -3271,7 +3518,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         self.type_abstraction_after_parameter_admission(parameter_admission, body, ty, origin)
     }
 
-    fn type_abstraction_after_parameter_admission(
+    pub(super) fn type_abstraction_after_parameter_admission(
         &mut self,
         parameter_admission: Result<Vec<(TypeVariableId, Kind)>, BuildError>,
         body: NodeId,
@@ -3638,6 +3885,24 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         )?;
         self.requires_type_rewrite =
             checkpoint.is_some() && self.requires_type_rewrite || rewritten_requires_type_rewrite;
+        Ok(())
+    }
+
+    /// Rewrites a suffix after its caller established that the prefix has no
+    /// unresolved type or cleanup metadata. A successful suffix rewrite can
+    /// then settle the builder-wide flag without reopening that prefix.
+    pub(crate) fn rewrite_types_and_rows_after_closed_prefix<R, Q>(
+        &mut self,
+        checkpoint: TypeRewriteCheckpoint,
+        mut rewrite: R,
+        mut rewrite_row: Q,
+    ) -> Result<(), BuildError>
+    where
+        R: FnMut(&Type) -> Result<Type, BuildError>,
+        Q: FnMut(&EffectRow) -> Result<EffectRow, BuildError>,
+    {
+        self.requires_type_rewrite =
+            self.rewrite_types_from(checkpoint, &mut rewrite, Some(&mut rewrite_row))?;
         Ok(())
     }
 

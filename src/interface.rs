@@ -3658,6 +3658,132 @@ impl PartialEq for EvidenceSelection {
 
 impl Eq for EvidenceSelection {}
 
+/// Relocates each retained flat plan once for one destination module view.
+/// Plan-local node indices and provider formal keys remain unchanged.
+#[derive(Default)]
+pub(crate) struct EvidencePlanRelocations {
+    plans: HashMap<usize, Arc<EvidencePlan>>,
+}
+
+impl EvidencePlanRelocations {
+    pub(crate) fn relocate(
+        &mut self,
+        selection: &EvidenceSelection,
+        variables: &HashMap<TypeVariableId, TypeVariableId>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<EvidenceSelection, ()> {
+        work.charge(1)?;
+        let key = Arc::as_ptr(&selection.plan) as usize;
+        if let Some(plan) = self.plans.get(&key) {
+            return Ok(EvidenceSelection {
+                plan: Arc::clone(plan),
+                root: selection.root,
+            });
+        }
+        let source = &selection.plan;
+        work.charge(
+            source
+                .nodes
+                .len()
+                .checked_add(source.application.arguments().len())
+                .and_then(|count| count.checked_add(2))
+                .ok_or(())?,
+        )?;
+        let mut arguments = InterfaceArgumentBuffer(Vec::new());
+        arguments
+            .0
+            .try_reserve_exact(source.application.arguments().len())
+            .map_err(|_| ())?;
+        for argument in source.application.arguments() {
+            arguments.0.push(
+                crate::types::rename_fragment_argument_with(
+                    argument,
+                    variables,
+                    None,
+                    |units| work.charge(units),
+                    || (),
+                )?
+                .map_err(|_| ())?,
+            );
+        }
+        let application = InterfaceApplication::new_kinded(
+            source.application.interface(),
+            arguments.into_boxed_slice(),
+        );
+        let mut nodes = Vec::new();
+        nodes
+            .try_reserve_exact(source.nodes.len())
+            .map_err(|_| ())?;
+        for node in source.nodes.iter() {
+            let node = match node {
+                EvidenceNodeData::Lexical { source, methods } => {
+                    work.charge(methods.len())?;
+                    EvidenceNodeData::Lexical {
+                        source: *source,
+                        methods: try_copy_slice(methods)?,
+                    }
+                }
+                EvidenceNodeData::Abstract {
+                    requirement,
+                    methods,
+                } => {
+                    work.charge(methods.len())?;
+                    EvidenceNodeData::Abstract {
+                        requirement: *requirement,
+                        methods: try_copy_slice(methods)?,
+                    }
+                }
+                EvidenceNodeData::Implementation {
+                    implementation,
+                    substitution,
+                    prerequisites,
+                    methods,
+                } => {
+                    work.charge(
+                        substitution
+                            .len()
+                            .checked_add(prerequisites.len())
+                            .and_then(|count| count.checked_add(methods.len()))
+                            .ok_or(())?,
+                    )?;
+                    let mut retained = Vec::new();
+                    retained
+                        .try_reserve_exact(substitution.len())
+                        .map_err(|_| ())?;
+                    for replacement in substitution.iter() {
+                        let argument = crate::types::rename_fragment_type_with(
+                            replacement.argument(),
+                            variables,
+                            None,
+                            |units| work.charge(units),
+                            || (),
+                        )?
+                        .map_err(|_| ())?;
+                        retained.push(EvidenceSubstitution::new(replacement.parameter(), argument));
+                    }
+                    EvidenceNodeData::Implementation {
+                        implementation: *implementation,
+                        substitution: retained.into_boxed_slice(),
+                        prerequisites: try_copy_slice(prerequisites)?,
+                        methods: try_copy_slice(methods)?,
+                    }
+                }
+            };
+            nodes.push(node);
+        }
+        self.plans.try_reserve(1).map_err(|_| ())?;
+        let plan = Arc::new(EvidencePlan {
+            application,
+            nodes: nodes.into_boxed_slice(),
+        });
+        self.plans.insert(key, Arc::clone(&plan));
+        Ok(EvidenceSelection {
+            plan,
+            root: selection.root,
+        })
+    }
+}
+
 /// Builder for one immutable flat evidence plan.
 #[derive(Debug, Default)]
 pub(crate) struct EvidenceSelectionBuilder {
@@ -3878,6 +4004,15 @@ impl EvidenceSlot {
         Arc::as_ptr(&self.filled) as usize
     }
 
+    /// Retains this exact occurrence while its compiler-owned module is moved.
+    /// The retained slot observes the same atomic publication as the source
+    /// occurrence, including when it has not yet been filled.
+    pub(crate) fn retain_exact(&self) -> Self {
+        Self {
+            filled: Arc::clone(&self.filled),
+        }
+    }
+
     /// Retains the exact unpublished slot for a private compiler transaction.
     #[cfg(test)]
     pub(crate) fn retain_unpublished(&self) -> Option<Self> {
@@ -3891,47 +4026,6 @@ impl EvidenceSlot {
         EvidenceSlotHandle {
             filled: Arc::clone(&self.filled),
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn replace_selection_for_test(&mut self, replacement: EvidenceSelection) -> bool {
-        let Some(filled) = Arc::get_mut(&mut self.filled).and_then(OnceLock::get_mut) else {
-            return false;
-        };
-        filled.selection = replacement;
-        true
-    }
-
-    #[cfg(test)]
-    pub(crate) fn replace_method_arguments_for_test(&mut self, replacement: Box<[Type]>) -> bool {
-        let Some(filled) = Arc::get_mut(&mut self.filled).and_then(OnceLock::get_mut) else {
-            return false;
-        };
-        for argument in std::mem::replace(&mut filled.method_arguments, replacement).into_vec() {
-            discard_type_iteratively(argument);
-        }
-        true
-    }
-
-    #[cfg(test)]
-    pub(crate) fn replace_checked_value_type_for_test(&mut self, replacement: Type) -> bool {
-        let Some(filled) = Arc::get_mut(&mut self.filled).and_then(OnceLock::get_mut) else {
-            discard_type_iteratively(replacement);
-            return false;
-        };
-        if let Some(previous) = filled.checked_value_type.replace(replacement) {
-            discard_type_iteratively(previous);
-        }
-        true
-    }
-
-    #[cfg(test)]
-    pub(crate) fn replace_checked_method_for_test(&mut self, replacement: MethodId) -> bool {
-        let Some(filled) = Arc::get_mut(&mut self.filled).and_then(OnceLock::get_mut) else {
-            return false;
-        };
-        filled.checked_method = Some(replacement);
-        true
     }
 }
 
@@ -4165,14 +4259,6 @@ impl CheckedInterface {
 
     pub(crate) const fn determination(&self) -> Option<&DeterminationKey> {
         self.determination.as_ref()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn replace_determination_for_test(
-        &mut self,
-        determination: Option<DeterminationKey>,
-    ) {
-        self.determination = determination;
     }
 }
 

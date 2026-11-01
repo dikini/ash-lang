@@ -1,6 +1,12 @@
 //! Bounded transformations over independently validated pure Core.
 
-use std::{error::Error, fmt, sync::Arc};
+use std::{
+    collections::HashMap,
+    error::Error,
+    fmt,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 
 use super::{
     BuildError, CoreBuilder, CoreMatchArm, CorePattern, CorePatternKind, NodeId, Primitive,
@@ -16,13 +22,16 @@ use crate::{
     types::{IterativeTypeOwner, Type, discard_type_iteratively},
 };
 
-trait RebuildExpression<F: CoreOperationFamily> {
+trait RebuildFields {
     fn ty(&self) -> &Type;
     fn effects(&self) -> &crate::types::EffectRow;
     fn origin(&self) -> Result<&Origin, TransformError>;
+}
+
+trait RebuildExpression<F: CoreOperationFamily>: RebuildFields {
     fn kind(&self) -> &F::Kind;
 }
-impl<F: CoreOperationFamily> RebuildExpression<F> for CoreTypedExpr<F> {
+impl<F: CoreOperationFamily> RebuildFields for CoreTypedExpr<F> {
     fn ty(&self) -> &Type {
         &self.ty
     }
@@ -32,11 +41,13 @@ impl<F: CoreOperationFamily> RebuildExpression<F> for CoreTypedExpr<F> {
     fn origin(&self) -> Result<&Origin, TransformError> {
         Ok(&self.origin)
     }
+}
+impl<F: CoreOperationFamily> RebuildExpression<F> for CoreTypedExpr<F> {
     fn kind(&self) -> &F::Kind {
         &self.kind
     }
 }
-impl<F: CoreOperationFamily> RebuildExpression<F> for super::dialect::StoredNode<F> {
+impl<F: CoreOperationFamily> RebuildFields for super::dialect::StoredNode<F> {
     fn ty(&self) -> &Type {
         &self.ty
     }
@@ -48,8 +59,398 @@ impl<F: CoreOperationFamily> RebuildExpression<F> for super::dialect::StoredNode
             .as_ref()
             .ok_or(TransformError::InvalidValidatedInput)
     }
+}
+impl<F: CoreOperationFamily> RebuildExpression<F> for super::dialect::StoredNode<F> {
     fn kind(&self) -> &F::Kind {
         &self.kind
+    }
+}
+
+/// State shared by the existing identity copier and checked-module relocation.
+/// Identity rebuilding uses the builder directly and retains its current work
+/// accounting; a fragment transfer will also supply explicit identity mappings.
+struct RebuildContext<'a, F: CoreOperationFamily> {
+    builder: &'a mut CoreBuilder<F>,
+    identities: Option<FragmentIdentityView<'a>>,
+}
+
+/// One fragment's complete mapping into the assembled Core namespace.
+/// Resolver-qualified identities remain stable; generated identities and
+/// handler owners are mapped separately for each source arena.
+#[derive(Debug, Default)]
+pub(crate) struct FragmentIdentities {
+    pub(crate) binders: HashMap<crate::resolved::BinderId, crate::resolved::BinderId>,
+    pub(crate) variables: HashMap<crate::types::TypeVariableId, crate::types::TypeVariableId>,
+    pub(crate) handlers: HashMap<super::HandlerId, super::HandlerId>,
+}
+
+/// A method may freshen its own source type binders without copying the
+/// fragment-wide binder, handler and generated-type inventories.
+#[derive(Clone, Copy)]
+pub(crate) struct FragmentIdentityView<'a> {
+    pub(crate) base: &'a FragmentIdentities,
+    pub(crate) variables:
+        Option<&'a HashMap<crate::types::TypeVariableId, crate::types::TypeVariableId>>,
+    preserve_completed_metadata: bool,
+}
+
+impl<'a> FragmentIdentityView<'a> {
+    pub(crate) const fn new(
+        base: &'a FragmentIdentities,
+        variables: Option<&'a HashMap<crate::types::TypeVariableId, crate::types::TypeVariableId>>,
+    ) -> Self {
+        Self {
+            base,
+            variables,
+            preserve_completed_metadata: false,
+        }
+    }
+
+    pub(crate) const fn completed(base: &'a FragmentIdentities) -> Self {
+        Self {
+            base,
+            variables: None,
+            preserve_completed_metadata: true,
+        }
+    }
+
+    pub(crate) fn variable(
+        self,
+        identity: &crate::types::TypeVariableId,
+    ) -> Option<crate::types::TypeVariableId> {
+        self.variables
+            .and_then(|overlay| overlay.get(identity))
+            .copied()
+            .or_else(|| self.base.variables.get(identity).copied())
+    }
+}
+
+/// Reusable storage for each checked owner in one source arena.
+pub(crate) struct FragmentWorkspace {
+    nodes: Vec<Option<NodeId>>,
+    visits: Vec<u8>,
+    touched: Vec<usize>,
+}
+
+impl FragmentWorkspace {
+    pub(crate) fn new<S: CoreOperationFamily, D: CoreOperationFamily>(
+        source: &CoreBuilder<S>,
+        destination: &mut CoreBuilder<D>,
+    ) -> Result<Self, TransformError> {
+        let count = source.nodes.len();
+        destination
+            .charge_rebuild_work(count.checked_mul(2).ok_or(BuildError::TypeWorkExceeded)?)?;
+        let mut nodes = Vec::new();
+        nodes
+            .try_reserve_exact(count)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        let mut visits = Vec::new();
+        visits
+            .try_reserve_exact(count)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        nodes.resize(count, None);
+        visits.resize(count, 0);
+        Ok(Self {
+            nodes,
+            visits,
+            touched: Vec::new(),
+        })
+    }
+}
+
+/// Relocates the reachable nodes for one checked owner and type mapping.
+///
+/// A separate map is needed for each effective method-owner substitution:
+/// sharing a source node does not make the two substitutions interchangeable.
+/// The caller controls traversal and may replace a whole evidence occurrence
+/// before visiting its obsolete source children.
+pub(crate) struct FragmentNodeMap<'a> {
+    identities: FragmentIdentityView<'a>,
+    source_arena: super::dialect::ArenaId,
+    destination_anchor: Option<NodeId>,
+    workspace: &'a mut FragmentWorkspace,
+}
+
+impl<'a> FragmentNodeMap<'a> {
+    pub(crate) fn new<S: CoreOperationFamily, D: CoreOperationFamily>(
+        workspace: &'a mut FragmentWorkspace,
+        source: &CoreBuilder<S>,
+        source_root: NodeId,
+        destination: &mut CoreBuilder<D>,
+        identities: FragmentIdentityView<'a>,
+    ) -> Result<Self, TransformError> {
+        let root_index = node_index(source_root)?;
+        source.node_at_ordinal(source_root, root_index)?;
+        if source.nodes.len() != workspace.nodes.len() {
+            return Err(BuildError::InvalidPayload.into());
+        }
+        destination.charge_rebuild_work(
+            workspace
+                .touched
+                .len()
+                .checked_mul(2)
+                .and_then(|work| work.checked_add(1))
+                .ok_or(BuildError::TypeWorkExceeded)?,
+        )?;
+        for index in workspace.touched.drain(..) {
+            workspace.nodes[index] = None;
+            workspace.visits[index] = 0;
+        }
+        Ok(Self {
+            identities,
+            source_arena: source_root.arena(),
+            destination_anchor: None,
+            workspace,
+        })
+    }
+
+    /// Starts a node once for this owner; a back-edge fails closed.
+    pub(crate) fn enter<S: CoreOperationFamily, D: CoreOperationFamily>(
+        &mut self,
+        source: &CoreBuilder<S>,
+        original: NodeId,
+        destination: &mut CoreBuilder<D>,
+    ) -> Result<bool, TransformError> {
+        destination.charge_rebuild_work(1)?;
+        let index = self.source_index(source, original)?;
+        self.check_destination_builder(destination)?;
+        match self.workspace.visits[index] {
+            0 => {
+                self.track(index, destination)?;
+                Ok(true)
+            }
+            2 => Ok(false),
+            _ => Err(BuildError::InvalidPayload.into()),
+        }
+    }
+
+    /// Publishes a complete replacement, without inspecting the old children.
+    pub(crate) fn replace<S: CoreOperationFamily, D: CoreOperationFamily>(
+        &mut self,
+        source: &CoreBuilder<S>,
+        original: NodeId,
+        destination: &mut CoreBuilder<D>,
+        replacement: NodeId,
+    ) -> Result<(), TransformError> {
+        destination.charge_rebuild_work(1)?;
+        let index = self.check_source(source, original)?;
+        self.check_destination(destination, replacement)?;
+        self.track(index, destination)?;
+        self.publish(index, replacement);
+        Ok(())
+    }
+
+    pub(crate) fn copy_effect(
+        &mut self,
+        source: &CoreBuilder<EffectOperationFamily>,
+        original: NodeId,
+        destination: &mut CoreBuilder<EffectOperationFamily>,
+    ) -> Result<NodeId, TransformError> {
+        self.check_destination_builder(destination)?;
+        let expression = self.checked_children(source, original, destination)?;
+        let index = node_index(original)?;
+        self.track(index, destination)?;
+        let mut context = RebuildContext {
+            builder: destination,
+            identities: Some(self.identities),
+        };
+        let rebuilt = rebuild_nonfold_node(&mut context, &self.workspace.nodes, expression)?;
+        self.publish(index, rebuilt);
+        Ok(rebuilt)
+    }
+
+    pub(crate) fn copy_pure(
+        &mut self,
+        source: &CoreBuilder<PureOperationFamily>,
+        original: NodeId,
+        destination: &mut CoreBuilder<PureOperationFamily>,
+    ) -> Result<NodeId, TransformError> {
+        self.check_destination_builder(destination)?;
+        let expression = self.checked_children(source, original, destination)?;
+        let index = node_index(original)?;
+        self.track(index, destination)?;
+        let mut context = RebuildContext {
+            builder: destination,
+            identities: Some(self.identities),
+        };
+        let rebuilt = rebuild_nonfold_node(&mut context, &self.workspace.nodes, expression)?;
+        self.publish(index, rebuilt);
+        Ok(rebuilt)
+    }
+
+    /// Lifts only the compiler-owned Foreign primitives whose checked Pure
+    /// representation is unchanged in Effect Core. Other pure expressions
+    /// may require Effect-specific region lowering and are not lifted here.
+    pub(crate) fn copy_foreign_pure_as_effect(
+        &mut self,
+        source: &CoreBuilder<PureOperationFamily>,
+        original: NodeId,
+        destination: &mut CoreBuilder<EffectOperationFamily>,
+    ) -> Result<NodeId, TransformError> {
+        self.check_destination_builder(destination)?;
+        let expression = self.checked_children(source, original, destination)?;
+        match &expression.kind {
+            PureExprKind::Value(PureValue::Intrinsic(node))
+                if node.module().is_builtin_foreign()
+                    && matches!(
+                        node.operation(),
+                        super::packed::Intrinsic::AddressNull
+                            | super::packed::Intrinsic::AddressIsNull
+                            | super::packed::Intrinsic::AddressEqual
+                    ) => {}
+            PureExprKind::Computation(PureComputation::TypeAbstraction(_)) => {}
+            _ => return Err(BuildError::InvalidPayload.into()),
+        }
+        let index = node_index(original)?;
+        self.track(index, destination)?;
+        let mut context = RebuildContext {
+            builder: destination,
+            identities: Some(self.identities),
+        };
+        let rebuilt = rebuild_pure_node(
+            &mut context,
+            &self.workspace.nodes,
+            expression,
+            &expression.kind,
+        )?;
+        self.publish(index, rebuilt);
+        Ok(rebuilt)
+    }
+
+    pub(crate) fn mapped(&self, original: NodeId) -> Result<NodeId, TransformError> {
+        if original.arena() != self.source_arena {
+            return Err(BuildError::InvalidNodeId.into());
+        }
+        remap(&self.workspace.nodes, original)
+    }
+
+    fn source_index<S: CoreOperationFamily>(
+        &self,
+        source: &CoreBuilder<S>,
+        original: NodeId,
+    ) -> Result<usize, TransformError> {
+        let index = node_index(original)?;
+        if original.arena() != self.source_arena {
+            return Err(BuildError::InvalidNodeId.into());
+        }
+        source.node_at_ordinal(original, index)?;
+        if self.workspace.nodes.get(index).is_none() {
+            return Err(BuildError::InvalidNodeId.into());
+        }
+        Ok(index)
+    }
+
+    fn check_source<S: CoreOperationFamily>(
+        &self,
+        source: &CoreBuilder<S>,
+        original: NodeId,
+    ) -> Result<usize, TransformError> {
+        let index = self.source_index(source, original)?;
+        if self.workspace.nodes[index].is_some() {
+            return Err(BuildError::InvalidPayload.into());
+        }
+        Ok(index)
+    }
+
+    fn check_destination<D: CoreOperationFamily>(
+        &self,
+        destination: &CoreBuilder<D>,
+        node: NodeId,
+    ) -> Result<(), TransformError> {
+        if self
+            .destination_anchor
+            .is_some_and(|anchor| anchor.arena() != node.arena())
+        {
+            return Err(BuildError::InvalidNodeId.into());
+        }
+        destination.node_at_ordinal(node, node_index(node)?)?;
+        Ok(())
+    }
+
+    fn check_destination_builder<D: CoreOperationFamily>(
+        &self,
+        destination: &CoreBuilder<D>,
+    ) -> Result<(), TransformError> {
+        if let Some(anchor) = self.destination_anchor {
+            self.check_destination(destination, anchor)?;
+        }
+        Ok(())
+    }
+
+    fn checked_children<'s, S: CoreOperationFamily, D: CoreOperationFamily>(
+        &self,
+        source: &'s CoreBuilder<S>,
+        original: NodeId,
+        destination: &mut CoreBuilder<D>,
+    ) -> Result<&'s super::dialect::StoredNode<S>, TransformError> {
+        let index = self.check_source(source, original)?;
+        let expression = source.nodes.get(index).ok_or(BuildError::InvalidNodeId)?;
+        let child_count = S::child_count(&expression.kind);
+        destination.charge_rebuild_work(child_count)?;
+        let capture_count =
+            S::region_closure(&expression.kind).map_or(0, |closure| closure.captures.len());
+        for child_index in 0..child_count {
+            if !self.identities.preserve_completed_metadata
+                && (1..=capture_count).contains(&child_index)
+            {
+                continue;
+            }
+            let child =
+                S::child_at(&expression.kind, child_index).ok_or(BuildError::InvalidPayload)?;
+            if child.arena() != self.source_arena {
+                return Err(BuildError::InvalidNodeId.into());
+            }
+            let mapped = self.mapped(child)?;
+            self.check_destination(destination, mapped)?;
+        }
+        Ok(expression)
+    }
+
+    fn track<D: CoreOperationFamily>(
+        &mut self,
+        index: usize,
+        destination: &mut CoreBuilder<D>,
+    ) -> Result<(), TransformError> {
+        match self.workspace.visits[index] {
+            0 => {
+                destination.charge_rebuild_work(1)?;
+                self.workspace
+                    .touched
+                    .try_reserve(1)
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                self.workspace.touched.push(index);
+                self.workspace.visits[index] = 1;
+            }
+            1 => {}
+            _ => return Err(BuildError::InvalidPayload.into()),
+        }
+        Ok(())
+    }
+
+    fn publish(&mut self, index: usize, replacement: NodeId) {
+        debug_assert_eq!(self.workspace.visits[index], 1);
+        debug_assert!(self.workspace.nodes[index].is_none());
+        debug_assert!(
+            self.destination_anchor
+                .is_none_or(|anchor| anchor.arena() == replacement.arena())
+        );
+        self.destination_anchor.get_or_insert(replacement);
+        self.workspace.nodes[index] = Some(replacement);
+        self.workspace.visits[index] = 2;
+    }
+}
+
+impl<F: CoreOperationFamily> Deref for RebuildContext<'_, F> {
+    type Target = CoreBuilder<F>;
+
+    fn deref(&self) -> &Self::Target {
+        self.builder
+    }
+}
+
+impl<F: CoreOperationFamily> DerefMut for RebuildContext<'_, F> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.builder
     }
 }
 
@@ -60,7 +461,7 @@ trait TransformFamily: CoreOperationFamily {
         builder: &mut CoreBuilder<Self>,
     ) -> Result<(), TransformError>;
     fn rebuild_operation(
-        builder: &mut CoreBuilder<Self>,
+        builder: &mut RebuildContext<'_, Self>,
         remapped: &[Option<NodeId>],
         expression: &impl RebuildExpression<Self>,
     ) -> Result<NodeId, TransformError>;
@@ -75,7 +476,7 @@ impl TransformFamily for PureOperationFamily {
         Ok(())
     }
     fn rebuild_operation(
-        _: &mut CoreBuilder<Self>,
+        _: &mut RebuildContext<'_, Self>,
         _: &[Option<NodeId>],
         _: &impl RebuildExpression<Self>,
     ) -> Result<NodeId, TransformError> {
@@ -117,7 +518,7 @@ impl TransformFamily for EffectOperationFamily {
     }
 
     fn rebuild_operation(
-        builder: &mut CoreBuilder<Self>,
+        builder: &mut RebuildContext<'_, Self>,
         remapped: &[Option<NodeId>],
         expression: &impl RebuildExpression<Self>,
     ) -> Result<NodeId, TransformError> {
@@ -128,33 +529,78 @@ impl TransformFamily for EffectOperationFamily {
         let effects = copy_expression_row(builder, expression)?;
         let origin = copy_origin(builder, expression.origin()?)?;
         match operation {
-            EffectOperation::Network(_) => return Err(TransformError::InvalidValidatedInput),
+            EffectOperation::Network(network) => {
+                if builder.identities.is_none() || network.linked_result.is_some() {
+                    return Err(TransformError::InvalidValidatedInput);
+                }
+                let handle_type = copy_type(builder, network.handle.ty())?;
+                let handle_id = copy_binder_id(builder, network.handle.id())?;
+                let handle_origin = copy_origin(builder, network.handle.origin())?;
+                let handle = builder.resolved_binder(handle_id, handle_type, handle_origin)?;
+                let mut acquisition = network.acquisition;
+                acquisition.identity = copy_variable_id(builder, acquisition.identity)?;
+                acquisition.handle = copy_binder_id(builder, acquisition.handle)?;
+                let entries = [
+                    copy_binder_id(builder, network.entries[0])?,
+                    copy_binder_id(builder, network.entries[1])?,
+                ];
+                builder.charge_effect_metadata(1)?;
+                builder.network_scope(
+                    Box::new(super::effect::NetworkScopeNode::new(
+                        acquisition,
+                        handle,
+                        entries,
+                        remap(remapped, network.capacity)?,
+                        [
+                            remap(remapped, network.inputs[0])?,
+                            remap(remapped, network.inputs[1])?,
+                        ],
+                        remap(remapped, network.body)?,
+                    )),
+                    ty.into_inner(),
+                    effects,
+                    origin,
+                )
+            }
             EffectOperation::RegionValueRequest(request) => builder.region_operation(
                 EffectOperation::RegionValueRequest(request.clone()),
                 ty.into_inner(),
                 effects,
                 origin,
             ),
-            EffectOperation::RegionBuffer(buffer)
-                if matches!(
-                    buffer.operation,
-                    super::region::RegionBufferOperation::Network { .. }
-                ) =>
-            {
-                return Err(TransformError::InvalidValidatedInput);
+            EffectOperation::RegionBuffer(buffer) => {
+                use super::region::RegionBufferOperation;
+                let operation = match &buffer.operation {
+                    RegionBufferOperation::Network { effect, operation } => {
+                        if builder.identities.is_none() {
+                            return Err(TransformError::InvalidValidatedInput);
+                        }
+                        RegionBufferOperation::Network {
+                            effect: copy_effect_instance(builder, effect)?,
+                            operation: *operation,
+                        }
+                    }
+                    RegionBufferOperation::Intrinsic(intrinsic) if builder.identities.is_some() => {
+                        RegionBufferOperation::Intrinsic(super::packed::IntrinsicNode::new(
+                            copy_intrinsic(builder, intrinsic.operation())?,
+                            intrinsic.module(),
+                        ))
+                    }
+                    operation => operation.clone(),
+                };
+                builder.region_operation(
+                    EffectOperation::RegionBuffer(super::region::RegionBufferNode {
+                        api: buffer.api,
+                        context: remap(remapped, buffer.context)?,
+                        operand: buffer.operand.map(|id| remap(remapped, id)).transpose()?,
+                        right: buffer.right.map(|id| remap(remapped, id)).transpose()?,
+                        operation,
+                    }),
+                    ty.into_inner(),
+                    effects,
+                    origin,
+                )
             }
-            EffectOperation::RegionBuffer(buffer) => builder.region_operation(
-                EffectOperation::RegionBuffer(super::region::RegionBufferNode {
-                    api: buffer.api,
-                    context: remap(remapped, buffer.context)?,
-                    operand: buffer.operand.map(|id| remap(remapped, id)).transpose()?,
-                    right: buffer.right.map(|id| remap(remapped, id)).transpose()?,
-                    operation: buffer.operation.clone(),
-                }),
-                ty.into_inner(),
-                effects,
-                origin,
-            ),
             EffectOperation::RegionTuple(tuple) => {
                 let mut fields = Vec::new();
                 builder.charge_effect_metadata(tuple.fields.len())?;
@@ -194,13 +640,18 @@ impl TransformFamily for EffectOperationFamily {
                         body: remap(remapped, closure.code.body())?,
                     }
                 };
-                builder.charge_effect_metadata(closure.captures.len())?;
                 let mut captures = Vec::new();
-                captures
-                    .try_reserve_exact(closure.captures.len())
-                    .map_err(|_| BuildError::TypeWorkExceeded)?;
-                for capture in &closure.captures {
-                    captures.push(remap(remapped, *capture)?);
+                if builder
+                    .identities
+                    .is_none_or(|identities| identities.preserve_completed_metadata)
+                {
+                    builder.charge_effect_metadata(closure.captures.len())?;
+                    captures
+                        .try_reserve_exact(closure.captures.len())
+                        .map_err(|_| BuildError::TypeWorkExceeded)?;
+                    for capture in &closure.captures {
+                        captures.push(remap(remapped, *capture)?);
+                    }
                 }
                 builder.region_operation(
                     EffectOperation::RegionClosure(super::region::RegionClosureNode {
@@ -429,8 +880,13 @@ impl TransformFamily for EffectOperationFamily {
                     .as_ref()
                     .map(|registration| {
                         builder.charge_effect_metadata(1)?;
-                        let copied = registration
+                        let mut copied = registration
                             .with_target(copy_effect_instance(builder, &registration.target)?);
+                        copied.callback = copy_binder_id(builder, copied.callback)?;
+                        copied.input = copy_binder_id(builder, copied.input)?;
+                        copied.previous = copy_binder_id(builder, copied.previous)?;
+                        copied.next = copy_binder_id(builder, copied.next)?;
+                        copied.resume = copy_resume_id(builder, copied.resume)?;
                         Ok::<_, TransformError>(Box::new(copied))
                     })
                     .transpose()?;
@@ -439,7 +895,10 @@ impl TransformFamily for EffectOperationFamily {
                     .hook_root()
                     .map(|root| {
                         builder.charge_effect_metadata(1)?;
-                        let copied = root.with_target(copy_effect_instance(builder, &root.target)?);
+                        let mut copied =
+                            root.with_target(copy_effect_instance(builder, &root.target)?);
+                        copied.input = copy_binder_id(builder, copied.input)?;
+                        copied.resume = copy_resume_id(builder, copied.resume)?;
                         Ok::<_, TransformError>(copied)
                     })
                     .transpose()?;
@@ -457,7 +916,7 @@ impl TransformFamily for EffectOperationFamily {
                         clause.operation(),
                         resume,
                         CoreMatchArm::new(
-                            rebuild_pattern(builder, clause.pattern())?,
+                            rebuild_pattern_in_context(builder, clause.pattern())?,
                             clause_body,
                             clause_origin,
                         ),
@@ -486,7 +945,7 @@ impl TransformFamily for EffectOperationFamily {
 // existing charged/fallible copies without adding allocation or changing order.
 
 fn clone_effect_instance<F: CoreOperationFamily>(
-    builder: &mut CoreBuilder<F>,
+    builder: &mut RebuildContext<'_, F>,
     instance: &crate::types::EffectInstance,
 ) -> Result<crate::types::EffectInstance, TransformError> {
     super::effect::clone_effect_instance_with_budget(instance, &mut builder.type_work)
@@ -494,31 +953,74 @@ fn clone_effect_instance<F: CoreOperationFamily>(
 }
 
 fn copy_type<F: CoreOperationFamily>(
-    builder: &mut CoreBuilder<F>,
+    builder: &mut RebuildContext<'_, F>,
     ty: &Type,
 ) -> Result<Type, BuildError> {
-    builder.clone_type_for_rebuild(ty)
+    let Some(identities) = builder.identities else {
+        return builder.clone_type_for_rebuild(ty);
+    };
+    crate::types::rename_fragment_type_with(
+        ty,
+        &identities.base.variables,
+        identities.variables,
+        |units| builder.charge_rebuild_work(units),
+        || BuildError::TypeWorkExceeded,
+    )?
+    .map_err(|_| BuildError::InvalidPayload)
 }
 fn copy_row<F: CoreOperationFamily>(
-    builder: &mut CoreBuilder<F>,
+    builder: &mut RebuildContext<'_, F>,
     row: &crate::types::EffectRow,
 ) -> Result<crate::types::EffectRow, BuildError> {
-    builder.clone_effect_row_for_rebuild(row)
+    let Some(identities) = builder.identities else {
+        return builder.clone_effect_row_for_rebuild(row);
+    };
+    crate::types::rename_fragment_row_with(
+        row,
+        &identities.base.variables,
+        identities.variables,
+        |units| builder.charge_rebuild_work(units),
+        || BuildError::TypeWorkExceeded,
+    )?
+    .map_err(|_| BuildError::InvalidPayload)
 }
 fn copy_expression_row<F: CoreOperationFamily>(
-    builder: &mut CoreBuilder<F>,
-    expression: &impl RebuildExpression<F>,
+    builder: &mut RebuildContext<'_, F>,
+    expression: &impl RebuildFields,
 ) -> Result<crate::types::EffectRow, BuildError> {
     copy_row(builder, expression.effects())
 }
 fn copy_effect_instance<F: CoreOperationFamily>(
-    builder: &mut CoreBuilder<F>,
+    builder: &mut RebuildContext<'_, F>,
     instance: &crate::types::EffectInstance,
 ) -> Result<crate::types::EffectInstance, TransformError> {
-    clone_effect_instance(builder, instance)
+    let Some(identities) = builder.identities else {
+        return clone_effect_instance(builder, instance);
+    };
+    builder.charge_effect_metadata(instance.arguments().len())?;
+    let mut arguments = IterativeArgumentBuffer(Vec::new());
+    arguments
+        .0
+        .try_reserve_exact(instance.arguments().len())
+        .map_err(|_| BuildError::TypeWorkExceeded)?;
+    for argument in instance.arguments() {
+        let copied = crate::types::rename_fragment_argument_with(
+            argument,
+            &identities.base.variables,
+            identities.variables,
+            |units| builder.charge_rebuild_work(units),
+            || BuildError::TypeWorkExceeded,
+        )?
+        .map_err(|_| BuildError::InvalidPayload)?;
+        arguments.0.push(copied);
+    }
+    Ok(crate::types::EffectInstance::new_kinded(
+        instance.effect(),
+        arguments.into_boxed_slice(),
+    ))
 }
 fn copy_origin<F: CoreOperationFamily>(
-    _builder: &mut CoreBuilder<F>,
+    _builder: &mut RebuildContext<'_, F>,
     origin: &Origin,
 ) -> Result<Origin, TransformError> {
     Ok(origin.clone())
@@ -526,16 +1028,65 @@ fn copy_origin<F: CoreOperationFamily>(
 macro_rules! copy_identity {
     ($function:ident,$method:ident,$identity:ty) => {
         fn $function<F: CoreOperationFamily>(
-            _builder: &mut CoreBuilder<F>,
+            _builder: &mut RebuildContext<'_, F>,
             identity: $identity,
         ) -> Result<$identity, BuildError> {
             Ok(identity)
         }
     };
 }
-copy_identity!(copy_binder_id, binder, crate::resolved::BinderId);
-copy_identity!(copy_variable_id, variable, crate::types::TypeVariableId);
-copy_identity!(copy_handler_id, handler, super::HandlerId);
+fn copy_binder_id<F: CoreOperationFamily>(
+    builder: &mut RebuildContext<'_, F>,
+    identity: crate::resolved::BinderId,
+) -> Result<crate::resolved::BinderId, BuildError> {
+    let Some(identities) = builder.identities else {
+        return Ok(identity);
+    };
+    builder.charge_rebuild_work(1)?;
+    match identity {
+        crate::resolved::BinderId::Generated(_) => identities
+            .base
+            .binders
+            .get(&identity)
+            .copied()
+            .ok_or(BuildError::InvalidPayload),
+        crate::resolved::BinderId::Resolved { .. } => Ok(identity),
+    }
+}
+
+fn copy_variable_id<F: CoreOperationFamily>(
+    builder: &mut RebuildContext<'_, F>,
+    identity: crate::types::TypeVariableId,
+) -> Result<crate::types::TypeVariableId, BuildError> {
+    let Some(identities) = builder.identities else {
+        return Ok(identity);
+    };
+    builder.charge_rebuild_work(1)?;
+    if identities.variables.is_some() {
+        builder.charge_rebuild_work(1)?;
+    }
+    match identities.variable(&identity) {
+        Some(mapped) => Ok(mapped),
+        None if matches!(identity, crate::types::TypeVariableId::Resolved { .. }) => Ok(identity),
+        None => Err(BuildError::InvalidPayload),
+    }
+}
+
+fn copy_handler_id<F: CoreOperationFamily>(
+    builder: &mut RebuildContext<'_, F>,
+    identity: super::HandlerId,
+) -> Result<super::HandlerId, BuildError> {
+    let Some(identities) = builder.identities else {
+        return Ok(identity);
+    };
+    builder.charge_rebuild_work(1)?;
+    identities
+        .base
+        .handlers
+        .get(&identity)
+        .copied()
+        .ok_or(BuildError::InvalidPayload)
+}
 copy_identity!(copy_resume_id, resume, crate::resolved::ResumeId);
 copy_identity!(copy_nominal_id, nominal, crate::types::NominalTypeId);
 copy_identity!(
@@ -548,6 +1099,53 @@ copy_identity!(
     lexical,
     crate::interface::LexicalEvidenceId
 );
+
+fn copy_intrinsic<F: CoreOperationFamily>(
+    builder: &mut RebuildContext<'_, F>,
+    operation: super::packed::Intrinsic,
+) -> Result<super::packed::Intrinsic, BuildError> {
+    use super::packed::Intrinsic;
+    Ok(match operation {
+        Intrinsic::RegionHostAllocate {
+            owner,
+            configuration,
+        } => Intrinsic::RegionHostAllocate {
+            owner: copy_variable_id(builder, owner)?,
+            configuration,
+        },
+        Intrinsic::RegionHostRelease {
+            owner,
+            configuration,
+        } => Intrinsic::RegionHostRelease {
+            owner: copy_variable_id(builder, owner)?,
+            configuration,
+        },
+        Intrinsic::RegionFromBacking {
+            owner,
+            address_module,
+        } => Intrinsic::RegionFromBacking {
+            owner: copy_variable_id(builder, owner)?,
+            address_module,
+        },
+        operation => operation,
+    })
+}
+
+struct IterativeArgumentBuffer(Vec<crate::types::KindedArgument>);
+
+impl IterativeArgumentBuffer {
+    fn into_boxed_slice(mut self) -> Box<[crate::types::KindedArgument]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
+
+impl Drop for IterativeArgumentBuffer {
+    fn drop(&mut self) {
+        for argument in self.0.drain(..) {
+            crate::types::discard_kinded_argument_iteratively(argument);
+        }
+    }
+}
 
 struct IterativeTypeBuffer(Vec<Type>);
 
@@ -872,17 +1470,30 @@ fn rebuild_node<F: TransformFamily>(
             .map_err(TransformError::from);
     }
 
-    rebuild_nonfold_node(builder, remapped, expression)
+    let mut context = RebuildContext {
+        builder,
+        identities: None,
+    };
+    rebuild_nonfold_node(&mut context, remapped, expression)
 }
 
 fn rebuild_nonfold_node<F: TransformFamily>(
-    builder: &mut CoreBuilder<F>,
+    builder: &mut RebuildContext<'_, F>,
     remapped: &[Option<NodeId>],
     expression: &impl RebuildExpression<F>,
 ) -> Result<NodeId, TransformError> {
     let Some(kind) = F::pure(expression.kind()) else {
         return F::rebuild_operation(builder, remapped, expression);
     };
+    rebuild_pure_node(builder, remapped, expression, kind)
+}
+
+fn rebuild_pure_node<F: TransformFamily>(
+    builder: &mut RebuildContext<'_, F>,
+    remapped: &[Option<NodeId>],
+    expression: &impl RebuildFields,
+    kind: &PureExprKind,
+) -> Result<NodeId, TransformError> {
     let origin = copy_origin(builder, expression.origin()?)?;
     match kind {
         PureExprKind::Value(PureValue::String(node)) => {
@@ -893,30 +1504,7 @@ fn rebuild_nonfold_node<F: TransformFamily>(
         }
         PureExprKind::Value(PureValue::Intrinsic(node)) => {
             let ty = copy_type(builder, expression.ty())?;
-            let operation = match node.operation() {
-                super::packed::Intrinsic::RegionHostAllocate {
-                    owner,
-                    configuration,
-                } => super::packed::Intrinsic::RegionHostAllocate {
-                    owner: copy_variable_id(builder, owner)?,
-                    configuration,
-                },
-                super::packed::Intrinsic::RegionHostRelease {
-                    owner,
-                    configuration,
-                } => super::packed::Intrinsic::RegionHostRelease {
-                    owner: copy_variable_id(builder, owner)?,
-                    configuration,
-                },
-                super::packed::Intrinsic::RegionFromBacking {
-                    owner,
-                    address_module,
-                } => super::packed::Intrinsic::RegionFromBacking {
-                    owner: copy_variable_id(builder, owner)?,
-                    address_module,
-                },
-                operation => operation,
-            };
+            let operation = copy_intrinsic(builder, node.operation())?;
             builder
                 .intrinsic(operation, node.module(), ty, origin)
                 .map_err(TransformError::from)
@@ -1008,7 +1596,11 @@ fn rebuild_nonfold_node<F: TransformFamily>(
             let function = remap(remapped, node.function())?;
             let argument = remap(remapped, node.argument())?;
 
-            if !F::REQUIRES_EMPTY_ROWS {
+            if !F::REQUIRES_EMPTY_ROWS
+                && builder
+                    .identities
+                    .is_none_or(|identities| identities.preserve_completed_metadata)
+            {
                 let effects = copy_expression_row(builder, expression)?;
                 return builder
                     .application_with_effects(
@@ -1053,7 +1645,8 @@ fn rebuild_nonfold_node<F: TransformFamily>(
             arms.try_reserve_exact(node.arms().len())
                 .map_err(|_| BuildError::TypeWorkExceeded)?;
             for arm in node.arms() {
-                let pattern = CorePatternOwner::new(rebuild_pattern(builder, arm.pattern())?);
+                let pattern =
+                    CorePatternOwner::new(rebuild_pattern_in_context(builder, arm.pattern())?);
                 let body = remap(remapped, arm.body())?;
                 let origin = copy_origin(builder, arm.origin())?;
                 arms.push(CoreMatchArm::new(pattern.into_inner(), body, origin));
@@ -1086,6 +1679,24 @@ fn rebuild_nonfold_node<F: TransformFamily>(
             let ty = IterativeTypeOwner::new(copy_type(builder, expression.ty())?);
             let body = remap(remapped, node.body())?;
 
+            if builder.identities.is_some() {
+                let mut parameters = crate::types::clone_kinded_type_parameters_with_budget(
+                    node.parameters(),
+                    &mut builder.type_work,
+                )
+                .map_err(|()| BuildError::TypeWorkExceeded)?;
+                for (identity, _) in &mut parameters {
+                    *identity = copy_variable_id(builder, *identity)?;
+                }
+                return builder
+                    .type_abstraction_after_parameter_admission(
+                        Ok(parameters),
+                        body,
+                        ty.into_inner(),
+                        origin,
+                    )
+                    .map_err(TransformError::from);
+            }
             builder
                 .type_abstraction_from_borrowed(node.parameters(), body, ty.into_inner(), origin)
                 .map_err(TransformError::from)
@@ -1109,7 +1720,11 @@ fn rebuild_nonfold_node<F: TransformFamily>(
             let ty = IterativeTypeOwner::new(copy_type(builder, expression.ty())?);
             let function = remap(remapped, node.function())?;
 
-            if !F::REQUIRES_EMPTY_ROWS {
+            if !F::REQUIRES_EMPTY_ROWS
+                && builder
+                    .identities
+                    .is_none_or(|identities| identities.preserve_completed_metadata)
+            {
                 let effects = copy_expression_row(builder, expression)?;
                 return builder
                     .type_application_with_effects(
@@ -1137,12 +1752,25 @@ fn rebuild_nonfold_node<F: TransformFamily>(
     }
 }
 
+#[cfg(test)]
 fn rebuild_pattern<F: CoreOperationFamily>(
     builder: &mut CoreBuilder<F>,
     pattern: &CorePattern,
 ) -> Result<CorePattern, TransformError> {
-    let clone_origin =
-        |_builder: &mut CoreBuilder<F>, origin: &Origin| Ok::<_, TransformError>(origin.clone());
+    let mut context = RebuildContext {
+        builder,
+        identities: None,
+    };
+    rebuild_pattern_in_context(&mut context, pattern)
+}
+
+fn rebuild_pattern_in_context<F: CoreOperationFamily>(
+    builder: &mut RebuildContext<'_, F>,
+    pattern: &CorePattern,
+) -> Result<CorePattern, TransformError> {
+    let clone_origin = |_builder: &mut RebuildContext<'_, F>, origin: &Origin| {
+        Ok::<_, TransformError>(origin.clone())
+    };
     enum Task<'a> {
         Visit(&'a CorePattern),
         FinishTuple(&'a CorePattern, usize),
@@ -2528,8 +3156,15 @@ mod tests {
         let mut builder = CoreBuilder::<EffectOperationFamily>::with_effect_registry(Arc::new(
             ResolvedRegistry::default(),
         ));
-        let root =
-            EffectOperationFamily::rebuild_operation(&mut builder, &[], &expression).unwrap();
+        let root = EffectOperationFamily::rebuild_operation(
+            &mut RebuildContext {
+                builder: &mut builder,
+                identities: None,
+            },
+            &[],
+            &expression,
+        )
+        .unwrap();
         let rebuilt = &builder.nodes[root.index().unwrap()];
         assert_eq!(rebuilt.kind, expression.kind);
         assert_eq!(rebuilt.ty, Type::Unit);
@@ -2541,6 +3176,464 @@ mod tests {
                 .reason(),
             crate::core::ValidationReason::Resume
         );
+    }
+
+    #[test]
+    fn checked_fragment_transfer_replaces_whole_node_before_copying_children() {
+        let source_file = SourceFile::new("fragment-transfer.ash", "value").unwrap();
+        let origin = Origin::Source(source_file.span(ByteRange::new(0, 5).unwrap()).unwrap());
+        let mut source = CoreBuilder::<EffectOperationFamily>::with_effect_registry(Arc::new(
+            ResolvedRegistry::default(),
+        ));
+        let thirteen = source
+            .integer(
+                crate::integer::Integer::from_i64(13),
+                Type::Int,
+                origin.clone(),
+            )
+            .unwrap();
+        let twenty_seven = source
+            .integer(
+                crate::integer::Integer::from_i64(27),
+                Type::Int,
+                origin.clone(),
+            )
+            .unwrap();
+        let obsolete = source
+            .primitive(
+                Primitive::Add,
+                thirteen,
+                twenty_seven,
+                Type::Int,
+                origin.clone(),
+            )
+            .unwrap();
+        let two = source
+            .integer(
+                crate::integer::Integer::from_i64(2),
+                Type::Int,
+                origin.clone(),
+            )
+            .unwrap();
+        let root = source
+            .primitive(Primitive::Add, obsolete, two, Type::Int, origin.clone())
+            .unwrap();
+        let identities = FragmentIdentities::default();
+        let mut destination = CoreBuilder::<EffectOperationFamily>::with_effect_registry(Arc::new(
+            ResolvedRegistry::default(),
+        ));
+        let mut workspace = FragmentWorkspace::new(&source, &mut destination).unwrap();
+        let mut transfer = FragmentNodeMap::new(
+            &mut workspace,
+            &source,
+            root,
+            &mut destination,
+            FragmentIdentityView::new(&identities, None),
+        )
+        .expect("the source arena and map are admitted");
+
+        assert!(
+            transfer
+                .copy_effect(&source, root, &mut destination)
+                .is_err()
+        );
+        let replacement = destination
+            .integer(crate::integer::Integer::from_i64(40), Type::Int, origin)
+            .unwrap();
+        transfer
+            .replace(&source, obsolete, &mut destination, replacement)
+            .expect("the complete evidence replacement is published");
+        let mut wrong_destination = CoreBuilder::<EffectOperationFamily>::with_effect_registry(
+            Arc::new(ResolvedRegistry::default()),
+        );
+        assert!(
+            transfer
+                .copy_effect(&source, two, &mut wrong_destination)
+                .is_err()
+        );
+        assert!(wrong_destination.nodes.is_empty());
+        assert!(transfer.mapped(thirteen).is_err());
+        assert!(transfer.mapped(twenty_seven).is_err());
+        assert!(
+            transfer
+                .replace(&source, obsolete, &mut destination, replacement)
+                .is_err()
+        );
+        transfer
+            .copy_effect(&source, two, &mut destination)
+            .unwrap();
+        let rebuilt = transfer
+            .copy_effect(&source, root, &mut destination)
+            .unwrap();
+        assert_eq!(transfer.mapped(root).unwrap(), rebuilt);
+        assert_eq!(
+            destination.nodes.len(),
+            3,
+            "obsolete children were never copied"
+        );
+        let validated =
+            super::super::validate_effect(destination.finish(rebuilt).unwrap(), &[&source_file])
+                .expect("the newly assembled Core is independently validated");
+        assert_eq!(
+            crate::eval::evaluate_effect(&validated)
+                .unwrap()
+                .value
+                .to_string(),
+            "42"
+        );
+    }
+
+    #[test]
+    fn checked_fragment_maps_are_owner_scoped_and_require_exact_arena() {
+        let source_file = SourceFile::new("fragment-owner.ash", "x").unwrap();
+        let origin = Origin::Source(source_file.span(ByteRange::new(0, 1).unwrap()).unwrap());
+        let variable = TypeVariableId::generated(0);
+        let binder = BinderId::resolved(crate::module::ModuleId::new(0), 0);
+        let mut source = CoreBuilder::<EffectOperationFamily>::with_effect_registry(Arc::new(
+            ResolvedRegistry::default(),
+        ));
+        let root = source
+            .variable(binder, Type::Variable(variable), origin.clone())
+            .unwrap();
+        let mut other_source = CoreBuilder::<EffectOperationFamily>::with_effect_registry(
+            Arc::new(ResolvedRegistry::default()),
+        );
+        let unrelated = other_source
+            .variable(binder, Type::Variable(variable), origin)
+            .unwrap();
+        let first = FragmentIdentities {
+            variables: HashMap::from([(variable, TypeVariableId::generated(10))]),
+            ..FragmentIdentities::default()
+        };
+        let second = FragmentIdentities {
+            variables: HashMap::from([(variable, TypeVariableId::generated(20))]),
+            ..FragmentIdentities::default()
+        };
+        for (identities, expected) in [(&first, 10), (&second, 20)] {
+            let mut destination = CoreBuilder::<EffectOperationFamily>::with_effect_registry(
+                Arc::new(ResolvedRegistry::default()),
+            );
+            let mut workspace = FragmentWorkspace::new(&source, &mut destination).unwrap();
+            let mut transfer = FragmentNodeMap::new(
+                &mut workspace,
+                &source,
+                root,
+                &mut destination,
+                FragmentIdentityView::new(identities, None),
+            )
+            .expect("owner-specific mapping");
+            assert!(
+                transfer
+                    .copy_effect(&other_source, unrelated, &mut destination)
+                    .is_err()
+            );
+            let copied = transfer
+                .copy_effect(&source, root, &mut destination)
+                .unwrap();
+            assert_eq!(
+                destination.nodes[copied.index().unwrap()].ty,
+                Type::Variable(TypeVariableId::generated(expected))
+            );
+            let mut retry = CoreBuilder::<EffectOperationFamily>::with_effect_registry(Arc::new(
+                ResolvedRegistry::default(),
+            ));
+            let other = if expected == 10 { &second } else { &first };
+            let mut transfer = FragmentNodeMap::new(
+                &mut workspace,
+                &source,
+                root,
+                &mut retry,
+                FragmentIdentityView::new(other, None),
+            )
+            .expect("the workspace resets only the previous owner's touched nodes");
+            assert!(transfer.mapped(root).is_err());
+            let copied = transfer.copy_effect(&source, root, &mut retry).unwrap();
+            let new_owner = if expected == 10 { 20 } else { 10 };
+            assert_eq!(
+                retry.nodes[copied.index().unwrap()].ty,
+                Type::Variable(TypeVariableId::generated(new_owner))
+            );
+        }
+
+        let count = source.nodes.len();
+        let work = count * 2 + 1;
+        let mut short = CoreBuilder::<EffectOperationFamily>::with_effect_registry(Arc::new(
+            ResolvedRegistry::default(),
+        ));
+        short
+            .charge_type_work_for_test(TYPE_WORK_LIMIT - (work - 1))
+            .unwrap();
+        let mut workspace = FragmentWorkspace::new(&source, &mut short).unwrap();
+        assert!(matches!(
+            FragmentNodeMap::new(
+                &mut workspace,
+                &source,
+                root,
+                &mut short,
+                FragmentIdentityView::new(&first, None)
+            ),
+            Err(TransformError::Build(BuildError::TypeWorkExceeded))
+        ));
+        for _ in 0..2 {
+            let mut exact = CoreBuilder::<EffectOperationFamily>::with_effect_registry(Arc::new(
+                ResolvedRegistry::default(),
+            ));
+            exact
+                .charge_type_work_for_test(TYPE_WORK_LIMIT - work)
+                .unwrap();
+            let mut workspace = FragmentWorkspace::new(&source, &mut exact).unwrap();
+            FragmentNodeMap::new(
+                &mut workspace,
+                &source,
+                root,
+                &mut exact,
+                FragmentIdentityView::new(&first, None),
+            )
+            .expect("fresh exact allocation retries");
+        }
+    }
+
+    #[test]
+    fn fragment_handler_relocation_preserves_hook_coordinates_and_retries() {
+        use crate::{
+            core::effect::{HandlerId, HandlerNode},
+            module::ModuleId,
+            resolved::{HookRegistrationContract, HookRootContract, ResumeId},
+            types::{EffectId, EffectInstance, EffectRow, OperationId},
+        };
+
+        let source = SourceFile::new("fragment-handler.ash", "handler").unwrap();
+        let span = source.span(ByteRange::new(0, 7).unwrap()).unwrap();
+        let origin = Origin::Source(span);
+        let effect = EffectId::new(ModuleId::new(0), 0);
+        let source_type = TypeVariableId::generated(0);
+        let target_type = TypeVariableId::generated(10);
+        let source_binders = [0, 1, 2, 3].map(BinderId::generated);
+        let target_binders = [10, 11, 12, 13].map(BinderId::generated);
+        let identities = FragmentIdentities {
+            binders: source_binders.into_iter().zip(target_binders).collect(),
+            variables: HashMap::from([(source_type, target_type)]),
+            handlers: HashMap::from([(HandlerId::new(0), HandlerId::new(7))]),
+        };
+        let prepare = || {
+            let mut builder = CoreBuilder::<EffectOperationFamily>::with_effect_registry(Arc::new(
+                ResolvedRegistry::default(),
+            ));
+            let body = builder.unit(Type::Unit, origin.clone()).unwrap();
+            let instance = || {
+                EffectInstance::new(effect, vec![Type::Variable(source_type)].into_boxed_slice())
+            };
+            let handler = HandlerNode::new(HandlerId::new(0), body, instance(), Vec::new())
+                .with_hook_registration(Some(HookRegistrationContract {
+                    target: instance(),
+                    span,
+                    target_span: span,
+                    operation: OperationId::new(effect, 0),
+                    callback: source_binders[0],
+                    input: source_binders[1],
+                    previous: source_binders[2],
+                    next: source_binders[3],
+                    resume: ResumeId::new(3),
+                }))
+                .with_hook_root(Some(HookRootContract {
+                    target: instance(),
+                    span,
+                    target_span: span,
+                    operation: OperationId::new(effect, 0),
+                    input: source_binders[1],
+                    resume: ResumeId::new(4),
+                }));
+            let expression = CoreTypedExpr {
+                ty: Type::Unit,
+                effects: EffectRow::empty(),
+                origin: origin.clone(),
+                kind: EffectExprKind::Operation(EffectOperation::Handler(handler)),
+            };
+            (builder, vec![Some(body)], expression)
+        };
+        let (mut measured, remapped, expression) = prepare();
+        let before = measured.type_work.used();
+        let root = EffectOperationFamily::rebuild_operation(
+            &mut RebuildContext {
+                builder: &mut measured,
+                identities: Some(FragmentIdentityView::new(&identities, None)),
+            },
+            &remapped,
+            &expression,
+        )
+        .expect("the complete fragment mapping succeeds");
+        let work = measured.type_work.used() - before;
+        let EffectExprKind::Operation(EffectOperation::Handler(handler)) =
+            &measured.nodes[root.index().unwrap()].kind
+        else {
+            panic!("the rebuilt operation remains a handler");
+        };
+        assert_eq!(handler.id(), HandlerId::new(7));
+        let expected_target =
+            EffectInstance::new(effect, vec![Type::Variable(target_type)].into_boxed_slice());
+        assert_eq!(handler.effect(), &expected_target);
+        let registration = handler.hook_registration().expect("registration retained");
+        assert_eq!(registration.target, expected_target);
+        assert_eq!(
+            [
+                registration.callback,
+                registration.input,
+                registration.previous,
+                registration.next
+            ],
+            target_binders,
+        );
+        assert_eq!(registration.resume, ResumeId::new(3));
+        let root_contract = handler.hook_root().expect("root retained");
+        assert_eq!(root_contract.target, expected_target);
+        assert_eq!(root_contract.input, target_binders[1]);
+        assert_eq!(root_contract.resume, ResumeId::new(4));
+
+        let (mut short, remapped, expression) = prepare();
+        let retained = short.nodes.len();
+        short
+            .charge_type_work_for_test(TYPE_WORK_LIMIT - short.type_work.used() - (work - 1))
+            .unwrap();
+        assert_eq!(
+            EffectOperationFamily::rebuild_operation(
+                &mut RebuildContext {
+                    builder: &mut short,
+                    identities: Some(FragmentIdentityView::new(&identities, None)),
+                },
+                &remapped,
+                &expression,
+            ),
+            Err(TransformError::Build(BuildError::TypeWorkExceeded)),
+        );
+        assert_eq!(short.nodes.len(), retained);
+        for _ in 0..2 {
+            let (mut retry, remapped, expression) = prepare();
+            retry
+                .charge_type_work_for_test(TYPE_WORK_LIMIT - retry.type_work.used() - work)
+                .unwrap();
+            EffectOperationFamily::rebuild_operation(
+                &mut RebuildContext {
+                    builder: &mut retry,
+                    identities: Some(FragmentIdentityView::new(&identities, None)),
+                },
+                &remapped,
+                &expression,
+            )
+            .expect("a fresh exact-work retry succeeds");
+        }
+        let (mut rejected, remapped, expression) = prepare();
+        let mut incomplete = identities;
+        incomplete.binders.remove(&source_binders[3]);
+        assert_eq!(
+            EffectOperationFamily::rebuild_operation(
+                &mut RebuildContext {
+                    builder: &mut rejected,
+                    identities: Some(FragmentIdentityView::new(&incomplete, None)),
+                },
+                &remapped,
+                &expression,
+            ),
+            Err(TransformError::Build(BuildError::InvalidPayload)),
+        );
+        assert_eq!(rejected.nodes.len(), 1);
+    }
+
+    #[test]
+    fn fragment_network_relocation_defers_linked_result_until_assembly() {
+        use crate::{
+            core::effect::NetworkScopeNode, module::ModuleId, resolved::NetworkAcquisition,
+            types::EffectRow,
+        };
+
+        let source = SourceFile::new("fragment-network.ash", "network").unwrap();
+        let span = source.span(ByteRange::new(0, 7).unwrap()).unwrap();
+        let origin = Origin::Source(span);
+        let mut original = CoreBuilder::<EffectOperationFamily>::with_effect_registry(Arc::new(
+            ResolvedRegistry::default(),
+        ));
+        let handle = original.binder(Type::Unit, origin.clone()).unwrap();
+        let old_handle = handle.id();
+        let old_inputs = [
+            original.unit(Type::Unit, origin.clone()).unwrap(),
+            original.unit(Type::Unit, origin.clone()).unwrap(),
+            original.unit(Type::Unit, origin.clone()).unwrap(),
+            original.unit(Type::Unit, origin.clone()).unwrap(),
+        ];
+        let old_type = TypeVariableId::generated(0);
+        let old_entries = [BinderId::generated(1), BinderId::generated(2)];
+        let expression = CoreTypedExpr {
+            ty: Type::Unit,
+            effects: EffectRow::empty(),
+            origin: origin.clone(),
+            kind: EffectExprKind::Operation(EffectOperation::Network(Box::new(
+                NetworkScopeNode::new(
+                    NetworkAcquisition {
+                        builtin: ModuleId::new(0),
+                        identity: old_type,
+                        handle: old_handle,
+                        span,
+                    },
+                    handle,
+                    old_entries,
+                    old_inputs[0],
+                    [old_inputs[1], old_inputs[2]],
+                    old_inputs[3],
+                ),
+            ))),
+        };
+        let new_handle = BinderId::generated(10);
+        let new_entries = [BinderId::generated(11), BinderId::generated(12)];
+        let new_type = TypeVariableId::generated(10);
+        let identities = FragmentIdentities {
+            binders: HashMap::from([
+                (old_handle, new_handle),
+                (old_entries[0], new_entries[0]),
+                (old_entries[1], new_entries[1]),
+            ]),
+            variables: HashMap::from([(old_type, new_type)]),
+            handlers: HashMap::new(),
+        };
+        let mut destination = CoreBuilder::<EffectOperationFamily>::with_effect_registry(Arc::new(
+            ResolvedRegistry::default(),
+        ));
+        destination.reserve_resolved_binders([new_handle]).unwrap();
+        let new_inputs = [
+            destination.unit(Type::Unit, origin.clone()).unwrap(),
+            destination.unit(Type::Unit, origin.clone()).unwrap(),
+            destination.unit(Type::Unit, origin.clone()).unwrap(),
+            destination.unit(Type::Unit, origin.clone()).unwrap(),
+        ];
+        let remapped: Vec<_> = new_inputs.into_iter().map(Some).collect();
+        let relocated = EffectOperationFamily::rebuild_operation(
+            &mut RebuildContext {
+                builder: &mut destination,
+                identities: Some(FragmentIdentityView::new(&identities, None)),
+            },
+            &remapped,
+            &expression,
+        )
+        .expect("the network fragment relocates");
+        let network = match &destination.nodes[relocated.index().unwrap()].kind {
+            EffectExprKind::Operation(EffectOperation::Network(network)) => network,
+            _ => panic!("the rebuilt operation remains a network"),
+        };
+        assert_eq!(network.acquisition.identity, new_type);
+        assert_eq!(network.acquisition.handle, new_handle);
+        assert_eq!(network.handle.id(), new_handle);
+        assert_eq!(network.entries, new_entries);
+        assert_eq!(network.capacity, new_inputs[0]);
+        assert_eq!(network.inputs, [new_inputs[1], new_inputs[2]]);
+        assert_eq!(network.body, new_inputs[3]);
+        assert_eq!(network.linked_result, None);
+        destination
+            .set_network_linked_result(new_inputs[3])
+            .unwrap();
+        let EffectExprKind::Operation(EffectOperation::Network(network)) =
+            &destination.nodes[relocated.index().unwrap()].kind
+        else {
+            unreachable!();
+        };
+        assert_eq!(network.linked_result, Some(new_inputs[3]));
     }
 
     #[test]
@@ -2599,8 +3692,15 @@ mod tests {
                 let admitted = || application_type(super::super::CORE_PAYLOAD_DEPTH_LIMIT - 2);
                 let (mut measured, remapped, expression) = prepare(admitted());
                 let before = measured.type_work.used();
-                EffectOperationFamily::rebuild_operation(&mut measured, &remapped, &expression)
-                    .unwrap();
+                EffectOperationFamily::rebuild_operation(
+                    &mut RebuildContext {
+                        builder: &mut measured,
+                        identities: None,
+                    },
+                    &remapped,
+                    &expression,
+                )
+                .unwrap();
                 let work = measured.type_work.used() - before;
 
                 let (mut short, remapped, expression) = prepare(admitted());
@@ -2611,7 +3711,14 @@ mod tests {
                     )
                     .unwrap();
                 assert_eq!(
-                    EffectOperationFamily::rebuild_operation(&mut short, &remapped, &expression),
+                    EffectOperationFamily::rebuild_operation(
+                        &mut RebuildContext {
+                            builder: &mut short,
+                            identities: None
+                        },
+                        &remapped,
+                        &expression,
+                    ),
                     Err(TransformError::Build(BuildError::TypeWorkExceeded)),
                 );
                 assert_eq!(short.nodes.len(), retained);
@@ -2620,8 +3727,15 @@ mod tests {
                     retry
                         .charge_type_work_for_test(TYPE_WORK_LIMIT - retry.type_work.used() - work)
                         .unwrap();
-                    EffectOperationFamily::rebuild_operation(&mut retry, &remapped, &expression)
-                        .expect("fresh exact retry");
+                    EffectOperationFamily::rebuild_operation(
+                        &mut RebuildContext {
+                            builder: &mut retry,
+                            identities: None,
+                        },
+                        &remapped,
+                        &expression,
+                    )
+                    .expect("fresh exact retry");
                 }
                 let rejected_type = (0..32_768).fold(Type::Unit, |ty, _| {
                     Type::Function(Box::new(Type::Unit), Box::new(ty))
@@ -2629,7 +3743,10 @@ mod tests {
                 let (mut rejected, remapped, expression) = prepare(rejected_type);
                 assert_eq!(
                     EffectOperationFamily::rebuild_operation(
-                        &mut rejected,
+                        &mut RebuildContext {
+                            builder: &mut rejected,
+                            identities: None
+                        },
                         &remapped,
                         &expression,
                     ),

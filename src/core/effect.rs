@@ -1166,6 +1166,29 @@ impl CoreBuilder<EffectOperationFamily> {
         self.replay_effect_rows_in_range(range, output, handler, owner, false)
     }
 
+    /// Replays an exact postorder domain retained while a checked clause was
+    /// structurally transferred into its final module arena.
+    pub(crate) fn recompute_effect_rows_in_nodes(
+        &mut self,
+        nodes: &[usize],
+        output: &EffectRow,
+        handler: HandlerId,
+        owner: ResumeId,
+    ) -> Result<(), super::BuildError> {
+        self.charge_effect_metadata(nodes.len())?;
+        let mut previous = None;
+        for &index in nodes {
+            if index >= self.nodes.len() || previous.is_some_and(|value| value >= index) {
+                return Err(super::BuildError::InvalidNodeId);
+            }
+            previous = Some(index);
+        }
+        for &index in nodes {
+            self.invalidate_settled_zonk_range(index..index + 1)?;
+        }
+        self.replay_effect_rows_in_indices(nodes.iter().copied(), output, handler, owner, false)
+    }
+
     fn replay_effect_rows_in_range(
         &mut self,
         range: std::ops::Range<usize>,
@@ -1174,7 +1197,21 @@ impl CoreBuilder<EffectOperationFamily> {
         owner: ResumeId,
         provisional: bool,
     ) -> Result<(), super::BuildError> {
+        if range.start > range.end || range.end > self.nodes.len() {
+            return Err(super::BuildError::InvalidNodeId);
+        }
         self.invalidate_settled_zonk_range(range.clone())?;
+        self.replay_effect_rows_in_indices(range, output, handler, owner, provisional)
+    }
+
+    fn replay_effect_rows_in_indices(
+        &mut self,
+        indices: impl ExactSizeIterator<Item = usize>,
+        output: &EffectRow,
+        handler: HandlerId,
+        owner: ResumeId,
+        provisional: bool,
+    ) -> Result<(), super::BuildError> {
         enum Equation {
             Region(super::region::RegionScopeNode),
             RegionAllocate(super::region::RegionAllocateNode),
@@ -1198,15 +1235,12 @@ impl CoreBuilder<EffectOperationFamily> {
             Keep,
         }
 
-        if range.start > range.end || range.end > self.nodes.len() {
-            return Err(super::BuildError::InvalidNodeId);
-        }
-        self.charge_effect_metadata(range.len())?;
+        self.charge_effect_metadata(indices.len())?;
         let mut undo = Vec::new();
-        undo.try_reserve_exact(range.len())
+        undo.try_reserve_exact(indices.len())
             .map_err(|_| super::BuildError::TypeWorkExceeded)?;
         let result = (|| {
-            for index in range {
+            for index in indices {
                 self.charge_effect_metadata(1)?;
                 let equation = match &self.nodes[index].kind {
                     EffectExprKind::Operation(EffectOperation::Network(network)) => {
@@ -1774,15 +1808,31 @@ impl CoreBuilder<EffectOperationFamily> {
 
     /// Completes source-only cleanup row replay after its row variables are solved.
     pub(crate) fn finish_cleanup_effect_rows(&mut self) -> Result<(), super::BuildError> {
-        self.settled_zonk_nodes.clear();
+        self.finish_cleanup_effect_rows_after(0)
+    }
+
+    /// Settles only newly constructed nodes, using the completed prefix's rows
+    /// as immutable inputs to the new entry and assembly expressions.
+    pub(crate) fn finish_cleanup_effect_rows_after(
+        &mut self,
+        start: usize,
+    ) -> Result<(), super::BuildError> {
         let count = self.nodes.len();
-        self.charge_effect_metadata(count)?;
+        let length = count
+            .checked_sub(start)
+            .ok_or(super::BuildError::InvalidNodeId)?;
+        if start == 0 {
+            self.settled_zonk_nodes.clear();
+        } else {
+            self.invalidate_settled_zonk_range(start..count)?;
+        }
+        self.charge_effect_metadata(length)?;
         let mut previous = Vec::new();
         previous
-            .try_reserve_exact(count)
+            .try_reserve_exact(length)
             .map_err(|_| super::BuildError::TypeWorkExceeded)?;
         let mut handlers = std::collections::HashMap::new();
-        for index in 0..count {
+        for index in start..count {
             self.charge_effect_metadata(1)?;
             previous.push(
                 clone_effect_row_with_budget(&self.nodes[index].effects, &mut self.type_work)
@@ -1816,7 +1866,7 @@ impl CoreBuilder<EffectOperationFamily> {
             // derived resume edges at bottom rather than retaining self-supporting
             // cached labels or tails. Stable call/discard leaves retain their rows
             // and authenticated lacks and reintroduce them during the replay.
-            for index in 0..count {
+            for index in start..count {
                 self.charge_effect_metadata(1)?;
                 if matches!(
                     self.nodes[index].kind,
@@ -1831,14 +1881,14 @@ impl CoreBuilder<EffectOperationFamily> {
             // clause was visited; refresh those resume edges until none changes.
             loop {
                 self.replay_effect_rows_in_range(
-                    0..count,
+                    start..count,
                     &EffectRow::empty(),
                     HandlerId::new(u32::MAX),
                     ResumeId::new(u32::MAX),
                     true,
                 )?;
                 let mut changed = false;
-                for index in 0..count {
+                for index in start..count {
                     self.charge_effect_metadata(1)?;
                     let EffectExprKind::Operation(EffectOperation::Resume(resume)) =
                         &self.nodes[index].kind
@@ -1871,7 +1921,7 @@ impl CoreBuilder<EffectOperationFamily> {
                 }
                 if !changed {
                     return self.recompute_effect_rows_in_range(
-                        0..count,
+                        start..count,
                         &EffectRow::empty(),
                         HandlerId::new(u32::MAX),
                         ResumeId::new(u32::MAX),
@@ -1880,7 +1930,7 @@ impl CoreBuilder<EffectOperationFamily> {
             }
         })();
         if result.is_err() {
-            for (node, row) in self.nodes.iter_mut().zip(previous) {
+            for (node, row) in self.nodes[start..].iter_mut().zip(previous) {
                 node.effects = row;
             }
         }
@@ -2388,6 +2438,92 @@ mod tests {
         output: &EffectRow,
     ) -> Result<(), super::super::BuildError> {
         builder.recompute_effect_rows_in_range(range, output, HandlerId::new(0), ResumeId::new(0))
+    }
+
+    #[test]
+    fn sparse_clause_replay_preserves_other_rows_and_retries_atomically() {
+        fn fixture() -> (EffectCoreBuilder, Vec<usize>, EffectRow, NodeId, NodeId) {
+            let source = SourceFile::new("sparse-clause", "()").unwrap();
+            let origin = Origin::Source(source.span(ByteRange::new(0, 2).unwrap()).unwrap());
+            let mut builder =
+                EffectCoreBuilder::with_effect_registry(Arc::new(ResolvedRegistry::default()));
+            let value = builder
+                .integer(
+                    Integer::parse_decimal("0").unwrap(),
+                    Type::Int,
+                    origin.clone(),
+                )
+                .unwrap();
+            let resume = |builder: &mut EffectCoreBuilder| {
+                builder
+                    .resume(
+                        HandlerId::new(0),
+                        ResumeId::new(0),
+                        ResumeUse::Consumed,
+                        value,
+                        Type::Int,
+                        EffectRow::empty(),
+                        origin.clone(),
+                    )
+                    .unwrap()
+            };
+            let selected = resume(&mut builder);
+            let skipped = resume(&mut builder);
+            let parent = builder
+                .primitive(Primitive::Add, value, selected, Type::Int, origin)
+                .unwrap();
+            let domain = vec![selected.index().unwrap(), parent.index().unwrap()];
+            let row = EffectRow::singleton(EffectInstance::new(
+                EffectId::new(ModuleId::new(0), 0),
+                Box::new([]),
+            ));
+            (builder, domain, row, selected, skipped)
+        }
+        let (mut measured, domain, row, selected, skipped) = fixture();
+        let before = measured.type_work.used();
+        measured
+            .recompute_effect_rows_in_nodes(&domain, &row, HandlerId::new(0), ResumeId::new(0))
+            .unwrap();
+        let work = measured.type_work.used() - before;
+        assert_eq!(measured.nodes[selected.index().unwrap()].effects, row);
+        assert!(measured.nodes[skipped.index().unwrap()].effects.is_empty());
+        assert_eq!(measured.nodes[*domain.last().unwrap()].effects, row);
+
+        let (mut short, domain, row, _, _) = fixture();
+        let original = short
+            .nodes
+            .iter()
+            .map(|node| node.effects.clone())
+            .collect::<Vec<_>>();
+        short
+            .charge_type_work_for_test(TYPE_WORK_LIMIT - short.type_work.used() - (work - 1))
+            .unwrap();
+        assert_eq!(
+            short.recompute_effect_rows_in_nodes(
+                &domain,
+                &row,
+                HandlerId::new(0),
+                ResumeId::new(0)
+            ),
+            Err(super::super::BuildError::TypeWorkExceeded)
+        );
+        assert_eq!(
+            short
+                .nodes
+                .iter()
+                .map(|node| node.effects.clone())
+                .collect::<Vec<_>>(),
+            original
+        );
+        for _ in 0..2 {
+            let (mut retry, domain, row, _, _) = fixture();
+            retry
+                .charge_type_work_for_test(TYPE_WORK_LIMIT - retry.type_work.used() - work)
+                .unwrap();
+            retry
+                .recompute_effect_rows_in_nodes(&domain, &row, HandlerId::new(0), ResumeId::new(0))
+                .unwrap();
+        }
     }
 
     #[test]

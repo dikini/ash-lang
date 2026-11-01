@@ -27,6 +27,28 @@ enum Equation {
     Remove(EffectRow, crate::types::EffectInstance, bool),
 }
 
+#[derive(Debug)]
+enum ClauseDomain {
+    Source(std::ops::Range<usize>),
+    Physical(Vec<usize>),
+}
+
+/// The exact nodes emitted for a source node in one checked body.  The
+/// destination range also includes evidence nodes replacing that occurrence.
+#[derive(Debug)]
+struct CleanupEmission {
+    owner: BinderId,
+    source: usize,
+    node: NodeId,
+    emitted: std::ops::Range<usize>,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct CleanupTransfer {
+    emissions: Vec<CleanupEmission>,
+    owners: HashSet<BinderId>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,10 +137,16 @@ mod tests {
 
 #[derive(Debug, Default)]
 pub(super) struct CleanupRows {
-    equations: Vec<(InferenceVariableId, Equation, Span)>,
+    equations: Vec<(InferenceVariableId, Equation, Span, Option<BinderId>)>,
     identities: HashSet<InferenceVariableId>,
-    equalities: Vec<(EffectRow, EffectRow, Span)>,
-    recomputations: Vec<(std::ops::Range<usize>, EffectRow, HandlerId, ResumeId)>,
+    equalities: Vec<(EffectRow, EffectRow, Span, Option<BinderId>)>,
+    recomputations: Vec<(
+        ClauseDomain,
+        EffectRow,
+        HandlerId,
+        ResumeId,
+        Option<BinderId>,
+    )>,
 }
 
 impl CleanupRows {
@@ -134,9 +162,214 @@ impl CleanupRows {
     }
 }
 
+impl CleanupTransfer {
+    pub(super) fn record(
+        &mut self,
+        owner: BinderId,
+        source: NodeId,
+        node: NodeId,
+        emitted: std::ops::Range<usize>,
+        work: &mut crate::types::TypeWorkBudget,
+    ) -> Result<(), TypeError> {
+        work.charge(1).map_err(|()| type_resource())?;
+        self.emissions.try_reserve(1).map_err(|_| type_resource())?;
+        let source = usize::try_from(source.value()).map_err(|_| invalid_state())?;
+        if emitted.start > emitted.end {
+            return Err(invalid_state());
+        }
+        self.emissions.push(CleanupEmission {
+            owner,
+            source,
+            node,
+            emitted,
+        });
+        Ok(())
+    }
+
+    fn mapped_node(
+        &self,
+        owner: BinderId,
+        source: usize,
+        work: &mut crate::types::TypeWorkBudget,
+    ) -> Result<NodeId, TypeError> {
+        work.charge(self.emissions.len())
+            .map_err(|()| type_resource())?;
+        let mut matching = self
+            .emissions
+            .iter()
+            .filter(|item| item.owner == owner && item.source == source);
+        let node = matching.next().ok_or_else(invalid_state)?.node;
+        if matching.next().is_some() {
+            return Err(invalid_state());
+        }
+        Ok(node)
+    }
+}
+
 impl<F: CoreLoweringFamily> CoreElaborator<F> {
+    pub(super) fn register_transferred_cleanup_rows(&mut self) -> Result<(), TypeError> {
+        self.type_work
+            .charge(self.cleanup_rows.identities.capacity())
+            .map_err(|()| type_resource())?;
+        for identity in &self.cleanup_rows.identities {
+            self.builder.defer_cleanup_row(*identity)?;
+        }
+        Ok(())
+    }
+
+    fn relocate_cleanup_row(
+        &mut self,
+        row: &EffectRow,
+        identities: crate::core::transform::FragmentIdentityView<'_>,
+    ) -> Result<EffectRow, TypeError> {
+        // Expand solutions in the checking owner's coordinates before its
+        // source parameters are freshened in the physical graph.
+        let row = self.zonk_effect_row(row)?;
+        crate::types::rename_fragment_row_with(
+            &row,
+            &identities.base.variables,
+            identities.variables,
+            |units| self.type_work.charge(units),
+            || (),
+        )
+        .map_err(|()| type_resource())?
+        .map_err(|_| invalid_state())
+    }
+
+    pub(super) fn relocate_cleanup_owner(
+        &mut self,
+        transfer: &mut CleanupTransfer,
+        owner: BinderId,
+        identities: crate::core::transform::FragmentIdentityView<'_>,
+    ) -> Result<(), TypeError> {
+        self.type_work.charge(1).map_err(|()| type_resource())?;
+        transfer
+            .owners
+            .try_reserve(1)
+            .map_err(|_| type_resource())?;
+        if !transfer.owners.insert(owner) {
+            return Err(invalid_state());
+        }
+        let mut pending = std::mem::take(&mut self.cleanup_rows);
+        let result = (|| {
+            let count = pending
+                .equations
+                .len()
+                .checked_add(pending.equalities.len())
+                .and_then(|count| count.checked_add(pending.recomputations.len()))
+                .ok_or_else(type_resource)?;
+            self.type_work.charge(count).map_err(|()| type_resource())?;
+            for (_, equation, _, equation_owner) in &mut pending.equations {
+                if *equation_owner != Some(owner) {
+                    continue;
+                }
+                match equation {
+                    Equation::Discard(_) => {}
+                    Equation::Union(left, right) => {
+                        *left = self.relocate_cleanup_row(left, identities)?;
+                        *right = self.relocate_cleanup_row(right, identities)?;
+                    }
+                    Equation::Remove(row, effect, _) => {
+                        *row = self.relocate_cleanup_row(row, identities)?;
+                        let effect_row = EffectRow::singleton(clone_effect_instance_with_budget(
+                            effect,
+                            &mut self.type_work,
+                        )?);
+                        let (known, tail) = self
+                            .relocate_cleanup_row(&effect_row, identities)?
+                            .into_parts();
+                        let mut known = known.into_vec();
+                        if tail.is_some() || known.len() != 1 {
+                            return Err(invalid_state());
+                        }
+                        *effect = known.pop().ok_or_else(invalid_state)?;
+                    }
+                }
+            }
+            for (left, right, _, equality_owner) in &mut pending.equalities {
+                if *equality_owner == Some(owner) {
+                    *left = self.relocate_cleanup_row(left, identities)?;
+                    *right = self.relocate_cleanup_row(right, identities)?;
+                }
+            }
+            for (_, output, _, _, clause_owner) in &mut pending.recomputations {
+                if *clause_owner == Some(owner) {
+                    *output = self.relocate_cleanup_row(output, identities)?;
+                }
+            }
+            Ok(())
+        })();
+        self.cleanup_rows = pending;
+        result
+    }
+
+    pub(super) fn finish_cleanup_transfer(
+        &mut self,
+        transfer: CleanupTransfer,
+    ) -> Result<(), TypeError> {
+        let mut pending = std::mem::take(&mut self.cleanup_rows);
+        let result = (|| {
+            let count = pending
+                .equations
+                .len()
+                .checked_add(pending.equalities.len())
+                .and_then(|count| count.checked_add(pending.recomputations.len()))
+                .ok_or_else(type_resource)?;
+            self.type_work.charge(count).map_err(|()| type_resource())?;
+            for (_, equation, _, owner) in &mut pending.equations {
+                let owner = owner.ok_or_else(invalid_state)?;
+                if !transfer.owners.contains(&owner) {
+                    return Err(invalid_state());
+                }
+                if let Equation::Discard(source) = equation {
+                    let node = transfer.mapped_node(owner, *source, &mut self.type_work)?;
+                    *source = usize::try_from(node.value()).map_err(|_| invalid_state())?;
+                }
+            }
+            for (_, _, _, owner) in &pending.equalities {
+                if !transfer.owners.contains(&owner.ok_or_else(invalid_state)?) {
+                    return Err(invalid_state());
+                }
+            }
+            for (domain, _, _, _, owner) in &mut pending.recomputations {
+                let owner = owner.ok_or_else(invalid_state)?;
+                if !transfer.owners.contains(&owner) {
+                    return Err(invalid_state());
+                }
+                let ClauseDomain::Source(source) = domain else {
+                    return Err(invalid_state());
+                };
+                self.type_work
+                    .charge(transfer.emissions.len())
+                    .map_err(|()| type_resource())?;
+                let mut nodes = Vec::new();
+                for emission in &transfer.emissions {
+                    if emission.owner != owner || !source.contains(&emission.source) {
+                        continue;
+                    }
+                    let count = emission.emitted.len();
+                    self.type_work.charge(count).map_err(|()| type_resource())?;
+                    nodes.try_reserve(count).map_err(|_| type_resource())?;
+                    nodes.extend(emission.emitted.clone());
+                }
+                *domain = ClauseDomain::Physical(nodes);
+            }
+            self.type_work
+                .charge(self.pending_cleanup_regions.len())
+                .map_err(|()| type_resource())?;
+            for (node, _, owner) in &mut self.pending_cleanup_regions {
+                let owner = owner.ok_or_else(invalid_state)?;
+                let source = usize::try_from(node.value()).map_err(|_| invalid_state())?;
+                *node = transfer.mapped_node(owner, source, &mut self.type_work)?;
+            }
+            Ok(())
+        })();
+        self.cleanup_rows = pending;
+        result
+    }
+
     pub(super) fn rollback_cleanup_rows(&mut self, (equations, equalities): (usize, usize)) {
-        for (id, _, _) in self.cleanup_rows.equations.drain(equations..) {
+        for (id, _, _, _) in self.cleanup_rows.equations.drain(equations..) {
             self.cleanup_rows.identities.remove(&id);
             self.builder.forget_cleanup_row(id);
         }
@@ -196,7 +429,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .map_err(|_| type_resource())?,
             );
         }
-        for (id, _, _) in &pending.equations {
+        for (id, _, _, _) in &pending.equations {
             solutions.insert(*id, EffectRow::empty());
         }
         // These equations are monotone unions and exact removals over the
@@ -204,7 +437,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         loop {
             let mut changed = false;
             let mut failure = None;
-            for (id, equation, span) in &pending.equations {
+            for (id, equation, span, _) in &pending.equations {
                 self.type_work.charge(1).map_err(|_| type_resource())?;
                 let row = match equation {
                     Equation::Discard(node) => (|| {
@@ -265,7 +498,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
         }
         let mut inserted = Vec::new();
-        for (id, _, _) in &pending.equations {
+        for (id, _, _, _) in &pending.equations {
             let row = solutions.remove(id).ok_or_else(invalid_state)?;
             self.solve_effect_row_variable(*id, &[], row, &mut inserted)
                 .map_err(|failure| match failure {
@@ -273,7 +506,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     _ => invalid_state(),
                 })?;
         }
-        for (left, right, span) in &pending.equalities {
+        for (left, right, span, _) in &pending.equalities {
             self.unify_effect_rows(left, right)
                 .map_err(|failure| match failure {
                     UnificationFailure::Resource => type_resource(),
@@ -288,15 +521,24 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         self.check_deferred_resource_escapes()?;
         self.zonk_builder_types().map_err(TypeError::Internal)?;
         self.builder.finish_cleanup_rows();
-        for (range, output, handler, owner) in &pending.recomputations {
+        for (domain, output, handler, owner, _) in &pending.recomputations {
             let output = self.zonk_effect_row(output)?;
-            F::recompute_clause_effect_rows(
-                &mut self.builder,
-                range.clone(),
-                &output,
-                *handler,
-                *owner,
-            )?;
+            match domain {
+                ClauseDomain::Source(range) => F::recompute_clause_effect_rows(
+                    &mut self.builder,
+                    range.clone(),
+                    &output,
+                    *handler,
+                    *owner,
+                )?,
+                ClauseDomain::Physical(nodes) => F::recompute_clause_effect_rows_in_nodes(
+                    &mut self.builder,
+                    nodes,
+                    &output,
+                    *handler,
+                    *owner,
+                )?,
+            }
         }
         F::finish_cleanup_effect_rows(&mut self.builder)?;
         if !self.pending_cleanup_regions.is_empty() {
@@ -377,7 +619,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         };
         self.builder.defer_cleanup_row(id)?;
         self.cleanup_rows.identities.insert(id);
-        self.cleanup_rows.equations.push((id, equation, span));
+        self.cleanup_rows.equations.push((
+            id,
+            equation,
+            span,
+            self.checked_body_owner.map(|(_, binder)| binder),
+        ));
         Ok(row)
     }
 
@@ -439,6 +686,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     id,
                     Equation::Union(replacement, EffectRow::empty()),
                     span,
+                    self.checked_body_owner.map(|(_, binder)| binder),
                 ));
                 return Ok(());
             }
@@ -452,7 +700,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .equalities
             .try_reserve(1)
             .map_err(|_| type_resource())?;
-        self.cleanup_rows.equalities.push((left, right, span));
+        self.cleanup_rows.equalities.push((
+            left,
+            right,
+            span,
+            self.checked_body_owner.map(|(_, binder)| binder),
+        ));
         Ok(())
     }
 
@@ -504,9 +757,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .recomputations
                 .try_reserve(1)
                 .map_err(|_| type_resource())?;
-            self.cleanup_rows
-                .recomputations
-                .push((range, output, handler, owner));
+            self.cleanup_rows.recomputations.push((
+                ClauseDomain::Source(range),
+                output,
+                handler,
+                owner,
+                self.checked_body_owner.map(|(_, binder)| binder),
+            ));
         }
         Ok(())
     }
