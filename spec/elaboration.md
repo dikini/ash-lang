@@ -3,9 +3,10 @@
 Elaboration converts resolved surface syntax into typed semantic terms used by
 the [dynamic semantics](dynamic-semantics.md). Each term has its structural type
 and a causal source origin. Elaboration does not change the result prescribed
-by the typing rules. Checked definitions retain any selected interface evidence
-through linking. Linked interface-evidence validation authenticates that
-evidence, and Core synthesis consumes it.
+by the typing rules. Each checked module completes its selected interface
+evidence and lowered representation before publication. Linking preserves
+those facts and checks new connections; the resulting Core receives its
+independent validation once.
 
 ## Surface erasure
 
@@ -29,17 +30,15 @@ Module paths, imports, aliases, targeted bindings, public re-export spellings,
 declaration visibility, and opacity are source-only forms and do not become
 Core terms. Resolution has already authenticated each cross-module name
 occurrence against its dependency summary. Implementation authorization routes
-remain linked metadata until validation authenticates their complete summary
-path. The resolved semantic terms and registries still retain the
+remain linked metadata while validation checks the complete route. The resolved
+semantic terms and registries still retain the
 module-qualified term, nominal, constructor, type-parameter, source, and origin
 identities that later stages require.
 
 Interface and implementation declarations likewise produce no Core declaration
-node. The interface-specific identities and registries established during
-resolution and checking remain linked metadata until linked interface-evidence
-validation authenticates their ordered parameter records, optional determinant
-positions, and complete applications. Determination metadata erases during Core
-synthesis as described below.
+node. The interface-specific identities and checked records established during
+module checking are retained for linked composition and independent Core
+validation. Determination metadata erases as described below.
 
 Effect declarations also produce no runtime declaration node. A checked module
 summary retains each body-free effect identity, ordered fixed-kinded
@@ -146,8 +145,9 @@ instance and the live activation before reading or replacing the root. No
 runtime activation is allocated by Core validation or private image restoration.
 
 The carrier selects the closed cell API and retains the body's result type.
-Independent linked and Core validation authenticate the exact builtin cell,
-sealed provider, generated methods, ownership, origins and result/row relation.
+Source checking and independent Core validation authenticate the exact builtin
+cell, sealed provider, generated methods, ownership, origins and result/row
+relation.
 Both transforms re-establish those checks. Core contains no allocated owner.
 Resolution has already replaced source type spellings with stable nominal and
 type-parameter identities. Elaboration may introduce inference variables while
@@ -187,11 +187,11 @@ match it with the source pattern in the function body.
 After every module checks, linking combines the complete defining nominal,
 constructor, interface, effect, operation, and implementation registries of all
 admitted modules.
-Each checked module contributes a definition group containing its source
-definitions, global schemes, implementation-method bodies, and filled
-structural evidence slots. Linking preserves that ownership rather than
-extracting selections into a span-keyed side table. Each declaration retains
-its module-qualified identity. Distinct identities remain distinct even when
+Each checked module contributes its completed lowered definition group, global
+schemes, evidence records, closure layouts and cleanup metadata. Linking
+structurally relocates the group and its metadata rather than re-elaborating
+its source or selecting evidence again. Each declaration retains its
+module-qualified identity. Distinct identities remain distinct even when
 their source spellings or representations match. Access-compatible import
 routes have already converged on the same identities. Public summaries can
 carry a private nominal identity without giving it a source name. The combined
@@ -200,9 +200,9 @@ refer to the same type. Opaque constructor access has already been enforced and
 does not restrict the defining constructor facts needed by the linked program.
 
 A physical data-constructor scheme exists in a checked dependency summary and
-then in the authenticated imported constructor fact used to check its
-dependent. Linking consumes those body-free summary and import carriers before
-Core synthesis. The linked constructor registry retains the defining identity,
+then in the retained imported constructor fact used to check its dependent.
+Linking consumes those body-free summary and import carriers. The linked
+constructor registry retains the defining identity,
 owner, payload, and origin needed by Core, but it does not retain another copy
 of the physical constructor scheme. The scheme therefore has the lifecycle
 summary to imported fact to disposal before linked Core, rather than a
@@ -211,10 +211,11 @@ redundant linked carrier.
 For a `newtype`, the combined nominal registry instead retains one canonical
 hidden fact containing the declaration kind and identity, owner, ordered
 parameter records, sole same-spelled constructor, representation template,
-access, origin, and representation provenance. Linking authenticates these
-facts across direct, aliased, opaque, re-exported, and diamond routes. Hidden
-facts authorize later Core validation but create no source name, constructor
-access, coercion, or interface evidence.
+access, origin, and representation provenance. Import composition checks
+agreement across direct, aliased, opaque, re-exported, and diamond routes;
+linking preserves the defining facts. Hidden facts authorize later Core
+validation but create no source name, constructor access, coercion, or
+interface evidence.
 
 Local canonical facts never enter dependency summaries, imports, or exports.
 Each checked module retains its lexical nominals and constructors separately
@@ -240,17 +241,16 @@ atomically freezes its zonked complete obligation application, ordered method-lo
 arguments, checked occurrence type, and selected evidence. A method occurrence
 retains one selection for its interface requirement. A constrained-global
 occurrence retains one selection for each requirement in the global signature's
-order. The checked definition owns those selections through module checking
-and linking. Core synthesis consumes the slots on those exact occurrences; it
-neither joins evidence by source location nor performs implementation selection
-again.
+order. Module finalization consumes those exact selections to build the module's
+evidence arguments, wrappers and authentication records before publication.
+It neither joins evidence by source location nor performs implementation
+selection again. Linking transfers the completed records with their nodes.
 
-Before Core synthesis, linked interface-evidence validation receives the
-checked definition groups, their combined registries, effective implementation
-inventories, and public authorization entries. It first authenticates every
-group's local implementation inventory. In dependency order, it then
-authenticates every complete public authorization table and every effective
-inventory before inspecting occurrence evidence.
+Linked interface composition receives the completed definition groups, their
+combined registries, effective implementation inventories, and public
+authorization entries. It retains the defining checks already established by
+each module and checks the identities, availability and routes introduced by
+the combined graph and its generated entry.
 
 An empty public authorization is valid only for a public implementation defined
 by the publishing group. A nonempty route must begin at the publishing group,
@@ -262,7 +262,8 @@ or otherwise inconsistent route fails authentication. Validation then uses the
 same authenticated relation for occurrence availability; it never substitutes
 another route or candidate.
 
-The complete validation authenticates:
+The defining checks, module finalization and independent linked Core
+validation together establish:
 
 - interface, method, implementation, nominal, requirement,
   implementation-method, and binder identities;
@@ -293,18 +294,12 @@ The complete validation authenticates:
 - source and module provenance, complete linked definitions, and the absence of
   unresolved inference variables.
 
-This validation checks the recorded selections and does not choose candidates
-again. A malformed linked selection is an internal
-`evidence.validation.*` failure. The graph-wide interface-and-constraint work
-budget charges linked public-entry retention and every route hop, then continues
-through inventory and occurrence validation. Exhaustion remains
-`internal.resource.constraint-work`. Core construction begins only after the
-complete judgment succeeds.
-
-Successful linked validation produces the only capability that authorizes
-polymorphic Core evidence. A copied scheme, node annotation, or unchecked Core
-shape cannot establish that authority, and Core synthesis never reselects an
-implementation.
+The graph-wide interface-and-constraint work budget charges retained
+public-entry and route composition and each new connection. Exhaustion remains
+`internal.resource.constraint-work`. Completed selections are not chosen again.
+The compiler's checked module output supplies evidence authority for structural
+assembly; a copied scheme, node annotation, or unchecked Core shape cannot
+establish it. The new linked Core is independently validated before execution.
 
 Each nonempty module definition group becomes one ordinary Core recursive
 binding. Groups appear in dependency order: a dependency's group surrounds the
@@ -334,6 +329,10 @@ requires an effectful function type, an `EffectRow` binder or argument, or an
 effect operation. Importing or declaring an effect whose identity does not
 occur in any such retained fact or expression does not by itself select Effect
 Core.
+Every successfully admitted public file graph retains the compiler-owned Region
+dependency and its nonempty allocation-row schemes, so that path selects Effect
+Core even when the entry's own row is empty. Standalone and manually assembled
+Pure Core remain available under their existing rules.
 
 Region lowering retains explicit selected-context and request operands, exact
 callback rows/targets, supplied pending storage, local fields/captures,
@@ -434,8 +433,8 @@ Module checking infers private control summaries from typed semantic control
 and publishes them only after capture checking succeeds. A function summary
 retains possible calls, requests, handlers and completion control, rather than
 only a preselected outward-request list. Imported calls specialize retained
-type and effect identities before selecting handlers. Summary admission
-authenticates the defining function and those hidden identities. No source
+type and effect identities before selecting handlers. Defining publication
+checks the function and those hidden identities. No source
 capture annotation, dependency source body, or runtime capture registry is
 introduced.
 
@@ -558,10 +557,10 @@ Global-to-method, method-to-global, direct method recursion, and mutual method
 recursion consequently use the existing recursive binding rather than a cross-
 module group.
 
-After linked interface-evidence validation, source-only interface,
-implementation, lexical selection scope, requirement, determination, and authorization-route carriers
-can erase.
-Minimal immutable method-evidence authentication facts survive Core synthesis
+After their checked facts have been retained and new routes composed,
+source-only interface, implementation, lexical selection scope, requirement,
+determination and authorization-route carriers can erase.
+Minimal immutable method-evidence authentication facts survive module lowering
 so independent validation can derive and check every generated evidence
 domain, occurrence, forwarding use, adapter, and supplied local method. Their term structure uses only
 ordinary Core type abstractions, function binders, binder occurrences, type
@@ -789,8 +788,8 @@ group; it cannot silently treat the members as sequential bindings.
 ## Validation boundary
 
 Every semantic binder, pattern, and expression carries its type and causal
-source origin. After linked interface-evidence validation, the validator for
-the selected Core dialect receives the produced program, its combined immutable
+source origin. After linked composition, the validator for the selected Core
+dialect receives the produced program, its combined immutable
 nominal, constructor, effect, operation, canonical type-binder, and method-
 evidence authentication facts, the admitted source set, and each module's
 source identity. Both dialects independently synthesize monotype kinds, check

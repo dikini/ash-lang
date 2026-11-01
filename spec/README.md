@@ -308,9 +308,11 @@ main () = observe(relay(Some(1)))
 ```
 
 The dependency summary carries the defining identities and fixed kinds without
-the dependency body. Linking authenticates the selected `Observe<Option>`
-evidence before Core synthesis. The program observes `42 : Int`; kinds and
-selected interface evidence introduce no runtime lookup or module value.
+the dependency body. Each occurrence's module checks and lowers its selected
+evidence, including `Observe<Option>`, before publication. Linking preserves
+that evidence and checks new import and caller connections. The program
+observes `42 : Int`; kinds and selected interface evidence introduce no runtime
+lookup or module value.
 
 A targeted import can select and rename that export without introducing a
 module alias:

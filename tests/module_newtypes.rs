@@ -1,6 +1,8 @@
 use std::{
+    cell::RefCell,
     fs,
     path::{Path, PathBuf},
+    rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -9,14 +11,14 @@ use ash::{
     elaborate::{EffectElaborator, TypeError, TypeReason, check_module, link_modules},
     eval::{Value, evaluate_effect},
     evidence_validation::validate_interface_evidence,
-    module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
+    module::{LoadedModule, ModuleGraph, ModuleId, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
     resolved::{CheckedModule, ImportedTypeAccess, ResolvedModule, ResolvedNominalDeclarationKind},
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
-struct ModuleTree(PathBuf);
+struct ModuleTree(PathBuf, RefCell<Vec<(ModuleId, Rc<Vec<CheckedModule>>)>>);
 
 impl ModuleTree {
     fn create() -> Self {
@@ -25,7 +27,7 @@ impl ModuleTree {
             let path = std::env::temp_dir()
                 .join(format!("ash-module-newtypes-{}-{id}", std::process::id()));
             match fs::create_dir(&path) {
-                Ok(()) => return Self(path),
+                Ok(()) => return Self(path, RefCell::new(Vec::new())),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => panic!("fixture tree should be creatable: {error}"),
             }
@@ -39,6 +41,56 @@ impl ModuleTree {
         }
         fs::write(&path, source).expect("fixture source should be writable");
         path
+    }
+
+    fn implicit_services(&self, graph: &ModuleGraph) -> Rc<Vec<CheckedModule>> {
+        if let Some((_, services)) = self
+            .1
+            .borrow()
+            .iter()
+            .find(|(entry, _)| *entry == graph.entry())
+        {
+            return Rc::clone(services);
+        }
+        let mut services = Vec::<CheckedModule>::new();
+        for module in graph.modules().iter().filter(|module| {
+            matches!(
+                module.canonical_path().to_str(),
+                Some("@builtin.foreign" | "@compiler.region")
+            )
+        }) {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    let service = services
+                        .iter()
+                        .find(|service| service.module() == edge.target())
+                        .expect("implicit services must be dependency ordered");
+                    DependencyExports::new(edge, service.exports())
+                        .expect("the actual implicit edge matches its export")
+                })
+                .collect::<Vec<_>>();
+            let resolved =
+                resolve_module(module, &dependencies).expect("the implicit service should resolve");
+            services.push(check_module(resolved).expect("the implicit service should check"));
+        }
+        let services = Rc::new(services);
+        self.1
+            .borrow_mut()
+            .push((graph.entry(), Rc::clone(&services)));
+        services
+    }
+
+    fn take_implicit_services(&self, graph: &ModuleGraph) -> Vec<CheckedModule> {
+        let index = self
+            .1
+            .borrow()
+            .iter()
+            .position(|(entry, _)| *entry == graph.entry())
+            .expect("the implicit services should have been checked");
+        let (_, services) = self.1.borrow_mut().remove(index);
+        Rc::try_unwrap(services).expect("no implicit service borrow should outlive resolution")
     }
 }
 
@@ -59,27 +111,43 @@ fn module_named<'a>(graph: &'a ModuleGraph, file_name: &str) -> &'a LoadedModule
 }
 
 fn resolve_fixture(
+    tree: &ModuleTree,
     graph: &ModuleGraph,
     target: &LoadedModule,
     retained: &[&CheckedModule],
 ) -> Result<ResolvedModule, ResolveModuleError> {
+    let implicit = tree.implicit_services(graph);
     let mut checked = Vec::new();
     for module in graph.modules() {
+        if implicit
+            .iter()
+            .any(|service| service.module() == module.id())
+        {
+            continue;
+        }
         let dependencies = module
             .dependencies()
             .iter()
             .map(|edge| {
-                let dependency = retained
+                let summary = retained
                     .iter()
                     .copied()
                     .find(|checked| checked.module() == edge.target())
+                    .map(CheckedModule::exports)
+                    .or_else(|| {
+                        implicit
+                            .iter()
+                            .find(|service| service.module() == edge.target())
+                            .map(CheckedModule::exports)
+                    })
                     .or_else(|| {
                         checked
                             .iter()
                             .find(|checked: &&CheckedModule| checked.module() == edge.target())
+                            .map(|checked| checked.exports())
                     })
                     .expect("each exact dependency target must precede its importer");
-                DependencyExports::new(edge, dependency.exports())
+                DependencyExports::new(edge, summary)
                     .expect("the original summary authenticates its actual target edge")
             })
             .collect::<Vec<_>>();
@@ -208,7 +276,7 @@ fn module_newtype_identity_survives_facade_reexport() {
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
 
     let base = module_named(&graph, "base.ash");
-    let base = resolve_fixture(&graph, base, &[]).expect("base should resolve");
+    let base = resolve_fixture(&tree, &graph, base, &[]).expect("base should resolve");
     let [base_nominal] = base.registry().nominals() else {
         panic!("base should declare one nominal");
     };
@@ -236,7 +304,7 @@ fn module_newtype_identity_survives_facade_reexport() {
             .count(),
         1
     );
-    let facade = resolve_fixture(&graph, facade, &[&base]).expect("facade should resolve");
+    let facade = resolve_fixture(&tree, &graph, facade, &[&base]).expect("facade should resolve");
     let facade = check_module(facade).expect("facade should check");
 
     let entry = module_named(&graph, "entry.ash");
@@ -248,7 +316,7 @@ fn module_newtype_identity_survives_facade_reexport() {
             .count(),
         1
     );
-    let entry = resolve_fixture(&graph, entry, &[&facade]).expect("entry should resolve");
+    let entry = resolve_fixture(&tree, &graph, entry, &[&facade]).expect("entry should resolve");
 
     let imported = entry
         .imported_facts()
@@ -281,7 +349,7 @@ fn module_opaque_newtype_keeps_its_representation_only_for_facade_linkage() {
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
 
-    let base = resolve_fixture(&graph, module_named(&graph, "base.ash"), &[])
+    let base = resolve_fixture(&tree, &graph, module_named(&graph, "base.ash"), &[])
         .expect("base should resolve");
     let defining_id = base
         .registry()
@@ -291,11 +359,11 @@ fn module_opaque_newtype_keeps_its_representation_only_for_facade_linkage() {
         .id;
     let base = check_module(base).expect("base should check");
     let facade = check_module(
-        resolve_fixture(&graph, module_named(&graph, "facade.ash"), &[&base])
+        resolve_fixture(&tree, &graph, module_named(&graph, "facade.ash"), &[&base])
             .expect("facade should resolve"),
     )
     .expect("facade should check");
-    let entry = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[&facade])
+    let entry = resolve_fixture(&tree, &graph, module_named(&graph, "entry.ash"), &[&facade])
         .expect("opaque facade import should resolve");
 
     let imported = entry
@@ -327,13 +395,14 @@ fn opaque_newtype_constructor_is_inaccessible_in_expressions_and_patterns() {
         let graph = load_module_graph(&entry, &ModuleRoots::empty())
             .expect("opaque constructor module graph should load");
         let base = check_module(
-            resolve_fixture(&graph, module_named(&graph, "base.ash"), &[])
+            resolve_fixture(&tree, &graph, module_named(&graph, "base.ash"), &[])
                 .expect("opaque defining module should resolve"),
         )
         .expect("opaque defining module should check");
         let entry_module = module_named(&graph, "entry.ash");
-        let ResolveModuleError::Resolution(error) = resolve_fixture(&graph, entry_module, &[&base])
-            .expect_err("an opaque newtype constructor should be inaccessible")
+        let ResolveModuleError::Resolution(error) =
+            resolve_fixture(&tree, &graph, entry_module, &[&base])
+                .expect_err("an opaque newtype constructor should be inaccessible")
         else {
             panic!("opaque constructor access should fail during resolution");
         };
@@ -349,7 +418,7 @@ fn module_newtype_constructor_must_repeat_its_nominal_spelling() {
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
 
-    let error = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
+    let error = resolve_fixture(&tree, &graph, module_named(&graph, "entry.ash"), &[])
         .expect_err("a differently named newtype constructor should fail resolution");
     let ResolveModuleError::Resolution(error) = error else {
         panic!("newtype constructor spelling should fail in resolution");
@@ -381,7 +450,7 @@ fn module_newtype_representation_cycle_is_rejected_after_kinding() {
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
 
     let ResolveModuleError::Representation(TypeError::Source(error)) =
-        resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
+        resolve_fixture(&tree, &graph, module_named(&graph, "entry.ash"), &[])
             .expect_err("kind-correct representation cycles must reject before remaining kinds")
     else {
         panic!("representation recursion belongs to module checking");
@@ -397,7 +466,7 @@ fn module_newtype_cycle_primary_is_the_first_closing_representation_occurrence()
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
     let ResolveModuleError::Representation(TypeError::Source(error)) =
-        resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
+        resolve_fixture(&tree, &graph, module_named(&graph, "entry.ash"), &[])
             .expect_err("the mutual representation cycle should be rejected")
     else {
         panic!("the representation cycle should retain a source diagnostic");
@@ -434,7 +503,7 @@ fn module_newtype_cycle_through_effect_argument_retains_the_closing_occurrence()
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
     let ResolveModuleError::Representation(TypeError::Source(error)) =
-        resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
+        resolve_fixture(&tree, &graph, module_named(&graph, "entry.ash"), &[])
             .expect_err("a cycle through effect arguments should be rejected")
     else {
         panic!("the effect-argument cycle should retain a source diagnostic");
@@ -462,7 +531,7 @@ fn module_newtype_representation_kind_failure_precedes_cycle_checking() {
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
 
     let ResolveModuleError::Kind(error) =
-        resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
+        resolve_fixture(&tree, &graph, module_named(&graph, "entry.ash"), &[])
             .expect_err("an ill-kinded representation must fail before module checking")
     else {
         panic!("representation kinding belongs to resolved admission");
@@ -479,7 +548,7 @@ fn transparent_newtype_constructor_expression_wraps_its_representation() {
     );
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
-    let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
+    let resolved = resolve_fixture(&tree, &graph, module_named(&graph, "entry.ash"), &[])
         .expect("the newtype declaration and its constructor occurrence should resolve");
 
     check_module(resolved)
@@ -523,7 +592,7 @@ fn module_newtype_constructors_are_first_class_across_representation_shapes() {
         let entry = tree.write("entry.ash", text);
         let graph = load_module_graph(&entry, &ModuleRoots::empty())
             .expect("constructor matrix module graph should load");
-        let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
+        let resolved = resolve_fixture(&tree, &graph, module_named(&graph, "entry.ash"), &[])
             .expect("constructor matrix case should resolve");
         check_module(resolved).unwrap_or_else(|error| {
             panic!("constructor matrix case {index} should check: {error}")
@@ -545,7 +614,7 @@ fn annotated_callback_does_not_hide_an_erased_constructor_row() {
         ),
     );
     let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
-    let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[]).unwrap();
+    let resolved = resolve_fixture(&tree, &graph, module_named(&graph, "entry.ash"), &[]).unwrap();
     let error = check_module(resolved).expect_err("the annotated callback retains its full row");
     assert!(
         matches!(error, TypeError::Source(ref diagnostic) if diagnostic.reason == TypeReason::Argument),
@@ -567,7 +636,7 @@ fn annotated_return_does_not_hide_an_erased_constructor_row() {
         ),
     );
     let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
-    let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[]).unwrap();
+    let resolved = resolve_fixture(&tree, &graph, module_named(&graph, "entry.ash"), &[]).unwrap();
     let error = check_module(resolved).expect_err("the annotated result retains its full row");
     assert!(
         matches!(error, TypeError::Source(ref diagnostic) if diagnostic.reason == TypeReason::DefinitionResult),
@@ -592,22 +661,12 @@ fn transparent_newtype_constructor_pattern_unwraps_its_representation() {
     );
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
-    let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
+    let resolved = resolve_fixture(&tree, &graph, module_named(&graph, "entry.ash"), &[])
         .expect("the newtype declaration and its value pattern should resolve");
 
     let checked = check_module(resolved)
         .expect("an accessible newtype constructor pattern should unwrap its representation");
-    let mut component = Vec::new();
-    for module in graph
-        .modules()
-        .iter()
-        .filter(|module| module.id() != graph.entry())
-    {
-        component.push(
-            check_module(resolve_fixture(&graph, module, &[]).expect("dependency resolves"))
-                .expect("dependency checks"),
-        );
-    }
+    let mut component = tree.take_implicit_services(&graph);
     component.push(checked);
     let linked = link_modules(component, graph.entry())
         .expect("the checked newtype pattern module should link");
@@ -658,7 +717,7 @@ fn irrefutable_newtype_function_and_binding_patterns_preserve_payload_binders() 
     );
     let graph = load_module_graph(&entry, &ModuleRoots::empty())
         .expect("function and binding pattern module graph should load");
-    let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
+    let resolved = resolve_fixture(&tree, &graph, module_named(&graph, "entry.ash"), &[])
         .expect("function and binding newtype patterns should resolve");
 
     check_module(resolved)
@@ -685,7 +744,7 @@ fn mixed_newtype_match_fallback_binder_keeps_the_nominal_value() {
     );
     let graph = load_module_graph(&entry, &ModuleRoots::empty())
         .expect("mixed fallback module graph should load");
-    let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
+    let resolved = resolve_fixture(&tree, &graph, module_named(&graph, "entry.ash"), &[])
         .expect("mixed fallback patterns should resolve");
 
     check_module(resolved)
@@ -721,7 +780,7 @@ fn newtype_patterns_cover_parameterized_nested_and_refutable_representations() {
     );
     let graph = load_module_graph(&entry, &ModuleRoots::empty())
         .expect("pattern representation matrix module graph should load");
-    let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
+    let resolved = resolve_fixture(&tree, &graph, module_named(&graph, "entry.ash"), &[])
         .expect("pattern representation matrix should resolve");
 
     check_module(resolved)
@@ -759,7 +818,7 @@ fn newtype_nominal_mismatch_precedes_coverage_and_payload_coverage_is_retained()
         let entry = tree.write("entry.ash", text);
         let graph = load_module_graph(&entry, &ModuleRoots::empty())
             .expect("newtype diagnostic module graph should load");
-        let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
+        let resolved = resolve_fixture(&tree, &graph, module_named(&graph, "entry.ash"), &[])
             .expect("newtype diagnostic case should resolve");
         let TypeError::Source(error) =
             check_module(resolved).expect_err("newtype diagnostic case should be rejected")
@@ -779,7 +838,7 @@ fn module_newtype_cycle_stops_at_an_ordinary_data_boundary() {
     );
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
-    let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
+    let resolved = resolve_fixture(&tree, &graph, module_named(&graph, "entry.ash"), &[])
         .expect("the mixed declaration representations should kind-check");
 
     check_module(resolved)
@@ -793,7 +852,7 @@ fn module_parameterized_newtype_cycle_uses_the_applied_nominal_identity() {
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
     let ResolveModuleError::Representation(TypeError::Source(error)) =
-        resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
+        resolve_fixture(&tree, &graph, module_named(&graph, "entry.ash"), &[])
             .expect_err("an applied self representation must remain a newtype cycle")
     else {
         panic!("the parameterized cycle must be a source typing diagnostic");
@@ -814,14 +873,16 @@ fn module_newtype_targeted_renames_merge_one_defining_fact_across_a_diamond() {
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
 
-    let base = resolve_fixture(&graph, module_named(&graph, "base.ash"), &[])
+    let base = resolve_fixture(&tree, &graph, module_named(&graph, "base.ash"), &[])
         .expect("base should resolve");
     let defining_id = base.registry().nominals()[0].id;
     let base = check_module(base).expect("base should check");
     let check_facade = |file_name: &str| {
         let module = module_named(&graph, file_name);
-        check_module(resolve_fixture(&graph, module, &[&base]).expect("facade should resolve"))
-            .expect("facade should check")
+        check_module(
+            resolve_fixture(&tree, &graph, module, &[&base]).expect("facade should resolve"),
+        )
+        .expect("facade should check")
     };
     let left = check_facade("left.ash");
     let right = check_facade("right.ash");
@@ -843,7 +904,7 @@ fn module_newtype_targeted_renames_merge_one_defining_fact_across_a_diamond() {
             .count(),
         1
     );
-    let entry = resolve_fixture(&graph, module, &[&left, &right])
+    let entry = resolve_fixture(&tree, &graph, module, &[&left, &right])
         .expect("diamond aliases should merge their one defining newtype fact");
     let imported = entry
         .imported_facts()
@@ -869,18 +930,19 @@ fn module_parameterized_newtype_preserves_its_canonical_parameter_through_a_faca
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
 
-    let base = resolve_fixture(&graph, module_named(&graph, "base.ash"), &[])
+    let base = resolve_fixture(&tree, &graph, module_named(&graph, "base.ash"), &[])
         .expect("base should resolve");
     let defining_id = base.registry().nominals()[0].id;
     let defining_parameter = base.registry().nominal_parameters(defining_id).unwrap()[0].id;
     let base = check_module(base).expect("base should check");
     let facade_module = module_named(&graph, "facade.ash");
     let facade = check_module(
-        resolve_fixture(&graph, facade_module, &[&base]).expect("facade should resolve"),
+        resolve_fixture(&tree, &graph, facade_module, &[&base]).expect("facade should resolve"),
     )
     .expect("facade should check");
     let entry_module = module_named(&graph, "entry.ash");
-    let entry = resolve_fixture(&graph, entry_module, &[&facade]).expect("entry should resolve");
+    let entry =
+        resolve_fixture(&tree, &graph, entry_module, &[&facade]).expect("entry should resolve");
     let imported = entry.imported_facts().nominal(defining_id).unwrap();
     assert_eq!(imported.parameters.len(), 1);
     assert_eq!(imported.parameters[0].id, defining_parameter);

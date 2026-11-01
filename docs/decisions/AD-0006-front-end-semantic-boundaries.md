@@ -16,6 +16,15 @@ expected types where the language requires them. Presentation-specific paths
 for equations, operational functions, and explicit matches call shared
 function, pattern, coverage, type, and Core-construction rules.
 
+For a modular file graph, each dependency is checked before its importers. Before
+publishing its compiler-owned result, the checker completes its lowered
+representation, selected evidence, layouts and cleanup contracts. Importers
+check their own obligations against those verified exports. Linking relocates
+the retained representation and its
+metadata without rebuilding them or checking a dependency's source body,
+patterns or coverage again. The newly constructed linked Core still crosses the
+independent validation boundary in AD-0007.
+
 Each semantic question has one reviewable rule interface with structured
 outcomes. Type equality, function exposure, pattern typing, coverage, and later
 constraint resolution remain separate rule responsibilities even when an early

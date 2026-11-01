@@ -579,6 +579,7 @@ pub(crate) struct PreflightedEvidencePublication {
 pub(crate) struct PendingOccurrence<'a> {
     pub(crate) application: &'a InterfaceApplication,
     pub(crate) method_arguments: &'a [Type],
+    pub(crate) checked_value_type: Option<&'a Type>,
     pub(crate) selection: &'a EvidenceSelection,
 }
 
@@ -615,6 +616,7 @@ impl PendingEvidencePublication {
         Ok(PendingOccurrence {
             application: &occurrence.checked_application,
             method_arguments: &occurrence.method_arguments,
+            checked_value_type: occurrence.checked_value_type.as_ref(),
             selection: occurrence
                 .selection
                 .as_ref()

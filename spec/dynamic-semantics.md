@@ -293,9 +293,10 @@ family effect-type-steps:
 
 ## Generated interface evidence
 
-Linking preserves each checked interface selection. Linked interface-evidence
-validation authenticates it, and Core synthesis lowers it before evaluation.
-Determination metadata erases before Core synthesis. Complete interface
+Module checking selects and lowers interface evidence before publishing each
+completed module. Linking preserves those selections and checks new entry and
+route connections; the assembled Core receives independent validation before
+evaluation. Determination metadata erases before Core synthesis. Complete interface
 applications may survive through transforms and independent validation only in
 inert static authentication relationships. Their ordered arguments have
 already been substituted into authenticated method types, and the evaluator

@@ -32,6 +32,36 @@ use crate::{
     },
 };
 
+#[cfg(test)]
+thread_local! {
+    static OBSERVED_INITIALIZER_ROOTS: std::cell::RefCell<Option<Vec<Span>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) struct InitializerRootObservation;
+
+#[cfg(test)]
+impl InitializerRootObservation {
+    pub(crate) fn start() -> Self {
+        OBSERVED_INITIALIZER_ROOTS.with(|observed| {
+            assert!(observed.borrow_mut().replace(Vec::new()).is_none());
+        });
+        Self
+    }
+
+    pub(crate) fn finish(self) -> Vec<Span> {
+        OBSERVED_INITIALIZER_ROOTS.with(|observed| observed.borrow_mut().take().unwrap_or_default())
+    }
+}
+
+#[cfg(test)]
+impl Drop for InitializerRootObservation {
+    fn drop(&mut self) {
+        OBSERVED_INITIALIZER_ROOTS.with(|observed| *observed.borrow_mut() = None);
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct Value {
     targets: Vec<usize>,
@@ -2066,13 +2096,9 @@ fn compile<F: CoreOperationFamily>(
 fn import_capture_control(
     graph: &mut SummaryGraph,
     imported: &ImportedCallables<'_>,
-    roots: &mut Vec<usize>,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), Failure> {
     for (import, target_offset, code_offset, type_offset) in &imported.graphs {
-        if let Some(data) = &import.data {
-            data.append_global_initializers(*code_offset, roots, budget)?;
-        }
         graph
             .code
             .try_reserve(import.code.len())
@@ -2999,8 +3025,11 @@ fn compile_with_boundary<F: CoreOperationFamily>(
     graph.callables.positions.resize_with(nodes.len(), || None);
     let mut roots = Vec::new();
     if !imported.graphs.is_empty() {
-        import_capture_control(&mut graph, imported, &mut roots, budget)?;
+        import_capture_control(&mut graph, imported, budget)?;
     }
+    // Imported controls were simplified by their defining module. Only the
+    // current nodes and the synthetic controls appended below need that work.
+    let local_extra_start = graph.code.len();
     let mut owners = HashMap::new();
     for (id, node) in nodes.iter().enumerate() {
         if domain.is_some_and(|domain| !domain.contains(&id)) {
@@ -3039,17 +3068,12 @@ fn compile_with_boundary<F: CoreOperationFamily>(
             ) => compile_pure_capture_control(
                 id, node, pure, nodes, values, source, &mut graph, data, &mut roots, budget,
             )?,
-            _ => compile_other_capture_control(
-                id,
-                node,
-                operation(&node.kind),
-                nodes,
-                source,
-                &mut graph,
-                data,
-                &owners,
-                budget,
-            )?,
+            _ => match operation(&node.kind) {
+                None => Control::Return,
+                some => compile_other_capture_control(
+                    id, node, some, nodes, source, &mut graph, data, &owners, budget,
+                )?,
+            },
         };
         graph.code[id + 1] = code;
         for ordinal in 0..F::child_count(&node.kind) {
@@ -3114,7 +3138,7 @@ fn compile_with_boundary<F: CoreOperationFamily>(
     }
     loop {
         let mut changed = false;
-        for id in 1..graph.code.len() {
+        for id in (1..=nodes.len()).chain(local_extra_start..graph.code.len()) {
             charge(budget, 1)?;
             if let Control::Sequence(children) | Control::Choice(children) = &graph.code[id] {
                 // A pure match can still produce the case observed by a
@@ -3256,7 +3280,7 @@ fn analyze_nodes_with_methods<F: CoreOperationFamily>(
     budget: &mut TypeWorkBudget,
 ) -> Result<Vec<CaptureValueSummary>, Failure> {
     let Some(BuiltCaptureGraph {
-        graph,
+        mut graph,
         roots,
         values,
         has_discard,
@@ -3266,21 +3290,38 @@ fn analyze_nodes_with_methods<F: CoreOperationFamily>(
     else {
         return Ok(Vec::new());
     };
+    if rows.is_none()
+        && let Some(data) = &mut graph.data
+    {
+        Arc::get_mut(data)
+            .ok_or(Failure::Invalid)?
+            .prepare_local_initializer_queries(nodes, globals, budget)?;
+    }
     if let Some(rows) = rows {
         *rows = cleanup_requirements(&graph, &roots, budget)?;
     } else {
-        if has_discard && cleanup_rows_may_be_nonempty(&graph, budget)? {
+        let replies = if has_discard && cleanup_rows_may_be_nonempty(&graph, budget)? {
             // Strict discovery already visits the original control paths. Keep
             // its passive row observations instead of constructing a second
             // inference-only solver; all safety checks still run in strict mode.
-            let requirements =
+            let (requirements, replies) =
                 check_control_roots_with_rows(&graph, roots, true, check_release, budget)?;
             check_cleanup_rows(nodes, operation, &requirements, budget)?;
+            replies
         } else {
             if has_discard {
                 check_cleanup_rows(nodes, operation, &[], budget)?;
             }
-            check_control_roots_with_rows(&graph, roots, false, check_release, budget)?;
+            let (_, replies) =
+                check_control_roots_with_rows(&graph, roots, false, check_release, budget)?;
+            replies
+        };
+        if let Some(data) = &mut graph.data {
+            Arc::get_mut(data)
+                .ok_or(Failure::Invalid)?
+                .publish_initializer_replies(replies, budget)?;
+        } else if !replies.is_empty() {
+            return Err(Failure::Invalid);
         }
     }
     let graph = Arc::new(graph);
@@ -3904,25 +3945,57 @@ fn check_control_roots_with_rows(
     collect_cleanup_rows: bool,
     check_release: bool,
     budget: &mut TypeWorkBudget,
-) -> Result<Vec<CleanupRequirement>, Failure> {
-    if let Some(scan) = control::PrepaidControlCodeScan::for_roots(graph, budget)? {
+) -> Result<(Vec<CleanupRequirement>, value::ObservedInitializerReplies), Failure> {
+    let needs_initializers = graph
+        .data
+        .as_ref()
+        .is_some_and(|data| data.needs_initializer_replies());
+    let scan = control::PrepaidControlCodeScan::for_roots(graph, budget)?;
+    if scan.is_some() || needs_initializers {
         let mut queries = Vec::new();
-        for root in roots {
-            // Row authentication needs every original root, including roots
-            // whose only observation is a cleanup row. The strict checker keeps
-            // its existing query pruning when no row collection is requested.
-            if collect_cleanup_rows || query_required(graph, root, budget)? {
-                queries.try_reserve(1).map_err(|_| Failure::Resource)?;
-                queries.push(root);
+        if scan.is_none() {
+            graph
+                .data
+                .as_ref()
+                .ok_or(Failure::Invalid)?
+                .append_local_initializer_roots(&mut queries, budget)?;
+        } else {
+            for root in roots {
+                // Row authentication needs every original root, including roots
+                // whose only observation is a cleanup row. The strict checker keeps
+                // its existing query pruning when no row collection is requested.
+                if collect_cleanup_rows || query_required(graph, root, budget)? {
+                    queries.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    queries.push(root);
+                }
             }
         }
-        let mut analysis = Analysis::from_prepaid_control_scan(scan, None, budget)?;
+        #[cfg(test)]
+        if let Some(data) = &graph.data {
+            OBSERVED_INITIALIZER_ROOTS.with(|observed| {
+                if let Some(observed) = observed.borrow_mut().as_mut() {
+                    observed.extend(
+                        queries
+                            .iter()
+                            .filter_map(|&root| data.global_initializer_source(root)),
+                    );
+                }
+            });
+        }
+        let mut analysis = match scan {
+            Some(scan) => Analysis::from_prepaid_control_scan(scan, None, budget)?,
+            None => Analysis::new(graph, None, budget)?,
+        };
+        if needs_initializers {
+            analysis.prepare_initializer_replies(budget)?;
+        }
         analysis.collect_cleanup_rows = collect_cleanup_rows;
         analysis.check_retained_release = check_release;
         analysis.check(&queries, budget)?;
-        return Ok(std::mem::take(&mut analysis.cleanup_rows));
+        let replies = analysis.initializer_replies(budget)?;
+        return Ok((std::mem::take(&mut analysis.cleanup_rows), replies));
     }
-    Ok(Vec::new())
+    Ok((Vec::new(), value::ObservedInitializerReplies::default()))
 }
 
 #[cfg(test)]
@@ -7274,7 +7347,7 @@ mod tests {
             check_control_roots_with_rows(&built.graph, built.roots.clone(), true, false, budget)
         };
         let mut observed = TypeWorkBudget::default();
-        let collected = query(&mut observed).unwrap();
+        let (collected, _) = query(&mut observed).unwrap();
         assert_eq!(inferred.len(), collected.len());
         for (old, actual) in inferred.iter().zip(&collected) {
             assert_eq!(
@@ -7307,7 +7380,7 @@ mod tests {
             for _ in 0..2 {
                 let mut exact = TypeWorkBudget::with_limit(prefix + required);
                 exact.charge(prefix).unwrap();
-                assert_eq!(query(&mut exact).unwrap().len(), inferred.len());
+                assert_eq!(query(&mut exact).unwrap().0.len(), inferred.len());
                 assert_eq!(exact.used(), prefix + required);
             }
         }
