@@ -9,6 +9,8 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
+- [TASK-0063: Host-default Store close](TASK-0063-host-default-store-close.md)
+  tracks the first case in [issue #165](https://github.com/dikini/ash-lang/issues/165).
 - [TASK-0062: Verified Module Reuse](TASK-0062-verified-module-reuse.md) tracks
   the compiler pipeline change in [issue #201](https://github.com/dikini/ash-lang/issues/201).
 - [TASK-0060: Frame Composition Work](TASK-0060-frame-composition-work.md) tracks
