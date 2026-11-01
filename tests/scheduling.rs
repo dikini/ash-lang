@@ -133,6 +133,34 @@ fn gas_safe_points_commit_accounting_before_the_selected_yield() {
 }
 
 #[test]
+fn imported_gas_guard_keeps_both_branches_until_the_final_drain() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let fixture = root.join("tests/fixtures/scheduling/imported-guard");
+    let observation = run_path(RunConfiguration {
+        entry: fixture.join("gas-pq.ash"),
+        roots: ModuleRoots::new([("ash", fixture)]).expect("the fixture library root is valid"),
+    })
+    .expect("the imported gas guard preserves both retained branches");
+
+    assert_eq!(observation.value_display(), "(42, 123456)");
+    assert_eq!(observation.type_display(), "(Int, Int)");
+}
+
+#[test]
+fn imported_gas_guard_allows_one_retained_branch_to_finish() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let fixture = root.join("tests/fixtures/scheduling/imported-guard");
+    let observation = run_path(RunConfiguration {
+        entry: fixture.join("gas-single.ash"),
+        roots: ModuleRoots::new([("ash", fixture)]).expect("the fixture library root is valid"),
+    })
+    .expect("the imported gas guard preserves a single retained branch");
+
+    assert_eq!(observation.value_display(), "(42, 123456)");
+    assert_eq!(observation.type_display(), "(Int, Int)");
+}
+
+#[test]
 fn checkpoints_before_and_after_resume_keep_the_inner_clause() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let observation = run_path(RunConfiguration {
