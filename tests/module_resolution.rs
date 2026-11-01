@@ -423,9 +423,8 @@ fn export_candidates_keep_withheld_type_and_constructor_namespaces_separate() {
 fn repeated_summary_imports_share_one_graph_type_work_budget() {
     const PAYLOAD_WIDTH: usize = 32;
     const CONSTRUCTOR_NAME_BYTES: usize = 4_096;
-    // Original authentication prepays both spelling byte slices in TypeWork.
-    // Keep the payload modest so its independent constraint comparisons do not
-    // exhaust that ledger before the repeated summary imports reach TypeWork.
+    // Keep the original repeated-import workload while checking that the
+    // graph-wide ledger remains cumulative across completed modules.
     const DEPENDENT_COUNT: usize = TYPE_WORK_LIMIT / (2 * CONSTRUCTOR_NAME_BYTES) + 2;
 
     let tree = TempTree::create();
@@ -503,6 +502,8 @@ fn repeated_summary_imports_share_one_graph_type_work_budget() {
         assert_eq!(phases.len(), graph.modules().len());
         // Each phase observes the supplied owner directly; a reset between
         // canonical modules would break cumulative growth or the endpoint.
+        // Defining facts are no longer reauthenticated at every import, so
+        // their cumulative total need not exceed the old standalone limit.
         let mut previous = 0;
         for phase in &phases {
             let used = phase["work_cumulative"].as_u64().unwrap();
@@ -517,12 +518,11 @@ fn repeated_summary_imports_share_one_graph_type_work_budget() {
             panic!("one completed resolution endpoint")
         };
         assert_eq!(endpoint["work_cumulative"], previous);
-        assert!(previous > TYPE_WORK_LIMIT as u64);
     }
 }
 
 #[test]
-fn repeated_targeted_nominal_metadata_shares_one_graph_type_work_budget() {
+fn repeated_targeted_nominal_metadata_shares_one_graph_constraint_budget() {
     const CONSTRUCTOR_COUNT: usize = 1_024;
     const ALIAS_COUNT: usize = TYPE_WORK_LIMIT / CONSTRUCTOR_COUNT + 1;
 
@@ -548,11 +548,11 @@ fn repeated_targeted_nominal_metadata_shares_one_graph_type_work_budget() {
         entry,
         roots: ModuleRoots::empty(),
     })
-    .expect_err("repeated nominal metadata retention must share graph type work");
+    .expect_err("repeated nominal metadata retention must share graph constraint work");
 
     let PipelineFailure::Resolution(error) = failure.pipeline_failure().expect("pipeline failure")
     else {
-        panic!("graph type work should remain owned by resolution: {failure:?}");
+        panic!("graph constraint work should remain owned by resolution: {failure:?}");
     };
-    assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+    assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
 }

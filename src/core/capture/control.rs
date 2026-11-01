@@ -2086,6 +2086,7 @@ struct RetainedSupport {
 pub(super) struct Analysis<'a> {
     graph: &'a SummaryGraph,
     has_retained_root: bool,
+    use_value_calls: bool,
     types: PreparedTypeUniverse<'a>,
     owner_rows: Vec<&'a EffectRow>,
     contexts: Vec<Context>,
@@ -2586,6 +2587,7 @@ impl<'a> Analysis<'a> {
         Ok(Self {
             graph,
             has_retained_root,
+            use_value_calls: has_resource,
             types,
             owner_rows,
             contexts,
@@ -4669,7 +4671,11 @@ impl<'a> Analysis<'a> {
         else {
             return Err(Failure::Invalid);
         };
-        let (successors, publication) = if let Some(data) = &mut self.data {
+        // Initializer replies need value data even without resource control.
+        // Only the original resource/control inventory selects precise calls;
+        // observing a reply must not strengthen a discard proof.
+        let (successors, publication) = if self.use_value_calls {
+            let data = self.data.as_mut().ok_or(Failure::Invalid)?;
             state.charge_key(budget)?;
             let (index, new_record) = if let Some(index) = observed_calls.get(&state) {
                 (*index, false)
@@ -8731,6 +8737,7 @@ mod tests {
         let mut setup = TypeWorkBudget::default();
         let mut analysis = Analysis::new(graph, None, &mut setup).unwrap();
         analysis.data = Some(graph.data.as_ref().unwrap().start(&mut setup).unwrap());
+        analysis.use_value_calls = true;
         analysis
     }
 

@@ -242,12 +242,28 @@ fn unknown_higher_order_and_open_row_calls_block_discard_only() {
                  main : Unit -> Unit\nmain () = handle (relay ask) with B {{\nask ignored => {completion}\n}}\n"
             );
             let result = check_module(resolved_source(&source));
+            let fixture = TempModule::write(&source);
+            let configuration = || ash::driver::RunConfiguration {
+                entry: fixture.0.clone(),
+                roots: ModuleRoots::empty(),
+            };
             if completion == "discard" {
                 assert!(
-                    matches!(result, Err(TypeError::Source(error)) if error.reason == TypeReason::DiscardUnsafe)
+                    matches!(&result, Err(TypeError::Source(error)) if error.reason == TypeReason::DiscardUnsafe),
+                    "{signature}: {result:?}"
                 );
+                let failure = ash::driver::compile_path(configuration())
+                    .expect_err("the public path must reject the unproved discard");
+                assert!(matches!(
+                    failure.pipeline_failure(),
+                    Some(ash::driver::PipelineFailure::Typing(TypeError::Source(error)))
+                        if error.reason == TypeReason::DiscardUnsafe
+                ));
             } else {
                 result.expect("unknown capture obligations must not reject resume-only code");
+                let observation = ash::driver::run_path(configuration())
+                    .expect("resume-only code should pass Core and execute");
+                assert_eq!(observation.value_display(), "()");
             }
         }
     }

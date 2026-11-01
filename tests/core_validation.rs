@@ -103,6 +103,13 @@ fn resolve_with_dependencies(
     target: &LoadedModule,
 ) -> ash::resolved::ResolvedModule {
     let checked = checked_before(graph, target);
+    resolve_with_checked_dependencies(target, &checked)
+}
+
+fn resolve_with_checked_dependencies(
+    target: &LoadedModule,
+    checked: &[CheckedModule],
+) -> ash::resolved::ResolvedModule {
     let dependencies = target
         .dependencies()
         .iter()
@@ -127,7 +134,7 @@ fn validated_interface_effect_with_graph(text: &str) -> (ValidatedEffectProgram,
         .module(graph.entry())
         .expect("the Core interface entry should remain admitted");
     let mut checked = checked_before(&graph, module);
-    let resolved = resolve_with_dependencies(&graph, module);
+    let resolved = resolve_with_checked_dependencies(module, &checked);
     checked.push(check_module(resolved).expect("the Core interface fixture should check"));
     let linked =
         link_modules(checked, graph.entry()).expect("the Core interface fixture should link");
@@ -347,7 +354,7 @@ fn module_newtype_conversion_authenticates_representation() {
         .expect("the module-newtype entry should remain loaded");
     let mut checked = checked_before(&graph, module);
     checked.push(
-        check_module(resolve_with_dependencies(&graph, module))
+        check_module(resolve_with_checked_dependencies(module, &checked))
             .expect("the module-newtype fixture should check"),
     );
     let linked =
@@ -1383,7 +1390,7 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
     );
 
     let dependency_prefix = checked_before(&graph, dependency);
-    let resolved_dependency = resolve_with_dependencies(&graph, dependency);
+    let resolved_dependency = resolve_with_checked_dependencies(dependency, &dependency_prefix);
     let option = resolved_dependency
         .registry()
         .nominals()
@@ -1626,13 +1633,19 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         methods,
         &[ImplMethodId::new(implementation, observe_method)]
     );
+    drop(checked_entry);
     drop(dependency_summary);
 
-    let rechecked_dependency = check_module(resolve_with_dependencies(&graph, dependency))
-        .expect("the dependency bodies should recheck for final linking");
+    let rechecked_dependency = check_module(resolve_with_checked_dependencies(
+        dependency,
+        &dependency_prefix,
+    ))
+    .expect("the dependency bodies should recheck for final linking");
     let mut linkable = dependency_prefix;
     linkable.push(rechecked_dependency);
-    linkable.push(checked_entry);
+    let linked_entry = check_module(resolve_with_checked_dependencies(entry_module, &linkable))
+        .expect("the entry should check against the linked dependency publications");
+    linkable.push(linked_entry);
     let linked =
         link_modules(linkable, graph.entry()).expect("the checked higher-kinded graph should link");
     let linked = validate_interface_evidence(linked)

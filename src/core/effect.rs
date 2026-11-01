@@ -1826,17 +1826,13 @@ impl CoreBuilder<EffectOperationFamily> {
         } else {
             self.invalidate_settled_zonk_range(start..count)?;
         }
-        self.charge_effect_metadata(length)?;
-        let mut previous = Vec::new();
-        previous
-            .try_reserve_exact(length)
-            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
         let mut handlers = std::collections::HashMap::new();
+        let mut has_resume = false;
         for index in start..count {
             self.charge_effect_metadata(1)?;
-            previous.push(
-                clone_effect_row_with_budget(&self.nodes[index].effects, &mut self.type_work)
-                    .map_err(|()| super::BuildError::TypeWorkExceeded)?,
+            has_resume |= matches!(
+                self.nodes[index].kind,
+                EffectExprKind::Operation(EffectOperation::Resume(_))
             );
 
             let handler = match &self.nodes[index].kind {
@@ -1860,6 +1856,47 @@ impl CoreBuilder<EffectOperationFamily> {
                     }
                 }
             }
+        }
+        let mut ordinal_postorder = !has_resume;
+        if ordinal_postorder {
+            'nodes: for index in start..count {
+                let children = EffectOperationFamily::child_count(&self.nodes[index].kind);
+                self.charge_effect_metadata(children)?;
+                for child in 0..children {
+                    let node = EffectOperationFamily::child_at(&self.nodes[index].kind, child)
+                        .ok_or(super::BuildError::InvalidPayload)?;
+                    let ordinal = node.index()?;
+                    self.node_at_ordinal(node, ordinal)?;
+                    if ordinal >= index {
+                        ordinal_postorder = false;
+                        break 'nodes;
+                    }
+                }
+            }
+        }
+        // Without resumes, ordinal-postorder children settle in one strict
+        // replay, which already journals and restores its own changes. Forward
+        // references and resumes need the outer snapshot because the fallback
+        // can perform several replays and resume resets.
+        if ordinal_postorder {
+            return self.recompute_effect_rows_in_range(
+                start..count,
+                &EffectRow::empty(),
+                HandlerId::new(u32::MAX),
+                ResumeId::new(u32::MAX),
+            );
+        }
+        self.charge_effect_metadata(length)?;
+        let mut previous = Vec::new();
+        previous
+            .try_reserve_exact(length)
+            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+        for index in start..count {
+            self.charge_effect_metadata(1)?;
+            previous.push(
+                clone_effect_row_with_budget(&self.nodes[index].effects, &mut self.type_work)
+                    .map_err(|()| super::BuildError::TypeWorkExceeded)?,
+            );
         }
         let result = (|| {
             // Final type coincidence can shrink an earlier handler output. Start
@@ -2770,6 +2807,113 @@ mod tests {
             .expect("small-stack worker")
             .join()
             .expect("range teardown remains stack-safe");
+    }
+
+    #[test]
+    fn completed_postorder_rows_recompute_with_atomic_retry() {
+        fn fixture() -> (EffectCoreBuilder, NodeId, NodeId, EffectRow) {
+            let source = SourceFile::new("postorder-row-replay", "()").unwrap();
+            let origin = Origin::Source(source.span(ByteRange::new(0, 2).unwrap()).unwrap());
+            let mut builder =
+                EffectCoreBuilder::with_effect_registry(Arc::new(ResolvedRegistry::default()));
+            let unit = builder.unit(Type::Unit, origin.clone()).unwrap();
+            let effect = EffectInstance::new(EffectId::new(ModuleId::new(0), 0), Box::new([]));
+            let row = EffectRow::singleton(effect.clone());
+            let request = builder
+                .request(
+                    effect.clone(),
+                    OperationId::new(effect.effect(), 0),
+                    unit,
+                    Type::Unit,
+                    row.clone(),
+                    origin.clone(),
+                )
+                .unwrap();
+            let binder = builder.binder(Type::Unit, origin.clone()).unwrap();
+            let body = builder
+                .binding(binder, request, unit, Type::Unit, origin.clone())
+                .unwrap();
+            let handler = builder
+                .handler(
+                    HandlerId::new(0),
+                    body,
+                    effect,
+                    vec![],
+                    Type::Unit,
+                    EffectRow::empty(),
+                    origin,
+                )
+                .unwrap();
+            // Model a stale derived row after its source variables were solved.
+            builder.nodes[body.index().unwrap()].effects = EffectRow::empty();
+            (builder, body, handler, row)
+        }
+
+        let (mut measured, body, handler, row) = fixture();
+        let before = measured.type_work.used();
+        measured.finish_cleanup_effect_rows().unwrap();
+        let work = measured.type_work.used() - before;
+        assert_eq!(measured.nodes[body.index().unwrap()].effects, row);
+        assert!(measured.nodes[handler.index().unwrap()].effects.is_empty());
+
+        let (mut short, _, _, _) = fixture();
+        let rows = short
+            .nodes
+            .iter()
+            .map(|node| node.effects.clone())
+            .collect::<Vec<_>>();
+        short
+            .charge_type_work_for_test(TYPE_WORK_LIMIT - short.type_work.used() - work + 1)
+            .unwrap();
+        assert_eq!(
+            short.finish_cleanup_effect_rows(),
+            Err(super::super::BuildError::TypeWorkExceeded)
+        );
+        assert_eq!(
+            short
+                .nodes
+                .iter()
+                .map(|node| node.effects.clone())
+                .collect::<Vec<_>>(),
+            rows
+        );
+        for _ in 0..2 {
+            let (mut retry, body, handler, row) = fixture();
+            retry
+                .charge_type_work_for_test(TYPE_WORK_LIMIT - retry.type_work.used() - work)
+                .unwrap();
+            retry.finish_cleanup_effect_rows().unwrap();
+            assert_eq!(retry.nodes[body.index().unwrap()].effects, row);
+            assert!(retry.nodes[handler.index().unwrap()].effects.is_empty());
+            assert_eq!(retry.type_work.used(), TYPE_WORK_LIMIT);
+        }
+
+        // Strict removal rejects a missing member after recomputing the body,
+        // and restores the stale input rows rather than publishing partial work.
+        let (mut missing, _, handler, _) = fixture();
+        let EffectExprKind::Operation(EffectOperation::Handler(handler)) =
+            &mut missing.nodes[handler.index().unwrap()].kind
+        else {
+            unreachable!()
+        };
+        handler.effect = EffectInstance::new(EffectId::new(ModuleId::new(0), 9), Box::new([]));
+        let rows = missing
+            .nodes
+            .iter()
+            .map(|node| node.effects.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            missing.finish_cleanup_effect_rows(),
+            Err(super::super::BuildError::InvalidPayload)
+        );
+        assert_eq!(
+            missing
+                .nodes
+                .iter()
+                .map(|node| node.effects.clone())
+                .collect::<Vec<_>>(),
+            rows
+        );
     }
 
     #[test]
