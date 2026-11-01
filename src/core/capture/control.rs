@@ -6290,7 +6290,52 @@ impl<'a> Analysis<'a> {
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        let eligible = false;
+        // A request escaping to the older ambient allocator cannot carry the
+        // focused fresh Store. Selected local handlers still run normally.
+        let eligible = if state.drain.is_some() && self.focusing {
+            charge(budget, 1)?;
+            let label = self.labels.get(event.label).ok_or(Failure::Invalid)?;
+            let operation = match self.graph.code.get(event.code) {
+                Some(Control::Request(request))
+                    if !event.unknown
+                        && !label.ambiguous_instance
+                        && label.opaque_row.is_none() =>
+                {
+                    label.effect.as_deref().and_then(|effect| {
+                        let api = crate::resolved::RegionApi::for_module(effect.effect().module())?;
+                        let operation = request.operation?;
+                        (effect.effect() == api.default_alloc()
+                            && effect.arguments().is_empty()
+                            && operation.owner() == api.default_alloc())
+                        .then_some((operation.operation(), request.region_service))
+                    })
+                }
+                _ => None,
+            };
+            let allocation = match operation {
+                Some((1, false)) => Some(false),
+                Some((0, true)) => Some(true),
+                _ => None,
+            };
+            match (allocation, &mut self.data, event.port) {
+                (Some(false), Some(data), Some(port)) if state.symbolic_seed => {
+                    data.ambient_default_request(port, state.value_context, false, budget)?
+                }
+                (Some(true), Some(data), Some(port)) => {
+                    if state.symbolic_seed
+                        && data.ambient_default_request(port, state.value_context, true, budget)?
+                    {
+                        true
+                    } else {
+                        let (targets, unknown, host) = data.region_targets(port, budget)?;
+                        host && !unknown && targets.is_empty()
+                    }
+                }
+                _ => false,
+            }
+        } else {
+            false
+        };
         pending.mark_native_route(event, None, budget)?;
         if let (Some(data), Some(port)) = (&mut self.data, event.port) {
             data.external_result(port, budget)?;

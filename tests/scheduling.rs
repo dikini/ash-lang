@@ -75,6 +75,20 @@ fn an_empty_ready_queue_completes_without_starting_work() {
 }
 
 #[test]
+fn host_default_allocation_does_not_add_work_to_an_empty_store() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let observation = run_path(RunConfiguration {
+        entry: root.join("tests/fixtures/scheduling/empty-host.ash"),
+        roots: ModuleRoots::new([("ash", root.join("libraries"))])
+            .expect("the shipped library root is valid"),
+    })
+    .expect("host-default allocation leaves the empty Store ready to close");
+
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+}
+
+#[test]
 fn losing_a_ready_key_does_not_authorize_store_release() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let Err(failure) = compile_path(RunConfiguration {

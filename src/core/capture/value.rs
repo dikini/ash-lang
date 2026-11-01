@@ -5873,6 +5873,59 @@ impl<'a> Analysis<'a> {
         Ok((targets, unknown, host))
     }
 
+    // An escaped default-allocator request cannot supply the freshly acquired
+    // Store to its older caller. This proves only Store-work independence; the
+    // RegionView remains opaque for region ownership and selection.
+    pub(super) fn ambient_default_request(
+        &mut self,
+        request: usize,
+        current: usize,
+        allocation: bool,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        charge(budget, 1)?;
+        let Some((resource, focus)) = self.focus else {
+            return Ok(false);
+        };
+        if !matches!(
+            self.graph.expressions.get(resource),
+            Some(Expr::Resource { store: true, .. })
+        ) {
+            return Ok(false);
+        }
+        let Some(creation) = self.focus_creation else {
+            return Ok(false);
+        };
+        if self.contexts.standalone_root(creation, budget)?.is_none()
+            || !self.contexts.focus_descendant(current, focus, budget)?
+        {
+            return Ok(false);
+        }
+        let (expression, context) = self.slots.get(request).ok_or(Failure::Invalid)?.key;
+        if context != current {
+            return Ok(false);
+        }
+        let Some(Expr::Request {
+            operand,
+            region_view,
+            descriptor,
+            ..
+        }) = self.graph.expressions.get(expression)
+        else {
+            return Ok(false);
+        };
+        if !allocation {
+            return Ok(*region_view && descriptor.is_none());
+        }
+        if descriptor.is_none() {
+            return Ok(false);
+        }
+        let operand = self.slot(*operand, context, budget)?;
+        self.close(budget)?;
+        charge(budget, self.slots[operand].atoms.len())?;
+        Ok(self.slots[operand].atoms.as_slice() == [Atom::RegionView])
+    }
+
     pub(super) fn cell_operands(
         &mut self,
         request: usize,
@@ -11635,6 +11688,76 @@ mod tests {
                 .dependencies_with_completeness(port, None, &mut work)
                 .unwrap();
             assert!(!lifetime_known);
+        }
+    }
+
+    #[test]
+    fn ambient_allocator_does_not_treat_unknown_or_local_views_as_older() {
+        let source = crate::source::SourceFile::new("ambient-allocator.ash", "x").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 1).unwrap())
+            .unwrap();
+        let resource = |store| Expr::Resource {
+            store,
+            success: None,
+            failure: None,
+            failure_payload: None,
+            handle: 0,
+            identity: 0,
+            initializer: 1,
+            body: 1,
+            source: span,
+        };
+        let graph = graph(vec![
+            Expr::Slot,
+            Expr::Scalar,
+            Expr::Request {
+                operand: 0,
+                scalar: false,
+                region_view: false,
+                descriptor: Some(1),
+            },
+            Expr::Function {
+                parameters: vec![],
+                body: 1,
+                captures: vec![],
+            },
+            resource(true),
+            resource(false),
+        ]);
+        for (atoms, accepted) in [
+            (vec![], false),
+            (vec![Atom::RegionView], true),
+            (vec![Atom::Unknown], false),
+            (vec![Atom::RegionView, Atom::Unknown], false),
+            (vec![Atom::Resource(5, 0)], false),
+        ] {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+            let root = analysis.context(0, Transition::Root(3), &mut work).unwrap();
+            let focus = analysis.context(0, Transition::Focus, &mut work).unwrap();
+            analysis.focus = Some((4, focus));
+            analysis.focus_creation = Some(root);
+            let request = analysis.slot(2, focus, &mut work).unwrap();
+            let view = analysis.slot(0, focus, &mut work).unwrap();
+            for atom in atoms {
+                analysis.atom(view, atom, &mut work).unwrap();
+            }
+            assert_eq!(
+                analysis
+                    .ambient_default_request(request, focus, true, &mut work)
+                    .unwrap(),
+                accepted
+            );
+            let restored = analysis
+                .context(focus, Transition::Restore(root, 2, 0), &mut work)
+                .unwrap();
+            let request = analysis.slot(2, restored, &mut work).unwrap();
+            assert!(
+                !analysis
+                    .ambient_default_request(request, restored, true, &mut work)
+                    .unwrap()
+            );
         }
     }
 
