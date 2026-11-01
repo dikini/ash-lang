@@ -87,8 +87,26 @@ input or budget. The follow-up also passes all 67 Core validation, 17 library
 import and 23 newtype tests, plus the postorder refusal/retry, nested-resume,
 forward-cleanup and imported generic-cleanup controls.
 
-On the follow-up source, the original #190 full-binding input compiled at
-unchanged limits: source checking used 53,730,158 of 368,770,000 units, final
+The next fresh workspace checkpoint passed the first five stages and 1,703
+library tests, but its test stage refused the original 10,000-member data cycle
+at the default type-work limit; documentation was not reached. Its inputs stayed
+unchanged. The postorder path now uses the strict replay's existing rollback
+journal instead of retaining a duplicate snapshot. The fixed-point fallback
+still snapshots before mutation. The original cycle passes on its 320 KiB stack
+without changing its input or budget.
+
+A diagnostic run of 91 integration targets then found five failures across four
+targets. One exposed a source/Core mismatch: collecting initializer replies had
+unintentionally enabled a more precise call analysis for a discard-only module.
+Reply observation now leaves the existing call-proof mode unchanged. Other
+corrections preserve the physical capture of strictly passed evidence and update
+work-budget expectations and probe inventories after removed replay. The five
+affected targets pass all 156 tests. Both original 64 KiB stack checks,
+initializer-reply relocation, the shared-module execution case and the
+observed-call transaction controls also pass.
+
+On the current follow-up source, the original #190 full-binding input compiled
+at unchanged limits: source checking used 53,730,163 of 368,770,000 units, final
 elaboration used 31,935 of 29,501,600, and independent Core validation used
 67,377,437 of 921,925,000. All three phases completed. On the merged PR source,
 the full binding and Network program also executed to `42` through the
@@ -148,11 +166,9 @@ they do not seed autonomous provider initializer or function roots. Each
 producer solves its cleanup rows after evidence and region lowering. A new
 open-module validator is not needed for this path.
 
-Formatting and warning-denied Clippy also pass on the follow-up. The remaining
-delivery is an exact-commit review and one fresh seven-stage workspace
-checkpoint. The PM coordinates the checkpoint review and follow-up PR;
-acceptance and cleanup follow the actual result. The failed checkpoint took
-about 17 minutes and does not predict the duration of the next run.
+The remaining delivery is an exact-commit review and one fresh seven-stage
+workspace checkpoint. The PM coordinates the checkpoint review and follow-up
+PR; acceptance and cleanup follow the actual result.
 
 ## Verification
 

@@ -1826,20 +1826,10 @@ impl CoreBuilder<EffectOperationFamily> {
         } else {
             self.invalidate_settled_zonk_range(start..count)?;
         }
-        self.charge_effect_metadata(length)?;
-        let mut previous = Vec::new();
-        previous
-            .try_reserve_exact(length)
-            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
         let mut handlers = std::collections::HashMap::new();
         let mut has_resume = false;
         for index in start..count {
             self.charge_effect_metadata(1)?;
-            previous.push(
-                clone_effect_row_with_budget(&self.nodes[index].effects, &mut self.type_work)
-                    .map_err(|()| super::BuildError::TypeWorkExceeded)?,
-            );
-
             has_resume |= matches!(
                 self.nodes[index].kind,
                 EffectExprKind::Operation(EffectOperation::Resume(_))
@@ -1884,18 +1874,31 @@ impl CoreBuilder<EffectOperationFamily> {
                 }
             }
         }
+        // Without resumes, ordinal-postorder children settle in one strict
+        // replay, which already journals and restores its own changes. Forward
+        // references and resumes need the outer snapshot because the fallback
+        // can perform several replays and resume resets.
+        if ordinal_postorder {
+            return self.recompute_effect_rows_in_range(
+                start..count,
+                &EffectRow::empty(),
+                HandlerId::new(u32::MAX),
+                ResumeId::new(u32::MAX),
+            );
+        }
+        self.charge_effect_metadata(length)?;
+        let mut previous = Vec::new();
+        previous
+            .try_reserve_exact(length)
+            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+        for index in start..count {
+            self.charge_effect_metadata(1)?;
+            previous.push(
+                clone_effect_row_with_budget(&self.nodes[index].effects, &mut self.type_work)
+                    .map_err(|()| super::BuildError::TypeWorkExceeded)?,
+            );
+        }
         let result = (|| {
-            // Without resume edges, strict ordinal postorder settles every row
-            // from already-settled children in one pass. Forward references
-            // retain the general replay path below.
-            if ordinal_postorder {
-                return self.recompute_effect_rows_in_range(
-                    start..count,
-                    &EffectRow::empty(),
-                    HandlerId::new(u32::MAX),
-                    ResumeId::new(u32::MAX),
-                );
-            }
             // Final type coincidence can shrink an earlier handler output. Start
             // derived resume edges at bottom rather than retaining self-supporting
             // cached labels or tails. Stable call/discard leaves retain their rows

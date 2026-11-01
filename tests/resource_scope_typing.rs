@@ -1003,7 +1003,7 @@ fn imported_constrained_helper_retains_selected_evidence_dependencies() {
 }
 
 #[test]
-fn unused_imported_evidence_prerequisite_does_not_capture_its_method() {
+fn imported_evidence_capture_follows_the_escaping_closure() {
     for wrapper in [false, true] {
         for helper_body in ["read value", "42"] {
             let tree = Tree::new();
@@ -1019,14 +1019,35 @@ fn unused_imported_evidence_prerequisite_does_not_capture_its_method() {
                 format!("pub interface Read<A> {{\nread : A -> Int\n}}\n{declarations}"),
             )
             .unwrap();
-            let source = "import @builtin.cell as Cell\nimport helper (Read, read, invoke)\nmain : Unit -> Int\nmain () = {\nlet escaped = resource cell<R> c = 41 {\nnewtype Token = Token(Unit)\nlet saved = Token(())\nwith Read<Token> {\nread ignored = handle (Cell.read c) with Cell.Ops<R> {\nread value => resume 42\nwrite value => resume ()\n}\n}\nlet later : Unit -> Int = fn(ignored) {\ninvoke saved\n}\nlater\n}\n42\n}\n";
-            let outcome = tree.check(source);
-            let expected = if helper_body == "42" {
-                None
-            } else {
-                Some("ResourceEscape")
-            };
-            assert_check(outcome, expected);
+            for (body, escapes) in [
+                (
+                    "let later : Unit -> Int = fn(ignored) {\ninvoke saved\n}\nlater",
+                    true,
+                ),
+                (
+                    "let copied = invoke saved\nlet later : Unit -> Int = fn(ignored) {\ncopied\n}\nlater",
+                    false,
+                ),
+                (
+                    "let later : Unit -> Int = fn(ignored) {\n42\n}\nlater",
+                    false,
+                ),
+            ] {
+                let source = format!(
+                    "import @builtin.cell as Cell\nimport helper (Read, read, invoke)\nmain : Unit -> Int\nmain () = {{\nlet escaped = resource cell<R> c = 41 {{\nnewtype Token = Token(Unit)\nlet saved = Token(())\nwith Read<Token> {{\nread ignored = handle (Cell.read c) with Cell.Ops<R> {{\nread value => resume 42\nwrite value => resume ()\n}}\n}}\n{body}\n}}\nescaped ()\n}}\n"
+                );
+                if escapes {
+                    assert_check(tree.check_dependencies(&source), Some("ResourceEscape"));
+                } else {
+                    fs::write(tree.0.join("entry.ash"), &source).unwrap();
+                    let observation = ash::driver::run_path(ash::driver::RunConfiguration {
+                        entry: tree.0.join("entry.ash"),
+                        roots: ModuleRoots::empty(),
+                    })
+                    .unwrap();
+                    assert_eq!(observation.value_display(), "42");
+                }
+            }
         }
     }
 }

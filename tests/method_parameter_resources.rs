@@ -244,13 +244,13 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "hidden interface import constraint ledger",
             RESOLVE_SOURCE,
             "fn hidden_interface_import_route_uses_its_exact_constraint_budget()",
-            "const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 1 + 1 + 14 + 3 + 3;",
+            "const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 1 + 1 + 14 + 3;",
         ),
         (
             "hidden interface import type ledger",
             RESOLVE_SOURCE,
             "fn hidden_interface_import_route_uses_its_exact_constraint_budget()",
-            "const EXACT_TYPE_WORK: usize = 6 + 41 + 19 + 1 + 1 + 1;",
+            "const EXACT_TYPE_WORK: usize = 6 + 41 + 19 + 1 + 1;",
         ),
         (
             "summary private binder authority graph ledger",
@@ -361,52 +361,16 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "const EXACT_TYPE_WORK: usize = 1 + 2;",
         ),
         (
-            "linked catalog constraint ledger",
+            "linked registry constraint ledger",
             EVIDENCE_VALIDATION_SOURCE,
-            "fn linked_method_evidence_catalog_has_exact_independent_ledgers()",
-            "let constraint_work = measured_constraint.used();",
+            "fn link_exposes_exact_independent_combined_registry_ledgers()",
+            "const CONSTRAINT_WORK: usize = 19 + 40 + 6 + 2 + 3 + 4;",
         ),
         (
-            "generic implementation validation without discarded head buffer",
+            "linked registry type ledger",
             EVIDENCE_VALIDATION_SOURCE,
-            "fn generic_implementation_validation_excludes_discarded_head_scope_buffer_work()",
-            "const EXACT_WORK_WITHOUT_UNUSED_HEAD_BUFFER: usize = 6;",
-        ),
-        (
-            "linked catalog type ledger",
-            EVIDENCE_VALIDATION_SOURCE,
-            "fn linked_method_evidence_catalog_has_exact_independent_ledgers()",
-            "let type_work = measured_type.used();",
-        ),
-        (
-            "abstract producer catalog",
-            EVIDENCE_VALIDATION_SOURCE,
-            "fn widened_abstract_producer_lookup_has_an_exact_retry_boundary()",
-            "let constraint_work = measured_constraint.used();",
-        ),
-        (
-            "abstract producer type ledger",
-            EVIDENCE_VALIDATION_SOURCE,
-            "fn widened_abstract_producer_lookup_has_an_exact_retry_boundary()",
-            "let type_work = measured_type.used();",
-        ),
-        (
-            "concrete source catalog",
-            EVIDENCE_VALIDATION_SOURCE,
-            "fn concrete_adapter_source_catalog_has_an_exact_retry_boundary()",
-            "let constraint_work = measured_constraint.used();",
-        ),
-        (
-            "concrete source paid-prefix retention",
-            EVIDENCE_VALIDATION_SOURCE,
-            "fn concrete_adapter_source_catalog_has_an_exact_retry_boundary()",
-            "for prefix in [0usize, 17] {",
-        ),
-        (
-            "concrete source type ledger",
-            EVIDENCE_VALIDATION_SOURCE,
-            "fn concrete_adapter_source_catalog_has_an_exact_retry_boundary()",
-            "let type_work = measured_type.used();",
+            "fn link_exposes_exact_independent_combined_registry_ledgers()",
+            "const TYPE_WORK: usize = TYPE_RETENTION_WORK + 5 + 2 + 5 + 3;",
         ),
         (
             "Core Builder carriers",
@@ -498,7 +462,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
         "fn selected_method_rigidity_has_exact_retryable_traversal_boundary()",
         "fn lowered_requirement_rows_and_replacements_have_an_exact_retryable_type_boundary()",
         "fn monomorphic_adapter_edge_identity_has_an_exact_validation_boundary()",
-        "fn generic_implementation_validation_excludes_discarded_head_scope_buffer_work()",
+        "fn link_exposes_exact_independent_combined_registry_ledgers()",
         "fn pending_method_payload_zonk_failure_discards_staged_types_on_a_small_stack()",
     ] {
         assert!(
@@ -532,8 +496,8 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
     assert_eq!(10 + 5, 15);
     assert_eq!(5 * 1_024 + 7, 5_127);
     assert_eq!(3 * 1_024 + 6, 3_078);
-    assert_eq!(1 + 2 + 1 + 1 + 14 + 3 + 3, 25);
-    assert_eq!(6 + 41 + 19 + 1 + 1 + 1, 69);
+    assert_eq!(1 + 2 + 1 + 1 + 14 + 3, 22);
+    assert_eq!(6 + 41 + 19 + 1 + 1, 68);
     assert_eq!(8 + 3 + 1, 12);
     assert_eq!(4 * 1_024 + 8, 4_104);
     assert_eq!(4 + 2, 6);
