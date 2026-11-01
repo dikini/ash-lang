@@ -140,9 +140,8 @@ pub(crate) fn binder_kind_is_admitted(kind: &Kind, allow_effect_row: bool) -> bo
 
 /// Minimal charging seam for the total kind-synthesis engine.
 ///
-/// Resolved checking supplies [`TypeWorkBudget`]. Linked evidence validation
-/// supplies its graph-wide constraint ledger without importing that layer into
-/// the kind module.
+/// Resolved checking supplies [`TypeWorkBudget`]. Body-free checking can use a
+/// constraint ledger without importing that layer into the kind module.
 pub(crate) trait KindWorkLedger {
     fn charge(&mut self, work: usize) -> Result<(), ()>;
 }
@@ -392,7 +391,7 @@ enum KindInternalCause {
     RowTailKind,
     MissingRowBinderKind,
     MissingRowInferenceKind,
-    ImplementationRowBinder,
+
     PreflightArityChanged,
     MethodRowBinder,
     RowInferenceDetermination,
@@ -439,14 +438,7 @@ enum KindInternalCause {
     HookArgumentSource,
     HookArgumentProvenance,
     HookMissingEffect,
-    ImplementationBinderCount,
-    ImplementationBinderIdentity,
-    SchemeBinderCount,
-    SchemeBinderIdentity,
-    RetainedBinderKind,
-    UnusedImplementationBinder,
-    UnusedSchemeBinder,
-    InvalidDependentAllowance,
+
     LinkedValueType,
     LinkedComputationRow,
     DuplicateConstructorMirror,
@@ -520,7 +512,6 @@ impl KindInternalCause {
             Self::RowTailKind => "row-tail-kind",
             Self::MissingRowBinderKind => "missing-row-binder-kind",
             Self::MissingRowInferenceKind => "missing-row-inference-kind",
-            Self::ImplementationRowBinder => "implementation-row-binder",
             Self::PreflightArityChanged => "preflight-arity-changed",
             Self::MethodRowBinder => "method-row-binder",
             Self::RowInferenceDetermination => "row-inference-determination",
@@ -567,14 +558,6 @@ impl KindInternalCause {
             Self::HookArgumentSource => "hook-argument-source",
             Self::HookArgumentProvenance => "hook-argument-provenance",
             Self::HookMissingEffect => "hook-missing-effect",
-            Self::ImplementationBinderCount => "implementation-binder-count",
-            Self::ImplementationBinderIdentity => "implementation-binder-identity",
-            Self::SchemeBinderCount => "scheme-binder-count",
-            Self::SchemeBinderIdentity => "scheme-binder-identity",
-            Self::RetainedBinderKind => "retained-binder-kind",
-            Self::UnusedImplementationBinder => "unused-implementation-binder",
-            Self::UnusedSchemeBinder => "unused-scheme-binder",
-            Self::InvalidDependentAllowance => "invalid-dependent-allowance",
             Self::LinkedValueType => "linked-value-type",
             Self::LinkedComputationRow => "linked-computation-row",
             Self::DuplicateConstructorMirror => "duplicate-constructor-mirror",
@@ -699,9 +682,6 @@ impl KindInternalCause {
             Self::RowTailKind => "an effect-row tail does not have kind EffectRow",
             Self::MissingRowBinderKind => "an effect-row tail has no canonical binder kind",
             Self::MissingRowInferenceKind => "an effect-row tail has no fixed inference kind",
-            Self::ImplementationRowBinder => {
-                "an implementation owner cannot bind an EffectRow parameter"
-            }
             Self::PreflightArityChanged => {
                 "an interface application changed arity between kind preflight passes"
             }
@@ -798,28 +778,6 @@ impl KindInternalCause {
             Self::HookArgumentSource => "a hook argument has no source occurrence",
             Self::HookArgumentProvenance => "a hook target has incomplete argument provenance",
             Self::HookMissingEffect => "a hook target has no canonical effect declaration",
-            Self::ImplementationBinderCount => {
-                "linked implementation-head mirrors retain different binder counts"
-            }
-            Self::ImplementationBinderIdentity => {
-                "linked implementation-head mirrors retain different binder identities"
-            }
-            Self::SchemeBinderCount => {
-                "a linked source and checked scheme retain different binder counts"
-            }
-            Self::SchemeBinderIdentity => {
-                "a linked source and checked scheme retain different binder identities"
-            }
-            Self::RetainedBinderKind => {
-                "a linked retained binder Kind does not match its canonical registry fact"
-            }
-            Self::UnusedImplementationBinder => {
-                "a linked implementation head retains an unused rigid binder"
-            }
-            Self::UnusedSchemeBinder => "a linked value scheme retains an unused owner binder",
-            Self::InvalidDependentAllowance => {
-                "a linked global has an invalid dependent-only binder allowance"
-            }
             Self::LinkedValueType => "a linked source type does not match its checked value type",
             Self::LinkedComputationRow => {
                 "a linked source computation row does not match its checked row"
@@ -992,9 +950,6 @@ impl KindInternalCause {
             Self::MissingRowInferenceKind => {
                 crate::message::Message::kind_internal_missing_row_inference_kind()
             }
-            Self::ImplementationRowBinder => {
-                crate::message::Message::kind_internal_implementation_row_binder()
-            }
             Self::PreflightArityChanged => {
                 crate::message::Message::kind_internal_preflight_arity_changed()
             }
@@ -1115,28 +1070,6 @@ impl KindInternalCause {
                 crate::message::Message::kind_internal_hook_argument_provenance()
             }
             Self::HookMissingEffect => crate::message::Message::kind_internal_hook_missing_effect(),
-            Self::ImplementationBinderCount => {
-                crate::message::Message::kind_internal_implementation_binder_count()
-            }
-            Self::ImplementationBinderIdentity => {
-                crate::message::Message::kind_internal_implementation_binder_identity()
-            }
-            Self::SchemeBinderCount => crate::message::Message::kind_internal_scheme_binder_count(),
-            Self::SchemeBinderIdentity => {
-                crate::message::Message::kind_internal_scheme_binder_identity()
-            }
-            Self::RetainedBinderKind => {
-                crate::message::Message::kind_internal_retained_binder_kind()
-            }
-            Self::UnusedImplementationBinder => {
-                crate::message::Message::kind_internal_unused_implementation_binder()
-            }
-            Self::UnusedSchemeBinder => {
-                crate::message::Message::kind_internal_unused_scheme_binder()
-            }
-            Self::InvalidDependentAllowance => {
-                crate::message::Message::kind_internal_invalid_dependent_allowance()
-            }
             Self::LinkedValueType => crate::message::Message::kind_internal_linked_value_type(),
             Self::LinkedComputationRow => {
                 crate::message::Message::kind_internal_linked_computation_row()
@@ -1295,7 +1228,6 @@ impl fmt::Display for KindStageFailure {
 #[derive(Clone, Copy)]
 struct KindFact<'a> {
     kind: &'a Kind,
-    retained_mirrors: Option<RetainedKindMirrors<'a>>,
     origin: Option<Span>,
     occurrence: Span,
 }
@@ -1306,11 +1238,6 @@ struct KindFact<'a> {
 struct DeclaredKindFact<'a> {
     fact: KindFact<'a>,
     summary_owner: Option<SummaryBinderOwner>,
-}
-
-#[derive(Clone, Copy)]
-enum RetainedKindMirrors<'a> {
-    Two(&'a Kind, &'a Kind),
 }
 
 struct NominalKindFact {
@@ -1549,7 +1476,7 @@ impl<'a> KindEnvironments<'a> {
             DeclaredKindFact {
                 fact: KindFact {
                     kind,
-                    retained_mirrors: None,
+
                     origin: Some(origin),
                     occurrence: origin,
                 },
@@ -1721,154 +1648,7 @@ impl<'a> KindEnvironments<'a> {
         Ok(())
     }
 
-    /// Installs checked and source implementation-head record mirrors together.
-    pub(crate) fn install_canonical_owner_records_with_source(
-        &mut self,
-        registry: &'a crate::resolved::ResolvedRegistry,
-        parameters: &'a [crate::resolved::ResolvedTypeVariable],
-        source_parameters: &'a [crate::resolved::ResolvedTypeVariable],
-        budget: &mut TypeWorkBudget,
-        span: Span,
-    ) -> Result<(), KindFailure> {
-        if parameters.len() != source_parameters.len() {
-            return Err(KindFailure::internal_cause(
-                span,
-                KindInternalCause::ImplementationBinderCount,
-            ));
-        }
-        self.clear_declared();
-        for (parameter, source) in parameters.iter().zip(source_parameters) {
-            if !binder_kind_is_admitted(&parameter.kind, false)
-                || !binder_kind_is_admitted(&source.kind, false)
-            {
-                return Err(KindFailure::internal_cause(
-                    span,
-                    KindInternalCause::ImplementationRowBinder,
-                ));
-            }
-            if parameter.id != source.id {
-                return Err(KindFailure::internal_cause(
-                    span,
-                    KindInternalCause::ImplementationBinderIdentity,
-                ));
-            }
-            budget.charge(1).map_err(|()| {
-                KindFailure::resource(
-                    span,
-                    "linked owner-binder lookup exceeded its type-work budget",
-                )
-            })?;
-            let canonical = registry.type_variable(parameter.id).ok_or_else(|| {
-                KindFailure::internal_cause(span, KindInternalCause::MissingOwnerBinder)
-            })?;
-            budget.charge(1).map_err(|()| {
-                KindFailure::resource(
-                    span,
-                    "declaration kind environment exceeded its type-work budget",
-                )
-            })?;
-            if self.delta.contains_key(&parameter.id) {
-                return Err(KindFailure::internal_cause(
-                    span,
-                    KindInternalCause::DuplicateBinder,
-                ));
-            }
-            self.delta.try_reserve(1).map_err(|_| {
-                KindFailure::resource(
-                    span,
-                    "declaration kind environment could not reserve storage",
-                )
-            })?;
-            self.delta.insert(
-                parameter.id,
-                DeclaredKindFact {
-                    fact: KindFact {
-                        kind: &canonical.kind,
-                        retained_mirrors: Some(RetainedKindMirrors::Two(
-                            &parameter.kind,
-                            &source.kind,
-                        )),
-                        origin: Some(canonical.origin.primary_span()),
-                        occurrence: span,
-                    },
-                    summary_owner: None,
-                },
-            );
-        }
-        Ok(())
-    }
-
-    /// Installs a checked scheme pair plus the independently retained source
-    /// binder Kind. Both mirrors are authenticated against the canonical
-    /// registry Kind when the binder occurs in the paired value type.
-    pub(crate) fn install_canonical_owner_pairs_with_source(
-        &mut self,
-        registry: &'a crate::resolved::ResolvedRegistry,
-        parameters: &'a [(TypeVariableId, Kind)],
-        source_parameters: &'a [crate::resolved::ResolvedTypeVariable],
-        budget: &mut TypeWorkBudget,
-        span: Span,
-    ) -> Result<(), KindFailure> {
-        if parameters.len() != source_parameters.len() {
-            return Err(KindFailure::internal_cause(
-                span,
-                KindInternalCause::SchemeBinderCount,
-            ));
-        }
-        self.clear_declared();
-        for ((identity, retained_kind), source) in parameters.iter().zip(source_parameters) {
-            if *identity != source.id {
-                return Err(KindFailure::internal_cause(
-                    span,
-                    KindInternalCause::SchemeBinderIdentity,
-                ));
-            }
-            budget.charge(1).map_err(|()| {
-                KindFailure::resource(
-                    span,
-                    "linked owner-binder lookup exceeded its type-work budget",
-                )
-            })?;
-            let parameter = registry.type_variable(*identity).ok_or_else(|| {
-                KindFailure::internal_cause(span, KindInternalCause::MissingOwnerBinder)
-            })?;
-            budget.charge(1).map_err(|()| {
-                KindFailure::resource(
-                    span,
-                    "declaration kind environment exceeded its type-work budget",
-                )
-            })?;
-            if self.delta.contains_key(identity) {
-                return Err(KindFailure::internal_cause(
-                    span,
-                    KindInternalCause::DuplicateBinder,
-                ));
-            }
-            self.delta.try_reserve(1).map_err(|_| {
-                KindFailure::resource(
-                    span,
-                    "declaration kind environment could not reserve storage",
-                )
-            })?;
-            self.delta.insert(
-                *identity,
-                DeclaredKindFact {
-                    fact: KindFact {
-                        kind: &parameter.kind,
-                        retained_mirrors: Some(RetainedKindMirrors::Two(
-                            retained_kind,
-                            &source.kind,
-                        )),
-                        origin: Some(parameter.origin.primary_span()),
-                        occurrence: span,
-                    },
-                    summary_owner: None,
-                },
-            );
-        }
-        Ok(())
-    }
-
+    /// Installs an inference variable and its kind in the current environment.
     pub(crate) fn insert_inference(
         &mut self,
         identity: InferenceVariableId,
@@ -1901,7 +1681,7 @@ impl<'a> KindEnvironments<'a> {
                 identity,
                 KindFact {
                     kind,
-                    retained_mirrors: None,
+
                     origin,
                     occurrence: causal_span,
                 },
@@ -2237,266 +2017,7 @@ impl<'a> KindEnvironments<'a> {
         }
     }
 
-    /// Checks a linked checked value type together with its retained source
-    /// type, and requires every installed owner binder to occur. Structural
-    /// comparison is fused into kind synthesis so no second deep type walk is
-    /// retained.
-    pub(crate) fn expect_body_free_paired_value_type_with_ledger(
-        &self,
-        checked: &Type,
-        source: &Type,
-        span: Span,
-        budget: &mut impl KindWorkLedger,
-    ) -> Result<(), KindFailure> {
-        let mut visited = HashSet::new();
-        budget.charge(self.delta.len()).map_err(|()| {
-            KindFailure::resource(
-                span,
-                "linked owner-binder coverage exceeded its owning work budget",
-            )
-        })?;
-        visited.try_reserve(self.delta.len()).map_err(|_| {
-            KindFailure::resource(
-                span,
-                "linked owner-binder coverage could not reserve storage",
-            )
-        })?;
-        let mut ledger = SynthesisLedger::BodyFree(budget);
-        let found = self.synthesize_with_ledger(
-            checked,
-            None,
-            Some(source),
-            None,
-            &mut KindVariableObserver::separate(None, Some(&mut visited)),
-            span,
-            &mut ledger,
-        )?;
-        if visited.len() != self.delta.len() {
-            return Err(KindFailure::internal_cause(
-                span,
-                KindInternalCause::UnusedSchemeBinder,
-            ));
-        }
-        let equal =
-            same_kind_with_charge(&TYPE_KIND, found.kind, || ledger.charge(1)).map_err(|()| {
-                KindFailure::resource(
-                    span,
-                    "body-free value kind checking exceeded its owning work budget",
-                )
-            })?;
-        if equal {
-            Ok(())
-        } else {
-            Err(KindFailure::internal_cause(
-                span,
-                KindInternalCause::BodyFreeValueKind,
-            ))
-        }
-    }
-
-    /// Checks a paired global value type while permitting only the
-    /// independently authenticated dependent-only binders supplied by the
-    /// caller to remain absent from that value type.
-    pub(crate) fn expect_body_free_paired_global_value_type_with_ledger(
-        &self,
-        checked: &Type,
-        source: &Type,
-        allowed_unused: &[TypeVariableId],
-        span: Span,
-        budget: &mut impl KindWorkLedger,
-    ) -> Result<(), KindFailure> {
-        let mut visited = HashSet::new();
-        budget.charge(self.delta.len()).map_err(|()| {
-            KindFailure::resource(
-                span,
-                "linked owner-binder coverage exceeded its owning work budget",
-            )
-        })?;
-        visited.try_reserve(self.delta.len()).map_err(|_| {
-            KindFailure::resource(
-                span,
-                "linked owner-binder coverage could not reserve storage",
-            )
-        })?;
-        let mut ledger = SynthesisLedger::BodyFree(budget);
-        let found = self.synthesize_with_ledger(
-            checked,
-            None,
-            Some(source),
-            None,
-            &mut KindVariableObserver::separate(None, Some(&mut visited)),
-            span,
-            &mut ledger,
-        )?;
-        self.authenticate_global_owner_coverage(&visited, allowed_unused, span, &mut ledger)?;
-        let equal =
-            same_kind_with_charge(&TYPE_KIND, found.kind, || ledger.charge(1)).map_err(|()| {
-                KindFailure::resource(
-                    span,
-                    "body-free value kind checking exceeded its owning work budget",
-                )
-            })?;
-        if equal {
-            Ok(())
-        } else {
-            Err(KindFailure::internal_cause(
-                span,
-                KindInternalCause::BodyFreeValueKind,
-            ))
-        }
-    }
-
-    /// Checks one checked value type and requires every installed Kind mirror
-    /// to be exercised by an owner-binder occurrence.
-    pub(crate) fn expect_body_free_exact_owner_value_type_with_ledger(
-        &self,
-        ty: &Type,
-        span: Span,
-        budget: &mut impl KindWorkLedger,
-    ) -> Result<(), KindFailure> {
-        let mut visited = HashSet::new();
-        budget.charge(self.delta.len()).map_err(|()| {
-            KindFailure::resource(
-                span,
-                "linked owner-binder coverage exceeded its owning work budget",
-            )
-        })?;
-        visited.try_reserve(self.delta.len()).map_err(|_| {
-            KindFailure::resource(
-                span,
-                "linked owner-binder coverage could not reserve storage",
-            )
-        })?;
-        let mut ledger = SynthesisLedger::BodyFree(budget);
-        let found = self.synthesize_with_ledger(
-            ty,
-            None,
-            None,
-            None,
-            &mut KindVariableObserver::separate(None, Some(&mut visited)),
-            span,
-            &mut ledger,
-        )?;
-        if visited.len() != self.delta.len() {
-            return Err(KindFailure::internal_cause(
-                span,
-                KindInternalCause::UnusedSchemeBinder,
-            ));
-        }
-        let equal =
-            same_kind_with_charge(&TYPE_KIND, found.kind, || ledger.charge(1)).map_err(|()| {
-                KindFailure::resource(
-                    span,
-                    "body-free value kind checking exceeded its owning work budget",
-                )
-            })?;
-        if equal {
-            Ok(())
-        } else {
-            Err(KindFailure::internal_cause(
-                span,
-                KindInternalCause::BodyFreeValueKind,
-            ))
-        }
-    }
-
-    /// Checks an operational global value type with the same authenticated
-    /// dependent-only exception as the paired equational path.
-    pub(crate) fn expect_body_free_exact_global_value_type_with_ledger(
-        &self,
-        ty: &Type,
-        allowed_unused: &[TypeVariableId],
-        span: Span,
-        budget: &mut impl KindWorkLedger,
-    ) -> Result<(), KindFailure> {
-        let mut visited = HashSet::new();
-        budget.charge(self.delta.len()).map_err(|()| {
-            KindFailure::resource(
-                span,
-                "linked owner-binder coverage exceeded its owning work budget",
-            )
-        })?;
-        visited.try_reserve(self.delta.len()).map_err(|_| {
-            KindFailure::resource(
-                span,
-                "linked owner-binder coverage could not reserve storage",
-            )
-        })?;
-        let mut ledger = SynthesisLedger::BodyFree(budget);
-        let found = self.synthesize_with_ledger(
-            ty,
-            None,
-            None,
-            None,
-            &mut KindVariableObserver::separate(None, Some(&mut visited)),
-            span,
-            &mut ledger,
-        )?;
-        self.authenticate_global_owner_coverage(&visited, allowed_unused, span, &mut ledger)?;
-        let equal =
-            same_kind_with_charge(&TYPE_KIND, found.kind, || ledger.charge(1)).map_err(|()| {
-                KindFailure::resource(
-                    span,
-                    "body-free value kind checking exceeded its owning work budget",
-                )
-            })?;
-        if equal {
-            Ok(())
-        } else {
-            Err(KindFailure::internal_cause(
-                span,
-                KindInternalCause::BodyFreeValueKind,
-            ))
-        }
-    }
-
-    fn authenticate_global_owner_coverage(
-        &self,
-        visited: &HashSet<TypeVariableId>,
-        allowed_unused: &[TypeVariableId],
-        span: Span,
-        budget: &mut impl KindWorkLedger,
-    ) -> Result<(), KindFailure> {
-        budget.charge(allowed_unused.len()).map_err(|()| {
-            KindFailure::resource(
-                span,
-                "linked dependent-only binder retention exceeded its owning work budget",
-            )
-        })?;
-        let mut allowed = HashSet::new();
-        allowed.try_reserve(allowed_unused.len()).map_err(|_| {
-            KindFailure::resource(
-                span,
-                "linked dependent-only binder retention could not reserve storage",
-            )
-        })?;
-        for identity in allowed_unused {
-            if !self.delta.contains_key(identity) || !allowed.insert(*identity) {
-                return Err(KindFailure::internal_cause(
-                    span,
-                    KindInternalCause::InvalidDependentAllowance,
-                ));
-            }
-        }
-        budget.charge(self.delta.len()).map_err(|()| {
-            KindFailure::resource(
-                span,
-                "linked global owner-binder coverage exceeded its owning work budget",
-            )
-        })?;
-        if self
-            .delta
-            .keys()
-            .any(|identity| !visited.contains(identity) && !allowed.contains(identity))
-        {
-            return Err(KindFailure::internal_cause(
-                span,
-                KindInternalCause::UnusedSchemeBinder,
-            ));
-        }
-        Ok(())
-    }
-
+    /// Installs a nominal type and its ordered parameter kinds.
     pub(crate) fn insert_nominal(
         &mut self,
         identity: NominalTypeId,
@@ -2983,100 +2504,6 @@ impl<'a> KindEnvironments<'a> {
 
     /// Checks an implementation head and proves that every installed rigid
     /// owner binder occurs in the authenticated head argument.
-    pub(crate) fn expect_body_free_exact_owner_interface_argument_with_ledger(
-        &self,
-        interface: InterfaceId,
-        arguments: &[KindedArgument],
-        span: Span,
-        budget: &mut impl KindWorkLedger,
-    ) -> Result<(), KindFailure> {
-        let Some(expected) = self.iota.get(&interface) else {
-            budget.charge(1).map_err(|()| {
-                KindFailure::resource(
-                    span,
-                    "body-free interface-kind lookup exceeded its owning work budget",
-                )
-            })?;
-            return Err(KindFailure::internal_cause(
-                span,
-                KindInternalCause::BodyFreeInterfaceKind,
-            ));
-        };
-        if arguments.len() != expected.parameters.len() {
-            return Err(KindFailure::internal_cause(
-                span,
-                KindInternalCause::BodyFreeInterfaceArity,
-            ));
-        }
-        let mut visited = HashSet::new();
-        budget.charge(self.delta.len()).map_err(|()| {
-            KindFailure::resource(
-                span,
-                "linked implementation-head coverage exceeded its owning work budget",
-            )
-        })?;
-        visited.try_reserve(self.delta.len()).map_err(|_| {
-            KindFailure::resource(
-                span,
-                "linked implementation-head coverage could not reserve storage",
-            )
-        })?;
-        let mut ledger = SynthesisLedger::BodyFree(budget);
-        let mut initial = Vec::new();
-        ledger.charge(arguments.len()).map_err(|()| {
-            KindFailure::resource(
-                span,
-                "interface argument checking exceeded its owning work budget",
-            )
-        })?;
-        initial.try_reserve_exact(arguments.len()).map_err(|_| {
-            KindFailure::resource(
-                span,
-                "interface argument checking could not reserve storage",
-            )
-        })?;
-        initial.extend(
-            arguments
-                .iter()
-                .zip(expected.parameters)
-                .map(|(argument, parameter)| (argument, &parameter.kind)),
-        );
-        for (argument, expected) in self.owner_type_inputs(
-            initial,
-            &mut KindVariableObserver::separate(None, Some(&mut visited)),
-            span,
-            &mut ledger,
-        )? {
-            let found = self.synthesize_with_ledger(
-                argument,
-                None,
-                None,
-                None,
-                &mut KindVariableObserver::separate(None, Some(&mut visited)),
-                span,
-                &mut ledger,
-            )?;
-            if !same_kind_with_charge(expected, found.kind, || ledger.charge(1)).map_err(|()| {
-                KindFailure::resource(
-                    span,
-                    "interface kind authentication exceeded its owning work budget",
-                )
-            })? {
-                return Err(KindFailure::internal_cause(
-                    span,
-                    KindInternalCause::BodyFreeInterfaceArgument,
-                ));
-            }
-        }
-        if visited.len() != self.delta.len() {
-            return Err(KindFailure::internal_cause(
-                span,
-                KindInternalCause::UnusedImplementationBinder,
-            ));
-        }
-        Ok(())
-    }
-
     fn expect_body_free_interface_argument(
         &self,
         interface: InterfaceId,
@@ -4141,16 +3568,12 @@ impl<'a> KindEnvironments<'a> {
                 })?
             }
         };
-        authenticate_kind_descendants_with_ledger(fact.kind, fact.retained_mirrors, budget)
-            .map_err(|failure| match failure {
-                LinkedKindMirrorFailure::Resource => KindFailure::resource(
-                    span,
-                    "row-binder kind correspondence exceeded its owning work budget",
-                ),
-                LinkedKindMirrorFailure::Mismatch => {
-                    KindFailure::internal_cause(span, KindInternalCause::RetainedBinderKind)
-                }
-            })?;
+        charge_kind_descendants_with_ledger(fact.kind, budget).map_err(|()| {
+            KindFailure::resource(
+                span,
+                "row-binder kind correspondence exceeded its owning work budget",
+            )
+        })?;
         let is_row = same_kind_with_charge(fact.kind, &Kind::EffectRow, || budget.charge(1))
             .map_err(|()| {
                 KindFailure::resource(
@@ -4648,7 +4071,7 @@ impl<'a> KindEnvironments<'a> {
                             require_fact_node(node, span, budget)?;
                             State::Complete(KindFact {
                                 kind: &TYPE_KIND,
-                                retained_mirrors: None,
+
                                 origin: None,
                                 occurrence: span,
                             })
@@ -4678,21 +4101,14 @@ impl<'a> KindEnvironments<'a> {
                                     KindInternalCause::BodyFreeConstructorOwner,
                                 ));
                             }
-                            authenticate_kind_descendants_with_ledger(
-                                fact.kind,
-                                fact.retained_mirrors,
-                                budget,
-                            )
-                            .map_err(|failure| match failure {
-                                LinkedKindMirrorFailure::Resource => KindFailure::resource(
-                                    span,
-                                    "declaration kind lookup exceeded its type-work budget",
-                                ),
-                                LinkedKindMirrorFailure::Mismatch => KindFailure::internal_cause(
-                                    span,
-                                    KindInternalCause::RetainedBinderKind,
-                                ),
-                            })?;
+                            charge_kind_descendants_with_ledger(fact.kind, budget).map_err(
+                                |()| {
+                                    KindFailure::resource(
+                                        span,
+                                        "declaration kind lookup exceeded its type-work budget",
+                                    )
+                                },
+                            )?;
                             fact.occurrence = span;
                             State::Complete(fact)
                         }
@@ -4756,7 +4172,7 @@ impl<'a> KindEnvironments<'a> {
                             )?;
                             State::Complete(KindFact {
                                 kind: &fact.kind,
-                                retained_mirrors: None,
+
                                 origin: Some(fact.origin),
                                 occurrence: span,
                             })
@@ -4786,7 +4202,7 @@ impl<'a> KindEnvironments<'a> {
                             } else {
                                 State::Complete(KindFact {
                                     kind: &TYPE_KIND,
-                                    retained_mirrors: None,
+
                                     origin: None,
                                     occurrence: span,
                                 })
@@ -4856,7 +4272,7 @@ impl<'a> KindEnvironments<'a> {
                             } else {
                                 State::Complete(KindFact {
                                     kind: &TYPE_KIND,
-                                    retained_mirrors: None,
+
                                     origin: None,
                                     occurrence: span,
                                 })
@@ -5114,7 +4530,7 @@ impl<'a> KindEnvironments<'a> {
                             } else {
                                 State::Complete(KindFact {
                                     kind: &TYPE_KIND,
-                                    retained_mirrors: None,
+
                                     origin: None,
                                     occurrence: span,
                                 })
@@ -5175,7 +4591,7 @@ impl<'a> KindEnvironments<'a> {
                             } else {
                                 State::Complete(KindFact {
                                     kind: &TYPE_KIND,
-                                    retained_mirrors: None,
+
                                     origin: None,
                                     occurrence: span,
                                 })
@@ -5257,7 +4673,7 @@ impl<'a> KindEnvironments<'a> {
                             }
                             State::Complete(KindFact {
                                 kind: codomain,
-                                retained_mirrors: None,
+
                                 origin: function.origin,
                                 occurrence: span,
                             })
@@ -5330,7 +4746,7 @@ impl<'a> KindEnvironments<'a> {
                             }
                             State::Complete(KindFact {
                                 kind: &TYPE_KIND,
-                                retained_mirrors: None,
+
                                 origin: None,
                                 occurrence: span,
                             })
@@ -8223,94 +7639,6 @@ fn charge_kind_descendants_with_ledger(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LinkedKindMirrorFailure {
-    Resource,
-    Mismatch,
-}
-
-fn authenticate_kind_descendants_with_ledger(
-    canonical: &Kind,
-    retained_mirrors: Option<RetainedKindMirrors<'_>>,
-    budget: &mut SynthesisLedger<'_>,
-) -> Result<(), LinkedKindMirrorFailure> {
-    let Some(retained_mirrors) = retained_mirrors else {
-        return charge_kind_descendants_with_ledger(canonical, budget)
-            .map_err(|()| LinkedKindMirrorFailure::Resource);
-    };
-
-    let RetainedKindMirrors::Two(first, second) = retained_mirrors;
-    let second = Some(second);
-    if second.is_some() {
-        budget
-            .charge(1)
-            .map_err(|()| LinkedKindMirrorFailure::Resource)?;
-    }
-
-    let mut current = (canonical, first, second);
-    let mut pending = Vec::new();
-    loop {
-        match current {
-            (Kind::Type, Kind::Type, None | Some(Kind::Type))
-            | (Kind::EffectRow, Kind::EffectRow, None | Some(Kind::EffectRow)) => {}
-            (
-                Kind::Arrow(canonical_domain, canonical_codomain),
-                Kind::Arrow(first_domain, first_codomain),
-                second,
-            ) => {
-                let (second_domain, second_codomain) = match second {
-                    None => (None, None),
-                    Some(Kind::Arrow(domain, codomain)) => {
-                        (Some(domain.as_ref()), Some(codomain.as_ref()))
-                    }
-                    Some(Kind::Type | Kind::EffectRow) => {
-                        return Err(LinkedKindMirrorFailure::Mismatch);
-                    }
-                };
-                budget
-                    .charge(1)
-                    .map_err(|()| LinkedKindMirrorFailure::Resource)?;
-                pending
-                    .try_reserve(1)
-                    .map_err(|_| LinkedKindMirrorFailure::Resource)?;
-                pending.push((
-                    canonical_codomain.as_ref(),
-                    first_codomain.as_ref(),
-                    second_codomain,
-                ));
-                budget
-                    .charge(1)
-                    .map_err(|()| LinkedKindMirrorFailure::Resource)?;
-                if second_domain.is_some() {
-                    budget
-                        .charge(1)
-                        .map_err(|()| LinkedKindMirrorFailure::Resource)?;
-                }
-                current = (
-                    canonical_domain.as_ref(),
-                    first_domain.as_ref(),
-                    second_domain,
-                );
-                continue;
-            }
-            _ => return Err(LinkedKindMirrorFailure::Mismatch),
-        }
-
-        let Some(next) = pending.pop() else {
-            return Ok(());
-        };
-        budget
-            .charge(1)
-            .map_err(|()| LinkedKindMirrorFailure::Resource)?;
-        if next.2.is_some() {
-            budget
-                .charge(1)
-                .map_err(|()| LinkedKindMirrorFailure::Resource)?;
-        }
-        current = next;
-    }
-}
-
 fn charge_lookup_attempt(span: Span, budget: &mut impl KindWorkLedger) -> Result<(), KindFailure> {
     budget.charge(1).map_err(|()| {
         KindFailure::resource(
@@ -8525,7 +7853,6 @@ mod tests {
             KindInternalCause::RowTailKind,
             KindInternalCause::MissingRowBinderKind,
             KindInternalCause::MissingRowInferenceKind,
-            KindInternalCause::ImplementationRowBinder,
             KindInternalCause::PreflightArityChanged,
             KindInternalCause::MethodRowBinder,
             KindInternalCause::RowInferenceDetermination,
@@ -8572,14 +7899,6 @@ mod tests {
             KindInternalCause::HookArgumentSource,
             KindInternalCause::HookArgumentProvenance,
             KindInternalCause::HookMissingEffect,
-            KindInternalCause::ImplementationBinderCount,
-            KindInternalCause::ImplementationBinderIdentity,
-            KindInternalCause::SchemeBinderCount,
-            KindInternalCause::SchemeBinderIdentity,
-            KindInternalCause::RetainedBinderKind,
-            KindInternalCause::UnusedImplementationBinder,
-            KindInternalCause::UnusedSchemeBinder,
-            KindInternalCause::InvalidDependentAllowance,
             KindInternalCause::LinkedValueType,
             KindInternalCause::LinkedComputationRow,
             KindInternalCause::DuplicateConstructorMirror,
@@ -9601,104 +8920,6 @@ mod tests {
                 "the valid method state must retain its expected outcome",
             );
         }
-    }
-
-    #[test]
-    fn retained_kind_mirror_continuations_are_exact_for_both_deep_spines() {
-        const DEPTH: usize = 32_768;
-        const EXACT_WORK: usize = 5 * DEPTH + 1;
-
-        #[derive(Clone, Copy)]
-        enum Spine {
-            Left,
-            Right,
-        }
-
-        fn kind(spine: Spine, late_mismatch: bool) -> Kind {
-            match spine {
-                Spine::Right => {
-                    let mut kind = if late_mismatch {
-                        Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
-                    } else {
-                        Kind::Type
-                    };
-                    for _ in 0..DEPTH {
-                        kind = Kind::Arrow(Box::new(Kind::Type), Box::new(kind));
-                    }
-                    kind
-                }
-                Spine::Left => {
-                    let mut kind = Kind::Type;
-                    for index in 0..DEPTH {
-                        let codomain = if late_mismatch && index == DEPTH - 1 {
-                            Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
-                        } else {
-                            Kind::Type
-                        };
-                        kind = Kind::Arrow(Box::new(kind), Box::new(codomain));
-                    }
-                    kind
-                }
-            }
-        }
-
-        fn authenticate(
-            canonical: &Kind,
-            first: &Kind,
-            second: &Kind,
-            limit: usize,
-        ) -> (Result<(), LinkedKindMirrorFailure>, usize) {
-            let mut budget = crate::interface::InterfaceConstraintBudget::with_limit(limit);
-            let result = {
-                let mut ledger = SynthesisLedger::BodyFree(&mut budget);
-                authenticate_kind_descendants_with_ledger(
-                    canonical,
-                    Some(RetainedKindMirrors::Two(first, second)),
-                    &mut ledger,
-                )
-            };
-            (result, budget.used())
-        }
-
-        std::thread::Builder::new()
-            .name("deep-retained-kind-mirrors".to_owned())
-            .stack_size(256 * 1024)
-            .spawn(|| {
-                for spine in [Spine::Right, Spine::Left] {
-                    let canonical = kind(spine, false);
-                    let first = kind(spine, false);
-                    let second = kind(spine, false);
-                    assert_eq!(
-                        authenticate(&canonical, &first, &second, EXACT_WORK - 1),
-                        (Err(LinkedKindMirrorFailure::Resource), EXACT_WORK - 1),
-                    );
-                    assert_eq!(
-                        authenticate(&canonical, &first, &second, EXACT_WORK),
-                        (Ok(()), EXACT_WORK),
-                    );
-                    drop(canonical);
-                    drop(first);
-                    drop(second);
-
-                    let canonical = kind(spine, false);
-                    let first = kind(spine, false);
-                    let second = kind(spine, true);
-                    assert_eq!(
-                        authenticate(&canonical, &first, &second, EXACT_WORK - 1),
-                        (Err(LinkedKindMirrorFailure::Resource), EXACT_WORK - 1),
-                    );
-                    assert_eq!(
-                        authenticate(&canonical, &first, &second, EXACT_WORK),
-                        (Err(LinkedKindMirrorFailure::Mismatch), EXACT_WORK),
-                    );
-                    drop(canonical);
-                    drop(first);
-                    drop(second);
-                }
-            })
-            .expect("the deep retained-mirror worker should start")
-            .join()
-            .expect("both retained Kind spines must authenticate and tear down on 256 KiB");
     }
 
     fn unit_expression(span: Span) -> ResolvedExpr {

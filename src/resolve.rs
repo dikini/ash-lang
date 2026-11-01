@@ -889,7 +889,6 @@ enum ResolveContext {
     MissingNominalScope,
     MissingConstructorScope,
     DependencySummaryMismatch,
-    DependencySummaryInvalid,
     Kind(crate::kind::KindFailureContext),
     Term,
     EffectOperation,
@@ -1002,10 +1001,6 @@ impl ResolveError {
             Some(ResolveContext::DependencySummaryMismatch) => Some((
                 Message::resolve_dependency_summary_mismatch(),
                 "dependency-summary-mismatch",
-            )),
-            Some(ResolveContext::DependencySummaryInvalid) => Some((
-                Message::resolve_dependency_summary_invalid(),
-                "dependency-summary-invalid",
             )),
             _ => None,
         }
@@ -1223,7 +1218,6 @@ impl ResolveError {
                 | ResolveContext::MixedTypeRowRoles
                 | ResolveContext::Kind(_)
                 | ResolveContext::DependencySummaryMismatch
-                | ResolveContext::DependencySummaryInvalid
                 | ResolveContext::DeclarationOrder { .. }
                 | ResolveContext::WorkState { .. }
                 | ResolveContext::MissingFileScope
@@ -1466,7 +1460,6 @@ impl ResolveError {
             ResolveContext::IdentityExhaustion(_)
             | ResolveContext::Kind(_)
             | ResolveContext::DependencySummaryMismatch
-            | ResolveContext::DependencySummaryInvalid
             | ResolveContext::DeclarationOrder { .. }
             | ResolveContext::WorkState { .. }
             | ResolveContext::MissingFileScope
@@ -1666,6 +1659,22 @@ fn finish_module_resolution(
                 "defining source provenance could not be retained",
             ))
         })?;
+    resolved
+        .retain_dependency_lowerings(
+            dependencies.iter().map(|dependency| dependency.summary),
+            type_work,
+        )
+        .map_err(|failure| {
+            ResolveModuleError::Resolution(error(
+                if failure == crate::resolved::ResolvedBuildFailure::TypeResource {
+                    ResolveReason::TypeResourceExhausted
+                } else {
+                    ResolveReason::ImportConflict
+                },
+                loaded.surface().span,
+                "compiled dependency metadata could not be retained",
+            ))
+        })?;
     Ok(resolved)
 }
 
@@ -1797,40 +1806,6 @@ fn resolve_module_names_with_budget(
             "the resolver received incomplete or mismatched dependency summaries",
         )
         .with_context(ResolveContext::DependencySummaryMismatch));
-    }
-
-    for dependency in dependencies {
-        dependency
-            .summary
-            .authenticate(type_work, constraint_work)
-            .map_err(|failure| {
-                let (reason, message) = match failure {
-                    ResolvedBuildFailure::Kind(context) => {
-                        return kind_context_error(
-                            context,
-                            dependency.edge.import_span(),
-                            "a dependency summary failed body-free authentication",
-                        );
-                    }
-                    ResolvedBuildFailure::TypeResource => (
-                        ResolveReason::TypeResourceExhausted,
-                        "dependency-summary authentication exceeded its type-work budget",
-                    ),
-                    ResolvedBuildFailure::ConstraintResource => (
-                        ResolveReason::ConstraintResourceExhausted,
-                        "dependency-summary authentication exceeded its constraint-work budget",
-                    ),
-                    ResolvedBuildFailure::InvalidState => {
-                        return error(
-                            ResolveReason::InternalState,
-                            dependency.edge.import_span(),
-                            "a dependency summary failed body-free authentication",
-                        )
-                        .with_context(ResolveContext::DependencySummaryInvalid);
-                    }
-                };
-                error(reason, dependency.edge.import_span(), message)
-            })?;
     }
 
     let mut resolver = Resolver::with_budgets(
@@ -4839,16 +4814,6 @@ impl Resolver {
                     )
                 })?;
             self.retain_type_nominals(&method.value_type, summary, span)?;
-            method
-                .authenticate_shared_original(&mut self.constraint_work)
-                .map_err(|failure| imported_fact_comparison_error(failure, span))?;
-            method
-                .authenticate_inherited_parameters(
-                    crate::resolved::OwnerId::Interface(exported.id),
-                    &exported.parameters,
-                    &mut self.type_work,
-                )
-                .map_err(|failure| imported_fact_comparison_error(failure, span))?;
             if authority_work != 0 {
                 authority_method_indices.push(method_index);
             }
@@ -4898,13 +4863,6 @@ impl Resolver {
             )
         })?;
         let fact = exported.fact();
-        crate::resolved::authenticate_implementation_publication(
-            fact,
-            exported.publication(),
-            &mut self.type_work,
-            &mut self.constraint_work,
-        )
-        .map_err(|failure| imported_fact_comparison_error(failure, span))?;
         let authorization_is_well_formed = exported
             .authorization()
             .is_well_formed_for(summary.module(), fact, &mut self.constraint_work)
@@ -13797,7 +13755,6 @@ fn lookup_error(
         ResolveContext::IdentityExhaustion(_) => ResolveReason::BinderIdExhausted,
         ResolveContext::Kind(_)
         | ResolveContext::DependencySummaryMismatch
-        | ResolveContext::DependencySummaryInvalid
         | ResolveContext::DeclarationOrder { .. }
         | ResolveContext::WorkState { .. }
         | ResolveContext::MissingFileScope
@@ -17439,12 +17396,11 @@ mod tests {
         // canonical Token definition is header+Source-Origin 2. Two one-hop
         // prepends and the effective/public hop comparisons complete the route.
         const PUBLIC_DUPLICATE_CONSTRAINT_WORK: usize =
-            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6 + 1) + 2 + 1 + 1 + 1 + 1 + 19;
-        // Publication authentication independently compares the same default row (+1).
+            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6 + 1) + 2 + 1 + 1 + 1 + 1;
         // A private-to-public promotion replaces the public hop comparison with
         // one public-order/rank reservation cell, so its exact total is equal.
         const PUBLIC_PROMOTION_CONSTRAINT_WORK: usize =
-            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6 + 1) + 2 + 1 + 1 + 1 + 1 + 19;
+            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6 + 1) + 2 + 1 + 1 + 1 + 1;
 
         let fixture = ImportBudgetFixture::create(ENTRY, DEPENDENCY);
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
@@ -17482,8 +17438,8 @@ mod tests {
             );
         }
         let capture_work = capture_work.used();
-        // One completed-original header and two independent capture comparisons.
-        let comparison_type_work = 1 + 2 * capture_work;
+        // The alternate route compares its retained capture once.
+        let comparison_type_work = capture_work;
         assert!(capture_work > 0);
         let token = summary
             .nominal("Token")
@@ -18189,10 +18145,9 @@ mod tests {
         // family-ordinal, withheld-owner, physical, closure, and two reverse
         // index cells for this one-nullary-constructor fixture. Its original
         // checked constructor also compares one Source origin before probing.
-        // Complete user/service summaries cost 140, both direct routes cost
-        // two, and private service namespace installation costs 72. Only then
-        // can the named user selector perform its processing/index probes.
-        const SUMMARY_AUTHENTICATION_WORK: usize = 140 + 2 + 72;
+        // Both direct routes cost two and private service namespace installation
+        // costs 72 before the named selector performs its index probes.
+        const SUMMARY_AUTHENTICATION_WORK: usize = 2 + 72;
         const NOMINAL_SELECTOR_WORK: usize = 3;
         const CONSTRUCTOR_SELECTOR_WORK: usize = 4;
         const MISSING_SELECTOR_WORK: usize = 7;
@@ -18381,14 +18336,12 @@ mod tests {
     #[test]
     fn hidden_interface_import_route_uses_its_exact_constraint_budget() {
         // ConstraintWork owns route/fact/index/binder admission, the fourteen-cell
-        // method walk (including DefaultAlloc), three service nominal merges,
-        // and complete binder record/Origin/Kind authentication.
-        const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 1 + 1 + 14 + 3 + 3;
+        // method walk (including DefaultAlloc) and three service nominal merges.
+        const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 1 + 1 + 14 + 3;
         // The completed closure costs 66: method traversal 6, the complete
         // DefaultAlloc declaration clone 41, and its signature/nominal frontier
-        // 19. Inherited-role authentication, original lookup and retention each
-        // consume one more cell. Keep those independent refusal boundaries.
-        const EXACT_TYPE_WORK: usize = 6 + 41 + 19 + 1 + 1 + 1;
+        // 19. Original lookup and retention each consume one more cell.
+        const EXACT_TYPE_WORK: usize = 6 + 41 + 19 + 1 + 1;
 
         let constraint_short =
             retain_hidden_interface_import_with_limits(EXACT_CONSTRAINT_WORK - 1, EXACT_TYPE_WORK);
@@ -18398,8 +18351,8 @@ mod tests {
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
         assert_eq!(constraint_short.constraint_used, EXACT_CONSTRAINT_WORK - 1,);
         assert_eq!(
-            constraint_short.type_used, 66,
-            "constraint failure precedes inherited-role authentication and checked-fact retention",
+            constraint_short.type_used, 64,
+            "the constraint cutoff occurs during the remaining nominal merge",
         );
         assert!(constraint_short.retained.is_none());
 
@@ -18630,11 +18583,6 @@ mod tests {
                 ResolveContext::DependencySummaryMismatch,
                 "dependency-summary-mismatch",
                 "The compiler received incomplete or mismatched checked information for this module's imports.",
-            ),
-            (
-                ResolveContext::DependencySummaryInvalid,
-                "dependency-summary-invalid",
-                "The compiler could not validate the checked information for this imported module.",
             ),
             (
                 ResolveContext::MissingFileScope,
@@ -20481,7 +20429,7 @@ mod tests {
             + ARGUMENT_CELLS
             + 1 // retained head spelling
             + 2 * (DEPTH + 1) // full retained head provenance
-            + 2; // completed original authentication and retained Arc reference
+            + 1; // retained original Arc reference
         const ENTRY: &str = "import dependency (impl Marker)\n";
         const DEPENDENCY: &str = "pub interface Marker<A> {\nmark : A -> A\n}\n";
 

@@ -293,53 +293,54 @@ spellings, checked constrained rank-1 schemes with kinded binders, accessible
 constructor and effect-operation facts, the public implementation closure with
 authorization routes, and hidden kind, identity, interface-shape, or
 effect-signature facts required to close those public facts. The compiler
-produces this source-body-free summary only after
-checking the complete module; Ash source does not declare it. It contains no
+produces this source-body-free summary only after checking and completing the
+module; Ash source does not declare it. It contains no
 dependency executable body, implementation executable body, forwarding
-declaration, or mutable dependency scope. Importing a scheme does not infer or
-generalize it again. Immutable resident source snapshots may accompany provenance.
-They authenticate original declaration syntax, coordinates and ordinary/native
-classification; they do not supply callable requirements, introduce dependency
+declaration, or mutable dependency scope. The checked module separately retains
+its completed executable representation. Importing a scheme does not infer or
+generalize it again. Immutable resident source snapshots may accompany provenance
+established for original declaration syntax, coordinates and ordinary/native
+classification. They do not supply callable requirements, introduce dependency
 names, elaborate dependency bodies or provide executable code.
 Exported function values also retain compiler-inferred control summaries for
 capture checking. These summaries describe possible calls, requests and handler
-control; they do not import dependency source bodies. Admission authenticates
-their defining function identity and retained type and effect identities.
+control; they do not import dependency source bodies. The defining module checks
+their function identity and retained type and effect identities before publication.
 Nonlexical nominal references in global or selected-method callable type metadata
 must retain authenticated nominal identity and kind facts even when the outward
 scheme omits them. This hidden metadata grants no constructor access; lexical
 type identities remain local to their callable graph.
 Each exported ordinary global view retains the same completed defining fact
-through imports and re-exports. Admission compares its binder, scheme, provenance
-and callable summary against that original. It authenticates effect identities
-referenced by callable controls and nested Type/Row metadata. Erasing symbol
-correspondence or a callable graph cannot turn a required native symbol effect
-into an ordinary pure dependency.
+through imports and re-exports, including its binder, scheme, provenance and
+callable summary. Publication establishes the referenced effect identities in
+callable controls and nested Type/Row metadata. New import and summary assembly
+preserve those facts and check their own routes and hidden dependency closure.
+Erasing symbol correspondence or a callable graph cannot turn a required native
+symbol effect into an ordinary pure dependency.
 Resident declaration provenance distinguishes native operations from ordinary
 effects even when both have the same apparent signature.
 
 Each exported ordinary implementation view retains its completed defining
-implementation fact through imports and re-exports. Admission compares the
-original implementation and method identities, method binders, complete head,
+implementation fact through imports and re-exports. The defining module checks
+its implementation and method identities, method binders, complete head,
 head-parameter boundary, prerequisite applications, method schemes, provenance
-and callable summaries. Alternate import routes retain the same original;
-route authorization alone does not establish completed method facts. Independent
-module checking authenticates retained imported implementations again before
-using them as checked evidence. These facts do not supply executable methods;
-linking and Core still authenticate producer correspondence separately.
+and callable summaries before publication. Alternate routes retain that same
+fact; an importer checks its own availability, route and coherence obligations
+without repeating the defining proof. Executable methods come from the retained
+completed module representation; the newly linked Core is independently checked.
 
-Summary admission authenticates every retained type-variable identity against
-one defining kinded binder record and derives each nominal constructor kind
-from its ordered parameter records before the dependency facts enter local
-resolution. Resolution preserves those identities and kinds. Qualification,
-targeted renaming, opacity, re-export, and another path through a dependency
-diamond cannot recompute a kind or replace a defining record with a local one.
-For each public method scheme, admission also authenticates the complete
+Defining publication associates each retained type-variable identity with its
+kinded binder record and derives each nominal constructor kind from its ordered
+parameter records. Resolution preserves those identities and kinds.
+Qualification, targeted renaming, opacity, re-export, and another path through
+a dependency diamond cannot recompute a kind or replace a defining record with
+a local one.
+For each public method scheme, publication also checks the complete
 method-parameter set, written order, method owner, kinds, body scope, identity,
 and provenance. A dependent checks from that body-free fact without importing
 the interface or implementation body.
 
-For each public effect, admission authenticates its defining module, ordered
+For each public effect, publication checks its defining module, ordered
 parameters, `EffectId`, ordered operation signatures, and `OperationId` values.
 A dependent preserves those facts without importing an effect body or creating
 a local identity.
@@ -356,11 +357,11 @@ public scheme or implementation route carries the hidden identity.
 
 A transparent constructor projection preserves the defining checked constructor
 meaning: owner, declaration kind, ordered parameter identities and kinds,
-effective payload, constructor scheme and provenance. Admission authenticates
-that correspondence independently of the projected payload's kind. Imports and
-re-exports preserve the same defining fact, and body checking re-authenticates
-retained imported projections. The defining reference supplies no missing
-projected kind metadata, hidden source name or constructor access.
+effective payload, constructor scheme and provenance. The defining publication
+checks that correspondence independently of the projected payload's kind.
+Imports and re-exports preserve the checked fact. The defining reference
+supplies no missing projected kind metadata, hidden source name or constructor
+access.
 
 For a `newtype`, that authenticated closure also retains the declaration kind,
 owner, ordered parameter identities and kinds, sole same-spelled constructor,

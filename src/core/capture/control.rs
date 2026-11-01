@@ -2465,6 +2465,32 @@ impl<'a> Analysis<'a> {
         Self::from_code_inventory(scan.into_inventory(budget)?, seed, budget)
     }
 
+    pub(super) fn prepare_initializer_replies(
+        &mut self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if self.data.is_none() {
+            self.data = Some(
+                self.graph
+                    .data
+                    .as_ref()
+                    .ok_or(Failure::Invalid)?
+                    .start(budget)?,
+            );
+        }
+        Ok(())
+    }
+
+    pub(super) fn initializer_replies(
+        &self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<super::value::ObservedInitializerReplies, Failure> {
+        match &self.data {
+            Some(data) => data.initializer_replies(budget),
+            None => Ok(Default::default()),
+        }
+    }
+
     fn from_code_inventory(
         inventory: ControlCodeInventory<'a>,
         seed: Option<&'a Type>,
@@ -10989,6 +11015,7 @@ mod tests {
                         &mut exact
                     )
                     .unwrap()
+                    .0
                     .is_empty()
                 );
                 assert_eq!(exact.used(), prefix + graph.code.len());

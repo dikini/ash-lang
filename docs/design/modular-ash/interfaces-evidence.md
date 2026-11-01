@@ -8,6 +8,12 @@ The retained [interface design note](../DN-0023-interfaces-and-implementations.m
 [passive-module evidence](evidence.md) explain the design pressure and the
 module boundary on which this increment depends.
 
+This report's linked reproof and lowering order describes the recorded
+checkpoints. Under [AD-0006](../../decisions/AD-0006-front-end-semantic-boundaries.md)
+and [AD-0007](../../decisions/AD-0007-typed-core-dialects.md), completed modules
+publish their lowering and metadata; imports and linking reuse them and check
+new connections. The assembled Core then receives independent validation once.
+
 ## Scope and checkpoints
 
 The comparison baseline is commit

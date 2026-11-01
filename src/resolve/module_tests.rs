@@ -1,18 +1,21 @@
 use std::{
+    cell::RefCell,
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
+    rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use crate::{
     elaborate::check_module,
-    module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
+    module::{LoadedModule, ModuleGraph, ModuleId, ModuleRoots, load_module_graph},
     resolved::{
         BinderId, ExportSummary, ExportedTypeAccess, ImportedNominalFactRef, ImportedTypeAccess,
         ResolvedBuildFailure, ResolvedDefinitionKind, ResolvedExprKind, ResolvedModule,
         ResolvedPatternKind, ResolvedTypeVariable, SummaryCarrierMutationForTest,
         SummaryConstructorFusionMutationForTest, SummaryDuplicateFactForTest,
-        SummaryHiddenDiamondMutationForTest, SummaryOrderForTest, SummaryWithheldMutationForTest,
+        SummaryHiddenDiamondMutationForTest,
     },
     source::Origin,
     types::{
@@ -27,38 +30,12 @@ use super::{
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
-#[test]
-fn generic_cell_summary_authenticates_complete_facade_facts() {
-    use crate::resolved::BuiltinCellSummaryMutationForTest::*;
-    for mutation in [
-        OperationResult,
-        ProviderResult,
-        MissingHandle,
-        MissingOps,
-        HandleKind,
-    ] {
-        let tree = TempTree::create();
-        tree.write("facade.ash", "pub import @builtin.generic_cell (read)\n");
-        let graph = load(&tree, "import facade (read)\n", &[]);
-        let builtin = graph
-            .modules()
-            .iter()
-            .find(|module| module.id().is_builtin_generic_cell())
-            .expect("the defining builtin must be loaded");
-        let checked = check_module(resolve_with(&graph, builtin, &[]).unwrap()).unwrap();
-        let facade = module_named(&graph, "facade.ash");
-        let mut summary = check_module(resolve_with(&graph, facade, &[checked.exports()]).unwrap())
-            .unwrap()
-            .into_exports();
-        resolve_with(&graph, graph.module(graph.entry()).unwrap(), &[&summary])
-            .expect("the honest complete builtin summary must resolve before mutation");
-        summary.corrupt_builtin_fact_for_test(mutation);
-        let entry = graph.module(graph.entry()).unwrap();
-        assert!(
-            resolve_with(&graph, entry, &[&summary]).is_err(),
-            "generic summary forgery admitted"
-        );
-    }
+thread_local! {
+    // A graph publishes each compiler-owned service once, just like the file
+    // driver. Rebuilding these summaries per resolve call would give the same
+    // module identity several unrelated completed lowering publications.
+    static IMPLICIT_SERVICES: RefCell<HashMap<ModuleId, Rc<Vec<ExportSummary>>>> =
+        RefCell::new(HashMap::new());
 }
 
 #[test]
@@ -93,14 +70,13 @@ fn generic_cell_duplicate_import_routes_reject_erased_contents_capture_fact() {
             if module.id() == graph.entry() {
                 if erase {
                     let error = resolved.unwrap_err();
-                    assert!(
-                        matches!(error,ResolveModuleError::Resolution(ref diagnostic) if diagnostic.reason==ResolveReason::InternalState),
-                        "{error:?}"
-                    );
-                    assert!(
-                        format!("{error:?}")
-                            .contains("a dependency summary failed body-free authentication"),
-                        "{error:?}"
+                    let ResolveModuleError::Resolution(diagnostic) = error else {
+                        panic!("the conflicting route must fail during resolution");
+                    };
+                    assert_eq!(diagnostic.reason, ResolveReason::InternalState);
+                    assert_eq!(
+                        diagnostic.work_state_context(),
+                        Some(("alternate-global-fact", "mismatch"))
                     );
                 } else {
                     check_module(resolved.unwrap()).unwrap();
@@ -116,86 +92,7 @@ fn generic_cell_duplicate_import_routes_reject_erased_contents_capture_fact() {
     }
 }
 
-#[test]
-fn builtin_cell_summary_rejects_well_kinded_operation_tampering() {
-    use crate::resolved::BuiltinCellSummaryMutationForTest;
-    let tree = TempTree::create();
-    let graph = load(&tree, "import @builtin.cell as Cell\n", &[]);
-    let builtin = graph
-        .modules()
-        .iter()
-        .find(|module| module.id().is_builtin_cell())
-        .expect("the defining builtin must be loaded");
-    let mut summary = check_module(resolve_with(&graph, builtin, &[]).unwrap())
-        .unwrap()
-        .into_exports();
-    resolve_with(&graph, graph.module(graph.entry()).unwrap(), &[&summary])
-        .expect("the honest complete builtin summary must resolve before mutation");
-    summary.corrupt_builtin_fact_for_test(BuiltinCellSummaryMutationForTest::OperationResult);
-    let entry = graph.module(graph.entry()).unwrap();
-    let error = resolve_with(&graph, entry, &[&summary]).expect_err("builtin signature is fixed");
-    assert!(error.reason == ResolveReason::InternalState);
-}
-
-#[test]
-fn builtin_cell_facade_rejects_tampered_or_detached_hidden_facts() {
-    use crate::resolved::BuiltinCellSummaryMutationForTest::*;
-    for mutation in [
-        OperationResult,
-        ProviderResult,
-        MissingHandle,
-        MissingOps,
-        HandleKind,
-    ] {
-        let tree = TempTree::create();
-        tree.write("facade.ash", "pub import @builtin.cell (read)\n");
-        let graph = load(&tree, "import facade (read)\n", &[]);
-        let builtin = graph
-            .modules()
-            .iter()
-            .find(|module| module.id().is_builtin_cell())
-            .expect("the defining builtin must be loaded");
-        let builtin_checked = check_module(resolve_with(&graph, builtin, &[]).unwrap()).unwrap();
-        let facade = module_named(&graph, "facade.ash");
-        let mut summary =
-            check_module(resolve_with(&graph, facade, &[builtin_checked.exports()]).unwrap())
-                .unwrap()
-                .into_exports();
-        resolve_with(&graph, graph.module(graph.entry()).unwrap(), &[&summary])
-            .expect("the honest complete builtin summary must resolve before mutation");
-        summary.corrupt_builtin_fact_for_test(mutation);
-        let entry = graph.module(graph.entry()).unwrap();
-        let error = resolve_with(&graph, entry, &[&summary])
-            .expect_err("selected method needs authentic complete hidden facts");
-        assert!(error.reason == ResolveReason::InternalState);
-    }
-}
-
-#[test]
-fn ordinary_effect_operation_summary_authenticates_retained_nominal_kinds() {
-    use crate::resolved::BuiltinCellSummaryMutationForTest::{HandleKind, MissingHandle};
-    for mutation in [HandleKind, MissingHandle] {
-        let tree = TempTree::create();
-        tree.write(
-            "cell.ash",
-            "pub opaque type Handle<R> = Hidden\npub effect Ops<R> {\nread : Handle<R> -> Int\n}\n",
-        );
-        let graph = load(&tree, "import cell as Cell\n", &[]);
-        let ordinary = module_named(&graph, "cell.ash");
-        let mut summary = check_module(resolve_with(&graph, ordinary, &[]).unwrap())
-            .unwrap()
-            .into_exports();
-        resolve_with(&graph, graph.module(graph.entry()).unwrap(), &[&summary])
-            .expect("the honest ordinary effect summary should resolve before mutation");
-        summary.corrupt_builtin_fact_for_test(mutation);
-        let entry = graph.module(graph.entry()).unwrap();
-        let error = resolve_with(&graph, entry, &[&summary])
-            .expect_err("effect signatures require their retained nominal kinds");
-        assert!(error.reason == ResolveReason::InternalState);
-    }
-}
-
-struct TempTree(PathBuf);
+struct TempTree(PathBuf, RefCell<Vec<ModuleId>>);
 
 impl TempTree {
     fn create() -> Self {
@@ -206,7 +103,7 @@ impl TempTree {
                 std::process::id()
             ));
             match fs::create_dir(&path) {
-                Ok(()) => return Self(path),
+                Ok(()) => return Self(path, RefCell::new(Vec::new())),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => panic!("test tree should be creatable: {error}"),
             }
@@ -225,6 +122,12 @@ impl TempTree {
 
 impl Drop for TempTree {
     fn drop(&mut self) {
+        IMPLICIT_SERVICES.with(|services| {
+            let mut services = services.borrow_mut();
+            for graph in self.1.borrow().iter() {
+                services.remove(graph);
+            }
+        });
         let _ = fs::remove_dir_all(&self.0);
     }
 }
@@ -234,7 +137,10 @@ fn load(tree: &TempTree, entry_text: &str, dependencies: &[(&str, &str)]) -> Mod
     for (path, text) in dependencies {
         tree.write(path, text);
     }
-    load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture graph should load")
+    let graph =
+        load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture graph should load");
+    tree.1.borrow_mut().push(graph.entry());
+    graph
 }
 
 fn module_named<'a>(graph: &'a ModuleGraph, file_name: &str) -> &'a LoadedModule {
@@ -261,7 +167,12 @@ fn resolve_with(
     )
 }
 
-fn implicit_service_summaries(graph: &ModuleGraph) -> Vec<ExportSummary> {
+fn implicit_service_summaries(graph: &ModuleGraph) -> Rc<Vec<ExportSummary>> {
+    if let Some(existing) =
+        IMPLICIT_SERVICES.with(|services| services.borrow().get(&graph.entry()).cloned())
+    {
+        return existing;
+    }
     let mut implicit = Vec::<ExportSummary>::new();
     for loaded in graph
         .modules()
@@ -288,6 +199,15 @@ fn implicit_service_summaries(graph: &ModuleGraph) -> Vec<ExportSummary> {
             .into_exports(),
         );
     }
+    let implicit = Rc::new(implicit);
+    IMPLICIT_SERVICES.with(|services| {
+        assert!(
+            services
+                .borrow_mut()
+                .insert(graph.entry(), Rc::clone(&implicit))
+                .is_none()
+        );
+    });
     implicit
 }
 
@@ -507,133 +427,6 @@ fn reordered_dependency_pairs_are_rejected_before_scope_installation() {
 }
 
 #[test]
-fn malformed_summary_admission_precedes_later_type_resource_in_dependency_order() {
-    for malformed_first in [true, false] {
-        let tree = TempTree::create();
-        let first = if malformed_first {
-            "malformed"
-        } else {
-            "clean"
-        };
-        let second = if malformed_first {
-            "clean"
-        } else {
-            "malformed"
-        };
-        let entry = format!("import {first} as First\nimport {second} as Second\n");
-        let graph = load(&tree, &entry, &[("malformed.ash", ""), ("clean.ash", "")]);
-        let malformed = module_named(&graph, "malformed.ash");
-        let clean = module_named(&graph, "clean.ash");
-        let make_summary = |module: &LoadedModule| {
-            ExportSummary::test_fixture(
-                module.id(),
-                vec![(
-                    "unit",
-                    BinderId::resolved(module.id(), 0),
-                    Type::Unit,
-                    Origin::Source(module.surface().span),
-                )],
-                vec![],
-                vec![],
-                vec![],
-            )
-        };
-        let mut malformed_summary = make_summary(malformed);
-        assert!(malformed_summary.corrupt_order_for_test(SummaryOrderForTest::Term));
-        let clean_summary = make_summary(clean);
-        let importer = module_named(&graph, "entry.ash");
-        let summaries = if malformed_first {
-            [&malformed_summary, &clean_summary]
-        } else {
-            [&clean_summary, &malformed_summary]
-        };
-        let implicit = implicit_service_summaries(&graph);
-        let candidates = summaries
-            .iter()
-            .copied()
-            .chain(implicit.iter().filter(|summary| {
-                importer
-                    .dependencies()
-                    .iter()
-                    .any(|edge| edge.is_region_service() && edge.target() == summary.module())
-            }));
-        // Before summary authentication: three dependency cells, one entry
-        // candidate, Foreign candidate+bytes (218), Region candidate+bytes (612).
-        let prefix = importer.dependencies().len()
-            + 1
-            + candidates
-                .flat_map(|summary| summary.defining_sources())
-                .map(|(owner, source)| {
-                    1 + if owner.is_builtin_foreign()
-                        || owner.is_builtin_region()
-                        || owner.is_builtin_region_facade()
-                    {
-                        source.text().len() + 1
-                    } else {
-                        0
-                    }
-                })
-                .sum::<usize>();
-        assert_eq!(prefix, 834);
-        let boundary = prefix + 3;
-        let mut type_work = TypeWorkBudget::with_limit(boundary);
-        let error = resolve_with_budgets(
-            &graph,
-            importer,
-            &summaries,
-            &mut type_work,
-            &mut crate::interface::InterfaceConstraintBudget::default(),
-        )
-        .expect_err("the first dependency boundary must own the failure");
-        assert_eq!(
-            error.reason,
-            if malformed_first {
-                ResolveReason::InternalState
-            } else {
-                ResolveReason::TypeResourceExhausted
-            },
-        );
-        // Malformed order refuses before Type admission; the clean first
-        // summary exhausts the original three-unit source cut afterward.
-        assert_eq!(
-            type_work.used(),
-            if malformed_first { prefix } else { boundary }
-        );
-    }
-}
-
-#[test]
-fn unselected_kind_invalid_summary_fact_is_rejected_before_local_checking() {
-    let tree = TempTree::create();
-    let graph = load(
-        &tree,
-        "import dependency (Token)\nmain : Unit -> Unit\nmain () = ()\n",
-        &[(
-            "dependency.ash",
-            concat!(
-                "pub type Token = Token\n\n",
-                "pub lift<F : Type -> Type> : F<Int> -> F<Int>\n",
-                "lift value = value\n",
-            ),
-        )],
-    );
-    let dependency = module_named(&graph, "dependency.ash");
-    let checked = check_module(
-        resolve_with(&graph, dependency, &[])
-            .expect("the dependency should resolve before mutation"),
-    )
-    .expect("the dependency should check before mutation");
-    let mut summary = checked.into_exports();
-    assert!(summary.replace_first_term_parameter_kind_for_test(Kind::Type));
-    let importer = module_named(&graph, "entry.ash");
-
-    let error = resolve_with(&graph, importer, &[&summary])
-        .expect_err("an unselected forged scheme must fail dependency-summary admission");
-
-    assert_eq!(error.reason, ResolveReason::InternalState);
-}
-
-#[test]
 fn frozen_summary_retains_authoritative_declaration_order() {
     let tree = TempTree::create();
     let graph = load(
@@ -682,403 +475,6 @@ fn frozen_summary_retains_authoritative_declaration_order() {
         .map(|(_, global)| global.binder)
         .collect::<Vec<_>>();
     assert_eq!(retained_binders, expected_binders);
-}
-
-#[test]
-fn unselected_constructor_scheme_corruption_fails_summary_admission() {
-    let tree = TempTree::create();
-    let graph = load(
-        &tree,
-        "import dependency (marker)\nmain : Unit -> Unit\nmain () = marker(())\n",
-        &[(
-            "dependency.ash",
-            concat!(
-                "pub type Boxed<A> = Boxed(A)\n\n",
-                "pub marker : Unit -> Unit\nmarker value = value\n",
-            ),
-        )],
-    );
-    let dependency = module_named(&graph, "dependency.ash");
-    let checked = check_module(
-        resolve_with(&graph, dependency, &[]).expect("the constructor dependency should resolve"),
-    )
-    .expect("the constructor dependency should check");
-    let mut summary = checked.into_exports();
-    assert!(summary.replace_first_constructor_scheme_value_type_for_test(Type::Unit));
-    let importer = module_named(&graph, "entry.ash");
-
-    let error = resolve_with(&graph, importer, &[&summary])
-        .expect_err("an unselected forged constructor scheme must fail admission");
-
-    assert_eq!(error.reason, ResolveReason::InternalState);
-}
-
-#[test]
-fn unselected_implementation_method_corruption_fails_summary_admission() {
-    let tree = TempTree::create();
-    let graph = load(
-        &tree,
-        "import dependency (marker)\nmain : Unit -> Unit\nmain () = marker(())\n",
-        &[(
-            "dependency.ash",
-            concat!(
-                "pub interface Observe<A> {\nobserve : A -> A\n}\n\n",
-                "pub impl Observe<Int> {\nobserve value = value\n}\n\n",
-                "pub marker : Unit -> Unit\nmarker value = value\n",
-            ),
-        )],
-    );
-    let dependency = module_named(&graph, "dependency.ash");
-    let checked = check_module(
-        resolve_with(&graph, dependency, &[])
-            .expect("the implementation dependency should resolve"),
-    )
-    .expect("the implementation dependency should check");
-    let mut summary = checked.into_exports();
-    assert!(summary.replace_first_implementation_method_value_type_for_test(Type::Unit));
-    let importer = module_named(&graph, "entry.ash");
-
-    let error = resolve_with(&graph, importer, &[&summary])
-        .expect_err("an unselected kind-valid method forgery must fail admission");
-
-    assert_eq!(error.reason, ResolveReason::InternalState);
-}
-
-#[test]
-fn exhaustive_summary_orders_indexes_aliases_and_owners_fail_before_local_checking() {
-    #[derive(Clone, Copy)]
-    enum Mutation {
-        Order(SummaryOrderForTest),
-        NominalIndex,
-        ConstructorIndex,
-        ConflictingGlobalAlias,
-        ConflictingNominalAlias,
-        ConstructorCount,
-        HiddenConstructorCount,
-        CrossOwnerBinder,
-        InterfacePosition,
-        ImplementationPosition,
-        WithheldBijection,
-        Withheld(SummaryWithheldMutationForTest),
-        ExpressionCollision,
-        TypeCollision,
-        BinderCollision,
-    }
-
-    let tree = TempTree::create();
-    let graph = load(
-        &tree,
-        "import dependency (Wrap)\nmain : Unit -> Unit\nmain () = ()\n",
-        &[(
-            "dependency.ash",
-            concat!(
-                "pub type Wrap<F : Type -> Type> = Wrap(F<Int>)\n\n",
-                "type Secret<F : Type -> Type> = Secret(F<Int>)\n\n",
-                "private_marker : Unit -> Unit\nprivate_marker value = value\n\n",
-                "pub interface Observe<A> {\nobserve : A -> A\n}\n\n",
-                "pub expose<F : Type -> Type> : Secret<F> -> Secret<F>\n",
-                "expose value = value\n\n",
-                "pub impl<F : Type -> Type> Observe<Wrap<F>> {\n",
-                "observe value = value\n}\n",
-            ),
-        )],
-    );
-    let dependency = module_named(&graph, "dependency.ash");
-    let importer = module_named(&graph, "entry.ash");
-    let mutations = [
-        Mutation::Order(SummaryOrderForTest::Term),
-        Mutation::Order(SummaryOrderForTest::Nominal),
-        Mutation::Order(SummaryOrderForTest::Constructor),
-        Mutation::Order(SummaryOrderForTest::InterfaceName),
-        Mutation::Order(SummaryOrderForTest::MethodName),
-        Mutation::Order(SummaryOrderForTest::HiddenNominal),
-        Mutation::NominalIndex,
-        Mutation::ConstructorIndex,
-        Mutation::ConflictingGlobalAlias,
-        Mutation::ConflictingNominalAlias,
-        Mutation::ConstructorCount,
-        Mutation::HiddenConstructorCount,
-        Mutation::CrossOwnerBinder,
-        Mutation::InterfacePosition,
-        Mutation::ImplementationPosition,
-        Mutation::WithheldBijection,
-        Mutation::Withheld(SummaryWithheldMutationForTest::TermKind),
-        Mutation::Withheld(SummaryWithheldMutationForTest::TermOwner),
-        Mutation::Withheld(SummaryWithheldMutationForTest::NominalKind),
-        Mutation::Withheld(SummaryWithheldMutationForTest::NominalOwner),
-        Mutation::Withheld(SummaryWithheldMutationForTest::ConstructorOwner),
-        Mutation::Withheld(SummaryWithheldMutationForTest::ConstructorPosition),
-        Mutation::Withheld(SummaryWithheldMutationForTest::MapOnly),
-        Mutation::ExpressionCollision,
-        Mutation::TypeCollision,
-        Mutation::BinderCollision,
-    ];
-
-    for mutation in mutations {
-        let checked = check_module(
-            resolve_with(&graph, dependency, &[]).expect("the matrix dependency should resolve"),
-        )
-        .expect("the matrix dependency should check");
-        let mut summary = checked.into_exports();
-        let changed = match mutation {
-            Mutation::Order(order) => summary.corrupt_order_for_test(order),
-            Mutation::NominalIndex => summary.remove_first_reverse_index_for_test(false),
-            Mutation::ConstructorIndex => summary.remove_first_reverse_index_for_test(true),
-            Mutation::ConflictingGlobalAlias => summary
-                .duplicate_first_global_with_conflicting_scheme_for_test("forged", Type::Unit),
-            Mutation::ConflictingNominalAlias => {
-                summary.duplicate_first_nominal_with_conflicting_origin_for_test("ForgedWrap")
-            }
-            Mutation::ConstructorCount => summary.increment_first_constructor_count_for_test(),
-            Mutation::HiddenConstructorCount => {
-                summary.increment_first_hidden_constructor_count_for_test()
-            }
-            Mutation::CrossOwnerBinder => {
-                summary.reuse_nominal_parameter_as_interface_owner_for_test()
-            }
-            Mutation::InterfacePosition => summary.corrupt_position_index_for_test(false),
-            Mutation::ImplementationPosition => summary.corrupt_position_index_for_test(true),
-            Mutation::WithheldBijection => summary.duplicate_withheld_order_entry_for_test(),
-            Mutation::Withheld(mutation) => summary.corrupt_withheld_for_test(mutation),
-            Mutation::ExpressionCollision => {
-                summary.collide_first_method_with_first_term_for_test()
-            }
-            Mutation::TypeCollision => {
-                summary.collide_first_interface_with_first_nominal_for_test()
-            }
-            Mutation::BinderCollision => {
-                summary.collide_first_implementation_method_with_global_for_test()
-            }
-        };
-        assert!(changed, "the selected matrix carrier should be present");
-        let error = resolve_with(&graph, importer, &[&summary])
-            .expect_err("every forged summary carrier must fail exhaustive admission");
-        assert_eq!(error.reason, ResolveReason::InternalState);
-    }
-}
-
-#[test]
-fn exhaustive_public_and_hidden_summary_carriers_fail_before_local_checking() {
-    const BASE_SOURCE: &str = concat!(
-        "pub type Wrap<F : Type -> Type, A> =\n",
-        "First(F<A>)\n",
-        "| Second(F<A>)\n\n",
-        "pub type Other<F : Type -> Type, A> = Other(F<A>)\n\n",
-        "pub interface Observe<A> {\nobserve : A -> A\n}\n\n",
-        "pub interface Witness<A> {\nwitness : A -> A\n}\n\n",
-        "pub generic<B, A> : A -> B -> A where Observe<B>\n",
-        "generic left right = left\n\n",
-        "pub impl<F : Type -> Type, A> Observe<Wrap<F, A>> where Observe<A>, Witness<A> {\n",
-        "observe value = value\n}\n\n",
-        "pub impl<F : Type -> Type, A> Observe<Other<F, A>> {\n",
-        "observe value = value\n}\n",
-    );
-    let direct_mutations = [
-        SummaryCarrierMutationForTest::PublicNominalKind,
-        SummaryCarrierMutationForTest::PublicNominalParameterIdentity,
-        SummaryCarrierMutationForTest::PublicNominalParameterOwner,
-        SummaryCarrierMutationForTest::PublicNominalParameterOrder,
-        SummaryCarrierMutationForTest::PublicConstructorFamilyOrdinal,
-        SummaryCarrierMutationForTest::PublicConstructorFamilyOwner,
-        SummaryCarrierMutationForTest::PublicConstructorResultOwner,
-        SummaryCarrierMutationForTest::PublicConstructorPayload,
-        SummaryCarrierMutationForTest::PublicConstructorPayloadDomainKind,
-        SummaryCarrierMutationForTest::PublicConstructorSchemeKind,
-        SummaryCarrierMutationForTest::PublicConstructorSchemeParameterIdentity,
-        SummaryCarrierMutationForTest::PublicInterfaceKind,
-        SummaryCarrierMutationForTest::PublicInterfaceParameterIdentity,
-        SummaryCarrierMutationForTest::PublicInterfaceParameterOwner,
-        SummaryCarrierMutationForTest::PublicInterfaceMethodType,
-        SummaryCarrierMutationForTest::PublicInterfaceMethodFreeBinder,
-        SummaryCarrierMutationForTest::PublicInterfaceMethodKind,
-        SummaryCarrierMutationForTest::PublicInterfaceMethodNonFunction,
-        SummaryCarrierMutationForTest::PublicInterfaceEmptyMethods,
-        SummaryCarrierMutationForTest::InterfaceIdentity,
-        SummaryCarrierMutationForTest::MethodIdentity,
-        SummaryCarrierMutationForTest::MethodOrdinal,
-        SummaryCarrierMutationForTest::InterfaceNameTarget,
-        SummaryCarrierMutationForTest::MethodNameTarget,
-        SummaryCarrierMutationForTest::GlobalParameterIdentity,
-        SummaryCarrierMutationForTest::GlobalParameterOrder,
-        SummaryCarrierMutationForTest::GlobalUnusedParameter,
-        SummaryCarrierMutationForTest::GlobalRequirementIdentity,
-        SummaryCarrierMutationForTest::GlobalRequirementInterface,
-        SummaryCarrierMutationForTest::GlobalRequirementArgumentKind,
-        SummaryCarrierMutationForTest::GlobalParameterOwner,
-        SummaryCarrierMutationForTest::GlobalParameterKind,
-        SummaryCarrierMutationForTest::ImplementationHeadKind,
-        SummaryCarrierMutationForTest::ImplementationHeadIdentity,
-        SummaryCarrierMutationForTest::ImplementationHeadOrder,
-        SummaryCarrierMutationForTest::ImplementationHeadOwner,
-        SummaryCarrierMutationForTest::ImplementationArgument,
-        SummaryCarrierMutationForTest::ImplementationSemanticHead,
-        SummaryCarrierMutationForTest::ImplementationInterfaceIdentity,
-        SummaryCarrierMutationForTest::ImplementationPrerequisiteIdentity,
-        SummaryCarrierMutationForTest::ImplementationPrerequisiteOrder,
-        SummaryCarrierMutationForTest::ImplementationPrerequisiteDuplicate,
-        SummaryCarrierMutationForTest::ImplementationPrerequisiteKind,
-        SummaryCarrierMutationForTest::ImplementationPrerequisiteInterface,
-        SummaryCarrierMutationForTest::ImplementationPrerequisiteArgument,
-        SummaryCarrierMutationForTest::ImplementationPrerequisiteOriginMirror,
-        SummaryCarrierMutationForTest::ImplementationPrerequisiteSpanMirror,
-        SummaryCarrierMutationForTest::ImplementationMethodRequirementIdentity,
-        SummaryCarrierMutationForTest::ImplementationMethodSchemeParameterIdentity,
-        SummaryCarrierMutationForTest::ImplementationMethodSchemeParameterKind,
-        SummaryCarrierMutationForTest::ImplementationMethodIdentity,
-        SummaryCarrierMutationForTest::ImplementationMethodMapping,
-        SummaryCarrierMutationForTest::ImplementationMethodBinder,
-        SummaryCarrierMutationForTest::ImplementationAuthorization,
-        SummaryCarrierMutationForTest::ImplementationOverlap,
-    ];
-
-    for mutation in direct_mutations {
-        let tree = TempTree::create();
-        let graph = load(
-            &tree,
-            "import dependency as Dependency\nmain : Unit -> Unit\nmain value = value\n",
-            &[("dependency.ash", BASE_SOURCE)],
-        );
-        let dependency = module_named(&graph, "dependency.ash");
-        let mut summary = check_module(
-            resolve_with(&graph, dependency, &[]).expect("the rich dependency should resolve"),
-        )
-        .expect("the rich dependency should check")
-        .into_exports();
-        assert!(
-            summary.corrupt_carrier_for_test(mutation),
-            "the direct carrier {mutation:?} should exist",
-        );
-        assert_eq!(
-            summary.authenticate(
-                &mut TypeWorkBudget::default(),
-                &mut crate::interface::InterfaceConstraintBudget::default(),
-            ),
-            Err(ResolvedBuildFailure::InvalidState),
-            "the raw boundary must reject {mutation:?} independently",
-        );
-        let importer = module_named(&graph, "entry.ash");
-        let error = resolve_with(&graph, importer, &[&summary])
-            .expect_err("every forged public summary carrier must fail admission");
-        assert_eq!(error.reason, ResolveReason::InternalState, "{mutation:?}");
-    }
-
-    let hidden_mutations = [
-        SummaryCarrierMutationForTest::HiddenNominalKind,
-        SummaryCarrierMutationForTest::HiddenNominalParameterIdentity,
-        SummaryCarrierMutationForTest::HiddenNominalParameterOwner,
-        SummaryCarrierMutationForTest::HiddenNominalParameterOrder,
-        SummaryCarrierMutationForTest::HiddenNominalAccess,
-        SummaryCarrierMutationForTest::HiddenConstructorPayload,
-        SummaryCarrierMutationForTest::HiddenConstructorPayloadDomainKind,
-        SummaryCarrierMutationForTest::HiddenConstructorSchemeKind,
-        SummaryCarrierMutationForTest::HiddenConstructorSchemeParameterIdentity,
-        SummaryCarrierMutationForTest::HiddenConstructorResultOwner,
-        SummaryCarrierMutationForTest::HiddenInterfaceKind,
-        SummaryCarrierMutationForTest::HiddenInterfaceParameterIdentity,
-        SummaryCarrierMutationForTest::HiddenInterfaceParameterOwner,
-        SummaryCarrierMutationForTest::HiddenInterfaceIdentity,
-        SummaryCarrierMutationForTest::HiddenInterfaceMethodType,
-        SummaryCarrierMutationForTest::HiddenInterfaceMethodIdentity,
-        SummaryCarrierMutationForTest::HiddenInterfaceMethodOwner,
-        SummaryCarrierMutationForTest::HiddenInterfaceMethodFreeBinder,
-        SummaryCarrierMutationForTest::HiddenInterfaceMethodKind,
-    ];
-    for mutation in hidden_mutations {
-        let tree = TempTree::create();
-        let graph = load(
-            &tree,
-            "import facade as Facade\nmain : Unit -> Unit\nmain value = value\n",
-            &[
-                ("facade.ash", "pub import base (First, impl Observe)\n"),
-                ("base.ash", BASE_SOURCE),
-            ],
-        );
-        let base = module_named(&graph, "base.ash");
-        let base_summary = check_module(
-            resolve_with(&graph, base, &[]).expect("the hidden-carrier base should resolve"),
-        )
-        .expect("the hidden-carrier base should check")
-        .into_exports();
-        let facade = module_named(&graph, "facade.ash");
-        let mut summary = check_module(
-            resolve_with(&graph, facade, &[&base_summary]).expect("the facade should resolve"),
-        )
-        .expect("the facade should check")
-        .into_exports();
-        assert!(
-            summary.corrupt_carrier_for_test(mutation),
-            "the hidden carrier {mutation:?} should exist",
-        );
-        assert_eq!(
-            summary.authenticate(
-                &mut TypeWorkBudget::default(),
-                &mut crate::interface::InterfaceConstraintBudget::default(),
-            ),
-            Err(ResolvedBuildFailure::InvalidState),
-            "the raw boundary must reject {mutation:?} independently",
-        );
-        let importer = module_named(&graph, "entry.ash");
-        let error = resolve_with(&graph, importer, &[&summary])
-            .expect_err("every forged hidden summary carrier must fail admission");
-        assert_eq!(error.reason, ResolveReason::InternalState, "{mutation:?}");
-    }
-}
-
-#[test]
-fn relational_summary_rejects_complete_parameter_and_application_tampering_matrix() {
-    const SOURCE: &str = concat!(
-        "pub type Option<A> =\nNone\n| Some(A)\n\n",
-        "pub interface Relation<Left, Right> {\n",
-        "relation : (Left, Right) -> Bool\n",
-        "}\n\n",
-        "pub impl Relation<Int, Bool> {\n",
-        "relation pair = true\n",
-        "}\n",
-    );
-    let mutations = [
-        SummaryCarrierMutationForTest::RelationalInterfaceParameterMissing,
-        SummaryCarrierMutationForTest::RelationalInterfaceParameterExtra,
-        SummaryCarrierMutationForTest::RelationalInterfaceParameterReordered,
-        SummaryCarrierMutationForTest::RelationalInterfaceParameterIdentity,
-        SummaryCarrierMutationForTest::RelationalInterfaceParameterWrongKind,
-        SummaryCarrierMutationForTest::RelationalImplementationArgumentMissing,
-        SummaryCarrierMutationForTest::RelationalImplementationArgumentExtra,
-        SummaryCarrierMutationForTest::RelationalImplementationArgumentReordered,
-        SummaryCarrierMutationForTest::RelationalImplementationArgumentWrongKind,
-        SummaryCarrierMutationForTest::RelationalImplementationInterfaceIdentity,
-    ];
-
-    for mutation in mutations {
-        let tree = TempTree::create();
-        let graph = load(
-            &tree,
-            "import dependency as Dependency\nmain : Unit -> Unit\nmain value = value\n",
-            &[("dependency.ash", SOURCE)],
-        );
-        let dependency = module_named(&graph, "dependency.ash");
-        let mut summary = check_module(
-            resolve_with(&graph, dependency, &[])
-                .expect("the relational dependency should resolve"),
-        )
-        .expect("the relational dependency should check")
-        .into_exports();
-        assert!(
-            summary.corrupt_carrier_for_test(mutation),
-            "the relational carrier {mutation:?} should exist",
-        );
-        assert_eq!(
-            summary.authenticate(
-                &mut TypeWorkBudget::default(),
-                &mut crate::interface::InterfaceConstraintBudget::default(),
-            ),
-            Err(ResolvedBuildFailure::InvalidState),
-            "the raw summary boundary must reject {mutation:?}",
-        );
-        let importer = module_named(&graph, "entry.ash");
-        let error = resolve_with(&graph, importer, &[&summary])
-            .expect_err("the forged relational summary must fail before local checking");
-        assert_eq!(error.reason, ResolveReason::InternalState, "{mutation:?}");
-    }
 }
 
 #[test]
@@ -1603,7 +999,6 @@ fn fused_constructor_scheme_authentication_rejects_every_independent_type_obliga
             )],
         );
         let dependency = module_named(&graph, "dependency.ash");
-        let importer = module_named(&graph, "entry.ash");
         let mut summary = check_module(
             resolve_with(&graph, dependency, &[])
                 .expect("the phantom-parameter fixture should resolve"),
@@ -1628,9 +1023,6 @@ fn fused_constructor_scheme_authentication_rejects_every_independent_type_obliga
             Err(ResolvedBuildFailure::InvalidState),
             "the fused raw boundary must reject {mutation:?}",
         );
-        let error = resolve_with(&graph, importer, &[&summary])
-            .expect_err("forged constructor closure must fail before local checking");
-        assert_eq!(error.reason, ResolveReason::InternalState, "{mutation:?}");
     }
 }
 
@@ -1833,47 +1225,6 @@ fn public_admission_rejects_one_short_constructor_closure_without_publishing_out
         .expect("the public-admission lifecycle worker should spawn")
         .join()
         .expect("accepted and rejected public admission must tear down iteratively");
-}
-
-#[test]
-fn hidden_constructor_order_and_family_coverage_are_authenticated() {
-    let tree = TempTree::create();
-    let graph = load(
-        &tree,
-        "import facade (First)\nmain : Unit -> Unit\nmain () = ()\n",
-        &[
-            ("facade.ash", "pub import base (First)\n"),
-            ("base.ash", "pub type Pair<A> =\nFirst(A)\n| Second(A)\n"),
-        ],
-    );
-    let base = module_named(&graph, "base.ash");
-    let base_summary =
-        check_module(resolve_with(&graph, base, &[]).expect("the constructor base should resolve"))
-            .expect("the constructor base should check")
-            .into_exports();
-    let facade = module_named(&graph, "facade.ash");
-    let importer = module_named(&graph, "entry.ash");
-
-    for remove_fact in [false, true] {
-        let mut summary = check_module(
-            resolve_with(&graph, facade, &[&base_summary])
-                .expect("the constructor facade should resolve"),
-        )
-        .expect("the constructor facade should check")
-        .into_exports();
-        let changed = if remove_fact {
-            summary.remove_first_hidden_constructor_for_test()
-        } else {
-            summary.corrupt_order_for_test(SummaryOrderForTest::HiddenConstructor)
-        };
-        assert!(
-            changed,
-            "the partial family should retain its hidden sibling"
-        );
-        let error = resolve_with(&graph, importer, &[&summary])
-            .expect_err("hidden constructor closure must authenticate before local checking");
-        assert_eq!(error.reason, ResolveReason::InternalState);
-    }
 }
 
 #[test]
@@ -2334,116 +1685,6 @@ fn duplicate_constructor_payload_routes_compare_foreign_nominal_provenance() {
             importer.dependencies()[1].import_span().source(),
         );
     }
-}
-
-#[test]
-fn unselected_non_decreasing_prerequisite_fails_summary_admission() {
-    let tree = TempTree::create();
-    let graph = load(
-        &tree,
-        "import dependency (marker)\nmain : Unit -> Unit\nmain () = marker(())\n",
-        &[(
-            "dependency.ash",
-            concat!(
-                "pub type Option<A> =\nNone\n| Some(A)\n\n",
-                "pub interface Parent<A> {\nparent : A -> A\n}\n\n",
-                "pub interface Child<A> {\nchild : A -> A\n}\n\n",
-                "pub impl<A> Child<Option<A>> where Parent<A> {\n",
-                "child value = value\n}\n\n",
-                "pub marker : Unit -> Unit\nmarker value = value\n",
-            ),
-        )],
-    );
-    let dependency = module_named(&graph, "dependency.ash");
-    let mut summary = check_module(
-        resolve_with(&graph, dependency, &[]).expect("the prerequisite dependency should resolve"),
-    )
-    .expect("the decreasing prerequisite should check")
-    .into_exports();
-    assert!(summary.replace_first_implementation_prerequisite_with_head_for_test());
-    let importer = module_named(&graph, "entry.ash");
-
-    let error = resolve_with(&graph, importer, &[&summary])
-        .expect_err("a non-strict imported prerequisite must fail summary admission");
-
-    assert_eq!(error.reason, ResolveReason::InternalState);
-}
-
-#[test]
-fn unselected_kind_valid_bare_variable_head_fails_summary_admission() {
-    let tree = TempTree::create();
-    let graph = load(
-        &tree,
-        "import dependency (marker)\nmain : Unit -> Unit\nmain () = marker(())\n",
-        &[(
-            "dependency.ash",
-            concat!(
-                "pub type Option<A> =\nNone\n| Some(A)\n\n",
-                "pub interface Observe<A> {\nobserve : A -> Unit\n}\n\n",
-                "pub impl<A> Observe<Option<A>> {\nobserve value = ()\n}\n\n",
-                "pub marker : Unit -> Unit\nmarker value = value\n",
-            ),
-        )],
-    );
-    let dependency = module_named(&graph, "dependency.ash");
-    let mut summary = check_module(
-        resolve_with(&graph, dependency, &[]).expect("the generic dependency should resolve"),
-    )
-    .expect("the concrete generic head should check")
-    .into_exports();
-    assert!(summary.replace_first_implementation_head_with_bare_parameter_for_test());
-    let importer = module_named(&graph, "entry.ash");
-
-    let error = resolve_with(&graph, importer, &[&summary])
-        .expect_err("a bare-variable imported implementation head must fail admission");
-
-    assert_eq!(error.reason, ResolveReason::InternalState);
-}
-
-#[test]
-fn unselected_kind_valid_orphan_head_fails_summary_admission() {
-    let tree = TempTree::create();
-    let graph = load(
-        &tree,
-        "import dependency (marker)\nmain : Unit -> Unit\nmain () = marker(())\n",
-        &[
-            (
-                "dependency.ash",
-                concat!(
-                    "pub import base (Foreign, Observe, observe)\n\n",
-                    "pub type Local = Local\n\n",
-                    "pub impl Observe<Local> {\nobserve value = ()\n}\n\n",
-                    "pub marker : Unit -> Unit\nmarker value = value\n",
-                ),
-            ),
-            (
-                "base.ash",
-                concat!(
-                    "pub type Foreign = Foreign\n\n",
-                    "pub interface Observe<A> {\nobserve : A -> Unit\n}\n",
-                ),
-            ),
-        ],
-    );
-    let base = module_named(&graph, "base.ash");
-    let base_summary =
-        check_module(resolve_with(&graph, base, &[]).expect("the foreign base should resolve"))
-            .expect("the foreign base should check")
-            .into_exports();
-    let dependency = module_named(&graph, "dependency.ash");
-    let mut summary = check_module(
-        resolve_with(&graph, dependency, &[&base_summary])
-            .expect("the local orphan-safe impl should resolve"),
-    )
-    .expect("the local nominal should satisfy the owner rule")
-    .into_exports();
-    assert!(summary.replace_first_implementation_head_with_foreign_nominal_for_test());
-    let importer = module_named(&graph, "entry.ash");
-
-    let error = resolve_with(&graph, importer, &[&summary])
-        .expect_err("a foreign-interface/foreign-nominal impl must fail admission");
-
-    assert_eq!(error.reason, ResolveReason::InternalState);
 }
 
 fn equational(module: &ResolvedModule, index: usize) -> &crate::resolved::ResolvedEquationalGlobal {

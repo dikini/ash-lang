@@ -21,27 +21,27 @@ use crate::{
         same_kinded_argument_with_constraint_budget,
         same_type_with_constraint_budget as same_semantic_type_with_constraint_budget,
     },
-    kind::{
-        BodyFreeInterfaceMethodSeed, KindEnvironments, KindFailure, canonical_type_variable_kind,
-    },
+    kind::{KindEnvironments, KindFailure, canonical_type_variable_kind},
     module::ModuleId,
     resolved::{
-        AvailableImplementation, BinderId, CheckedImplementationFact, CheckedInterfaceFact,
-        ImplementationAuthorization, PublicImplementationAuthorization, ResolvedBlock,
-        ResolvedDeclarationIndex, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
-        ResolvedInterfaceApplication, ResolvedLocalDeclaration, ResolvedModuleGroup,
-        ResolvedModuleProgram, ResolvedOccurrence, ResolvedRegistry, ResolvedTermName,
-        ResolvedTypeVariable, resolved_determination_positions_match,
+        AvailableImplementation, BinderId, CheckedGlobalScheme, CheckedImplementationFact,
+        CheckedInterfaceFact, ImplementationAuthorization, PublicImplementationAuthorization,
+        ResolvedBlock, ResolvedExpr, ResolvedExprKind, ResolvedLocalDeclaration, ResolvedModule,
+        ResolvedModuleGroup, ResolvedModuleProgram, ResolvedOccurrence, ResolvedRegistry,
+        ResolvedTermName, ResolvedTypeVariable,
     },
     source::{Origin, Span},
     types::{
-        ConstructorId, EffectRow, EffectRowVariable, IterativeArgumentOwner, IterativeTypeOwner,
-        Kind, KindedArgument, NominalTypeId, Type, TypeVariableId, TypeWorkBudget,
+        EffectRow, EffectRowVariable, IterativeArgumentOwner, IterativeTypeOwner, Kind,
+        KindedArgument, NominalTypeId, Type, TypeVariableId, TypeWorkBudget,
         clone_kind_with_budget, clone_kinded_argument_with_budget, clone_type_with_budget,
         discard_kinded_argument_iteratively, discard_type_iteratively, same_kind_with_charge,
         substitute_type_and_row_variables_with, visit_owner_components_with_charge,
     },
 };
+
+#[cfg(test)]
+use crate::resolved::ResolvedDefinitionKind;
 
 /// Stable reason owned by pre-Core interface-evidence validation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -209,13 +209,14 @@ impl LinkedInterfaceRegistry {
             &mut type_work,
             program.result().span,
         )?;
-        Self::build_with_kinds(
+        let registry = Self::build_with_kinds(
             program,
             &mut kind_environments,
             None,
             budget,
             &mut type_work,
-        )
+        )?;
+        Ok(registry)
     }
 
     fn build_with_kinds<'a>(
@@ -286,6 +287,9 @@ impl LinkedInterfaceRegistry {
                 {
                     return Err(unknown(fact.span));
                 }
+                kind_environments
+                    .insert_interface(fact.id, &fact.parameters, fact.span, type_work)
+                    .map_err(|failure| map_kind_type_failure(failure, fact.span))?;
                 for method_index in 0..fact.methods.len() {
                     charge(budget, 1, fact.span)?;
                     let method = fact
@@ -458,141 +462,9 @@ impl LinkedInterfaceRegistry {
                 }
             }
         }
-        registry.validate_references(program, kind_environments, budget, type_work)?;
         registry.authenticate_public_implementations(program, budget)?;
         registry.authenticate_available_implementations(program, budget)?;
         Ok(registry)
-    }
-
-    fn validate_references<'a>(
-        &self,
-        program: &'a ResolvedModuleProgram,
-        kind_environments: &mut KindEnvironments<'a>,
-        budget: &mut InterfaceConstraintBudget,
-        type_work: &mut TypeWorkBudget,
-    ) -> Result<(), EvidenceValidationFailure> {
-        // Every declaration key is authenticated before any global or
-        // implementation relationship reads determinant positions. This pass
-        // is independent of dependency and group order because registry
-        // indexing for every group has already completed.
-        for group_index in 0..program.groups().len() {
-            let provisional_span = program
-                .groups()
-                .get(group_index)
-                .map_or(program.result().span, ResolvedModuleGroup::span);
-            charge(budget, 1, provisional_span)?;
-            let group = program
-                .groups()
-                .get(group_index)
-                .ok_or_else(|| unknown(provisional_span))?;
-            validate_group_interface_consistency(
-                program,
-                group,
-                kind_environments,
-                budget,
-                type_work,
-            )?;
-        }
-
-        for group_index in 0..program.groups().len() {
-            let group = program
-                .groups()
-                .get(group_index)
-                .ok_or_else(|| unknown(program.result().span))?;
-            validate_group_remaining_consistency(
-                program,
-                self,
-                group,
-                kind_environments,
-                budget,
-                type_work,
-            )?;
-            for scheme_index in 0..group.schemes().len() {
-                charge(budget, 1, group.span())?;
-                let scheme = group
-                    .schemes()
-                    .get(scheme_index)
-                    .ok_or_else(|| unknown(group.span()))?;
-                let variables = copy_kinded_parameter_ids(
-                    &scheme.scheme.type_parameters,
-                    budget,
-                    scheme.origin.primary_span(),
-                )?;
-                validate_requirements(
-                    &scheme.scheme,
-                    RequirementOwner::Global(scheme.binder),
-                    &variables,
-                    self,
-                    program,
-                    budget,
-                    scheme.origin.primary_span(),
-                )?;
-            }
-            for fact_index in 0..group.implementation_facts().len() {
-                charge(budget, 1, group.span())?;
-                let fact = group
-                    .implementation_facts()
-                    .get(fact_index)
-                    .ok_or_else(|| unknown(group.span()))?;
-                if self.interface(program, fact.interface()).is_none() {
-                    return Err(unknown(fact.span));
-                }
-                let mut head_variables = Vec::new();
-                charge(budget, fact.head_parameters.len(), fact.span)?;
-                head_variables
-                    .try_reserve(fact.head_parameters.len())
-                    .map_err(|_| resource(fact.span))?;
-                head_variables.extend(fact.head_parameters.iter().map(|parameter| parameter.id));
-                for argument in fact.arguments() {
-                    validate_argument_with_policy(
-                        argument,
-                        program.registry(),
-                        &head_variables,
-                        budget,
-                        fact.span,
-                    )?;
-                }
-                for ordinal in 0..fact.prerequisites.len() {
-                    charge(budget, 1, fact.span)?;
-                    let prerequisite = fact
-                        .prerequisites
-                        .get(ordinal)
-                        .ok_or_else(|| unknown(fact.span))?;
-                    validate_requirement(
-                        prerequisite,
-                        RequirementOwner::Impl(fact.id),
-                        ordinal,
-                        &head_variables,
-                        self,
-                        program,
-                        budget,
-                    )?;
-                }
-                let interface = self
-                    .interface(program, fact.interface())
-                    .ok_or_else(|| unknown(fact.span))?;
-                if fact.methods.len() != interface.methods.len() {
-                    return Err(unknown(fact.span));
-                }
-                for method_index in 0..fact.methods.len() {
-                    charge(budget, 1, fact.span)?;
-                    let method = fact
-                        .methods
-                        .get(method_index)
-                        .ok_or_else(|| unknown(fact.span))?;
-                    let interface_method = interface
-                        .methods
-                        .get(method_index)
-                        .ok_or_else(|| unknown(fact.span))?;
-                    if method.method != interface_method.id
-                        || method.id != ImplMethodId::new(fact.id, interface_method.id)
-                    {
-                        return Err(unknown(method.span));
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 
     fn public_implementation<'a>(
@@ -678,24 +550,11 @@ impl LinkedInterfaceRegistry {
             let Some(fact) = group.implementation_facts().get(location.fact) else {
                 return Ok(false);
             };
-            let Some(body) = group.implementations().get(location.fact) else {
-                return Ok(false);
-            };
             if location.group != group_index
                 || authorization.id().module() != group.module()
                 || fact.id != authorization.id()
-                || body.id() != authorization.id()
-                || !body.source().public
             {
                 return Ok(false);
-            }
-            for method in &fact.methods {
-                charge(budget, 1, group.span())?;
-                if method.id.implementation() != fact.id
-                    || method.binder.module() != Some(group.module())
-                {
-                    return Ok(false);
-                }
             }
             return Ok(true);
         }
@@ -838,22 +697,6 @@ impl LinkedInterfaceRegistry {
             .get(location.method)
     }
 
-    fn source_method<'a>(
-        &self,
-        program: &'a ResolvedModuleProgram,
-        id: MethodId,
-    ) -> Option<&'a crate::resolved::ResolvedInterfaceMethod> {
-        let location = self.methods.get(&id)?;
-        program
-            .groups()
-            .get(location.interface.group)?
-            .interfaces()
-            .get(location.interface.fact)?
-            .methods
-            .get(location.method)
-            .filter(|method| method.id == id)
-    }
-
     fn implementation<'a>(
         &self,
         program: &'a ResolvedModuleProgram,
@@ -920,675 +763,6 @@ impl LinkedInterfaceRegistry {
     }
 }
 
-fn validate_group_interface_consistency<'a>(
-    program: &'a ResolvedModuleProgram,
-    group: &'a ResolvedModuleGroup,
-    kind_environments: &mut KindEnvironments<'a>,
-    budget: &mut InterfaceConstraintBudget,
-    type_work: &mut TypeWorkBudget,
-) -> Result<(), EvidenceValidationFailure> {
-    let span = group.span();
-    charge(budget, 1, span)?;
-    if group.interfaces().len() != group.interface_facts().len()
-        || group.interfaces().len() != group.checked_interfaces().len()
-        || group.definitions().len() != group.schemes().len()
-        || group.implementations().len() != group.implementation_facts().len()
-        || group.implementations().len() != group.checked_implementations().len()
-    {
-        return Err(unknown(span));
-    }
-
-    for index in 0..group.interface_facts().len() {
-        charge(budget, 1, span)?;
-        let source = group.interfaces().get(index).ok_or_else(|| unknown(span))?;
-        let token = group
-            .checked_interfaces()
-            .get(index)
-            .ok_or_else(|| unknown(span))?;
-        let fact = group
-            .interface_facts()
-            .get(index)
-            .ok_or_else(|| unknown(span))?;
-        if token.source_index != index
-            || token.id != source.id
-            || fact.id != source.id
-            || fact.spelling != source.spelling
-        {
-            return Err(unknown(source.span));
-        }
-        if !resolved_determination_positions_match(
-            &source.parameters,
-            source.determination.as_ref(),
-            &[
-                token.determination().map(|key| key.positions()),
-                fact.determination().map(|key| key.positions()),
-            ],
-            |work| budget.charge(work),
-        )
-        .map_err(|()| resource(source.span))?
-        {
-            return Err(unknown(source.span));
-        }
-        if !same_binders_charged(&fact.parameters, &source.parameters, budget, source.span)? {
-            return Err(unknown(source.span));
-        }
-        if !same_origin_charged(&fact.origin, &source.origin, budget, source.span)?
-            || fact.span != source.span
-            || fact.methods.len() != source.methods.len()
-        {
-            return Err(unknown(source.span));
-        }
-        kind_environments
-            .insert_interface(fact.id, &fact.parameters, fact.span, type_work)
-            .map_err(|failure| map_kind_type_failure(failure, source.span))?;
-        for method_index in 0..fact.methods.len() {
-            charge(budget, 1, fact.span)?;
-            let source_method = source
-                .methods
-                .get(method_index)
-                .ok_or_else(|| unknown(fact.span))?;
-            let method = fact
-                .methods
-                .get(method_index)
-                .ok_or_else(|| unknown(fact.span))?;
-            if method.id != source_method.id
-                || method.spelling != source_method.spelling
-                || !same_binders_charged(
-                    method.authoritative_type_parameters(),
-                    &source_method.type_parameters,
-                    budget,
-                    method.span,
-                )?
-                || !same_binders_charged(
-                    method.authoritative_type_parameters(),
-                    method.type_parameters(),
-                    budget,
-                    method.span,
-                )?
-                || !same_origin_charged(&method.origin, &source_method.origin, budget, method.span)?
-                || method.span != source_method.span
-                || !same_type_charged(
-                    &method.value_type,
-                    &source_method.annotation.ty,
-                    budget,
-                    method.span,
-                )?
-            {
-                return Err(unknown(method.span));
-            }
-            for parameter in method.authoritative_type_parameters() {
-                let canonical = program
-                    .registry()
-                    .type_variable(parameter.id)
-                    .ok_or_else(|| unknown(method.span))?;
-                if !same_binders_charged(
-                    std::slice::from_ref(canonical),
-                    std::slice::from_ref(parameter),
-                    budget,
-                    method.span,
-                )? {
-                    return Err(unknown(method.span));
-                }
-            }
-            if let ([parameter], []) = (
-                fact.parameters.as_ref(),
-                method.authoritative_type_parameters(),
-            ) {
-                validate_linked_value_structure(
-                    &method.value_type,
-                    program.registry(),
-                    std::slice::from_ref(&parameter.id),
-                    budget,
-                    method.span,
-                )?;
-            } else {
-                let variable_count = fact
-                    .parameters
-                    .len()
-                    .checked_add(method.authoritative_type_parameters().len())
-                    .ok_or_else(|| resource(method.span))?;
-                charge(budget, variable_count, method.span)?;
-                let mut variables = Vec::new();
-                variables
-                    .try_reserve_exact(variable_count)
-                    .map_err(|_| resource(method.span))?;
-                variables.extend(fact.parameters.iter().map(|parameter| parameter.id));
-                variables.extend(
-                    method
-                        .authoritative_type_parameters()
-                        .iter()
-                        .map(|parameter| parameter.id),
-                );
-                validate_linked_value_structure(
-                    &method.value_type,
-                    program.registry(),
-                    &variables,
-                    budget,
-                    method.span,
-                )?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_group_remaining_consistency<'a>(
-    program: &'a ResolvedModuleProgram,
-    registry: &LinkedInterfaceRegistry,
-    group: &'a ResolvedModuleGroup,
-    kind_environments: &mut KindEnvironments<'a>,
-    budget: &mut InterfaceConstraintBudget,
-    type_work: &mut TypeWorkBudget,
-) -> Result<(), EvidenceValidationFailure> {
-    let span = group.span();
-    for index in 0..group.schemes().len() {
-        charge(budget, 1, span)?;
-        let definition = group
-            .definitions()
-            .get(index)
-            .ok_or_else(|| unknown(span))?;
-        let checked = group.schemes().get(index).ok_or_else(|| unknown(span))?;
-        validate_global_scheme(
-            program,
-            definition,
-            checked,
-            kind_environments,
-            budget,
-            type_work,
-        )?;
-    }
-
-    for index in 0..group.implementation_facts().len() {
-        charge(budget, 1, span)?;
-        let body = group
-            .implementations()
-            .get(index)
-            .ok_or_else(|| unknown(span))?;
-        let token = group
-            .checked_implementations()
-            .get(index)
-            .ok_or_else(|| unknown(span))?;
-        let fact = group
-            .implementation_facts()
-            .get(index)
-            .ok_or_else(|| unknown(span))?;
-        validate_implementation_consistency(
-            program,
-            registry,
-            body,
-            token,
-            fact,
-            kind_environments,
-            budget,
-            type_work,
-        )?;
-    }
-    Ok(())
-}
-
-fn validate_global_scheme<'a>(
-    program: &'a ResolvedModuleProgram,
-    definition: &crate::resolved::CheckedDefinition,
-    checked: &crate::resolved::CheckedGlobalScheme,
-    kind_environments: &mut KindEnvironments<'a>,
-    budget: &mut InterfaceConstraintBudget,
-    type_work: &mut TypeWorkBudget,
-) -> Result<(), EvidenceValidationFailure> {
-    let span = definition.span();
-    let (name, parameters, requirements) = match definition.kind() {
-        ResolvedDefinitionKind::Equational(global)
-        | ResolvedDefinitionKind::ForeignConstant(global) => (
-            &global.interface.name,
-            global.interface.type_parameters.as_ref(),
-            global.interface.requirements.as_ref(),
-        ),
-        ResolvedDefinitionKind::InlineOperational(global) => (
-            &global.header.name,
-            global.header.type_parameters.as_ref(),
-            global.header.requirements.as_ref(),
-        ),
-    };
-    charge(
-        budget,
-        parameters
-            .len()
-            .saturating_add(requirements.len())
-            .saturating_add(1),
-        span,
-    )?;
-    for parameter in parameters {
-        let canonical = program
-            .registry()
-            .type_variable(parameter.id)
-            .ok_or_else(|| unknown(span))?;
-        if canonical.id != parameter.id
-            || canonical.spelling != parameter.spelling
-            || !same_origin_charged(&canonical.origin, &parameter.origin, budget, span)?
-        {
-            return Err(unknown(span));
-        }
-    }
-    let checked_parameters =
-        copy_kinded_parameter_ids(&checked.scheme.type_parameters, budget, span)?;
-    for requirement in &checked.scheme.requirements {
-        authenticate_linked_interface_application_kind(
-            requirement.application(),
-            program.registry(),
-            &checked_parameters,
-            None,
-            kind_environments,
-            budget,
-            type_work,
-            requirement.span,
-        )?;
-    }
-    if checked.binder != name.id
-        || checked.spelling != name.spelling
-        || !same_origin_charged(&checked.origin, &name.origin, budget, span)?
-        || !checked
-            .scheme
-            .type_parameters
-            .iter()
-            .map(|(parameter, _)| *parameter)
-            .eq(parameters.iter().map(|parameter| parameter.id))
-        || !requirements_match(
-            &checked.scheme.requirements,
-            requirements,
-            &checked_parameters,
-            program,
-            budget,
-            span,
-        )?
-    {
-        return Err(unknown(span));
-    }
-    let value_matches = match definition.kind() {
-        ResolvedDefinitionKind::Equational(_) => true,
-        ResolvedDefinitionKind::ForeignConstant(global) => {
-            charge(budget, 1, span)?;
-            checked.scheme.value_type == Type::Int
-                && global.interface.annotation.ty == Type::Int
-                && global.interface.requirements.is_empty()
-                && global.interface.type_parameters.is_empty()
-                && matches!(global.equations.as_slice(), [equation]
-                    if equation.patterns.is_empty()
-                        && equation.name.binder == global.interface.name.id
-                        && matches!(equation.body.kind, ResolvedExprKind::Integer(_)))
-        }
-        ResolvedDefinitionKind::InlineOperational(global) => {
-            validate_linked_value_structure(
-                &checked.scheme.value_type,
-                program.registry(),
-                &checked_parameters,
-                budget,
-                span,
-            )?;
-            let Some(function) = checked.scheme.value_type.function_view() else {
-                return Err(unknown(span));
-            };
-            let (domain, codomain) = (function.domain(), function.value());
-            let rows_match = crate::types::same_effect_rows_with_charge(
-                function.effects().unwrap_or(&EffectRow::empty()),
-                &global.header.result_effects,
-                |work| budget.charge(work),
-            )
-            .map_err(|()| resource(span))?;
-            let domain_matches = match global.header.parameters.as_slice() {
-                [parameter] => {
-                    same_type_charged(domain, &parameter.annotation.ty, budget, parameter.span)?
-                }
-                parameters if parameters.len() >= 2 => {
-                    let Type::Tuple(elements) = domain else {
-                        return Err(unknown(span));
-                    };
-                    if elements.len() != parameters.len() {
-                        false
-                    } else {
-                        let mut matches = true;
-                        for (element, parameter) in elements.iter().zip(parameters) {
-                            if !same_type_charged(
-                                element,
-                                &parameter.annotation.ty,
-                                budget,
-                                parameter.span,
-                            )? {
-                                matches = false;
-                                break;
-                            }
-                        }
-                        matches
-                    }
-                }
-                _ => false,
-            };
-            rows_match
-                && domain_matches
-                && same_type_charged(
-                    codomain,
-                    &global.header.result_type.ty,
-                    budget,
-                    global.header.result_type.span,
-                )?
-        }
-    };
-    if value_matches {
-        Ok(())
-    } else {
-        Err(unknown(span))
-    }
-}
-
-fn requirements_match(
-    checked: &[CheckedRequirement],
-    source: &[crate::resolved::ResolvedRequirement],
-    variables: &[TypeVariableId],
-    program: &ResolvedModuleProgram,
-    budget: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<bool, EvidenceValidationFailure> {
-    if checked.len() != source.len() {
-        return Ok(false);
-    }
-    for (checked, source) in checked.iter().zip(source) {
-        charge(budget, 1, span)?;
-        for argument in checked.arguments() {
-            validate_argument_with_policy(
-                argument,
-                program.registry(),
-                variables,
-                budget,
-                checked.span,
-            )?;
-        }
-        if checked.id != source.id
-            || !same_source_application_charged(
-                checked.application(),
-                &source.application,
-                budget,
-                source.application.span,
-            )?
-            || !same_origin_charged(
-                &checked.origin,
-                &Origin::Source(source.application.span),
-                budget,
-                source.application.span,
-            )?
-            || checked.span != source.application.span
-        {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn validate_implementation_consistency<'a>(
-    program: &'a ResolvedModuleProgram,
-    registry: &LinkedInterfaceRegistry,
-    body: &'a crate::resolved::CheckedImplementationBody,
-    token: &crate::interface::CheckedImplementation,
-    fact: &'a CheckedImplementationFact,
-    kind_environments: &mut KindEnvironments<'a>,
-    budget: &mut InterfaceConstraintBudget,
-    type_work: &mut TypeWorkBudget,
-) -> Result<(), EvidenceValidationFailure> {
-    let source = body.source();
-    let span = source.span;
-    charge(
-        budget,
-        fact.head_parameters
-            .len()
-            .saturating_add(fact.prerequisites.len())
-            .saturating_add(fact.methods.len())
-            .saturating_add(1),
-        span,
-    )?;
-    if token.source_index != usize::try_from(source.id.declaration()).unwrap_or(usize::MAX)
-        || token.id != source.id
-        || token.interface() != source.head.interface.id
-        || body.id() != source.id
-        || fact.id != source.id
-        || fact.interface() != source.head.interface.id
-        || !same_application_parts_charged(
-            token.application(),
-            fact.interface(),
-            fact.arguments(),
-            budget,
-            span,
-        )?
-    {
-        return Err(unknown(span));
-    }
-    if !same_binder_metadata_charged(&fact.head_parameters, &source.head_parameters, budget, span)?
-    {
-        return Err(unknown(span));
-    }
-    for parameter in &fact.head_parameters {
-        let canonical = program
-            .registry()
-            .type_variable(parameter.id)
-            .ok_or_else(|| unknown(span))?;
-        if !same_binder_metadata_charged(
-            std::slice::from_ref(canonical),
-            std::slice::from_ref(parameter),
-            budget,
-            span,
-        )? {
-            return Err(unknown(span));
-        }
-    }
-    if !same_origin_charged(
-        &fact.origin,
-        &Origin::Source(source.span),
-        budget,
-        source.span,
-    )? || fact.span != source.span
-        || fact.methods.len() != token.methods.len()
-        || fact.methods.len()
-            != registry
-                .interface(program, fact.interface())
-                .ok_or_else(|| unknown(span))?
-                .methods
-                .len()
-    {
-        return Err(unknown(span));
-    }
-    let mut variables = Vec::new();
-    variables
-        .try_reserve(fact.head_parameters.len())
-        .map_err(|_| resource(span))?;
-    variables.extend(fact.head_parameters.iter().map(|parameter| parameter.id));
-    validate_linked_interface_application(
-        fact.application(),
-        program.registry(),
-        &variables,
-        &fact.head_parameters,
-        &source.head_parameters,
-        kind_environments,
-        budget,
-        type_work,
-        span,
-    )?;
-    for prerequisite in &fact.prerequisites {
-        authenticate_linked_interface_application_kind(
-            prerequisite.application(),
-            program.registry(),
-            &variables,
-            None,
-            kind_environments,
-            budget,
-            type_work,
-            prerequisite.span,
-        )?;
-    }
-    if !same_source_application_charged(fact.application(), &source.head, budget, span)?
-        || !requirements_match(
-            &fact.prerequisites,
-            &source.prerequisites,
-            &variables,
-            program,
-            budget,
-            span,
-        )?
-    {
-        return Err(unknown(span));
-    }
-
-    let interface = registry
-        .interface(program, fact.interface())
-        .ok_or_else(|| unknown(span))?;
-    let head_key = if fact.prerequisites.is_empty() {
-        Vec::new()
-    } else {
-        linked_selection_key_types(interface, fact.arguments(), budget, span)?
-    };
-    for prerequisite in &fact.prerequisites {
-        let complete_prerequisite =
-            linked_type_references(prerequisite.arguments(), budget, prerequisite.span)?;
-        let prerequisite_interface = registry
-            .interface(program, prerequisite.interface())
-            .ok_or_else(|| unknown(prerequisite.span))?;
-        let prerequisite_key = linked_selection_key_types(
-            prerequisite_interface,
-            prerequisite.arguments(),
-            budget,
-            prerequisite.span,
-        )?;
-        if !crate::interface::implementation_prerequisite_selection_key_terminates(
-            &complete_prerequisite,
-            &prerequisite_key,
-            &head_key,
-            budget,
-        )
-        .map_err(|()| resource(prerequisite.span))?
-        {
-            return Err(unknown(prerequisite.span));
-        }
-    }
-    for method_index in 0..fact.methods.len() {
-        charge(budget, 1, span)?;
-        let method = fact
-            .methods
-            .get(method_index)
-            .ok_or_else(|| unknown(span))?;
-        let checked = token
-            .methods
-            .get(method_index)
-            .ok_or_else(|| unknown(span))?;
-        let interface_method = interface
-            .methods
-            .get(method_index)
-            .ok_or_else(|| unknown(span))?;
-        let source_interface_method = registry
-            .source_method(program, interface_method.id)
-            .ok_or_else(|| unknown(span))?;
-        let group = source
-            .method_groups
-            .get(checked.source_group)
-            .ok_or_else(|| unknown(span))?;
-        if method.head_type_parameter_count() != fact.head_parameters.len()
-            || !same_parameter_pairs_to_two_record_slices_charged(
-                &method.scheme.type_parameters,
-                &fact.head_parameters,
-                interface_method.authoritative_type_parameters(),
-                budget,
-                method.span,
-            )?
-        {
-            return Err(unknown(method.span));
-        }
-        let method_variable_count = variables
-            .len()
-            .checked_add(interface_method.authoritative_type_parameters().len())
-            .ok_or_else(|| resource(method.span))?;
-        charge(budget, method_variable_count, method.span)?;
-        let mut method_variables = Vec::new();
-        method_variables
-            .try_reserve_exact(method_variable_count)
-            .map_err(|_| resource(method.span))?;
-        method_variables.extend_from_slice(&variables);
-        method_variables.extend(
-            interface_method
-                .authoritative_type_parameters()
-                .iter()
-                .map(|parameter| parameter.id),
-        );
-        if method.id != checked.id
-            || method.method != checked.method
-            || method.binder != checked.binder
-            || checked.method != interface_method.id
-            || group.method != Some(method.method)
-            || group.identity != Some(method.id)
-            || group.binder.id != method.binder
-            || method.span != group.span
-            || !method
-                .scheme
-                .type_parameters
-                .iter()
-                .map(|(parameter, _)| *parameter)
-                .eq(method_variables.iter().copied())
-            || !requirements_match(
-                &method.scheme.requirements,
-                &source.prerequisites,
-                &variables,
-                program,
-                budget,
-                method.span,
-            )?
-            || !implementation_method_origin_matches(
-                &method.origin,
-                source,
-                group,
-                interface_method.span,
-                source_interface_method.annotation.span,
-            )
-            || !same_type_after_interface_substitution(
-                &interface_method.value_type,
-                &interface.parameters,
-                fact.arguments(),
-                &method.scheme.value_type,
-                budget,
-                method.span,
-            )?
-        {
-            return Err(unknown(method.span));
-        }
-        validate_linked_value_structure(
-            &method.scheme.value_type,
-            program.registry(),
-            &method_variables,
-            budget,
-            method.span,
-        )?;
-    }
-    Ok(())
-}
-
-fn implementation_method_origin_matches(
-    origin: &Origin,
-    implementation: &crate::resolved::ResolvedImplementation,
-    group: &crate::resolved::ResolvedImplementationMethodGroup,
-    method_span: Span,
-    annotation_span: Span,
-) -> bool {
-    let first = group.equations.first();
-    let Origin::Related { primary, related } = origin else {
-        return false;
-    };
-    let primary_span = first.map_or(group.span, |equation| equation.span);
-    let expected_prefix = [
-        implementation.span,
-        group.span,
-        method_span,
-        annotation_span,
-    ];
-    matches!(primary.as_ref(), Origin::Source(span) if *span == primary_span)
-        && related.len() == expected_prefix.len() + usize::from(first.is_some())
-        && related.starts_with(&expected_prefix)
-        && first.is_none_or(|equation| related.last() == Some(&equation.body.span))
-}
-
 fn validate_linked_type_with_policy(
     ty: &Type,
     registry: &ResolvedRegistry,
@@ -1624,20 +798,6 @@ fn same_application_parts_charged(
         }
     }
     Ok(true)
-}
-
-fn linked_type_references<'a>(
-    types: &'a [KindedArgument],
-    budget: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<Vec<&'a KindedArgument>, EvidenceValidationFailure> {
-    charge(budget, types.len(), span)?;
-    let mut references = Vec::new();
-    references
-        .try_reserve_exact(types.len())
-        .map_err(|_| resource(span))?;
-    references.extend(types);
-    Ok(references)
 }
 
 fn linked_selection_key_types<'a>(
@@ -1685,121 +845,6 @@ fn linked_selection_key_types<'a>(
     Ok(selected)
 }
 
-fn same_source_application_charged(
-    application: &InterfaceApplication,
-    source: &ResolvedInterfaceApplication,
-    budget: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<bool, EvidenceValidationFailure> {
-    if application.interface() != source.interface.id
-        || application.arguments().len() != source.arguments.len()
-    {
-        return Ok(false);
-    }
-    for (checked, source) in application.arguments().iter().zip(&source.arguments) {
-        if !same_argument_charged(checked, &source.ty, budget, span)? {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn validate_linked_interface_application<'a>(
-    application: &InterfaceApplication,
-    registry: &'a ResolvedRegistry,
-    variables: &[TypeVariableId],
-    parameter_records: &'a [ResolvedTypeVariable],
-    source_parameter_records: &'a [ResolvedTypeVariable],
-    environments: &mut KindEnvironments<'a>,
-    constraint_work: &mut InterfaceConstraintBudget,
-    type_work: &mut TypeWorkBudget,
-    span: Span,
-) -> Result<(), EvidenceValidationFailure> {
-    for argument in application.arguments() {
-        validate_argument_with_policy(argument, registry, variables, constraint_work, span)?;
-    }
-    authenticate_linked_interface_application_kind(
-        application,
-        registry,
-        variables,
-        Some((parameter_records, source_parameter_records)),
-        environments,
-        constraint_work,
-        type_work,
-        span,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn authenticate_linked_interface_application_kind<'a>(
-    application: &InterfaceApplication,
-    registry: &'a ResolvedRegistry,
-    variables: &[TypeVariableId],
-    parameter_records: Option<(&'a [ResolvedTypeVariable], &'a [ResolvedTypeVariable])>,
-    environments: &mut KindEnvironments<'a>,
-    constraint_work: &mut InterfaceConstraintBudget,
-    type_work: &mut TypeWorkBudget,
-    span: Span,
-) -> Result<(), EvidenceValidationFailure> {
-    if let Some((parameters, source_parameters)) = parameter_records {
-        if !parameters
-            .iter()
-            .map(|parameter| parameter.id)
-            .eq(variables.iter().copied())
-        {
-            return Err(unknown(span));
-        }
-        environments
-            .install_canonical_owner_records_with_source(
-                registry,
-                parameters,
-                source_parameters,
-                type_work,
-                span,
-            )
-            .map_err(|failure| map_kind_type_failure(failure, span))?;
-    } else {
-        environments
-            .install_canonical_owner_ids(registry, variables, type_work, span)
-            .map_err(|failure| map_kind_type_failure(failure, span))?;
-    }
-    let result = if parameter_records.is_some() {
-        environments.expect_body_free_exact_owner_interface_argument_with_ledger(
-            application.interface(),
-            application.arguments(),
-            span,
-            constraint_work,
-        )
-    } else {
-        environments.expect_body_free_interface_argument_with_ledger(
-            application.interface(),
-            application.arguments(),
-            span,
-            constraint_work,
-        )
-    };
-    result.map_err(|failure| map_kind_constraint_failure(failure, span))
-}
-
-fn validate_linked_value_structure(
-    ty: &Type,
-    registry: &ResolvedRegistry,
-    variables: &[TypeVariableId],
-    budget: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<(), EvidenceValidationFailure> {
-    match validate_type_with_application_policy(ty, registry, variables, budget, span) {
-        Ok(()) => Ok(()),
-        Err(failure)
-            if failure.reason() == EvidenceValidationReason::ConstraintResourceExhausted =>
-        {
-            Err(failure)
-        }
-        Err(_) => Err(unknown(span)),
-    }
-}
-
 fn build_linked_kind_environments<'a>(
     registry: &'a ResolvedRegistry,
     type_work: &mut TypeWorkBudget,
@@ -1841,13 +886,6 @@ fn build_linked_kind_environments<'a>(
                 let parameters = registry
                     .defining_owner_parameters(owner)
                     .ok_or_else(|| unknown(span))?;
-                registry
-                    .authenticate_owner_signature(owner, Some(identity), parameters, type_work)
-                    .map_err(|failure| match failure {
-                        crate::resolved::ResolvedBuildFailure::TypeResource => type_resource(span),
-                        crate::resolved::ResolvedBuildFailure::ConstraintResource => resource(span),
-                        _ => unknown(span),
-                    })?;
                 environments.insert_row_resource_family(
                     identity,
                     *resource_id,
@@ -1860,342 +898,6 @@ fn build_linked_kind_environments<'a>(
         .map_err(|failure| map_kind_type_failure(failure, span))?;
     }
     Ok(environments)
-}
-
-fn validate_linked_value_type<'a>(
-    ty: &Type,
-    registry: &'a ResolvedRegistry,
-    variables: &[TypeVariableId],
-    environments: &mut KindEnvironments<'a>,
-    constraint_work: &mut InterfaceConstraintBudget,
-    type_work: &mut TypeWorkBudget,
-    span: Span,
-) -> Result<(), EvidenceValidationFailure> {
-    environments
-        .install_canonical_owner_ids(registry, variables, type_work, span)
-        .map_err(|failure| map_kind_type_failure(failure, span))?;
-    environments
-        .expect_body_free_value_type_with_ledger(ty, span, constraint_work)
-        .map_err(|failure| map_kind_constraint_failure(failure, span))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn validate_linked_paired_value_type_with_kind_mirrors<'a>(
-    checked: &Type,
-    source: &Type,
-    registry: &'a ResolvedRegistry,
-    parameters: &'a [(TypeVariableId, Kind)],
-    source_parameters: &'a [ResolvedTypeVariable],
-    allowed_unused: Option<&[TypeVariableId]>,
-    environments: &mut KindEnvironments<'a>,
-    constraint_work: &mut InterfaceConstraintBudget,
-    type_work: &mut TypeWorkBudget,
-    span: Span,
-) -> Result<(), EvidenceValidationFailure> {
-    environments
-        .install_canonical_owner_pairs_with_source(
-            registry,
-            parameters,
-            source_parameters,
-            type_work,
-            span,
-        )
-        .map_err(|failure| map_kind_type_failure(failure, span))?;
-    if let Some(allowed_unused) = allowed_unused {
-        environments
-            .expect_body_free_paired_global_value_type_with_ledger(
-                checked,
-                source,
-                allowed_unused,
-                span,
-                constraint_work,
-            )
-            .map_err(|failure| map_kind_constraint_failure(failure, span))
-    } else {
-        environments
-            .expect_body_free_paired_value_type_with_ledger(checked, source, span, constraint_work)
-            .map_err(|failure| map_kind_constraint_failure(failure, span))
-    }
-}
-
-fn validate_linked_value_schemes<'a>(
-    program: &'a ResolvedModuleProgram,
-    registry: &LinkedInterfaceRegistry,
-    environments: &mut KindEnvironments<'a>,
-    constraint_work: &mut InterfaceConstraintBudget,
-    type_work: &mut TypeWorkBudget,
-) -> Result<(), EvidenceValidationFailure> {
-    for group_index in 0..program.groups().len() {
-        let group_span = program
-            .groups()
-            .get(group_index)
-            .map_or(program.result().span, ResolvedModuleGroup::span);
-        charge(constraint_work, 1, group_span)?;
-        let group = program
-            .groups()
-            .get(group_index)
-            .ok_or_else(|| unknown(group_span))?;
-
-        // The late body-free method pass owns this fact visit. Registry
-        // indexing and consistency already established each immutable method
-        // location, so the defensive lookup is fused into the charged method
-        // visit below instead of repeating a separate registry traversal.
-        for fact_index in 0..group.interface_facts().len() {
-            charge(constraint_work, 1, group_span)?;
-            let fact = group
-                .interface_facts()
-                .get(fact_index)
-                .ok_or_else(|| unknown(group_span))?;
-            let determinant_parameters = fact
-                .determination()
-                .map(|determination| {
-                    charge(constraint_work, determination.positions().len(), fact.span)?;
-                    let mut parameters = Vec::new();
-                    parameters
-                        .try_reserve_exact(determination.positions().len())
-                        .map_err(|_| resource(fact.span))?;
-                    for &position in determination.positions() {
-                        parameters.push(
-                            fact.parameters
-                                .get(position)
-                                .ok_or_else(|| unknown(fact.span))?
-                                .id,
-                        );
-                    }
-                    Ok::<_, EvidenceValidationFailure>(parameters)
-                })
-                .transpose()?;
-            let method_seed = determinant_parameters.as_deref().map_or(
-                BodyFreeInterfaceMethodSeed::AllInterfaceParameters,
-                BodyFreeInterfaceMethodSeed::Determined,
-            );
-            for method_index in 0..fact.methods.len() {
-                charge(constraint_work, 1, fact.span)?;
-                let method = fact
-                    .methods
-                    .get(method_index)
-                    .ok_or_else(|| unknown(fact.span))?;
-                if registry.method(program, method.id).is_none() {
-                    return Err(unknown(method.span));
-                }
-                let variable_count = fact
-                    .parameters
-                    .len()
-                    .checked_add(method.authoritative_type_parameters().len())
-                    .ok_or_else(|| resource(method.span))?;
-                charge(constraint_work, variable_count, method.span)?;
-                let mut variables = Vec::new();
-                variables
-                    .try_reserve_exact(variable_count)
-                    .map_err(|_| resource(method.span))?;
-                variables.extend(fact.parameters.iter().map(|parameter| parameter.id));
-                variables.extend(
-                    method
-                        .authoritative_type_parameters()
-                        .iter()
-                        .map(|parameter| parameter.id),
-                );
-                environments
-                    .install_canonical_owner_ids(
-                        program.registry(),
-                        &variables,
-                        type_work,
-                        method.span,
-                    )
-                    .map_err(|failure| map_kind_type_failure(failure, method.span))?;
-                environments
-                    .expect_body_free_interface_method_with_ledger(
-                        method.value_type(),
-                        &variables[..fact.parameters.len()],
-                        method_seed,
-                        &variables[fact.parameters.len()..],
-                        method.span,
-                        constraint_work,
-                    )
-                    .map_err(|failure| map_kind_constraint_failure(failure, method.span))?;
-            }
-        }
-
-        for scheme_index in 0..group.schemes().len() {
-            charge(constraint_work, 1, group_span)?;
-            let scheme = group
-                .schemes()
-                .get(scheme_index)
-                .ok_or_else(|| unknown(group_span))?;
-            let definition = group
-                .definitions()
-                .get(scheme_index)
-                .ok_or_else(|| unknown(group_span))?;
-            let span = scheme.origin.primary_span();
-            let allowed_unused = authenticated_global_dependent_only_binders(
-                program,
-                registry,
-                &scheme.scheme,
-                constraint_work,
-                span,
-            )?;
-            match definition.kind() {
-                ResolvedDefinitionKind::Equational(global)
-                | ResolvedDefinitionKind::ForeignConstant(global) => {
-                    validate_linked_paired_value_type_with_kind_mirrors(
-                        &scheme.scheme.value_type,
-                        &global.interface.annotation.ty,
-                        program.registry(),
-                        &scheme.scheme.type_parameters,
-                        &global.interface.type_parameters,
-                        allowed_unused.as_deref(),
-                        environments,
-                        constraint_work,
-                        type_work,
-                        span,
-                    )?;
-                }
-                ResolvedDefinitionKind::InlineOperational(global) => {
-                    environments
-                        .install_canonical_owner_pairs_with_source(
-                            program.registry(),
-                            &scheme.scheme.type_parameters,
-                            &global.header.type_parameters,
-                            type_work,
-                            span,
-                        )
-                        .map_err(|failure| map_kind_type_failure(failure, span))?;
-                    if let Some(allowed_unused) = allowed_unused.as_deref() {
-                        environments
-                            .expect_body_free_exact_global_value_type_with_ledger(
-                                &scheme.scheme.value_type,
-                                allowed_unused,
-                                span,
-                                constraint_work,
-                            )
-                            .map_err(|failure| map_kind_constraint_failure(failure, span))?;
-                    } else {
-                        environments
-                            .expect_body_free_exact_owner_value_type_with_ledger(
-                                &scheme.scheme.value_type,
-                                span,
-                                constraint_work,
-                            )
-                            .map_err(|failure| map_kind_constraint_failure(failure, span))?;
-                    }
-                }
-            }
-        }
-
-        for fact_index in 0..group.implementation_facts().len() {
-            charge(constraint_work, 1, group_span)?;
-            let fact = group
-                .implementation_facts()
-                .get(fact_index)
-                .ok_or_else(|| unknown(group_span))?;
-            for method_index in 0..fact.methods.len() {
-                charge(constraint_work, 1, fact.span)?;
-                let method = fact
-                    .methods
-                    .get(method_index)
-                    .ok_or_else(|| unknown(fact.span))?;
-                let variables = copy_kinded_parameter_ids(
-                    &method.scheme.type_parameters,
-                    constraint_work,
-                    method.span,
-                )?;
-                validate_linked_value_type(
-                    &method.scheme.value_type,
-                    program.registry(),
-                    &variables,
-                    environments,
-                    constraint_work,
-                    type_work,
-                    method.span,
-                )?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn authenticated_global_dependent_only_binders(
-    program: &ResolvedModuleProgram,
-    registry: &LinkedInterfaceRegistry,
-    scheme: &ConstrainedScheme,
-    budget: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<Option<Vec<TypeVariableId>>, EvidenceValidationFailure> {
-    let mut required = Vec::new();
-    let mut dependent = Vec::new();
-    let mut has_determination = false;
-    for requirement in &scheme.requirements {
-        charge(budget, 1, requirement.span)?;
-        let interface = registry
-            .interface(program, requirement.interface())
-            .ok_or_else(|| unknown(requirement.span))?;
-        if requirement.arguments().len() != interface.parameters.len() {
-            return Err(unknown(requirement.span));
-        }
-        let Some(determination) = interface.determination() else {
-            for argument in requirement.arguments() {
-                collect_argument_constraint_variables(argument, &mut required, budget, span)?;
-            }
-            continue;
-        };
-        has_determination = true;
-        let mut previous = None;
-        for &position in determination.positions() {
-            charge(budget, 1, requirement.span)?;
-            if position >= requirement.arguments().len()
-                || previous.is_some_and(|previous| previous >= position)
-            {
-                return Err(unknown(requirement.span));
-            }
-            previous = Some(position);
-        }
-        let mut next_key = determination.positions().iter().copied().peekable();
-        for (position, argument) in requirement.arguments().iter().enumerate() {
-            charge(budget, 1, requirement.span)?;
-            if next_key.peek() == Some(&position) {
-                next_key.next();
-                collect_argument_constraint_variables(argument, &mut required, budget, span)?;
-            } else {
-                collect_argument_constraint_variables(argument, &mut dependent, budget, span)?;
-            }
-        }
-        if next_key.next().is_some() {
-            return Err(unknown(requirement.span));
-        }
-    }
-    if !has_determination {
-        return Ok(None);
-    }
-
-    let mut allowed = Vec::new();
-    for identity in dependent {
-        let mut is_required = false;
-        for candidate in &required {
-            charge(budget, 1, span)?;
-            if *candidate == identity {
-                is_required = true;
-                break;
-            }
-        }
-        if is_required {
-            continue;
-        }
-        let mut declared = false;
-        for (parameter, _) in &scheme.type_parameters {
-            charge(budget, 1, span)?;
-            if *parameter == identity {
-                declared = true;
-                break;
-            }
-        }
-        if !declared {
-            return Err(unknown(span));
-        }
-        charge(budget, 1, span)?;
-        allowed.try_reserve(1).map_err(|_| resource(span))?;
-        allowed.push(identity);
-    }
-    Ok(Some(allowed))
 }
 
 fn retain_constraint_variable(
@@ -2374,15 +1076,6 @@ fn map_kind_type_failure(failure: KindFailure, span: Span) -> EvidenceValidation
     }
 }
 
-fn map_kind_constraint_failure(failure: KindFailure, span: Span) -> EvidenceValidationFailure {
-    match failure {
-        KindFailure::Resource(_) => resource(span),
-        failure @ (KindFailure::Internal(_) | KindFailure::Source(_)) => {
-            unknown(span).with_kind_context(&failure)
-        }
-    }
-}
-
 fn authenticate_selected_goal_kind(
     application: &InterfaceApplication,
     environments: &KindEnvironments<'_>,
@@ -2459,19 +1152,6 @@ fn map_selected_kind_constraint_failure(
             invalid_root(span).with_kind_context(&failure)
         }
     }
-}
-
-fn copy_kinded_parameter_ids(
-    parameters: &[(TypeVariableId, Kind)],
-    budget: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<Vec<TypeVariableId>, EvidenceValidationFailure> {
-    charge(budget, parameters.len(), span)?;
-    let mut ids = Vec::new();
-    ids.try_reserve(parameters.len())
-        .map_err(|_| resource(span))?;
-    ids.extend(parameters.iter().map(|(parameter, _)| *parameter));
-    Ok(ids)
 }
 
 struct OwnerReplacements {
@@ -2575,28 +1255,6 @@ fn owner_replacements(
     Ok(result)
 }
 
-fn same_type_after_interface_substitution(
-    source: &Type,
-    parameters: &[ResolvedTypeVariable],
-    arguments: &[KindedArgument],
-    actual: &Type,
-    budget: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<bool, EvidenceValidationFailure> {
-    let replacements = owner_replacements(parameters, arguments, budget, span)?;
-    let expected = IterativeTypeOwner::new(
-        substitute_type_and_row_variables_with(
-            source,
-            &replacements.types,
-            &replacements.rows,
-            |cells| charge(budget, cells, span),
-            || resource(span),
-        )?
-        .map_err(|_| invalid_root(span))?,
-    );
-    same_type_charged(&expected, actual, budget, span)
-}
-
 #[allow(clippy::too_many_arguments)]
 fn same_type_after_method_instantiation(
     source: &Type,
@@ -2648,7 +1306,6 @@ struct MethodEvidenceAuthentication;
 #[derive(Debug)]
 pub struct ValidatedInterfaceProgram {
     source: ResolvedModuleProgram,
-    method_evidence: Arc<MethodEvidenceCatalog>,
 
     _method_evidence: MethodEvidenceAuthentication,
 }
@@ -2658,10 +1315,6 @@ impl ValidatedInterfaceProgram {
     #[must_use]
     pub const fn registry(&self) -> &Arc<ResolvedRegistry> {
         self.source.registry()
-    }
-
-    pub(crate) const fn method_evidence(&self) -> &Arc<MethodEvidenceCatalog> {
-        &self.method_evidence
     }
 
     /// Returns dependency-ordered checked module groups.
@@ -2683,12 +1336,12 @@ impl ValidatedInterfaceProgram {
     }
 }
 
-/// Authenticates linked checked interface evidence before Core synthesis.
+/// Checks new linked interface routes and the generated entry before Core assembly.
 ///
 /// # Errors
 ///
-/// Returns an internal validation failure when a retained checked identity,
-/// implementation authorization route, or occurrence evidence root is malformed.
+/// Returns an internal validation failure for conflicting linked identities,
+/// invalid implementation authorization routes, or invalid generated entry evidence.
 pub fn validate_interface_evidence(
     program: ResolvedModuleProgram,
 ) -> Result<ValidatedInterfaceProgram, EvidenceValidationFailure> {
@@ -2704,197 +1357,162 @@ pub(crate) fn validate_interface_evidence_with_budget(
     constraint_work: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
 ) -> Result<ValidatedInterfaceProgram, EvidenceValidationFailure> {
-    let span = program.result().span;
-    let mut binder_owners =
-        authenticate_linked_registry_facts(&program, constraint_work, type_work)?;
     let mut kind_environments =
         build_linked_kind_environments(program.registry(), type_work, program.result().span)?;
-    authenticate_linked_constructor_payloads(
-        &program,
-        &mut kind_environments,
-        constraint_work,
-        type_work,
-    )?;
     let linked_interfaces = LinkedInterfaceRegistry::build_with_kinds(
         &program,
         &mut kind_environments,
-        Some(&mut binder_owners),
+        None,
         constraint_work,
         type_work,
     )?;
-    let has_contextual_parameters = binder_owners.len() != program.registry().type_variable_count();
-    if !has_contextual_parameters {
-        finalize_linked_registry_authentication(&program, &binder_owners, constraint_work)?;
-    }
-    validate_linked_value_schemes(
+    retain_checked_scoped_owners(&program, &linked_interfaces, constraint_work)?;
+    validate_linked_entry(
         &program,
         &linked_interfaces,
         &mut kind_environments,
         constraint_work,
         type_work,
     )?;
-    validate_occurrences(
-        &program,
-        &linked_interfaces,
-        &mut kind_environments,
-        constraint_work,
-        type_work,
-        false,
-    )?;
-    let method_evidence = build_core_method_evidence_catalog_with_registry(
-        &program,
-        &linked_interfaces,
-        constraint_work,
-        type_work,
-    )?;
-    validate_lexical_headers(
-        &program,
-        &linked_interfaces,
-        &method_evidence,
-        &mut kind_environments,
-        constraint_work,
-        type_work,
-    )?;
-    drop(kind_environments);
-    for (identity, (owner, owner_span)) in linked_interfaces.scoped_type_owners.borrow().iter() {
-        charge(constraint_work, 1, *owner_span)?;
-        binder_owners
-            .try_reserve(1)
-            .map_err(|_| resource(*owner_span))?;
-        if binder_owners.insert(*identity, *owner).is_some() {
-            return Err(unknown(*owner_span));
-        }
-    }
-    if has_contextual_parameters {
-        for owner in method_evidence.lexical_owners() {
-            let resource_identity = owner.resource.as_ref().map(
-                |crate::core::dialect::MethodEvidenceResourceOwner::Builtin(acquisition)| {
-                    (acquisition.identity, acquisition.provider, acquisition.span)
-                },
-            );
-            if let Some((identity, provider, span)) = resource_identity
-                && owner.method.declaration() == 0
-            {
-                charge(constraint_work, 1, span)?;
-                let canonical = program
-                    .registry()
-                    .type_variable(identity)
-                    .ok_or_else(|| unknown(span))?;
-                binder_owners.try_reserve(1).map_err(|_| resource(span))?;
-                if canonical.kind != Kind::Type || identity.module() != Some(provider.module()) {
-                    return Err(unknown(span));
-                }
-                // The same builtin acquisition can supply several methods.
-                // Its identity must retain the same lexical owner throughout.
-                match binder_owners.entry(identity) {
-                    std::collections::hash_map::Entry::Vacant(slot) => {
-                        slot.insert(LinkedBinderOwner::Resource(provider));
-                    }
-                    std::collections::hash_map::Entry::Occupied(slot)
-                        if *slot.get() == LinkedBinderOwner::Resource(provider) => {}
-                    _ => return Err(unknown(span)),
-                }
-            }
-            let method = method_evidence
-                .method(owner.method)
-                .ok_or_else(|| unknown(program.result().span))?;
-            if owner.source_parameters.len() != method.parameters.len() {
-                return Err(unknown(program.result().span));
-            }
-            charge(
-                constraint_work,
-                owner.source_parameters.len(),
-                program.result().span,
-            )?;
-            binder_owners
-                .try_reserve(owner.source_parameters.len())
-                .map_err(|_| resource(program.result().span))?;
-            for (parameter, (_, kind)) in owner.source_parameters.iter().zip(&method.parameters) {
-                charge(constraint_work, 1, program.result().span)?;
-                let canonical = program
-                    .registry()
-                    .type_variable(*parameter)
-                    .ok_or_else(|| unknown(program.result().span))?;
-                if parameter.module() != Some(owner.source.module())
-                    || !same_kind_with_charge(&canonical.kind, kind, || constraint_work.charge(1))
-                        .map_err(|()| resource(program.result().span))?
-                    || binder_owners
-                        .insert(
-                            *parameter,
-                            LinkedBinderOwner::LexicalMethod(owner.source, owner.method),
-                        )
-                        .is_some()
-                {
-                    return Err(unknown(program.result().span));
-                }
-            }
-        }
-        finalize_linked_registry_authentication(&program, &binder_owners, constraint_work)?;
-    }
-    charge(constraint_work, 1, span)?;
-    let method_evidence = Arc::new(method_evidence);
     Ok(ValidatedInterfaceProgram {
         source: program,
-        method_evidence,
 
         _method_evidence: MethodEvidenceAuthentication,
     })
 }
 
+struct ModuleEvidenceInputs<'a> {
+    module: &'a ResolvedModule,
+    registry: &'a ResolvedRegistry,
+    schemes: &'a [CheckedGlobalScheme],
+    interfaces: &'a [crate::resolved::SharedCheckedInterfaceFact],
+    implementations: &'a [CheckedImplementationFact],
+    method_uses: &'a [crate::elaborate::CheckedMethodUse],
+    global_uses: &'a [crate::elaborate::CheckedGlobalUse],
+    lexical_sources: &'a [crate::elaborate::CheckedLexicalSource],
+    publication: &'a crate::evidence::PendingEvidencePublication,
+}
+
 #[derive(Clone, Copy)]
-struct MethodEvidenceInputs<'a>(&'a ResolvedModuleProgram);
+struct MethodEvidenceInputs<'a>(&'a ModuleEvidenceInputs<'a>);
+
 impl<'a> MethodEvidenceInputs<'a> {
-    fn linked(self) -> Option<&'a ResolvedModuleProgram> {
-        Some(self.0)
+    fn module(self) -> &'a ModuleEvidenceInputs<'a> {
+        self.0
     }
     fn span(self) -> Span {
-        self.0.result().span
+        self.0.module.span()
     }
     fn registry(self) -> &'a ResolvedRegistry {
-        self.0.registry()
+        self.0.registry
     }
     fn interfaces(self) -> impl Iterator<Item = &'a CheckedInterfaceFact> {
         self.0
-            .groups()
-            .iter()
-            .flat_map(ResolvedModuleGroup::interface_facts)
-            .map(AsRef::as_ref)
+            .module
+            .imported_facts()
+            .interface_imports()
+            .map(|imported| imported.fact.as_ref())
+            .chain(self.0.interfaces.iter().map(AsRef::as_ref))
+    }
+    fn local_interfaces(self) -> impl Iterator<Item = &'a CheckedInterfaceFact> {
+        self.0.interfaces.iter().map(AsRef::as_ref)
     }
     fn implementations(self) -> impl Iterator<Item = &'a CheckedImplementationFact> {
         self.0
-            .groups()
-            .iter()
-            .flat_map(ResolvedModuleGroup::implementation_facts)
+            .module
+            .imported_facts()
+            .implementations()
+            .map(|imported| &imported.fact)
+            .chain(self.0.implementations.iter())
+    }
+    fn local_implementations(self) -> impl Iterator<Item = &'a CheckedImplementationFact> {
+        self.0.implementations.iter()
     }
     fn globals(self) -> impl Iterator<Item = (BinderId, &'a ConstrainedScheme, &'a Origin)> {
         self.0
-            .groups()
-            .iter()
-            .flat_map(ResolvedModuleGroup::schemes)
+            .module
+            .imported_facts()
+            .globals()
             .map(|f| (f.binder, &f.scheme, &f.origin))
+            .chain(
+                self.0
+                    .schemes
+                    .iter()
+                    .map(|f| (f.binder, &f.scheme, &f.origin)),
+            )
+    }
+    fn local_globals(self) -> impl Iterator<Item = (BinderId, &'a ConstrainedScheme, &'a Origin)> {
+        self.0
+            .schemes
+            .iter()
+            .map(|f| (f.binder, &f.scheme, &f.origin))
+    }
+    fn owns(self, owner: MethodEvidenceOwner) -> bool {
+        let module = self.0.module.module();
+        match owner {
+            MethodEvidenceOwner::Global(binder) => binder.module() == Some(module),
+            MethodEvidenceOwner::Implementation(method) => {
+                method.implementation().module() == module
+            }
+            MethodEvidenceOwner::ResourceFamily(resource) => resource.module() == module,
+        }
     }
     fn implementation_method_count(
         self,
         work: &mut InterfaceConstraintBudget,
         span: Span,
     ) -> Result<usize, EvidenceValidationFailure> {
-        checked_implementation_method_count(self.0, work, span)
+        let mut count = 0usize;
+        for implementation in self.implementations() {
+            charge(
+                work,
+                implementation
+                    .methods
+                    .len()
+                    .checked_add(1)
+                    .ok_or_else(|| resource(span))?,
+                span,
+            )?;
+            count = count
+                .checked_add(implementation.methods.len())
+                .ok_or_else(|| resource(span))?;
+        }
+        Ok(count)
     }
     fn interface_count(
         self,
         work: &mut InterfaceConstraintBudget,
         span: Span,
     ) -> Result<usize, EvidenceValidationFailure> {
-        checked_interface_count(self.0, work, span)
+        let mut count = 0usize;
+        for _ in self.interfaces() {
+            charge(work, 1, span)?;
+            count = count.checked_add(1).ok_or_else(|| resource(span))?;
+        }
+        Ok(count)
     }
     fn interface_search_width(
         self,
         work: &mut InterfaceConstraintBudget,
         span: Span,
     ) -> Result<usize, EvidenceValidationFailure> {
-        checked_interface_method_search_width(self.0, work, span)
+        let mut count = 0usize;
+        for interface in self.interfaces() {
+            charge(work, 1, span)?;
+            count = count
+                .checked_add(
+                    interface
+                        .methods
+                        .len()
+                        .checked_add(1)
+                        .ok_or_else(|| resource(span))?,
+                )
+                .ok_or_else(|| resource(span))?;
+        }
+        Ok(count)
     }
 }
+
 fn clone_method_spelling(
     text: &str,
     work: &mut TypeWorkBudget,
@@ -2909,34 +1527,183 @@ fn clone_method_spelling(
     Ok(result.into_boxed_str())
 }
 
-#[cfg(test)]
-fn build_core_method_evidence_catalog(
-    program: &ResolvedModuleProgram,
-    constraint_work: &mut InterfaceConstraintBudget,
-    type_work: &mut TypeWorkBudget,
-) -> Result<MethodEvidenceCatalog, EvidenceValidationFailure> {
-    let mut kinds =
-        build_linked_kind_environments(program.registry(), type_work, program.result().span)?;
-    let registry = LinkedInterfaceRegistry::build_with_kinds(
-        program,
-        &mut kinds,
-        None,
-        constraint_work,
-        type_work,
-    )?;
-    build_core_method_evidence_catalog_with_registry(program, &registry, constraint_work, type_work)
+fn copy_catalog_slice<T: Copy>(
+    source: &[T],
+    work: &mut TypeWorkBudget,
+    span: Span,
+) -> Result<Box<[T]>, EvidenceValidationFailure> {
+    work.charge(source.len())
+        .map_err(|()| type_resource(span))?;
+    let mut retained = Vec::new();
+    retained
+        .try_reserve_exact(source.len())
+        .map_err(|_| type_resource(span))?;
+    retained.extend_from_slice(source);
+    Ok(retained.into_boxed_slice())
 }
 
-fn build_core_method_evidence_catalog_with_registry(
-    program: &ResolvedModuleProgram,
-    registry: &LinkedInterfaceRegistry,
+fn copy_catalog_method(
+    source: &MethodEvidenceMethod,
+    work: &mut TypeWorkBudget,
+    span: Span,
+) -> Result<MethodEvidenceMethod, EvidenceValidationFailure> {
+    Ok(MethodEvidenceMethod {
+        id: source.id,
+        spelling: clone_method_spelling(&source.spelling, work, span)?,
+        interface_parameters: copy_catalog_slice(&source.interface_parameters, work, span)?,
+        inherited_parameters: copy_catalog_slice(&source.inherited_parameters, work, span)?,
+        parameters: crate::types::clone_kinded_type_parameters_with_budget(
+            &source.parameters,
+            work,
+        )
+        .map_err(|()| type_resource(span))?
+        .into_boxed_slice(),
+        value_type: clone_type_with_budget(&source.value_type, work)
+            .map_err(|()| type_resource(span))?,
+    })
+}
+
+fn copy_catalog_implementation_owner(
+    source: &MethodEvidenceImplementationOwner,
+    work: &mut TypeWorkBudget,
+    span: Span,
+) -> Result<MethodEvidenceImplementationOwner, EvidenceValidationFailure> {
+    Ok(MethodEvidenceImplementationOwner {
+        implementation: source.implementation,
+        binder: source.binder,
+        head_type_parameter_count: source.head_type_parameter_count,
+        source_parameters: crate::types::clone_kinded_type_parameters_with_budget(
+            &source.source_parameters,
+            work,
+        )
+        .map_err(|()| type_resource(span))?
+        .into_boxed_slice(),
+        application: source
+            .application
+            .clone_with_budget(work)
+            .map_err(|()| type_resource(span))?,
+    })
+}
+
+fn copy_catalog_domain(
+    source: &MethodEvidenceDomain,
+    work: &mut TypeWorkBudget,
+    span: Span,
+) -> Result<MethodEvidenceDomain, EvidenceValidationFailure> {
+    Ok(MethodEvidenceDomain {
+        source_parameters: crate::types::clone_kinded_type_parameters_with_budget(
+            &source.source_parameters,
+            work,
+        )
+        .map_err(|()| type_resource(span))?
+        .into_boxed_slice(),
+        owner: source.owner,
+        requirement: source.requirement,
+        requirement_position: source.requirement_position,
+        method: source.method,
+        method_position: source.method_position,
+        application: source
+            .application
+            .clone_with_budget(work)
+            .map_err(|()| type_resource(span))?,
+    })
+}
+
+fn evidence_owner_module(owner: MethodEvidenceOwner) -> Option<ModuleId> {
+    match owner {
+        MethodEvidenceOwner::Global(binder) => binder.module(),
+        MethodEvidenceOwner::Implementation(method) => Some(method.implementation().module()),
+        MethodEvidenceOwner::ResourceFamily(resource) => Some(resource.module()),
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn copy_dependency_catalog_declarations(
+    inputs: MethodEvidenceInputs<'_>,
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+) -> Result<
+    (
+        Vec<MethodEvidenceMethod>,
+        Vec<MethodEvidenceImplementationOwner>,
+        Vec<MethodEvidenceDomain>,
+    ),
+    EvidenceValidationFailure,
+> {
+    let mut methods = Vec::new();
+    let mut owners = Vec::new();
+    let mut domains = Vec::new();
+    let module = inputs.module();
+    for dependency in module.module.imported_lowerings() {
+        let catalog = dependency
+            .catalog()
+            .ok_or_else(|| invalid_root(inputs.span()))?;
+        let retained = catalog
+            .methods()
+            .len()
+            .checked_add(catalog.implementation_owners().len())
+            .and_then(|count| count.checked_add(catalog.domains().len()))
+            .ok_or_else(|| resource(inputs.span()))?;
+        charge(constraint_work, retained, inputs.span())?;
+        methods
+            .try_reserve(catalog.methods().len())
+            .map_err(|_| resource(inputs.span()))?;
+        owners
+            .try_reserve(catalog.implementation_owners().len())
+            .map_err(|_| resource(inputs.span()))?;
+        domains
+            .try_reserve(catalog.domains().len())
+            .map_err(|_| resource(inputs.span()))?;
+        for method in catalog.methods() {
+            if method.id.interface().module() == dependency.module() {
+                methods.push(copy_catalog_method(method, type_work, inputs.span())?);
+            }
+        }
+        for owner in catalog.implementation_owners() {
+            if owner.implementation.implementation().module() == dependency.module() {
+                owners.push(copy_catalog_implementation_owner(
+                    owner,
+                    type_work,
+                    inputs.span(),
+                )?);
+            }
+        }
+        for domain in catalog.domains() {
+            if evidence_owner_module(domain.owner) == Some(dependency.module()) {
+                domains.push(copy_catalog_domain(domain, type_work, inputs.span())?);
+            }
+        }
+    }
+    Ok((methods, owners, domains))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_module_method_evidence_catalog(
+    module: &ResolvedModule,
+    registry: &ResolvedRegistry,
+    schemes: &[CheckedGlobalScheme],
+    interfaces: &[crate::resolved::SharedCheckedInterfaceFact],
+    implementations: &[CheckedImplementationFact],
+    method_uses: &[crate::elaborate::CheckedMethodUse],
+    global_uses: &[crate::elaborate::CheckedGlobalUse],
+    lexical_sources: &[crate::elaborate::CheckedLexicalSource],
+    publication: &crate::evidence::PendingEvidencePublication,
     constraint_work: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
 ) -> Result<MethodEvidenceCatalog, EvidenceValidationFailure> {
+    let inputs = ModuleEvidenceInputs {
+        module,
+        registry,
+        schemes,
+        interfaces,
+        implementations,
+        method_uses,
+        global_uses,
+        lexical_sources,
+        publication,
+    };
     build_method_evidence_catalog_from_inputs(
-        MethodEvidenceInputs(program),
-        Vec::new(),
-        Some(registry),
+        MethodEvidenceInputs(&inputs),
         constraint_work,
         type_work,
     )
@@ -2944,14 +1711,14 @@ fn build_core_method_evidence_catalog_with_registry(
 
 fn build_method_evidence_catalog_from_inputs(
     inputs: MethodEvidenceInputs<'_>,
-    supplied_occurrences: Vec<MethodEvidenceOccurrence>,
-    linked_registry: Option<&LinkedInterfaceRegistry>,
     constraint_work: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
 ) -> Result<MethodEvidenceCatalog, EvidenceValidationFailure> {
     charge(constraint_work, 1, inputs.span())?;
-    let mut method_count = 0usize;
-    for interface in inputs.interfaces() {
+    let (mut methods, mut implementation_owners, mut domains) =
+        copy_dependency_catalog_declarations(inputs, constraint_work, type_work)?;
+    let mut method_count = methods.len();
+    for interface in inputs.local_interfaces() {
         charge(constraint_work, interface.methods.len(), inputs.span())?;
         for _ in &interface.methods {
             method_count = method_count
@@ -2960,11 +1727,10 @@ fn build_method_evidence_catalog_from_inputs(
         }
     }
     charge(constraint_work, method_count, inputs.span())?;
-    let mut methods = Vec::new();
     methods
-        .try_reserve(method_count)
+        .try_reserve(method_count.saturating_sub(methods.len()))
         .map_err(|_| resource(inputs.span()))?;
-    for interface in inputs.interfaces() {
+    for interface in inputs.local_interfaces() {
         charge(constraint_work, interface.methods.len(), inputs.span())?;
         for method in &interface.methods {
             let mut parameters = Vec::new();
@@ -3052,8 +1818,8 @@ fn build_method_evidence_catalog_from_inputs(
             return Err(invalid_root(inputs.span()));
         }
     }
-    let mut implementation_owner_count = 0usize;
-    for implementation in inputs.implementations() {
+    let mut implementation_owner_count = implementation_owners.len();
+    for implementation in inputs.local_implementations() {
         for method in &implementation.methods {
             let search_work = method
                 .scheme
@@ -3085,11 +1851,10 @@ fn build_method_evidence_catalog_from_inputs(
         }
     }
     charge(constraint_work, implementation_owner_count, inputs.span())?;
-    let mut implementation_owners = Vec::new();
     implementation_owners
-        .try_reserve_exact(implementation_owner_count)
+        .try_reserve_exact(implementation_owner_count.saturating_sub(implementation_owners.len()))
         .map_err(|_| resource(inputs.span()))?;
-    for implementation in inputs.implementations() {
+    for implementation in inputs.local_implementations() {
         for method in &implementation.methods {
             let search_work = method
                 .scheme
@@ -3148,8 +1913,7 @@ fn build_method_evidence_catalog_from_inputs(
     {
         return Err(invalid_root(inputs.span()));
     }
-    let mut domains = Vec::new();
-    for (binder, scheme, origin) in inputs.globals() {
+    for (binder, scheme, origin) in inputs.local_globals() {
         collect_method_evidence_domains(
             &methods,
             scheme,
@@ -3160,7 +1924,7 @@ fn build_method_evidence_catalog_from_inputs(
             origin.primary_span(),
         )?;
     }
-    for implementation in inputs.implementations() {
+    for implementation in inputs.local_implementations() {
         for method in &implementation.methods {
             collect_method_evidence_domains(
                 &methods,
@@ -3174,65 +1938,48 @@ fn build_method_evidence_catalog_from_inputs(
         }
     }
     let mut lexical_owners = Vec::new();
-    let mut occurrences = if let Some(program) = inputs.linked() {
-        let mut collected = collect_method_evidence_occurrences(
-            program,
-            linked_registry.ok_or_else(|| invalid_root(inputs.span()))?,
-            &methods,
-            &mut lexical_owners,
-            constraint_work,
-            type_work,
-        )?;
-        if !supplied_occurrences.is_empty() {
-            charge(constraint_work, supplied_occurrences.len(), inputs.span())?;
-            collected
-                .try_reserve(supplied_occurrences.len())
-                .map_err(|_| resource(inputs.span()))?;
-            collected.extend(supplied_occurrences);
-        }
-        collected
-    } else {
-        supplied_occurrences
-    };
+    let mut occurrences = collect_staged_module_occurrences(
+        inputs.module(),
+        &methods,
+        &mut lexical_owners,
+        constraint_work,
+        type_work,
+    )?;
     if !lexical_owners.is_empty() {
-        let program = inputs.linked().ok_or_else(|| invalid_root(inputs.span()))?;
-        charge(constraint_work, program.groups().len(), inputs.span())?;
-        for group in program.groups() {
-            charge(
-                constraint_work,
-                group.implementation_facts().len(),
-                inputs.span(),
-            )?;
-            for implementation in group.implementation_facts() {
-                charge(constraint_work, implementation.methods.len(), inputs.span())?;
-                for method in &implementation.methods {
-                    charge(constraint_work, implementation_owners.len(), method.span)?;
-                    let Err(position) = implementation_owners
-                        .binary_search_by_key(&method.id, |owner| owner.implementation)
-                    else {
-                        continue;
-                    };
-                    if !lexical_header_captures_method_parameter(
-                        &lexical_owners,
-                        method,
-                        constraint_work,
-                    )? {
-                        continue;
-                    }
-                    let retention_work = implementation_owners
-                        .len()
-                        .checked_sub(position)
-                        .and_then(|shifted| shifted.checked_add(1))
-                        .ok_or_else(|| resource(method.span))?;
-                    charge(constraint_work, retention_work, method.span)?;
-                    implementation_owners
-                        .try_reserve(1)
-                        .map_err(|_| resource(method.span))?;
-                    implementation_owners.insert(
-                        position,
-                        core_implementation_owner(implementation.application(), method, type_work)?,
-                    );
+        charge(
+            constraint_work,
+            inputs.module().implementations.len(),
+            inputs.span(),
+        )?;
+        for implementation in inputs.local_implementations() {
+            charge(constraint_work, implementation.methods.len(), inputs.span())?;
+            for method in &implementation.methods {
+                charge(constraint_work, implementation_owners.len(), method.span)?;
+                let Err(position) = implementation_owners
+                    .binary_search_by_key(&method.id, |owner| owner.implementation)
+                else {
+                    continue;
+                };
+                if !lexical_header_captures_method_parameter(
+                    &lexical_owners,
+                    method,
+                    constraint_work,
+                )? {
+                    continue;
                 }
+                let retention_work = implementation_owners
+                    .len()
+                    .checked_sub(position)
+                    .and_then(|shifted| shifted.checked_add(1))
+                    .ok_or_else(|| resource(method.span))?;
+                charge(constraint_work, retention_work, method.span)?;
+                implementation_owners
+                    .try_reserve(1)
+                    .map_err(|_| resource(method.span))?;
+                implementation_owners.insert(
+                    position,
+                    core_implementation_owner(implementation.application(), method, type_work)?,
+                );
             }
         }
     }
@@ -3301,28 +2048,6 @@ fn build_method_evidence_catalog_from_inputs(
     Ok(catalog)
 }
 
-fn checked_implementation_method_count(
-    program: &ResolvedModuleProgram,
-    constraint_work: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<usize, EvidenceValidationFailure> {
-    charge(constraint_work, program.groups().len(), span)?;
-    let implementation_count = program
-        .groups()
-        .iter()
-        .map(|group| group.implementation_facts().len())
-        .try_fold(0usize, usize::checked_add)
-        .ok_or_else(|| resource(span))?;
-    charge(constraint_work, implementation_count, span)?;
-    program
-        .groups()
-        .iter()
-        .flat_map(ResolvedModuleGroup::implementation_facts)
-        .map(|implementation| implementation.methods.len())
-        .try_fold(0usize, usize::checked_add)
-        .ok_or_else(|| resource(span))
-}
-
 fn method_is_polymorphic(method: &MethodEvidenceMethod) -> bool {
     !method.parameters.is_empty()
 }
@@ -3334,64 +2059,6 @@ fn interface_has_polymorphic_method(
     methods
         .iter()
         .any(|method| method.id.interface() == interface && method_is_polymorphic(method))
-}
-
-fn checked_global_scheme_count(
-    program: &ResolvedModuleProgram,
-    constraint_work: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<usize, EvidenceValidationFailure> {
-    charge(constraint_work, program.groups().len(), span)?;
-    program
-        .groups()
-        .iter()
-        .map(|group| group.schemes().len())
-        .try_fold(0usize, usize::checked_add)
-        .ok_or_else(|| resource(span))
-}
-
-fn checked_interface_count(
-    program: &ResolvedModuleProgram,
-    constraint_work: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<usize, EvidenceValidationFailure> {
-    charge(constraint_work, program.groups().len(), span)?;
-    program
-        .groups()
-        .iter()
-        .map(|group| group.interface_facts().len())
-        .try_fold(0usize, usize::checked_add)
-        .ok_or_else(|| resource(span))
-}
-
-fn checked_interface_method_search_width(
-    program: &ResolvedModuleProgram,
-    constraint_work: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<usize, EvidenceValidationFailure> {
-    let interface_count = checked_interface_count(program, constraint_work, span)?;
-    charge(constraint_work, interface_count, span)?;
-    program
-        .groups()
-        .iter()
-        .flat_map(ResolvedModuleGroup::interface_facts)
-        .try_fold(interface_count, |count, interface| {
-            count.checked_add(interface.methods.len())
-        })
-        .ok_or_else(|| resource(span))
-}
-
-#[cfg(test)]
-fn imported_seed_is_polymorphic(
-    methods: &[MethodEvidenceMethod],
-    selected: ImplMethodId,
-    work: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<bool, EvidenceValidationFailure> {
-    charge(work, methods.len(), span)?;
-    Ok(methods
-        .iter()
-        .any(|row| row.id == selected.method() && method_is_polymorphic(row)))
 }
 
 fn clone_evidence_substitution_arguments(
@@ -3652,7 +2319,7 @@ fn build_method_evidence_concrete_sources(
 
 #[allow(
     clippy::too_many_arguments,
-    reason = "linked evidence rows are derived from independent authenticated inputs"
+    reason = "module evidence rows use distinct checked inputs"
 )]
 fn build_method_evidence_expectations(
     inputs: MethodEvidenceInputs<'_>,
@@ -3678,7 +2345,7 @@ fn build_method_evidence_expectations(
     for (owner, row) in implementation_owners
         .iter()
         .enumerate()
-        .filter(|_| inputs.linked().is_some())
+        .filter(|(_, row)| inputs.owns(MethodEvidenceOwner::Implementation(row.implementation)))
     {
         expectations.push(MethodEvidenceExpectation {
             occurrence: None,
@@ -3694,7 +2361,7 @@ fn build_method_evidence_expectations(
     for (domain, row) in domains
         .iter()
         .enumerate()
-        .filter(|_| inputs.linked().is_some())
+        .filter(|(_, row)| inputs.owns(row.owner))
     {
         let expectation = expectations.len();
         expectations.push(MethodEvidenceExpectation {
@@ -4378,16 +3045,12 @@ fn method_evidence_scope_position(
     let owner = occurrence.scope.ok_or_else(|| invalid_root(span))?;
     let candidate_count = match owner {
         MethodEvidenceOwner::Global(_) => {
-            if let Some(program) = inputs.linked() {
-                checked_global_scheme_count(program, constraint_work, span)?
-            } else {
-                let mut count = 0usize;
-                for _ in inputs.globals() {
-                    charge(constraint_work, 1, span)?;
-                    count = count.checked_add(1).ok_or_else(|| resource(span))?;
-                }
-                count
+            let mut count = 0usize;
+            for _ in inputs.globals() {
+                charge(constraint_work, 1, span)?;
+                count = count.checked_add(1).ok_or_else(|| resource(span))?;
             }
+            count
         }
         MethodEvidenceOwner::Implementation(_) => {
             inputs.implementation_method_count(constraint_work, span)?
@@ -4519,898 +3182,160 @@ fn selection_has_lexical(
     Ok(false)
 }
 
-fn retain_lexical_owners(
-    source: &crate::resolved::ResolvedLexicalEvidence,
-    expected_rows: &[HashMap<TypeVariableId, crate::types::EffectRow>],
-    methods: &[MethodEvidenceMethod],
-    owners: &mut Vec<crate::core::dialect::MethodEvidenceLexicalOwner>,
-    budget: &mut InterfaceConstraintBudget,
-    type_work: &mut TypeWorkBudget,
-) -> Result<(), EvidenceValidationFailure> {
-    let checked = source
-        .checked
-        .get()
-        .ok_or_else(|| invalid_root(source.span))?;
-    if checked.acquisition != source.acquisition
-        || checked.id != source.id
-        || checked.application.interface() != source.application.interface.id
-        || checked.application.arguments().len() != source.application.arguments.len()
-        || checked.methods.len() != source.method_groups.len()
-    {
-        return Err(invalid_root(source.span));
+fn staged_occurrence_failure(
+    failure: crate::evidence::SelectionFailure,
+    span: Span,
+) -> EvidenceValidationFailure {
+    match failure {
+        crate::evidence::SelectionFailure::TypeResource => type_resource(span),
+        crate::evidence::SelectionFailure::ConstraintResource => resource(span),
+        _ => invalid_root(span),
     }
-    for (checked, resolved) in checked
-        .application
-        .arguments()
-        .iter()
-        .zip(&source.application.arguments)
-    {
-        let qualified = crate::types::qualify_kinded_argument_with_row_contexts_with_budget(
-            &resolved.ty,
-            expected_rows.iter(),
-            type_work,
-        )
-        .map_err(|()| type_resource(source.span))?
-        .map_err(|_| invalid_root(source.span))?;
-        let qualified = qualified.map(crate::types::IterativeArgumentOwner::new);
-        let expected = qualified.as_deref().unwrap_or(&resolved.ty);
-        if !same_argument_charged(checked, expected, budget, source.span)? {
-            return Err(invalid_root(source.span));
-        }
-    }
-    charge(
-        budget,
-        owners.len().saturating_add(source.method_groups.len()),
-        source.span,
-    )?;
-    if owners.iter().any(|owner| owner.source == source.id) {
-        return Err(invalid_root(source.span));
-    }
-    owners
-        .try_reserve(source.method_groups.len())
-        .map_err(|_| resource(source.span))?;
-    for group in &source.method_groups {
-        let method = group.method.ok_or_else(|| invalid_root(group.span))?;
-        if group.identity.is_some() || method.interface() != source.application.interface.id {
-            return Err(invalid_root(group.span));
-        }
-        charge(budget, group.equations.len(), group.span)?;
-        if group.equations.is_empty()
-            || group
-                .equations
-                .iter()
-                .any(|equation| equation.name.binder != group.binder.id)
-        {
-            return Err(invalid_root(group.span));
-        }
-        let checked_method = checked
-            .methods
-            .get(method.declaration() as usize)
-            .ok_or_else(|| invalid_root(group.span))?;
-        charge(budget, methods.len(), group.span)?;
-        let canonical = methods
-            .iter()
-            .find(|row| row.id == method)
-            .ok_or_else(|| invalid_root(group.span))?;
-        if checked_method.method != method
-            || checked_method.binder != group.binder.id
-            || checked_method.captures
-                != crate::resolved::lexical_method_captures(group, type_work)
-                    .map_err(|()| type_resource(group.span))?
-        {
-            return Err(invalid_root(group.span));
-        }
-        if group.contextual_parameters.len() != canonical.parameters.len()
-            || checked.application.arguments().len() != canonical.interface_parameters.len()
-        {
-            return Err(invalid_root(group.span));
-        }
-        let mut replacements = OwnerReplacements {
-            types: HashMap::new(),
-            rows: HashMap::new(),
-        };
-        let count = canonical
-            .interface_parameters
-            .len()
-            .checked_add(canonical.parameters.len())
-            .ok_or_else(|| resource(group.span))?;
-        charge(budget, count, group.span)?;
-        let row_count = checked
-            .application
-            .arguments()
-            .iter()
-            .filter(|argument| matches!(argument, KindedArgument::RowArg(_)))
-            .count();
-        let type_count = count - row_count;
-        replacements
-            .types
-            .try_reserve(type_count)
-            .map_err(|_| resource(group.span))?;
-        replacements
-            .rows
-            .try_reserve(row_count)
-            .map_err(|_| resource(group.span))?;
-        for ((parameter, kind), contextual) in canonical
-            .parameters
-            .iter()
-            .zip(&group.contextual_parameters)
-        {
-            if !same_kind_with_charge(kind, &contextual.kind, || budget.charge(1))
-                .map_err(|()| resource(group.span))?
-                || *kind == Kind::EffectRow
-            {
-                return Err(invalid_root(group.span));
-            }
-            replacements.insert_discarding_previous(
-                *parameter,
-                KindedArgument::TypeArg(Type::Variable(contextual.id)),
-            );
-        }
-        for (parameter, argument) in canonical
-            .interface_parameters
-            .iter()
-            .zip(checked.application.arguments())
-        {
-            charge(budget, 1, group.span)?;
-            if replacements.types.contains_key(parameter)
-                || replacements.rows.contains_key(parameter)
-            {
-                return Err(invalid_root(group.span));
-            }
-            let copied = clone_kinded_argument_with_budget(argument, type_work)
-                .map_err(|()| type_resource(group.span))?;
-            replacements.insert_discarding_previous(*parameter, copied);
-        }
-        let method_type = IterativeTypeOwner::new(
-            substitute_type_and_row_variables_with(
-                &canonical.value_type,
-                &replacements.types,
-                &replacements.rows,
-                |cells| charge(budget, cells, group.span),
-                || resource(group.span),
-            )?
-            .map_err(|_| invalid_root(group.span))?,
-        );
-        let actual_value_type = match (&checked_method.scheme, canonical.parameters.is_empty()) {
-            (Type::Forall(parameters, body), false) => {
-                if parameters.len() != group.contextual_parameters.len() {
-                    return Err(invalid_root(group.span));
-                }
-                charge(budget, parameters.len(), group.span)?;
-                for ((id, kind), contextual) in parameters.iter().zip(&group.contextual_parameters)
-                {
-                    if *id != contextual.id
-                        || !same_kind_with_charge(kind, &contextual.kind, || budget.charge(1))
-                            .map_err(|()| resource(group.span))?
-                    {
-                        return Err(invalid_root(group.span));
-                    }
-                }
-                body.as_ref()
-            }
-            (ty, true) => ty,
-            _ => return Err(invalid_root(group.span)),
-        };
-        if !same_type_charged(&method_type, actual_value_type, budget, group.span)? {
-            return Err(invalid_root(group.span));
-        }
-        let application = checked
-            .application
-            .clone_with_budget(type_work)
-            .map_err(|()| type_resource(group.span))?;
-        charge(budget, checked_method.captures.len(), group.span)?;
-        let mut captures = Vec::new();
-        captures
-            .try_reserve(checked_method.captures.len())
-            .map_err(|_| resource(group.span))?;
-        captures.extend_from_slice(&checked_method.captures);
-        charge(budget, group.contextual_parameters.len(), group.span)?;
-        let mut source_parameters = Vec::new();
-        source_parameters
-            .try_reserve(group.contextual_parameters.len())
-            .map_err(|_| resource(group.span))?;
-        source_parameters.extend(
-            group
-                .contextual_parameters
-                .iter()
-                .map(|parameter| parameter.id),
-        );
-        owners.push(crate::core::dialect::MethodEvidenceLexicalOwner {
-            resource: source
-                .acquisition
-                .map(crate::core::dialect::MethodEvidenceResourceOwner::Builtin),
-            source_parameters: source_parameters.into_boxed_slice(),
-            source: source.id,
-            method,
-            binder: group.binder.id,
-            application,
-            captures: captures.into_boxed_slice(),
-        });
-    }
-    Ok(())
 }
 
-fn collect_method_evidence_occurrences(
-    program: &ResolvedModuleProgram,
-    registry: &LinkedInterfaceRegistry,
+fn collect_staged_module_occurrences(
+    module: &ModuleEvidenceInputs<'_>,
     methods: &[MethodEvidenceMethod],
     lexical_owners: &mut Vec<crate::core::dialect::MethodEvidenceLexicalOwner>,
     constraint_work: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
 ) -> Result<Vec<MethodEvidenceOccurrence>, EvidenceValidationFailure> {
-    let mut occurrences = Vec::new();
-    for group in program.groups() {
-        for (definition, checked) in group.definitions().iter().zip(group.schemes()) {
-            let owner = Some(MethodEvidenceOwner::Global(checked.binder));
-            match definition.kind() {
-                ResolvedDefinitionKind::Equational(global)
-                | ResolvedDefinitionKind::ForeignConstant(global) => {
-                    for equation in &global.equations {
-                        collect_method_evidence_expression_occurrences(
-                            program,
-                            registry,
-                            Some(ExpectedEquation::Global {
-                                binder: checked.binder,
-                            }),
-                            None,
-                            owner,
-                            &equation.body,
-                            methods,
-                            &mut occurrences,
-                            lexical_owners,
-                            constraint_work,
-                            type_work,
-                        )?;
-                    }
-                }
-                ResolvedDefinitionKind::InlineOperational(global) => {
-                    for declaration in &global.body.declarations {
-                        match declaration {
-                            ResolvedLocalDeclaration::Binding(binding) => {
-                                collect_method_evidence_expression_occurrences(
-                                    program,
-                                    registry,
-                                    None,
-                                    binding
-                                        .annotation
-                                        .as_ref()
-                                        .filter(|annotation| {
-                                            may_have_source_row_context(&annotation.ty)
-                                        })
-                                        .map(LinkedLocalScope::Annotation),
-                                    owner,
-                                    &binding.initializer,
-                                    methods,
-                                    &mut occurrences,
-                                    lexical_owners,
-                                    constraint_work,
-                                    type_work,
-                                )?;
-                            }
-                            ResolvedLocalDeclaration::Recursive(group) => {
-                                for member in &group.members {
-                                    collect_method_evidence_expression_occurrences(
-                                        program,
-                                        registry,
-                                        None,
-                                        may_have_source_row_context(&member.annotation.ty)
-                                            .then_some(LinkedLocalScope::Annotation(
-                                                &member.annotation,
-                                            )),
-                                        owner,
-                                        &member.initializer,
-                                        methods,
-                                        &mut occurrences,
-                                        lexical_owners,
-                                        constraint_work,
-                                        type_work,
-                                    )?;
-                                }
-                            }
-                            ResolvedLocalDeclaration::Evidence(source) => {
-                                retain_lexical_owners(
-                                    source,
-                                    &[],
-                                    methods,
-                                    lexical_owners,
-                                    constraint_work,
-                                    type_work,
-                                )?;
-                                for method in &source.method_groups {
-                                    for equation in &method.equations {
-                                        collect_method_evidence_expression_occurrences(
-                                            program,
-                                            registry,
-                                            None,
-                                            Some(LinkedLocalScope::Equation { source, method }),
-                                            owner,
-                                            &equation.body,
-                                            methods,
-                                            &mut occurrences,
-                                            lexical_owners,
-                                            constraint_work,
-                                            type_work,
-                                        )?;
-                                    }
-                                }
-                            }
-                            ResolvedLocalDeclaration::Newtype(_) => {}
-                        }
-                    }
-                    collect_method_evidence_expression_occurrences(
-                        program,
-                        registry,
-                        None,
-                        None,
-                        owner,
-                        &global.body.result,
-                        methods,
-                        &mut occurrences,
-                        lexical_owners,
-                        constraint_work,
-                        type_work,
-                    )?;
-                }
-            }
+    for retained in module.lexical_sources {
+        let span = retained.span;
+        let source = retained.slot.get().ok_or_else(|| invalid_root(span))?;
+        if source.id.module() != module.module.module() {
+            return Err(invalid_root(span));
         }
-        for implementation in group.implementations() {
-            for method in implementation.method_groups() {
-                let owner = Some(MethodEvidenceOwner::Implementation(
-                    method.identity.ok_or_else(|| invalid_root(method.span))?,
-                ));
-                for equation in &method.equations {
-                    collect_method_evidence_expression_occurrences(
-                        program,
-                        registry,
-                        Some(ExpectedEquation::Implementation {
-                            method: method.identity.ok_or_else(|| invalid_root(method.span))?,
-                        }),
-                        None,
-                        owner,
-                        &equation.body,
-                        methods,
-                        &mut occurrences,
-                        lexical_owners,
-                        constraint_work,
-                        type_work,
-                    )?;
-                }
+        charge(constraint_work, source.methods.len(), span)?;
+        lexical_owners
+            .try_reserve(source.methods.len())
+            .map_err(|_| resource(span))?;
+        for checked in &source.methods {
+            charge(constraint_work, methods.len(), span)?;
+            let canonical = methods
+                .iter()
+                .find(|method| method.id == checked.method)
+                .ok_or_else(|| invalid_root(span))?;
+            if checked.method.interface() != source.application.interface() {
+                return Err(invalid_root(span));
             }
+            let parameters: &[(TypeVariableId, Kind)] = if canonical.parameters.is_empty() {
+                &[]
+            } else if let Type::Forall(parameters, _) = &checked.scheme {
+                if parameters.len() != canonical.parameters.len() {
+                    return Err(invalid_root(span));
+                }
+                parameters
+            } else {
+                return Err(invalid_root(span));
+            };
+            charge(
+                constraint_work,
+                parameters
+                    .len()
+                    .checked_add(checked.captures.len())
+                    .ok_or_else(|| resource(span))?,
+                span,
+            )?;
+            let mut source_parameters = Vec::new();
+            source_parameters
+                .try_reserve_exact(parameters.len())
+                .map_err(|_| resource(span))?;
+            source_parameters.extend(parameters.iter().map(|(identity, _)| *identity));
+            lexical_owners.push(crate::core::dialect::MethodEvidenceLexicalOwner {
+                resource: source
+                    .acquisition
+                    .map(crate::core::dialect::MethodEvidenceResourceOwner::Builtin),
+                source_parameters: source_parameters.into_boxed_slice(),
+                source: source.id,
+                method: checked.method,
+                binder: checked.binder,
+                application: source
+                    .application
+                    .clone_with_budget(type_work)
+                    .map_err(|()| type_resource(span))?,
+                captures: copy_catalog_slice(&checked.captures, type_work, span)?,
+            });
         }
     }
-    collect_method_evidence_expression_occurrences(
-        program,
-        registry,
-        None,
-        None,
-        None,
-        program.result(),
-        methods,
-        &mut occurrences,
-        lexical_owners,
-        constraint_work,
-        type_work,
-    )?;
+    let mut occurrences = Vec::new();
+    for use_ in module.method_uses {
+        let span = use_.span;
+        let staged = module
+            .publication
+            .occurrence(use_.slot.storage_id(), Some(use_.method), type_work)
+            .map_err(|failure| staged_occurrence_failure(failure, span))?;
+        charge(constraint_work, methods.len(), span)?;
+        if !methods
+            .iter()
+            .any(|row| row.id == use_.method && method_is_polymorphic(row))
+            && (lexical_owners.is_empty()
+                || !selection_has_lexical(staged.selection, constraint_work, span)?)
+        {
+            continue;
+        }
+        let (scope, binder) = use_.scope.ok_or_else(|| invalid_root(span))?;
+        retain_method_evidence_occurrence(
+            &mut occurrences,
+            use_.slot.storage_id(),
+            Some(scope),
+            Some(binder),
+            None,
+            None,
+            Some(use_.method),
+            staged.application,
+            staged.method_arguments,
+            Some(
+                staged
+                    .checked_value_type
+                    .ok_or_else(|| invalid_root(span))?,
+            ),
+            staged.selection,
+            constraint_work,
+            type_work,
+            span,
+        )?;
+    }
+    for use_ in module.global_uses {
+        let span = use_.span;
+        let staged = module
+            .publication
+            .occurrence(use_.slot.storage_id(), None, type_work)
+            .map_err(|failure| staged_occurrence_failure(failure, span))?;
+        charge(constraint_work, methods.len(), span)?;
+        if !interface_has_polymorphic_method(methods, staged.application.interface())
+            && (lexical_owners.is_empty()
+                || !selection_has_lexical(staged.selection, constraint_work, span)?)
+        {
+            continue;
+        }
+        let (scope, binder) = use_.scope.ok_or_else(|| invalid_root(span))?;
+        retain_method_evidence_occurrence(
+            &mut occurrences,
+            use_.slot.storage_id(),
+            Some(scope),
+            Some(binder),
+            Some(MethodEvidenceOwner::Global(use_.binder)),
+            Some(use_.requirement),
+            None,
+            staged.application,
+            &[],
+            None,
+            staged.selection,
+            constraint_work,
+            type_work,
+            span,
+        )?;
+    }
     Ok(occurrences)
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "occurrence and lexical owner outputs retain independent constraint and type ledgers"
-)]
-fn reserve_method_context_expressions(
-    pending: &mut Vec<(&ResolvedExpr, Option<usize>)>,
-    count: usize,
-    budget: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<(), EvidenceValidationFailure> {
-    charge(budget, count, span)?;
-    pending.try_reserve(count).map_err(|_| resource(span))
-}
-
 #[allow(clippy::too_many_arguments)]
-fn collect_method_evidence_expression_occurrences<'a>(
-    program: &'a ResolvedModuleProgram,
-    registry: &LinkedInterfaceRegistry,
-    expected_equation: Option<ExpectedEquation>,
-    initial_equation: Option<LinkedLocalScope<'a>>,
-    scope: Option<MethodEvidenceOwner>,
-    root: &'a ResolvedExpr,
-    methods: &[MethodEvidenceMethod],
+fn retain_method_evidence_occurrence(
     occurrences: &mut Vec<MethodEvidenceOccurrence>,
-    lexical_owners: &mut Vec<crate::core::dialect::MethodEvidenceLexicalOwner>,
-    constraint_work: &mut InterfaceConstraintBudget,
-    type_work: &mut TypeWorkBudget,
-) -> Result<(), EvidenceValidationFailure> {
-    let mut pending = Vec::new();
-    charge(constraint_work, 1, root.span)?;
-    pending.try_reserve(1).map_err(|_| resource(root.span))?;
-    let mut row_contexts = Vec::new();
-    let initial_head = if let Some(equation) = initial_equation {
-        charge(constraint_work, 1, root.span)?;
-        row_contexts
-            .try_reserve(1)
-            .map_err(|_| resource(root.span))?;
-        row_contexts.push((equation, None));
-        Some(0)
-    } else {
-        None
-    };
-    pending.push((root, initial_head));
-    while let Some((expression, row_head)) = pending.pop() {
-        charge(constraint_work, 1, expression.span)?;
-        match &expression.kind {
-            ResolvedExprKind::Occurrence(occurrence) => match occurrence.term {
-                ResolvedTermName::Global(binder) => {
-                    let mut scheme = None;
-                    'groups: for group in program.groups() {
-                        for checked in group.schemes() {
-                            charge(constraint_work, 1, expression.span)?;
-                            if checked.binder == binder {
-                                scheme = Some(&checked.scheme);
-                                break 'groups;
-                            }
-                        }
-                    }
-                    let Some(scheme) = scheme else {
-                        if occurrence.evidence.is_empty() {
-                            continue;
-                        }
-                        return Err(invalid_root(expression.span));
-                    };
-                    for (slot, requirement) in occurrence.evidence.iter().zip(&scheme.requirements)
-                    {
-                        charge(constraint_work, methods.len(), expression.span)?;
-                        if !interface_has_polymorphic_method(methods, requirement.interface())
-                            && (lexical_owners.is_empty()
-                                || !slot
-                                    .selection()
-                                    .map(|selection| {
-                                        selection_has_lexical(
-                                            selection,
-                                            constraint_work,
-                                            expression.span,
-                                        )
-                                    })
-                                    .transpose()?
-                                    .unwrap_or(false))
-                        {
-                            continue;
-                        }
-                        let (checked_application, selection) =
-                            slot.filled().ok_or_else(|| invalid_root(expression.span))?;
-                        push_method_evidence_occurrence(
-                            occurrences,
-                            program,
-                            slot.storage_id(),
-                            scope,
-                            Some(MethodEvidenceOwner::Global(binder)),
-                            Some(requirement.id),
-                            None,
-                            checked_application,
-                            &[],
-                            None,
-                            selection,
-                            constraint_work,
-                            type_work,
-                            expression.span,
-                        )?;
-                    }
-                }
-                ResolvedTermName::Method(method) => {
-                    charge(constraint_work, methods.len(), expression.span)?;
-                    let [slot] = occurrence.evidence.as_ref() else {
-                        return Err(invalid_root(expression.span));
-                    };
-                    if !methods
-                        .iter()
-                        .any(|row| row.id == method && method_is_polymorphic(row))
-                        && (lexical_owners.is_empty()
-                            || !slot
-                                .selection()
-                                .map(|selection| {
-                                    selection_has_lexical(
-                                        selection,
-                                        constraint_work,
-                                        expression.span,
-                                    )
-                                })
-                                .transpose()?
-                                .unwrap_or(false))
-                    {
-                        continue;
-                    }
-                    let (
-                        checked_method,
-                        checked_application,
-                        method_arguments,
-                        checked_value_type,
-                        selection,
-                    ) = slot
-                        .filled_method()
-                        .ok_or_else(|| invalid_root(expression.span))?;
-                    push_method_evidence_occurrence(
-                        occurrences,
-                        program,
-                        slot.storage_id(),
-                        scope,
-                        None,
-                        None,
-                        Some(checked_method),
-                        checked_application,
-                        method_arguments,
-                        Some(checked_value_type),
-                        selection,
-                        constraint_work,
-                        type_work,
-                        expression.span,
-                    )?;
-                }
-            },
-            ResolvedExprKind::String(_)
-            | ResolvedExprKind::Integer(_)
-            | ResolvedExprKind::Boolean(_)
-            | ResolvedExprKind::Unit
-            | ResolvedExprKind::Constructor(_) => {}
-            ResolvedExprKind::Tuple(elements) => {
-                charge(constraint_work, elements.len(), expression.span)?;
-                pending
-                    .try_reserve(elements.len())
-                    .map_err(|_| resource(expression.span))?;
-                pending.extend(elements.iter().rev().map(|child| (child, row_head)));
-            }
-            ResolvedExprKind::Apply(application) => {
-                charge(constraint_work, 2, expression.span)?;
-                pending
-                    .try_reserve(2)
-                    .map_err(|_| resource(expression.span))?;
-                pending.push((&application.argument, row_head));
-                pending.push((&application.function, row_head));
-            }
-            ResolvedExprKind::Add(binary)
-            | ResolvedExprKind::Multiply(binary)
-            | ResolvedExprKind::Equal(binary) => {
-                charge(constraint_work, 2, expression.span)?;
-                pending
-                    .try_reserve(2)
-                    .map_err(|_| resource(expression.span))?;
-                pending.push((&binary.right, row_head));
-                pending.push((&binary.left, row_head));
-            }
-            ResolvedExprKind::Block(block) => {
-                charge(constraint_work, 1, expression.span)?;
-                pending
-                    .try_reserve(1)
-                    .map_err(|_| resource(expression.span))?;
-                pending.push((&block.result, row_head));
-                for declaration in block.declarations.iter().rev() {
-                    match declaration {
-                        ResolvedLocalDeclaration::Evidence(source) => {
-                            let expected = lexical_sources::lexical_context_rows(
-                                program,
-                                registry,
-                                source,
-                                EvidenceScope {
-                                    local_scopes: &[],
-                                    expected_equation,
-                                    owner: scope.map(|owner| match owner {
-                                        MethodEvidenceOwner::Global(binder) => {
-                                            RequirementOwner::Global(binder)
-                                        }
-                                        MethodEvidenceOwner::Implementation(method) => {
-                                            RequirementOwner::Impl(method.implementation())
-                                        }
-                                        MethodEvidenceOwner::ResourceFamily(definition) => {
-                                            RequirementOwner::ResourceFamily(definition)
-                                        }
-                                    }),
-                                    variables: &[],
-                                    lexical_sources: &[],
-                                    lexical_head: None,
-                                },
-                                &row_contexts,
-                                row_head,
-                                constraint_work,
-                                type_work,
-                            )?;
-                            retain_lexical_owners(
-                                source,
-                                &expected,
-                                methods,
-                                lexical_owners,
-                                constraint_work,
-                                type_work,
-                            )?;
-                            for method in source.method_groups.iter().rev() {
-                                for equation in method.equations.iter().rev() {
-                                    reserve_method_context_expressions(
-                                        &mut pending,
-                                        1,
-                                        constraint_work,
-                                        equation.span,
-                                    )?;
-                                    charge(constraint_work, 1, equation.span)?;
-                                    row_contexts
-                                        .try_reserve(1)
-                                        .map_err(|_| resource(equation.span))?;
-                                    let context = row_contexts.len();
-                                    row_contexts.push((
-                                        LinkedLocalScope::Equation { source, method },
-                                        row_head,
-                                    ));
-                                    pending.push((&equation.body, Some(context)));
-                                }
-                            }
-                        }
-                        ResolvedLocalDeclaration::Binding(binding) => {
-                            charge(constraint_work, 1, expression.span)?;
-                            pending
-                                .try_reserve(1)
-                                .map_err(|_| resource(expression.span))?;
-                            let annotation_head = if let Some(annotation) = &binding.annotation
-                                && may_have_source_row_context(&annotation.ty)
-                            {
-                                charge(constraint_work, 1, binding.span)?;
-                                row_contexts
-                                    .try_reserve(1)
-                                    .map_err(|_| resource(binding.span))?;
-                                let index = row_contexts.len();
-                                row_contexts
-                                    .push((LinkedLocalScope::Annotation(annotation), row_head));
-                                Some(index)
-                            } else {
-                                row_head
-                            };
-                            pending.push((&binding.initializer, annotation_head));
-                        }
-                        ResolvedLocalDeclaration::Recursive(group) => {
-                            charge(constraint_work, group.members.len(), expression.span)?;
-                            pending
-                                .try_reserve(group.members.len())
-                                .map_err(|_| resource(expression.span))?;
-                            for member in group.members.iter().rev() {
-                                if !may_have_source_row_context(&member.annotation.ty) {
-                                    pending.push((&member.initializer, row_head));
-                                    continue;
-                                }
-                                charge(constraint_work, 1, group.span)?;
-                                row_contexts
-                                    .try_reserve(1)
-                                    .map_err(|_| resource(group.span))?;
-                                let index = row_contexts.len();
-                                row_contexts.push((
-                                    LinkedLocalScope::Annotation(&member.annotation),
-                                    row_head,
-                                ));
-                                pending.push((&member.initializer, Some(index)));
-                            }
-                        }
-                        ResolvedLocalDeclaration::Newtype(_) => {}
-                    }
-                }
-            }
-            ResolvedExprKind::Function(function) => {
-                charge(constraint_work, 1, expression.span)?;
-                pending
-                    .try_reserve(1)
-                    .map_err(|_| resource(expression.span))?;
-                pending.push((&function.body.result, row_head));
-                for declaration in function.body.declarations.iter().rev() {
-                    match declaration {
-                        ResolvedLocalDeclaration::Evidence(source) => {
-                            let expected = lexical_sources::lexical_context_rows(
-                                program,
-                                registry,
-                                source,
-                                EvidenceScope {
-                                    local_scopes: &[],
-                                    expected_equation,
-                                    owner: scope.map(|owner| match owner {
-                                        MethodEvidenceOwner::Global(binder) => {
-                                            RequirementOwner::Global(binder)
-                                        }
-                                        MethodEvidenceOwner::Implementation(method) => {
-                                            RequirementOwner::Impl(method.implementation())
-                                        }
-                                        MethodEvidenceOwner::ResourceFamily(definition) => {
-                                            RequirementOwner::ResourceFamily(definition)
-                                        }
-                                    }),
-                                    variables: &[],
-                                    lexical_sources: &[],
-                                    lexical_head: None,
-                                },
-                                &row_contexts,
-                                row_head,
-                                constraint_work,
-                                type_work,
-                            )?;
-                            retain_lexical_owners(
-                                source,
-                                &expected,
-                                methods,
-                                lexical_owners,
-                                constraint_work,
-                                type_work,
-                            )?;
-                            for method in source.method_groups.iter().rev() {
-                                for equation in method.equations.iter().rev() {
-                                    reserve_method_context_expressions(
-                                        &mut pending,
-                                        1,
-                                        constraint_work,
-                                        equation.span,
-                                    )?;
-                                    charge(constraint_work, 1, equation.span)?;
-                                    row_contexts
-                                        .try_reserve(1)
-                                        .map_err(|_| resource(equation.span))?;
-                                    let context = row_contexts.len();
-                                    row_contexts.push((
-                                        LinkedLocalScope::Equation { source, method },
-                                        row_head,
-                                    ));
-                                    pending.push((&equation.body, Some(context)));
-                                }
-                            }
-                        }
-                        ResolvedLocalDeclaration::Binding(binding) => {
-                            charge(constraint_work, 1, expression.span)?;
-                            pending
-                                .try_reserve(1)
-                                .map_err(|_| resource(expression.span))?;
-                            let annotation_head = if let Some(annotation) = &binding.annotation
-                                && may_have_source_row_context(&annotation.ty)
-                            {
-                                charge(constraint_work, 1, binding.span)?;
-                                row_contexts
-                                    .try_reserve(1)
-                                    .map_err(|_| resource(binding.span))?;
-                                let index = row_contexts.len();
-                                row_contexts
-                                    .push((LinkedLocalScope::Annotation(annotation), row_head));
-                                Some(index)
-                            } else {
-                                row_head
-                            };
-                            pending.push((&binding.initializer, annotation_head));
-                        }
-                        ResolvedLocalDeclaration::Recursive(group) => {
-                            charge(constraint_work, group.members.len(), expression.span)?;
-                            pending
-                                .try_reserve(group.members.len())
-                                .map_err(|_| resource(expression.span))?;
-                            for member in group.members.iter().rev() {
-                                if !may_have_source_row_context(&member.annotation.ty) {
-                                    pending.push((&member.initializer, row_head));
-                                    continue;
-                                }
-                                charge(constraint_work, 1, group.span)?;
-                                row_contexts
-                                    .try_reserve(1)
-                                    .map_err(|_| resource(group.span))?;
-                                let index = row_contexts.len();
-                                row_contexts.push((
-                                    LinkedLocalScope::Annotation(&member.annotation),
-                                    row_head,
-                                ));
-                                pending.push((&member.initializer, Some(index)));
-                            }
-                        }
-                        ResolvedLocalDeclaration::Newtype(_) => {}
-                    }
-                }
-            }
-            ResolvedExprKind::Match(matched) => {
-                let child_count = matched
-                    .arms
-                    .len()
-                    .checked_add(1)
-                    .ok_or_else(|| resource(expression.span))?;
-                charge(constraint_work, child_count, expression.span)?;
-                pending
-                    .try_reserve(child_count)
-                    .map_err(|_| resource(expression.span))?;
-                pending.extend(matched.arms.iter().rev().map(|arm| (&arm.body, row_head)));
-                pending.push((&matched.scrutinee, row_head));
-            }
-            ResolvedExprKind::Region(region) => {
-                reserve_method_context_expressions(
-                    &mut pending,
-                    2,
-                    constraint_work,
-                    expression.span,
-                )?;
-                pending.push((&region.body, row_head));
-                if let Some(provider) = &region.provider {
-                    pending.push((provider, row_head));
-                }
-            }
-            ResolvedExprKind::RegionSelection(selection) => {
-                reserve_method_context_expressions(
-                    &mut pending,
-                    2,
-                    constraint_work,
-                    expression.span,
-                )?;
-                pending.push((&selection.body, row_head));
-                pending.push((&selection.region, row_head));
-            }
-            ResolvedExprKind::Resource(acquisition) => {
-                reserve_method_context_expressions(
-                    &mut pending,
-                    2,
-                    constraint_work,
-                    expression.span,
-                )?;
-                pending.push((&acquisition.body, row_head));
-                pending.push((&acquisition.initializer, row_head));
-            }
-            ResolvedExprKind::Store(store) => {
-                reserve_method_context_expressions(
-                    &mut pending,
-                    2,
-                    constraint_work,
-                    expression.span,
-                )?;
-                pending.push((&store.body, row_head));
-                pending.push((&store.initializer, row_head));
-            }
-            ResolvedExprKind::Network(network) => {
-                reserve_method_context_expressions(
-                    &mut pending,
-                    2,
-                    constraint_work,
-                    expression.span,
-                )?;
-                pending.push((&network.body, row_head));
-                pending.push((&network.initializer, row_head));
-            }
-            ResolvedExprKind::Cleanup(cleanup) => {
-                reserve_method_context_expressions(
-                    &mut pending,
-                    2,
-                    constraint_work,
-                    expression.span,
-                )?;
-                pending.push((&cleanup.body, row_head));
-                pending.push((&cleanup.action, row_head));
-            }
-            ResolvedExprKind::Perform(request) => pending.push((&request.operand, row_head)),
-            ResolvedExprKind::Handle(handler) => {
-                let child_count = handler
-                    .clauses
-                    .len()
-                    .saturating_add(1 + usize::from(handler.store.is_some()));
-                charge(constraint_work, child_count, expression.span)?;
-                pending
-                    .try_reserve(child_count)
-                    .map_err(|_| resource(expression.span))?;
-                pending.extend(
-                    handler
-                        .clauses
-                        .iter()
-                        .rev()
-                        .map(|clause| (&clause.body, row_head)),
-                );
-                pending.push((&handler.body, row_head));
-                if let Some(store) = &handler.store {
-                    pending.push((store, row_head));
-                }
-            }
-            ResolvedExprKind::Resume(resume) => pending.push((&resume.value, row_head)),
-            ResolvedExprKind::Discard(_) | ResolvedExprKind::Retain(_) => {}
-        }
-    }
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn push_method_evidence_occurrence(
-    occurrences: &mut Vec<MethodEvidenceOccurrence>,
-    program: &ResolvedModuleProgram,
     slot: usize,
     scope: Option<MethodEvidenceOwner>,
+    scope_binder: Option<BinderId>,
     target_owner: Option<MethodEvidenceOwner>,
     target_requirement: Option<RequirementId>,
     checked_method: Option<MethodId>,
@@ -5424,25 +3349,6 @@ fn push_method_evidence_occurrence(
 ) -> Result<(), EvidenceValidationFailure> {
     charge(constraint_work, 2, span)?;
     occurrences.try_reserve(1).map_err(|_| resource(span))?;
-    let scope_binder = match scope {
-        Some(MethodEvidenceOwner::Global(binder)) => Some(binder),
-        Some(MethodEvidenceOwner::Implementation(implementation)) => {
-            let candidate_count =
-                checked_implementation_method_count(program, constraint_work, span)?;
-            charge(constraint_work, candidate_count, span)?;
-            Some(
-                program
-                    .groups()
-                    .iter()
-                    .flat_map(ResolvedModuleGroup::implementation_facts)
-                    .flat_map(|implementation| implementation.methods.iter())
-                    .find(|candidate| candidate.id == implementation)
-                    .ok_or_else(|| invalid_root(span))?
-                    .binder,
-            )
-        }
-        Some(MethodEvidenceOwner::ResourceFamily(_)) | None => None,
-    };
     let mut retained_arguments = Vec::new();
     type_work
         .charge(method_arguments.len())
@@ -5584,442 +3490,62 @@ fn local_representation_captures_method_parameter(
     Ok(false)
 }
 
-fn authenticate_linked_constructor_payloads<'a>(
-    program: &'a ResolvedModuleProgram,
-    environments: &mut KindEnvironments<'a>,
-    constraint_work: &mut InterfaceConstraintBudget,
-    type_work: &mut TypeWorkBudget,
-) -> Result<(), EvidenceValidationFailure> {
-    let registry = program.registry();
-    for nominal in registry.nominals() {
-        let span = nominal.origin.primary_span();
-        charge(constraint_work, 1, span)?;
-        let parameters = registry
-            .nominal_parameters(nominal.id)
-            .ok_or_else(|| unknown(span))?;
-        charge(constraint_work, parameters.len(), span)?;
-        let mut variables = Vec::new();
-        variables
-            .try_reserve(parameters.len())
-            .map_err(|_| resource(span))?;
-        variables.extend(parameters.iter().map(|parameter| parameter.id));
-        for identity in &nominal.constructors {
-            charge(constraint_work, 1, span)?;
-            let constructor = registry
-                .constructor(*identity)
-                .ok_or_else(|| unknown(span))?;
-            let Some(payload) = constructor.payload.as_ref() else {
-                continue;
-            };
-            let payload_span = constructor.origin.primary_span();
-            validate_linked_value_structure(
-                payload,
-                registry,
-                &variables,
-                constraint_work,
-                payload_span,
-            )?;
-            validate_linked_value_type(
-                payload,
-                registry,
-                &variables,
-                environments,
-                constraint_work,
-                type_work,
-                payload_span,
-            )?;
-        }
-    }
-    Ok(())
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LinkedBinderOwner {
     Region(BinderId),
     Store(BinderId),
     Network(BinderId),
-    Resource(crate::interface::LexicalEvidenceId),
-
-    LexicalMethod(crate::interface::LexicalEvidenceId, MethodId),
-    Nominal(NominalTypeId),
-    Effect(crate::types::EffectId),
-    Interface(InterfaceId),
     Method(MethodId),
-    Global(BinderId),
-    Implementation(ImplId),
 }
 
-fn reserve_linked_registry_authentication_indexes(
-    group_count: usize,
-    owner_count: usize,
-    budget: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<
-    (
-        HashSet<ModuleId>,
-        HashMap<TypeVariableId, LinkedBinderOwner>,
-    ),
-    EvidenceValidationFailure,
-> {
-    let index_work = group_count
-        .checked_add(owner_count)
-        .ok_or_else(|| resource(span))?;
-    charge(budget, index_work, span)?;
-    let mut modules = HashSet::new();
-    modules
-        .try_reserve(group_count)
-        .map_err(|_| resource(span))?;
-    let mut owners = HashMap::new();
-    owners
-        .try_reserve(owner_count)
-        .map_err(|_| resource(span))?;
-    Ok((modules, owners))
-}
-
-fn authenticate_linked_registry_facts(
+fn retain_checked_scoped_owners(
     program: &ResolvedModuleProgram,
-    budget: &mut InterfaceConstraintBudget,
-    _type_work: &mut TypeWorkBudget,
-) -> Result<HashMap<TypeVariableId, LinkedBinderOwner>, EvidenceValidationFailure> {
-    let span = program.result().span;
-    charge(budget, 1, span)?;
-    let registry = program.registry();
-    let (mut modules, mut owners) = reserve_linked_registry_authentication_indexes(
-        program.groups().len(),
-        registry.type_variable_count(),
-        budget,
-        span,
-    )?;
-    for group in program.groups() {
-        charge(budget, 1, group.span())?;
-        if let Some(api) = crate::resolved::ResourceApi::for_module(group.module()) {
-            charge(
-                budget,
-                api.nominal_count() + api.constructor_count() + 2 * api.method_names().len(),
-                group.span(),
-            )?;
-            if !api.registry(registry)
-                || !matches!(group.interface_facts(), [interface] if api.interface(interface))
-            {
-                return Err(unknown(group.span()));
-            }
-        }
-        if !modules.insert(group.module()) {
-            return Err(unknown(group.span()));
-        }
-    }
-    let mut constructor_count = 0_usize;
-
-    for nominal in registry
-        .nominals()
-        .iter()
-        .chain(registry.lexical_nominals())
-    {
-        charge(budget, 1, span)?;
-        if !modules.contains(&nominal.id.module())
-            || registry
-                .nominal(nominal.id)
-                .is_none_or(|found| found.id != nominal.id || found.spelling != nominal.spelling)
-            || nominal.constructors.is_empty()
-        {
-            return Err(unknown(nominal.origin.primary_span()));
-        }
-        let parameters = registry
-            .nominal_parameters(nominal.id)
-            .ok_or_else(|| unknown(nominal.origin.primary_span()))?;
-        for parameter in parameters {
-            let canonical = registry
-                .type_variable(parameter.id)
-                .ok_or_else(|| unknown(parameter.origin.primary_span()))?;
-            if !same_binders_charged(
-                std::slice::from_ref(canonical),
-                std::slice::from_ref(parameter),
-                budget,
-                parameter.origin.primary_span(),
-            )? || owners
-                .insert(parameter.id, LinkedBinderOwner::Nominal(nominal.id))
-                .is_some()
-            {
-                return Err(unknown(parameter.origin.primary_span()));
-            }
-        }
-        constructor_count = constructor_count
-            .checked_add(nominal.constructors.len())
-            .ok_or_else(|| resource(nominal.origin.primary_span()))?;
-        for (ordinal, identity) in nominal.constructors.iter().copied().enumerate() {
-            charge(budget, 1, nominal.origin.primary_span())?;
-            let ordinal =
-                u32::try_from(ordinal).map_err(|_| unknown(nominal.origin.primary_span()))?;
-            let expected = ConstructorId::new(nominal.id, ordinal);
-            let constructor = registry
-                .constructor(identity)
-                .ok_or_else(|| unknown(nominal.origin.primary_span()))?;
-            if identity != expected || constructor.id != identity || constructor.owner != nominal.id
-            {
-                return Err(unknown(constructor.origin.primary_span()));
-            }
-        }
-    }
-    if constructor_count != registry.constructors().len() + registry.lexical_constructors().len() {
-        return Err(unknown(span));
-    }
-
-    for effect in registry.effects() {
-        charge(budget, 1, effect.span)?;
-        if !modules.contains(&effect.id.module())
-            || registry.effect(effect.id) != Some(effect)
-            || effect.operations.is_empty()
-        {
-            return Err(unknown(effect.span));
-        }
-        for parameter in &effect.parameters {
-            charge(budget, 1, parameter.origin.primary_span())?;
-            let canonical = registry
-                .type_variable(parameter.id)
-                .ok_or_else(|| unknown(parameter.origin.primary_span()))?;
-            if !same_binders_charged(
-                std::slice::from_ref(canonical),
-                std::slice::from_ref(parameter),
-                budget,
-                parameter.origin.primary_span(),
-            )? || owners
-                .insert(parameter.id, LinkedBinderOwner::Effect(effect.id))
-                .is_some()
-            {
-                return Err(unknown(parameter.origin.primary_span()));
-            }
-        }
-        for (ordinal, operation) in effect.operations.iter().enumerate() {
-            charge(budget, 1, operation.span)?;
-            if operation.id.owner() != effect.id
-                || usize::try_from(operation.id.operation()) != Ok(ordinal)
-            {
-                return Err(unknown(operation.span));
-            }
-        }
-    }
-
-    for group in program.groups() {
-        // Fresh windows in original source forests are distinct lexical
-        // binders. Register only occurrences in those already independently
-        // checked forests, with their original resource and exact node identity;
-        // a registry variable or matching spelling alone is insufficient.
-        for interface in group.interface_facts() {
-            charge(budget, 1, interface.span)?;
-            let owner = LinkedBinderOwner::Interface(interface.id);
-            for parameter in &interface.parameters {
-                charge(budget, 1, interface.span)?;
-                let canonical = registry
-                    .type_variable(parameter.id)
-                    .ok_or_else(|| unknown(interface.span))?;
-                if !same_binders_charged(
-                    std::slice::from_ref(canonical),
-                    std::slice::from_ref(parameter),
-                    budget,
-                    interface.span,
-                )? || owners.insert(parameter.id, owner).is_some()
-                {
-                    return Err(unknown(interface.span));
-                }
-            }
-        }
-        for scheme in group.schemes() {
-            charge(budget, 1, scheme.origin.primary_span())?;
-            for (identity, _) in &scheme.scheme.type_parameters {
-                charge(budget, 1, scheme.origin.primary_span())?;
-                let owner = LinkedBinderOwner::Global(scheme.binder);
-                if registry.type_variable(*identity).is_none()
-                    || owners.insert(*identity, owner).is_some()
-                {
-                    return Err(unknown(scheme.origin.primary_span()));
-                }
-            }
-        }
-        for implementation in group.implementation_facts() {
-            charge(budget, 1, implementation.span)?;
-            for parameter in &implementation.head_parameters {
-                charge(budget, 1, parameter.origin.primary_span())?;
-                let owner = LinkedBinderOwner::Implementation(implementation.id);
-                if registry.type_variable(parameter.id).is_none()
-                    || owners.insert(parameter.id, owner).is_some()
-                {
-                    return Err(unknown(parameter.origin.primary_span()));
-                }
-            }
-        }
-    }
-    Ok(owners)
-}
-
-fn finalize_linked_registry_authentication(
-    program: &ResolvedModuleProgram,
-    owners: &HashMap<TypeVariableId, LinkedBinderOwner>,
+    registry: &LinkedInterfaceRegistry,
     budget: &mut InterfaceConstraintBudget,
 ) -> Result<(), EvidenceValidationFailure> {
-    let span = program.result().span;
-    charge(budget, 1, span)?;
-    if owners.len() != program.registry().type_variable_count() {
-        return Err(unknown(span));
-    }
-    authenticate_linked_global_parameter_rows(program, budget)
-}
+    use crate::elaborate::CheckedScopedOwnerKind;
 
-fn authenticate_linked_global_parameter_rows(
-    program: &ResolvedModuleProgram,
-    budget: &mut InterfaceConstraintBudget,
-) -> Result<(), EvidenceValidationFailure> {
-    let registry = program.registry();
-    let rows = registry.global_parameter_rows();
-    let mut row_position = 0usize;
     for group in program.groups() {
-        for scheme in group.schemes() {
-            let parameters = &scheme.scheme.type_parameters;
-            if parameters.is_empty() {
-                continue;
-            }
-            let span = scheme.origin.primary_span();
-            charge(budget, 1, span)?;
-            let row = rows.get(row_position).ok_or_else(|| unknown(span))?;
-            let indexed = registry
-                .global_parameter_row(scheme.binder)
-                .ok_or_else(|| unknown(span))?;
-            if row.owner() != scheme.binder
-                || !std::ptr::eq(row, indexed)
-                || row.parameters().len() != parameters.len()
+        let fragment = group
+            .typed_fragment()
+            .ok_or_else(|| invalid_root(group.span()))?;
+        let (_, _, _, owners) = fragment.evidence_inventory();
+        charge(budget, owners.len(), group.span())?;
+        let mut retained = registry.scoped_type_owners.borrow_mut();
+        retained
+            .try_reserve(owners.len())
+            .map_err(|_| resource(group.span()))?;
+        for owner in owners {
+            if owner.identity.module() != Some(group.module())
+                || owner.handle.module() != Some(group.module())
             {
-                return Err(unknown(span));
+                return Err(invalid_root(owner.span));
             }
-            for (retained, (expected, _)) in row.parameters().iter().zip(parameters) {
-                charge(budget, 1, span)?;
-                if retained != expected || registry.type_variable(*retained).is_none() {
-                    return Err(unknown(span));
+            let kind = match owner.kind {
+                CheckedScopedOwnerKind::Region => LinkedBinderOwner::Region(owner.handle),
+                CheckedScopedOwnerKind::Network => LinkedBinderOwner::Network(owner.handle),
+                CheckedScopedOwnerKind::Store => LinkedBinderOwner::Store(owner.handle),
+            };
+            match retained.entry(owner.identity) {
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    slot.insert((kind, owner.span));
                 }
+                std::collections::hash_map::Entry::Occupied(slot)
+                    if *slot.get() == (kind, owner.span) => {}
+                _ => return Err(invalid_root(owner.span)),
             }
-            row_position = row_position.checked_add(1).ok_or_else(|| resource(span))?;
         }
-    }
-    if row_position != rows.len() {
-        return Err(unknown(program.result().span));
-    }
-    if rows.len() != registry.global_parameter_position_count() {
-        return Err(unknown(program.result().span));
     }
     Ok(())
 }
 
-fn validate_lexical_headers<'a>(
-    program: &'a ResolvedModuleProgram,
-    registry: &LinkedInterfaceRegistry,
-    catalog: &MethodEvidenceCatalog,
-    kind_environments: &mut KindEnvironments<'a>,
-    budget: &mut InterfaceConstraintBudget,
-    type_work: &mut TypeWorkBudget,
-) -> Result<(), EvidenceValidationFailure> {
-    if catalog.lexical_owners().is_empty() {
-        return Ok(());
-    }
-    validate_occurrences(
-        program,
-        registry,
-        kind_environments,
-        budget,
-        type_work,
-        true,
-    )
-}
-
-fn validate_occurrences<'a>(
+fn validate_linked_entry<'a>(
     program: &'a ResolvedModuleProgram,
     registry: &LinkedInterfaceRegistry,
     kind_environments: &mut KindEnvironments<'a>,
     budget: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
-    headers_only: bool,
 ) -> Result<(), EvidenceValidationFailure> {
-    for group_index in 0..program.groups().len() {
-        let group_span = program
-            .groups()
-            .get(group_index)
-            .map_or(program.result().span, ResolvedModuleGroup::span);
-        charge(budget, 1, group_span)?;
-        let group = program
-            .groups()
-            .get(group_index)
-            .ok_or_else(|| unknown(group_span))?;
-        let mut next_definition = 0usize;
-        let mut next_implementation = 0usize;
-        let mut next_interface = 0usize;
-        for declaration_index in 0..group.declaration_order().len() {
-            charge(budget, 1, group.span())?;
-            let declaration = group
-                .declaration_order()
-                .get(declaration_index)
-                .ok_or_else(|| unknown(group.span()))?;
-            match *declaration {
-                ResolvedDeclarationIndex::Resource(_) => return Err(unknown(group.span())),
-                ResolvedDeclarationIndex::Global(definition_index)
-                    if definition_index == next_definition =>
-                {
-                    let definition = group
-                        .definitions()
-                        .get(definition_index)
-                        .ok_or_else(|| unknown(group.span()))?;
-                    validate_definition(
-                        program,
-                        registry,
-                        group,
-                        definition,
-                        kind_environments,
-                        budget,
-                        type_work,
-                        headers_only,
-                    )?;
-                    next_definition = next_definition
-                        .checked_add(1)
-                        .ok_or_else(|| resource(group.span()))?;
-                }
-                ResolvedDeclarationIndex::Implementation(implementation_index)
-                    if implementation_index == next_implementation =>
-                {
-                    let implementation = group
-                        .implementations()
-                        .get(implementation_index)
-                        .ok_or_else(|| unknown(group.span()))?;
-                    validate_implementation(
-                        program,
-                        registry,
-                        group,
-                        implementation,
-                        kind_environments,
-                        budget,
-                        type_work,
-                        headers_only,
-                    )?;
-                    next_implementation = next_implementation
-                        .checked_add(1)
-                        .ok_or_else(|| resource(group.span()))?;
-                }
-                ResolvedDeclarationIndex::Interface(interface_index)
-                    if interface_index == next_interface =>
-                {
-                    next_interface = next_interface
-                        .checked_add(1)
-                        .ok_or_else(|| resource(group.span()))?;
-                }
-                ResolvedDeclarationIndex::Type(_) => {}
-                ResolvedDeclarationIndex::Effect(_) => {}
-                ResolvedDeclarationIndex::Global(_)
-                | ResolvedDeclarationIndex::Implementation(_)
-                | ResolvedDeclarationIndex::Interface(_) => return Err(unknown(group.span())),
-            }
-        }
-        if next_definition != group.definitions().len()
-            || next_implementation != group.implementations().len()
-            || next_interface != group.interfaces().len()
-        {
-            return Err(unknown(group.span()));
-        }
-    }
     let entry = registry
         .modules
         .get(&program.entry())
@@ -6034,159 +3560,8 @@ fn validate_occurrences<'a>(
         kind_environments,
         budget,
         type_work,
-        headers_only,
+        false,
     )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn validate_definition<'a>(
-    program: &'a ResolvedModuleProgram,
-    registry: &LinkedInterfaceRegistry,
-    group: &ResolvedModuleGroup,
-    definition: &crate::resolved::CheckedDefinition,
-    kind_environments: &mut KindEnvironments<'a>,
-    budget: &mut InterfaceConstraintBudget,
-    type_work: &mut TypeWorkBudget,
-    headers_only: bool,
-) -> Result<(), EvidenceValidationFailure> {
-    let binder = match definition.kind() {
-        ResolvedDefinitionKind::Equational(global)
-        | ResolvedDefinitionKind::ForeignConstant(global) => global.interface.name.id,
-        ResolvedDefinitionKind::InlineOperational(global) => global.header.name.id,
-    };
-    let scheme = registry
-        .scheme(program, binder)
-        .ok_or_else(|| unknown(definition.span()))?;
-    let variables = copy_kinded_parameter_ids(&scheme.type_parameters, budget, definition.span())?;
-    let scope = EvidenceScope {
-        local_scopes: &[],
-        expected_equation: None,
-        lexical_sources: &[],
-        lexical_head: None,
-        owner: Some(RequirementOwner::Global(binder)),
-        variables: &variables,
-    };
-    match definition.kind() {
-        ResolvedDefinitionKind::Equational(global)
-        | ResolvedDefinitionKind::ForeignConstant(global) => {
-            for equation_index in 0..global.equations.len() {
-                charge(budget, 1, definition.span())?;
-                let equation = global
-                    .equations
-                    .get(equation_index)
-                    .ok_or_else(|| unknown(definition.span()))?;
-                let equation_scope = EvidenceScope {
-                    local_scopes: &[],
-                    expected_equation: Some(ExpectedEquation::Global { binder }),
-                    ..scope
-                };
-                validate_expression(
-                    program,
-                    registry,
-                    group,
-                    equation_scope,
-                    &equation.body,
-                    kind_environments,
-                    budget,
-                    type_work,
-                    headers_only,
-                )?;
-            }
-        }
-        ResolvedDefinitionKind::InlineOperational(global) => {
-            let mut pending = Vec::new();
-            validate_pending_expressions(
-                program,
-                registry,
-                group,
-                scope,
-                &mut pending,
-                Some(&global.body),
-                kind_environments,
-                budget,
-                type_work,
-                headers_only,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn validate_implementation<'a>(
-    program: &'a ResolvedModuleProgram,
-    registry: &LinkedInterfaceRegistry,
-    group: &ResolvedModuleGroup,
-    implementation: &crate::resolved::CheckedImplementationBody,
-    kind_environments: &mut KindEnvironments<'a>,
-    budget: &mut InterfaceConstraintBudget,
-    type_work: &mut TypeWorkBudget,
-    headers_only: bool,
-) -> Result<(), EvidenceValidationFailure> {
-    let fact = registry
-        .implementation(program, implementation.id())
-        .ok_or_else(|| unknown(implementation.span()))?;
-    for method_index in 0..implementation.method_groups().len() {
-        charge(budget, 1, implementation.span())?;
-        let method = implementation
-            .method_groups()
-            .get(method_index)
-            .ok_or_else(|| unknown(implementation.span()))?;
-        let checked_method = fact
-            .methods
-            .get(method_index)
-            .ok_or_else(|| unknown(method.span))?;
-        charge(
-            budget,
-            checked_method.scheme.type_parameters.len(),
-            method.span,
-        )?;
-        let mut method_parameters = Vec::new();
-        method_parameters
-            .try_reserve_exact(checked_method.scheme.type_parameters.len())
-            .map_err(|_| resource(method.span))?;
-        method_parameters.extend(
-            checked_method
-                .scheme
-                .type_parameters
-                .iter()
-                .map(|(identity, _)| *identity),
-        );
-        let scope = EvidenceScope {
-            local_scopes: &[],
-            expected_equation: None,
-            lexical_sources: &[],
-            lexical_head: None,
-            owner: Some(RequirementOwner::Impl(implementation.id())),
-            variables: &method_parameters,
-        };
-        for equation_index in 0..method.equations.len() {
-            charge(budget, 1, method.span)?;
-            let equation = method
-                .equations
-                .get(equation_index)
-                .ok_or_else(|| unknown(method.span))?;
-            let equation_scope = EvidenceScope {
-                local_scopes: &[],
-                expected_equation: Some(ExpectedEquation::Implementation {
-                    method: checked_method.id,
-                }),
-                ..scope
-            };
-            validate_expression(
-                program,
-                registry,
-                group,
-                equation_scope,
-                &equation.body,
-                kind_environments,
-                budget,
-                type_work,
-                headers_only,
-            )?;
-        }
-    }
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6248,7 +3623,6 @@ fn validate_pending_expressions<'a, 'body>(
             budget,
             track_provider_equations,
             OriginalLexicalContext {
-                equation: scope.expected_equation,
                 owner: scope.owner,
                 local_head: None,
             },
@@ -6256,7 +3630,6 @@ fn validate_pending_expressions<'a, 'body>(
                 program,
                 registry,
                 scope.variables,
-                scope.expected_equation,
                 scope.owner,
                 type_work,
                 headers_only,
@@ -6365,7 +3738,6 @@ fn validate_pending_expressions<'a, 'body>(
             }
             ResolvedExprKind::Block(block) => {
                 let original = OriginalLexicalContext {
-                    equation: scope.expected_equation,
                     owner: scope.owner,
                     local_head: head.1,
                 };
@@ -6373,7 +3745,6 @@ fn validate_pending_expressions<'a, 'body>(
                     program,
                     registry,
                     active_variables,
-                    original.equation,
                     original.owner,
                     &mut *type_work,
                     headers_only,
@@ -6393,7 +3764,6 @@ fn validate_pending_expressions<'a, 'body>(
             }
             ResolvedExprKind::Function(function) => {
                 let original = OriginalLexicalContext {
-                    equation: scope.expected_equation,
                     owner: scope.owner,
                     local_head: head.1,
                 };
@@ -6401,7 +3771,6 @@ fn validate_pending_expressions<'a, 'body>(
                     program,
                     registry,
                     active_variables,
-                    original.equation,
                     original.owner,
                     &mut *type_work,
                     headers_only,
@@ -6837,15 +4206,8 @@ fn validate_occurrence<'a>(
 }
 
 #[derive(Clone, Copy)]
-enum ExpectedEquation {
-    Global { binder: BinderId },
-    Implementation { method: ImplMethodId },
-}
-
-#[derive(Clone, Copy)]
 struct EvidenceScope<'a> {
     local_scopes: &'a [(LinkedLocalScope<'a>, Option<usize>)],
-    expected_equation: Option<ExpectedEquation>,
     owner: Option<RequirementOwner>,
     variables: &'a [TypeVariableId],
     lexical_sources: &'a [(LinkedLexicalSource<'a>, Option<usize>)],
@@ -6855,7 +4217,6 @@ struct EvidenceScope<'a> {
 impl EvidenceScope<'static> {
     const NONE: Self = Self {
         local_scopes: &[],
-        expected_equation: None,
         owner: None,
         variables: &[],
         lexical_sources: &[],
@@ -7794,53 +5155,6 @@ fn same_binders_charged(
     Ok(true)
 }
 
-fn same_binder_metadata_charged(
-    left: &[ResolvedTypeVariable],
-    right: &[ResolvedTypeVariable],
-    budget: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<bool, EvidenceValidationFailure> {
-    if left.len() != right.len() {
-        return Ok(false);
-    }
-    for (left, right) in left.iter().zip(right) {
-        charge(budget, 1, span)?;
-        if left.id != right.id
-            || left.spelling != right.spelling
-            || !same_origin_charged(&left.origin, &right.origin, budget, span)?
-        {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-fn same_parameter_pairs_to_two_record_slices_charged(
-    pairs: &[(TypeVariableId, Kind)],
-    first: &[ResolvedTypeVariable],
-    second: &[ResolvedTypeVariable],
-    budget: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<bool, EvidenceValidationFailure> {
-    let expected = first
-        .len()
-        .checked_add(second.len())
-        .ok_or_else(|| resource(span))?;
-    if pairs.len() != expected {
-        return Ok(false);
-    }
-    for ((identity, kind), record) in pairs.iter().zip(first.iter().chain(second)) {
-        charge(budget, 1, span)?;
-        if *identity != record.id
-            || !same_kind_with_charge(kind, &record.kind, || budget.charge(1))
-                .map_err(|()| resource(span))?
-        {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
 fn same_origin_charged(
     mut left: &Origin,
     mut right: &Origin,
@@ -8081,59 +5395,6 @@ fn has_direct_dependency(
     Ok(false)
 }
 
-fn validate_requirements(
-    scheme: &ConstrainedScheme,
-    owner: RequirementOwner,
-    variables: &[TypeVariableId],
-    registry: &LinkedInterfaceRegistry,
-    program: &ResolvedModuleProgram,
-    budget: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<(), EvidenceValidationFailure> {
-    for (ordinal, requirement) in scheme.requirements.iter().enumerate() {
-        validate_requirement(
-            requirement,
-            owner,
-            ordinal,
-            variables,
-            registry,
-            program,
-            budget,
-        )?;
-    }
-    charge(budget, 0, span)
-}
-
-fn validate_requirement(
-    requirement: &CheckedRequirement,
-    owner: RequirementOwner,
-    ordinal: usize,
-    variables: &[TypeVariableId],
-    registry: &LinkedInterfaceRegistry,
-    program: &ResolvedModuleProgram,
-    budget: &mut InterfaceConstraintBudget,
-) -> Result<(), EvidenceValidationFailure> {
-    charge(budget, 1, requirement.span)?;
-    for argument in requirement.arguments() {
-        validate_argument_with_policy(
-            argument,
-            program.registry(),
-            variables,
-            budget,
-            requirement.span,
-        )?;
-    }
-    if requirement.id.owner() != owner
-        || usize::try_from(requirement.id.declaration()) != Ok(ordinal)
-        || registry
-            .interface(program, requirement.interface())
-            .is_none()
-    {
-        return Err(unknown(requirement.span));
-    }
-    Ok(())
-}
-
 enum LinkedLocalScope<'a> {
     Annotation(&'a crate::resolved::ResolvedType),
     Equation {
@@ -8336,7 +5597,6 @@ fn schedule_lexical_block<'a>(
         &ResolvedModuleProgram,
         &LinkedInterfaceRegistry,
         &[TypeVariableId],
-        Option<ExpectedEquation>,
         Option<RequirementOwner>,
         &mut TypeWorkBudget,
         bool,
@@ -8345,14 +5605,14 @@ fn schedule_lexical_block<'a>(
     let start = pending.len();
     let include_nominals = header_scope
         .as_ref()
-        .is_some_and(|(_, _, _, _, _, _, headers_only)| *headers_only)
+        .is_some_and(|(_, _, _, _, _, headers_only)| *headers_only)
         || track_provider_equations;
     let (additional, has_lexical_scope) = block_schedule_shape_with_annotation_check(
         block,
         include_nominals,
         budget,
         |annotation, budget| {
-            if let Some((program, registry, _, _, _, work, _)) = header_scope.as_mut() {
+            if let Some((program, registry, _, _, work, _)) = header_scope.as_mut() {
                 validate_original_annotation_row_formation(
                     program, registry, annotation, original, budget, work,
                 )?;
@@ -8371,15 +5631,8 @@ fn schedule_lexical_block<'a>(
     for declaration in &block.declarations {
         match declaration {
             ResolvedLocalDeclaration::Evidence(source) => {
-                if let Some((
-                    program,
-                    registry,
-                    variables,
-                    expected_equation,
-                    owner,
-                    type_work,
-                    true,
-                )) = header_scope.as_mut()
+                if let Some((program, registry, variables, owner, type_work, true)) =
+                    header_scope.as_mut()
                 {
                     authenticate_lexical_header(
                         program,
@@ -8387,7 +5640,6 @@ fn schedule_lexical_block<'a>(
                         source,
                         EvidenceScope {
                             local_scopes: method_scopes,
-                            expected_equation: *expected_equation,
                             lexical_sources: sources,
                             lexical_head: head.0,
                             variables,
@@ -8565,26 +5817,8 @@ fn validate_original_annotation_row_formation(
         return Ok(());
     }
     charge(budget, 1, span)?;
-    let scheme = match (original.equation, original.owner) {
-        (Some(ExpectedEquation::Global { binder, .. }), Some(RequirementOwner::Global(owner)))
-            if binder == owner =>
-        {
-            &registry
-                .scheme(program, binder)
-                .ok_or_else(|| unknown(span))?
-                .value_type
-        }
-        (
-            Some(ExpectedEquation::Implementation { method, .. }),
-            Some(RequirementOwner::Impl(owner)),
-        ) if method.implementation() == owner => {
-            &registry
-                .implementation_method(program, method)
-                .ok_or_else(|| unknown(span))?
-                .scheme
-                .value_type
-        }
-        (None, Some(RequirementOwner::Global(binder))) => {
+    let scheme = match original.owner {
+        Some(RequirementOwner::Global(binder)) => {
             &registry
                 .scheme(program, binder)
                 .ok_or_else(|| unknown(span))?
@@ -8796,10 +6030,8 @@ mod tests {
         module::{ModuleGraph, ModuleRoots, load_module_graph},
         resolve::{DependencyExports, resolve_module},
         resolved::{
-            CheckedModule, ImplementationRoute, ImplementationRouteHop,
-            LinkedCarrierMutationForTest, LinkedDeterminationCarrierForTest,
-            LinkedDeterminationMutationForTest, LinkedGlobalParameterRowMutationForTest,
-            ResolvedTypeVariable, same_imported_constructor_fact_with_budget,
+            CheckedModule, ImplementationRoute, ImplementationRouteHop, ResolvedTypeVariable,
+            same_imported_constructor_fact_with_budget,
         },
         source::{ByteRange, SourceFile},
         types::{InferenceVariableId, Kind, NominalTypeId, Type, TypeVariableId, TypeWorkBudget},
@@ -8822,16 +6054,11 @@ mod tests {
             KindAdapter,
             EvidenceValidationReason,
             EvidenceValidationReason,
-        ); 4] = [
+        ); 3] = [
             (
                 map_kind_type_failure,
                 EvidenceValidationReason::UnknownIdentity,
                 EvidenceValidationReason::TypeResourceExhausted,
-            ),
-            (
-                map_kind_constraint_failure,
-                EvidenceValidationReason::UnknownIdentity,
-                EvidenceValidationReason::ConstraintResourceExhausted,
             ),
             (
                 map_selected_kind_type_failure,
@@ -9086,26 +6313,6 @@ mod tests {
             .expect("partial and complete substitutions must dismantle iteratively");
     }
 
-    fn validate_direct_linked_value_type(
-        program: &ResolvedModuleProgram,
-        ty: &Type,
-        variables: &[TypeVariableId],
-    ) -> Result<(), EvidenceValidationFailure> {
-        let span = program.result().span;
-        let mut type_work = TypeWorkBudget::default();
-        let mut environments =
-            build_linked_kind_environments(program.registry(), &mut type_work, span)?;
-        validate_linked_value_type(
-            ty,
-            program.registry(),
-            variables,
-            &mut environments,
-            &mut InterfaceConstraintBudget::default(),
-            &mut type_work,
-            span,
-        )
-    }
-
     #[test]
     fn fixed_kind_binder_authentication_uses_the_constraint_budget() {
         // One binder record, one Source-Origin cell, and the Arrow with its two
@@ -9150,823 +6357,6 @@ mod tests {
             Ok(false),
         );
         assert_eq!(mismatch.used(), 3);
-    }
-
-    #[test]
-    fn declaration_head_and_prerequisite_kind_authentication_has_exact_dual_limits() {
-        // The head Wrap<A> consumes nine constraint units and the prerequisite
-        // A consumes three. Each occurrence installs one canonical binder
-        // lookup plus one retained DELTA record: 9 + 3 and 2 + 2.
-        // Head and prerequisite each retain one owner tag for lexical policy
-        // and one for independent kind synthesis.
-        const CONSTRAINT_WORK: usize = 12 + 2 * 2;
-        const TYPE_WORK: usize = 4;
-        let program = generic_program();
-        let group = entry_group(&program);
-        let fact = &group.implementation_facts()[1];
-        let interface = &group.interface_facts()[0];
-        let variables = fact
-            .head_parameters
-            .iter()
-            .map(|parameter| parameter.id)
-            .collect::<Vec<_>>();
-        let prerequisite = &fact.prerequisites[0];
-        let authenticate = |constraint_limit, type_limit| {
-            let mut environments = build_linked_kind_environments(
-                program.registry(),
-                &mut TypeWorkBudget::default(),
-                fact.span,
-            )
-            .expect("the nominal environment should fit outside the measured operation");
-            environments
-                .insert_interface(
-                    interface.id,
-                    &interface.parameters,
-                    interface.span,
-                    &mut TypeWorkBudget::default(),
-                )
-                .expect("the interface environment should fit outside the measured operation");
-            let mut constraint_work = InterfaceConstraintBudget::with_limit(constraint_limit);
-            let mut type_work = TypeWorkBudget::with_limit(type_limit);
-            let result = (|| {
-                authenticate_linked_interface_application_kind(
-                    fact.application(),
-                    program.registry(),
-                    &variables,
-                    None,
-                    &mut environments,
-                    &mut constraint_work,
-                    &mut type_work,
-                    fact.span,
-                )?;
-                authenticate_linked_interface_application_kind(
-                    prerequisite.application(),
-                    program.registry(),
-                    &variables,
-                    None,
-                    &mut environments,
-                    &mut constraint_work,
-                    &mut type_work,
-                    prerequisite.span,
-                )
-            })();
-            (result, constraint_work.used(), type_work.used())
-        };
-
-        let (failure, constraint_used, type_used) = authenticate(CONSTRAINT_WORK - 1, TYPE_WORK);
-        assert_eq!(
-            failure
-                .expect_err("one-short constraint work must prevent authentication")
-                .reason(),
-            EvidenceValidationReason::ConstraintResourceExhausted,
-        );
-        assert_eq!(constraint_used, CONSTRAINT_WORK - 1);
-        assert_eq!(type_used, TYPE_WORK);
-
-        let (failure, constraint_used, type_used) = authenticate(CONSTRAINT_WORK, TYPE_WORK - 1);
-        assert_eq!(
-            failure
-                .expect_err("one-short TypeWork must prevent authentication")
-                .reason(),
-            EvidenceValidationReason::TypeResourceExhausted,
-        );
-        assert_eq!(constraint_used, 9 + 2);
-        assert_eq!(type_used, TYPE_WORK - 1);
-
-        let (result, constraint_used, type_used) = authenticate(CONSTRAINT_WORK, TYPE_WORK);
-        result.expect("the exact declaration Kind budgets should fit");
-        assert_eq!(constraint_used, CONSTRAINT_WORK);
-        assert_eq!(type_used, TYPE_WORK);
-    }
-
-    #[test]
-    fn linked_value_type_accepts_higher_kinded_variable_application() {
-        let program = entry_program(concat!(
-            "keep<F : Type -> Type, A> : F<A> -> F<A>\n",
-            "keep value = value\n\n",
-            "main : Unit -> Unit\n",
-            "main () = ()\n",
-        ));
-        let scheme = &entry_group(&program).schemes()[0].scheme;
-        let variables = scheme
-            .type_parameters
-            .iter()
-            .map(|(identity, _)| *identity)
-            .collect::<Vec<_>>();
-
-        validate_direct_linked_value_type(&program, &scheme.value_type, &variables)
-            .expect("a function-kinded binder may be applied inside a linked value type");
-    }
-
-    #[test]
-    fn linked_value_type_accepts_partial_nominal_constructor_argument() {
-        let program = entry_program(concat!(
-            "type Pair<A, B> = Pair(A, B)\n",
-            "type Higher<F : Type -> Type> = Higher(F<Int>)\n\n",
-            "main : Unit -> Unit\n",
-            "main () = ()\n",
-        ));
-        let pair = program
-            .registry()
-            .nominals()
-            .iter()
-            .find(|nominal| nominal.id.module() == program.entry() && nominal.spelling == "Pair")
-            .expect("Pair");
-        let higher = program
-            .registry()
-            .nominals()
-            .iter()
-            .find(|nominal| nominal.id.module() == program.entry() && nominal.spelling == "Higher")
-            .expect("Higher");
-        let partial_pair = Type::Application(Box::new(Type::Nominal(pair.id)), Box::new(Type::Int));
-        let value_type =
-            Type::Application(Box::new(Type::Nominal(higher.id)), Box::new(partial_pair));
-
-        validate_direct_linked_value_type(&program, &value_type, &[])
-            .expect("a partial constructor may satisfy a higher-kinded nominal parameter");
-    }
-
-    #[test]
-    fn linked_value_type_rejects_wrong_higher_kinded_application_domain() {
-        let program = entry_program(concat!(
-            "type Option<A> =\nNone\n| Some(A)\n\n",
-            "keep<F : Type -> Type> : F<Int> -> F<Int>\n",
-            "keep value = value\n\n",
-            "main : Unit -> Unit\n",
-            "main () = ()\n",
-        ));
-        let scheme = &entry_group(&program).schemes()[0].scheme;
-        let function = scheme.type_parameters[0].0;
-        let option = program
-            .registry()
-            .nominals()
-            .iter()
-            .find(|nominal| nominal.id.module() == program.entry() && nominal.spelling == "Option")
-            .expect("Option")
-            .id;
-        let wrong = Type::Application(
-            Box::new(Type::Variable(function)),
-            Box::new(Type::Nominal(option)),
-        );
-
-        assert_eq!(
-            validate_direct_linked_value_type(&program, &wrong, &[function],)
-                .expect_err("F expects a Type argument, not a Type constructor")
-                .reason(),
-            EvidenceValidationReason::UnknownIdentity,
-        );
-    }
-
-    #[test]
-    fn linked_value_type_rejects_application_of_type_kinded_variable() {
-        let program = entry_program(concat!(
-            "identity<A> : A -> A\n",
-            "identity value = value\n\n",
-            "main : Unit -> Unit\n",
-            "main () = ()\n",
-        ));
-        let parameter = entry_group(&program).schemes()[0].scheme.type_parameters[0].0;
-        let wrong = Type::Application(Box::new(Type::Variable(parameter)), Box::new(Type::Int));
-
-        assert_eq!(
-            validate_direct_linked_value_type(&program, &wrong, &[parameter],)
-                .expect_err("a Type-kinded binder is not applicable")
-                .reason(),
-            EvidenceValidationReason::UnknownIdentity,
-        );
-    }
-
-    #[test]
-    fn linked_value_structure_owns_scope_inference_and_scheme_exclusions() {
-        let program = entry_program(concat!(
-            "identity<A> : A -> A\n",
-            "identity value = value\n\n",
-            "main : Unit -> Unit\n",
-            "main () = ()\n",
-        ));
-        let parameter = entry_group(&program).schemes()[0].scheme.type_parameters[0].0;
-        let cases = [
-            Type::Variable(parameter),
-            Type::Inference(InferenceVariableId::new(0)),
-            Type::Forall(
-                vec![(parameter, Kind::Type)].into_boxed_slice(),
-                Box::new(Type::Variable(parameter)),
-            ),
-        ];
-
-        for ty in &cases {
-            let mut constraint_work = InterfaceConstraintBudget::default();
-            assert_eq!(
-                validate_linked_value_structure(
-                    ty,
-                    program.registry(),
-                    &[],
-                    &mut constraint_work,
-                    program.result().span,
-                )
-                .expect_err("linked monotypes reject missing scope, inference, and nested schemes")
-                .reason(),
-                EvidenceValidationReason::UnknownIdentity,
-            );
-        }
-    }
-
-    #[test]
-    fn linked_value_kind_validation_has_exact_dual_limits() {
-        // The original higher-kind arrow retains structural18 plus its
-        // singleton row-label visit1. Kind synthesis adds two canonical
-        // DefaultAlloc identity/signature reads to its original20 cells.
-        // XI retains Address/Request/Storage/StorageView/RegionView for13;
-        // the original two owner binders retain lookup+DELTA records for4.
-        const STRUCTURAL_WORK: usize = 18 + 1;
-        const CONSTRAINT_WORK: usize = 20 + 2;
-        const XI_WORK: usize = 2 + 2 + (2 + 1 + 2) + 2 + 2;
-        const TYPE_WORK: usize = XI_WORK + 2 * 2;
-        let program = entry_program(concat!(
-            "keep<F : Type -> Type, A> : F<A> -> F<A>\n",
-            "keep value = value\n\n",
-            "main : Unit -> Unit\n",
-            "main () = ()\n",
-        ));
-        let scheme = &entry_group(&program).schemes()[0].scheme;
-        let variables = scheme
-            .type_parameters
-            .iter()
-            .map(|(identity, _)| *identity)
-            .collect::<Vec<_>>();
-        let span = entry_group(&program).span();
-        let function = scheme.value_type.function_view().unwrap();
-        let row = function.effects().unwrap();
-        let [instance] = row.known() else {
-            panic!("one canonical allocation effect")
-        };
-        assert!(instance.effect().module().is_builtin_region());
-        assert!(instance.arguments().is_empty());
-        assert!(row.tail().is_none());
-        assert_eq!(program.registry().nominals().len(), 5);
-
-        let mut structural_short = InterfaceConstraintBudget::with_limit(STRUCTURAL_WORK - 1);
-        assert_eq!(
-            validate_linked_value_structure(
-                &scheme.value_type,
-                program.registry(),
-                &variables,
-                &mut structural_short,
-                span,
-            )
-            .expect_err("one-short predecessor structural work should fail")
-            .reason(),
-            EvidenceValidationReason::ConstraintResourceExhausted,
-        );
-        assert_eq!(structural_short.used(), STRUCTURAL_WORK - 1);
-
-        let mut structural_exact = InterfaceConstraintBudget::with_limit(STRUCTURAL_WORK);
-        validate_linked_value_structure(
-            &scheme.value_type,
-            program.registry(),
-            &variables,
-            &mut structural_exact,
-            span,
-        )
-        .expect("the exact predecessor structural boundary should fit");
-        assert_eq!(structural_exact.used(), STRUCTURAL_WORK);
-
-        let mut constraint_short = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK - 1);
-        let mut type_exact = TypeWorkBudget::with_limit(TYPE_WORK);
-        let mut environments =
-            build_linked_kind_environments(program.registry(), &mut type_exact, span)
-                .expect("the canonical service XI should fit");
-        assert_eq!(
-            validate_linked_value_type(
-                &scheme.value_type,
-                program.registry(),
-                &variables,
-                &mut environments,
-                &mut constraint_short,
-                &mut type_exact,
-                span,
-            )
-            .expect_err("one-short constraint work should fail atomically")
-            .reason(),
-            EvidenceValidationReason::ConstraintResourceExhausted,
-        );
-        assert_eq!(constraint_short.used(), CONSTRAINT_WORK - 1);
-        assert_eq!(type_exact.used(), TYPE_WORK);
-
-        let mut constraint_for_type_short = InterfaceConstraintBudget::default();
-        let mut type_short = TypeWorkBudget::with_limit(TYPE_WORK - 1);
-        let mut environments =
-            build_linked_kind_environments(program.registry(), &mut type_short, span)
-                .expect("the canonical service XI should fit");
-        assert_eq!(
-            validate_linked_value_type(
-                &scheme.value_type,
-                program.registry(),
-                &variables,
-                &mut environments,
-                &mut constraint_for_type_short,
-                &mut type_short,
-                span,
-            )
-            .expect_err("one-short DELTA retention should fail atomically")
-            .reason(),
-            EvidenceValidationReason::TypeResourceExhausted,
-        );
-        assert_eq!(type_short.used(), TYPE_WORK - 1);
-
-        let mut constraint_exact = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
-        let mut type_exact = TypeWorkBudget::with_limit(TYPE_WORK);
-        let mut environments =
-            build_linked_kind_environments(program.registry(), &mut type_exact, span)
-                .expect("the canonical service XI should fit");
-        validate_linked_value_type(
-            &scheme.value_type,
-            program.registry(),
-            &variables,
-            &mut environments,
-            &mut constraint_exact,
-            &mut type_exact,
-            span,
-        )
-        .expect("the higher-kinded value type should validate");
-        assert_eq!(constraint_exact.used(), CONSTRAINT_WORK);
-        assert_eq!(type_exact.used(), TYPE_WORK);
-        assert_eq!(
-            scheme.type_parameters.len(),
-            2,
-            "failed attempts do not mutate the scheme"
-        );
-    }
-
-    #[test]
-    fn linked_nominal_kinds_are_retained_once_for_all_value_schemes() {
-        // XI is retained once for the graph. For each nominal, the exact type
-        // work is one environment record, one Type result, and for every
-        // parameter its Kind nodes, one Arrow node, and one owner-kind scan:
-        //
-        //   Σ_nominal [2 + Σ_parameter (|K| + 2)]
-        //
-        // Option<A> therefore costs 2 + (1 + 2) = 5 and
-        // Higher<F : Type -> Type> costs 2 + (3 + 2) = 7. The five
-        // service nominals add Address2+Request2+Storage5+View2+View2=13.
-        // Validating two schemes that share both constructors must not rebuild
-        // XI or spend further type work.
-        const SERVICE_XI_WORK: usize = 2 + 2 + (2 + 1 + 2) + 2 + 2;
-        const XI_WORK: usize = 5 + 7 + SERVICE_XI_WORK;
-        const SERVICE_GLOBAL_OWNER_WORK: usize = 1 + 1;
-        let program = entry_program(concat!(
-            "type Option<A> =\nNone\n| Some(A)\n\n",
-            "type Higher<F : Type -> Type> = Higher(F<Int>)\n\n",
-            "first : Higher<Option> -> Higher<Option>\n",
-            "first value = value\n\n",
-            "second : Higher<Option> -> Higher<Option>\n",
-            "second value = value\n\n",
-            "main : Unit -> Unit\n",
-            "main () = ()\n",
-        ));
-        let span = program.result().span;
-        let nominals = program.registry().nominals();
-        assert_eq!(nominals.len(), 7);
-        let mut names = nominals
-            .iter()
-            .map(|nominal| nominal.spelling.as_str())
-            .collect::<Vec<_>>();
-        names.sort_unstable();
-        assert_eq!(
-            names,
-            [
-                "Address",
-                "Higher",
-                "Option",
-                "RegionView",
-                "Request",
-                "Storage",
-                "StorageView"
-            ]
-        );
-        for nominal in nominals {
-            let parameters = program.registry().nominal_parameters(nominal.id).unwrap();
-            if nominal.id.module() == program.entry() {
-                let [parameter] = parameters else {
-                    panic!("each source nominal has one parameter")
-                };
-                assert_eq!(
-                    parameter.kind,
-                    if nominal.spelling == "Higher" {
-                        Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
-                    } else {
-                        Kind::Type
-                    }
-                );
-            } else if nominal.spelling == "Storage" {
-                assert!(nominal.id.module().is_builtin_region());
-                let [parameter] = parameters else {
-                    panic!("Storage retains its owner")
-                };
-                assert_eq!(parameter.kind, Kind::Type);
-            } else {
-                assert!(parameters.is_empty());
-                assert!(
-                    nominal.id.module().is_builtin_region()
-                        || nominal.id.module().is_builtin_foreign()
-                );
-            }
-        }
-
-        let mut short = TypeWorkBudget::with_limit(XI_WORK - 1);
-        let Err(failure) = build_linked_kind_environments(program.registry(), &mut short, span)
-        else {
-            panic!("one-short XI retention must fail before publication");
-        };
-        assert_eq!(
-            failure.reason(),
-            EvidenceValidationReason::TypeResourceExhausted,
-        );
-        assert_eq!(short.used(), XI_WORK - 1);
-
-        let mut exact = TypeWorkBudget::with_limit(XI_WORK + SERVICE_GLOBAL_OWNER_WORK);
-        let mut environments = build_linked_kind_environments(program.registry(), &mut exact, span)
-            .expect("the exact XI retention budget should succeed");
-        assert_eq!(exact.used(), XI_WORK);
-        // Both original monomorphic user schemes reuse XI without spending
-        // another type cell. The full graph separately installs from_backing<R>.
-        for scheme in entry_group(&program)
-            .schemes()
-            .iter()
-            .filter(|scheme| matches!(scheme.spelling.as_str(), "first" | "second"))
-        {
-            validate_linked_value_type(
-                &scheme.scheme.value_type,
-                program.registry(),
-                &[],
-                &mut environments,
-                &mut InterfaceConstraintBudget::default(),
-                &mut exact,
-                span,
-            )
-            .unwrap();
-        }
-        assert_eq!(exact.used(), XI_WORK);
-        let registry =
-            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
-                .expect("the linked fixture registry should authenticate");
-        validate_linked_value_schemes(
-            &program,
-            &registry,
-            &mut environments,
-            &mut InterfaceConstraintBudget::default(),
-            &mut exact,
-        )
-        .expect("both schemes may reuse the graph-lifetime nominal environment");
-        assert_eq!(
-            exact.used(),
-            XI_WORK + SERVICE_GLOBAL_OWNER_WORK,
-            "the graph reuses XI and retains only the service global owner",
-        );
-        assert!(entry_group(&program).schemes().len() >= 2);
-    }
-
-    #[test]
-    fn deep_linked_value_kinding_is_exact_and_stack_safe() {
-        const DEPTH: usize = 32_768;
-        // Predecessor linked-fact authentication owns structural admission.
-        // Total Kind authentication is 6D + 3: one reusable current-state
-        // slot, one continuation plus one visited Application per layer,
-        // 2D + 1 for the deep variable Kind lookup, one primitive visit and
-        // one domain comparison per layer, and one root-Type comparison.
-        // Leaving one argument unapplied removes four synthesis cells.
-        const VALID_WORK: usize = 6 * DEPTH + 3;
-        const RESIDUAL_WORK: usize = 6 * DEPTH - 1;
-        const TYPE_WORK: usize = 2;
-
-        thread::Builder::new()
-            .stack_size(256 * 1024)
-            .spawn(|| {
-                fn fixture(applications: usize) -> (ResolvedRegistry, Type, TypeVariableId, Span) {
-                    let source = SourceFile::new("deep-linked-kind.ash", "F")
-                        .expect("the deep fixture source should fit");
-                    let span = source
-                        .span(ByteRange::new(0, 1).expect("the binder range should be ordered"))
-                        .expect("the binder range should belong to the fixture");
-                    let identity = TypeVariableId::resolved(ModuleId::new(0), 0);
-                    let mut kind = Kind::Type;
-                    for _ in 0..DEPTH {
-                        kind = Kind::Arrow(Box::new(Kind::Type), Box::new(kind));
-                    }
-                    let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
-                        .with_additional_type_variables([ResolvedTypeVariable {
-                            id: identity,
-                            spelling: "F".to_owned(),
-                            kind,
-                            origin: Origin::Source(span),
-                        }]);
-                    let mut ty = Type::Variable(identity);
-                    for _ in 0..applications {
-                        ty = Type::Application(Box::new(ty), Box::new(Type::Int));
-                    }
-                    (registry, ty, identity, span)
-                }
-
-                let (registry, valid, identity, span) = fixture(DEPTH);
-                let valid = IterativeTypeOwner::new(valid);
-                let mut type_work = TypeWorkBudget::with_limit(TYPE_WORK);
-                let mut environments =
-                    build_linked_kind_environments(&registry, &mut type_work, span)
-                        .expect("the empty XI should fit");
-                let mut default = InterfaceConstraintBudget::default();
-                validate_linked_value_type(
-                    &valid,
-                    &registry,
-                    &[identity],
-                    &mut environments,
-                    &mut default,
-                    &mut type_work,
-                    span,
-                )
-                .expect("the admitted deep linked value must fit the production budget");
-                assert_eq!(default.used(), VALID_WORK);
-
-                drop(environments);
-                let mut type_work = TypeWorkBudget::with_limit(TYPE_WORK);
-                let mut environments =
-                    build_linked_kind_environments(&registry, &mut type_work, span)
-                        .expect("the empty XI should fit");
-                let mut one_short = InterfaceConstraintBudget::with_limit(VALID_WORK - 1);
-                assert_eq!(
-                    validate_linked_value_type(
-                        &valid,
-                        &registry,
-                        &[identity],
-                        &mut environments,
-                        &mut one_short,
-                        &mut type_work,
-                        span,
-                    )
-                    .expect_err("one-short work must reject at the late root comparison")
-                    .reason(),
-                    EvidenceValidationReason::ConstraintResourceExhausted,
-                );
-                assert_eq!(one_short.used(), VALID_WORK - 1);
-                assert!(registry.type_variable(identity).is_some());
-
-                drop(environments);
-                let mut type_work = TypeWorkBudget::with_limit(TYPE_WORK);
-                let mut environments =
-                    build_linked_kind_environments(&registry, &mut type_work, span)
-                        .expect("the empty XI should fit");
-                let mut exact = InterfaceConstraintBudget::with_limit(VALID_WORK);
-                validate_linked_value_type(
-                    &valid,
-                    &registry,
-                    &[identity],
-                    &mut environments,
-                    &mut exact,
-                    &mut type_work,
-                    span,
-                )
-                .expect("the exact deep linked value boundary should succeed");
-                assert_eq!(exact.used(), VALID_WORK);
-
-                let (registry, residual, identity, span) = fixture(DEPTH - 1);
-                let residual = IterativeTypeOwner::new(residual);
-                let mut type_work = TypeWorkBudget::with_limit(TYPE_WORK);
-                let mut environments =
-                    build_linked_kind_environments(&registry, &mut type_work, span)
-                        .expect("the empty XI should fit");
-                let mut exact_rejection = InterfaceConstraintBudget::with_limit(RESIDUAL_WORK);
-                assert_eq!(
-                    validate_linked_value_type(
-                        &residual,
-                        &registry,
-                        &[identity],
-                        &mut environments,
-                        &mut exact_rejection,
-                        &mut type_work,
-                        span,
-                    )
-                    .expect_err("a residual constructor Kind is not a linked value type")
-                    .reason(),
-                    EvidenceValidationReason::UnknownIdentity,
-                );
-                assert_eq!(exact_rejection.used(), RESIDUAL_WORK);
-                assert!(registry.type_variable(identity).is_some());
-            })
-            .expect("the small-stack kinding worker should spawn")
-            .join()
-            .expect("deep linked kinding and teardown should remain iterative");
-    }
-
-    #[test]
-    #[expect(
-        clippy::err_expect,
-        reason = "avoid recursively formatting an unexpected deep validated program on the small test stack"
-    )]
-    fn deep_public_linked_value_kinding_fits_the_default_budget_on_a_small_stack() {
-        const DEPTH: usize = 32_768;
-        const GENERATED_ORIGIN_DEPTH: usize = 16_384;
-        // Checked/source type equality is fused into synthesis. The canonical
-        // lookup separately charges both checked and source Kind pairs, while
-        // each scheduled codomain owns one continuation cell. Iterative
-        // source-binder provenance owns its retained Origin cell. One retained
-        // coverage-set cell proves the owner binder was visited; the module
-        // and binder-owner authentication indexes add two fixed cells. Linked
-        // registry-row authentication visits the identity row and parameter.
-        const DEEP_TYPE_AND_KIND_WORK: usize = 9 * DEPTH;
-        // The final unit publishes the private method-evidence authentication
-        // capability only after every occurrence has validated.
-        // Complete normal public admission measures311752; the fixed456
-        // remainder includes unchanged services/rows separately from9D and
-        // the independent generated-Origin traversal below.
-        const FIXED_PUBLIC_METADATA_WORK: usize = 456;
-        // Replacing the predecessor Source-Origin comparison with generated
-        // causes plus its Source leaf adds exactly one cell per cause. Keep
-        // that independent deep payload within the production constraint cap.
-        const GENERATED_ORIGIN_DELTA: usize = GENERATED_ORIGIN_DEPTH;
-        const EXACT_WORK: usize =
-            DEEP_TYPE_AND_KIND_WORK + FIXED_PUBLIC_METADATA_WORK + GENERATED_ORIGIN_DELTA;
-        // TypeWork owns one canonical binder lookup and one declaration-kind
-        // environment record.
-        const CANONICAL_BINDER_LOOKUP_WORK: usize = 1;
-        const DECLARATION_ENVIRONMENT_RECORD_WORK: usize = 1;
-        // Four nullary service nominals cost2each, Storage<R> costs5;
-        // the service from_backing owner adds lookup1+environment1 separately.
-        const SERVICE_XI_WORK: usize = 4 * 2 + 5;
-        const SERVICE_GLOBAL_OWNER_WORK: usize = 1 + 1;
-        const EXACT_TYPE_WORK: usize = SERVICE_XI_WORK
-            + SERVICE_GLOBAL_OWNER_WORK
-            + CANONICAL_BINDER_LOOKUP_WORK
-            + DECLARATION_ENVIRONMENT_RECORD_WORK;
-
-        thread::Builder::new()
-            .stack_size(256 * 1024)
-            .spawn(|| {
-                fn deep_kind() -> Kind {
-                    let mut kind = Kind::Type;
-                    for _ in 0..DEPTH {
-                        kind = Kind::Arrow(Box::new(Kind::Type), Box::new(kind));
-                    }
-                    kind
-                }
-
-                fn deep_value_type(parameter: TypeVariableId) -> Type {
-                    let mut ty = Type::Variable(parameter);
-                    for _ in 0..DEPTH {
-                        ty = Type::Application(Box::new(ty), Box::new(Type::Int));
-                    }
-                    ty
-                }
-
-                fn deep_origin(span: Span) -> Origin {
-                    let mut origin = Origin::Source(span);
-                    for _ in 0..GENERATED_ORIGIN_DEPTH {
-                        origin = Origin::Generated {
-                            cause: Box::new(origin),
-                            reason: crate::source::GeneratedReason::TypeChecking,
-                        };
-                    }
-                    origin
-                }
-
-                fn generated_origin_depth(mut origin: &Origin) -> usize {
-                    let mut depth = 0;
-                    loop {
-                        match origin {
-                            Origin::Generated { cause, reason } => {
-                                assert_eq!(*reason, crate::source::GeneratedReason::TypeChecking);
-                                depth += 1;
-                                origin = cause;
-                            }
-                            Origin::Source(_) => return depth,
-                            Origin::Related { .. } => {
-                                panic!("the deep fixture must use only generated causes")
-                            }
-                        }
-                    }
-                }
-
-                fn fixture() -> ResolvedModuleProgram {
-                    let mut program = entry_program(concat!(
-                        "identity<A> : A -> A\n",
-                        "identity value = value\n\n",
-                        "main : Unit -> Unit\n",
-                        "main () = ()\n",
-                    ));
-                    let module = entry_group(&program).module();
-                    let identity = entry_group(&program)
-                        .schemes()
-                        .iter()
-                        .find(|scheme| scheme.spelling == "identity")
-                        .unwrap();
-                    assert_eq!(identity.scheme.type_parameters.len(), 1);
-                    assert_eq!(identity.binder.module(), Some(module));
-                    let parameter = identity.scheme.type_parameters[0].0;
-                    assert_eq!(program.registry().nominals().len(), 5);
-                    assert!(
-                        program.registry().nominals().iter().all(|nominal| nominal
-                            .id
-                            .module()
-                            .is_builtin_region()
-                            || nominal.id.module().is_builtin_foreign())
-                    );
-                    let canonical = program
-                        .registry()
-                        .type_variable(parameter)
-                        .expect("the source binder should be canonical");
-                    let origin_span = canonical.origin.primary_span();
-                    let canonical_parameter = ResolvedTypeVariable {
-                        id: parameter,
-                        spelling: canonical.spelling.clone(),
-                        kind: deep_kind(),
-                        origin: deep_origin(origin_span),
-                    };
-                    assert!(program.replace_first_global_kind_boundary_for_test(
-                        module,
-                        (
-                            canonical_parameter,
-                            deep_kind(),
-                            deep_kind(),
-                            deep_origin(origin_span),
-                        ),
-                        (deep_value_type(parameter), deep_value_type(parameter)),
-                    ));
-                    let owner = entry_group(&program)
-                        .schemes()
-                        .iter()
-                        .find(|scheme| scheme.spelling == "identity")
-                        .expect("the defining user identity must remain checked")
-                        .binder;
-                    let row = program
-                        .registry()
-                        .global_parameter_rows()
-                        .iter()
-                        .find(|row| row.owner() == owner)
-                        .expect("the deep user identity row must remain canonical");
-                    assert_eq!(row.parameters(), [parameter]);
-                    let canonical = program
-                        .registry()
-                        .type_variable(parameter)
-                        .expect("the deep source binder must remain canonical");
-                    assert_eq!(
-                        generated_origin_depth(&canonical.origin),
-                        GENERATED_ORIGIN_DEPTH,
-                    );
-                    let source_origin = match entry_group(&program).definitions()[0].kind() {
-                        ResolvedDefinitionKind::Equational(global)
-                        | ResolvedDefinitionKind::ForeignConstant(global) => {
-                            &global.interface.type_parameters[0].origin
-                        }
-                        ResolvedDefinitionKind::InlineOperational(_) => {
-                            panic!("the deep fixture must remain equational")
-                        }
-                    };
-                    assert_eq!(
-                        generated_origin_depth(source_origin),
-                        GENERATED_ORIGIN_DEPTH,
-                    );
-                    program
-                }
-
-                let mut one_short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
-                let failure = validate_interface_evidence_with_budget(
-                    fixture(),
-                    &mut one_short,
-                    &mut TypeWorkBudget::default(),
-                )
-                .err()
-                .expect("one-short public work must not publish a validated program");
-                assert_eq!(
-                    failure.reason(),
-                    EvidenceValidationReason::ConstraintResourceExhausted,
-                );
-                assert_eq!(one_short.used(), EXACT_WORK - 1);
-
-                let mut type_one_short = TypeWorkBudget::with_limit(EXACT_TYPE_WORK - 1);
-                let failure = validate_interface_evidence_with_budget(
-                    fixture(),
-                    &mut InterfaceConstraintBudget::with_limit(EXACT_WORK),
-                    &mut type_one_short,
-                )
-                .err()
-                .expect("one-short linked Kind-mirror work must prevent publication");
-                assert_eq!(
-                    failure.reason(),
-                    EvidenceValidationReason::TypeResourceExhausted,
-                );
-                assert_eq!(type_one_short.used(), EXACT_TYPE_WORK - 1);
-
-                let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
-                let mut type_work = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
-                validate_interface_evidence_with_budget(fixture(), &mut exact, &mut type_work)
-                    .expect("the exact public linked Kind budget should validate");
-                assert_eq!(exact.used(), EXACT_WORK);
-                assert_eq!(type_work.used(), EXACT_TYPE_WORK);
-
-                validate_interface_evidence(fixture())
-                    .expect("the admitted deep linked program must fit the production budget");
-            })
-            .expect("the public linked-kinding worker should spawn")
-            .join()
-            .expect("public linked kinding and teardown should remain iterative");
     }
 
     struct ValidationFixture(PathBuf);
@@ -10038,34 +6428,10 @@ mod tests {
     }
 
     fn deep_constructor_lifecycle_checked_graph() -> (Vec<CheckedModule>, ModuleId) {
-        // Checking and freezing cost 8D + 18 type cells; complete producer
-        // authentication adds 5D + 11 for the nominal and constructor scheme.
-        // Keep the whole publication within the production type-work limit
-        // while retaining deep ownership on the worker's small stack.
+        // Keep a deep constructor through publication within the production
+        // type-work limit and retain it on the worker's small stack.
         const DEPTH: usize = 16_384;
-        // Export freeze retains one defining-source Arc record; the complete
-        // zonk visitor eliminates the one-cell redundant row-tail scan.
-        // Computational admission scans the single Unit result: one node visit
-        // and one structural root, independent of the constructor payload depth.
-        const COMPUTATIONAL_ADMISSION_WORK: usize = 2;
-        // Canonical DefaultAlloc makes export effect closure inspect the
-        // effect-free payload: root1 and two scheduled children per Function.
-        const EFFECT_INVENTORY_PAYLOAD_SCAN: usize = 1 + 2 * DEPTH;
-        // The fixed metadata remainder excludes both depth tariffs and the
-        // independently retained two-cell computational admission.
-        const FIXED_METADATA_WORK: usize = 211;
-        // Rebuilt effectful provenance also visits the domain and result of
-        // the three imported region functions. The two Request -> Int schemes
-        // add two nodes each; from_backing adds its tuple domain and the
-        // Storage<R> application, constructor and argument.
-        const IMPORTED_REGION_PROVENANCE_WORK: usize = 2 + 2 + 4;
-        const DEFINING_TYPE_WORK: usize = 13 * DEPTH
-            + EFFECT_INVENTORY_PAYLOAD_SCAN
-            + COMPUTATIONAL_ADMISSION_WORK
-            + FIXED_METADATA_WORK
-            + IMPORTED_REGION_PROVENANCE_WORK;
         const {
-            assert!(DEFINING_TYPE_WORK < crate::types::TYPE_WORK_LIMIT);
             assert!(13 * (2 * DEPTH) + 29 > crate::types::TYPE_WORK_LIMIT);
         }
         let fixture = ValidationFixture::create(concat!(
@@ -10191,8 +6557,8 @@ mod tests {
                 .expect("checking should consume the imported physical scheme iteratively"),
             );
             if module.id() == defining {
-                // The complete nominal-owner inventory retains its source record.
-                assert_eq!(type_work.used(), DEFINING_TYPE_WORK);
+                assert!(type_work.used() > 2 * DEPTH);
+                assert!(type_work.used() < crate::types::TYPE_WORK_LIMIT);
             }
         }
         assert_eq!(mutations, 1);
@@ -10202,10 +6568,10 @@ mod tests {
 
     #[test]
     fn deep_constructor_scheme_crosses_check_and_link_then_is_disposed_before_core() {
-        // Complete four-module graph: wrapper20, fixed combined inventory62,
-        // canonical variable set2, Storage<R> mirror3 and global R identity/Kind2.
-        const LINK_CONSTRAINT_WORK: usize = 20 + 62 + 2 + 3 + 2;
-        const ONE_SHORT_PREFIX: usize = LINK_CONSTRAINT_WORK - 1;
+        // Four-module wrapper20, registry index44, three occupied map slots,
+        // and group lookups2+3+4+5. The final lookup is charged atomically.
+        const LINK_CONSTRAINT_WORK: usize = 20 + 44 + 3 + 2 + 3 + 4 + 5;
+        const ONE_SHORT_PREFIX: usize = LINK_CONSTRAINT_WORK - 5;
         std::thread::Builder::new()
             .name("deep-constructor-check-link-lifecycle".to_owned())
             .stack_size(256 * 1024)
@@ -10224,8 +6590,12 @@ mod tests {
 
                 let (short_modules, short_entry) = deep_constructor_lifecycle_checked_graph();
                 let mut one_short = InterfaceConstraintBudget::with_limit(exact_work - 1);
-                link_modules_with_budget(short_modules, short_entry, &mut one_short)
-                    .expect_err("one missing late-link cell must reject before publication");
+                assert!(matches!(
+                    link_modules_with_budget(short_modules, short_entry, &mut one_short),
+                    Err(crate::elaborate::TypeError::Internal(
+                        crate::elaborate::ElaborationFailure::ConstraintResourceExhausted
+                    )),
+                ));
                 assert_eq!(one_short.used(), ONE_SHORT_PREFIX);
 
                 let (exact_modules, exact_entry) = deep_constructor_lifecycle_checked_graph();
@@ -10253,67 +6623,20 @@ mod tests {
         link_modules(check_graph(&graph), graph.entry()).expect("the local fixture should link")
     }
 
-    #[test]
-    fn generic_implementation_validation_excludes_discarded_head_scope_buffer_work() {
-        const EXACT_WORK_WITHOUT_UNUSED_HEAD_BUFFER: usize = 6;
-        let program = entry_program(concat!(
-            "type Wrap<A> = Wrap(A)\n\n",
-            "interface Marker<I> {\nmarker : I -> I\n}\n\n",
-            "impl<A> Marker<Wrap<A>> {\nmarker value = value\n}\n\n",
-            "main : Unit -> Unit\n",
-            "main () = ()\n",
-        ));
-        let group = entry_group(&program);
-        let implementation = &group.implementations()[0];
-        assert_eq!(
-            group.implementation_facts()[0].head_parameters.len(),
-            1,
-            "the fixture must expose the obsolete head-scope allocation",
-        );
-        assert_eq!(implementation.method_groups().len(), 1);
-        let run = |limit| {
-            let registry =
-                LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
-                    .expect("the generic implementation registry should authenticate");
-            let mut type_work = TypeWorkBudget::default();
-            let mut environments =
-                build_linked_kind_environments(program.registry(), &mut type_work, group.span())
-                    .expect("the nominal environment should fit");
-            let mut budget = InterfaceConstraintBudget::with_limit(limit);
-            let result = validate_implementation(
-                &program,
-                &registry,
-                group,
-                implementation,
-                &mut environments,
-                &mut budget,
-                &mut type_work,
-                false,
-            );
-            (result, budget.used())
-        };
-
-        let (one_short, one_short_used) = run(EXACT_WORK_WITHOUT_UNUSED_HEAD_BUFFER - 1);
-        assert_eq!(
-            one_short
-                .expect_err("one missing body-validation cell must reject")
-                .reason(),
-            EvidenceValidationReason::ConstraintResourceExhausted,
-        );
-        assert_eq!(one_short_used, EXACT_WORK_WITHOUT_UNUSED_HEAD_BUFFER - 1);
-        for _ in 0..2 {
-            let (exact, exact_used) = run(EXACT_WORK_WITHOUT_UNUSED_HEAD_BUFFER);
-            exact.expect("the exact implementation-body validation budget should fit");
-            assert_eq!(exact_used, EXACT_WORK_WITHOUT_UNUSED_HEAD_BUFFER);
-        }
-    }
-
     fn entry_group(program: &ResolvedModuleProgram) -> &crate::resolved::ResolvedModuleGroup {
         program
             .groups()
             .iter()
             .find(|group| group.module() == program.entry())
             .expect("the checked entry group")
+    }
+
+    fn entry_catalog(program: &ResolvedModuleProgram) -> &MethodEvidenceCatalog {
+        entry_group(program)
+            .local_lowering()
+            .and_then(|lowering| lowering.catalog())
+            .map(AsRef::as_ref)
+            .expect("the checked entry retains its defining catalogue")
     }
 
     fn entry_program(source: &str) -> ResolvedModuleProgram {
@@ -10372,9 +6695,14 @@ mod tests {
             let (measured, constraints, types) = run(usize::MAX, usize::MAX);
             let validated = measured.unwrap();
             let owners: Vec<_> = validated
-                .method_evidence()
-                .lexical_owners()
+                .groups()
                 .iter()
+                .filter_map(|group| {
+                    group
+                        .local_lowering()
+                        .and_then(|lowering| lowering.catalog())
+                })
+                .flat_map(|catalog| catalog.lexical_owners())
                 .filter_map(|owner| {
                     owner
                         .resource
@@ -10392,8 +6720,8 @@ mod tests {
             assert_eq!(owners[0].1.provider, owners[1].1.provider);
             assert_eq!(owners[0].0.method.declaration(), 0);
             assert_eq!(owners[1].0.method.declaration(), 1);
-            // Full validation rejects a duplicate owner insertion, so success
-            // above also proves the shared R is registered only once.
+            // The defining catalogue retains the same acquisition identity
+            // for both methods across linked composition.
             assert_eq!(
                 run(constraints - 1, types).0.unwrap_err().reason(),
                 EvidenceValidationReason::ConstraintResourceExhausted
@@ -10407,73 +6735,19 @@ mod tests {
                 retry.unwrap();
                 assert_eq!((used_constraints, used_types), (constraints, types));
             }
-            let mut surplus = published_resource_program(implementation_only);
-            let module = surplus
-                .groups()
-                .iter()
-                .find(|group| {
-                    group
-                        .schemes()
-                        .iter()
-                        .any(|scheme| scheme.spelling == "readCell")
-                        || !group.implementation_facts().is_empty()
-                })
-                .unwrap()
-                .module();
-            assert!(surplus.add_surplus_registry_type_variable_for_test(module));
-            assert_eq!(
-                validate_interface_evidence(surplus).unwrap_err().reason(),
-                EvidenceValidationReason::UnknownIdentity
-            );
-        }
-        for detach in [false, true] {
-            let mut program = published_resource_program(false);
-            assert!(program.corrupt_first_direct_resource_owner_for_test(detach));
-            assert!(
-                validate_interface_evidence(program).is_err(),
-                "detached={detach} must publish no capability"
-            );
         }
     }
 
     #[test]
-    fn cell_linked_authority_rejects_independent_acquisition_forgeries() {
-        use crate::resolved::LinkedResourceMutationForTest as Mutation;
-        for mutation in [
-            Mutation::Provider,
-            Mutation::DetachedOwner,
-            Mutation::Builtin,
-            Mutation::MethodOrder,
-            Mutation::Handle,
-            Mutation::Brand,
-            Mutation::Origin,
-            Mutation::Operation,
-        ] {
-            let fixture = ValidationFixture::create(
-                "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = resource cell<R> c = 4 {\nCell.read c\n}\n",
-            );
-            let graph = fixture.graph();
-            let mut program =
-                crate::elaborate::link_modules(check_graph(&graph), graph.entry()).unwrap();
-            assert!(program.corrupt_first_direct_resource_for_test(mutation));
-            assert!(
-                validate_interface_evidence(program).is_err(),
-                "mutation={mutation:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn mixed_namespace_method_catalog_is_canonical_and_exactly_retryable() {
+    fn defining_catalog_retains_mixed_namespace_methods() {
         let program = published_resource_program(true);
-        let run = |constraint_limit, type_limit| {
-            let mut constraints = InterfaceConstraintBudget::with_limit(constraint_limit);
-            let mut types = TypeWorkBudget::with_limit(type_limit);
-            let result = build_core_method_evidence_catalog(&program, &mut constraints, &mut types);
-            (result, constraints.used(), types.used())
-        };
-        let (catalog, constraints, types) = run(usize::MAX, usize::MAX);
-        let catalog = catalog.unwrap();
+        let catalog = program
+            .groups()
+            .iter()
+            .find(|group| !group.implementation_facts().is_empty())
+            .and_then(|group| group.local_lowering())
+            .and_then(|lowering| lowering.catalog())
+            .expect("the defining module retains its catalogue");
         assert!(
             catalog
                 .methods()
@@ -10481,47 +6755,6 @@ mod tests {
                 .all(|pair| pair[0].id < pair[1].id)
         );
         assert_eq!(catalog.methods().len(), 3);
-        assert_eq!(
-            run(constraints - 1, types).0.unwrap_err().reason(),
-            EvidenceValidationReason::ConstraintResourceExhausted
-        );
-        assert_eq!(
-            run(constraints, types - 1).0.unwrap_err().reason(),
-            EvidenceValidationReason::TypeResourceExhausted
-        );
-        for _ in 0..2 {
-            let (retry, used_constraints, used_types) = run(constraints, types);
-            retry.unwrap();
-            assert_eq!((used_constraints, used_types), (constraints, types));
-        }
-        let mut duplicate = published_resource_program(true);
-        let builtin = duplicate
-            .groups()
-            .iter()
-            .find(|group| {
-                group.implementation_facts().is_empty() && !group.interface_facts().is_empty()
-            })
-            .unwrap()
-            .interface_facts()[0]
-            .methods[0]
-            .id;
-        let source = duplicate
-            .groups()
-            .iter()
-            .find(|group| !group.implementation_facts().is_empty())
-            .unwrap()
-            .module();
-        assert!(duplicate.replace_first_interface_method_id_for_test(source, builtin));
-        assert_eq!(
-            build_core_method_evidence_catalog(
-                &duplicate,
-                &mut InterfaceConstraintBudget::default(),
-                &mut TypeWorkBudget::default(),
-            )
-            .unwrap_err()
-            .reason(),
-            EvidenceValidationReason::UnknownIdentity
-        );
     }
 
     #[test]
@@ -10546,7 +6779,6 @@ mod tests {
                 &program.groups()[0],
                 EvidenceScope {
                     local_scopes: &[],
-                    expected_equation: None,
                     lexical_sources: &[],
                     lexical_head: None,
                     owner: None,
@@ -10610,7 +6842,6 @@ mod tests {
                 source,
                 EvidenceScope {
                     local_scopes: &[],
-                    expected_equation: None,
                     lexical_sources: &[],
                     lexical_head: None,
                     owner: None,
@@ -10638,61 +6869,14 @@ mod tests {
     }
 
     #[test]
-    fn unused_lexical_sources_authenticate_all_retained_declaration_facts() {
-        validate_interface_evidence(unused_lexical_program())
-            .expect("an unused but checked lexical source should authenticate");
-        let mut accepted = Vec::new();
-        for mutation in [
-            LinkedCarrierMutationForTest::LexicalSourceIdentity,
-            LinkedCarrierMutationForTest::LexicalApplicationArgument,
-            LinkedCarrierMutationForTest::LexicalMethodIdentity,
-            LinkedCarrierMutationForTest::LexicalMethodBinder,
-            LinkedCarrierMutationForTest::LexicalEquationBinder,
-            LinkedCarrierMutationForTest::LexicalEmptyEquations,
-            LinkedCarrierMutationForTest::LexicalContextualParameter,
-            LinkedCarrierMutationForTest::LexicalBeforeNominal,
-        ] {
-            let mut program = unused_lexical_program();
-            let module = entry_group(&program).module();
-            assert!(program.corrupt_linked_carrier_for_test(module, mutation));
-            if validate_interface_evidence(program).is_ok() {
-                accepted.push(mutation);
-            }
-        }
-        assert!(
-            accepted.is_empty(),
-            "accepted unused-source tampering: {accepted:?}"
-        );
-    }
-
-    #[test]
     fn intact_lexical_method_groups_may_remain_in_either_source_order() {
-        let mut program = unused_lexical_program();
-        let module = entry_group(&program).module();
-        assert!(program.corrupt_linked_carrier_for_test(
-            module,
-            LinkedCarrierMutationForTest::LexicalMethodOrder
+        let program = entry_program(concat!(
+            "interface Choose<T> {\nchoose<A> : T -> A -> A\nkeep<B> : T -> B -> B\n}\n",
+            "main : Unit -> Int\nmain () = {\nnewtype Token = Token(Unit)\n",
+            "with Choose<Token> {\nkeep ignored value = value\nchoose ignored value = value\n}\n42\n}\n",
         ));
         validate_interface_evidence(program)
             .expect("source group order does not change each group's canonical method slot");
-    }
-
-    #[test]
-    fn unused_lexical_header_requires_its_dependent_nominal_to_be_active() {
-        let mut program = entry_program(concat!(
-            "interface R<A, B> where A -> B {\nread : A -> Int\n}\n",
-            "main : Unit -> Int\nmain () = {\nnewtype N = N(Unit)\nnewtype M = M(Unit)\n",
-            "with R<N, M> {\nread ignored = 42\n}\n42\n}\n",
-        ));
-        let module = entry_group(&program).module();
-        assert!(program.corrupt_linked_carrier_for_test(
-            module,
-            LinkedCarrierMutationForTest::LexicalBeforeNominal
-        ));
-        assert!(
-            validate_interface_evidence(program).is_err(),
-            "an active key nominal does not authorize a later dependent nominal"
-        );
     }
 
     fn first_lexical_source(
@@ -10729,367 +6913,6 @@ mod tests {
     }
 
     #[test]
-    fn original_lexical_row_context_keeps_full_declared_lacks_equality() {
-        let source = concat!(
-            "effect H {\nop : Unit -> Unit\n}\n",
-            "interface Run<Key : Type, Rows : EffectRow> {\n",
-            "run : (Key, Unit -> Unit ! {| Rows}) -> Unit ! {H | Rows}\n}\n",
-            "client<Delta : EffectRow> : (Unit -> Unit ! {H | Delta}) -> Unit ! {| Delta}\n",
-            "client callback = {\nnewtype Token = Token(Unit)\n",
-            "with Run<Token, {| Delta}> {\nrun (ignored, callback) = callback ()\n}\n",
-            "()\n}\nmain : Unit -> Int\nmain () = 42\n",
-        );
-        let program = entry_program(source);
-        validate_interface_evidence(entry_program(source))
-            .expect("a latent parameter row supplies its written exclusion");
-        validate_interface_evidence(entry_program(concat!(
-            "effect H {\nop : Unit -> Unit\n}\n",
-            "interface Run<Key : Type, Rows : EffectRow> {\n",
-            "run : (Key, Unit -> Unit ! {| Rows}) -> Unit ! {H | Rows}\n}\n",
-            "client<Delta : EffectRow> : (Unit -> Unit ! {H | Delta}) -> Unit\n",
-            "client callback = {\nnewtype Token = Token(Unit)\n",
-            "let invoke : Unit -> Unit ! {H | Delta} = fn(ignored) {\n",
-            "with Run<Token, {| Delta}> {\nrun (ignored, callback) = callback ()\n}\n",
-            "()\n}\n()\n}\nmain : Unit -> Int\nmain () = 42\n",
-        )))
-        .expect("a local written annotation uses the original enclosing formal contract");
-        let (group, scheme) = program
-            .groups()
-            .iter()
-            .find_map(|group| {
-                group
-                    .schemes()
-                    .iter()
-                    .find(|scheme| scheme.spelling == "client")
-                    .map(|scheme| (group, scheme))
-            })
-            .expect("client original");
-        let original = group
-            .definitions()
-            .iter()
-            .find_map(|definition| {
-                let ResolvedDefinitionKind::Equational(global) = definition.kind() else {
-                    return None;
-                };
-                (global.interface.name.id == scheme.binder).then_some(global)
-            })
-            .expect("client source equation");
-        let ResolvedExprKind::Block(block) = &original.equations[0].body.kind else {
-            panic!("block");
-        };
-        let source = block
-            .declarations
-            .iter()
-            .find_map(|declaration| match declaration {
-                ResolvedLocalDeclaration::Evidence(source) => Some(source),
-                _ => None,
-            })
-            .expect("original lexical declaration");
-        let registry =
-            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
-                .unwrap();
-        let context = OriginalLexicalContext {
-            equation: Some(ExpectedEquation::Global {
-                binder: scheme.binder,
-            }),
-            owner: Some(RequirementOwner::Global(scheme.binder)),
-            local_head: None,
-        };
-        let checked = &source
-            .checked
-            .get()
-            .expect("ordinary checked fact")
-            .application;
-        let run = |application: &InterfaceApplication, context| {
-            LinkedLexicalSource::Declared(source, context).same_application(
-                &program,
-                &registry,
-                application,
-                EvidenceScope::NONE,
-                &mut InterfaceConstraintBudget::default(),
-                &mut TypeWorkBudget::default(),
-                source.span,
-            )
-        };
-        assert!(run(checked, context).unwrap());
-        assert!(
-            !run(checked, OriginalLexicalContext::NONE).unwrap(),
-            "retained checked facts cannot authenticate themselves"
-        );
-        let mut arguments = checked.arguments().to_vec();
-        let KindedArgument::RowArg(row) = &arguments[1] else {
-            panic!("row tag");
-        };
-        let tail = row.tail().unwrap();
-        let extra = crate::types::EffectInstance::new(
-            crate::types::EffectId::new(group.module(), u32::MAX),
-            Box::new([]),
-        );
-        let mut lacks = tail.lacks().to_vec();
-        lacks.push(extra);
-        arguments[1] = KindedArgument::RowArg(crate::types::EffectRow::open(
-            tail.variable(),
-            lacks.into_boxed_slice(),
-        ));
-        assert!(
-            !run(
-                &InterfaceApplication::new_kinded(
-                    checked.interface(),
-                    arguments.into_boxed_slice()
-                ),
-                context
-            )
-            .unwrap(),
-            "full equality rejects an additional exclusion absent from the original declaration"
-        );
-    }
-
-    #[test]
-    fn ordinary_annotation_formation_is_checked_without_a_lexical_owner() {
-        let program = entry_program(concat!(
-            "effect H {\nop : Unit -> Unit\n}\neffect J {\nop : Unit -> Unit\n}\n",
-            "client<Delta : EffectRow> : (Unit -> Unit ! {H | Delta}) -> Unit\n",
-            "client callback = {\nlet invoke : Unit -> Unit ! {H | Delta} = fn(ignored) {\n()\n}\n()\n}\n",
-            "main : Unit -> Int\nmain () = 42\n",
-        ));
-        validate_interface_evidence(entry_program(concat!(
-            "effect H {\nop : Unit -> Unit\n}\neffect J {\nop : Unit -> Unit\n}\n",
-            "client<Delta : EffectRow> : (Unit -> Unit ! {H | Delta}) -> Unit\n",
-            "client callback = {\nlet invoke : Unit -> Unit ! {H | Delta} = fn(ignored) {\n()\n}\n()\n}\n",
-            "main : Unit -> Int\nmain () = 42\n",
-        ))).expect("complete ordinary pipeline baseline");
-        let registry =
-            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
-                .unwrap();
-        let (group, scheme) = program
-            .groups()
-            .iter()
-            .find_map(|group| {
-                group
-                    .schemes()
-                    .iter()
-                    .find(|scheme| scheme.spelling == "client")
-                    .map(|scheme| (group, scheme))
-            })
-            .unwrap();
-        let original = group
-            .definitions()
-            .iter()
-            .find_map(|definition| match definition.kind() {
-                ResolvedDefinitionKind::Equational(global)
-                    if global.interface.name.id == scheme.binder =>
-                {
-                    Some(global)
-                }
-                _ => None,
-            })
-            .unwrap();
-        let variables = scheme
-            .scheme
-            .type_parameters
-            .iter()
-            .map(|(id, _)| *id)
-            .collect::<Vec<_>>();
-        let scope = EvidenceScope {
-            local_scopes: &[],
-            lexical_sources: &[],
-            lexical_head: None,
-            owner: Some(RequirementOwner::Global(scheme.binder)),
-            variables: &variables,
-            expected_equation: Some(ExpectedEquation::Global {
-                binder: scheme.binder,
-            }),
-        };
-        let run = |body: &ResolvedExpr| {
-            let mut work = TypeWorkBudget::default();
-            let mut environments =
-                build_linked_kind_environments(program.registry(), &mut work, body.span).unwrap();
-            validate_expression(
-                &program,
-                &registry,
-                group,
-                scope,
-                body,
-                &mut environments,
-                &mut InterfaceConstraintBudget::default(),
-                &mut work,
-                false,
-            )
-        };
-        run(&original.equations[0].body).expect("annotation uses the original H exclusion");
-        let mut altered = original.equations[0].body.clone();
-        let ResolvedExprKind::Block(block) = &mut altered.kind else {
-            panic!("body block");
-        };
-        let ResolvedLocalDeclaration::Binding(binding) = &mut block.declarations[0] else {
-            panic!("annotation binding");
-        };
-        let j = program
-            .registry()
-            .effects()
-            .iter()
-            .find(|effect| effect.spelling == "J")
-            .unwrap()
-            .id;
-        let row = crate::types::EffectRow::with_tail(
-            Box::new([crate::types::EffectInstance::new(j, Box::new([]))]),
-            crate::types::EffectRowVariable::rigid(variables[0]),
-            Box::new([]),
-        );
-        binding.annotation.as_mut().unwrap().ty = Type::function_computation(
-            Type::Unit,
-            crate::types::ComputationType::new(Type::Unit, row),
-        );
-        assert_eq!(
-            run(&altered).unwrap_err().reason(),
-            EvidenceValidationReason::InvalidEvidenceRoot,
-            "an unrelated canonical effect in a local annotation cannot add an original row premise"
-        );
-    }
-
-    #[test]
-    fn nested_original_annotation_cannot_authenticate_a_free_rigid_row_exclusion() {
-        let program = entry_program(concat!(
-            "effect H {\nop : Unit -> Unit\n}\n",
-            "interface Run<Key : Type, Rows : EffectRow> {\n",
-            "run : (Key, Unit -> Unit ! {| Rows}) -> Unit ! {H | Rows}\n}\n",
-            "client<Delta : EffectRow> : (Unit -> Unit ! {H | Delta}) -> Unit\n",
-            "client callback = {\nnewtype Token = Token(Unit)\n",
-            "with Run<Token, {| Delta}> {\nrun (ignored, callback) = callback ()\n}\n",
-            "()\n}\nmain : Unit -> Int\nmain () = 42\n",
-        ));
-        let (group, scheme) = program
-            .groups()
-            .iter()
-            .find_map(|group| {
-                group
-                    .schemes()
-                    .iter()
-                    .find(|scheme| scheme.spelling == "client")
-                    .map(|scheme| (group, scheme))
-            })
-            .expect("client original");
-        let original = group
-            .definitions()
-            .iter()
-            .find_map(|definition| {
-                let ResolvedDefinitionKind::Equational(global) = definition.kind() else {
-                    return None;
-                };
-                (global.interface.name.id == scheme.binder).then_some(global)
-            })
-            .expect("original client equation");
-        let ResolvedExprKind::Block(block) = &original.equations[0].body.kind else {
-            panic!("client block");
-        };
-        let source = block
-            .declarations
-            .iter()
-            .find_map(|declaration| match declaration {
-                ResolvedLocalDeclaration::Evidence(source) => Some(source),
-                _ => None,
-            })
-            .expect("original lexical declaration");
-        let registry =
-            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
-                .unwrap();
-        let checked = &source
-            .checked
-            .get()
-            .expect("completed checked fact")
-            .application;
-        // Mutate only the authority coordinates. The retained checked fact,
-        // original lexical arguments and exact written annotation stay fixed.
-        let KindedArgument::TypeArg(key) = &checked.arguments()[0] else {
-            panic!("key type");
-        };
-        let locals = [
-            (
-                LinkedLocalScope::Nominal(key.outer_nominal().expect("local Token")),
-                None,
-            ),
-            (
-                LinkedLocalScope::Annotation(&original.interface.annotation),
-                Some(0),
-            ),
-        ];
-        let variables = scheme
-            .scheme
-            .type_parameters
-            .iter()
-            .map(|(id, _)| *id)
-            .collect::<Vec<_>>();
-        let context = OriginalLexicalContext {
-            equation: Some(ExpectedEquation::Global {
-                binder: scheme.binder,
-            }),
-            owner: Some(RequirementOwner::Global(scheme.binder)),
-            local_head: Some(1),
-        };
-        let scope = EvidenceScope {
-            local_scopes: &locals,
-            variables: &variables,
-            ..EvidenceScope::NONE
-        };
-        let same = |context| {
-            LinkedLexicalSource::Declared(source, context).same_application(
-                &program,
-                &registry,
-                checked,
-                scope,
-                &mut InterfaceConstraintBudget::default(),
-                &mut TypeWorkBudget::default(),
-                source.span,
-            )
-        };
-        assert!(
-            same(context).unwrap(),
-            "the original formal contract entails the nested annotation"
-        );
-        let unauthorized = OriginalLexicalContext {
-            equation: None,
-            owner: None,
-            local_head: Some(1),
-        };
-        assert!(
-            same(unauthorized).is_err(),
-            "a nested annotation cannot introduce H absence on a free rigid Delta"
-        );
-        assert!(
-            authenticate_lexical_header(
-                &program,
-                &registry,
-                source,
-                EvidenceScope {
-                    expected_equation: context.equation,
-                    owner: context.owner,
-                    ..scope
-                },
-                &locals,
-                Some(1),
-                &mut InterfaceConstraintBudget::default(),
-                &mut TypeWorkBudget::default(),
-            )
-            .is_ok(),
-            "independent original header formation accepts established facts"
-        );
-        assert!(
-            authenticate_lexical_header(
-                &program,
-                &registry,
-                source,
-                scope,
-                &locals,
-                Some(1),
-                &mut InterfaceConstraintBudget::default(),
-                &mut TypeWorkBudget::default(),
-            )
-            .is_err(),
-            "header reconstruction cannot trust retained checked application facts"
-        );
-    }
-
-    #[test]
     fn lexical_node_method_and_equation_scans_have_exact_retry_boundaries() {
         let program = lexical_resource_program();
         let group = entry_group(&program);
@@ -11115,7 +6938,6 @@ mod tests {
         )];
         let scope = EvidenceScope {
             local_scopes: &[],
-            expected_equation: None,
             owner: None,
             variables: &[],
             lexical_sources: &sources,
@@ -11150,111 +6972,6 @@ mod tests {
             } else {
                 result.expect("the exact complete lexical node should authenticate");
                 assert_eq!(budget.used(), WORK);
-            }
-        }
-    }
-
-    #[test]
-    fn lexical_owner_lookup_charges_unrelated_method_table_width() {
-        let program = lexical_resource_program();
-        let source = first_lexical_source(&program);
-        let fact = &entry_group(&program).interface_facts()[0];
-        let mut methods = fact
-            .methods
-            .iter()
-            .map(|method| MethodEvidenceMethod {
-                spelling: method.spelling.clone().into_boxed_str(),
-                id: method.id,
-                inherited_parameters: method.inherited_parameters.clone(),
-                interface_parameters: fact
-                    .parameters
-                    .iter()
-                    .map(|parameter| parameter.id)
-                    .collect(),
-                parameters: Box::new([]),
-                value_type: method.value_type().clone(),
-            })
-            .collect::<Vec<_>>();
-        let mut base = InterfaceConstraintBudget::default();
-        retain_lexical_owners(
-            source,
-            &[],
-            &methods,
-            &mut Vec::new(),
-            &mut base,
-            &mut TypeWorkBudget::default(),
-        )
-        .expect("base owners");
-        let unrelated = &entry_group(&program).interface_facts()[1];
-        for method in &unrelated.methods {
-            methods.push(MethodEvidenceMethod {
-                spelling: method.spelling.clone().into_boxed_str(),
-                id: method.id,
-                inherited_parameters: method.inherited_parameters.clone(),
-                interface_parameters: unrelated
-                    .parameters
-                    .iter()
-                    .map(|parameter| parameter.id)
-                    .collect(),
-                parameters: Box::new([]),
-                value_type: method.value_type().clone(),
-            });
-        }
-        let mut wide = InterfaceConstraintBudget::default();
-        retain_lexical_owners(
-            source,
-            &[],
-            &methods,
-            &mut Vec::new(),
-            &mut wide,
-            &mut TypeWorkBudget::default(),
-        )
-        .expect("wide owners");
-        // Four application comparisons and two owner slots. Per group:
-        // equation1, complete table T, replacements2, then full substitution8
-        // (function/computation2 + leaves2 + row/slot/instance/rebuild4),
-        // comparison7 (initial/root2 + children2 + leaves2 + row-label1),
-        // and replacement staging2 + initial task1.
-        for method in &methods {
-            let function = method.value_type.function_view().unwrap();
-            let row = function.effects().unwrap();
-            let [instance] = row.known() else {
-                panic!("one allocation effect")
-            };
-            assert!(instance.effect().module().is_builtin_region());
-            assert!(instance.arguments().is_empty());
-            assert!(row.tail().is_none());
-        }
-        assert_eq!(base.used(), 4 + 2 + 2 * (1 + 2 + 2 + 8 + 7 + 3));
-        assert_eq!(wide.used(), 4 + 2 + 2 * (1 + 5 + 2 + 8 + 7 + 3));
-        assert_eq!(
-            wide.used() - base.used(),
-            source.method_groups.len() * 3,
-            "each supplied method scans the complete canonical table"
-        );
-        let work = wide.used();
-        for limit in [work - 1, work, work] {
-            let mut budget = InterfaceConstraintBudget::with_limit(limit);
-            let mut owners = Vec::new();
-            let result = retain_lexical_owners(
-                source,
-                &[],
-                &methods,
-                &mut owners,
-                &mut budget,
-                &mut TypeWorkBudget::default(),
-            );
-            if limit < work {
-                assert_eq!(
-                    result
-                        .expect_err("one-short owner authentication must reject")
-                        .reason(),
-                    EvidenceValidationReason::ConstraintResourceExhausted
-                );
-            } else {
-                result.expect("the exact owner table must authenticate");
-                assert_eq!(owners.len(), 2);
-                assert_eq!(budget.used(), work);
             }
         }
     }
@@ -11338,7 +7055,6 @@ mod tests {
             )];
             let scope = EvidenceScope {
                 local_scopes: &[],
-                expected_equation: None,
                 owner: None,
                 variables: &[],
                 lexical_sources: &sources,
@@ -11475,7 +7191,6 @@ mod tests {
             )];
             let mut scope = EvidenceScope {
                 local_scopes: &[],
-                expected_equation: None,
                 owner: None,
                 variables: &variables,
                 lexical_sources: &sources,
@@ -11573,7 +7288,6 @@ mod tests {
         )];
         let scope = EvidenceScope {
             local_scopes: &[],
-            expected_equation: None,
             owner: None,
             variables: &[],
             lexical_sources: &sources,
@@ -11626,15 +7340,8 @@ mod tests {
             "with Read<N, A> {\nread ignored = 0\n}\nvalue\n}\n}\n",
             "main : Unit -> Int\nmain () = 42\n",
         ));
-        let catalog = build_core_method_evidence_catalog(
-            &program,
-            &mut InterfaceConstraintBudget::default(),
-            &mut TypeWorkBudget::default(),
-        )
-        .expect("complete lexical catalog");
+        let catalog = entry_catalog(&program);
         let method = &entry_group(&program).implementation_facts()[0].methods[0];
-        // Owner visit, nominal worklist and node, variable worklist/node/slot,
-        // and one source-parameter comparison. Each argument also retains its tag.
         const EXACT: usize = 1 + (2 + 1) + (3 + 1) + 1;
         for limit in [EXACT - 1, EXACT, EXACT] {
             let mut budget = InterfaceConstraintBudget::with_limit(limit);
@@ -11705,18 +7412,6 @@ mod tests {
         ))
     }
 
-    fn dependent_only_global_program() -> ResolvedModuleProgram {
-        entry_program(concat!(
-            "interface Measure<I, Item> where I -> Item {\n",
-            "measure : I -> Int\n",
-            "}\n\n",
-            "size<I, Item> : I -> Int where Measure<I, Item>\n",
-            "size value = 0\n\n",
-            "main : Unit -> Unit\n",
-            "main () = ()\n",
-        ))
-    }
-
     fn polymorphic_method_program() -> ResolvedModuleProgram {
         entry_program(concat!(
             "type Wrap<A> = Wrap(A)\n\n",
@@ -11767,24 +7462,10 @@ mod tests {
     }
 
     #[test]
-    fn linked_method_evidence_catalog_has_exact_independent_ledgers() {
+    fn defining_method_catalog_retains_checked_domains() {
         let program = polymorphic_method_program();
-        let mut measured_constraint = InterfaceConstraintBudget::default();
-        let mut measured_type = TypeWorkBudget::default();
-        let catalog = build_core_method_evidence_catalog(
-            &program,
-            &mut measured_constraint,
-            &mut measured_type,
-        )
-        .expect("the measured linked method-evidence catalog should build");
+        let catalog = entry_catalog(&program);
         assert!(!catalog.expectations().is_empty());
-        let constraint_work = measured_constraint.used();
-        let type_work = measured_type.used();
-        // The complete catalog boundary includes authenticated service facts,
-        // full row-bearing schemes and retained applications. Its successful
-        // donor defines admission; local domain/Kind premises remain explicit.
-        assert!(constraint_work > 0 && type_work > 0);
-        // Domains retain four source-parameter records and six Kind nodes.
         assert_eq!(
             catalog
                 .domains()
@@ -11800,251 +7481,12 @@ mod tests {
             }
         }
         assert_eq!(retained_kinds.used(), 6);
-        drop(catalog);
-
-        let mut constraint_short = InterfaceConstraintBudget::with_limit(constraint_work - 1);
-        let mut type_default = TypeWorkBudget::default();
-        assert_eq!(
-            build_core_method_evidence_catalog(&program, &mut constraint_short, &mut type_default,)
-                .expect_err("one missing catalog relation unit must reject before publication")
-                .reason(),
-            EvidenceValidationReason::ConstraintResourceExhausted,
-        );
-        assert_eq!(constraint_short.used(), constraint_work - 1);
-
-        let mut constraint_default = InterfaceConstraintBudget::default();
-        let mut type_short = TypeWorkBudget::with_limit(type_work - 1);
-        assert_eq!(
-            build_core_method_evidence_catalog(&program, &mut constraint_default, &mut type_short,)
-                .expect_err("one missing retained Type or Kind cell must reject publication")
-                .reason(),
-            EvidenceValidationReason::TypeResourceExhausted,
-        );
-        assert!(type_short.used() < type_work);
-
-        for _ in 0..2 {
-            let mut constraint_exact = InterfaceConstraintBudget::with_limit(constraint_work);
-            let mut type_exact = TypeWorkBudget::with_limit(type_work);
-            let retry = build_core_method_evidence_catalog(
-                &program,
-                &mut constraint_exact,
-                &mut type_exact,
-            )
-            .expect("a fresh exact catalog stage should retry reproducibly");
-            assert_eq!(constraint_exact.used(), constraint_work);
-            assert_eq!(type_exact.used(), type_work);
-            drop(retry);
-        }
     }
 
     #[test]
-    fn lexical_checked_scheme_parameter_count_failure_discards_deep_replacements_on_a_small_stack()
-    {
-        thread::Builder::new()
-            .name("lexical-contextual-replacement-drop".to_owned())
-            .stack_size(256 * 1024)
-            .spawn(|| {
-                let file = SourceFile::new("lexical-contextual-drop.ash", "Read").expect("fixture");
-                let span = file
-                    .span(ByteRange::new(0, 4).expect("range"))
-                    .expect("span");
-                let module = ModuleId::from(file.id());
-                let interface = InterfaceId::new(module, 0);
-                let method = MethodId::new(interface, 0);
-                let binder = BinderId::resolved(module, 0);
-                let id = crate::interface::LexicalEvidenceId::new(module, 0);
-                let checked = crate::interface::LexicalEvidenceSlot::default();
-                checked
-                    .fill(crate::interface::CheckedLexicalEvidence {
-                        acquisition: None,
-                        id,
-                        application: test_application(
-                            interface,
-                            Box::new([deep_application_type(16_384)]),
-                        ),
-                        methods: Box::new([crate::interface::CheckedLexicalMethod {
-                            method,
-                            binder,
-                            scheme: Type::Forall(Box::new([]), Box::new(Type::Int)),
-                            captures: Box::new([]),
-                        }]),
-                    })
-                    .expect("checked fixture");
-                let mut source = crate::resolved::ResolvedLexicalEvidence {
-                    acquisition: None,
-                    checked,
-                    id,
-                    span,
-                    application: ResolvedInterfaceApplication {
-                        interface: crate::resolved::ResolvedInterfaceOccurrence {
-                            id: interface,
-                            spelling: "Read".to_owned(),
-                            origin: Origin::Source(span),
-                        },
-                        arguments: Box::new([crate::resolved::ResolvedOwnerArgument {
-                            ty: KindedArgument::TypeArg(deep_application_type(16_384)),
-                            provenance: crate::resolved::ResolvedTypeProvenance::new(
-                                vec![crate::resolved::ResolvedTypeProvenanceNode::Fact(span)],
-                                0,
-                            ),
-                            origin: Origin::Source(span),
-                            span,
-                        }]),
-                        span,
-                    },
-                    method_groups: Box::new([crate::resolved::ResolvedImplementationMethodGroup {
-                        contextual_parameters: Box::new([ResolvedTypeVariable {
-                            id: TypeVariableId::resolved(module, 2),
-                            spelling: "B".to_owned(),
-                            kind: Kind::Type,
-                            origin: Origin::Source(span),
-                        }]),
-                        method: Some(method),
-                        identity: None,
-                        binder: crate::resolved::Binder {
-                            id: binder,
-                            spelling: "read".to_owned(),
-                            origin: Origin::Source(span),
-                        },
-                        equations: Box::new([crate::resolved::ResolvedEquation {
-                            name: crate::resolved::ResolvedEquationHead {
-                                binder,
-                                spelling: "read".to_owned(),
-                                origin: Origin::Source(span),
-                            },
-                            patterns: Vec::new(),
-                            body: ResolvedExpr {
-                                kind: ResolvedExprKind::Unit,
-                                span,
-                            },
-                            span,
-                        }]),
-                        span,
-                    }]),
-                };
-                let methods = [MethodEvidenceMethod {
-                    spelling: "method".into(),
-                    id: method,
-                    inherited_parameters: Box::new([]),
-                    interface_parameters: Box::new([TypeVariableId::resolved(module, 0)]),
-                    parameters: Box::new([(TypeVariableId::resolved(module, 1), Kind::Type)]),
-                    value_type: Type::Int,
-                }];
-                let mut type_work = TypeWorkBudget::default();
-                assert_eq!(
-                    retain_lexical_owners(
-                        &source,
-                        &[],
-                        &methods,
-                        &mut Vec::new(),
-                        &mut InterfaceConstraintBudget::default(),
-                        &mut type_work
-                    )
-                    .expect_err("the malformed checked scheme parameter count must reject")
-                    .reason(),
-                    EvidenceValidationReason::InvalidEvidenceRoot
-                );
-                assert!(
-                    type_work.used() > 16_384,
-                    "the rejection must occur after retaining the deep replacement"
-                );
-                crate::types::discard_kinded_argument_iteratively(std::mem::replace(
-                    &mut source.application.arguments[0].ty,
-                    crate::types::KindedArgument::TypeArg(Type::Unit),
-                ));
-            })
-            .expect("small-stack worker")
-            .join()
-            .expect("failure must dispose iteratively");
-    }
-
-    #[test]
-    fn lexical_plan_scans_preserve_the_no_source_fast_path() {
-        for program in [generic_program(), polymorphic_method_program()] {
-            LEXICAL_PLAN_INSPECTIONS.with(|count| count.set(0));
-            let catalog = build_core_method_evidence_catalog(
-                &program,
-                &mut InterfaceConstraintBudget::default(),
-                &mut TypeWorkBudget::default(),
-            )
-            .expect("existing concrete plans should build without lexical scanning");
-            assert!(catalog.lexical_owners().is_empty());
-            assert_eq!(LEXICAL_PLAN_INSPECTIONS.with(std::cell::Cell::get), 0);
-            let registry =
-                LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
-                    .expect("registry");
-            let mut constraints = InterfaceConstraintBudget::with_limit(0);
-            let mut types = TypeWorkBudget::with_limit(0);
-            validate_lexical_headers(
-                &program,
-                &registry,
-                &catalog,
-                &mut KindEnvironments::new(),
-                &mut constraints,
-                &mut types,
-            )
-            .expect("source-free programs skip header authentication");
-            assert_eq!(constraints.used(), 0);
-            assert_eq!(types.used(), 0);
-        }
-    }
-
-    #[test]
-    fn lexical_header_pass_has_exact_independent_retry_boundaries() {
+    fn lexical_owners_are_retained_in_the_defining_catalog() {
         let program = lexical_resource_program();
-        let registry =
-            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
-                .expect("registry");
-        let catalog = build_core_method_evidence_catalog(
-            &program,
-            &mut InterfaceConstraintBudget::default(),
-            &mut TypeWorkBudget::default(),
-        )
-        .expect("catalog");
-        assert_eq!(catalog.lexical_owners().len(), 2);
-        let run = |constraint_limit, type_limit| {
-            let mut environments = build_linked_kind_environments(
-                program.registry(),
-                &mut TypeWorkBudget::default(),
-                program.result().span,
-            )
-            .expect("kind environments");
-            let mut constraints = InterfaceConstraintBudget::with_limit(constraint_limit);
-            let mut types = TypeWorkBudget::with_limit(type_limit);
-            let result = validate_lexical_headers(
-                &program,
-                &registry,
-                &catalog,
-                &mut environments,
-                &mut constraints,
-                &mut types,
-            );
-            (result, constraints.used(), types.used())
-        };
-        let (result, constraint_work, type_work) = run(usize::MAX, usize::MAX);
-        result.expect("the complete header-only pass should authenticate");
-        // The whole header-only pass includes complete service/row and lexical
-        // scope authentication; use its successful independent-owner totals.
-        assert!(constraint_work > 0 && type_work > 0);
-        assert_eq!(
-            run(constraint_work - 1, type_work)
-                .0
-                .expect_err("one-short header constraint budget")
-                .reason(),
-            EvidenceValidationReason::ConstraintResourceExhausted
-        );
-        assert_eq!(
-            run(constraint_work, type_work - 1)
-                .0
-                .expect_err("one-short header type budget")
-                .reason(),
-            EvidenceValidationReason::TypeResourceExhausted
-        );
-        for _ in 0..2 {
-            let (result, constraints, types) = run(constraint_work, type_work);
-            result.expect("fresh exact budgets retry header authentication");
-            assert_eq!((constraints, types), (constraint_work, type_work));
-        }
+        assert_eq!(entry_catalog(&program).lexical_owners().len(), 2);
     }
 
     #[test]
@@ -12127,175 +7569,29 @@ mod tests {
     }
 
     #[test]
-    fn widened_abstract_producer_lookup_has_an_exact_retry_boundary() {
+    fn defining_catalog_retains_widened_abstract_producers() {
         let program = widened_abstract_method_source_program();
-        let mut measured_constraint = InterfaceConstraintBudget::default();
-        let mut measured_type = TypeWorkBudget::default();
-        let catalog = build_core_method_evidence_catalog(
-            &program,
-            &mut measured_constraint,
-            &mut measured_type,
-        )
-        .expect("the widened abstract-only catalog should build");
+        let catalog = entry_catalog(&program);
         assert_eq!(catalog.domains().len(), 2);
         assert!(catalog.adapters().is_empty());
-        let producer_lookups = catalog
-            .expectations()
-            .iter()
-            .filter(|expectation| {
-                matches!(
+        assert_eq!(
+            catalog
+                .expectations()
+                .iter()
+                .filter(|expectation| matches!(
                     expectation.role,
                     MethodEvidenceExpectedRole::Instantiation { .. }
                         | MethodEvidenceExpectedRole::Application { .. }
-                )
-            })
-            .count();
-        assert_eq!(producer_lookups, 2);
-        // This owns the complete catalog phase. Keep the two exact producer
-        // lookups and domain width above independently of its admission total.
-        let constraint_work = measured_constraint.used();
-        let type_work = measured_type.used();
-        assert!(constraint_work > 0 && type_work > 0);
-        drop(catalog);
-
-        let mut constraint_short = InterfaceConstraintBudget::with_limit(constraint_work - 1);
-        assert_eq!(
-            build_core_method_evidence_catalog(
-                &program,
-                &mut constraint_short,
-                &mut TypeWorkBudget::default(),
-            )
-            .expect_err("one missing selected-method scan unit rejects publication")
-            .reason(),
-            EvidenceValidationReason::ConstraintResourceExhausted,
-        );
-        let mut type_short = TypeWorkBudget::with_limit(type_work - 1);
-        assert_eq!(
-            build_core_method_evidence_catalog(
-                &program,
-                &mut InterfaceConstraintBudget::default(),
-                &mut type_short,
-            )
-            .expect_err("one missing abstract-only Type cell rejects publication")
-            .reason(),
-            EvidenceValidationReason::TypeResourceExhausted,
-        );
-        for _ in 0..2 {
-            let mut constraint_exact = InterfaceConstraintBudget::with_limit(constraint_work);
-            let mut type_exact = TypeWorkBudget::with_limit(type_work);
-            let retry = build_core_method_evidence_catalog(
-                &program,
-                &mut constraint_exact,
-                &mut type_exact,
-            )
-            .expect("a fresh exact widened producer stage retries");
-            assert_eq!(constraint_exact.used(), constraint_work);
-            assert_eq!(type_exact.used(), type_work);
-            drop(retry);
-        }
-    }
-
-    #[test]
-    fn imported_concrete_source_seed_charges_each_wide_lookup() {
-        let program = concrete_monomorphic_source_program();
-        let catalog = build_core_method_evidence_catalog(
-            &program,
-            &mut InterfaceConstraintBudget::with_limit(usize::MAX),
-            &mut TypeWorkBudget::unbounded(),
-        )
-        .unwrap();
-        let selected = catalog.concrete_sources()[0].implementation;
-        let row = &catalog.methods()[0];
-        let methods = (0..64)
-            .map(|_| MethodEvidenceMethod {
-                spelling: row.spelling.clone(),
-                id: row.id,
-                inherited_parameters: Box::new([]),
-                interface_parameters: Box::new([]),
-                parameters: Box::new([]),
-                value_type: Type::Unit,
-            })
-            .collect::<Vec<_>>();
-        let mut work = InterfaceConstraintBudget::with_limit(usize::MAX);
-        for _ in 0..3 {
-            imported_seed_is_polymorphic(&methods, selected, &mut work, program.result().span)
-                .unwrap();
-        }
-        assert_eq!(
-            work.used(),
-            3 * methods.len(),
-            "every selected method scans the canonical method width"
+                ))
+                .count(),
+            2
         );
     }
 
     #[test]
-    fn concrete_adapter_source_catalog_has_an_exact_retry_boundary() {
+    fn defining_catalog_retains_concrete_adapter_source() {
         let program = concrete_monomorphic_source_program();
-        let mut measured_constraint = InterfaceConstraintBudget::default();
-        let mut measured_type = TypeWorkBudget::default();
-        let catalog = build_core_method_evidence_catalog(
-            &program,
-            &mut measured_constraint,
-            &mut measured_type,
-        )
-        .expect("the concrete source catalog should build");
-        assert_eq!(catalog.concrete_sources().len(), 1);
-        // Measure the complete catalog boundary, retaining the concrete-source
-        // identity, independent ledgers, prefixes and fresh retries below.
-        let constraint_work = measured_constraint.used();
-        let type_work = measured_type.used();
-        assert!(constraint_work > 0 && type_work > 0);
-        drop(catalog);
-
-        for prefix in [0usize, 17] {
-            let run = |constraint_limit, type_limit| {
-                let mut constraints = InterfaceConstraintBudget::with_limit(constraint_limit);
-                let mut types = TypeWorkBudget::with_limit(type_limit);
-                constraints.charge(prefix).unwrap();
-                types.charge(prefix).unwrap();
-                let result =
-                    build_core_method_evidence_catalog(&program, &mut constraints, &mut types);
-                (result, constraints.used(), types.used())
-            };
-            let (short, constraints, _) = run(prefix + constraint_work - 1, prefix + type_work);
-            assert_eq!(
-                short
-                    .expect_err("one missing concrete-source catalog unit rejects")
-                    .reason(),
-                EvidenceValidationReason::ConstraintResourceExhausted,
-            );
-            assert!(constraints < prefix + constraint_work);
-            let (short, _, types) = run(prefix + constraint_work, prefix + type_work - 1);
-            assert_eq!(
-                short
-                    .expect_err("one missing catalog Type cell rejects")
-                    .reason(),
-                EvidenceValidationReason::TypeResourceExhausted,
-            );
-            assert!(types < prefix + type_work);
-            for _ in 0..2 {
-                let (retry, constraints, types) = run(prefix + constraint_work, prefix + type_work);
-                let retry = retry.expect("a fresh exact concrete-source catalog retries");
-                assert_eq!(constraints, prefix + constraint_work);
-                assert_eq!(types, prefix + type_work);
-                assert_eq!(retry.concrete_sources().len(), 1);
-            }
-        }
-    }
-
-    fn same_shaped_method_program() -> ResolvedModuleProgram {
-        entry_program(concat!(
-            "interface Choose<I> {\n",
-            "first<A> : (I, A) -> I\n",
-            "second<B> : (I, B) -> I\n",
-            "}\n\n",
-            "impl Choose<Bool> {\n",
-            "first pair = true\n",
-            "second pair = true\n",
-            "}\n\n",
-            "main : Unit -> Bool\n",
-            "main () = first((true, false))\n",
-        ))
+        assert_eq!(entry_catalog(&program).concrete_sources().len(), 1);
     }
 
     #[test]
@@ -12391,284 +7687,6 @@ mod tests {
             final_method,
             &ImplMethodId::new(implementation, final_method),
         ));
-    }
-
-    #[test]
-    fn rejects_same_shaped_method_occurrence_identity_substitution() {
-        let mut program = same_shaped_method_program();
-        let group = entry_group(&program);
-        let module = group.module();
-        let second = group.interface_facts()[0].methods[1].id;
-        assert!(
-            program.replace_nth_direct_method_occurrence_identity_for_test(module, 0, second),
-            "the fixture should expose its first method occurrence",
-        );
-
-        assert_eq!(
-            validate_interface_evidence(program)
-                .expect_err("retained occurrence evidence must reject a same-shaped MethodId")
-                .reason(),
-            EvidenceValidationReason::InvalidEvidenceRoot,
-        );
-    }
-
-    #[test]
-    fn rejects_same_shaped_retained_method_identity_substitution() {
-        let mut program = same_shaped_method_program();
-        let group = entry_group(&program);
-        let module = group.module();
-        let second = group.interface_facts()[0].methods[1].id;
-        assert!(
-            program.replace_nth_direct_method_evidence_identity_for_test(module, 0, second),
-            "the fixture should expose the retained identity of its first occurrence",
-        );
-        assert_eq!(
-            validate_interface_evidence(program)
-                .expect_err("the retained MethodId must equal the occurrence MethodId")
-                .reason(),
-            EvidenceValidationReason::InvalidEvidenceRoot,
-        );
-    }
-
-    #[test]
-    fn rejects_wrong_concrete_method_relationship_for_same_shaped_occurrence() {
-        let mut program = same_shaped_method_program();
-        let group = entry_group(&program);
-        let module = group.module();
-        let implementation = &group.implementation_facts()[0];
-        let [first, second] = implementation.methods.as_ref() else {
-            panic!("the fixture should retain two implementation methods");
-        };
-        let forged = implementation_selection_for_argument(
-            implementation.id,
-            implementation.interface(),
-            &[second.id, first.id],
-            Type::Bool,
-        );
-        assert!(
-            program.replace_nth_direct_method_occurrence_selection_for_test(module, 0, forged),
-            "the fixture should expose its concrete method occurrence",
-        );
-        assert_eq!(
-            validate_interface_evidence(program)
-                .expect_err("concrete evidence must retain the canonical ImplMethodId relation")
-                .reason(),
-            EvidenceValidationReason::InvalidEvidenceRoot,
-        );
-    }
-
-    #[test]
-    fn rejects_wrong_abstract_method_relationship_for_same_shaped_occurrence() {
-        let mut program = entry_program(concat!(
-            "interface Choose<I> {\n",
-            "first<A> : (I, A) -> I\n",
-            "second<B> : (I, B) -> I\n",
-            "}\n\n",
-            "relay<I, A> : (I, A) -> I where Choose<I>\n",
-            "relay pair = first(pair)\n\n",
-            "impl Choose<Bool> {\n",
-            "first pair = true\n",
-            "second pair = true\n",
-            "}\n\n",
-            "main : Unit -> Bool\n",
-            "main () = relay((true, false))\n",
-        ));
-        let group = entry_group(&program);
-        let module = group.module();
-        let interface = &group.interface_facts()[0];
-        let requirement = group
-            .schemes()
-            .iter()
-            .find(|scheme| scheme.spelling == "relay")
-            .and_then(|scheme| scheme.scheme.requirements.first())
-            .expect("relay should retain its abstract requirement");
-        let second = interface.methods[1].id;
-        let mut builder = EvidenceSelectionBuilder::new();
-        let root = builder
-            .push_abstract(
-                requirement.id,
-                &[second],
-                &mut InterfaceConstraintBudget::default(),
-            )
-            .expect("the forged abstract method row should fit");
-        let forged = finish_width_one(
-            builder,
-            root,
-            interface.id,
-            test_type_argument(&requirement.arguments()[0]).clone(),
-        )
-        .expect("the forged abstract selection should have a root");
-        assert!(
-            program.replace_nth_direct_method_occurrence_selection_for_test(module, 0, forged),
-            "the relay should expose its abstract method occurrence",
-        );
-        assert_eq!(
-            validate_interface_evidence(program)
-                .expect_err("abstract evidence must retain the selected MethodId relation")
-                .reason(),
-            EvidenceValidationReason::InvalidEvidenceRoot,
-        );
-    }
-
-    #[test]
-    fn rejects_wrong_exact_current_impl_method_relationship() {
-        let mut program = entry_program(concat!(
-            "interface Choose<I> {\n",
-            "first<A> : (I, A) -> I\n",
-            "second<B> : (I, B) -> I\n",
-            "}\n\n",
-            "impl Choose<Bool> {\n",
-            "first pair = first(pair)\n",
-            "second pair = true\n",
-            "}\n\n",
-            "main : Unit -> Bool\n",
-            "main () = first((true, false))\n",
-        ));
-        let group = entry_group(&program);
-        let module = group.module();
-        let implementation = &group.implementation_facts()[0];
-        let [first, second] = implementation.methods.as_ref() else {
-            panic!("the exact-current fixture should retain two implementation methods");
-        };
-        let forged = implementation_selection_for_argument(
-            implementation.id,
-            implementation.interface(),
-            &[second.id, first.id],
-            Type::Bool,
-        );
-        assert!(
-            program.replace_nth_direct_method_occurrence_selection_for_test(module, 0, forged),
-            "the implementation should expose its exact-current occurrence",
-        );
-        assert_eq!(
-            validate_interface_evidence(program)
-                .expect_err(
-                    "exact-current evidence must retain the canonical ImplMethodId relation"
-                )
-                .reason(),
-            EvidenceValidationReason::InvalidEvidenceRoot,
-        );
-    }
-
-    #[test]
-    fn rejects_polymorphic_method_occurrence_argument_and_identity_tampering() {
-        enum Mutation {
-            Missing,
-            Extra,
-            Reordered,
-            WrongKind,
-            WrongCheckedType,
-            WrongMethod,
-        }
-
-        for mutation in [
-            Mutation::Missing,
-            Mutation::Extra,
-            Mutation::Reordered,
-            Mutation::WrongKind,
-            Mutation::WrongCheckedType,
-            Mutation::WrongMethod,
-        ] {
-            let mut program = polymorphic_method_program();
-            let module = entry_group(&program).module();
-            let changed = match mutation {
-                Mutation::Missing => program
-                    .replace_nth_direct_method_occurrence_arguments_for_test(
-                        module,
-                        1,
-                        Box::new([]),
-                    ),
-                Mutation::Extra => program.replace_nth_direct_method_occurrence_arguments_for_test(
-                    module,
-                    1,
-                    Box::new([
-                        Type::Nominal(NominalTypeId::new(module, 0)),
-                        Type::Bool,
-                        Type::Int,
-                        Type::Unit,
-                    ]),
-                ),
-                Mutation::Reordered => program
-                    .replace_nth_direct_method_occurrence_arguments_for_test(
-                        module,
-                        1,
-                        Box::new([
-                            Type::Nominal(NominalTypeId::new(module, 0)),
-                            Type::Int,
-                            Type::Bool,
-                        ]),
-                    ),
-                Mutation::WrongKind => program
-                    .replace_nth_direct_method_occurrence_arguments_for_test(
-                        module,
-                        1,
-                        Box::new([Type::Bool, Type::Bool, Type::Int]),
-                    ),
-                Mutation::WrongCheckedType => program
-                    .replace_nth_direct_method_occurrence_checked_type_for_test(
-                        module,
-                        1,
-                        Type::Int,
-                    ),
-                Mutation::WrongMethod => program
-                    .replace_nth_direct_method_occurrence_identity_for_test(
-                        module,
-                        1,
-                        MethodId::new(InterfaceId::new(module, 0), u32::MAX),
-                    ),
-            };
-            assert!(
-                changed,
-                "the fixture should expose its concrete method occurrence"
-            );
-            let expected = if matches!(mutation, Mutation::WrongMethod) {
-                EvidenceValidationReason::UnknownIdentity
-            } else {
-                EvidenceValidationReason::InvalidEvidenceRoot
-            };
-            assert_eq!(
-                validate_interface_evidence(program)
-                    .expect_err("forged method occurrence evidence must fail before Core")
-                    .reason(),
-                expected,
-            );
-        }
-    }
-
-    #[test]
-    fn rejects_reordered_implementation_head_then_method_binder_relationship() {
-        let mut program = polymorphic_method_program();
-        let module = entry_group(&program).module();
-        assert!(
-            program.swap_first_implementation_method_scheme_parameters_for_test(module),
-            "the fixture should retain the combined head-then-method scheme",
-        );
-        assert_eq!(
-            validate_interface_evidence(program)
-                .expect_err("a reordered combined implementation method scheme must fail")
-                .reason(),
-            EvidenceValidationReason::UnknownIdentity,
-        );
-    }
-
-    #[test]
-    fn rejects_forged_implementation_head_method_partition_before_capability() {
-        let mut program = polymorphic_method_program();
-        let module = entry_group(&program).module();
-        let method = &entry_group(&program).implementation_facts()[0].methods[0];
-        assert_eq!(method.head_type_parameter_count(), 1);
-        assert_eq!(method.scheme.type_parameters.len(), 4);
-        assert!(
-            program.replace_first_implementation_method_head_parameter_count_for_test(module, 0),
-            "the fixture should expose only its stored head/method partition",
-        );
-
-        assert_eq!(
-            validate_interface_evidence(program)
-                .expect_err("a forged partition must publish no validation capability")
-                .reason(),
-            EvidenceValidationReason::UnknownIdentity,
-        );
     }
 
     fn reexport_groups(
@@ -12832,28 +7850,6 @@ mod tests {
         ))
     }
 
-    fn multi_module_all_binder_owner_program() -> ResolvedModuleProgram {
-        let fixture = ValidationFixture::create(concat!(
-            "import dependency (relay)\n",
-            "main : Unit -> Unit\nmain () = ()\n",
-        ));
-        fixture.write(
-            "dependency.ash",
-            concat!(
-                "pub type Wrapped<F : Type -> Type, A> = Wrapped(F<A>)\n\n",
-                "pub interface Extract<A> {\nextract : A -> A\n}\n\n",
-                "pub impl<F : Type -> Type, A> Extract<Wrapped<F, A>> {\n",
-                "extract value = value\n",
-                "}\n\n",
-                "pub relay<G : Type -> Type> : G<Int> -> G<Int>\n",
-                "relay value = value\n",
-            ),
-        );
-        let graph = fixture.graph();
-        link_modules(check_graph(&graph), graph.entry())
-            .expect("the all-binder-owner fixture should link")
-    }
-
     fn linked_registry_row_program() -> ResolvedModuleProgram {
         let fixture = ValidationFixture::create(concat!(
             "import dependency (pair)\n\n",
@@ -12875,371 +7871,12 @@ mod tests {
     }
 
     #[test]
-    fn linked_registry_rejects_every_resolved_global_parameter_row_mutation_before_core() {
-        let mutations = [
-            LinkedGlobalParameterRowMutationForTest::Owner,
-            LinkedGlobalParameterRowMutationForTest::ParameterIdentity,
-            LinkedGlobalParameterRowMutationForTest::ParameterOrder,
-            LinkedGlobalParameterRowMutationForTest::RowOrder,
-            LinkedGlobalParameterRowMutationForTest::OwnerPosition,
-            LinkedGlobalParameterRowMutationForTest::SurplusOwnerPosition,
-            LinkedGlobalParameterRowMutationForTest::MissingRow,
-            LinkedGlobalParameterRowMutationForTest::ExtraRow,
-            LinkedGlobalParameterRowMutationForTest::DuplicateOwner,
-        ];
-        for mutation in mutations {
-            let ValidatedInterfaceProgram {
-                source: mut program,
-                ..
-            } = validate_interface_evidence(linked_registry_row_program())
-                .expect("the same complete row donor must authenticate before corruption");
-            let pair = program
-                .groups()
-                .iter()
-                .flat_map(|group| group.schemes())
-                .find(|scheme| scheme.spelling == "pair")
-                .expect("the defining pair owner");
-            let second = entry_group(&program)
-                .schemes()
-                .iter()
-                .find(|scheme| scheme.spelling == "second")
-                .expect("the entry second owner");
-            let original_owners = [pair.binder, second.binder];
-            let first_span = pair.origin.primary_span();
-            let second_span = second.origin.primary_span();
-            let empty_owner = entry_group(&program)
-                .schemes()
-                .iter()
-                .find(|scheme| {
-                    scheme.spelling == "main" && scheme.scheme.type_parameters.is_empty()
-                })
-                .expect("the entry main must have an empty scheme")
-                .binder;
-            let all_rows = program.registry().global_parameter_rows();
-            let positions = original_owners.map(|owner| {
-                all_rows
-                    .iter()
-                    .position(|row| row.owner() == owner)
-                    .expect("each named user row must occur in the full registry")
-            });
-            let original_parameters =
-                positions.map(|position| all_rows[position].parameters().to_vec());
-            let original_rows = all_rows
-                .iter()
-                .map(|row| (row.owner(), row.parameters().to_vec()))
-                .collect::<Vec<_>>();
-            let result_span = program.result().span;
-            let expected_primary = match mutation {
-                LinkedGlobalParameterRowMutationForTest::Owner
-                | LinkedGlobalParameterRowMutationForTest::ParameterIdentity
-                | LinkedGlobalParameterRowMutationForTest::ParameterOrder
-                | LinkedGlobalParameterRowMutationForTest::RowOrder
-                | LinkedGlobalParameterRowMutationForTest::OwnerPosition => first_span,
-                LinkedGlobalParameterRowMutationForTest::MissingRow
-                | LinkedGlobalParameterRowMutationForTest::DuplicateOwner => second_span,
-                LinkedGlobalParameterRowMutationForTest::SurplusOwnerPosition
-                | LinkedGlobalParameterRowMutationForTest::ExtraRow => result_span,
-            };
-            assert!(
-                program.corrupt_linked_global_parameter_rows_for_test(
-                    mutation,
-                    original_owners,
-                    empty_owner
-                ),
-                "the linked fixture must support {mutation:?}",
-            );
-            match mutation {
-                LinkedGlobalParameterRowMutationForTest::Owner => {
-                    let all_rows = program.registry().global_parameter_rows();
-                    assert_eq!(all_rows.len(), original_rows.len());
-                    let rows = [&all_rows[positions[0]], &all_rows[positions[1]]];
-                    assert_eq!(rows.len(), 2);
-                    assert_eq!(rows[0].owner(), empty_owner);
-                    assert_eq!(rows[0].parameters(), original_parameters[0].as_slice());
-                    assert!(
-                        program
-                            .registry()
-                            .global_parameter_row(original_owners[0])
-                            .is_none()
-                    );
-                    assert!(std::ptr::eq(
-                        program
-                            .registry()
-                            .global_parameter_row(empty_owner)
-                            .expect("the replacement owner index must remain coherent"),
-                        rows[0],
-                    ));
-                }
-                LinkedGlobalParameterRowMutationForTest::RowOrder => {
-                    let all_rows = program.registry().global_parameter_rows();
-                    assert_eq!(all_rows.len(), original_rows.len());
-                    let rows = [&all_rows[positions[0]], &all_rows[positions[1]]];
-                    assert_eq!(rows.len(), 2);
-                    assert_eq!(rows[0].owner(), original_owners[1]);
-                    assert_eq!(rows[1].owner(), original_owners[0]);
-                    assert_eq!(rows[0].parameters(), original_parameters[1].as_slice());
-                    assert_eq!(rows[1].parameters(), original_parameters[0].as_slice());
-                    assert!(std::ptr::eq(
-                        program
-                            .registry()
-                            .global_parameter_row(original_owners[1])
-                            .expect("the moved second owner index must remain coherent"),
-                        rows[0],
-                    ));
-                    assert!(std::ptr::eq(
-                        program
-                            .registry()
-                            .global_parameter_row(original_owners[0])
-                            .expect("the moved first owner index must remain coherent"),
-                        rows[1],
-                    ));
-                }
-                LinkedGlobalParameterRowMutationForTest::DuplicateOwner => {
-                    let all_rows = program.registry().global_parameter_rows();
-                    assert_eq!(all_rows.len(), original_rows.len());
-                    let rows = [&all_rows[positions[0]], &all_rows[positions[1]]];
-                    assert_eq!(rows.len(), 2);
-                    assert_eq!(rows[0].owner(), original_owners[0]);
-                    assert_eq!(rows[1].owner(), original_owners[0]);
-                    assert_eq!(rows[0].parameters(), original_parameters[0].as_slice());
-                    assert_eq!(rows[1].parameters(), original_parameters[1].as_slice());
-                    assert!(std::ptr::eq(
-                        program
-                            .registry()
-                            .global_parameter_row(original_owners[0])
-                            .expect("the first duplicate owner position must remain authoritative"),
-                        rows[0],
-                    ));
-                    assert!(
-                        program
-                            .registry()
-                            .global_parameter_row(original_owners[1])
-                            .is_none()
-                    );
-                }
-                LinkedGlobalParameterRowMutationForTest::ParameterIdentity => {
-                    let all_rows = program.registry().global_parameter_rows();
-                    assert_eq!(all_rows.len(), original_rows.len());
-                    let rows = [&all_rows[positions[0]], &all_rows[positions[1]]];
-                    assert_eq!(rows.len(), 2);
-                    assert_eq!([rows[0].owner(), rows[1].owner()], original_owners,);
-                    let replacement = rows[0].parameters()[0];
-                    assert_ne!(replacement, original_parameters[0][0]);
-                    assert!(original_parameters[1].contains(&replacement));
-                    assert_eq!(
-                        program
-                            .registry()
-                            .type_variable(replacement)
-                            .expect("the replacement identity must remain canonical")
-                            .kind,
-                        program
-                            .registry()
-                            .type_variable(original_parameters[0][0])
-                            .expect("the replaced identity must remain canonical")
-                            .kind,
-                    );
-                    assert_eq!(&rows[0].parameters()[1..], &original_parameters[0][1..],);
-                    assert_eq!(rows[1].parameters(), original_parameters[1].as_slice());
-                    assert!(std::ptr::eq(
-                        program
-                            .registry()
-                            .global_parameter_row(original_owners[0])
-                            .expect("the first owner index must remain coherent"),
-                        rows[0],
-                    ));
-                    assert!(std::ptr::eq(
-                        program
-                            .registry()
-                            .global_parameter_row(original_owners[1])
-                            .expect("the second owner index must remain coherent"),
-                        rows[1],
-                    ));
-                }
-                LinkedGlobalParameterRowMutationForTest::ParameterOrder => {
-                    let all_rows = program.registry().global_parameter_rows();
-                    assert_eq!(all_rows.len(), original_rows.len());
-                    let rows = [&all_rows[positions[0]], &all_rows[positions[1]]];
-                    assert_eq!(rows.len(), 2);
-                    assert_eq!([rows[0].owner(), rows[1].owner()], original_owners,);
-                    assert_eq!(
-                        rows[0].parameters(),
-                        [original_parameters[0][1], original_parameters[0][0]],
-                    );
-                    assert_eq!(rows[1].parameters(), original_parameters[1].as_slice());
-                    assert!(std::ptr::eq(
-                        program
-                            .registry()
-                            .global_parameter_row(original_owners[0])
-                            .expect("the first owner index must remain coherent"),
-                        rows[0],
-                    ));
-                    assert!(std::ptr::eq(
-                        program
-                            .registry()
-                            .global_parameter_row(original_owners[1])
-                            .expect("the second owner index must remain coherent"),
-                        rows[1],
-                    ));
-                }
-                LinkedGlobalParameterRowMutationForTest::OwnerPosition => {
-                    let all_rows = program.registry().global_parameter_rows();
-                    assert_eq!(all_rows.len(), original_rows.len());
-                    let rows = [&all_rows[positions[0]], &all_rows[positions[1]]];
-                    assert_eq!(rows.len(), 2);
-                    assert_eq!([rows[0].owner(), rows[1].owner()], original_owners,);
-                    assert_eq!(rows[0].parameters(), original_parameters[0].as_slice());
-                    assert_eq!(rows[1].parameters(), original_parameters[1].as_slice());
-                    assert!(
-                        program
-                            .registry()
-                            .global_parameter_row(original_owners[0])
-                            .is_none()
-                    );
-                    assert!(
-                        program
-                            .registry()
-                            .global_parameter_row(original_owners[1])
-                            .is_none()
-                    );
-                }
-                LinkedGlobalParameterRowMutationForTest::SurplusOwnerPosition => {
-                    let all_rows = program.registry().global_parameter_rows();
-                    assert_eq!(all_rows.len(), original_rows.len());
-                    let rows = [&all_rows[positions[0]], &all_rows[positions[1]]];
-                    assert_eq!(rows.len(), 2);
-                    assert_eq!([rows[0].owner(), rows[1].owner()], original_owners);
-                    assert_eq!(
-                        program.registry().global_parameter_position_count(),
-                        all_rows.len() + 1,
-                    );
-                    assert!(
-                        program
-                            .registry()
-                            .global_parameter_row(empty_owner)
-                            .is_none()
-                    );
-                }
-                LinkedGlobalParameterRowMutationForTest::MissingRow => {
-                    let all_rows = program.registry().global_parameter_rows();
-                    assert_eq!(all_rows.len(), original_rows.len() - 1);
-                    let rows = [&all_rows[positions[0]]];
-                    assert_eq!(rows.len(), 1);
-                    assert_eq!(rows[0].owner(), original_owners[0]);
-                    assert_eq!(rows[0].parameters(), original_parameters[0].as_slice());
-                    assert!(std::ptr::eq(
-                        program
-                            .registry()
-                            .global_parameter_row(original_owners[0])
-                            .expect("the retained owner index must remain coherent"),
-                        rows[0],
-                    ));
-                    assert!(
-                        program
-                            .registry()
-                            .global_parameter_row(original_owners[1])
-                            .is_none()
-                    );
-                }
-                LinkedGlobalParameterRowMutationForTest::ExtraRow => {
-                    let all_rows = program.registry().global_parameter_rows();
-                    assert_eq!(all_rows.len(), original_rows.len() + 1);
-                    let rows = [
-                        &all_rows[positions[0]],
-                        &all_rows[positions[1]],
-                        &all_rows[original_rows.len()],
-                    ];
-                    assert_eq!(rows.len(), 3);
-                    assert_eq!([rows[0].owner(), rows[1].owner()], original_owners,);
-                    assert_eq!(rows[0].parameters(), original_parameters[0].as_slice());
-                    assert_eq!(rows[1].parameters(), original_parameters[1].as_slice());
-                    assert_eq!(rows[2].owner(), empty_owner);
-                    assert_eq!(rows[2].parameters(), [original_parameters[0][0]]);
-                    assert!(std::ptr::eq(
-                        program
-                            .registry()
-                            .global_parameter_row(original_owners[0])
-                            .expect("the first owner index must remain coherent"),
-                        rows[0],
-                    ));
-                    assert!(std::ptr::eq(
-                        program
-                            .registry()
-                            .global_parameter_row(original_owners[1])
-                            .expect("the second owner index must remain coherent"),
-                        rows[1],
-                    ));
-                    assert!(std::ptr::eq(
-                        program
-                            .registry()
-                            .global_parameter_row(empty_owner)
-                            .expect("the surplus owner index must remain coherent"),
-                        rows[2],
-                    ));
-                }
-            }
-            let all_rows = program.registry().global_parameter_rows();
-            for (old_position, (owner, parameters)) in original_rows.iter().enumerate() {
-                if original_owners.contains(owner) {
-                    continue;
-                }
-                let position = if matches!(
-                    mutation,
-                    LinkedGlobalParameterRowMutationForTest::MissingRow
-                ) && old_position > positions[1]
-                {
-                    old_position - 1
-                } else {
-                    old_position
-                };
-                assert_eq!(all_rows[position].owner(), *owner);
-                assert_eq!(all_rows[position].parameters(), parameters.as_slice());
-                assert!(std::ptr::eq(
-                    program
-                        .registry()
-                        .global_parameter_row(*owner)
-                        .expect("every unrelated row index remains coherent"),
-                    &all_rows[position]
-                ));
-            }
-
-            let failure = validate_interface_evidence(program)
-                .expect_err("every independent row mutation must fail before Core");
-            assert_eq!(
-                failure.reason(),
-                EvidenceValidationReason::UnknownIdentity,
-                "{mutation:?}",
-            );
-            assert_eq!(failure.primary(), expected_primary, "{mutation:?}");
-        }
-    }
-
-    #[test]
     fn linked_registry_rows_have_exact_constraint_work() {
         const GROUPS: usize = 4;
         const TYPE_VARIABLES: usize = 6;
         const GLOBAL_SCHEMES: usize = 9;
         const GLOBAL_ROWS: usize = 3;
         const GLOBAL_PARAMETERS: usize = 5;
-        const ROOT_VISIT_WORK: usize = 1;
-        const AUTHENTICATION_INDEX_WORK: usize = GROUPS + TYPE_VARIABLES;
-        const GROUP_VISIT_WORK: usize = GROUPS;
-        const GLOBAL_SCHEME_VISIT_WORK: usize = GLOBAL_SCHEMES;
-        const GLOBAL_OWNER_IDENTITY_WORK: usize = GLOBAL_PARAMETERS;
-        const OWNER_COVERAGE_WORK: usize = 1;
-        const ROW_AUTHENTICATION_WORK: usize = GLOBAL_ROWS + GLOBAL_PARAMETERS;
-        // Five opaque service nominals and constructors, Storage<R>'s
-        // record/origin/Kind mirror3, DefaultAlloc1 and its two operations.
-        const SERVICE_FACT_WORK: usize = 5 + 5 + 3 + 1 + 2;
-        const EXACT_AUTHENTICATION_WORK: usize = ROOT_VISIT_WORK
-            + SERVICE_FACT_WORK
-            + AUTHENTICATION_INDEX_WORK
-            + GROUP_VISIT_WORK
-            + GLOBAL_SCHEME_VISIT_WORK
-            + GLOBAL_OWNER_IDENTITY_WORK
-            + OWNER_COVERAGE_WORK
-            + ROW_AUTHENTICATION_WORK;
-        const AUTHENTICATION_PREFIX_WORK: usize =
-            EXACT_AUTHENTICATION_WORK - OWNER_COVERAGE_WORK - ROW_AUTHENTICATION_WORK;
 
         let program = linked_registry_row_program();
         assert_eq!(program.registry().nominals().len(), 5);
@@ -13297,7 +7934,6 @@ mod tests {
             .iter()
             .map(|row| row.parameters().len())
             .sum::<usize>();
-        let exact_row_work = row_count + parameter_count;
         assert_eq!(program.groups().len(), GROUPS);
         assert_eq!(program.registry().type_variable_count(), TYPE_VARIABLES);
         assert_eq!(
@@ -13310,35 +7946,6 @@ mod tests {
         );
         assert_eq!(row_count, GLOBAL_ROWS);
         assert_eq!(parameter_count, GLOBAL_PARAMETERS);
-        assert_eq!(exact_row_work, ROW_AUTHENTICATION_WORK);
-        assert_eq!(EXACT_AUTHENTICATION_WORK, 54);
-        assert_eq!(AUTHENTICATION_PREFIX_WORK, 45);
-
-        let mut row_short = InterfaceConstraintBudget::with_limit(exact_row_work - 1);
-        assert_eq!(
-            authenticate_linked_global_parameter_rows(&program, &mut row_short)
-                .expect_err("one-short row authentication must fail")
-                .reason(),
-            EvidenceValidationReason::ConstraintResourceExhausted,
-        );
-        assert_eq!(row_short.used(), exact_row_work - 1);
-
-        let retry = linked_registry_row_program();
-        let mut row_exact = InterfaceConstraintBudget::with_limit(exact_row_work);
-        authenticate_linked_global_parameter_rows(&retry, &mut row_exact)
-            .expect("a fresh exact-budget fixture must authenticate its rows");
-        assert_eq!(row_exact.used(), exact_row_work);
-
-        let mut authentication_exact =
-            InterfaceConstraintBudget::with_limit(AUTHENTICATION_PREFIX_WORK);
-        authenticate_linked_registry_facts(
-            &retry,
-            &mut authentication_exact,
-            &mut TypeWorkBudget::unbounded(),
-        )
-        .expect("the immutable fixture must retry with the exact pre-method prefix");
-        assert_eq!(authentication_exact.used(), AUTHENTICATION_PREFIX_WORK);
-
         let mut measured_constraint_work = InterfaceConstraintBudget::default();
         let mut measured_type_work = TypeWorkBudget::default();
         validate_interface_evidence_with_budget(
@@ -13360,173 +7967,6 @@ mod tests {
         .expect("a fresh fixture should publish its capability with both exact ledgers");
         assert_eq!(exact_constraint.used(), exact_constraint_work);
         assert_eq!(exact_type.used(), exact_type_work);
-    }
-
-    #[test]
-    fn linked_registry_canonical_malformation_precedes_a_later_row_mismatch() {
-        let (both, base) = linked_higher_kinded_diamond_program();
-        let ValidatedInterfaceProgram {
-            source: mut both, ..
-        } = validate_interface_evidence(both)
-            .expect("the same complete priority donor must validate before corruption");
-        let canonical_span = both
-            .registry()
-            .nominals()
-            .iter()
-            .find(|nominal| nominal.id.module() == base)
-            .and_then(|nominal| both.registry().nominal_parameters(nominal.id))
-            .and_then(|parameters| parameters.first())
-            .map(|parameter| parameter.origin.primary_span())
-            .expect("the fixture should retain a canonical nominal parameter");
-        let base_group = both
-            .groups()
-            .iter()
-            .find(|group| group.module() == base)
-            .expect("base group");
-        let row_owners = ["expose", "relay"].map(|name| {
-            base_group
-                .schemes()
-                .iter()
-                .find(|scheme| scheme.spelling == name)
-                .expect("the defining user row")
-                .binder
-        });
-        let row_span = base_group
-            .schemes()
-            .iter()
-            .find(|scheme| scheme.binder == row_owners[0])
-            .expect("the exact corrupted user row")
-            .origin
-            .primary_span();
-        let empty_owner = entry_group(&both)
-            .schemes()
-            .iter()
-            .find(|scheme| scheme.spelling == "main")
-            .expect("the empty entry owner")
-            .binder;
-        assert_ne!(canonical_span, row_span);
-        assert!(both.corrupt_linked_carrier_for_test(
-            base,
-            LinkedCarrierMutationForTest::NominalParameterKind(0),
-        ));
-        assert!(both.corrupt_linked_global_parameter_rows_for_test(
-            LinkedGlobalParameterRowMutationForTest::Owner,
-            row_owners,
-            empty_owner,
-        ));
-        let found = validate_interface_evidence(both)
-            .expect_err("the earlier canonical failure must preempt row authentication");
-
-        assert_eq!(found.reason(), EvidenceValidationReason::UnknownIdentity);
-        assert_eq!(found.primary(), canonical_span);
-        assert_ne!(found.primary(), row_span);
-    }
-
-    #[test]
-    fn linked_registry_indexes_precharge_exactly_before_reserve_and_retry() {
-        const WIDTH: usize = 32_768;
-        std::thread::Builder::new()
-            .name("wide-linked-registry-index-reservation".to_owned())
-            .stack_size(256 * 1024)
-            .spawn(|| {
-                let source = SourceFile::new("linked-registry-indexes.ash", "index")
-                    .expect("the index source should fit");
-                let span = source
-                    .span(ByteRange::new(0, 5).expect("the index range should be ordered"))
-                    .expect("the index span should fit");
-                let mut short = InterfaceConstraintBudget::with_limit(2 * WIDTH - 1);
-                assert!(
-                    reserve_linked_registry_authentication_indexes(WIDTH, WIDTH, &mut short, span,)
-                        .is_err()
-                );
-                assert_eq!(short.used(), 0, "the aggregate index charge is atomic");
-
-                for _ in 0..2 {
-                    let mut exact = InterfaceConstraintBudget::with_limit(2 * WIDTH);
-                    let (modules, owners) = reserve_linked_registry_authentication_indexes(
-                        WIDTH, WIDTH, &mut exact, span,
-                    )
-                    .expect("the exact module and owner index capacities should fit");
-                    assert_eq!(exact.used(), 2 * WIDTH);
-                    assert!(modules.is_empty());
-                    assert!(owners.is_empty());
-                }
-            })
-            .expect("the wide linked-registry index worker should start")
-            .join()
-            .expect("wide linked-registry index success and rejection must fit 256 KiB");
-
-        let program = multi_module_all_binder_owner_program();
-        assert!(program.groups().len() > 1);
-        assert!(program.registry().nominals().iter().any(|nominal| {
-            program
-                .registry()
-                .nominal_parameters(nominal.id)
-                .is_some_and(|parameters| !parameters.is_empty())
-        }));
-        assert!(
-            program
-                .groups()
-                .iter()
-                .any(|group| !group.interface_facts().is_empty())
-        );
-        assert!(program.groups().iter().any(|group| {
-            group
-                .schemes()
-                .iter()
-                .any(|scheme| !scheme.scheme.type_parameters.is_empty())
-        }));
-        assert!(program.groups().iter().any(|group| {
-            group
-                .implementation_facts()
-                .iter()
-                .any(|fact| !fact.head_parameters.is_empty())
-        }));
-
-        let index_boundary = 1 + program.groups().len() + program.registry().type_variable_count();
-        let mut index_short = InterfaceConstraintBudget::with_limit(index_boundary - 1);
-        assert!(
-            authenticate_linked_registry_facts(
-                &program,
-                &mut index_short,
-                &mut TypeWorkBudget::unbounded()
-            )
-            .is_err()
-        );
-        assert_eq!(
-            index_short.used(),
-            1,
-            "root authentication precedes the atomic index-storage charge",
-        );
-
-        let mut measured = InterfaceConstraintBudget::default();
-        authenticate_linked_registry_facts(
-            &program,
-            &mut measured,
-            &mut TypeWorkBudget::unbounded(),
-        )
-        .expect("the all-owner linked registry prefix should authenticate");
-        let exact_work = measured.used();
-        assert!(exact_work > index_boundary);
-        let mut one_short = InterfaceConstraintBudget::with_limit(exact_work - 1);
-        assert!(
-            authenticate_linked_registry_facts(
-                &program,
-                &mut one_short,
-                &mut TypeWorkBudget::unbounded()
-            )
-            .is_err()
-        );
-        for _ in 0..2 {
-            let mut exact = InterfaceConstraintBudget::with_limit(exact_work);
-            authenticate_linked_registry_facts(
-                &program,
-                &mut exact,
-                &mut TypeWorkBudget::unbounded(),
-            )
-            .expect("the immutable all-owner registry prefix should remain reusable");
-            assert_eq!(exact.used(), exact_work);
-        }
     }
 
     fn linked_higher_kinded_diamond_program() -> (ResolvedModuleProgram, ModuleId) {
@@ -13819,81 +8259,6 @@ mod tests {
     }
 
     #[test]
-    fn interface_substitution_compares_effectful_methods_exactly_and_retryably() {
-        let program = entry_program(
-            "interface Read<A> {\nread : A -> A\n}\nmain : Unit -> Unit\nmain () = ()\n",
-        );
-        let parameters = &entry_group(&program).interface_facts()[0].parameters;
-        let span = program.result().span;
-        let effect = crate::types::EffectId::new(ModuleId::new(77), 0);
-        let free = TypeVariableId::generated(900);
-        let function = |argument| {
-            Type::function_computation(
-                Type::Variable(free),
-                crate::types::ComputationType::new(
-                    Type::Int,
-                    crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
-                        effect,
-                        Box::new([argument]),
-                    )),
-                ),
-            )
-        };
-        let source = function(Type::Variable(parameters[0].id));
-        let actual = function(Type::Bool);
-        let mut measured = InterfaceConstraintBudget::default();
-        assert!(
-            same_type_after_interface_substitution(
-                &source,
-                parameters,
-                &[crate::types::KindedArgument::TypeArg(Type::Bool)],
-                &actual,
-                &mut measured,
-                span
-            )
-            .unwrap()
-        );
-        let exact = measured.used();
-        let error = same_type_after_interface_substitution(
-            &source,
-            parameters,
-            &[crate::types::KindedArgument::TypeArg(Type::Bool)],
-            &actual,
-            &mut InterfaceConstraintBudget::with_limit(exact - 1),
-            span,
-        )
-        .unwrap_err();
-        assert_eq!(
-            error.reason(),
-            EvidenceValidationReason::ConstraintResourceExhausted
-        );
-        for _ in 0..2 {
-            assert!(
-                same_type_after_interface_substitution(
-                    &source,
-                    parameters,
-                    &[crate::types::KindedArgument::TypeArg(Type::Bool)],
-                    &actual,
-                    &mut InterfaceConstraintBudget::with_limit(exact),
-                    span
-                )
-                .unwrap()
-            );
-        }
-        assert!(
-            !same_type_after_interface_substitution(
-                &source,
-                parameters,
-                &[crate::types::KindedArgument::TypeArg(Type::Int)],
-                &actual,
-                &mut InterfaceConstraintBudget::default(),
-                span
-            )
-            .unwrap()
-        );
-    }
-
-    #[test]
     fn nullary_closed_row_evidence_work_is_proportional_exact_and_retryable() {
         const NARROW: u32 = 1;
         const WIDE: u32 = 8;
@@ -14039,39 +8404,6 @@ mod tests {
         ))
     }
 
-    fn relational_application_program() -> ResolvedModuleProgram {
-        entry_program(concat!(
-            "type Wrap<A> = Wrap(A)\n\n",
-            "interface Relation<F : Type -> Type, Key, Dep> where (F, Key) -> Dep {\n",
-            "relate<X> : (F<Key>, X) -> F<Dep>\n",
-            "}\n\n",
-            "impl Relation<Wrap, Int, Bool> {\n",
-            "relate pair = Wrap(true)\n",
-            "}\n\n",
-            "relay<F : Type -> Type, Key, Dep, X> : (F<Key>, X) -> F<Dep> ",
-            "where Relation<F, Key, Dep>\n",
-            "relay pair = relate(pair)\n\n",
-            "main : Unit -> Wrap<Bool>\n",
-            "main () = relate((Wrap(1), ()))\n",
-        ))
-    }
-
-    fn hidden_relational_application_program() -> ResolvedModuleProgram {
-        entry_program(concat!(
-            "type Hidden = HiddenValue(Int)\n",
-            "type HiddenTwin = HiddenTwinValue(Int)\n",
-            "type Wrap<A> = Wrap(A)\n\n",
-            "interface Relation<F : Type -> Type, Key, Dep> where (F, Key) -> Dep {\n",
-            "relate<X> : (F<Key>, X) -> F<Dep>\n",
-            "}\n\n",
-            "hidden<F : Type -> Type, Key, X> : (F<Key>, X) -> F<Hidden> ",
-            "where Relation<F, Key, Hidden>\n",
-            "hidden pair = relate(pair)\n\n",
-            "main : Unit -> Unit\n",
-            "main () = ()\n",
-        ))
-    }
-
     fn implementation_selection_for_application(
         fact: &CheckedImplementationFact,
         arguments: Box<[crate::types::KindedArgument]>,
@@ -14164,7 +8496,6 @@ mod tests {
     fn validated_interface_capability_has_exact_resolved_program_payload() {
         let ValidatedInterfaceProgram {
             source,
-            method_evidence: _,
             _method_evidence: _,
         } = validate_interface_evidence(local_program())
             .expect("the local fixture should validate");
@@ -14274,197 +8605,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_selection_root_application_that_differs_from_its_frozen_slot() {
-        let mut program = two_application_parameter_program();
-        let group = entry_group(&program);
-        let module = group.module();
-        let fact = &group.implementation_facts()[0];
-        let forged = implementation_selection_for_application(
-            fact,
-            vec![
-                crate::types::KindedArgument::TypeArg(Type::Bool),
-                crate::types::KindedArgument::TypeArg(Type::Int),
-            ]
-            .into_boxed_slice(),
-        );
-        assert!(
-            program.replace_nth_direct_method_occurrence_selection_for_test(module, 0, forged),
-            "the direct method occurrence should retain one frozen slot"
-        );
-
-        assert_eq!(
-            validate_interface_evidence(program)
-                .expect_err("a selection root must equal the already frozen checked application")
-                .reason(),
-            EvidenceValidationReason::InvalidEvidenceRoot,
-        );
-    }
-
-    #[test]
-    fn rejects_relational_linked_parameter_and_application_tampering_before_core() {
-        let mutations = [
-            LinkedCarrierMutationForTest::RelationalInterfaceParameterMissing,
-            LinkedCarrierMutationForTest::RelationalInterfaceParameterExtra,
-            LinkedCarrierMutationForTest::RelationalInterfaceParameterReordered,
-            LinkedCarrierMutationForTest::RelationalInterfaceParameterWrongKind,
-            LinkedCarrierMutationForTest::RelationalInterfaceParameterWrongIdentity,
-            LinkedCarrierMutationForTest::RelationalApplicationArgumentMissing,
-            LinkedCarrierMutationForTest::RelationalApplicationArgumentExtra,
-            LinkedCarrierMutationForTest::RelationalApplicationArgumentReordered,
-            LinkedCarrierMutationForTest::RelationalApplicationArgumentWrongKind,
-            LinkedCarrierMutationForTest::RelationalApplicationArgumentWrongIdentity,
-        ];
-
-        validate_interface_evidence(two_application_parameter_program())
-            .expect("the canonical relational linked fixture should validate");
-        for mutation in mutations {
-            let mut program = two_application_parameter_program();
-            let module = entry_group(&program).module();
-            assert!(
-                program.corrupt_linked_carrier_for_test(module, mutation),
-                "the relational linked fixture should retain {mutation:?}",
-            );
-            assert_eq!(
-                validate_interface_evidence(program)
-                    .expect_err("the forged relational linked carrier must fail before Core")
-                    .reason(),
-                EvidenceValidationReason::UnknownIdentity,
-                "{mutation:?}",
-            );
-        }
-    }
-
-    #[test]
-    fn rejects_relational_application_relationship_tampering_before_core() {
-        #[derive(Clone, Copy, Debug)]
-        enum Mutation {
-            KeyCarrier,
-            DependentCarrier,
-            AbstractSelection,
-            ImplementationSelection,
-            SameShapedHiddenDependent,
-        }
-
-        for mutation in [
-            Mutation::KeyCarrier,
-            Mutation::DependentCarrier,
-            Mutation::AbstractSelection,
-            Mutation::ImplementationSelection,
-            Mutation::SameShapedHiddenDependent,
-        ] {
-            let mut program = match mutation {
-                Mutation::SameShapedHiddenDependent => hidden_relational_application_program(),
-                _ => relational_application_program(),
-            };
-            let module = entry_group(&program).module();
-            match mutation {
-                Mutation::KeyCarrier => assert!(program.corrupt_linked_carrier_for_test(
-                    module,
-                    LinkedCarrierMutationForTest::RelationalApplicationKeyMismatch,
-                )),
-                Mutation::DependentCarrier => assert!(program.corrupt_linked_carrier_for_test(
-                    module,
-                    LinkedCarrierMutationForTest::RelationalApplicationDependentMismatch,
-                )),
-                Mutation::AbstractSelection => {
-                    let group = entry_group(&program);
-                    let interface = &group.interface_facts()[0];
-                    let requirement = group
-                        .schemes()
-                        .iter()
-                        .find(|scheme| scheme.spelling == "relay")
-                        .and_then(|scheme| scheme.scheme.requirements.first())
-                        .expect("relay should retain its relational requirement");
-                    let mut arguments = requirement.arguments().to_vec();
-                    arguments[2] = crate::types::KindedArgument::TypeArg(Type::Int);
-                    let forged = abstract_selection_for_application(
-                        requirement.id,
-                        interface,
-                        arguments.into_boxed_slice(),
-                    );
-                    assert!(
-                        program.replace_nth_direct_method_occurrence_selection_for_test(
-                            module, 0, forged,
-                        )
-                    );
-                }
-                Mutation::ImplementationSelection => {
-                    let group = entry_group(&program);
-                    let fact = &group.implementation_facts()[0];
-                    let mut arguments = fact.arguments().to_vec();
-                    arguments[1] = crate::types::KindedArgument::TypeArg(Type::Bool);
-                    let forged = implementation_selection_for_application(
-                        fact,
-                        arguments.into_boxed_slice(),
-                    );
-                    assert!(
-                        program.replace_nth_direct_method_occurrence_selection_for_test(
-                            module, 1, forged,
-                        )
-                    );
-                }
-                Mutation::SameShapedHiddenDependent => {
-                    let group = entry_group(&program);
-                    let interface = &group.interface_facts()[0];
-                    let requirement = group
-                        .schemes()
-                        .iter()
-                        .find(|scheme| scheme.spelling == "hidden")
-                        .and_then(|scheme| scheme.scheme.requirements.first())
-                        .expect("hidden should retain its relational requirement");
-                    let hidden = program
-                        .registry()
-                        .nominals()
-                        .iter()
-                        .find(|nominal| nominal.spelling == "Hidden")
-                        .expect("Hidden should retain its nominal identity");
-                    let twin = program
-                        .registry()
-                        .nominals()
-                        .iter()
-                        .find(|nominal| nominal.spelling == "HiddenTwin")
-                        .expect("HiddenTwin should retain its distinct nominal identity");
-                    assert_ne!(hidden.id, twin.id);
-                    let mut arguments = requirement.arguments().to_vec();
-                    assert_eq!(
-                        arguments[2],
-                        crate::types::KindedArgument::TypeArg(Type::Nominal(hidden.id))
-                    );
-                    arguments[2] = crate::types::KindedArgument::TypeArg(Type::Nominal(twin.id));
-                    let forged = abstract_selection_for_application(
-                        requirement.id,
-                        interface,
-                        arguments.into_boxed_slice(),
-                    );
-                    assert!(
-                        program.replace_nth_direct_method_occurrence_selection_for_test(
-                            module, 0, forged,
-                        )
-                    );
-                }
-            }
-
-            let expected = match mutation {
-                Mutation::KeyCarrier | Mutation::DependentCarrier => {
-                    EvidenceValidationReason::UnknownIdentity
-                }
-                Mutation::AbstractSelection
-                | Mutation::ImplementationSelection
-                | Mutation::SameShapedHiddenDependent => {
-                    EvidenceValidationReason::InvalidEvidenceRoot
-                }
-            };
-            assert_eq!(
-                validate_interface_evidence(program)
-                    .expect_err("each fresh relational relationship forgery must fail before Core")
-                    .reason(),
-                expected,
-                "{mutation:?}",
-            );
-        }
-    }
-
-    #[test]
     fn authenticates_an_honest_determined_linked_program_before_core() {
         let program = entry_program(concat!(
             "interface Relation<A, B> where A -> B {\n",
@@ -14482,81 +8622,6 @@ mod tests {
     }
 
     #[test]
-    fn linked_global_dependent_only_allowance_rejects_coherent_tampering() {
-        validate_interface_evidence(dependent_only_global_program())
-            .expect("an honest dependent-only global binder must authenticate before Core");
-
-        let mut no_edge = dependent_only_global_program();
-        let module = no_edge.entry();
-        assert!(no_edge.coherently_remove_first_interface_determination_for_test(module));
-        assert_eq!(
-            validate_interface_evidence(no_edge)
-                .expect_err("a no-edge global must not retain a dependent-only binder")
-                .reason(),
-            EvidenceValidationReason::UnknownIdentity,
-        );
-
-        let mut missing_key = dependent_only_global_program();
-        let module = missing_key.entry();
-        assert!(
-            missing_key.coherently_make_first_determined_global_key_only_unused_for_test(module)
-        );
-        assert_eq!(
-            validate_interface_evidence(missing_key)
-                .expect_err("a determined key-only unused binder must be rejected")
-                .reason(),
-            EvidenceValidationReason::UnknownIdentity,
-        );
-    }
-
-    #[test]
-    fn linked_global_dependent_only_authentication_has_an_exact_retry_boundary() {
-        // Requirement retention (1), determinant-position authentication (1),
-        // two argument classifications (2), two atomic variable walks (6),
-        // required/dependent exclusion (1), scheme membership (2), and output
-        // publication (1). Each complete owner argument adds one traversal slot.
-        const EXACT_WORK: usize = 14 + 2;
-        let program = dependent_only_global_program();
-        let group = entry_group(&program);
-        let scheme = group
-            .schemes()
-            .iter()
-            .find(|scheme| !scheme.scheme.requirements.is_empty())
-            .expect("the fixture should retain its constrained global scheme");
-        let registry =
-            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
-                .expect("the linked interface registry should authenticate");
-        let span = scheme.origin.primary_span();
-        let exercise = |budget: &mut InterfaceConstraintBudget| {
-            authenticated_global_dependent_only_binders(
-                &program,
-                &registry,
-                &scheme.scheme,
-                budget,
-                span,
-            )
-        };
-
-        let mut one_short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
-        assert!(matches!(
-            exercise(&mut one_short),
-            Err(EvidenceValidationFailure {
-                reason: EvidenceValidationReason::ConstraintResourceExhausted,
-                ..
-            })
-        ));
-        assert_eq!(one_short.used(), EXACT_WORK - 1);
-        for _ in 0..2 {
-            let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
-            let allowed = exercise(&mut exact)
-                .expect("the exact dependent-only allowance budget should fit")
-                .expect("the determined global should use the global-only path");
-            assert_eq!(allowed.len(), 1);
-            assert_eq!(exact.used(), EXACT_WORK);
-        }
-    }
-
-    #[test]
     fn linked_generic_prerequisite_decrease_uses_determined_selection_keys() {
         validate_interface_evidence(linked_determined_generic_decrease_program()).expect(
             "linked generic decrease must compare the determined key and retain the complete prerequisite only for groundness",
@@ -14565,54 +8630,6 @@ mod tests {
 
     #[test]
     fn linked_generic_prerequisite_selection_key_has_an_exact_public_retry_boundary() {
-        // Generic decrease owns 2D=2 head-key cells, P=2 complete-prerequisite
-        // cells, 2D=2 prerequisite-key cells, and 17 groundness/subterm cells.
-        // The complete public validator additionally authenticates structural,
-        // mirror, kind, method, and publication relationships.
-        const RELATIONSHIP_WORK: usize = 2 + 2 + 2 + 17 + 2;
-        let relationship_program = linked_determined_generic_decrease_program();
-        let group = entry_group(&relationship_program);
-        let interface = &group.interface_facts()[0];
-        let fact = &group.implementation_facts()[0];
-        let prerequisite = &fact.prerequisites[0];
-        let exercise_relationship = |work: &mut InterfaceConstraintBudget| {
-            let head_key =
-                linked_selection_key_types(interface, fact.arguments(), work, fact.span)?;
-            let complete =
-                linked_type_references(prerequisite.arguments(), work, prerequisite.span)?;
-            let prerequisite_key = linked_selection_key_types(
-                interface,
-                prerequisite.arguments(),
-                work,
-                prerequisite.span,
-            )?;
-            crate::interface::implementation_prerequisite_selection_key_terminates(
-                &complete,
-                &prerequisite_key,
-                &head_key,
-                work,
-            )
-            .map_err(|()| resource(prerequisite.span))
-        };
-        let mut relationship_short = InterfaceConstraintBudget::with_limit(RELATIONSHIP_WORK - 1);
-        assert_eq!(
-            exercise_relationship(&mut relationship_short)
-                .expect_err("one missing linked relationship cell must reject")
-                .reason(),
-            EvidenceValidationReason::ConstraintResourceExhausted,
-        );
-        assert_eq!(relationship_short.used(), RELATIONSHIP_WORK - 1);
-        for _ in 0..2 {
-            let mut relationship_exact = InterfaceConstraintBudget::with_limit(RELATIONSHIP_WORK);
-            assert!(
-                exercise_relationship(&mut relationship_exact)
-                    .expect("the exact borrowed linked relationship should fit")
-            );
-            assert_eq!(relationship_exact.used(), RELATIONSHIP_WORK);
-            assert_eq!(fact.arguments().len(), 2);
-            assert_eq!(prerequisite.arguments().len(), 2);
-        }
-
         let mut constraint_work = InterfaceConstraintBudget::default();
         let mut type_work = TypeWorkBudget::default();
         validate_interface_evidence_with_budget(
@@ -14621,11 +8638,9 @@ mod tests {
             &mut type_work,
         )
         .expect("the measured generic decrease program should authenticate");
-        // The local relationship tariff above is independent of the complete
-        // public validation boundary, including canonical service facts.
         let exact_constraint_work = constraint_work.used();
         let exact_type_work = type_work.used();
-        assert!(exact_constraint_work > RELATIONSHIP_WORK && exact_type_work > 0);
+        assert!(exact_constraint_work > 0 && exact_type_work > 0);
 
         let mut constraint_short = InterfaceConstraintBudget::with_limit(exact_constraint_work - 1);
         let mut exact_type = TypeWorkBudget::with_limit(exact_type_work);
@@ -14672,171 +8687,7 @@ mod tests {
     }
 
     #[test]
-    fn linked_generic_prerequisite_rejects_dependent_only_strictness_after_coherent_tampering() {
-        let mut program = entry_program(concat!(
-            "type List<A> =\n",
-            "Nil\n",
-            "| Cons(A, List<A>)\n",
-            "interface Relation<A, B> where A -> B {\n",
-            "relate : A -> Int\n",
-            "}\n",
-            "impl<X> Relation<List<X>, List<X>> where Relation<X, X> {\n",
-            "relate value = 0\n",
-            "}\n",
-            "main : Unit -> Unit\n",
-            "main () = ()\n",
-        ));
-        let implementation = entry_group(&program).implementation_facts()[0].id;
-        assert!(
-            program.replace_implementation_prerequisite_argument_with_head_for_test(
-                implementation,
-                0,
-                0,
-            ),
-            "the linked fixture should retain every prerequisite mirror",
-        );
-        let fact = &entry_group(&program).implementation_facts()[0];
-        let prerequisite = &fact.prerequisites[0];
-        assert_eq!(prerequisite.arguments()[0], fact.arguments()[0]);
-        assert_ne!(prerequisite.arguments()[1], fact.arguments()[1]);
-
-        assert_eq!(
-            validate_interface_evidence(program)
-                .expect_err("dependent-only strictness cannot authenticate generic decrease")
-                .reason(),
-            EvidenceValidationReason::UnknownIdentity,
-        );
-    }
-
-    #[test]
-    fn rejects_every_source_token_and_fact_determination_mutation_before_core() {
-        const SOURCE: &str = concat!(
-            "interface Relation<A, B, C> where (A, B) -> C {\n",
-            "relation : (A, B, C) -> Unit\n",
-            "}\n\n",
-            "interface Other<X, Y, Z> where Y -> (X, Z) {\n",
-            "other : (X, Y, Z) -> Unit\n",
-            "}\n\n",
-            "interface Ordinary<L, R, V> {\n",
-            "ordinary : (L, R, V) -> Unit\n",
-            "}\n\n",
-            "main : Unit -> Unit\n",
-            "main () = ()\n",
-        );
-        let mutations = [
-            (
-                LinkedDeterminationCarrierForTest::Source,
-                LinkedDeterminationMutationForTest::Missing,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Source,
-                LinkedDeterminationMutationForTest::Extra,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Source,
-                LinkedDeterminationMutationForTest::Duplicate,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Source,
-                LinkedDeterminationMutationForTest::Reordered,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Source,
-                LinkedDeterminationMutationForTest::OutOfRange,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Source,
-                LinkedDeterminationMutationForTest::WrongInterface,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Source,
-                LinkedDeterminationMutationForTest::MismatchedPositions,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Source,
-                LinkedDeterminationMutationForTest::WrongSourceSpelling,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Source,
-                LinkedDeterminationMutationForTest::WrongSourceOrigin,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Token,
-                LinkedDeterminationMutationForTest::Missing,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Token,
-                LinkedDeterminationMutationForTest::Extra,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Token,
-                LinkedDeterminationMutationForTest::Duplicate,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Token,
-                LinkedDeterminationMutationForTest::Reordered,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Token,
-                LinkedDeterminationMutationForTest::OutOfRange,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Token,
-                LinkedDeterminationMutationForTest::MismatchedPositions,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Fact,
-                LinkedDeterminationMutationForTest::Missing,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Fact,
-                LinkedDeterminationMutationForTest::Extra,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Fact,
-                LinkedDeterminationMutationForTest::Duplicate,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Fact,
-                LinkedDeterminationMutationForTest::Reordered,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Fact,
-                LinkedDeterminationMutationForTest::OutOfRange,
-            ),
-            (
-                LinkedDeterminationCarrierForTest::Fact,
-                LinkedDeterminationMutationForTest::MismatchedPositions,
-            ),
-        ];
-
-        validate_interface_evidence(entry_program(SOURCE))
-            .expect("the honest three-interface fixture should authenticate");
-        let mut unexpectedly_accepted = Vec::new();
-        for (carrier, mutation) in mutations {
-            let mut program = entry_program(SOURCE);
-            let module = entry_group(&program).module();
-            assert!(
-                program.corrupt_linked_determination_for_test(module, carrier, mutation),
-                "the fixture should retain {carrier:?} {mutation:?}",
-            );
-            match validate_interface_evidence(program) {
-                Err(failure) => assert_eq!(
-                    failure.reason(),
-                    EvidenceValidationReason::UnknownIdentity,
-                    "{carrier:?} {mutation:?}",
-                ),
-                Ok(_) => unexpectedly_accepted.push((carrier, mutation)),
-            }
-        }
-        assert!(
-            unexpectedly_accepted.is_empty(),
-            "linked validation accepted {unexpectedly_accepted:?}",
-        );
-    }
-
-    #[test]
-    fn linked_determination_authentication_has_an_exact_public_retry_boundary() {
+    fn linked_determination_is_retained_without_rechecking_and_retries_exactly() {
         fn program(determined: bool) -> ResolvedModuleProgram {
             let interface = if determined {
                 "interface Relation<A, B, C> where (A, B) -> C {\n"
@@ -14850,32 +8701,31 @@ mod tests {
         let measure = |determined| {
             let mut constraint_work = InterfaceConstraintBudget::default();
             let mut type_work = TypeWorkBudget::default();
-            validate_interface_evidence_with_budget(
+            let validated = validate_interface_evidence_with_budget(
                 program(determined),
                 &mut constraint_work,
                 &mut type_work,
             )
             .expect("the measured linked program should authenticate");
+            let fact = validated
+                .groups()
+                .iter()
+                .flat_map(|group| group.interface_facts())
+                .find(|fact| fact.spelling == "Relation")
+                .expect("the defining interface remains linked");
+            assert_eq!(
+                fact.determination().map(|key| key.positions()),
+                determined.then_some([0, 1].as_slice())
+            );
             (constraint_work.used(), type_work.used())
         };
-
-        const PARAMETER_COUNT: usize = 3;
-        const DETERMINANT_COUNT: usize = 2;
-        const THREE_WAY_AUTH_DELTA: usize = 2 * PARAMETER_COUNT + 2 * DETERMINANT_COUNT;
-        const SEED_RETENTION_DELTA: usize = DETERMINANT_COUNT;
-        const METHOD_SEED_DELTA: usize = 2 * DETERMINANT_COUNT;
-        const TOTAL_KEY_DELTA: usize =
-            THREE_WAY_AUTH_DELTA + SEED_RETENTION_DELTA + METHOD_SEED_DELTA;
 
         let ordinary = measure(false);
         let determined = measure(true);
         let (ordinary_constraint_work, ordinary_type_work) = ordinary;
         let (determined_constraint_work, exact_type_work) = determined;
         assert_eq!(ordinary_type_work, exact_type_work);
-        assert_eq!(
-            determined_constraint_work - ordinary_constraint_work,
-            TOTAL_KEY_DELTA,
-        );
+        assert_eq!(determined_constraint_work - ordinary_constraint_work, 0,);
 
         let mut short = InterfaceConstraintBudget::with_limit(determined_constraint_work - 1);
         let failure = validate_interface_evidence_with_budget(
@@ -14961,446 +8811,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_checked_global_parameter_kind_mirror_before_core() {
-        let mut program = higher_kinded_generic_program();
-        let module = entry_group(&program).module();
-        assert!(program.replace_first_checked_global_parameter_kind_for_test(module, Kind::Type,));
-
-        let failure = validate_interface_evidence(program)
-            .expect_err("a checked scheme Kind mirror must match the combined registry");
-
-        assert_eq!(failure.reason(), EvidenceValidationReason::UnknownIdentity);
-    }
-
-    #[test]
     fn authenticates_one_reusable_higher_kinded_linked_diamond() {
         let (program, _) = linked_higher_kinded_diamond_program();
         validate_interface_evidence(program)
             .expect("the exact public, hidden, opaque, and implementation mirrors must link");
-    }
-
-    #[test]
-    fn rejects_non_predecessor_resolved_source_carriers_without_panicking() {
-        for mutation in [
-            LinkedCarrierMutationForTest::InterfaceSourceParametersEmpty,
-            LinkedCarrierMutationForTest::InterfaceSourceParametersExtra,
-            LinkedCarrierMutationForTest::InterfaceSourceDetermination,
-            LinkedCarrierMutationForTest::ImplementationSourceArgumentsEmpty,
-            LinkedCarrierMutationForTest::ImplementationSourceArgumentsExtra,
-            LinkedCarrierMutationForTest::ImplementationSourceWideLatePrerequisiteArgumentsExtra,
-        ] {
-            let (mut program, base) = linked_higher_kinded_diamond_program();
-            assert!(
-                program.corrupt_linked_carrier_for_test(base, mutation),
-                "the linked fixture should support {mutation:?}",
-            );
-            let observed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                validate_interface_evidence(program)
-            }));
-            let failure = match observed {
-                Ok(Err(failure)) => failure,
-                Ok(Ok(_)) => panic!("linked validation accepted {mutation:?}"),
-                Err(_) => panic!("linked validation panicked for {mutation:?}"),
-            };
-            assert_eq!(
-                failure.reason(),
-                EvidenceValidationReason::UnknownIdentity,
-                "{mutation:?}",
-            );
-        }
-    }
-
-    #[test]
-    fn wide_mismatched_source_prerequisites_do_not_bypass_the_linked_budget() {
-        let (mut program, base) = linked_higher_kinded_diamond_program();
-        let registry =
-            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
-                .expect("the canonical linked registry should authenticate");
-        assert!(program.corrupt_linked_carrier_for_test(
-            base,
-            LinkedCarrierMutationForTest::ImplementationSourceWideLatePrerequisiteArgumentsExtra,
-        ));
-        let group = program
-            .groups()
-            .iter()
-            .find(|group| group.module() == base)
-            .expect("the fixture should retain its defining group");
-        let implementation_index = group
-            .implementation_facts()
-            .iter()
-            .position(|fact| {
-                fact.head_parameters
-                    .first()
-                    .is_some_and(|parameter| matches!(parameter.kind, Kind::Arrow(_, _)))
-                    && !fact.prerequisites.is_empty()
-            })
-            .expect("the fixture should retain its prerequisite implementation");
-        let fact = &group.implementation_facts()[implementation_index];
-        let source = group.implementations()[implementation_index].source();
-        assert_eq!(source.prerequisites.len(), 32);
-        assert_eq!(
-            source
-                .prerequisites
-                .last()
-                .unwrap()
-                .application
-                .arguments
-                .len(),
-            2
-        );
-        let initial_fact_work = fact
-            .head_parameters
-            .len()
-            .saturating_add(fact.prerequisites.len())
-            .saturating_add(fact.methods.len())
-            .saturating_add(1);
-        let mut type_work = TypeWorkBudget::default();
-        let mut kind_environments = build_linked_kind_environments(
-            program.registry(),
-            &mut type_work,
-            program.result().span,
-        )
-        .expect("the linked kind environments should fit");
-        let mut exact_initial = InterfaceConstraintBudget::with_limit(initial_fact_work);
-        let failure = validate_implementation_consistency(
-            &program,
-            &registry,
-            &group.implementations()[implementation_index],
-            &group.checked_implementations()[implementation_index],
-            fact,
-            &mut kind_environments,
-            &mut exact_initial,
-            &mut type_work,
-        )
-        .expect_err("source prerequisite width must not be scanned outside the budget");
-
-        assert_eq!(
-            failure.reason(),
-            EvidenceValidationReason::ConstraintResourceExhausted
-        );
-        assert_eq!(exact_initial.used(), initial_fact_work);
-    }
-
-    #[test]
-    fn late_relational_source_requirement_has_an_exact_matching_boundary() {
-        const WIDTH: usize = 32;
-        // The final deliberately over-wide source row reaches its arity check
-        // only after both retained positional application visits. Every complete
-        // row adds lexical tag admission; Type equality retains its predecessor cost.
-        const EXACT_WORK: usize = (6 + 1) * WIDTH - 3;
-
-        fn rows(
-            module: ModuleId,
-            span: Span,
-        ) -> (
-            Vec<CheckedRequirement>,
-            Vec<crate::resolved::ResolvedRequirement>,
-        ) {
-            let interface = InterfaceId::new(module, 0);
-            let owner = RequirementOwner::Global(BinderId::resolved(module, 0));
-            let resolved_type = || crate::resolved::ResolvedOwnerArgument {
-                ty: KindedArgument::TypeArg(Type::Int),
-                provenance: crate::resolved::ResolvedTypeProvenance::new(
-                    vec![crate::resolved::ResolvedTypeProvenanceNode::Fact(span)],
-                    0,
-                ),
-                origin: Origin::Source(span),
-                span,
-            };
-            let mut checked = Vec::new();
-            let mut source = Vec::new();
-            for index in 0..WIDTH {
-                let id = RequirementId::new(
-                    owner,
-                    u32::try_from(index).expect("the fixture width should fit"),
-                );
-                checked.push(CheckedRequirement {
-                    id,
-                    application: test_application(interface, Box::new([Type::Int])),
-                    origin: Origin::Source(span),
-                    span,
-                });
-                let mut arguments = vec![resolved_type()];
-                if index + 1 == WIDTH {
-                    arguments.push(resolved_type());
-                }
-                source.push(crate::resolved::ResolvedRequirement {
-                    id,
-                    application: crate::resolved::ResolvedInterfaceApplication {
-                        interface: crate::resolved::ResolvedInterfaceOccurrence {
-                            id: interface,
-                            spelling: "Relation".to_owned(),
-                            origin: Origin::Source(span),
-                        },
-                        arguments: arguments.into_boxed_slice(),
-                        span,
-                    },
-                });
-            }
-            (checked, source)
-        }
-
-        let (program, module) = linked_higher_kinded_diamond_program();
-        let span = program.result().span;
-        let (short_checked, short_source) = rows(module, span);
-        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
-        assert_eq!(
-            requirements_match(
-                &short_checked,
-                &short_source,
-                &[],
-                &program,
-                &mut short,
-                span,
-            )
-            .expect_err("one missing row unit should exhaust linked requirement matching")
-            .reason(),
-            EvidenceValidationReason::ConstraintResourceExhausted,
-        );
-        assert_eq!(short.used(), EXACT_WORK - 1);
-
-        let (exact_checked, exact_source) = rows(module, span);
-        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
-        assert!(
-            !requirements_match(
-                &exact_checked,
-                &exact_source,
-                &[],
-                &program,
-                &mut exact,
-                span,
-            )
-            .expect("the exact budget should reach the late relational row")
-        );
-        assert_eq!(exact.used(), EXACT_WORK);
-    }
-
-    #[test]
-    fn rejects_every_task8_kinded_linked_diamond_carrier_before_core() {
-        let mutations = [
-            LinkedCarrierMutationForTest::NominalParameterKind(0),
-            LinkedCarrierMutationForTest::NominalParameterKind(1),
-            LinkedCarrierMutationForTest::ConstructorIdentity,
-            LinkedCarrierMutationForTest::ConstructorOrdinal,
-            LinkedCarrierMutationForTest::DefiningModule,
-            LinkedCarrierMutationForTest::GlobalRegistryKind,
-            LinkedCarrierMutationForTest::GlobalSourceParameterIdentity,
-            LinkedCarrierMutationForTest::GlobalSourceParameterSpelling,
-            LinkedCarrierMutationForTest::GlobalSourceParameterOrigin,
-            LinkedCarrierMutationForTest::GlobalSourceNameIdentity,
-            LinkedCarrierMutationForTest::GlobalSourceNameSpelling,
-            LinkedCarrierMutationForTest::GlobalSourceNameOrigin,
-            LinkedCarrierMutationForTest::GlobalSourceKind,
-            LinkedCarrierMutationForTest::GlobalCheckedKind,
-            LinkedCarrierMutationForTest::GlobalSourceType,
-            LinkedCarrierMutationForTest::InterfaceTokenIdentity,
-            LinkedCarrierMutationForTest::InterfaceTokenSourceIndex,
-            LinkedCarrierMutationForTest::InterfaceSourceParameterIdentity,
-            LinkedCarrierMutationForTest::InterfaceSourceParameterSpelling,
-            LinkedCarrierMutationForTest::InterfaceSourceMethodIdentity,
-            LinkedCarrierMutationForTest::InterfaceSourceMethodSpelling,
-            LinkedCarrierMutationForTest::InterfaceSourceMethodSpan,
-            LinkedCarrierMutationForTest::InterfaceSourceMethodLocalBinder,
-            LinkedCarrierMutationForTest::InterfaceRegistryKind,
-            LinkedCarrierMutationForTest::InterfaceFactParameterIdentity,
-            LinkedCarrierMutationForTest::InterfaceFactParameterSpelling,
-            LinkedCarrierMutationForTest::InterfaceFactParameterKind,
-            LinkedCarrierMutationForTest::InterfaceHiddenFactParameterKind,
-            LinkedCarrierMutationForTest::InterfaceFactParameterOrigin,
-            LinkedCarrierMutationForTest::InterfaceMethodType,
-            LinkedCarrierMutationForTest::InterfaceMethodOrigin,
-            LinkedCarrierMutationForTest::ImplementationRegistryKind,
-            LinkedCarrierMutationForTest::ImplementationSourceParameterIdentity,
-            LinkedCarrierMutationForTest::ImplementationSourceParameterSpelling,
-            LinkedCarrierMutationForTest::ImplementationSourceParameterOrigin,
-            LinkedCarrierMutationForTest::ImplementationSourceKind,
-            LinkedCarrierMutationForTest::ImplementationFactKind,
-            LinkedCarrierMutationForTest::ImplementationOpaqueFactKind,
-            LinkedCarrierMutationForTest::ImplementationTokenIdentity,
-            LinkedCarrierMutationForTest::ImplementationTokenInterface,
-            LinkedCarrierMutationForTest::ImplementationTokenSourceIndex,
-            LinkedCarrierMutationForTest::ImplementationTokenMethod,
-            LinkedCarrierMutationForTest::ImplementationPrerequisite,
-            LinkedCarrierMutationForTest::ImplementationMethodRequirement,
-            LinkedCarrierMutationForTest::ImplementationMethodIdentity,
-            LinkedCarrierMutationForTest::ImplementationMethodBinder,
-        ];
-        for mutation in mutations {
-            let (mut program, base) = linked_higher_kinded_diamond_program();
-            assert!(
-                program.corrupt_linked_carrier_for_test(base, mutation),
-                "the linked diamond must retain {mutation:?}",
-            );
-            assert_eq!(
-                validate_interface_evidence(program)
-                    .expect_err("every independent linked carrier must authenticate before Core")
-                    .reason(),
-                EvidenceValidationReason::UnknownIdentity,
-                "{mutation:?}",
-            );
-        }
-    }
-
-    #[test]
-    fn rejects_implementation_method_parameter_kind_mirror_before_core() {
-        let mut program = higher_kinded_generic_program();
-        let module = entry_group(&program).module();
-        assert!(
-            program
-                .replace_first_implementation_method_parameter_kind_for_test(module, Kind::Type,)
-        );
-
-        let failure = validate_interface_evidence(program)
-            .expect_err("an implementation method Kind mirror must match its registry binder");
-
-        assert_eq!(failure.reason(), EvidenceValidationReason::UnknownIdentity);
-    }
-
-    #[test]
-    fn rejects_every_surviving_linked_nominal_and_constructor_mirror_before_core() {
-        enum Mutation {
-            NominalParameter,
-            Family,
-            Payload,
-            DefiningOwner,
-        }
-
-        for mutation in [
-            Mutation::NominalParameter,
-            Mutation::Family,
-            Mutation::Payload,
-            Mutation::DefiningOwner,
-        ] {
-            let donor = match mutation {
-                Mutation::Family => entry_program(concat!(
-                    "type Choice<A> =\n",
-                    "First(A)\n",
-                    "| Second(A)\n\n",
-                    "main : Unit -> Unit\n",
-                    "main () = ()\n",
-                )),
-                _ => higher_kinded_generic_program(),
-            };
-            let ValidatedInterfaceProgram {
-                source: mut program,
-                ..
-            } = validate_interface_evidence(donor)
-                .expect("the same honest nominal donor must validate before mutation");
-            let spelling = if matches!(mutation, Mutation::Family) {
-                "Choice"
-            } else {
-                "Wrapped"
-            };
-            let owner = program
-                .registry()
-                .nominals()
-                .iter()
-                .find(|nominal| {
-                    nominal.id.module() == program.entry() && nominal.spelling == spelling
-                })
-                .expect("the selected defining user nominal must remain canonical")
-                .id;
-            let changed = match mutation {
-                Mutation::NominalParameter => {
-                    program.replace_first_linked_nominal_parameter_kind_for_test(owner, Kind::Type)
-                }
-                Mutation::Family => {
-                    program.truncate_first_linked_constructor_family_for_test(owner)
-                }
-                Mutation::Payload => program
-                    .replace_first_linked_constructor_payload_for_test(owner, Type::Nominal(owner)),
-                Mutation::DefiningOwner => {
-                    program.detach_first_linked_constructor_from_owner_for_test(owner)
-                }
-            };
-            assert!(
-                changed,
-                "the selected linked mutation must reach its carrier"
-            );
-
-            let failure = validate_interface_evidence(program)
-                .expect_err("every surviving linked registry mirror must authenticate");
-            assert_eq!(failure.reason(), EvidenceValidationReason::UnknownIdentity);
-        }
-    }
-
-    #[test]
-    fn rejects_unused_inline_and_implementation_registry_binder_mirrors_before_core() {
-        let ValidatedInterfaceProgram {
-            source: mut inline, ..
-        } = validate_interface_evidence(entry_program(concat!(
-            "fn operational<F : Type -> Type>(value : F<Int>) -> F<Int> {\n",
-            "value\n",
-            "}\n\n",
-            "main : Unit -> Unit\n",
-            "main () = ()\n",
-        )))
-        .expect("the same honest inline donor must validate before mutation");
-        let module = inline.entry();
-        assert!(inline.erase_first_inline_global_binder_occurrence_for_test(module));
-        assert_eq!(
-            validate_interface_evidence(inline)
-                .expect_err("an inline checked/source pair cannot retain an unused binder")
-                .reason(),
-            EvidenceValidationReason::UnknownIdentity,
-        );
-
-        let ValidatedInterfaceProgram {
-            source: mut implementation,
-            ..
-        } = validate_interface_evidence(higher_kinded_generic_program())
-            .expect("the same honest implementation donor must validate before mutation");
-        assert!(implementation.corrupt_first_linked_implementation_parameter_spelling_for_test());
-        assert_eq!(
-            validate_interface_evidence(implementation)
-                .expect_err("an implementation binder record must match registry metadata")
-                .reason(),
-            EvidenceValidationReason::UnknownIdentity,
-        );
-    }
-
-    #[test]
-    fn rejects_surplus_canonical_variable_at_linked_owner_boundary() {
-        let mut program = polymorphic_method_program();
-        let module = entry_group(&program).module();
-        assert!(program.add_surplus_registry_type_variable_for_test(module));
-
-        assert_eq!(
-            validate_interface_evidence(program)
-                .expect_err("an unowned canonical binder must publish no capability")
-                .reason(),
-            EvidenceValidationReason::UnknownIdentity,
-        );
-    }
-
-    #[test]
-    fn rejects_correlated_interface_method_shape_tampering_before_core() {
-        for replacement in [
-            None,
-            Some(Type::Function(Box::new(Type::Int), Box::new(Type::Int))),
-        ] {
-            let mut program = entry_program(concat!(
-                "interface View<A> {\n",
-                "view : A -> A\n",
-                "}\n\n",
-                "main : Unit -> Unit\n",
-                "main () = ()\n",
-            ));
-            let group = entry_group(&program);
-            let module = group.module();
-            let parameter = group.interface_facts()[0].parameters[0].id;
-            let replacement = replacement.unwrap_or(Type::Variable(parameter));
-            assert!(
-                program.replace_first_interface_method_type_pair_for_test(module, replacement,)
-            );
-
-            assert_eq!(
-                validate_interface_evidence(program)
-                    .expect_err("a linked interface method must retain its exact shape")
-                    .reason(),
-                EvidenceValidationReason::UnknownIdentity,
-            );
-        }
     }
 
     #[test]
@@ -15537,7 +8951,6 @@ mod tests {
                 &application,
                 EvidenceScope {
                     local_scopes: &[],
-                    expected_equation: None,
                     lexical_sources: &[],
                     lexical_head: None,
                     owner: None,
@@ -15849,7 +9262,6 @@ mod tests {
         let variables = [second.scheme.type_parameters[0].0];
         let scope = EvidenceScope {
             local_scopes: &[],
-            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Global(second.binder)),
@@ -15890,7 +9302,6 @@ mod tests {
         let variables = [first.scheme.type_parameters[0].0];
         let scope = EvidenceScope {
             local_scopes: &[],
-            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Global(first.binder)),
@@ -15992,7 +9403,6 @@ mod tests {
             .collect::<Vec<_>>();
         let scope = EvidenceScope {
             local_scopes: &[],
-            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Impl(implementation.id)),
@@ -16048,7 +9458,6 @@ mod tests {
                 .expect("the valid linked registry should authenticate");
         let scope = EvidenceScope {
             local_scopes: &[],
-            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Impl(current.id)),
@@ -16119,7 +9528,6 @@ mod tests {
             .collect::<Vec<_>>();
         let scope = EvidenceScope {
             local_scopes: &[],
-            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Impl(current.id)),
@@ -16159,7 +9567,6 @@ mod tests {
         let variables = [scope_parameter.0];
         let scope = EvidenceScope {
             local_scopes: &[],
-            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Global(shadowed.binder)),
@@ -16249,7 +9656,6 @@ mod tests {
         };
         let implementation_scope = EvidenceScope {
             local_scopes: &[],
-            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Impl(outer.id)),
@@ -16334,7 +9740,6 @@ mod tests {
         let variables = [shadowed.scheme.type_parameters[0].0];
         let scope = EvidenceScope {
             local_scopes: &[],
-            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Global(shadowed.binder)),
@@ -16453,7 +9858,6 @@ mod tests {
             .collect::<Vec<_>>();
         let scope = EvidenceScope {
             local_scopes: &[],
-            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Impl(current.id)),
@@ -16657,40 +10061,6 @@ mod tests {
             .reason(),
             EvidenceValidationReason::InvalidEvidenceRoot,
         );
-    }
-
-    #[test]
-    fn rejects_linked_implementation_type_scheme_and_provenance_corruption() {
-        let cases = [0, 1, 2];
-        for case in cases {
-            let mut program = local_program();
-            let group = entry_group(&program);
-            let module = group.module();
-            let span = group.span();
-            let changed = match case {
-                0 => program.replace_first_implementation_argument_for_test(
-                    module,
-                    Type::Inference(InferenceVariableId::new(7)),
-                ),
-                1 => program.replace_first_implementation_method_type_for_test(
-                    module,
-                    Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
-                ),
-                2 => program.replace_first_implementation_method_origin_for_test(
-                    module,
-                    Origin::Source(span),
-                ),
-                _ => unreachable!(),
-            };
-            assert!(changed);
-
-            assert_eq!(
-                validate_interface_evidence(program)
-                    .expect_err("linked checked facts must agree with source bodies and provenance")
-                    .reason(),
-                EvidenceValidationReason::UnknownIdentity,
-            );
-        }
     }
 
     #[test]
@@ -16933,45 +10303,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_selection_for_a_different_checked_occurrence_argument() {
-        let mut program = entry_program(concat!(
-            "interface Keep<A> {\nkeep : A -> A\n}\n\n",
-            "impl Keep<Int> {\nkeep value = value\n}\n\n",
-            "impl Keep<Bool> {\nkeep value = value\n}\n\n",
-            "main : Unit -> (Int -> Int)\nmain () = keep\n",
-        ));
-        let group = entry_group(&program);
-        let module = group.module();
-        let bool_implementation = group
-            .implementation_facts()
-            .iter()
-            .find(|implementation| {
-                implementation.arguments() == [KindedArgument::TypeArg(Type::Bool)]
-            })
-            .expect("the fixture should retain its Bool implementation");
-        let methods = bool_implementation
-            .methods
-            .iter()
-            .map(|method| method.id)
-            .collect::<Vec<_>>();
-        let forged = implementation_selection_for_argument(
-            bool_implementation.id,
-            bool_implementation.interface(),
-            &methods,
-            Type::Bool,
-        );
-
-        assert!(program.replace_direct_equation_body_selection_for_test(module, forged));
-
-        assert_eq!(
-            validate_interface_evidence(program)
-                .expect_err("evidence must retain the checked occurrence argument")
-                .reason(),
-            EvidenceValidationReason::InvalidEvidenceRoot,
-        );
-    }
-
-    #[test]
     fn rejects_imported_implementation_route_without_its_exact_direct_edge() {
         let fixture = ValidationFixture::create(concat!(
             "import dependency as Dependency\n",
@@ -17189,54 +10520,6 @@ mod tests {
     }
 
     #[test]
-    fn changed_available_identity_is_reported_as_occurrence_unavailability() {
-        let mut program = dual_reexport_program();
-        let (base, _facade, entry) = reexport_groups(&program);
-        let entry_module = entry.module();
-        let [equal] = entry.available_implementations() else {
-            panic!("the entry should retain only its explicitly selected implementation");
-        };
-        let keep = &base.implementation_facts()[1];
-        assert!(program.replace_available_implementation_id_for_test(
-            entry_module,
-            equal.id(),
-            keep.id,
-        ));
-
-        assert_eq!(
-            validate_interface_evidence(program)
-                .expect_err("the validator must not reselect after effective availability changes")
-                .reason(),
-            EvidenceValidationReason::UnavailableImplementation,
-        );
-    }
-
-    #[test]
-    fn changed_selected_identity_is_reported_as_an_invalid_evidence_root() {
-        let mut program = dual_reexport_program();
-        let (base, _facade, entry) = reexport_groups(&program);
-        let entry_module = entry.module();
-        let keep = &base.implementation_facts()[1];
-        let forged = implementation_selection(
-            keep.id,
-            keep.interface(),
-            &keep
-                .methods
-                .iter()
-                .map(|method| method.id)
-                .collect::<Vec<_>>(),
-        );
-        assert!(program.replace_direct_equation_body_selection_for_test(entry_module, forged));
-
-        assert_eq!(
-            validate_interface_evidence(program)
-                .expect_err("an occurrence cannot change to a different selected interface")
-                .reason(),
-            EvidenceValidationReason::InvalidEvidenceRoot,
-        );
-    }
-
-    #[test]
     fn rejects_dependency_private_implementation_forged_into_importer_availability() {
         let fixture = ValidationFixture::create(concat!(
             "import dependency as Dependency\n",
@@ -17293,29 +10576,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_coherently_forged_expanding_generic_prerequisite() {
-        let mut program = entry_program(concat!(
-            "type Wrap<A> = Wrap(A)\n\n",
-            "interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\n",
-            "impl Equal<Int> {\nequal (left, right) = left == right\n}\n\n",
-            "impl Equal<Wrap<A>> where Equal<A> {\n",
-            "equal (Wrap(left), Wrap(right)) = equal((left, right))\n",
-            "}\n\n",
-            "main : Unit -> Unit\nmain () = ()\n",
-        ));
-        let generic = &entry_group(&program).implementation_facts()[1];
-        let implementation = generic.id;
-        assert!(program.replace_implementation_prerequisite_with_head_for_test(implementation, 0,));
-
-        assert_eq!(
-            validate_interface_evidence(program)
-                .expect_err("a generic prerequisite must remain a strict head subterm")
-                .reason(),
-            EvidenceValidationReason::UnknownIdentity,
-        );
-    }
-
-    #[test]
     fn linked_registry_entries_have_an_exact_constraint_limit() {
         let program = local_program();
         let mut measured = InterfaceConstraintBudget::default();
@@ -17342,26 +10602,6 @@ mod tests {
             implementation.arguments(),
             [KindedArgument::TypeArg(Type::Int)]
         );
-        // Its isolated Int goal still costs synthesis2 + Kind comparison1.
-        let mut environments = build_linked_kind_environments(
-            program.registry(),
-            &mut TypeWorkBudget::default(),
-            group.span(),
-        )
-        .unwrap();
-        let mut head_work = InterfaceConstraintBudget::with_limit(2 + 1);
-        validate_linked_value_type(
-            &Type::Int,
-            program.registry(),
-            &[],
-            &mut environments,
-            &mut head_work,
-            &mut TypeWorkBudget::default(),
-            group.span(),
-        )
-        .unwrap();
-        assert_eq!(head_work.used(), 3);
-
         assert_eq!(
             LinkedInterfaceRegistry::build(
                 &program,
@@ -17460,10 +10700,11 @@ mod tests {
         let linked = link_modules_with_budget(check_graph(&graph), graph.entry(), &mut measured)
             .expect("the checked local graph should link");
         let link_used = measured.used();
-        // Wrapper: modules3 + entry scheme1 + retained graph relationships15.
-        // Combined registry: fixed35 + uniqueness20 + canonical variable set3
-        // + Storage<R> record/origin/Kind3 + from_backing<R> identity/Kind2.
-        const LINK_PREFIX_WORK: usize = (3 + 1 + 15) + (35 + 20) + 3 + 3 + 2;
+        // Wrapper19, combined registry index39 and six occupied map slots,
+        // followed by group-lowering lookups of two, three and four units.
+        const LINK_PREFIX_WORK: usize = 19 + 39 + 6 + 2 + 3 + 4;
+        // Registry indexes and actual entry composition add 35 and 7 units.
+        const LINK_AND_VALIDATION_WORK: usize = LINK_PREFIX_WORK + 35 + 7;
         assert_eq!(graph.modules().len(), 3);
         assert_eq!(linked.groups().len(), 3);
         assert_eq!(linked.registry().nominals().len(), 5);
@@ -17479,7 +10720,7 @@ mod tests {
             .expect("the linked evidence should validate on the same budget"),
         );
         let total = measured.used();
-        assert!(total > link_used);
+        assert_eq!(total, LINK_AND_VALIDATION_WORK);
 
         let mut one_short = InterfaceConstraintBudget::with_limit(total - 1);
         let linked = link_modules_with_budget(check_graph(&graph), graph.entry(), &mut one_short)
@@ -17495,6 +10736,7 @@ mod tests {
             .reason(),
             EvidenceValidationReason::ConstraintResourceExhausted,
         );
+        assert_eq!(one_short.used(), LINK_AND_VALIDATION_WORK - 1);
 
         let mut exact = InterfaceConstraintBudget::with_limit(total);
         let linked = link_modules_with_budget(check_graph(&graph), graph.entry(), &mut exact)
@@ -17512,20 +10754,13 @@ mod tests {
 
     #[test]
     fn link_exposes_exact_independent_combined_registry_ledgers() {
-        // Wrapper19 + deterministic/uniqueness precharge55 + canonical
-        // variable set4 + Storage<R> mirror3 + global R identity/Kind2.
-        const CONSTRAINT_WORK: usize = 19 + 55 + 4 + 3 + 2;
-        // Modules3 + coverage4 + original effect/interface signatures(1+5).
-        const TYPE_PRELUDE_WORK: usize = 3 + 4 + 1 + 5;
-        // Atomic retained storage46 + Storage's parameter2 + four canonical
-        // variable records8 + two plain operation-arrow copies(3each).
-        const TYPE_RETENTION_WORK: usize = 46 + 2 + 4 * 2 + 2 * 3;
-        // DefaultAlloc: nonshared definition4 + signature2 + authentication1.
-        // Equal: shared definition4 + signature3 + authentication5.
-        const EFFECT_OWNER_WORK: usize = 4 + 2 + 1;
-        const INTERFACE_OWNER_WORK: usize = 4 + 3 + 5;
-        const TYPE_WORK: usize =
-            TYPE_PRELUDE_WORK + TYPE_RETENTION_WORK + EFFECT_OWNER_WORK + INTERFACE_OWNER_WORK;
+        // Wrapper19, registry index40, six map slots, and group lookups2+3+4.
+        const CONSTRAINT_WORK: usize = 19 + 40 + 6 + 2 + 3 + 4;
+        // Atomic retained storage62; DefaultAlloc owner5/signature2 and
+        // Equal owner5/signature3 retain their already-checked records.
+        const TYPE_RETENTION_WORK: usize = 62;
+        const TYPE_WORK: usize = TYPE_RETENTION_WORK + 5 + 2 + 5 + 3;
+        const REGISTRY_CONSTRAINT_PREFIX: usize = 19 + 40 + 6;
         let fixture = ValidationFixture::create(concat!(
             "interface Equal<A> {\nequal<B> : (A, B) -> Bool\n}\n\n",
             "impl Equal<Int> {\nequal (left, ignored) = left == left\n}\n\n",
@@ -17533,32 +10768,26 @@ mod tests {
         ));
         let graph = fixture.graph();
         let mut constraint_short = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK - 1);
-        let mut untouched_type = TypeWorkBudget::with_limit(TYPE_WORK);
+        let mut retained_type = TypeWorkBudget::with_limit(TYPE_WORK);
         let constraint_failure = link_modules_with_budgets(
             check_graph(&graph),
             graph.entry(),
             &mut constraint_short,
-            &mut untouched_type,
+            &mut retained_type,
         )
-        .expect_err("one missing combined-registry owner-index cell must reject linking");
+        .expect_err("one missing entry group lookup cell must reject linking");
         assert_eq!(
             constraint_failure,
             crate::elaborate::TypeError::Internal(
                 crate::elaborate::ElaborationFailure::ConstraintResourceExhausted,
             ),
         );
-        assert_eq!(
-            constraint_short.used(),
-            CONSTRAINT_WORK - 1,
-            "the last global-R Kind comparison follows the atomic registry precharge",
-        );
-        assert_eq!(untouched_type.used(), TYPE_PRELUDE_WORK);
+        assert_eq!(constraint_short.used(), CONSTRAINT_WORK - 4);
+        assert_eq!(retained_type.used(), TYPE_WORK);
 
-        // Retained storage is one atomic62-cell precharge after the paid13
-        // prelude, independently of the final single-cell exact boundary.
+        // Retained storage is one atomic 62-cell precharge.
         let mut atomic_constraint = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
-        let mut atomic_type =
-            TypeWorkBudget::with_limit(TYPE_PRELUDE_WORK + TYPE_RETENTION_WORK - 1);
+        let mut atomic_type = TypeWorkBudget::with_limit(TYPE_RETENTION_WORK - 1);
         assert_eq!(
             link_modules_with_budgets(
                 check_graph(&graph),
@@ -17571,8 +10800,8 @@ mod tests {
                 crate::elaborate::ElaborationFailure::TypeResourceExhausted
             )
         );
-        assert_eq!(atomic_constraint.used(), CONSTRAINT_WORK);
-        assert_eq!(atomic_type.used(), TYPE_PRELUDE_WORK);
+        assert_eq!(atomic_constraint.used(), REGISTRY_CONSTRAINT_PREFIX);
+        assert_eq!(atomic_type.used(), 0);
 
         let mut constraint = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
         let mut type_short = TypeWorkBudget::with_limit(TYPE_WORK - 1);
@@ -17589,7 +10818,7 @@ mod tests {
                 crate::elaborate::ElaborationFailure::TypeResourceExhausted,
             ),
         );
-        assert_eq!(constraint.used(), CONSTRAINT_WORK);
+        assert_eq!(constraint.used(), REGISTRY_CONSTRAINT_PREFIX);
         assert_eq!(type_short.used(), TYPE_WORK - 1);
 
         for _ in 0..2 {
@@ -18046,15 +11275,7 @@ mod tests {
                     &mut budget,
                     false,
                     OriginalLexicalContext::NONE,
-                    headers_only.then_some((
-                        &program,
-                        &registry,
-                        &[],
-                        None,
-                        None,
-                        &mut types,
-                        true,
-                    )),
+                    headers_only.then_some((&program, &registry, &[], None, &mut types, true)),
                 );
                 if limit < constraint_work {
                     assert_eq!(

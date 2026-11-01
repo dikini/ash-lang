@@ -2512,14 +2512,13 @@ freshly. For an operational global, one typed source parameter is
 pattern and one tuple domain. Singleton exhaustiveness requires that pattern to
 be irrefutable.
 
-Module checking receives resolved identities and headers. Import admission
-first authenticates immutable body-free nominal, binder, scheme, effect,
-interface, and implementation facts. It rejects a duplicate or mismatched
-canonical binder, an invalid nominal-kind derivation, an unbound type variable,
-or any kind-invalid imported type or effect instance as an internal
-dependency-summary failure. An alias, facade, opacity boundary, transitive
-route, or dependency diamond cannot recompute a defining kind or effect
-identity.
+Module checking receives resolved identities and headers. Imports use the
+immutable body-free nominal, binder, scheme, effect, interface, and
+implementation facts checked by each defining module before publication.
+The importer checks its new routes, namespace and identity collisions,
+availability, coherence and required hidden dependency closure. An alias,
+facade, opacity boundary, transitive route, or dependency diamond cannot
+recompute a defining kind or effect identity.
 
 After resolution allocates all nominal and parameter identities, kind
 checking derives and freezes every module-level nominal constructor kind and every
@@ -2549,10 +2548,10 @@ by public imports, but none enters a summary until all these checks succeed.
 ```sequent
 family module-and-program-typing:
   T-Module :=
-    imported kinded facts authenticate from direct dependency summaries
+    imported kinded facts come from checked direct dependency summaries
     allocate all local nominal and declaration-parameter identities
     XI = imported nominal kinds plus derived local nominal kinds
-    PHI = authenticated imported effects plus pre-frozen local effect headers
+    PHI = checked imported effects plus pre-frozen local effect headers
     IOTA = imported interface parameter vectors and determinant positions
       plus pre-frozen local interface parameter vectors and determinant positions
     for each module-level constructor payload and newtype representation in combined order,
@@ -2603,11 +2602,13 @@ selection, zonks its interface and method arguments and occurrence type, and
 publishes all fields together. It publishes none if any retained inference
 variable or relationship is invalid.
 
-`freeze_module_and_public` constructs the returned checked module from
-`checked_definitions` and derives its source-body-free checked summary in one
-atomic publication after the complete module succeeds. Any failure publishes
-neither result. Public local declarations, effects, and implementations retain
-the facts established by their owning judgments. The summary retains public
+`freeze_module_and_public` completes the lowered module graph, selected
+evidence and anchors, closure layouts, cleanup rows and capture contracts from
+`checked_definitions`. It constructs the returned checked module and its
+source-body-free checked summary in one atomic publication after the complete
+module succeeds. Any failure publishes neither result. Public local
+declarations, effects, and implementations retain the facts established by
+their owning judgments. The summary retains public
 kinds, effects and operations, and the hidden kind and identity closure
 required by public schemes, constructors, effects, interfaces, ordered parameters and
 determinant positions, ordered method binders and bodies, complete
@@ -2619,8 +2620,8 @@ kind, header, overlap, membership, body, inference-closure, or selection failure
 publishes no summary. The [name-resolution
 specification](name-resolution.md#imports-and-namespaces) defines the summary's
 public facts, required hidden closure, access effects, and authorization routes.
-Summary admission authenticates complete interface-application arity and
-positional kinds before classifying detached prerequisite pairs. It then uses
+Defining checks establish complete interface-application arity and positional
+kinds before classifying detached prerequisite pairs. New combinations retain
 the same current-then-earlier source order and complete-before-key identity
 precedence as source header admission.
 Publication also completes capture inference and retains the inferred control
@@ -2637,11 +2638,11 @@ opaque and private projections do not expose the representation or constructor.
 Checked lexical facts remain separate from this summary closure, as specified
 by [elaboration](elaboration.md#module-linking-and-entry-generation).
 
-The filled occurrence fields and checked modules become inputs to
-[module linking and linked interface-evidence validation](elaboration.md#module-linking-and-entry-generation).
-That specification owns their retention through linking and the validator's
-authentication inventory. Core synthesis requires the validated result, and
-neither validation nor synthesis selects implementations again.
+The completed checked modules become inputs to
+[module linking](elaboration.md#module-linking-and-entry-generation). Linking
+preserves their selected evidence and metadata without rechecking provider
+bodies or selecting implementations again. It checks new link and entry
+obligations, and the newly assembled Core receives independent validation.
 
 `T-Program` checks each module after all its dependencies. The entry must
 declare exactly one local `main`; an imported `main` cannot satisfy the
@@ -2809,12 +2810,11 @@ owner index are charged independently before allocation. Validation of one
 canonical improvement goal is charged once; each candidate and comparison
 remains separately charged.
 [Elaboration](elaboration.md#module-linking-and-entry-generation) defines the
-link-retention and full-route-validation charges. Exhaustion at any stage is
+link-retention and route-checking charges. Exhaustion at any stage is
 `internal.resource.constraint-work`; validation has no separate resource
 reason. Active-goal cycle detection precedes resource exhaustion for the same
-retained selection work. Existing type-inference, Core-construction, and Core-
-validation budgets remain separate, and the Core budgets begin only after
-linked interface-evidence validation succeeds.
+retained selection work. Type inference, module construction, final assembly
+and independent Core validation retain their own work accounting.
 
 Effect syntax charges the existing syntax ledger. Effect and operation facts,
 effect instances, computation codomains, row variables, row members, and lacks

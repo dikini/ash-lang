@@ -3306,12 +3306,22 @@ pub(crate) fn substitute_type_and_row_variables_borrowed_with<E>(
 pub(crate) struct TemplateIdentityRenaming<'a> {
     pub(crate) nominals: &'a HashMap<NominalTypeId, NominalTypeId>,
     pub(crate) variables: &'a HashMap<TypeVariableId, TypeVariableId>,
+    pub(crate) variable_overlay: Option<&'a HashMap<TypeVariableId, TypeVariableId>>,
+}
+
+impl TemplateIdentityRenaming<'_> {
+    fn variable(&self, identity: &TypeVariableId) -> Option<&TypeVariableId> {
+        self.variable_overlay
+            .and_then(|overlay| overlay.get(identity))
+            .or_else(|| self.variables.get(identity))
+    }
 }
 
 #[derive(Clone, Copy)]
 struct TemplateRowReplacements<'a> {
     inference_rows: &'a HashMap<InferenceVariableId, EffectRow>,
     renaming: Option<&'a TemplateIdentityRenaming<'a>>,
+    require_generated_mapping: bool,
 }
 
 #[cfg(test)]
@@ -3331,6 +3341,7 @@ pub(crate) fn substitute_type_for_template_with<E>(
         Some(TemplateRowReplacements {
             inference_rows,
             renaming: Some(renaming),
+            require_generated_mapping: false,
         }),
         &mut charge,
         &mut allocation_error,
@@ -3356,12 +3367,98 @@ pub(crate) fn substitute_row_for_template_with<E>(
         Some(TemplateRowReplacements {
             inference_rows,
             renaming: Some(renaming),
+            require_generated_mapping: false,
         }),
         &mut charge,
         &mut allocation_error,
         None,
     )
     .map(|result| result.map(|value| value.into_row().expect("row substitution root")))
+}
+
+/// Relocates one checked fragment's type variables without changing its
+/// module-qualified identities. A missing generated identity is an incomplete
+/// relocation, not permission to retain an arena-local name.
+pub(crate) fn rename_fragment_type_with<E>(
+    ty: &Type,
+    variables: &HashMap<TypeVariableId, TypeVariableId>,
+    overlay: Option<&HashMap<TypeVariableId, TypeVariableId>>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+) -> Result<Result<Type, EffectRowError>, E> {
+    rename_fragment_root(
+        SubstitutionRoot::Type(ty),
+        variables,
+        overlay,
+        &mut charge,
+        &mut allocation_error,
+    )
+    .map(|result| result.map(StructuralValue::into_inner))
+}
+
+pub(crate) fn rename_fragment_row_with<E>(
+    row: &EffectRow,
+    variables: &HashMap<TypeVariableId, TypeVariableId>,
+    overlay: Option<&HashMap<TypeVariableId, TypeVariableId>>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+) -> Result<Result<EffectRow, EffectRowError>, E> {
+    rename_fragment_root(
+        SubstitutionRoot::Row(row),
+        variables,
+        overlay,
+        &mut charge,
+        &mut allocation_error,
+    )
+    .map(|result| result.map(|value| value.into_row().expect("row relocation root")))
+}
+
+pub(crate) fn rename_fragment_argument_with<E>(
+    argument: &KindedArgument,
+    variables: &HashMap<TypeVariableId, TypeVariableId>,
+    overlay: Option<&HashMap<TypeVariableId, TypeVariableId>>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+) -> Result<Result<KindedArgument, EffectRowError>, E> {
+    rename_fragment_root(
+        SubstitutionRoot::Argument(argument),
+        variables,
+        overlay,
+        &mut charge,
+        &mut allocation_error,
+    )
+    .map(|result| result.map(|value| value.into_argument().expect("argument relocation root")))
+}
+
+fn rename_fragment_root<'a, E>(
+    root: SubstitutionRoot<'a>,
+    variables: &'a HashMap<TypeVariableId, TypeVariableId>,
+    overlay: Option<&'a HashMap<TypeVariableId, TypeVariableId>>,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+    allocation_error: &mut impl FnMut() -> E,
+) -> Result<Result<StructuralValue, EffectRowError>, E> {
+    let replacements: HashMap<TypeVariableId, Type> = HashMap::new();
+    let rows = HashMap::new();
+    let inference_rows = HashMap::new();
+    let nominals = HashMap::new();
+    let renaming = TemplateIdentityRenaming {
+        nominals: &nominals,
+        variables,
+        variable_overlay: overlay,
+    };
+    substitute_structural_type_and_row_variables(
+        root,
+        &replacements,
+        &rows,
+        Some(TemplateRowReplacements {
+            inference_rows: &inference_rows,
+            renaming: Some(&renaming),
+            require_generated_mapping: true,
+        }),
+        charge,
+        allocation_error,
+        None,
+    )
 }
 
 /// Substitute an implementation's complete source type after requiring every
@@ -3412,7 +3509,6 @@ pub(crate) fn substitute_kinded_argument_strict_source_with<E>(
 }
 
 enum SubstitutionRoot<'a> {
-    #[cfg(test)]
     Row(&'a EffectRow),
     Type(&'a Type),
     Argument(&'a KindedArgument),
@@ -3662,12 +3758,20 @@ fn substitute_structural_type_and_row_variables<E, R: Borrow<Type>>(
         FinishForall(Box<[(TypeVariableId, Kind)]>),
     }
 
+    let generated_is_unmapped = |identity: TypeVariableId| {
+        matches!(identity, TypeVariableId::Generated(_))
+            && template.is_some_and(|template| {
+                template.require_generated_mapping
+                    && template
+                        .renaming
+                        .is_none_or(|renaming| renaming.variable(&identity).is_none())
+            })
+    };
     let mut active_shadows = HashMap::new();
     let mut work = Vec::new();
     charge(1)?;
     work.try_reserve_exact(1).map_err(|_| allocation_error())?;
     work.push(match root {
-        #[cfg(test)]
         SubstitutionRoot::Row(row) => Task::VisitRow(row, true),
         SubstitutionRoot::Type(ty) => Task::Visit(ty, true),
         SubstitutionRoot::Argument(argument) => Task::VisitArgument(argument, true),
@@ -3678,12 +3782,21 @@ fn substitute_structural_type_and_row_variables<E, R: Borrow<Type>>(
         rebuilt.try_reserve(1).map_err(|_| allocation_error())?;
         match task {
             Task::Visit(Type::Variable(identity), true) => {
+                if template
+                    .and_then(|template| template.renaming)
+                    .is_some_and(|renaming| renaming.variable_overlay.is_some())
+                {
+                    charge(2)?;
+                }
                 if let Some(renamed) = template
                     .and_then(|template| template.renaming)
-                    .and_then(|renaming| renaming.variables.get(identity))
+                    .and_then(|renaming| renaming.variable(identity))
                 {
                     charge(1)?;
                     rebuilt.push(StructuralValue::type_value(Type::Variable(*renamed)));
+                } else if generated_is_unmapped(*identity) {
+                    charge(1)?;
+                    return Ok(Err(EffectRowError::Missing));
                 } else if active_shadows
                     .get(identity)
                     .is_some_and(|count| *count != 0)
@@ -3793,6 +3906,20 @@ fn substitute_structural_type_and_row_variables<E, R: Borrow<Type>>(
                 if let Some(tail) = &row.tail {
                     charge(1)?;
                     charge(tail.lacks.len())?;
+                    if substitute
+                        && matches!(tail.variable, EffectRowVariable::Rigid(_))
+                        && template
+                            .and_then(|template| template.renaming)
+                            .is_some_and(|renaming| renaming.variable_overlay.is_some())
+                    {
+                        charge(3)?;
+                    }
+                    if substitute
+                        && let EffectRowVariable::Rigid(identity) = tail.variable
+                        && generated_is_unmapped(identity)
+                    {
+                        return Ok(Err(EffectRowError::Missing));
+                    }
                 }
                 let instances = row
                     .known
@@ -3822,9 +3949,9 @@ fn substitute_structural_type_and_row_variables<E, R: Borrow<Type>>(
                 let replacement = row.tail.as_ref().and_then(|tail| match tail.variable {
                     EffectRowVariable::Rigid(identity)
                         if substitute
-                            && template.and_then(|template| template.renaming).is_none_or(
-                                |renaming| !renaming.variables.contains_key(&identity),
-                            )
+                            && template
+                                .and_then(|template| template.renaming)
+                                .is_none_or(|renaming| renaming.variable(&identity).is_none())
                             && !active_shadows
                                 .get(&identity)
                                 .is_some_and(|count| *count != 0) =>
@@ -3852,7 +3979,7 @@ fn substitute_structural_type_and_row_variables<E, R: Borrow<Type>>(
                         match tail.variable {
                             EffectRowVariable::Rigid(identity) => template
                                 .and_then(|template| template.renaming)
-                                .and_then(|renaming| renaming.variables.get(&identity))
+                                .and_then(|renaming| renaming.variable(&identity))
                                 .map_or(tail.variable, |identity| {
                                     EffectRowVariable::Rigid(*identity)
                                 }),
@@ -3888,10 +4015,20 @@ fn substitute_structural_type_and_row_variables<E, R: Borrow<Type>>(
                     .try_reserve_exact(parameters.len())
                     .map_err(|_| allocation_error())?;
                 for (identity, kind) in parameters {
+                    if substitute
+                        && template
+                            .and_then(|template| template.renaming)
+                            .is_some_and(|renaming| renaming.variable_overlay.is_some())
+                    {
+                        charge(2)?;
+                    }
+                    if substitute && generated_is_unmapped(*identity) {
+                        return Ok(Err(EffectRowError::Missing));
+                    }
                     let identity = if substitute {
                         template
                             .and_then(|template| template.renaming)
-                            .and_then(|renaming| renaming.variables.get(identity))
+                            .and_then(|renaming| renaming.variable(identity))
                             .unwrap_or(identity)
                     } else {
                         identity
@@ -4673,6 +4810,7 @@ mod tests {
         let renaming = TemplateIdentityRenaming {
             nominals: &nominals,
             variables: &variables,
+            variable_overlay: None,
         };
         let mut work = TypeWorkBudget::unbounded();
         let copied = IterativeTypeOwner::new(
@@ -4750,6 +4888,107 @@ mod tests {
             )
             .unwrap()
             .is_err()
+        );
+    }
+
+    #[test]
+    fn fragment_relocation_maps_forall_and_rows_with_exact_retry() {
+        let module = ModuleId::new(71);
+        let source_value = TypeVariableId::generated(0);
+        let source_row = TypeVariableId::generated(1);
+        let target_value = TypeVariableId::generated(10);
+        let target_row = TypeVariableId::generated(11);
+        let external = TypeVariableId::resolved(module, 0);
+        let effect = EffectId::new(module, 0);
+        let row = |value, row| {
+            EffectRow::open(
+                EffectRowVariable::rigid(row),
+                vec![EffectInstance::new(
+                    effect,
+                    vec![Type::Variable(value)].into_boxed_slice(),
+                )]
+                .into_boxed_slice(),
+            )
+        };
+        let source = Type::Forall(
+            vec![(source_value, Kind::Type), (source_row, Kind::EffectRow)].into_boxed_slice(),
+            Box::new(Type::function_computation(
+                Type::Variable(source_value),
+                ComputationType::new(Type::Variable(external), row(source_value, source_row)),
+            )),
+        );
+        let expected = Type::Forall(
+            vec![(target_value, Kind::Type), (target_row, Kind::EffectRow)].into_boxed_slice(),
+            Box::new(Type::function_computation(
+                Type::Variable(target_value),
+                ComputationType::new(Type::Variable(external), row(target_value, target_row)),
+            )),
+        );
+        let mapping = HashMap::from([(source_value, target_value), (source_row, target_row)]);
+        let mut measured = TypeWorkBudget::unbounded();
+        assert_eq!(
+            rename_fragment_type_with(
+                &source,
+                &mapping,
+                None,
+                |units| measured.charge(units),
+                || ()
+            ),
+            Ok(Ok(expected.clone())),
+        );
+        let exact = measured.used();
+        assert!(exact > 0);
+        let mut short = TypeWorkBudget::with_limit(exact - 1);
+        assert_eq!(
+            rename_fragment_type_with(&source, &mapping, None, |units| short.charge(units), || ()),
+            Err(()),
+        );
+        for _ in 0..2 {
+            let mut retry = TypeWorkBudget::with_limit(exact);
+            assert_eq!(
+                rename_fragment_type_with(
+                    &source,
+                    &mapping,
+                    None,
+                    |units| retry.charge(units),
+                    || ()
+                ),
+                Ok(Ok(expected.clone())),
+            );
+            assert_eq!(retry.used(), exact);
+        }
+        let overlay_value = TypeVariableId::generated(20);
+        let overlay_row = TypeVariableId::generated(21);
+        let overlay = HashMap::from([(source_value, overlay_value), (source_row, overlay_row)]);
+        let overlay_expected = Type::Forall(
+            vec![(overlay_value, Kind::Type), (overlay_row, Kind::EffectRow)].into_boxed_slice(),
+            Box::new(Type::function_computation(
+                Type::Variable(overlay_value),
+                ComputationType::new(Type::Variable(external), row(overlay_value, overlay_row)),
+            )),
+        );
+        let mut overlay_work = TypeWorkBudget::unbounded();
+        assert_eq!(
+            rename_fragment_type_with(
+                &source,
+                &mapping,
+                Some(&overlay),
+                |units| overlay_work.charge(units),
+                || (),
+            ),
+            Ok(Ok(overlay_expected)),
+        );
+        let incomplete = HashMap::from([(source_value, target_value)]);
+        let mut work = TypeWorkBudget::unbounded();
+        assert_eq!(
+            rename_fragment_row_with(
+                &row(source_value, source_row),
+                &incomplete,
+                None,
+                |units| work.charge(units),
+                || (),
+            ),
+            Ok(Err(EffectRowError::Missing)),
         );
     }
 
@@ -7307,6 +7546,7 @@ mod owned_tail_reconstruction_tests {
                 &TemplateIdentityRenaming {
                     variables: &HashMap::new(),
                     nominals: &HashMap::new(),
+                    variable_overlay: None,
                 },
                 |_: usize| Ok::<_, ()>(()),
                 || (),

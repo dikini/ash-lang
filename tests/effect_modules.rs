@@ -107,6 +107,12 @@ fn registration_factory_dependencies_survive_opaque_facade_exports() {
         let result = try_check_graph(&graph);
         if accepted {
             result.unwrap();
+            let observation = ash::driver::run_path(ash::driver::RunConfiguration {
+                entry: entry.clone(),
+                roots: ModuleRoots::empty(),
+            })
+            .expect("the accepted imported callback should link and execute");
+            assert_eq!(observation.value_display(), "42");
         } else {
             assert!(format!("{:?}", result.unwrap_err()).contains("ResourceEscape"));
         }
@@ -203,7 +209,55 @@ fn discard_summary_survives_import_and_facade_reexport() {
         ));
         let graph = load_module_graph(&entry, &ModuleRoots::empty()).expect("capture imports load");
         check_graph(&graph);
+        assert_unit_entry(&entry);
     }
+}
+
+#[test]
+fn imported_generic_method_preserves_owner_in_discard_cleanup_rows() {
+    let tree = ModuleTree::create();
+    tree.write(
+        "provider.ash",
+        r#"pub type Box<A> = Box(A)
+pub interface Measure<A> {
+    measure : A -> Int
+}
+effect Stop<A> {
+    stop : A -> Unit
+}
+effect Touch<A> {
+    touch : A -> Unit
+}
+pub impl Measure<Int> {
+    measure value = value
+}
+pub impl<A> Measure<Box<A>> where Measure<A> {
+    measure (Box(value)) = handle (handle (cleanup fn(ignored) {
+        perform Touch<A>.touch value
+    } {
+        let ignored = perform Stop<A>.stop value
+        0
+    }) with Stop<A> {
+        stop ignored => {
+            let done = discard
+            measure value
+        }
+    }) with Touch<A> {
+        touch ignored => resume ()
+    }
+}
+"#,
+    );
+    let entry = tree.write(
+        "entry.ash",
+        "import provider (Box, measure, impl Measure)\nmain : Unit -> Int\nmain () = measure(Box(42))\n",
+    );
+    let observation = ash::driver::run_path(ash::driver::RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .expect("the imported generic method should check, link, and execute");
+    assert_eq!(observation.value_display(), "42");
 }
 
 #[test]
