@@ -1,8 +1,10 @@
 //! Resolution and checking evidence for independent library import channels.
 
 use std::{
+    cell::RefCell,
     fs,
     path::{Path, PathBuf},
+    rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -10,16 +12,19 @@ use ash::{
     driver::{RunConfiguration, run_path},
     elaborate::{TypeError, check_module},
     interface::InterfaceReason,
-    module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
+    module::{LoadedModule, ModuleGraph, ModuleId, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
-    resolved::{ImportedTypeAccess, ResolvedDefinitionKind, ResolvedExprKind, ResolvedTermName},
+    resolved::{
+        CheckedModule, ImportedTypeAccess, ResolvedDefinitionKind, ResolvedExprKind,
+        ResolvedTermName,
+    },
     source::{SourceFile, Span},
     surface::{SurfaceImportItem, SurfaceImportSelection},
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
-struct ModuleTree(PathBuf);
+struct ModuleTree(PathBuf, RefCell<Vec<(ModuleId, Rc<Vec<CheckedModule>>)>>);
 
 impl ModuleTree {
     fn create() -> Self {
@@ -28,7 +33,7 @@ impl ModuleTree {
             let path = std::env::temp_dir()
                 .join(format!("ash-library-imports-{}-{id}", std::process::id()));
             match fs::create_dir(&path) {
-                Ok(()) => return Self(path),
+                Ok(()) => return Self(path, RefCell::new(Vec::new())),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => panic!("library import fixture should be creatable: {error}"),
             }
@@ -42,6 +47,45 @@ impl ModuleTree {
         }
         fs::write(&path, source).expect("fixture source should be writable");
         path
+    }
+
+    fn implicit_services(&self, graph: &ModuleGraph) -> Rc<Vec<CheckedModule>> {
+        if let Some((_, services)) = self
+            .1
+            .borrow()
+            .iter()
+            .find(|(entry, _)| *entry == graph.entry())
+        {
+            return Rc::clone(services);
+        }
+        let mut services = Vec::<CheckedModule>::new();
+        for module in graph.modules().iter().filter(|module| {
+            matches!(
+                module.canonical_path().to_str(),
+                Some("@builtin.foreign" | "@compiler.region")
+            )
+        }) {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    let service = services
+                        .iter()
+                        .find(|service| service.module() == edge.target())
+                        .expect("implicit services must be dependency ordered");
+                    DependencyExports::new(edge, service.exports())
+                        .expect("the actual implicit edge matches its export")
+                })
+                .collect::<Vec<_>>();
+            let resolved =
+                resolve_module(module, &dependencies).expect("the implicit service should resolve");
+            services.push(check_module(resolved).expect("the implicit service should check"));
+        }
+        let services = Rc::new(services);
+        self.1
+            .borrow_mut()
+            .push((graph.entry(), Rc::clone(&services)));
+        services
     }
 }
 
@@ -147,17 +191,29 @@ fn resolve_entry_error(graph: &ModuleGraph) -> ash::resolve::ResolveError {
     panic!("the graph should contain its entry module");
 }
 
-fn resolve_entry(graph: &ModuleGraph) -> ash::resolved::ResolvedModule {
-    resolve_target(graph, module_named(graph, "entry.ash"), &[])
+fn resolve_entry(tree: &ModuleTree, graph: &ModuleGraph) -> ash::resolved::ResolvedModule {
+    resolve_target(tree, graph, module_named(graph, "entry.ash"), &[])
 }
 
 fn resolve_target(
+    tree: &ModuleTree,
     graph: &ModuleGraph,
     target: &LoadedModule,
     summaries: &[&ash::resolved::CheckedModule],
 ) -> ash::resolved::ResolvedModule {
+    let implicit = tree.implicit_services(graph);
     let mut checked = Vec::new();
     for module in graph.modules() {
+        if implicit
+            .iter()
+            .any(|service| service.module() == module.id())
+            || (module.id() != target.id()
+                && summaries
+                    .iter()
+                    .any(|checked| checked.module() == module.id()))
+        {
+            continue;
+        }
         let dependencies = module
             .dependencies()
             .iter()
@@ -166,6 +222,11 @@ fn resolve_target(
                     .iter()
                     .copied()
                     .find(|dependency| dependency.module() == edge.target())
+                    .or_else(|| {
+                        implicit
+                            .iter()
+                            .find(|dependency| dependency.module() == edge.target())
+                    })
                     .or_else(|| {
                         checked
                             .iter()
@@ -337,7 +398,7 @@ fn name_only_import_does_not_select_implementation() {
         )],
     );
     let equality = module_named(&graph, "equality.ash");
-    let equality_checked = check_module(resolve_target(&graph, equality, &[]))
+    let equality_checked = check_module(resolve_target(&tree, &graph, equality, &[]))
         .expect("the equality dependency should check");
     let [interface] = equality_checked.interface_facts() else {
         panic!("the dependency should publish one interface fact");
@@ -354,7 +415,7 @@ fn name_only_import_does_not_select_implementation() {
             .count(),
         1
     );
-    let resolved = resolve_target(&graph, entry, &[&equality_checked]);
+    let resolved = resolve_target(&tree, &graph, entry, &[&equality_checked]);
     let retained_interface = resolved.imported_facts().interface(interface.id).is_some();
     let retained_implementation = resolved
         .imported_facts()
@@ -444,7 +505,7 @@ fn implementation_only_import_selects_evidence_without_binding_names() {
         )],
     );
     let equality = module_named(&graph, "equality.ash");
-    let equality_checked = check_module(resolve_target(&graph, equality, &[]))
+    let equality_checked = check_module(resolve_target(&tree, &graph, equality, &[]))
         .expect("the equality dependency should check");
     let [defining_interface] = equality_checked.interface_facts() else {
         panic!("the dependency should publish one interface fact");
@@ -456,7 +517,7 @@ fn implementation_only_import_selects_evidence_without_binding_names() {
     let expected_implementation = defining_implementation.id;
     let expected_implementation_method = defining_implementation.methods[0].id;
     let entry = module_named(&graph, "entry.ash");
-    let resolved = resolve_target(&graph, entry, &[&equality_checked]);
+    let resolved = resolve_target(&tree, &graph, entry, &[&equality_checked]);
     let imported = resolved
         .imported_facts()
         .implementation(expected_implementation)
@@ -617,7 +678,7 @@ fn public_implementation_selector_crosses_a_three_module_facade() {
     );
 
     let equality = module_named(&graph, "equality.ash");
-    let equality_checked = check_module(resolve_target(&graph, equality, &[]))
+    let equality_checked = check_module(resolve_target(&tree, &graph, equality, &[]))
         .expect("the defining module should check");
     let [defining_interface] = equality_checked.interface_facts() else {
         panic!("the defining module should retain one interface fact");
@@ -640,7 +701,7 @@ fn public_implementation_selector_crosses_a_three_module_facade() {
             .count(),
         1
     );
-    let facade_resolved = resolve_target(&graph, facade, &[&equality_checked]);
+    let facade_resolved = resolve_target(&tree, &graph, facade, &[&equality_checked]);
     let facade_imported = facade_resolved
         .imported_facts()
         .implementation(implementation)
@@ -660,7 +721,8 @@ fn public_implementation_selector_crosses_a_three_module_facade() {
             .count(),
         1
     );
-    let entry_resolved = resolve_target(&graph, entry, &[&facade_checked]);
+    let entry_resolved =
+        resolve_target(&tree, &graph, entry, &[&equality_checked, &facade_checked]);
     let entry_imported = entry_resolved
         .imported_facts()
         .implementation(implementation)
@@ -940,8 +1002,8 @@ fn public_targeted_import_reexports_each_selected_name_namespace() {
     );
 
     let base = module_named(&graph, "base.ash");
-    let base_checked =
-        check_module(resolve_target(&graph, base, &[])).expect("the defining module should check");
+    let base_checked = check_module(resolve_target(&tree, &graph, base, &[]))
+        .expect("the defining module should check");
     let expected_global = base_checked.schemes()[0].binder;
     let [choice, token] = base_checked.registry().nominals() else {
         panic!("the defining module should retain both nominal declarations");
@@ -973,7 +1035,7 @@ fn public_targeted_import_reexports_each_selected_name_namespace() {
             .count(),
         1
     );
-    let facade_resolved = resolve_target(&graph, facade, &[&base_checked]);
+    let facade_resolved = resolve_target(&tree, &graph, facade, &[&base_checked]);
     let candidate = facade_resolved.export_candidate();
     assert_eq!(
         candidate.term("facade_answer").map(|term| term.binder),
@@ -1048,7 +1110,7 @@ fn public_targeted_import_reexports_each_selected_name_namespace() {
             .count(),
         1
     );
-    let entry_resolved = resolve_target(&graph, entry, &[&facade_checked]);
+    let entry_resolved = resolve_target(&tree, &graph, entry, &[&base_checked, &facade_checked]);
 
     assert_eq!(
         entry_resolved
@@ -1149,7 +1211,10 @@ fn name_reexports_preserve_privacy_opacity_and_identity() {
         ],
     );
     let base = module_named(&graph, "base.ash");
-    let token = resolve_target(&graph, base, &[]).registry().nominals()[0].id;
+    let token = resolve_target(&tree, &graph, base, &[])
+        .registry()
+        .nominals()[0]
+        .id;
     let mut checked = Vec::new();
     let mut entry_resolved = None;
     for module in graph.modules() {
@@ -1257,7 +1322,7 @@ fn name_reexports_preserve_privacy_opacity_and_identity() {
     );
     let base = module_named(&graph, "base.ash");
     let base_checked =
-        check_module(resolve_target(&graph, base, &[])).expect("the base should check");
+        check_module(resolve_target(&tree, &graph, base, &[])).expect("the base should check");
     let expected_binder = base_checked.schemes()[0].binder;
     let facade = module_named(&graph, "facade.ash");
     assert_eq!(
@@ -1268,7 +1333,7 @@ fn name_reexports_preserve_privacy_opacity_and_identity() {
             .count(),
         1
     );
-    let facade_checked = check_module(resolve_target(&graph, facade, &[&base_checked]))
+    let facade_checked = check_module(resolve_target(&tree, &graph, facade, &[&base_checked]))
         .expect("the alias facade should check");
     assert!(
         facade_checked.schemes().is_empty(),
@@ -1283,7 +1348,7 @@ fn name_reexports_preserve_privacy_opacity_and_identity() {
             .count(),
         1
     );
-    let entry_resolved = resolve_target(&graph, entry, &[&facade_checked]);
+    let entry_resolved = resolve_target(&tree, &graph, entry, &[&base_checked, &facade_checked]);
     assert_eq!(
         entry_resolved
             .imported_facts()
@@ -1669,7 +1734,7 @@ fn partial_transparent_name_reexports_retain_hidden_constructor_family() {
             ],
         );
         let base = module_named(&graph, "base.ash");
-        let base_resolved = resolve_target(&graph, base, &[]);
+        let base_resolved = resolve_target(&tree, &graph, base, &[]);
         let [choice] = base_resolved.registry().nominals() else {
             panic!("the family base should retain one nominal");
         };
@@ -1678,7 +1743,7 @@ fn partial_transparent_name_reexports_retain_hidden_constructor_family() {
             panic!("the family base should retain both constructors");
         };
 
-        let resolved = resolve_entry(&graph);
+        let resolved = resolve_entry(&tree, &graph);
         let imported_choice = resolved
             .imported_facts()
             .nominal(expected_choice)

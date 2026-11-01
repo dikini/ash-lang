@@ -58,25 +58,44 @@ initializer safety root twice before the repair and once afterward; the same
 compile and independent Core validation execute to `42`. A facade regression
 executes the valid case to `42` and rejects an escaping resource.
 
-The final source passed 1,702 library tests, 17 resource-scope module tests,
+The merged PR source passed 1,702 library tests, 17 resource-scope module tests,
 54 scoped-evidence tests and five targeted caller, cleanup and small-stack
 checks. Formatting and warning-denied Clippy passed. Seven program-build tests
 and the three existing supported native tests passed; the latter include the
 full binding's lifecycle with static and shared linkage after source removal.
 The earlier reviewed candidate also passed the architecture, compiler-work,
 effect-module, interface-module and newtype targets before lint-only changes.
-The final source/configuration manifest covers `src/`, `Cargo.toml`,
-`Cargo.lock` and `rust-toolchain.toml` (SHA-256
+Its source/configuration manifest covers `src/`, `Cargo.toml`, `Cargo.lock`
+and `rust-toolchain.toml` (SHA-256
 `b4085ecb1f9bffbe9511e188471d8a7689d59f791d3a2224799d0f120f444178`).
 
-The original #190 full-binding input compiled at unchanged limits: source
-checking used 53,730,142 of 368,770,000 units, final elaboration used 31,935
-of 29,501,600, and independent Core validation used 67,377,437 of 921,925,000.
-All three phases completed. The full binding and Network program also executed
-to `42` through the source-native interpreter after all six source files were
-removed. The base final-elaboration count was a refused prefix, so it does not
-establish a complete baseline cost. An attempted generated-host Network test
-was outside the accepted build profile.
+The fresh full workspace checkpoint on that PR's exact tree passed format,
+metadata, check, build and Clippy, then failed the test stage: 66 of 67 Core
+validation tests passed. The failing manual fixture mixed distinct publications
+of the same implicit dependencies. The input snapshot included the unchanged
+README and benchmark files and remained stable through the failed run;
+documentation was not reached. A follow-up retains one publication per
+dependency in the affected Core and library-import fixtures, preserving the
+real identity guard and all existing assertions.
+
+The same focused audit exposed a separate default-budget refusal for a valid
+192-export module. Cleanup row completion now uses one strict pass when its
+paid scan proves there are no resumes and every structural child precedes its
+parent. Forward references and resume edges retain the existing fixed-point
+path and rollback. The original 192-export test passes without changing its
+input or budget. The follow-up also passes all 67 Core validation, 17 library
+import and 23 newtype tests, plus the postorder refusal/retry, nested-resume,
+forward-cleanup and imported generic-cleanup controls.
+
+On the follow-up source, the original #190 full-binding input compiled at
+unchanged limits: source checking used 53,730,158 of 368,770,000 units, final
+elaboration used 31,935 of 29,501,600, and independent Core validation used
+67,377,437 of 921,925,000. All three phases completed. On the merged PR source,
+the full binding and Network program also executed to `42` through the
+source-native interpreter after all six source files were removed. The base
+final-elaboration count was a refused prefix, so it does not establish a
+complete baseline cost. An attempted generated-host Network test was outside
+the accepted build profile.
 [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md)
 excludes Network scopes and operations from generated images.
 
@@ -129,9 +148,11 @@ they do not seed autonomous provider initializer or function roots. Each
 producer solves its cleanup rows after evidence and region lowering. A new
 open-module validator is not needed for this path.
 
-The remaining delivery is exact-candidate review and the PR. The pinned
-integration gate and its review follow separately; the prior seven-stage run
-took about 21 minutes and is not a prediction of the next run.
+Formatting and warning-denied Clippy also pass on the follow-up. The remaining
+delivery is an exact-commit review and one fresh seven-stage workspace
+checkpoint. The PM coordinates the checkpoint review and follow-up PR;
+acceptance and cleanup follow the actual result. The failed checkpoint took
+about 17 minutes and does not predict the duration of the next run.
 
 ## Verification
 
@@ -139,9 +160,9 @@ The focused PR evidence must show actual reuse, supported imports and evidence,
 positive and negative caller obligations, and linked execution at unchanged
 work, depth and stack limits. Record the exact full-binding #190 result separately
 from intrinsic replay savings. The independently reviewed candidate must receive
-the full workspace checkpoint on a pinned Main integration candidate before
-separately authorized integration; the PM coordinates it and the developer owns
-the Cargo run. The [prior full gate](https://github.com/dikini/ash-lang/pull/200#issuecomment-6550774584)
+the full workspace checkpoint on the pinned follow-up commit before its PR;
+the PM coordinates it and the developer owns the Cargo run. The
+[prior full gate](https://github.com/dikini/ash-lang/pull/200#issuecomment-6550774584)
 passed seven fresh stages on local Main
 `8fbc84dd87b752fc26227a1233baca8c2ebaac38` (remote tree `2725cc2c` plus the
 user's `AGENTS.md` addition); receipt SHA-256 starts `1f3f471f`. It is not
