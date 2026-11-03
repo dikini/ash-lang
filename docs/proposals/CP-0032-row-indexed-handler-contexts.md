@@ -67,8 +67,9 @@ argument; this does not turn a row into an ordinary runtime value.
 
 Extending the permitted argument kinds alone does not define a context. The
 type system and typed Core must also express its entry contracts and the
-context operations below. This proposal does not prescribe new surface syntax
-or require contexts to be constructed explicitly by Ash programmers.
+context operations below. Ordinary source callers do not construct contexts
+explicitly. Authors can supply a worker through the `core` declaration boundary
+defined below.
 
 ### Context shape
 
@@ -505,6 +506,39 @@ do not apply the source-arrow translation to it again. The same applies to
 generated sequencing functions and handler adapters. Packet, sequencing and
 adapter equations use already translated Core value types.
 
+#### Once-only elaboration
+
+The calling-convention change is a translation across a source-to-Core phase
+boundary. Its schematic type contracts are:
+
+```text
+V : CheckedSourceValueType -> CoreValueType
+elaborate : CheckedSource -> Core
+```
+
+The recursive translation consumes original checked source types and terms.
+Generated workers, continuations, sequencing functions, evidence adapters and
+their types are already Core; keep them outside that source traversal. Enforce
+this distinction at the compiler's artifact or IR boundary. Traversal order
+and physical representation are implementation choices; this adds no source
+type or continuation type.
+
+The translation is not an idempotent rewrite over arbitrary function types:
+`V(V(T))` is outside its domain. Treating a generated Core arrow as a source
+arrow would introduce further context arguments and computation wrappers.
+Ordinary Core arrows therefore do not themselves trigger this translation.
+
+A source-only elaboration entry point excludes Core as input. An optional
+wrapper for this stage can accept both phases and pass already elaborated Core
+through unchanged, preserving its established facts. It must distinguish the
+phases explicitly, without inferring them from function shape or generated
+names. Such a wrapper can be idempotent; this proposal does not require it or
+claim idempotence for `V` itself. Core-to-Core transformations and ordinary
+Core validation remain separate operations; they do not rerun this source
+calling-convention translation.
+
+#### Sequencing and application
+
 For sequencing, `bind` takes a `Comp<chi, A>` and an ordinary function from
 `A` to `Comp<chi, B>`, producing `Comp<chi, B>`. Its equations are:
 
@@ -557,6 +591,79 @@ function. Checked function-effect compatibility adapters project contexts and
 widen worker results by this same contract; nested domain and result coercions
 follow the companion proposal's directional compatibility rule. None of these
 operations opens or rechecks the worker's body.
+
+### Author-written workers
+
+Permit a contextual `core` modifier before an equational global signature. The
+signature remains its source contract; its equations implement the translated
+worker contract directly. The initial extension adds this global form, reusing
+the existing signature and equation productions:
+
+```ebnf
+core_global ::=
+  [ "pub" ] "core" global_signature line_end equation
+  { line_end equation } ;
+```
+
+Add `core_global` as an alternative of `global_definition`. The modifier occurs
+only on the signature; each equation retains the declared function's ordinary
+name. Recognize `core` contextually in that position, without reserving it as
+an identifier elsewhere. This extension adds no local, method, inline
+operational, block or module `core` form.
+
+For a source arrow `A -> B ! rho`, each equation's argument pattern checks
+against `(Context<rho>, V(A))`, and its body checks against
+`Comp<rho, V(B)>`. Apply source signature rules, including row defaults, source
+scheme binders and requirements, before deriving that contract. Existing type
+and interface-evidence abstractions surround the worker as usual; its authored
+argument pattern need not bind the flattened evidence parameters. Body type
+variables denote their translated counterparts under those abstractions.
+
+The following example uses proposed syntax and is not executable in current
+Ash. The callback and outer call have the same complete checked row, including
+default allocation:
+
+```ash
+core apply<A, B, R : EffectRow> : (A -> B ! {| R}, A) -> B ! {| R}
+apply (ctx, (f, x)) = f(ctx, x)
+```
+
+Here `f` already has its worker type. The explicit call supplies its context and
+returns its computation directly. An ordinary source caller still writes
+`apply(function, argument)`. Publish the checked source scheme and its matching
+worker together. Imports, recursion, aliases and higher-order source uses keep
+that source contract and use the ordinary call translation. They do not infer
+a source contract by reversing an arbitrary Core function type.
+
+Inside a `core` body, use ordinary expression presentations for the admitted
+Core functions, applications, bindings, primitives, tuples, constructors,
+patterns and matches. Function annotations, lambdas and calls use Core types
+and conventions throughout; do not repeat source row-default expansion or the
+source calling-convention translation. Source name resolution, scheme
+instantiation, requirement selection and evidence lowering still supply the
+checked bindings. An ordinary global or interface-method reference denotes its
+worker with the applicable type and evidence arguments supplied. The author
+passes contexts and composes computations explicitly, using only operations
+available under the checked environment and normal visibility rules.
+
+The modifier introduces no new primitive imports, source spellings for the
+conceptual `Context` or `Comp` types, or constructors for compiler-only evidence.
+A Core primitive already available to the body keeps its declared Core contract;
+it is not treated as a source helper and translated again. Same-spelled source
+definitions remain ordinary helpers with worker contracts. An unavailable Core
+operation remains unavailable. Source-only effect, resource and scoped-evidence
+forms have no implicit rewrite in a `core` body; reject them unless a separate
+Core-body rule admits them. This includes `perform`, `handle`, `resume`,
+`discard`, `retain`, resource/region scopes, hook and cleanup forms, and local
+`with` evidence declarations.
+
+The authored body is input to Core checking, not already validated Core.
+The `core` marker grants no unchecked authority. Ordinary Core type, row,
+interface, scope, provenance and existing ownership checks remain required.
+Preserve the source signature and body origins for diagnostics. The signature
+crosses the source translation once; the checked authored worker is not fed
+back through it. This boundary coexists with the source-only elaboration API
+and optional wrapper above without making `V` idempotent.
 
 ### Handler adapters
 
@@ -731,6 +838,9 @@ the separately proposed handler-context change and the stated checking gap.
 - Source function values translate recursively to fixed-result workers taking
   their invocation-time contexts. Call-site widening and `bind` compose caller
   work without adding caller answer or row quantification inside value types.
+- An equational global may use `core` to supply its worker directly while
+  retaining its source scheme. The authored body checks in the Core phase and
+  remains outside the source calling-convention translation.
 - Ordinary Ash call syntax and existing effect-row identity and equality are
   retained. The handler-context semantic change considered by the effects
   proposal is separate from this type-system proposal.
@@ -743,6 +853,10 @@ the separately proposed handler-context change and the stated checking gap.
 
 ## Affected specification areas
 
+- [Syntax](../../spec/syntax.md#grammar): the contextual `core` modifier on an
+  equational global definition.
+- [Name resolution](../../spec/name-resolution.md#global-scope): source schemes
+  and worker references in authored Core bodies, including ordinary visibility.
 - [Kinds, monotypes and schemes](../../spec/static-semantics.md#kinds-monotypes-and-schemes):
   row-kinded parameters, applications and substitution.
 - [Effect rows](../../spec/static-semantics.md#computation-types-and-effect-rows):
@@ -764,7 +878,8 @@ current behavior before that transition.
 
 It also states the fixed-result contract for translated source functions at
 every value boundary, and how calls compose returned computations with caller
-work using established row evidence.
+work using established row evidence. A `core` global retains its source contract
+while supplying a body checked directly against its worker contract.
 
 ## Interactions
 
@@ -805,6 +920,20 @@ separate obligations.
   contexts and no added caller-answer or row quantification in its value type.
   Check context projection and computation widening before call-site `bind`,
   including valid and invalid row inclusions and nested function coercions.
+- Check the once-only source-to-Core boundary: nested source arrows translate,
+  while generated workers, continuations, sequencing functions and evidence
+  adapters receive no further context arguments or computation wrappers.
+  Establish that the source-only entry point excludes Core input; if a wrapper
+  for this stage accepts already elaborated Core, check that it preserves that
+  Core and its established facts without translating it again.
+- Check `core` global parsing, contextual use of the modifier, public and
+  private declarations, translated argument patterns, complete rows and
+  compiler-supplied type/evidence abstractions. Check direct worker calls,
+  ordinary helper and method references, recursion, imports and higher-order
+  source callers, with no second lowering of authored workers or nested Core
+  functions. Reject mismatched worker contracts, unavailable operations,
+  source-only body forms and unsupported placements of the modifier. Check
+  source-oriented diagnostics and the existing ownership/evidence checks.
 - Check known-prefix selection and opaque-tail forwarding, valid and invalid
   lacks constraints, exact parameterized effect identities, equal rows written
   in different orders, and a callee requiring a subset of the caller's row.

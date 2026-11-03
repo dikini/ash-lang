@@ -533,6 +533,37 @@ into a function. That generated continuation is already Core and is not
 translated again as a source arrow. The implementation must be checked against
 Ash's operational semantics and the existing discard and cleanup path.
 
+The calling-convention change runs once at the checked source-to-Core boundary,
+as specified in [CP-0032](../../proposals/CP-0032-row-indexed-handler-contexts.md#once-only-elaboration).
+Recursively translate original source structure; keep generated workers,
+continuations, adapters and their types outside the source translation.
+This is not an idempotent rewrite of arbitrary function arrows.
+A source-only entry point excludes Core input. An optional wrapper for this
+stage may pass already elaborated Core through unchanged, using an explicit
+phase distinction rather than function shape or generated names. Its
+idempotence would not make the source translation itself idempotent.
+Core-to-Core transformations and ordinary validation remain separate operations.
+
+### Author-written workers
+
+The [CP-0032 author-written worker rule](../../proposals/CP-0032-row-indexed-handler-contexts.md#author-written-workers)
+adds a contextual `core` modifier to equational global signatures. The signature
+remains the source contract; the equations implement its translated worker
+directly. For `A -> B ! rho`, the argument pattern checks against
+`(Context<rho>, V(A))` and the body against `Comp<rho, V(B)>`, with the existing
+source scheme and evidence abstractions supplied by the compiler. Ordinary
+source callers, imports and higher-order uses keep the declared source scheme.
+
+The authored body uses Core function types and calls, including explicit
+contexts and sequencing. Ordinary helper and method references supply their
+checked workers. Do not apply source row defaults or calling-convention
+lowering inside that body again. The modifier adds no Core primitive imports
+or evidence constructors; the admitted body forms and available operations
+remain checked. Source-only effect and resource sugar has no implicit rewrite
+there. The body receives ordinary Core checking and retains its source origins;
+the marker is not a claim of prior validation. This is a global declaration
+extension, not a new continuation type or a general embedded-Core syntax.
+
 ### Row-indexed handler context
 
 The proposed type-system change and its review requirements are recorded in
@@ -861,6 +892,13 @@ and its [execution rules](../../../spec/dynamic-semantics.md#scoped-retained-con
   widening and `bind`. Cover one opaque monomorphic callback used under both
   `Bool`- and `Int`-result handlers, returned callbacks and callbacks stored in
   data, including invocation-time contexts and nested function coercions.
+- Enforce and validate once-only lowering at the source-to-Core boundary.
+  Cover recursive source arrows and generated Core functions, including
+  preservation of already elaborated Core if a wrapper accepts it as input.
+- Implement the `core` equational global boundary: preserve its source scheme,
+  check the authored worker directly, and cover source callers, worker calls,
+  nested Core functions, imports, evidence, complete rows and rejected body
+  forms. Keep ordinary Core validation and source diagnostics on that path.
 - Implement and validate the proposed general function-effect compatibility
   and row-inference rules, then use their established facts in the effect
   elaboration.
