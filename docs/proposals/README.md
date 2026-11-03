@@ -23,7 +23,10 @@ No proposed transitions are listed.
 
 ## Accepted changes
 
-No accepted transitions are listed.
+- [CP-0032: Row-Indexed Handler Contexts](CP-0032-row-indexed-handler-contexts.md),
+  accepted as one package with
+  [Effects as Interfaces: Elaboration Proposal](../design/effects-resources/effect-interface-elaboration-proposal.md).
+  Implementation is pending.
 
 The [specification](../../spec/README.md) records the accepted, implemented
 `ffi-ash` language, including generic cells, lexical regions, retained control

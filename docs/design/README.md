@@ -182,6 +182,14 @@ and exclusions remain at their linked owners.
 
 ### Surface language, typing, and elaboration
 
+- [DN-0061: Effects and Resources as the First Typed Slice](DN-0061-effects-and-resources-first-slice.md)
+  — the first semantic slice and its opaque data and function boundaries; its
+  [effects elaboration package](effects-resources/effect-interface-elaboration-proposal.md)
+  is accepted and unimplemented, while resource and cleanup design remains
+  exploratory.
+- [DN-0060: A Roadmap Concept for Typed Data and Control](DN-0060-typed-data-and-control-roadmap.md)
+  — a proposed delivery method for semantic fragments, connecting logical
+  control judgments and replacing shared analysis with typed evidence.
 - [DN-0059: Compositional Contracts and Evidence](DN-0059-compositional-contracts-and-evidence.md)
   — successive replacement of behavioral reconstruction with explicit contracts;
   support and continuation composition, axiomatic laws, evidence and inference.

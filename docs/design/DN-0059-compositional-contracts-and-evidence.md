@@ -153,7 +153,7 @@ Candidates must be evaluated on useful programs, including existing positive and
 
 ## Bounded investigation examples
 
-The investigation uses six example families. Existing tests establish current observations; they do not prove a replacement sound. E1 and E2 are the first detailed study. E3 challenges its treatment of surrounding control; E4–E6 test interpretation, state and justification.
+The investigation uses six example families. Existing tests establish current observations; they do not prove a replacement sound. In this note's earlier sequence, E1 and E2 were the first detailed study. E3 challenges its treatment of surrounding control; E4–E6 test interpretation, state and justification. DN-0060 proposes a different starting point.
 
 ### E1 Independent snapshots and retained access
 
@@ -374,7 +374,11 @@ The same principle applies to M4. Transport-origin authentication does not prove
 
 ## Successive replacement sequence
 
-These are ordered investigations with bounded exit criteria, not an accepted implementation schedule. Practical development and focused repairs may proceed while the contract work advances.
+The following is this note's earlier proposed investigation sequence, not an
+accepted implementation schedule. [DN-0060](DN-0060-typed-data-and-control-roadmap.md)
+proposes a connected type-and-control roadmap and a different starting point.
+The cases and criteria below remain available as evidence and challenges.
+Practical development and focused repairs may proceed while the work advances.
 
 ### First establish the obligation map
 
@@ -459,10 +463,18 @@ Runtime enforcement remains appropriate for dynamic facts. Explicit assumptions 
 11. What implementation, semantic and dependency identities must reusable evidence bind?
 12. Which current acceptance cases justify additional expressiveness rather than conservative rejection or specialization?
 
-## Immediate next investigation
+## Relationship to the roadmap concept
 
-The next bounded study is E1 and E2 under an explicit top-level contract. Produce side-by-side candidate statements for opaque transport and callback results, one producer derivation and one client composition for each, and a precise list of reconstruction they eliminate. Include the counterexample where invoking a dependent callback returns an independent value, and account for backing independently of cell access.
+[DN-0060](DN-0060-typed-data-and-control-roadmap.md) proposes a newer roadmap
+concept and a repeatable method for selecting and delivering fragments that
+connect types, data and control. It sets out proposed implementation
+requirements for the direction in both notes, for later decision when the
+method has converged.
+The E1–E6 cases in this note remain evidence and challenges for that direction;
+neither note changes current semantics or authorizes implementation.
 
-Use E3 to test the candidate’s limit before generalizing it to continuation admission. Work through E6 alongside the study so that assumptions and derivations have a defined status from the beginning.
+The E1/E2 study proposed here remains a challenge for the roadmap: compare explicit contracts for opaque transport and callback results through producer and client derivations. Include a dependent callback that returns an independent value, and account for backing independently of cell access.
 
-A retained outcome is either a justified contract candidate for a semantic proposal or a documented reason it is insufficient. The investigation succeeds by making the missing obligation and its boundary explicit, even if its first candidate is rejected.
+E3 challenges continuation admission; E6 makes the status of assumptions and derivations explicit. DN-0060 provides a method for deciding when these questions join the connected type-and-control work.
+
+The contract work should yield either a justified candidate for a semantic proposal or a documented reason it is insufficient. Both outcomes clarify the obligation and its boundary.
