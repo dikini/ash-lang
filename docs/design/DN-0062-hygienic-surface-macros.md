@@ -22,13 +22,24 @@ errors? What can such transformations express using current or proposed Ash,
 and where do effects and other features require later typed elaboration or
 additional checked language mechanisms?
 
-The larger goal is a small semantic Core and a small set of general checking
-and inference rules. Ash-authored syntax and typed elaboration would express
-features through those shared mechanisms where their contracts permit it. A
-program should require only the compiler services and rules needed by its
-syntax, dependencies, inferred contracts and generated code, plus a shared
-foundation. Reducing total compiler and library code is an aspiration, not
-the primary measure of success.
+This work has three goals:
+
+1. Reduce the surface language needed as Ash's foundation, including syntax
+   that needs dedicated compiler treatment. Decide separately which existing
+   conveniences remain standard and which are optional library syntax.
+2. Maintain a focused semantic Core and a small set of general checking and
+   inference rules. Ash-authored syntax and typed elaboration would express
+   features through those mechanisms where their contracts permit it.
+3. Make the language adaptable: authors can define and use domain-specific
+   languages in Ash, including domain-specific syntax and transformations,
+   without changing the compiler for each DSL.
+
+These goals are distinct. A DSL may add syntax for its users while relying on
+a smaller common foundation; moving syntax to a library does not by itself
+prove that the language a user must learn has become smaller. A program should
+require only the compiler services and rules needed by its syntax, dependencies,
+inferred contracts and generated code, plus a shared foundation. Reducing total
+compiler and library code is an aspiration, not the primary measure of success.
 
 The immediate motivation is the effects work. Some wrappers, declarations,
 and notational forms may be expressible as syntax expansion over a smaller
@@ -90,6 +101,30 @@ preference, not a decision. It avoids requiring two independent accounts of
 binding, but a token-oriented interface or a smaller initial rules-only system
 may prove preferable. Surface macros and typed compiler transformations need
 not use the same public representation.
+
+### Domain-specific languages
+
+An Ash library should be able to define a DSL suited to its domain, publish
+its syntax and transformations, and let another module use them alongside
+ordinary Ash. For example, a routing library might accept a declaration such
+as `route "/users" => list_users` and translate it into ordinary route data
+and handler functions. This is an illustrative DSL, not current Ash syntax or
+an accepted routing API. Another DSL might supply notation and checked
+elaboration for a data pipeline or a scoped effect protocol.
+
+The authoring model must describe how DSL syntax is declared, imported and
+scoped; how DSL forms embed Ash expressions and compose with other DSLs; and
+how expansions preserve binding, type and effect checks and useful source
+diagnostics. Some forms may expand through ordinary surface syntax; others may
+need a typed elaboration interface. In either case the library must use the
+available Core and general checking rules. A domain requiring new semantic or
+runtime mechanisms needs those mechanisms designed separately.
+
+An explicit macro invocation is one possible DSL entry point, but it does not
+by itself satisfy the goal of convenient natural syntax. The design must also
+compare keyword-led forms and their nesting, precedence, conflicts and tooling.
+It need not promise arbitrary grammar replacement or decide a specific syntax
+extension mechanism in this note.
 
 ### General rules and program-specific work
 
@@ -552,10 +587,14 @@ available on demand, with a concise default when it adds causal information.
 
 - Current language rules and accepted decisions remain authoritative until
   changed through the applicable proposal or decision workflow.
+- Reduce the foundational surface language and dedicated syntax machinery;
+  account separately for standard conveniences and optional DSL syntax.
 - Minimize the semantic Core and the general checking and inference rules
   required by a program, while preserving its complete established obligations.
   A smaller total implementation is an aspiration, not a substitute for that
   criterion.
+- Support Ash-authored domain-specific syntax and transformations, including
+  composition with ordinary Ash and other available DSLs.
 - Expansions cannot bypass resolution, typing, effects, resource, continuation
   or completion checks. Hygiene is not semantic equivalence or a safety proof.
 - Preserve caller and definition binding contexts through nested expansion;
@@ -627,6 +666,10 @@ the same corpus and distinguish unavailable features from implementation bugs:
 5. A bounded fragment of the accepted effects elaboration, recording required
    row, identity, continuation, context and checking information; identify the
    exact point at which surface expansion ceases to suffice.
+6. Two separately authored DSLs, each with domain syntax and embedded Ash
+   expressions, used together in a module. Include a deliberate syntax conflict,
+   shadowed names, an invalid DSL form and a type or effect error in embedded
+   Ash; check import scope, composition and diagnostic origins.
 
 For each, compare parsing and ambiguity, binding identities, evaluation and
 effects, generated structure validation, errors and their causal spans,
@@ -647,6 +690,13 @@ from optional feature-specific paths, and trace retained or replaced checks.
 Do not treat a reduced total line count, fewer source keywords or moving code
 into Ash as proof that a program requires fewer rules.
 
+Assess the three goals separately: count foundational syntax and standard
+conveniences, identify the Core forms and checking rules each program requires,
+and evaluate the syntax and transformations DSL authors can express without
+compiler changes. A new optional DSL is not evidence that the shared foundation
+grew; moving an obligatory construct into a library is not by itself evidence
+that users learn less syntax.
+
 A future bounded prototype could test whether the shared syntax-object model
 supports this corpus while fitting the parser and resolver boundaries. Its
 comparison criteria are the cases and obligations above, implementation
@@ -660,6 +710,11 @@ This draft alone does not authorize a prototype or select an implementation.
 
 - Which natural syntax forms and output categories are essential, and which
   should remain delimited or ordinary functions?
+- Which syntax belongs in the shared foundation, in standard conveniences or
+  in optional libraries, and what would actually reduce the surface a user must
+  learn for a particular task?
+- How can separately authored DSLs embed Ash, compose or conflict, and provide
+  natural notation and actionable diagnostics without compiler changes?
 - How are syntax names imported, scoped, re-exported, shadowed and kept
   compatible with existing identifier uses? How are conflicting forms resolved?
 - Which fragment, literal, repetition and precedence rules give useful syntax
