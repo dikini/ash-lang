@@ -182,6 +182,9 @@ and exclusions remain at their linked owners.
 
 ### Surface language, typing, and elaboration
 
+- [DN-0062: Hygienic Surface Macros](DN-0062-hygienic-surface-macros.md)
+  — natural syntax, hygienic expansion, Ash-defined compiler interfaces,
+  diagnostics and a smaller Core and checking foundation; exploring.
 - [DN-0061: Effects and Resources as the First Typed Slice](DN-0061-effects-and-resources-first-slice.md)
   — the first semantic slice and its opaque data and function boundaries; its
   [effects elaboration package](effects-resources/effect-interface-elaboration-proposal.md)
