@@ -123,8 +123,8 @@ findings here before adding mechanisms.
 
 - Parser amendment, task and execution plan are recorded. D0 has a concrete
   producer/consumer proposal and a frozen fixture family. The checkpoint,
-  header projection and source census compile; other planned interfaces do not.
-  No current specification or macro behavior has changed.
+  header projection, source census and staged driver compile; syntax contexts,
+  grants and the macro host do not. No macro behavior has changed.
 - The initial driver tests fail at unsupported targeted `syntax` imports, as
   expected. The independent handwritten graph executes to `Int` value `42`,
   and the proposed procedural transformer's ordinary Ash body parses and
@@ -134,10 +134,10 @@ findings here before adding mechanisms.
   syntax by each leading identifier's retained context; and independently
   validate a dedicated compile-time entry and authenticated input handoff.
   The plan now records those contracts and the source census and borrowed
-  checked-fragment ownership they require. The parser checkpoint, projected
-  header and shared canonical-source census compile and have focused checks.
-  The existing loader consumes projected imports while still parsing complete
-  bodies. The staged loader, syntax contexts, grants and validated macro host
+  checked-fragment ownership they require. The staged driver now discovers
+  canonical headers, pays one source census, and checks each dependency before
+  parsing its importer body. The public syntax-free loader retains its original
+  complete-body schedule. Syntax contexts, grants and the validated macro host
   are not yet connected or compiled. D1–D4 and every M01–M14 criterion remain
   pending. No retained macro implementation or fresh full gate is claimed.
 - Re-review found that retained contexts cannot borrow exports from a checked
@@ -211,6 +211,35 @@ findings here before adding mechanisms.
 - The frozen macro graph tests still fail at unsupported syntax imports; their
   handwritten execution and ordinary transformer-parser controls pass. The
   existing loader uses the projected header but does not yet stage the graph.
+
+### D0 staged-graph receipt
+
+- Reviewed candidate: `80beb33105ed3cc2aad2bed31899561a48845b43`.
+  The retaining commit pins this staged repair and its evidence. The 30–55
+  focused engineer-day estimate remains uncalibrated for the remaining chain.
+- `cargo test -j 1 -p ash --lib module::staged_tests -- --nocapture`: one
+  passes. An alias and diamond graph includes the implicit builtins once and
+  compares source census, edge order, spans and total syntax work with the
+  syntax-free path. Exact work succeeds; header, first-body and one-below-final
+  refusals retain deterministic source and import attribution.
+- `cargo test -j 1 -p ash --lib parser::checkpoint_tests -- --nocapture`:
+  nine pass, including whole-module span parity for empty, whitespace,
+  import-only and ordinary LF/CRLF inputs.
+- `cargo test -j 1 -p ash --test parser --test modules_syntax --test
+  module_loading --test module_resolution --test compiler_work_reporting
+  --no-fail-fast`: parser 50, module syntax 20, module loading 27, module
+  resolution 11 and work reporting 6 pass. The long work case took 101.42
+  seconds. A real driver case proves a dependency check precedes a malformed
+  importer body; other cases retain source/import diagnostics and paid partial
+  checking work after body failure.
+- `cargo test -j 1 -p ash --features resource-calibration --test
+  resource_calibration_observer -- --nocapture`: three pass. Observation on
+  and off agree; complete surfaces produce one input record, early failures
+  produce none, and incomplete compilation is not reported as complete.
+- Macro graph tests still fail at unsupported targeted syntax imports, while
+  their handwritten and ordinary transformer-parser controls pass. The source
+  catalogue assertion and API/calibration documentation comments changed after
+  these runs; the retaining source needs a frozen rerun.
 
 ## Verification
 

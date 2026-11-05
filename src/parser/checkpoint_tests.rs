@@ -209,3 +209,26 @@ fn projected_header_matches_complete_projection_for_import_forms() {
         super::project_module(&source, &tree).unwrap().imports
     );
 }
+
+#[test]
+fn header_module_span_matches_complete_projection() {
+    for text in [
+        "",
+        "   \n",
+        "   import values (answer)\n",
+        "\r\n  import values (answer)\r\nmain : Unit -> Int\r\nmain () = 42\r\n",
+        "\n  main : Unit -> Int\nmain () = 42\n",
+    ] {
+        let source = SourceFile::new("span.ash", text).unwrap();
+        let mut budget = SyntaxBudget::with_limit(10_000);
+        let (tokens, lexical, _, _) = lex_with_budget(&source, &mut budget).unwrap().into_parts();
+        let (header, budget) = parse_module_header(tokens, lexical, budget);
+        let span = super::module_span_from_checkpoint(&source, &header).unwrap();
+        let (tree, _) = finish_module_from_checkpoint(header, budget);
+        assert_eq!(
+            span,
+            super::project_module(&source, &tree).unwrap().span,
+            "{text:?}"
+        );
+    }
+}

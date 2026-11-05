@@ -266,9 +266,9 @@ repeat the compiler proof. Runtime completion and build cleanup remain required.
 These crate-private Rust interfaces freeze the connected handoffs for review.
 They are implementation contracts, not Ash semantics. A change to ownership,
 admission, or failure behavior returns to the same reviewer. The checkpoint,
-header projection and canonical-source census below compile. The existing
-loader consumes projected imports but still parses complete bodies before graph
-checking. The staged graph, context, grant and host interfaces remain planned.
+header projection, canonical-source census and staged driver compile. The
+driver checks each dependency before resuming its importer. Syntax contexts,
+grants, matcher admission and the host interfaces remain planned.
 
 ```rust
 fn parse_module_header(
@@ -290,13 +290,23 @@ fn source_work_for_sources<'a>(
 ```
 
 ```rust
-struct HeaderModule {
+struct StagedModule {
     id: ModuleId,
     canonical_path: PathBuf,
-    source: Arc<SourceFile>,
-    parser: Option<ParserCheckpoint>,
-    imports: Box<[SurfaceImport]>,
-    dependencies: Box<[ModuleDependency]>,
+    source: SourceFile,
+    surface: StagedSyntax,
+    dependencies: Vec<ModuleDependency>,
+    // Graph ownership, relative edges and traversal state are also retained.
+}
+struct StagedSyntax {
+    imports: Vec<SurfaceImport>,
+    span: Span,
+    body: ModuleBody,
+    import_span: Option<Span>,
+}
+enum ModuleBody {
+    Parsed(SurfaceModule),
+    Header(ParserCheckpoint),
 }
 struct ParserCheckpoint {
     tokens: Vec<Token>,
@@ -311,22 +321,29 @@ struct ParserCheckpoint {
     syntax_work_exhausted: bool,
 }
 struct HeaderGraph {
-    modules: Box<[HeaderModule]>, // dependencies first
+    pending: VecDeque<StagedModule>, // dependencies first
+    loaded: Vec<LoadedModule>,
+    completed: Option<ModuleGraph>,
     entry: ModuleId,
     syntax_budget: SyntaxBudget,
 }
 fn discover_headers(entry: &Path, roots: &ModuleRoots)
     -> Result<HeaderGraph, GraphDiagnostic>;
+impl HeaderGraph {
+    fn next_module(&mut self) -> Result<Option<&LoadedModule>, GraphDiagnostic>;
+}
+```
+
+The still-planned syntax admission extends that handoff without changing its
+dependency order:
+
+```rust
 fn parse_staged_module(
-    module: &mut HeaderModule,
+    module: &mut StagedModule,
     syntax: SyntaxContextId,
     syntax_registry: &CheckedSyntaxRegistry,
     budget: &mut SyntaxBudget,
 ) -> Result<LoadedModule, LoadGraphError>;
-fn check_staged_graph(
-    graph: HeaderGraph,
-    budgets: &mut CompilationBudgets,
-) -> Result<(ModuleGraph, Vec<CheckedModule>), FileFailure>;
 ```
 
 `discover_headers` reads and lexes each source once, parses only its fixed
@@ -336,26 +353,33 @@ event stream, token cursor, diagnostics and recovery state; it borrows no token
 slice. Body parsing reconstructs that borrow and resumes the same stream after
 checked imports are available. The checkpoint owns its tokens and lexical
 diagnostics so it cannot be resumed against another module's token stream.
-Header and body share one graph syntax budget;
-ordinary source and header events are charged exactly once as before. Compare
-the existing and staged paths at exact and one-below limits, including recovery.
-`check_staged_graph` processes each dependency first: select its already checked
-exports, build the immutable matcher environment, parse/project the next body,
-expand it while resolving, check it, and only then publish its syntax exports.
+Header and body share one graph syntax budget; ordinary source and header events
+are charged exactly once as before. The staged schedule attributes a refusal to
+the source and import edge of the next retained unit. Its source order can differ
+from the legacy complete-body schedule, so equal totals and deterministic
+attribution do not imply identical first-failure sources. Each staged module's
+whole-module span uses its first retained token through EOF, preserving the
+implicit region edge's span and its position after explicit imports. The staged
+driver parses/projects and checks each dependency before its importer. Matcher
+selection, expansion and checked syntax publication remain to be connected.
 Before checking, the completed header graph's canonical sources, including
-implicit builtins, pay the same `compiler_work::source_work` census once.
+implicit builtins, pay the same `compiler_work::source_work_for_sources` census once.
 Carry that ledger and source-size allowance through checking; aliases and
 diamonds do not mint source credit. Test overflow/low-budget refusal and
-existing reporting/calibration. The driver links the returned checked modules
-without rechecking their bodies.
-It retains the parsed graph and sources for diagnostics and builds. Lexical and
+existing reporting/calibration. Body syntax failures retain their source and
+import route along with the already-paid partial checking report. Calibration
+emits one input record only after every source-authored surface is available;
+loading timers measure discovery and body-parsing segments. The driver links the
+checked modules without rechecking their bodies. It retains the parsed graph and
+sources for diagnostics and builds. Lexical and
 header errors remain structured; missing, duplicate, re-exported, or
 inaccessible syntax selections fail before importer expansion. Recovery nodes
 cannot cross projection.
 
 The public `load_module_graph` remains a syntax-free parsing API for existing
-low-level callers; it explicitly rejects macro forms and points macro-enabled
-compilation to `compile_path`. It never supplies unchecked matchers. The staged
+low-level callers; it rejects currently unsupported macro forms and never
+supplies unchecked matchers. Macro-enabled compilation will use `compile_path`.
+The staged
 driver does not call that wrapper. The complete in-tree caller inventory is
 reproducible with `rg -l 'load_module_graph\s*\(' --glob '*.rs' src tests`.
 The production call is `src/driver.rs::compile_path_with_consumers_internal`;

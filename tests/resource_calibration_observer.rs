@@ -2,12 +2,45 @@
 #![cfg(feature = "resource-calibration")]
 
 use std::{
+    fs,
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use serde_json::Value;
+
+static NEXT: AtomicU64 = AtomicU64::new(0);
+
+struct Tree(PathBuf);
+
+impl Tree {
+    fn new() -> Self {
+        loop {
+            let id = NEXT.fetch_add(1, Ordering::Relaxed);
+            let path =
+                std::env::temp_dir().join(format!("ash-observer-{}-{id}", std::process::id()));
+            match fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("observer fixture: {error}"),
+            }
+        }
+    }
+
+    fn write(&self, name: &str, text: &str) -> PathBuf {
+        let path = self.0.join(name);
+        fs::write(&path, text).unwrap();
+        path
+    }
+}
+
+impl Drop for Tree {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
 
 fn run(entry: &Path, observe: bool, diagnostic_base: Option<usize>) -> std::process::Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_ash"));
@@ -166,6 +199,83 @@ fn pure_and_effect_observation_preserve_results_and_report_selected_capacities_o
                 assert_eq!(legacy["work"], current["work"]);
             }
         }
+    }
+}
+
+#[test]
+fn staged_observation_reports_only_complete_source_surfaces() {
+    let tree = Tree::new();
+    let entry = tree.write(
+        "entry.ash",
+        "import dependency as Dependency\nmain : Unit -> Int\nmain () = 42\n",
+    );
+    tree.write("dependency.ash", "pub value : Unit -> Int\nvalue () = 1\n");
+    let graph = ash::module::load_module_graph(&entry, &ash::module::ModuleRoots::empty()).unwrap();
+    let bytes = graph
+        .modules()
+        .iter()
+        .map(|module| module.source().text().len())
+        .sum::<usize>();
+    let off = run(&entry, false, None);
+    let on = run(&entry, true, None);
+    assert!(off.status.success() && on.status.success());
+    assert_eq!(off.stdout, on.stdout);
+    assert!(records(&off).is_empty());
+    let observed = records(&on);
+    let inputs = observed
+        .iter()
+        .filter(|record| record["event"] == "input")
+        .collect::<Vec<_>>();
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0]["features"]["modules"], graph.modules().len());
+    assert_eq!(inputs[0]["features"]["bytes"], bytes);
+    let consumed = consume_calibration_logs(&on);
+    assert_eq!(
+        consumed["current"]["complete"], true,
+        "{}",
+        consumed["current"]["errors"]
+    );
+    assert_eq!(
+        consumed["current"]["phases"]["compilation"]["endpoint_count"],
+        1
+    );
+
+    for (dependency, body, expected_inputs, loading_failed) in [
+        ("value : Unit -> Bool\nvalue () = 42\n", ")", 0, false),
+        ("value : Unit -> Int\nvalue () = 1\n", ")", 0, true),
+        ("value : Unit -> Int\nvalue () = 1\n", "true", 1, false),
+    ] {
+        tree.write("dependency.ash", dependency);
+        tree.write(
+            "entry.ash",
+            &format!("import dependency as Dependency\nmain : Unit -> Int\nmain () = {body}\n"),
+        );
+        let off = run(&entry, false, None);
+        let on = run(&entry, true, None);
+        assert!(!off.status.success() && !on.status.success());
+        assert_eq!(off.status.code(), on.status.code());
+        assert_eq!(off.stdout, on.stdout);
+        assert!(records(&off).is_empty());
+        let observed = records(&on);
+        assert_eq!(
+            observed
+                .iter()
+                .filter(|record| record["event"] == "input")
+                .count(),
+            expected_inputs
+        );
+        assert!(observed.iter().any(|record| record["event"] == "phase"
+            && record["phase"] == "compilation"
+            && record["completed"] == false));
+        assert_eq!(
+            observed.iter().any(|record| record["event"] == "phase"
+                && record["phase"] == "loading"
+                && record["completed"] == false),
+            loading_failed
+        );
+        assert!(!observed.iter().any(|record| record["event"] == "work"
+            && (record["phase"] == "final-elaboration"
+                || record["phase"] == "independent-effect-core")));
     }
 }
 

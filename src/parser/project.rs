@@ -140,6 +140,22 @@ pub(crate) fn project_module_header(
     Ok(imports)
 }
 
+pub(crate) fn module_span_from_checkpoint(
+    source: &SourceFile,
+    checkpoint: &ParserCheckpoint,
+) -> Result<Span, ProjectionError> {
+    validate_tokens(source, &checkpoint.tokens)?;
+    let first = checkpoint
+        .tokens
+        .first()
+        .ok_or(ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
+    let last = checkpoint
+        .tokens
+        .last()
+        .ok_or(ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
+    join_spans(source, first.span, last.span)
+}
+
 fn validated_root<'tree>(
     source: &SourceFile,
     tree: &'tree ConcreteTree,

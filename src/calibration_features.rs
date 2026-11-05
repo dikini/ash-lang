@@ -1,4 +1,4 @@
-//! Diagnostic input metrics collected before resolution or inference.
+//! Diagnostic input metrics over retained source-authored surfaces.
 //!
 //! Each loaded module contributes once, including builtin and foreign source.
 //! `nodes` counts visited structural surface records: modules, imports and
@@ -80,7 +80,8 @@ enum Visit<'a> {
 }
 
 /// Emits one immutable source-graph feature record for the calibration harness.
-/// The caller places this entire observation in a separate metrics phase.
+/// The caller waits for every source-authored surface and places the observation
+/// in a separate metrics phase; expanded syntax is not included.
 pub(crate) fn observe_input(graph: &ModuleGraph) {
     let mut features = Features::default();
     let mut sources = Vec::with_capacity(graph.modules().len());

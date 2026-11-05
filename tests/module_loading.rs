@@ -5,6 +5,7 @@ use std::{
 };
 
 use ash::{
+    driver::{FileFailure, PipelineFailure, RunConfiguration, compile_path},
     module::{
         LoadGraphError, MODULE_PATH_SEGMENT_LIMIT, MODULE_PENDING_LIMIT, ModuleReason,
         ModuleResource, ModuleRoots, load_module_graph,
@@ -113,6 +114,117 @@ fn loads_relative_descendants_in_dependency_order() {
         graph.modules().last().map(|module| module.id()),
         Some(graph.entry())
     );
+}
+
+#[test]
+fn driver_checks_dependencies_before_parsing_importer_bodies() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        "import dependency as Dependency\nmain : Unit -> Int\nmain () = )\n",
+    );
+    tree.write("dependency.ash", "value : Unit -> Bool\nvalue () = 42\n");
+
+    let wrapper_failure = load_module_graph(&entry, &ModuleRoots::empty()).unwrap_err();
+    assert!(matches!(
+        wrapper_failure.failure(),
+        LoadGraphError::Syntax(_)
+    ));
+
+    let failure = compile_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    assert!(
+        matches!(failure.pipeline_failure(), Some(PipelineFailure::Typing(_))),
+        "{failure:?}"
+    );
+    assert_eq!(failure.reason_code(), "type.definition-result");
+    let paths = failure
+        .sources()
+        .iter()
+        .map(|source| source.display_path())
+        .collect::<Vec<_>>();
+    assert!(paths.iter().any(|path| path.ends_with("entry.ash")));
+    assert!(paths.iter().any(|path| path.ends_with("dependency.ash")));
+}
+
+#[test]
+fn staged_body_syntax_failure_preserves_graph_context_and_partial_work() {
+    for reject_dependency in [false, true] {
+        let tree = TempTree::create();
+        let entry_body = if reject_dependency { "42" } else { ")" };
+        let entry = tree.write(
+            "entry.ash",
+            &format!(
+                "import dependency as Dependency\nmain : Unit -> Int\nmain () = {entry_body}\n"
+            ),
+        );
+        let dependency_body = if reject_dependency { ")" } else { "42" };
+        tree.write(
+            "dependency.ash",
+            &format!("value : Unit -> Int\nvalue () = {dependency_body}\n"),
+        );
+        let failure = compile_path(RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        let Some(LoadGraphError::Syntax(syntax)) = failure.graph_failure() else {
+            panic!("expected graph syntax failure: {failure:?}");
+        };
+        let expected_path = if reject_dependency {
+            "dependency.ash"
+        } else {
+            "entry.ash"
+        };
+        assert!(syntax.source.display_path().ends_with(expected_path));
+        assert_eq!(syntax.import_span.is_some(), reject_dependency);
+        let FileFailure::Graph(context) = &failure else {
+            panic!("expected graph-owned diagnostics");
+        };
+        let retained = context.sources().collect::<Vec<_>>();
+        assert_eq!(retained.len(), 4);
+        assert!(
+            retained
+                .iter()
+                .any(|source| source.display_path().ends_with("entry.ash"))
+        );
+        assert!(
+            retained
+                .iter()
+                .any(|source| source.display_path().ends_with("dependency.ash"))
+        );
+        let bytes = retained
+            .iter()
+            .map(|source| source.text().len())
+            .sum::<usize>();
+        let work = failure
+            .compilation_work()
+            .expect("paid graph work is reported");
+        let source = work.source_checking.expect("source checking started");
+        assert!(!source.completed);
+        assert!(source.used > 0);
+        assert_eq!(source.allowance, Some(10_000 * bytes));
+        assert!(work.final_elaboration.is_none() && work.independent_core.is_none());
+    }
+}
+
+#[test]
+fn header_failure_precedes_source_census() {
+    let tree = TempTree::create();
+    let entry = tree.write("entry.ash", "import dependency (\nmain () = 42\n");
+    let failure = compile_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    assert!(matches!(
+        failure.graph_failure(),
+        Some(LoadGraphError::Syntax(_))
+    ));
+    assert!(failure.compilation_work().is_none());
 }
 
 #[test]

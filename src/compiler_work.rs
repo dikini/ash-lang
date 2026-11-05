@@ -3,7 +3,9 @@
 //! These are cumulative charged units, including reservations, rather than CPU
 //! time or bytes. Only the modular public driver selects these allowances.
 
-use crate::{module::ModuleGraph, source::SourceFile, types::TypeWorkBudget};
+#[cfg(test)]
+use crate::module::ModuleGraph;
+use crate::{source::SourceFile, types::TypeWorkBudget};
 
 const SOURCE_PER_BYTE: usize = 10000;
 
@@ -55,6 +57,7 @@ fn size_sources<'a>(
     Ok((phase_total(phase, bytes)?, bytes))
 }
 
+#[cfg(test)]
 pub(crate) fn source_work(graph: &ModuleGraph) -> Result<(TypeWorkBudget, usize), ()> {
     // The loader has already admitted one source per canonical module. Aliases
     // and repeated import edges do not add modules or size credit here.

@@ -15,9 +15,10 @@ use {
     crate::evidence_validation::ValidatedInterfaceProgram,
     crate::evidence_validation::validate_interface_evidence_with_budget,
     crate::interface::InterfaceConstraintBudget, crate::kind::KindFailure, crate::lexer::LexReason,
-    crate::module::GraphDiagnostic, crate::module::LoadGraphError, crate::module::ModuleGraph,
-    crate::module::ModuleId, crate::module::ModuleRoots, crate::module::load_module_graph,
-    crate::parser::ParseDiagnostic, crate::parser::ProjectionError, crate::parser::ResourceFailure,
+    crate::module::GraphDiagnostic, crate::module::HeaderGraph, crate::module::LoadGraphError,
+    crate::module::LoadedModule, crate::module::ModuleGraph, crate::module::ModuleId,
+    crate::module::ModuleRoots, crate::module::discover_headers, crate::parser::ParseDiagnostic,
+    crate::parser::ProjectionError, crate::parser::ResourceFailure,
     crate::pattern::UsefulnessBudget, crate::resolve::DependencyExports,
     crate::resolve::ResolveError, crate::resolve::ResolveModuleError,
     crate::resolved::ResolvedModuleProgram, crate::source::SourceError, crate::source::SourceFile,
@@ -25,6 +26,8 @@ use {
     crate::types::Type, crate::types::TypeWorkBudget,
 };
 
+#[cfg(test)]
+use crate::module::load_module_graph;
 #[cfg(test)]
 use crate::resolve::resolve_module_with_budget;
 
@@ -634,11 +637,13 @@ impl From<PipelineFailure> for FileFailure {
 
 impl FileFailure {
     /// Returns observed work, retaining completed phases and partial failure costs.
-    /// Missing fields were not observed; input failures carry no compiler report.
+    /// Missing fields were not observed; failures before the source census carry
+    /// no compiler report.
     #[must_use]
     pub fn compilation_work(&self) -> Option<&crate::compiler_work::CompilationWork> {
         match self {
             Self::Pipeline(context) => Some(&context.compilation_work),
+            Self::Graph(context) => context.compilation_work(),
             _ => None,
         }
     }
@@ -662,6 +667,9 @@ impl FileFailure {
     }
 
     fn with_compilation_work(mut self, costs: crate::compiler_work::CompilationWork) -> Self {
+        if let Self::Graph(context) = self {
+            return Self::Graph(context.with_compilation_work(costs));
+        }
         if let Self::Pipeline(context) = &mut self {
             context.compilation_work.source_checking = context
                 .compilation_work
@@ -1080,17 +1088,11 @@ where
 {
     let compilation_phase = crate::calibration::Phase::start("compilation");
     let loading_phase = crate::calibration::Phase::start("loading");
-    let graph = load_module_graph(&configuration.entry, &configuration.roots)
-        .map_err(FileFailure::Graph)?;
+    let mut graph =
+        discover_headers(&configuration.entry, &configuration.roots).map_err(FileFailure::Graph)?;
     loading_phase.finish(None, 0, 0);
-    #[cfg(feature = "resource-calibration")]
-    if crate::calibration::observing() {
-        let metrics = crate::calibration::Phase::start("input-metrics");
-        crate::calibration_features::observe_input(&graph);
-        metrics.finish(None, 0, 0);
-    }
-    let result = compile_graph_with_consumers(
-        &graph,
+    let result = compile_input_with_consumers(
+        &mut CompilationInput::Staged(&mut graph),
         constraint_work,
         interface_validator,
         validator,
@@ -1111,6 +1113,87 @@ where
     }
 }
 
+enum CompilationInput<'a> {
+    #[cfg(test)]
+    Parsed {
+        graph: &'a ModuleGraph,
+        next: usize,
+    },
+    Staged(&'a mut HeaderGraph),
+}
+
+impl CompilationInput<'_> {
+    fn len(&self) -> usize {
+        match self {
+            #[cfg(test)]
+            Self::Parsed { graph, .. } => graph.modules().len(),
+            Self::Staged(graph) => graph.len(),
+        }
+    }
+
+    fn source_work(&self) -> Result<(TypeWorkBudget, usize), ()> {
+        match self {
+            #[cfg(test)]
+            Self::Parsed { graph, .. } => crate::compiler_work::source_work(graph),
+            Self::Staged(graph) => graph.source_work(),
+        }
+    }
+
+    fn advance(&mut self) -> Result<bool, FileFailure> {
+        match self {
+            #[cfg(test)]
+            Self::Parsed { graph, next } => {
+                if *next == graph.modules().len() {
+                    Ok(false)
+                } else {
+                    *next += 1;
+                    Ok(true)
+                }
+            }
+            Self::Staged(graph) => {
+                if !graph.has_pending() {
+                    return Ok(false);
+                }
+                let phase = crate::calibration::Phase::start("loading");
+                let advanced = graph
+                    .next_module()
+                    .map(|module| module.is_some())
+                    .map_err(FileFailure::Graph)?;
+                phase.finish(None, 0, 0);
+                Ok(advanced)
+            }
+        }
+    }
+
+    fn current(&self) -> Option<&LoadedModule> {
+        match self {
+            #[cfg(test)]
+            Self::Parsed { graph, next } => {
+                next.checked_sub(1).and_then(|i| graph.modules().get(i))
+            }
+            Self::Staged(graph) => graph.current_module(),
+        }
+    }
+
+    fn completed(&mut self) -> Option<&ModuleGraph> {
+        match self {
+            #[cfg(test)]
+            Self::Parsed { graph, .. } => Some(graph),
+            Self::Staged(graph) => graph.completed_graph(),
+        }
+    }
+
+    #[cfg(feature = "resource-calibration")]
+    fn all_staged_surfaces_loaded(&self) -> bool {
+        match self {
+            #[cfg(test)]
+            Self::Parsed { .. } => false,
+            Self::Staged(graph) => graph.all_loaded(),
+        }
+    }
+}
+
+#[cfg(test)]
 fn compile_graph_with_consumers<I, V>(
     graph: &ModuleGraph,
     constraint_work: &mut InterfaceConstraintBudget,
@@ -1132,9 +1215,40 @@ where
         &ValidatedInterfaceProgram,
     ) -> ModularEffectCoreResult,
 {
+    compile_input_with_consumers(
+        &mut CompilationInput::Parsed { graph, next: 0 },
+        constraint_work,
+        interface_validator,
+        validator,
+        select_effect_core,
+        retention,
+    )
+}
+
+fn compile_input_with_consumers<I, V>(
+    input: &mut CompilationInput<'_>,
+    constraint_work: &mut InterfaceConstraintBudget,
+    interface_validator: I,
+    validator: V,
+    select_effect_core: bool,
+    retention: ProvenanceRetention,
+) -> Result<CompiledProgram, FileFailure>
+where
+    I: FnOnce(
+        ResolvedModuleProgram,
+        &mut InterfaceConstraintBudget,
+        &mut TypeWorkBudget,
+    ) -> Result<ValidatedInterfaceProgram, EvidenceValidationFailure>,
+    V: FnOnce(
+        UnvalidatedEffectProgram,
+        &[&SourceFile],
+        &[(ModuleId, SourceId)],
+        &ValidatedInterfaceProgram,
+    ) -> ModularEffectCoreResult,
+{
     let mut compilation_work = crate::compiler_work::CompilationWork::default();
     compile_graph_with_report(
-        graph,
+        input,
         constraint_work,
         interface_validator,
         validator,
@@ -1146,7 +1260,7 @@ where
 }
 
 fn compile_graph_with_report<I, V>(
-    graph: &ModuleGraph,
+    input: &mut CompilationInput<'_>,
     constraint_work: &mut InterfaceConstraintBudget,
     interface_validator: I,
     validator: V,
@@ -1167,16 +1281,13 @@ where
         &ValidatedInterfaceProgram,
     ) -> ModularEffectCoreResult,
 {
-    let mut checked: Vec<crate::resolved::CheckedModule> =
-        Vec::with_capacity(graph.modules().len());
-    let mut checked_by_module: HashMap<ModuleId, usize> =
-        HashMap::with_capacity(graph.modules().len());
-    let (mut checking_type_work, source_bytes) =
-        crate::compiler_work::source_work(graph).map_err(|()| {
-            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
-                crate::elaborate::ElaborationFailure::TypeResourceExhausted,
-            )))
-        })?;
+    let mut checked: Vec<crate::resolved::CheckedModule> = Vec::with_capacity(input.len());
+    let mut checked_by_module: HashMap<ModuleId, usize> = HashMap::with_capacity(input.len());
+    let (mut checking_type_work, source_bytes) = input.source_work().map_err(|()| {
+        FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+            crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+        )))
+    })?;
     let resolution_normal_limit =
         crate::compiler_work::resolution_total(source_bytes).map_err(|()| {
             FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
@@ -1200,13 +1311,26 @@ where
                 crate::elaborate::ElaborationFailure::TypeResourceExhausted,
             )))
         })?;
+    compilation_work.source_checking = Some(
+        crate::compiler_work::CompilationPhase::SourceChecking
+            .assess_with_allowance(checking_type_work.used(), checking_type_work.limit())
+            .incomplete(),
+    );
     let rewrite_limit = modular_rewrite_limit(source_bytes).map_err(|()| {
         FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
             crate::elaborate::ElaborationFailure::TypeResourceExhausted,
         )))
     })?;
     let mut coverage_work = UsefulnessBudget::default();
-    for module in graph.modules() {
+    while input.advance()? {
+        #[cfg(feature = "resource-calibration")]
+        if crate::calibration::observing() && input.all_staged_surfaces_loaded() {
+            let metrics = crate::calibration::Phase::start("input-metrics");
+            let graph = input.completed().ok_or_else(internal_file_failure)?;
+            crate::calibration_features::observe_input(graph);
+            metrics.finish(None, 0, 0);
+        }
+        let module = input.current().ok_or_else(internal_file_failure)?;
         let dependencies = module
             .dependencies()
             .iter()
@@ -1293,6 +1417,7 @@ where
         );
     }
 
+    let graph = input.completed().ok_or_else(internal_file_failure)?;
     let entry = checked
         .iter()
         .find(|module| module.module() == graph.entry())

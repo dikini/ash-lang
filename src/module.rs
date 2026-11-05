@@ -1,8 +1,12 @@
 //! Canonical source loading for passive module graphs.
 
+#[cfg(test)]
+#[path = "module_staged_tests.rs"]
+mod staged_tests;
+
 use std::{
     borrow::Borrow,
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     error::Error,
     fmt, fs, io,
     path::{Path, PathBuf},
@@ -13,8 +17,9 @@ use crate::{
     diagnostic::Diagnostic,
     lexer::{LexReason, lex_with_budget},
     parser::{
-        ParseDiagnostic, ProjectionError, ResourceFailure, parse_with_budget_and_header,
-        project_module,
+        ParseDiagnostic, ParserCheckpoint, ProjectionError, ResourceFailure,
+        finish_module_from_checkpoint, module_span_from_checkpoint, parse_module_header,
+        parse_with_budget_and_header, project_module, project_module_header,
     },
     source::{SourceError, SourceFile, SourceId, Span},
     surface::{SurfaceImport, SurfaceModule, SurfaceModulePath},
@@ -882,7 +887,7 @@ mod presentation_tests {
                     membership: HashSet::new(),
                 },
                 source,
-                surface,
+                surface: StagedSyntax::parsed(surface, None),
                 dependencies: Vec::new(),
                 relative_edges: Vec::new(),
                 state: VisitState::Active,
@@ -899,6 +904,7 @@ mod presentation_tests {
             let context = GraphDiagnostic {
                 failure: Box::new(failure),
                 sources: vec![module.source].into_boxed_slice(),
+                compilation_work: None,
             };
             let diagnostics = crate::presentation::compile_graph_diagnostics(&context).unwrap();
             let mut output = Vec::new();
@@ -1198,9 +1204,22 @@ impl Error for LoadGraphError {}
 pub struct GraphDiagnostic {
     failure: Box<LoadGraphError>,
     sources: Box<[SourceFile]>,
+    compilation_work: Option<crate::compiler_work::CompilationWork>,
 }
 
 impl GraphDiagnostic {
+    pub(crate) fn compilation_work(&self) -> Option<&crate::compiler_work::CompilationWork> {
+        self.compilation_work.as_ref()
+    }
+
+    pub(crate) fn with_compilation_work(
+        mut self,
+        work: crate::compiler_work::CompilationWork,
+    ) -> Self {
+        self.compilation_work = Some(work);
+        self
+    }
+
     /// Borrows the unchanged graph-loading failure.
     #[must_use]
     pub const fn failure(&self) -> &LoadGraphError {
@@ -1255,6 +1274,7 @@ impl From<LoadGraphError> for GraphDiagnostic {
         Self {
             failure: Box::new(failure),
             sources: Box::default(),
+            compilation_work: None,
         }
     }
 }
@@ -1327,27 +1347,180 @@ enum ImportOwners {
     Absolute(PathBuf),
 }
 
-#[derive(Clone, Debug)]
 struct StagedModule {
     id: ModuleId,
     canonical_path: PathBuf,
     owners: OwnerSet,
     source: SourceFile,
-    surface: SurfaceModule,
+    surface: StagedSyntax,
     dependencies: Vec<ModuleDependency>,
     relative_edges: Vec<RelativeEdge>,
     state: VisitState,
 }
 
+struct StagedSyntax {
+    imports: Vec<SurfaceImport>,
+    span: Span,
+    body: ModuleBody,
+    import_span: Option<Span>,
+}
+
+enum ModuleBody {
+    Parsed(SurfaceModule),
+    Header(ParserCheckpoint),
+}
+
+impl StagedSyntax {
+    fn parsed(mut surface: SurfaceModule, import_span: Option<Span>) -> Self {
+        Self {
+            imports: std::mem::take(&mut surface.imports),
+            span: surface.span,
+            body: ModuleBody::Parsed(surface),
+            import_span,
+        }
+    }
+}
+
 impl StagedModule {
-    fn into_loaded(self) -> LoadedModule {
-        LoadedModule {
+    fn into_loaded(self, budget: &mut SyntaxBudget) -> Result<LoadedModule, LoadGraphError> {
+        let StagedSyntax {
+            imports,
+            span,
+            body,
+            import_span,
+        } = self.surface;
+        let (source, surface) = match body {
+            ModuleBody::Parsed(mut surface) => {
+                surface.imports = imports;
+                (self.source, surface)
+            }
+            ModuleBody::Header(checkpoint) => {
+                let (tree, retained) = finish_module_from_checkpoint(checkpoint, budget.clone());
+                *budget = retained;
+                let (source, mut surface) =
+                    project_finished_module(self.source, tree, import_span)?;
+                if surface.imports != imports {
+                    return Err(LoadGraphError::Projection {
+                        source,
+                        error: ProjectionError::MalformedTree(
+                            crate::parser::InternalReason::UnexpectedShape,
+                        ),
+                        import_span,
+                    });
+                }
+                surface.imports = imports;
+                (source, surface)
+            }
+        };
+        if surface.span != span {
+            return Err(LoadGraphError::Projection {
+                source,
+                error: ProjectionError::MalformedTree(crate::parser::InternalReason::InvalidSpan),
+                import_span,
+            });
+        }
+        Ok(LoadedModule {
             id: self.id,
             canonical_path: self.canonical_path,
-            source: std::sync::Arc::new(self.source),
-            surface: self.surface,
+            source: std::sync::Arc::new(source),
+            surface,
             dependencies: self.dependencies.into_boxed_slice(),
+        })
+    }
+}
+
+pub(crate) struct HeaderGraph {
+    pending: VecDeque<StagedModule>,
+    loaded: Vec<LoadedModule>,
+    completed: Option<ModuleGraph>,
+    entry: ModuleId,
+    syntax_budget: SyntaxBudget,
+}
+
+impl HeaderGraph {
+    pub(crate) fn source_work(&self) -> Result<(crate::types::TypeWorkBudget, usize), ()> {
+        if !self.loaded.is_empty() || self.completed.is_some() {
+            return Err(());
         }
+        crate::compiler_work::source_work_for_sources(
+            self.pending.iter().map(|module| &module.source),
+        )
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.pending.len() + self.loaded.len()
+    }
+
+    pub(crate) fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    #[cfg(feature = "resource-calibration")]
+    pub(crate) fn all_loaded(&self) -> bool {
+        self.pending.is_empty()
+    }
+
+    pub(crate) fn current_module(&self) -> Option<&LoadedModule> {
+        match &self.completed {
+            Some(graph) => graph.modules.last(),
+            None => self.loaded.last(),
+        }
+    }
+
+    pub(crate) fn next_module(&mut self) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
+        let Some(module) = self.pending.pop_front() else {
+            return Ok(None);
+        };
+        match module.into_loaded(&mut self.syntax_budget) {
+            Ok(module) => {
+                self.loaded.push(module);
+                Ok(self.loaded.last())
+            }
+            Err(failure) => {
+                let loaded = std::mem::take(&mut self.loaded);
+                let pending = std::mem::take(&mut self.pending);
+                Err(GraphDiagnostic {
+                    failure: Box::new(failure),
+                    sources: loaded
+                        .into_iter()
+                        .map(|module| {
+                            std::sync::Arc::try_unwrap(module.source)
+                                .unwrap_or_else(|source| (*source).clone())
+                        })
+                        .chain(pending.into_iter().map(|module| module.source))
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                    compilation_work: None,
+                })
+            }
+        }
+    }
+
+    pub(crate) fn completed_graph(&mut self) -> Option<&ModuleGraph> {
+        if !self.pending.is_empty() {
+            return None;
+        }
+        if self.completed.is_none() {
+            self.completed = Some(ModuleGraph {
+                modules: std::mem::take(&mut self.loaded).into_boxed_slice(),
+                entry: self.entry,
+            });
+        }
+        self.completed.as_ref()
+    }
+
+    pub(crate) fn into_sources(self) -> Box<[SourceFile]> {
+        if let Some(graph) = self.completed {
+            return graph.into_sources();
+        }
+        self.loaded
+            .into_iter()
+            .map(|module| {
+                std::sync::Arc::try_unwrap(module.source).unwrap_or_else(|source| (*source).clone())
+            })
+            .chain(self.pending.into_iter().map(|module| module.source))
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
     }
 }
 
@@ -1386,7 +1559,15 @@ struct GraphBudget {
     owner_facts: usize,
     pending_work: usize,
     syntax_work: SyntaxBudget,
+    mode: BodyMode,
     limits: GraphLimits,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+enum BodyMode {
+    #[default]
+    Complete,
+    Header,
 }
 
 impl GraphBudget {
@@ -1477,8 +1658,41 @@ pub fn load_module_graph(
     entry: &Path,
     roots: &ModuleRoots,
 ) -> Result<ModuleGraph, GraphDiagnostic> {
+    let mut graph = discover_graph(entry, roots, BodyMode::Complete)?;
+    while graph.next_module()?.is_some() {}
+    graph.completed_graph();
+    Ok(graph.completed.expect("all complete modules were retained"))
+}
+
+pub(crate) fn discover_headers(
+    entry: &Path,
+    roots: &ModuleRoots,
+) -> Result<HeaderGraph, GraphDiagnostic> {
+    discover_graph(entry, roots, BodyMode::Header)
+}
+
+fn discover_graph(
+    entry: &Path,
+    roots: &ModuleRoots,
+    mode: BodyMode,
+) -> Result<HeaderGraph, GraphDiagnostic> {
+    discover_graph_with_budget(
+        entry,
+        roots,
+        GraphBudget {
+            mode,
+            ..GraphBudget::default()
+        },
+    )
+}
+
+fn discover_graph_with_budget(
+    entry: &Path,
+    roots: &ModuleRoots,
+    mut budget: GraphBudget,
+) -> Result<HeaderGraph, GraphDiagnostic> {
     let mut staged = Vec::new();
-    let result: Result<ModuleGraph, LoadGraphError> = (|| {
+    let result: Result<HeaderGraph, LoadGraphError> = (|| {
         let canonical_entry = fs::canonicalize(entry).map_err(|error| LoadGraphError::Read {
             path: entry.to_path_buf(),
             kind: error.kind(),
@@ -1494,7 +1708,6 @@ pub fn load_module_graph(
             })?;
 
         let graph_identity = allocate_module_graph_identity()?;
-        let mut budget = GraphBudget::default();
         let mut by_path = HashMap::new();
         let entry_id = admit_module(
             canonical_entry,
@@ -1770,14 +1983,13 @@ pub fn load_module_graph(
             positions[module.index()] = position;
         }
         staged.sort_by_key(|module| positions[module.id.index()]);
-        let modules = std::mem::take(&mut staged)
-            .into_iter()
-            .map(StagedModule::into_loaded)
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        Ok(ModuleGraph {
-            modules,
+        let pending = std::mem::take(&mut staged).into();
+        Ok(HeaderGraph {
+            pending,
+            loaded: Vec::new(),
+            completed: None,
             entry: entry_id,
+            syntax_budget: budget.syntax_work,
         })
     })();
     result.map_err(|failure| GraphDiagnostic {
@@ -1787,6 +1999,7 @@ pub fn load_module_graph(
             .map(|module| module.source)
             .collect::<Vec<_>>()
             .into_boxed_slice(),
+        compilation_work: None,
     })
 }
 
@@ -1811,8 +2024,13 @@ fn admit_builtin_region_facade(
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
     text.push_str(REGION_FACADE_SOURCE);
     let path = PathBuf::from("@builtin.regions");
-    let (source, surface) =
-        parse_surface_module(&path, text, Some(import_span), &mut budget.syntax_work)?;
+    let (source, surface) = parse_graph_module(
+        &path,
+        text,
+        Some(import_span),
+        &mut budget.syntax_work,
+        budget.mode,
+    )?;
     let value = u32::try_from(staged.len())
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
     let id = ModuleId {
@@ -1875,8 +2093,13 @@ fn admit_builtin_region(
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
     text.push_str(REGION_SOURCE);
     let path = PathBuf::from("@compiler.region");
-    let (source, surface) =
-        parse_surface_module(&path, text, Some(owner_span), &mut budget.syntax_work)?;
+    let (source, surface) = parse_graph_module(
+        &path,
+        text,
+        Some(owner_span),
+        &mut budget.syntax_work,
+        budget.mode,
+    )?;
     let value = u32::try_from(staged.len())
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
     let id = ModuleId {
@@ -1932,8 +2155,13 @@ fn admit_builtin_foreign(
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
     text.push_str(FOREIGN_SOURCE);
     let path = PathBuf::from("@builtin.foreign");
-    let (source, surface) =
-        parse_surface_module(&path, text, Some(import_span), &mut budget.syntax_work)?;
+    let (source, surface) = parse_graph_module(
+        &path,
+        text,
+        Some(import_span),
+        &mut budget.syntax_work,
+        budget.mode,
+    )?;
     let value = u32::try_from(staged.len())
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
     let id = ModuleId {
@@ -1995,11 +2223,12 @@ fn admit_builtin_packed(
         }
     };
     let path = PathBuf::from(path);
-    let (source, surface) = parse_surface_module(
+    let (source, surface) = parse_graph_module(
         &path,
         text.to_owned(),
         Some(import_span),
         &mut budget.syntax_work,
+        budget.mode,
     )?;
     let value = u32::try_from(staged.len())
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
@@ -2048,7 +2277,7 @@ fn admit_builtin_resource(
     } else {
         "@builtin.cell"
     });
-    let (source, surface) = parse_surface_module(
+    let (source, surface) = parse_graph_module(
         &path,
         if generic {
             GENERIC_CELL_SOURCE
@@ -2058,6 +2287,7 @@ fn admit_builtin_resource(
         .to_owned(),
         Some(import_span),
         &mut budget.syntax_work,
+        budget.mode,
     )?;
     let value = u32::try_from(staged.len())
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
@@ -2100,11 +2330,12 @@ fn admit_builtin_retained_control(
         .try_reserve(1)
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
     let path = PathBuf::from("@builtin.retained_control");
-    let (source, surface) = parse_surface_module(
+    let (source, surface) = parse_graph_module(
         &path,
         RETAINED_CONTROL_SOURCE.to_owned(),
         Some(import_span),
         &mut budget.syntax_work,
+        budget.mode,
     )?;
     let value = u32::try_from(staged.len())
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
@@ -2149,11 +2380,12 @@ fn admit_builtin_network(
         .try_reserve(1)
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
     let path = PathBuf::from("@builtin.network");
-    let (source, surface) = parse_surface_module(
+    let (source, surface) = parse_graph_module(
         &path,
         NETWORK_SOURCE.to_owned(),
         Some(import_span),
         &mut budget.syntax_work,
+        budget.mode,
     )?;
     let value = u32::try_from(staged.len())
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
@@ -2192,8 +2424,12 @@ fn admit_module(
     graph_identity: u32,
 ) -> Result<ModuleId, LoadGraphError> {
     budget.charge_sources()?;
-    let (source, surface) =
-        load_surface_module(&canonical_path, import_span, &mut budget.syntax_work)?;
+    let (source, surface) = load_surface_module(
+        &canonical_path,
+        import_span,
+        &mut budget.syntax_work,
+        budget.mode,
+    )?;
     let id_value = u32::try_from(staged.len())
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
     let id = ModuleId::admitted(graph_identity, id_value);
@@ -2215,7 +2451,8 @@ fn load_surface_module(
     path: &Path,
     import_span: Option<Span>,
     syntax_budget: &mut SyntaxBudget,
-) -> Result<(SourceFile, SurfaceModule), LoadGraphError> {
+    mode: BodyMode,
+) -> Result<(SourceFile, StagedSyntax), LoadGraphError> {
     let bytes = fs::read(path).map_err(|error| LoadGraphError::Read {
         path: path.to_path_buf(),
         kind: error.kind(),
@@ -2225,7 +2462,118 @@ fn load_surface_module(
         path: path.to_path_buf(),
         import_span,
     })?;
-    parse_surface_module(path, text, import_span, syntax_budget)
+    parse_graph_module(path, text, import_span, syntax_budget, mode)
+}
+
+fn parse_graph_module(
+    path: &Path,
+    text: String,
+    import_span: Option<Span>,
+    syntax_budget: &mut SyntaxBudget,
+    mode: BodyMode,
+) -> Result<(SourceFile, StagedSyntax), LoadGraphError> {
+    if matches!(mode, BodyMode::Complete) {
+        let (source, surface) = parse_surface_module(path, text, import_span, syntax_budget)?;
+        return Ok((source, StagedSyntax::parsed(surface, import_span)));
+    }
+    let source = SourceFile::new(path.to_string_lossy(), text).map_err(|error| {
+        LoadGraphError::SourceModel {
+            path: path.to_path_buf(),
+            error,
+            operation: crate::source::SourceOperation::Admission,
+            import_span,
+        }
+    })?;
+    let lexed =
+        lex_with_budget(&source, syntax_budget).map_err(|error| LoadGraphError::SourceModel {
+            path: path.to_path_buf(),
+            error,
+            operation: crate::source::SourceOperation::SpanConstruction,
+            import_span,
+        })?;
+    let (tokens, lexical, _, lexical_failure) = lexed.into_parts();
+    if let Some(resource) = lexical_failure {
+        return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+            lexical,
+            parser: Vec::new(),
+            resource: Some(resource),
+            source,
+            import_span,
+        })));
+    }
+    let (checkpoint, retained) = parse_module_header(tokens, lexical, syntax_budget.clone());
+    *syntax_budget = retained;
+    let imports = match project_module_header(&source, &checkpoint) {
+        Ok(imports) => imports,
+        Err(error) => {
+            if matches!(
+                error,
+                ProjectionError::RecoveryNodesPresent | ProjectionError::ResourceLimit(_)
+            ) && (checkpoint.resource_failure().is_some()
+                || !checkpoint.lexical_diagnostics().is_empty()
+                || !checkpoint.parse_diagnostics().is_empty())
+            {
+                return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+                    lexical: checkpoint.lexical_diagnostics().to_vec(),
+                    parser: checkpoint.parse_diagnostics().to_vec(),
+                    resource: checkpoint.resource_failure(),
+                    source,
+                    import_span,
+                })));
+            }
+            return Err(LoadGraphError::Projection {
+                source,
+                error,
+                import_span,
+            });
+        }
+    };
+    let span = match module_span_from_checkpoint(&source, &checkpoint) {
+        Ok(span) => span,
+        Err(error) => {
+            return Err(LoadGraphError::Projection {
+                source,
+                error,
+                import_span,
+            });
+        }
+    };
+    Ok((
+        source,
+        StagedSyntax {
+            imports,
+            span,
+            body: ModuleBody::Header(checkpoint),
+            import_span,
+        },
+    ))
+}
+
+fn project_finished_module(
+    source: SourceFile,
+    tree: crate::parser::ConcreteTree,
+    import_span: Option<Span>,
+) -> Result<(SourceFile, SurfaceModule), LoadGraphError> {
+    if tree.resource_failure().is_some()
+        || !tree.lexical_diagnostics().is_empty()
+        || !tree.parse_diagnostics().is_empty()
+    {
+        return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+            lexical: tree.lexical_diagnostics().to_vec(),
+            parser: tree.parse_diagnostics().to_vec(),
+            resource: tree.resource_failure(),
+            source,
+            import_span,
+        })));
+    }
+    match project_module(&source, &tree) {
+        Ok(surface) => Ok((source, surface)),
+        Err(error) => Err(LoadGraphError::Projection {
+            source,
+            error,
+            import_span,
+        }),
+    }
 }
 
 fn parse_surface_module(
