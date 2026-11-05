@@ -856,7 +856,7 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
             &mut encoder.image.sources,
             SourceRecord {
                 role: if module.is_builtin_compiler_syntax() {
-                    return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+                    ModuleRoleRecord::BuiltinCompilerSyntax
                 } else if module.is_builtin_foreign() {
                     ModuleRoleRecord::BuiltinForeign
                 } else if module.is_builtin_region_facade() {
@@ -3063,6 +3063,7 @@ impl PureImage {
         let mut seen_integer = false;
         let mut seen_region = false;
         let mut seen_region_facade = false;
+        let mut seen_compiler_syntax = false;
         for record in &self.sources {
             charge(decoder.work, 1)?;
             let path = decoder.text(record.path)?;
@@ -3071,6 +3072,15 @@ impl PureImage {
                 .map_err(|_| ImageFailure::SourceAdmission)?;
             let role = match record.role {
                 ModuleRoleRecord::Ordinary => crate::module::ImageModuleRole::Ordinary,
+                ModuleRoleRecord::BuiltinCompilerSyntax => {
+                    charge(decoder.work, source.text().len())?;
+                    if std::mem::replace(&mut seen_compiler_syntax, true)
+                        || source.text() != crate::module::compiler_syntax_builtin_source_text()
+                    {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinCompilerSyntax
+                }
                 ModuleRoleRecord::BuiltinRegionFacade => {
                     if std::mem::replace(&mut seen_region_facade, true) {
                         return Err(ImageFailure::InvalidRecord);
@@ -4463,6 +4473,85 @@ mod tests {
                 .to_string(),
             "42"
         );
+    }
+
+    #[test]
+    fn syntax_builtin_image_reconstructs_and_refuses_changed_or_duplicate_roles() {
+        let tree = SourceTree::new();
+        for (name, source) in [
+            (
+                "entry.ash",
+                include_str!("../../tests/fixtures/surface-macros/entry.ash"),
+            ),
+            (
+                "macros.ash",
+                include_str!("../../tests/fixtures/surface-macros/macros.ash"),
+            ),
+            (
+                "helpers.ash",
+                include_str!("../../tests/fixtures/surface-macros/helpers.ash"),
+            ),
+            (
+                "other_dsl.ash",
+                include_str!("../../tests/fixtures/surface-macros/other_dsl.ash"),
+            ),
+        ] {
+            tree.write(name, source);
+        }
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let build = encode_effect_for_build(
+            program,
+            provenance,
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let bytes = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(build);
+        drop(compiled);
+        drop(tree);
+
+        let mut work = TypeWorkBudget::default();
+        let decoded = PureImage::decode_bytes(&bytes, &mut work).unwrap();
+        decoded
+            .admit_expected_native_facts(&expected, &mut work)
+            .unwrap();
+        let restored = decoded.restore_effect(&mut work).unwrap();
+        assert_eq!(
+            crate::eval::evaluate_effect(&restored.program)
+                .unwrap()
+                .value
+                .to_string(),
+            "42"
+        );
+
+        let mut changed = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let syntax_source = *changed
+            .sources
+            .iter()
+            .find(|source| source.role == ModuleRoleRecord::BuiltinCompilerSyntax)
+            .expect("canonical syntax module is present");
+        changed.bytes[syntax_source.text.start as usize] ^= 1;
+        assert!(matches!(
+            changed.restore_effect(&mut TypeWorkBudget::default()),
+            Err(ImageFailure::InvalidRecord)
+        ));
+
+        let mut duplicate =
+            PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        duplicate.sources.push(syntax_source);
+        assert!(matches!(
+            duplicate.restore_effect(&mut TypeWorkBudget::default()),
+            Err(ImageFailure::InvalidRecord)
+        ));
     }
     use super::*;
 
@@ -6272,6 +6361,7 @@ enum ModuleRoleRecord {
     BuiltinString,
     BuiltinBytes,
     BuiltinInteger,
+    BuiltinCompilerSyntax,
 }
 
 // Add role: ModuleRoleRecord to SourceRecord. Never infer it from the path.
@@ -6517,6 +6607,7 @@ impl Wire for ModuleRoleRecord {
             Self::BuiltinRetainedControl => 8,
             Self::BuiltinNetwork => 9,
             Self::BuiltinInteger => 10,
+            Self::BuiltinCompilerSyntax => 11,
         }
         .write(writer)
     }
@@ -6533,6 +6624,7 @@ impl Wire for ModuleRoleRecord {
             8 => Ok(Self::BuiltinRetainedControl),
             9 => Ok(Self::BuiltinNetwork),
             10 => Ok(Self::BuiltinInteger),
+            11 => Ok(Self::BuiltinCompilerSyntax),
             _ => Err(ImageFailure::InvalidEncoding),
         }
     }
@@ -8966,6 +9058,7 @@ impl PureImage {
         let mut seen_string = false;
         let mut seen_bytes = false;
         let mut seen_integer = false;
+        let mut seen_compiler_syntax = false;
         for record in &self.sources {
             charge(decoder.work, 1)?;
             let path = decoder.text(record.path)?;
@@ -8974,6 +9067,15 @@ impl PureImage {
                 .map_err(|_| ImageFailure::SourceAdmission)?;
             let role = match record.role {
                 ModuleRoleRecord::Ordinary => crate::module::ImageModuleRole::Ordinary,
+                ModuleRoleRecord::BuiltinCompilerSyntax => {
+                    charge(decoder.work, source.text().len())?;
+                    if std::mem::replace(&mut seen_compiler_syntax, true)
+                        || source.text() != crate::module::compiler_syntax_builtin_source_text()
+                    {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinCompilerSyntax
+                }
                 ModuleRoleRecord::BuiltinString => {
                     if std::mem::replace(&mut seen_string, true) {
                         return Err(ImageFailure::InvalidRecord);

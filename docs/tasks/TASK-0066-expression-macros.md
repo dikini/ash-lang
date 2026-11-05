@@ -127,10 +127,10 @@ The reviewed progress is **36.5/100 delivery points, about 37%**, through
 repairs, and 8.5 points for the expanded vocabulary, identifier operations,
 group output, one procedural binder scope, and a restricted parse/unwrap service
 with contextual syntax selection.
-An additional 5 provisional points record qualified caller-term output, a
+An additional 7 provisional points record qualified caller-term output, a
 combined-origin syntax round trip, authored and parser failures with human/JSON
 causes, malformed output refusal, and contextual failure of a non-terminating
-transformer.
+transformer, plus the combined graph's native build and matching execution.
 Observed root-close
 evidence and all M01–M14 acceptance criteria remain pending.
 
@@ -183,7 +183,7 @@ reviewer owns `Rev`, and the orchestrator owns `PM`.
 | P30 | 2.5 | Dev / 0 | Ordered multi-input/frame representation (1), ordinary semantic causes/locations (1), bounded copying/relocation preservation (0.5). |
 | P31 | 2.5 | Dev / D1 | Authored rejection (0.5) and retained parser failure (0.5) render their messages and caller/definition causes in human and JSON output, `/tmp/ash-syntax-rejection-driver.log` and `/tmp/ash-syntax-parser-diagnostic-driver.log`; remaining diagnostic variants, complete frame structure, and locale/catalog conformance are pending. |
 | P32 | 2.5 | Dev / 0 | Required image records (1), reconstruction/round trip (1), corruption refusal (0.5). |
-| P33 | 2.5 | Dev / 0 | Public build preparation/link (1), real generated executable matches interpretation (1), source removal/cleanup/no runtime syntax service (0.5). |
+| P33 | 2.5 | Dev / D2 | The combined template and checked-transformer graph builds and links through public `ash build` (1); its generated executable returns 42, matching interpretation (1), `/tmp/ash-syntax-native-second.log` (SHA-256 `43fe9d4c89fe2a69791a8a835bf52e68e1af1e79292b98c70cbea5bfb68c3029`). Copied `.ash` inputs were removed before execution; the remaining cleanup and no-runtime-syntax-service assertions (0.5) are pending. |
 | P34 | 2 | Dev / 0 | Implemented language delta in specification (1), executable positive/negative examples (1). |
 | P35 | 2 | Dev / 0 | Public vocabulary/API and tool docs (1), status/link/authority and transition cleanup (1). |
 | P36 | 1.5 | Rev+Dev / 0 | Connected C1 independent review (0.5), fresh pinned full gate (1). |
@@ -197,7 +197,7 @@ API/entry 10; Ops/interchange 14; transfer/failure/limits 8; graph/Core/repeatab
 The independent review assigns more weight to the unresolved contextual,
 non-term, copied-identity, grant, and Core-coordinate consumers than the first
 draft. The 20-point reviewed baseline is frozen; a changed ETA does not reweight it.
-Reviewed effort is 36.5, demonstrated provisional effort is 5, and 58.5 points
+Reviewed effort is 36.5, demonstrated provisional effort is 7, and 56.5 points
 have no credit. Review upgrades D to R without awarding implementation points
 again. Explicit review/gate rows cover their own work, not a second implementation
 credit. Record the exact commit or source hash, real consumer observation/test
@@ -269,6 +269,26 @@ and the observer suite passed three cases
 `0f48fba50539eca8700ba26f4cd1b0fd911672b11d4f19c3719b41af2f008750`).
 These results await independent review. The remaining forecast is in the plan.
 
+Partial review of `94bd9467` found that repeated shared origin combinations
+could expand without bound while reporting a rejection. The local repair limits
+combined-origin size and depth and admits the complete rejection's causes
+before reporting; ordinary cause order is retained. The affected host suite
+passes 30 cases, including finite doubling, deep-chain, and repeated-cause
+programs (`/tmp/ash-syntax-r11-host.log`, SHA-256
+`d9bde04489051955c3169858869c4c1c4a99af9858c44d650b2c9e93ec679599`).
+
+The first native build of the combined graph failed because the private image
+refused the compiler-syntax module role (`/tmp/ash-syntax-native-first.log`,
+SHA-256 `8bc692db34ee2dbcc1fa55cfab3749922e8b23cd507c400814d63694e1d20d74`).
+The image role adapter now lets the real graph build and return 42 after its
+copied sources are removed (`/tmp/ash-syntax-native-second.log`, SHA-256
+`43fe9d4c89fe2a69791a8a835bf52e68e1af1e79292b98c70cbea5bfb68c3029`).
+The focused image check reconstructs that graph and rejects changed canonical
+syntax bytes and a duplicate syntax role (`/tmp/ash-syntax-image-mutations.log`,
+SHA-256 `78fc15f63fad357d27313c36e71d86155ac3a1c93956cb19452e8455c3f6be61`).
+The repair and image adapter await review; image corruption coverage and full
+causal origin preservation remain incomplete.
+
 1. **Template grouping — demonstrated.** `cargo test -j 1 -p ash --test
    surface_macros template_macro_preserves_expression_capture_grouping --
    --exact` must compile and execute the imported template to `Int 35`.
@@ -310,9 +330,10 @@ These results await independent review. The remaining forecast is in the plan.
 4. **Diagnostics and refusal — partial.** Malformed selected syntax and direct
    private-helper access are rejected. Complete the proposal's negative cases
    and verify causal details in human and JSON diagnostics.
-5. **Interpreter and build/image — partial.** The frozen combined macro graph
-   runs through the interpreter. Build it, remove its source inputs, and run the
-   built artifact with the same result; no macro build/image result is claimed.
+5. **Interpreter and build/image — partial.** The combined macro graph now runs
+   through the interpreter and a native executable, both returning 42 after the
+   executable's copied sources are removed. Broader image mutation, cleanup,
+   and no-runtime-syntax-service evidence remain pending.
 6. **Review and acceptance — pending.** Pin the completed implementation and
    evidence, obtain independent review and QA, run a fresh full gate, then
    integrate into `integration/expression-macros` and record acceptance. Main

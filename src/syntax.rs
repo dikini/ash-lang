@@ -26,6 +26,8 @@ pub(crate) enum MacroOutputNode {
     Splice(SurfaceName),
 }
 
+pub(crate) const MAX_ORIGIN_SPANS: usize = 65_536;
+
 /// Ordered causal inputs retained by the invocation-owned syntax interface.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MacroOrigin {
@@ -34,10 +36,48 @@ pub(crate) enum MacroOrigin {
         inputs: Arc<[MacroOrigin]>,
         invocation: Span,
         definition: Span,
+        span_count: usize,
+        depth: usize,
     },
 }
 
 impl MacroOrigin {
+    pub(crate) fn combined(inputs: Vec<Self>, invocation: Span, definition: Span) -> Option<Self> {
+        let mut span_count = 2usize;
+        let mut depth = 0usize;
+        for input in &inputs {
+            span_count = span_count.checked_add(input.span_count())?;
+            depth = depth.max(input.depth().checked_add(1)?);
+        }
+        if inputs.is_empty()
+            || span_count > MAX_ORIGIN_SPANS
+            || depth > crate::parser::STRUCTURAL_DEPTH_LIMIT
+        {
+            return None;
+        }
+        Some(Self::Combined {
+            inputs: inputs.into(),
+            invocation,
+            definition,
+            span_count,
+            depth,
+        })
+    }
+
+    pub(crate) fn span_count(&self) -> usize {
+        match self {
+            Self::Source(_) => 1,
+            Self::Combined { span_count, .. } => *span_count,
+        }
+    }
+
+    fn depth(&self) -> usize {
+        match self {
+            Self::Source(_) => 0,
+            Self::Combined { depth, .. } => *depth,
+        }
+    }
+
     pub(crate) fn primary(&self) -> Span {
         let mut origin = self;
         loop {
@@ -63,6 +103,7 @@ impl MacroOrigin {
                     inputs,
                     invocation,
                     definition,
+                    ..
                 }) => {
                     pending.push(Pending::Span(*definition));
                     pending.push(Pending::Span(*invocation));

@@ -3256,6 +3256,7 @@ pub(crate) enum ImageModuleRole {
     BuiltinString,
     BuiltinBytes,
     BuiltinInteger,
+    BuiltinCompilerSyntax,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -3281,6 +3282,7 @@ pub(crate) fn restore_image_module(
         ImageModuleRole::BuiltinString => ModuleIdNamespace::BuiltinString,
         ImageModuleRole::BuiltinBytes => ModuleIdNamespace::BuiltinBytes,
         ImageModuleRole::BuiltinInteger => ModuleIdNamespace::BuiltinInteger,
+        ImageModuleRole::BuiltinCompilerSyntax => ModuleIdNamespace::BuiltinCompilerSyntax,
     };
     work.charge(1).map_err(|()| ImageModuleFailure::Resource)?;
     let graph = allocate_module_graph_identity().map_err(|_| ImageModuleFailure::Resource)?;

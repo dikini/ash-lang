@@ -241,6 +241,45 @@ fn transformer_rejection_preserves_message_and_causes_in_human_and_json() {
             .unwrap()
             .ends_with("entry_reject_ops.ash")
     );
+    let labels = json["labels"].as_array().unwrap();
+    assert_eq!(labels.len(), 6);
+    for label in &labels[3..] {
+        assert!(
+            label["path"]
+                .as_str()
+                .unwrap()
+                .ends_with("syntax_reject_ops.ash")
+        );
+    }
+}
+
+#[test]
+fn excessive_combined_origins_fail_with_expansion_context() {
+    for fixture in [
+        "entry_origin_doubling.ash",
+        "entry_origin_deep.ash",
+        "entry_origin_repeated.ash",
+    ] {
+        let failure = compile_path(macro_fixture(fixture)).unwrap_err();
+        assert_eq!(
+            failure.reason_code(),
+            "syntax.transformer-failed",
+            "{fixture}"
+        );
+        let diagnostics = ash::presentation::compile_file_diagnostics(&failure).unwrap();
+        let [diagnostic] = diagnostics.as_slice() else {
+            panic!("one transformer failure for {fixture}");
+        };
+        let mut json = Vec::new();
+        ash::presentation::write_json(&mut json, diagnostic).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(
+            json["facts"][0]["value"], "runtime.resource-capacity",
+            "{fixture}"
+        );
+        assert_eq!(json["labels"][0]["relationship"], "syntax_invocation");
+        assert_eq!(json["labels"][1]["relationship"], "syntax_definition");
+    }
 }
 
 #[test]

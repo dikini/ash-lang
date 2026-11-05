@@ -154,6 +154,7 @@ impl SyntaxHost {
         &self,
         mut origins: &'a Value,
         heap: &'a [HeapCell],
+        mut remaining_spans: usize,
     ) -> Result<Vec<MacroOrigin>, RuntimeFailure> {
         let mut inputs = Vec::new();
         loop {
@@ -165,7 +166,11 @@ impl SyntaxHost {
                 return Err(RuntimeFailure::InvalidControlState);
             }
             let (origin, rest) = pair(payload.ok_or(RuntimeFailure::InvalidControlState)?, heap)?;
-            inputs.push(self.admitted_origin(origin)?.clone());
+            let origin = self.admitted_origin(origin)?;
+            remaining_spans = remaining_spans
+                .checked_sub(origin.span_count())
+                .ok_or(RuntimeFailure::ResourceCapacity)?;
+            inputs.push(origin.clone());
             origins = rest;
         }
     }
@@ -339,15 +344,17 @@ impl SyntaxHost {
                 ) {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
-                let inputs = self.read_origins(origins, heap)?;
+                // Reserve the invocation and definition frames added by this
+                // combination before admitting its ordered inputs.
+                let inputs =
+                    self.read_origins(origins, heap, crate::syntax::MAX_ORIGIN_SPANS - 2)?;
                 if inputs.is_empty() {
                     return self.construct(heap, "MissingOrigins", None);
                 }
-                let combined = self.issue_origin(MacroOrigin::Combined {
-                    inputs: inputs.into(),
-                    invocation: self.invocation_span,
-                    definition: self.definition_span,
-                });
+                let origin =
+                    MacroOrigin::combined(inputs, self.invocation_span, self.definition_span)
+                        .ok_or(RuntimeFailure::ResourceCapacity)?;
+                let combined = self.issue_origin(origin);
                 self.construct(heap, "Combined", Some(combined))
             }
             "parse_expression" => {
@@ -480,11 +487,19 @@ impl SyntaxHost {
         let message = std::str::from_utf8(message)
             .map_err(|_| RuntimeFailure::InvalidControlState)?
             .to_owned();
+        let primary = self.admitted_origin(primary)?.clone();
+        // Rejection reports retain both the primary and every related cause,
+        // plus the enclosing invocation and definition frames.
+        let remaining = crate::syntax::MAX_ORIGIN_SPANS
+            .checked_sub(primary.span_count())
+            .and_then(|remaining| remaining.checked_sub(2))
+            .ok_or(RuntimeFailure::ResourceCapacity)?;
+        let related = self.read_origins(related, heap, remaining)?;
         Ok(TransformerOutput::Rejected(
             crate::driver::SyntaxExpansionFailure {
                 message,
-                primary: self.admitted_origin(primary)?.clone(),
-                related: self.read_origins(related, heap)?,
+                primary,
+                related,
                 invocation: self.invocation_span,
                 definition: self.definition_span,
             },
