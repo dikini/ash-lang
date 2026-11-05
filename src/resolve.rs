@@ -11697,7 +11697,7 @@ impl Resolver {
             })
         })?;
         let identity = self.allocate_type_variable(identity_source, None, Kind::Type)?;
-        let handle = self.allocate_binder(&handle_source.text, handle_source.span)?;
+        let handle = self.allocate_contextual_binder(handle_source)?;
         self.type_work.charge(4).map_err(|()| {
             error(
                 ResolveReason::TypeResourceExhausted,
@@ -11723,6 +11723,7 @@ impl Resolver {
         self.lexical_method_parameters.push(retained);
         let scope_checkpoint = self.scopes.len();
         let type_scope_checkpoint = self.type_scopes.len();
+        let syntax_type_scope_checkpoint = self.syntax_type_scopes.len();
         let mut terms = HashMap::new();
         terms.try_reserve(1).map_err(|_| {
             error(
@@ -11732,7 +11733,7 @@ impl Resolver {
             )
         })?;
         terms.insert(
-            (handle.spelling.clone(), 0),
+            (handle.spelling.clone(), handle_source.introduction),
             ResolvedTermBinding::local(ResolvedTermName::Global(handle.id)),
         );
         let mut types = HashMap::new();
@@ -11743,7 +11744,22 @@ impl Resolver {
                 "resource type scope could not be reserved",
             )
         })?;
-        types.insert(identity.spelling.clone(), identity.id);
+        let mut syntax_types = HashMap::new();
+        if identity_source.introduction == 0 {
+            types.insert(identity.spelling.clone(), identity.id);
+        } else {
+            syntax_types.try_reserve(1).map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "resource type scope could not be reserved",
+                )
+            })?;
+            syntax_types.insert(
+                (identity.spelling.clone(), identity_source.introduction),
+                identity.id,
+            );
+        }
         self.scopes.try_reserve(1).map_err(|_| {
             error(
                 ResolveReason::TypeResourceExhausted,
@@ -11758,8 +11774,16 @@ impl Resolver {
                 "resource type scope could not be reserved",
             )
         })?;
+        self.syntax_type_scopes.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource type scope could not be reserved",
+            )
+        })?;
         self.scopes.push(terms);
         self.type_scopes.push(types);
+        self.syntax_type_scopes.push(syntax_types);
         tasks.0.try_reserve(2).map_err(|_| {
             error(
                 ResolveReason::TypeResourceExhausted,
@@ -11782,6 +11806,7 @@ impl Resolver {
             initializer: Box::new(initializer),
             scope_checkpoint,
             type_scope_checkpoint,
+            syntax_type_scope_checkpoint,
             span,
         });
         tasks.push(ResolveTask::VisitBlock(body));
@@ -12343,12 +12368,15 @@ impl Resolver {
     fn resolve_work<'a>(&mut self, initial: ResolveTask<'a>) -> Result<ResolvedExpr, ResolveError> {
         let scope_checkpoint = self.scopes.len();
         let type_scope_checkpoint = self.type_scopes.len();
+        let syntax_type_scope_checkpoint = self.syntax_type_scopes.len();
         let nominal_scope_checkpoint = self.lexical_nominal_scopes.len();
         let constructor_scope_checkpoint = self.lexical_constructor_scopes.len();
         let result = self.resolve_work_inner(initial);
         if result.is_err() {
             self.scopes.truncate(scope_checkpoint);
             self.type_scopes.truncate(type_scope_checkpoint);
+            self.syntax_type_scopes
+                .truncate(syntax_type_scope_checkpoint);
             self.lexical_nominal_scopes
                 .truncate(nominal_scope_checkpoint);
             self.lexical_constructor_scopes
@@ -12470,6 +12498,7 @@ impl Resolver {
                 handle,
                 scope_checkpoint,
                 type_scope_checkpoint,
+                syntax_type_scope_checkpoint,
                 span,
             } => {
                 let provider = if source.provider.is_some() {
@@ -12492,7 +12521,7 @@ impl Resolver {
                     )
                 })?;
                 terms.insert(
-                    (handle.spelling.clone(), 0),
+                    (handle.spelling.clone(), source.handle.introduction),
                     ResolvedTermBinding::local(ResolvedTermName::Global(handle.id)),
                 );
                 self.scopes.try_reserve(1).map_err(|_| {
@@ -12509,6 +12538,7 @@ impl Resolver {
                     provider,
                     scope_checkpoint,
                     type_scope_checkpoint,
+                    syntax_type_scope_checkpoint,
                     span,
                 });
                 tasks.push(ResolveTask::VisitBlock(&source.body));
@@ -12519,6 +12549,7 @@ impl Resolver {
                 provider,
                 scope_checkpoint,
                 type_scope_checkpoint,
+                syntax_type_scope_checkpoint,
                 span,
             } => {
                 let body = expressions.pop_owned().ok_or_else(|| {
@@ -12526,6 +12557,8 @@ impl Resolver {
                 })?;
                 self.scopes.truncate(scope_checkpoint);
                 self.type_scopes.truncate(type_scope_checkpoint);
+                self.syntax_type_scopes
+                    .truncate(syntax_type_scope_checkpoint);
                 expressions.push(ResolvedExpr {
                     kind: ResolvedExprKind::Region(Box::new(crate::resolved::ResolvedRegionExpr {
                         identity,
@@ -12783,6 +12816,7 @@ impl Resolver {
                 initializer,
                 scope_checkpoint,
                 type_scope_checkpoint,
+                syntax_type_scope_checkpoint,
                 span,
             } => {
                 let body = expressions.pop_owned().ok_or_else(|| {
@@ -12798,6 +12832,8 @@ impl Resolver {
                 })?;
                 self.scopes.truncate(scope_checkpoint);
                 self.type_scopes.truncate(type_scope_checkpoint);
+                self.syntax_type_scopes
+                    .truncate(syntax_type_scope_checkpoint);
                 expressions.push(self.finish_resource_expression(
                     builtin,
                     payload,
@@ -13813,7 +13849,7 @@ impl Resolver {
             SurfaceExprKind::Region(source) => {
                 let span = expression.span;
                 let identity = self.allocate_type_variable(&source.identity, None, Kind::Type)?;
-                let handle = self.allocate_binder(&source.handle.text, source.handle.span)?;
+                let handle = self.allocate_contextual_binder(&source.handle)?;
                 self.type_work.charge(8).map_err(|()| {
                     error(
                         ResolveReason::TypeResourceExhausted,
@@ -13839,6 +13875,7 @@ impl Resolver {
                 self.lexical_method_parameters.push(retained);
                 let scope_checkpoint = self.scopes.len();
                 let type_scope_checkpoint = self.type_scopes.len();
+                let syntax_type_scope_checkpoint = self.syntax_type_scopes.len();
                 let mut types = HashMap::new();
                 types.try_reserve(1).map_err(|_| {
                     error(
@@ -13847,7 +13884,22 @@ impl Resolver {
                         "region type scope could not be reserved",
                     )
                 })?;
-                types.insert(identity.spelling.clone(), identity.id);
+                let mut syntax_types = HashMap::new();
+                if source.identity.introduction == 0 {
+                    types.insert(identity.spelling.clone(), identity.id);
+                } else {
+                    syntax_types.try_reserve(1).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "region type scope could not be reserved",
+                        )
+                    })?;
+                    syntax_types.insert(
+                        (identity.spelling.clone(), source.identity.introduction),
+                        identity.id,
+                    );
+                }
                 self.type_scopes.try_reserve(1).map_err(|_| {
                     error(
                         ResolveReason::TypeResourceExhausted,
@@ -13855,7 +13907,15 @@ impl Resolver {
                         "region type scopes could not be reserved",
                     )
                 })?;
+                self.syntax_type_scopes.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "region type scopes could not be reserved",
+                    )
+                })?;
                 self.type_scopes.push(types);
+                self.syntax_type_scopes.push(syntax_types);
                 tasks.0.try_reserve(3).map_err(|_| {
                     error(
                         ResolveReason::TypeResourceExhausted,
@@ -13869,6 +13929,7 @@ impl Resolver {
                     handle,
                     scope_checkpoint,
                     type_scope_checkpoint,
+                    syntax_type_scope_checkpoint,
                     span,
                 });
                 if let Some(provider) = &source.provider {
@@ -14402,6 +14463,7 @@ enum ResolveTask<'a> {
         handle: Binder,
         scope_checkpoint: usize,
         type_scope_checkpoint: usize,
+        syntax_type_scope_checkpoint: usize,
         span: Span,
     },
     FinishRegion {
@@ -14410,6 +14472,7 @@ enum ResolveTask<'a> {
         provider: Option<Box<ResolvedExpressionOwner>>,
         scope_checkpoint: usize,
         type_scope_checkpoint: usize,
+        syntax_type_scope_checkpoint: usize,
         span: Span,
     },
     FinishRegionSelection {
@@ -14451,6 +14514,7 @@ enum ResolveTask<'a> {
         initializer: Box<ResolvedExpressionOwner>,
         scope_checkpoint: usize,
         type_scope_checkpoint: usize,
+        syntax_type_scope_checkpoint: usize,
         span: Span,
     },
     FinishStore {

@@ -846,11 +846,11 @@ full gate may serve the pre-Main gate without a duplicate identical-input run.
 
 ## Estimate and re-planning
 
-After generic type applications and generated local parameters, the provisional
-forecast is **about 7.7 additional Codex elapsed hours**, with a tentative
-**6–13 hour** range. At 00:40 Sofia time on 6 November, 55 reviewed and 0.5
-provisional weighted points over about 9.6 elapsed hours, including setup,
-inform the midpoint. Review can change the provisional credit. The range is
+After the introduced resource and region graphs, the provisional forecast is
+**about 7.9 additional Codex elapsed hours**, with a tentative **6–13 hour**
+range. At 01:03 Sofia time on 6 November, 55.5 reviewed and 0.5 provisional
+weighted points over about 10 elapsed hours, including setup, inform the
+midpoint. Review can change the provisional credit. The range is
 not a confidence interval. It is a whole-chain estimate, not a deadline or
 a measured model-runtime total; independent review may revise it.
 

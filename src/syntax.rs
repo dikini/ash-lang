@@ -643,6 +643,20 @@ pub(crate) fn validate_template(
                 }
                 Ok(())
             }
+            SurfaceExprKind::Resource(resource) => {
+                check(&resource.initializer, matcher, qualified_name, owner_effect)?;
+                check_block(&resource.body, matcher, qualified_name, owner_effect)
+            }
+            SurfaceExprKind::Region(region) => {
+                if let Some(provider) = &region.provider {
+                    check(provider, matcher, qualified_name, owner_effect)?;
+                }
+                check_block(&region.body, matcher, qualified_name, owner_effect)
+            }
+            SurfaceExprKind::RegionSelection(selection) => {
+                check(&selection.region, matcher, qualified_name, owner_effect)?;
+                check_block(&selection.body, matcher, qualified_name, owner_effect)
+            }
             _ => Err(expression.span),
         }
     }
@@ -1155,6 +1169,67 @@ fn substitute(
                 )?;
                 substitute(&mut arm.body, matcher, captures, introduction, invocation)?;
             }
+        }
+        SurfaceExprKind::Resource(resource) => {
+            if introduction != 0 {
+                resource.identity.introduction = introduction;
+                resource.identity.introduced_at = Some(invocation);
+                resource.handle.introduction = introduction;
+                resource.handle.introduced_at = Some(invocation);
+                expression.span = invocation;
+            }
+            substitute(
+                &mut resource.initializer,
+                matcher,
+                captures,
+                introduction,
+                invocation,
+            )?;
+            substitute_block(
+                &mut resource.body,
+                matcher,
+                captures,
+                introduction,
+                invocation,
+            )?;
+        }
+        SurfaceExprKind::Region(region) => {
+            if introduction != 0 {
+                region.identity.introduction = introduction;
+                region.identity.introduced_at = Some(invocation);
+                region.handle.introduction = introduction;
+                region.handle.introduced_at = Some(invocation);
+                expression.span = invocation;
+            }
+            if let Some(provider) = &mut region.provider {
+                substitute(provider, matcher, captures, introduction, invocation)?;
+            }
+            substitute_block(
+                &mut region.body,
+                matcher,
+                captures,
+                introduction,
+                invocation,
+            )?;
+        }
+        SurfaceExprKind::RegionSelection(selection) => {
+            if introduction != 0 {
+                expression.span = invocation;
+            }
+            substitute(
+                &mut selection.region,
+                matcher,
+                captures,
+                introduction,
+                invocation,
+            )?;
+            substitute_block(
+                &mut selection.body,
+                matcher,
+                captures,
+                introduction,
+                invocation,
+            )?;
         }
         SurfaceExprKind::Perform(request) => {
             let SurfaceReference::Unqualified(effect) = &mut request.effect else {

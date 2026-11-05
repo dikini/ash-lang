@@ -3737,6 +3737,9 @@ impl<'a> Analysis<'a> {
                 .is_some_and(|child| matches!(self.graph.code[*child], Control::Return))
         {
             charge(budget, 1)?;
+            if let Some(data) = &mut self.data {
+                data.prepare_skipped_value(children[ordinal], state.value_context, budget)?;
+            }
             ordinal += 1;
         }
         if ordinal > 0
@@ -3766,7 +3769,8 @@ impl<'a> Analysis<'a> {
             }
             let position = Position {
                 code,
-                next: following,
+                // Restoration identifies the active child as next - 1.
+                next: ordinal + 1,
             };
             if following < children.len() {
                 next.push(

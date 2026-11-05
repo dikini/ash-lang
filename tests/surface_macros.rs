@@ -228,6 +228,53 @@ fn nested_syntax_identifier_keeps_the_outer_template_context() {
 }
 
 #[test]
+fn template_resource_preserves_initializer_body_and_identity_scopes() {
+    for path in [
+        "template-resource/entry.ash",
+        "template-resource/handwritten.ash",
+        "template-resource/reversed.ash",
+        "template-resource/reversed_handwritten.ash",
+        "template-resource/initializer.ash",
+        "template-resource/body.ash",
+        "template-resource/typed.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    for (path, expected) in [
+        ("template-resource/escape.ash", "type.resource-escape"),
+        (
+            "template-resource/missing_builtin.ash",
+            "resolve.resource-builtin-required",
+        ),
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), expected, "{path}: {failure:?}");
+    }
+}
+
+#[test]
+fn template_region_preserves_selection_and_access_scope() {
+    for path in [
+        "template-region/entry.ash",
+        "template-region/nested.ash",
+        "template-region/typed.ash",
+        "template-region/provider.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    for (path, expected) in [
+        ("template-region/escape.ash", "type.resource-escape"),
+        ("template-region/provider_scope.ash", "resolve.unknown-name"),
+        ("template-region/outside.ash", "resolve.unknown-name"),
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), expected, "{path}: {failure:?}");
+    }
+}
+
+#[test]
 fn template_perform_uses_the_defining_effect_not_the_callers_shadow() {
     for path in [
         "template-perform/entry.ash",

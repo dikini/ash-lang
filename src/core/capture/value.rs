@@ -4704,6 +4704,22 @@ impl<'a> Analysis<'a> {
         self.slot(expression, context, budget)
     }
 
+    pub(super) fn prepare_skipped_value(
+        &mut self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if let Some(&expression) = self.graph.positions.get(&code) {
+            if context < self.frozen_contexts && !self.indices.contains_key(&(expression, context))
+            {
+                return Err(Failure::Invalid);
+            }
+            self.slot(expression, context, budget)?;
+        }
+        Ok(())
+    }
+
     // Completion queries may only read an already closed focus. Unlike
     // `slot`, these lookups never create a port, enqueue work or add watches.
 
@@ -7916,6 +7932,36 @@ mod tests {
             evidence: Vec::new(),
             evidence_index: Vec::new(),
         }
+    }
+
+    #[test]
+    fn skipped_values_keep_dependencies_and_cannot_be_created_in_frozen_contexts() {
+        let mut graph = graph(vec![Expr::Slot, Expr::Alias(0), Expr::Scalar]);
+        graph.positions.insert(5, 1);
+        graph.positions.insert(6, 2);
+        let mut budget = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut budget).unwrap();
+        let source = analysis.slot(0, 0, &mut budget).unwrap();
+        let marker = Atom::Resource(99, 0);
+        analysis.atom(source, marker, &mut budget).unwrap();
+        analysis.prepare_skipped_value(5, 0, &mut budget).unwrap();
+        analysis.close(&mut budget).unwrap();
+        let value = analysis.indices[&(1, 0)];
+        assert!(
+            analysis
+                .dependencies(value, &mut budget)
+                .unwrap()
+                .contains(&marker)
+        );
+
+        analysis.frozen_contexts = 1;
+        analysis.prepare_skipped_value(5, 0, &mut budget).unwrap();
+        assert!(matches!(
+            analysis.prepare_skipped_value(6, 0, &mut budget),
+            Err(Failure::Invalid)
+        ));
+        assert!(!analysis.indices.contains_key(&(2, 0)));
+        analysis.prepare_skipped_value(7, 0, &mut budget).unwrap();
     }
 
     #[test]
