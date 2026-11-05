@@ -228,14 +228,28 @@ vertical and its repairs are reviewed at `ad8ca9cc`.
 At 20:35 Sofia time, the latest approximately 30-minute interval added 4.5
 provisional points (constructed identifier contexts, unwrapping, and contextual
 parsing); the ledger stands at R28 + D8.5. The
-partial candidate passed 22 host, 25 module-syntax, and 18 template driver cases
-(`e32ace759c5cf11f1418cde8e782b00f865057f8e7a9e686c9a5ba056b94ea37`), the
-vocabulary and cross-source-origin guards
-(`078fafaa946845aa0dd5bc4c1ed349bedfe06bbd8087d2b6b5a3debb15ab748b`,
-`ca968d2d2c1af3ba74d58bb5b5daa9570a23a067ad122dbbfce81ed13b2cc0dc`), and
-three calibration observer cases
-(`47e17ec97f352749378996ce0c5008bb6cbab817766465f466dbf0a4704f004e`).
-These are developer results awaiting independent review, not M01–M14 closure.
+partial candidate `57f68ae1` passed 22 host, 25 module-syntax, and 18 template
+driver cases (`/tmp/ash-syntax-retained-context-regressions.log`, SHA-256
+`e32ace759c5cf11f1418cde8e782b00f865057f8e7a9e686c9a5ba056b94ea37`), the
+vocabulary and cross-source-origin guards (`/tmp/ash-syntax-retained-vocabulary.log`,
+`/tmp/ash-syntax-retained-origin.log`), and three calibration observer cases
+(`/tmp/ash-syntax-retained-calibration.log`).
+
+Review R10 found that template-written parentheses and a generated nested
+protected fragment were each lost by whole-carrier substitution. Both real
+programs produced 21 instead of 30 before the repair
+(`/tmp/ash-syntax-r10-before.log`, SHA-256
+`933d1af1614a4b83ad9fe5d90d3cb3f93c624b26b8e0b1d48cb4807944375572`).
+Restricting that substitution to an actual bare splice retains both boundaries;
+both programs now produce 30, and bare forwarding still produces 21
+(`/tmp/ash-syntax-r10-after.log`, SHA-256
+`40d14deff0c1a884317b05e86cc713ea086bb02636fcbb502c40a23d0d5d243f`).
+The affected suite passes 23 host, 25 module-syntax, and 18 template cases
+(`/tmp/ash-syntax-r10-regressions.log`, SHA-256
+`1dee17cb3227324d7d686fb2224b3de4f6f8bd82fe30bcdc37851dbb01b30e4e`).
+Re-review and all M01–M14 remain pending. Unwrapping identifiers in qualified,
+type, and pattern positions still fails closed; `Text.equal(...)` is a concrete
+qualified-name case for that remaining work.
 
 1. **Template grouping — demonstrated.** `cargo test -j 1 -p ash --test
    surface_macros template_macro_preserves_expression_capture_grouping --
@@ -270,8 +284,10 @@ These are developer results awaiting independent review, not M01–M14 closure.
    execute through the driver (`/tmp/ash-syntax-vocabulary-groups-regressions.log`).
    Captured identifier inspection and caller-context reference/binder output
    also run through Ash (`/tmp/ash-syntax-captured-ident-driver.log`,
-   `/tmp/ash-syntax-captured-binder-driver.log`). Constructed identifiers,
-   other services, complete origins and diagnostics, public interface-version
+   `/tmp/ash-syntax-captured-binder-driver.log`). Fresh, caller and definition
+   identifiers, contextual syntax selection, and restricted parse/unwrap now
+   have the real-driver observations recorded above. Their broader contexts,
+   remaining services, complete origins and diagnostics, public interface-version
    conformance, and image support remain pending.
 4. **Diagnostics and refusal — partial.** Malformed selected syntax and direct
    private-helper access are rejected. Complete the proposal's negative cases

@@ -481,6 +481,7 @@ fn substitute_capture(
     invocation: Span,
 ) -> Result<(), Span> {
     if let SurfaceExprKind::TemplateSplice(name) = &capture.expression.kind
+        && matches!(capture.contents.as_ref(), [MacroOutputNode::Splice(splice)] if splice.text == name.text)
         && let SurfaceSyntaxCapture::Expression(original) =
             capture_by_name(name, matcher, captures)?
     {

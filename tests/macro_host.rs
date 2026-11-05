@@ -160,6 +160,7 @@ fn expression_unwrapping_preserves_groups_and_nested_fragments() {
         ("entry_unwrap_reparsed.ash", "30"),
         ("entry_unwrap_grouped.ash", "30"),
         ("entry_unwrap_forwarded.ash", "21"),
+        ("entry_unwrap_forwarded_grouped.ash", "30"),
     ] {
         let compiled = compile_path(macro_fixture(fixture)).expect(fixture);
         assert_eq!(
@@ -168,6 +169,13 @@ fn expression_unwrapping_preserves_groups_and_nested_fragments() {
             "{fixture}"
         );
     }
+}
+
+#[test]
+fn generated_nested_unwrap_keeps_the_protected_fragment() {
+    let compiled = compile_path(macro_fixture("entry_unwrap_generated_protected.ash"))
+        .expect("a generated nested invocation keeps its protected argument");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "30");
 }
 
 #[test]
