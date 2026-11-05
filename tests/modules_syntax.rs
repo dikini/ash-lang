@@ -719,8 +719,11 @@ fn projects_expression_template_with_a_capture_splice() {
         }] if name.text == "value"
     ));
     assert!(matches!(
-        syntax.template.kind,
-        ash::surface::SurfaceExprKind::Block(_)
+        syntax.implementation,
+        ash::surface::SurfaceSyntaxImplementation::Template(ash::surface::SurfaceExpr {
+            kind: ash::surface::SurfaceExprKind::Block(_),
+            ..
+        })
     ));
 }
 
@@ -1210,4 +1213,14 @@ fn lowercase_qualifiers_never_enter_the_qualified_name_grammar() {
             "{case} should stop at the parser recovery boundary"
         );
     }
+}
+
+#[test]
+fn projects_ash_transformer_syntax_declaration() {
+    let module = parse_valid("pub syntax twice $value:expr => using expand_twice\n");
+    assert!(matches!(
+        &module.syntax_declarations[0].implementation,
+        ash::surface::SurfaceSyntaxImplementation::Transformer(name)
+            if name.text == "expand_twice"
+    ));
 }

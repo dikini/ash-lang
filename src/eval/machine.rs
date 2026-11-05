@@ -7,6 +7,8 @@ mod instantiation;
 pub(super) use instantiation::Instantiation;
 #[path = "region.rs"]
 mod region;
+#[path = "syntax.rs"]
+mod syntax;
 use region::BackingRecord;
 pub(super) use region::HostRootCompletion;
 
@@ -1134,6 +1136,7 @@ type WorkTrace = Arc<std::sync::Mutex<Vec<(NodeId, usize)>>>;
 #[derive(Debug)]
 pub struct Machine<'runtime> {
     worker: Option<WorkerStartup>,
+    syntax_host: Option<syntax::SyntaxHost>,
     source_bindings: Option<&'runtime crate::foreign::source_bindings::SourceNativeBindings>,
     cleanup_limit: usize,
     live_cleanups: usize,
@@ -1709,6 +1712,7 @@ impl<'runtime> Machine<'runtime> {
     fn new(program: &ValidatedProgram) -> Self {
         Self {
             worker: None,
+            syntax_host: None,
             source_bindings: None,
             program: ExecutableProgram::Pure(program.shared()),
             cleanup_limit: 0,
@@ -1755,6 +1759,7 @@ impl<'runtime> Machine<'runtime> {
     ) -> Self {
         Self {
             worker: None,
+            syntax_host: None,
             source_bindings: None,
             program: ExecutableProgram::Effect(program),
             cleanup_limit: MAX_CAPTURED_FRAME_CELLS,
@@ -1836,12 +1841,32 @@ impl<'runtime> Machine<'runtime> {
     fn run_loop(&mut self) -> Result<Evaluation, RuntimeFailure> {
         loop {
             disposal::check()?;
+            if let Some(host) = &mut self.syntax_host {
+                host.steps_left = host
+                    .steps_left
+                    .checked_sub(1)
+                    .ok_or(RuntimeFailure::ResourceCapacity)?;
+            }
             let control = self
                 .control
                 .take()
                 .ok_or(RuntimeFailure::InvalidControlState)?;
             match control {
                 Control::Evaluate(node, environment) => {
+                    if let Some(host) = &mut self.syntax_host
+                        && host.occurrence == node
+                        && !host.started
+                    {
+                        host.started = true;
+                        let argument = host.input();
+                        let function = environment
+                            .lookup(host.binder, &self.program)
+                            .ok_or(RuntimeFailure::InvalidControlState)?;
+                        reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+                        self.frames.push(Frame::ApplyArgument { function });
+                        self.apply(Transition::direct(Control::Return(argument)));
+                        continue;
+                    }
                     if self
                         .worker
                         .as_ref()
@@ -4603,6 +4628,18 @@ impl<'runtime> Machine<'runtime> {
         }
         disposal::check()?;
         let Some(selected) = selected else {
+            if let Some(host) = &mut self.syntax_host
+                && effect.effect() == host.ops
+            {
+                let result = host.request(
+                    operation,
+                    value,
+                    &mut self.heap,
+                    &mut self.instantiation_work,
+                )?;
+                self.apply(Transition::direct(Control::Return(result)));
+                return Ok(());
+            }
             return Err(RuntimeFailure::ForeignBinding);
         };
         let retained = match &self.frames[selected] {
@@ -6824,6 +6861,30 @@ pub fn evaluate(program: &ValidatedProgram) -> Result<Evaluation, RuntimeFailure
 /// Evaluates one compiler-validated effect Core program.
 pub fn evaluate_effect(program: &ValidatedEffectProgram) -> Result<Evaluation, RuntimeFailure> {
     Machine::new_effect(program).run()
+}
+
+pub(crate) fn evaluate_transformer(
+    entry: &crate::core::validate::ValidatedMacroEntry,
+    captures: &[crate::surface::SurfaceSyntaxCapture],
+    invocation: crate::source::Span,
+) -> Result<Vec<crate::syntax::MacroOutputNode>, RuntimeFailure> {
+    let scope = disposal::Scope::enter();
+    let result = (|| {
+        let mut machine = Machine::new_effect(&entry.program);
+        machine.syntax_host = Some(syntax::SyntaxHost::new(entry, captures, invocation)?);
+        let evaluation = machine.run_loop()?;
+        let (value, heap) = evaluation.into_observation_parts();
+        let transferred = machine
+            .syntax_host
+            .as_ref()
+            .ok_or(RuntimeFailure::InvalidControlState)?
+            .transfer(&value, heap.cells());
+        drop(value);
+        drop(heap);
+        drop(machine);
+        transferred
+    })();
+    scope.finish(result)
 }
 
 /// Evaluates only a program whose source-native bindings were admitted before

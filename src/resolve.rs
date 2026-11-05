@@ -1597,7 +1597,7 @@ pub(crate) fn resolve_module_with_syntax(
     type_work: &mut TypeWorkBudget,
     constraint_work: &mut InterfaceConstraintBudget,
     uses: &[crate::syntax::SyntaxNameUse],
-    owners: &[crate::resolved::CheckedModule],
+    owners: &[Arc<crate::resolved::CheckedModule>],
     terms: &[crate::syntax::SyntaxOwnerBindings],
 ) -> Result<ResolvedModule, ResolveModuleError> {
     resolve_module_for_catalogue(
@@ -1617,14 +1617,14 @@ pub(crate) fn resolve_module_with_syntax(
 #[derive(Clone, Copy)]
 struct SyntaxInputs<'a> {
     uses: &'a [crate::syntax::SyntaxNameUse],
-    owners: &'a [crate::resolved::CheckedModule],
+    owners: &'a [Arc<crate::resolved::CheckedModule>],
     terms: &'a [crate::syntax::SyntaxOwnerBindings],
 }
 
 #[derive(Clone, Copy)]
 struct SyntaxOwnerLookup<'a> {
     owner: &'a crate::resolved::CheckedModule,
-    graph: &'a [crate::resolved::CheckedModule],
+    graph: &'a [Arc<crate::resolved::CheckedModule>],
 }
 
 impl<'a> SyntaxOwnerLookup<'a> {
@@ -1793,6 +1793,7 @@ fn resolve_module_names_with_budget(
             && !owner.is_builtin_region_facade()
             && !owner.is_builtin_retained_control()
             && !owner.is_builtin_network()
+            && !owner.is_builtin_compiler_syntax()
         {
             return Ok(());
         }
@@ -1805,7 +1806,9 @@ fn resolve_module_names_with_budget(
                     "builtin source authentication exceeded its type-work budget",
                 )
             })?;
-        let canonical = if owner.is_builtin_network() {
+        let canonical = if owner.is_builtin_compiler_syntax() {
+            crate::module::compiler_syntax_builtin_source_text()
+        } else if owner.is_builtin_network() {
             crate::module::network_builtin_source_text()
         } else if owner.is_builtin_retained_control() {
             crate::module::retained_control_builtin_source_text()

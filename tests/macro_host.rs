@@ -33,3 +33,14 @@ fn checked_ash_transformer_constructs_expression_from_capture() {
     assert_eq!(actual.value_display(), "42");
     assert_eq!(actual.type_display(), "Int");
 }
+
+#[test]
+fn compiler_syntax_module_loads_through_the_driver() {
+    let configuration = RunConfiguration {
+        entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/surface-macros/compiler-syntax-import.ash"),
+        roots: ModuleRoots::empty(),
+    };
+    let compiled = compile_path(configuration).expect("compiler syntax module loads and checks");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}

@@ -20,9 +20,9 @@ use crate::{
         SurfaceModulePath, SurfaceName, SurfaceNominalDeclarationKind, SurfacePattern,
         SurfacePatternKind, SurfacePerformExpr, SurfaceQualifiedName, SurfaceRecursiveGroup,
         SurfaceRecursiveMember, SurfaceReference, SurfaceRequirement, SurfaceSyntaxCapture,
-        SurfaceSyntaxCaptureKind, SurfaceSyntaxDeclaration, SurfaceSyntaxMatcherPart, SurfaceType,
-        SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeParameter, SurfaceTypeVisibility,
-        SurfaceTypedPattern,
+        SurfaceSyntaxCaptureKind, SurfaceSyntaxDeclaration, SurfaceSyntaxImplementation,
+        SurfaceSyntaxMatcherPart, SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind,
+        SurfaceTypeParameter, SurfaceTypeVisibility, SurfaceTypedPattern,
     },
 };
 
@@ -375,7 +375,12 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                 }
             }
             shape.token(&TokenKind::FatArrow)?;
-            shape.node(NodeKind::Block)?;
+            if shape.peek_token_is(&TokenKind::Using) {
+                shape.token(&TokenKind::Using)?;
+                shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
+            } else {
+                shape.node(NodeKind::Block)?;
+            }
         }
         NodeKind::SyntaxCapture => {
             shape.token(&TokenKind::Dollar)?;
@@ -1489,14 +1494,31 @@ fn project_surface_module(
                         _ => return malformed(InternalReason::UnexpectedShape),
                     }
                 }
+                let implementation = if let Some(block) =
+                    child_nodes(child).find(|node| node.kind == NodeKind::Block)
+                {
+                    SurfaceSyntaxImplementation::Template(project_expression(
+                        source, block, tokens,
+                    )?)
+                } else {
+                    let mut after_arrow = direct_tokens(child, tokens)
+                        .skip_while(|token| token.kind != TokenKind::FatArrow)
+                        .skip(1);
+                    if after_arrow.next().map(|token| &token.kind) != Some(&TokenKind::Using) {
+                        return malformed(InternalReason::UnexpectedShape);
+                    }
+                    let transformer = after_arrow.next().ok_or(ProjectionError::MalformedTree(
+                        InternalReason::UnexpectedShape,
+                    ))?;
+                    if after_arrow.next().is_some() {
+                        return malformed(InternalReason::UnexpectedShape);
+                    }
+                    SurfaceSyntaxImplementation::Transformer(surface_name(transformer)?)
+                };
                 syntax_declarations.push(SurfaceSyntaxDeclaration {
                     name: surface_name(name)?,
                     matcher,
-                    template: project_expression(
-                        source,
-                        only_child_of_kind(child, NodeKind::Block)?,
-                        tokens,
-                    )?,
+                    implementation,
                     span: node_span(source, child, tokens)?,
                 });
             }
@@ -2106,6 +2128,41 @@ fn project_expression(
     node: &ConcreteNode,
     tokens: &[Token],
 ) -> Result<SurfaceExpr, ProjectionError> {
+    project_expression_with_fragments(source, node, tokens, &std::collections::HashMap::new())
+}
+
+pub(super) fn project_macro_expression(
+    source: &SourceFile,
+    tree: &ConcreteTree,
+    fragments: &std::collections::HashMap<usize, SurfaceName>,
+) -> Result<SurfaceExpr, ProjectionError> {
+    if tree.resource_failure.is_some()
+        || tree.malformed.is_some()
+        || !tree.lexical_diagnostics.is_empty()
+        || !tree.parse_diagnostics.is_empty()
+    {
+        return Err(ProjectionError::RecoveryNodesPresent);
+    }
+    validate_tokens(source, &tree.tokens)?;
+    let root = tree
+        .root
+        .as_ref()
+        .ok_or(ProjectionError::RecoveryNodesPresent)?;
+    if has_recovery(root) || source_structural_depth_exceeds_budget(root) {
+        return Err(ProjectionError::RecoveryNodesPresent);
+    }
+    validate_concrete_token_coverage(root, tree.tokens.len())?;
+    let expression = expression_child(root)?;
+    validate_node_shape(expression, &tree.tokens)?;
+    project_expression_with_fragments(source, expression, &tree.tokens, fragments)
+}
+
+fn project_expression_with_fragments(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+    fragments: &std::collections::HashMap<usize, SurfaceName>,
+) -> Result<SurfaceExpr, ProjectionError> {
     let mut tasks = vec![ExpressionTask::Visit(node)];
     let mut projected = Vec::new();
     while let Some(task) = tasks.pop() {
@@ -2457,7 +2514,14 @@ fn project_expression(
                     }
                 }
                 NodeKind::PrimaryExpression => {
-                    if let Some(group) =
+                    if let [ConcreteElement::Token(index)] = node.children.as_slice()
+                        && let Some(name) = fragments.get(index)
+                    {
+                        projected.push(SurfaceExpr {
+                            span: name.span,
+                            kind: SurfaceExprKind::TemplateSplice(name.clone()),
+                        });
+                    } else if let Some(group) =
                         optional_child_of_kind(node, NodeKind::ParenthesizedExpression)?
                     {
                         schedule_group(source, group, tokens, &mut tasks, &mut projected)?;

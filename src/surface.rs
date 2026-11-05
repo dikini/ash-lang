@@ -44,10 +44,19 @@ pub struct SurfaceSyntaxDeclaration {
     pub name: SurfaceName,
     /// The literal and capture sequence after the syntax name.
     pub matcher: Vec<SurfaceSyntaxMatcherPart>,
-    /// The template expression, including its capture splices.
-    pub template: SurfaceExpr,
+    /// The template or checked Ash transformer selected by this declaration.
+    pub implementation: SurfaceSyntaxImplementation,
     /// The complete declaration span.
     pub span: Span,
+}
+
+/// The source implementation of an expression syntax declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SurfaceSyntaxImplementation {
+    /// A template expression with capture splices.
+    Template(SurfaceExpr),
+    /// An ordinary global in the defining module.
+    Transformer(SurfaceName),
 }
 
 /// One part of an expression syntax matcher.

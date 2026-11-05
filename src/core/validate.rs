@@ -3113,7 +3113,8 @@ pub(crate) fn validate_effect_modules_linked_with_work(
     linked: &crate::evidence_validation::ValidatedInterfaceProgram,
     work: &mut TypeWorkBudget,
 ) -> Result<ValidatedCoreProgram<super::effect::EffectOperationFamily>, ValidationError> {
-    validate_effect_modules_internal(program, sources, module_sources, Some(linked), work)
+    validate_effect_modules_internal(program, sources, module_sources, Some(linked), None, work)
+        .map(|(program, _)| program)
 }
 
 pub(crate) fn validate_effect_modules_with_work(
@@ -3122,7 +3123,55 @@ pub(crate) fn validate_effect_modules_with_work(
     module_sources: &[(ModuleId, SourceId)],
     work: &mut TypeWorkBudget,
 ) -> Result<ValidatedCoreProgram<super::effect::EffectOperationFamily>, ValidationError> {
-    validate_effect_modules_internal(program, sources, module_sources, None, work)
+    validate_effect_modules_internal(program, sources, module_sources, None, None, work)
+        .map(|(program, _)| program)
+}
+
+/// A validated compile-time entry and the exact linked occurrence at which the
+/// machine applies the compiler-issued input.
+pub(crate) struct ValidatedMacroEntry {
+    pub(crate) program: ValidatedCoreProgram<super::effect::EffectOperationFamily>,
+    pub(crate) occurrence: NodeId,
+    pub(crate) binder: BinderId,
+    pub(crate) syntax_module: ModuleId,
+    pub(crate) ops: crate::types::EffectId,
+}
+
+#[derive(Clone, Copy)]
+struct MacroEntryContract {
+    binder: BinderId,
+    syntax_module: ModuleId,
+}
+
+pub(crate) fn validate_effect_macro_modules_linked_with_work(
+    program: UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+    linked: &crate::evidence_validation::ValidatedInterfaceProgram,
+    binder: BinderId,
+    syntax_module: ModuleId,
+    work: &mut TypeWorkBudget,
+) -> Result<ValidatedMacroEntry, ValidationError> {
+    let (program, admission) = validate_effect_modules_internal(
+        program,
+        sources,
+        module_sources,
+        Some(linked),
+        Some(MacroEntryContract {
+            binder,
+            syntax_module,
+        }),
+        work,
+    )?;
+    let (occurrence, ops) =
+        admission.ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+    Ok(ValidatedMacroEntry {
+        program,
+        occurrence,
+        binder,
+        syntax_module,
+        ops,
+    })
 }
 
 fn validate_effect_modules_internal(
@@ -3130,8 +3179,15 @@ fn validate_effect_modules_internal(
     sources: &[&SourceFile],
     module_sources: &[(ModuleId, SourceId)],
     linked: Option<&crate::evidence_validation::ValidatedInterfaceProgram>,
+    macro_entry: Option<MacroEntryContract>,
     work: &mut TypeWorkBudget,
-) -> Result<ValidatedCoreProgram<super::effect::EffectOperationFamily>, ValidationError> {
+) -> Result<
+    (
+        ValidatedCoreProgram<super::effect::EffectOperationFamily>,
+        Option<(NodeId, crate::types::EffectId)>,
+    ),
+    ValidationError,
+> {
     let mut validator = match Validator::new_modules(&program, sources, module_sources) {
         Ok(validator) => validator,
         Err(error) => {
@@ -3141,14 +3197,21 @@ fn validate_effect_modules_internal(
     };
     validator.type_work_limit = work.remaining();
     validator.linked = linked;
-    let result = validator.run_effect();
+    let result = validator.run_effect().and_then(|()| {
+        macro_entry
+            .map(|contract| validator.check_macro_entry(contract))
+            .transpose()
+    });
     // The validator debits this exact remaining allowance, including failures.
     work.charge(validator.type_work.get())
         .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
-    if let Err(error) = result {
-        program.discard_iteratively();
-        return Err(error);
-    }
+    let macro_admission = match result {
+        Ok(admission) => admission,
+        Err(error) => {
+            program.discard_iteratively();
+            return Err(error);
+        }
+    };
     let admissions = std::mem::take(validator.network_admissions.get_mut());
     drop(validator);
     let (registry, method_evidence, anchors, arena, stored, root) = program.into_parts();
@@ -3170,7 +3233,7 @@ fn validate_effect_modules_internal(
     }
     let mut core = CoreProgram::new(registry, method_evidence, anchors, arena, nodes, root);
     core.set_network_admissions(admissions);
-    Ok(ValidatedCoreProgram::new(core))
+    Ok((ValidatedCoreProgram::new(core), macro_admission))
 }
 
 /// Consumes unchecked Core assembled from multiple canonical modules.
@@ -14766,6 +14829,97 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
     // not from a marker, binder spelling, or an arbitrary Bind-shaped prefix.
     // This is only a structural precursor: it does not admit entry bodies,
     // native services, or network execution.
+    fn check_macro_entry(
+        &self,
+        contract: MacroEntryContract,
+    ) -> Result<(NodeId, crate::types::EffectId), ValidationError> {
+        let invalid = || ValidationError::new(ValidationReason::Registry, Some(self.program.root));
+        if !contract.syntax_module.is_builtin_compiler_syntax() {
+            return Err(invalid());
+        }
+        let source_id = self
+            .module_sources
+            .as_ref()
+            .and_then(|sources| sources.get(&contract.syntax_module))
+            .ok_or_else(invalid)?;
+        let source = self.sources.get(source_id).ok_or_else(invalid)?;
+        if source.text() != crate::module::compiler_syntax_builtin_source_text() {
+            return Err(invalid());
+        }
+        let registry = &self.program.registry;
+        let input = registry
+            .nominals()
+            .iter()
+            .find(|nominal| {
+                nominal.id.module() == contract.syntax_module && nominal.spelling == "Input"
+            })
+            .ok_or_else(invalid)?
+            .id;
+        let output = registry
+            .nominals()
+            .iter()
+            .find(|nominal| {
+                nominal.id.module() == contract.syntax_module && nominal.spelling == "MacroResult"
+            })
+            .ok_or_else(invalid)?
+            .id;
+        let ops = registry
+            .effects()
+            .iter()
+            .find(|effect| effect.id.module() == contract.syntax_module && effect.spelling == "Ops")
+            .ok_or_else(invalid)?
+            .id;
+        let linked = self.linked.ok_or_else(invalid)?;
+        let owner = linked
+            .groups()
+            .iter()
+            .find(|group| group.module() == linked.entry())
+            .ok_or_else(invalid)?;
+        let scheme = owner
+            .schemes()
+            .iter()
+            .find(|scheme| scheme.binder == contract.binder)
+            .ok_or_else(invalid)?;
+        if contract.binder.module() != Some(owner.module())
+            || !scheme.scheme.type_parameters.is_empty()
+            || !scheme.scheme.requirements.is_empty()
+        {
+            return Err(invalid());
+        }
+        let (domain, result, row) = match &scheme.scheme.value_type {
+            Type::Function(domain, result) => (domain.as_ref(), result.as_ref(), None),
+            Type::EffectfulFunction(domain, result) => {
+                (domain.as_ref(), result.value(), Some(result.effects()))
+            }
+            _ => return Err(invalid()),
+        };
+        if domain != &Type::Nominal(input) || result != &Type::Nominal(output) {
+            return Err(invalid());
+        }
+        if let Some(row) = row {
+            if row.tail().is_some()
+                || row.known().iter().any(|instance| {
+                    !instance.arguments().is_empty()
+                        || (instance.effect() != ops
+                            && !crate::resolved::RegionApi::for_module(instance.effect().module())
+                                .is_some_and(|api| api.default_alloc() == instance.effect()))
+                })
+            {
+                return Err(invalid());
+            }
+        }
+        let spine = self.reconstruct_network_linked_spine(self.program.root, None)?;
+        let occurrence = self.node(spine.result)?;
+        if !matches!(&occurrence.kind,
+            super::effect::EffectExprKind::Pure(PureExprKind::Variable(variable))
+                if variable.binder() == contract.binder)
+            || !self.same_type_charged(&occurrence.ty, &scheme.scheme.value_type)?
+        {
+            return Err(invalid());
+        }
+        Ok((spine.result, ops))
+    }
+
     fn check_network_linked_spine(
         &self,
         id: NodeId,

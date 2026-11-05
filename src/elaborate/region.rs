@@ -402,7 +402,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         )?)
     }
 
-    pub(super) fn wrap_region_entry(&mut self, body: TypedNode) -> Result<TypedNode, TypeError> {
+    pub(super) fn wrap_region_entry(
+        &mut self,
+        body: TypedNode,
+        transformer_entry: bool,
+    ) -> Result<TypedNode, TypeError> {
         let body = TypedNodeOwner::new(body);
         let span = body.provenance.span().ok_or_else(invalid_state)?;
         let api = self.region_api_at(span)?;
@@ -415,7 +419,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .builder
             .binder(Type::Nominal(api.region_view()), Origin::Source(span))?;
         let provider = self.host_pair(api, identity, span)?;
-        let body = TypedNodeOwner::new(self.forward_default(body, &access, api, span)?);
+        // A transformer is applied by the evaluator at the selected entry
+        // occurrence, so its latent allocation requests need this same handler.
+        let body = TypedNodeOwner::new(if transformer_entry {
+            self.forward_cleanup_default(body, &access, api, span)?
+        } else {
+            self.forward_default(body, &access, api, span)?
+        });
         let preceding = self.builder.unit(Type::Unit, Origin::Source(span))?;
         let default = EffectInstance::new(api.default_alloc(), Box::new([]));
         let effects = self.remove_cleanup_effect(&body.effects, &default, span, true)?;

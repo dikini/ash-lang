@@ -5300,6 +5300,21 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         program: &ValidatedInterfaceProgram,
     ) -> Result<TypedNode, TypeError> {
+        self.synthesize_effect_module_program_with_entry(program, false)
+    }
+
+    pub(crate) fn synthesize_effect_transformer_program(
+        &mut self,
+        program: &ValidatedInterfaceProgram,
+    ) -> Result<TypedNode, TypeError> {
+        self.synthesize_effect_module_program_with_entry(program, true)
+    }
+
+    fn synthesize_effect_module_program_with_entry(
+        &mut self,
+        program: &ValidatedInterfaceProgram,
+        transformer_entry: bool,
+    ) -> Result<TypedNode, TypeError> {
         self.clear_capture_uses();
         if self.state == ElaboratorState::Poisoned
             || self.purpose != ElaborationPurpose::FinalSynthesis
@@ -5312,7 +5327,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         let result = self
             .elaborate_module_program(program)
-            .and_then(|body| self.wrap_region_entry(body));
+            .and_then(|body| self.wrap_region_entry(body, transformer_entry));
         self.clear_capture_uses();
         match result {
             Ok(typed) => {
@@ -25261,11 +25276,50 @@ pub(crate) fn link_modules_with_budgets(
     constraint_work: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
 ) -> Result<ResolvedModuleProgram, TypeError> {
+    link_checked_modules(
+        modules,
+        entry,
+        None,
+        constraint_work,
+        type_work,
+        CheckedModule::into_group,
+    )
+}
+
+pub(crate) fn link_transformer_modules(
+    modules: Vec<Arc<CheckedModule>>,
+    entry: crate::module::ModuleId,
+    transformer: BinderId,
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+) -> Result<ResolvedModuleProgram, TypeError> {
+    link_checked_modules(
+        modules,
+        entry,
+        Some(transformer),
+        constraint_work,
+        type_work,
+        crate::resolved::ResolvedModuleGroup::from_shared,
+    )
+}
+
+fn link_checked_modules<M: std::borrow::Borrow<CheckedModule>>(
+    modules: Vec<M>,
+    entry: crate::module::ModuleId,
+    transformer: Option<BinderId>,
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+    mut make_group: impl FnMut(
+        M,
+        &mut InterfaceConstraintBudget,
+    ) -> Result<crate::resolved::ResolvedModuleGroup, ()>,
+) -> Result<ResolvedModuleProgram, TypeError> {
     constraint_work
         .charge(modules.len())
         .map_err(|()| constraint_resource())?;
     let entry_module = modules
         .iter()
+        .map(|module| module.borrow())
         .find(|module| module.module() == entry)
         .ok_or_else(invalid_state)?;
     constraint_work
@@ -25274,7 +25328,7 @@ pub(crate) fn link_modules_with_budgets(
     let main = entry_module
         .schemes()
         .iter()
-        .find(|scheme| scheme.spelling == "main")
+        .find(|scheme| transformer.map_or(scheme.spelling == "main", |id| scheme.binder == id))
         .ok_or_else(invalid_state)?;
     let domain = match &main.scheme.value_type {
         Type::Function(domain, _) | Type::EffectfulFunction(domain, _) => domain,
@@ -25282,11 +25336,12 @@ pub(crate) fn link_modules_with_budgets(
     };
     if !main.scheme.type_parameters.is_empty()
         || !main.scheme.requirements.is_empty()
-        || !matches!(domain.as_ref(), Type::Unit)
+        || (transformer.is_none() && !matches!(domain.as_ref(), Type::Unit))
     {
         return Err(invalid_state());
     }
     let retained = modules.iter().try_fold(modules.len(), |total, module| {
+        let module = module.borrow();
         total
             .checked_add(module.direct_dependencies().len())
             .and_then(|total| total.checked_add(module.interface_facts().len()))
@@ -25310,11 +25365,13 @@ pub(crate) fn link_modules_with_budgets(
         .try_reserve(modules.len())
         .map_err(|_| constraint_resource())?;
     for (index, module) in modules.iter().enumerate() {
+        let module = module.borrow();
         if module_positions.insert(module.module(), index).is_some() {
             return Err(invalid_state());
         }
     }
     for (index, module) in modules.iter().enumerate() {
+        let module = module.borrow();
         if module.direct_dependencies().iter().any(|dependency| {
             module_positions
                 .get(&dependency.target())
@@ -25336,7 +25393,7 @@ pub(crate) fn link_modules_with_budgets(
     reachable[entry_index] = true;
     pending.push(entry_index);
     while let Some(index) = pending.pop() {
-        let module = modules.get(index).ok_or_else(invalid_state)?;
+        let module = modules.get(index).ok_or_else(invalid_state)?.borrow();
         for dependency in module.direct_dependencies() {
             let dependency_index = *module_positions
                 .get(&dependency.target())
@@ -25351,25 +25408,30 @@ pub(crate) fn link_modules_with_budgets(
         return Err(invalid_state());
     }
     let span = main.origin.primary_span();
-    let result = ResolvedExpr {
-        kind: ResolvedExprKind::Apply(crate::resolved::ResolvedApplicationExpr {
-            expansion: None,
-            function: Box::new(ResolvedExpr {
-                kind: ResolvedExprKind::Occurrence(crate::resolved::ResolvedOccurrence {
-                    term: crate::resolved::ResolvedTermName::Global(main.binder),
-                    spelling: main.spelling.clone(),
-                    origin: main.origin.clone(),
-                    import_span: None,
-                    evidence: Box::new([]),
-                }),
-                span,
-            }),
-            argument: Box::new(ResolvedExpr {
-                kind: ResolvedExprKind::Unit,
-                span,
-            }),
+    let function = ResolvedExpr {
+        kind: ResolvedExprKind::Occurrence(crate::resolved::ResolvedOccurrence {
+            term: crate::resolved::ResolvedTermName::Global(main.binder),
+            spelling: main.spelling.clone(),
+            origin: main.origin.clone(),
+            import_span: None,
+            evidence: Box::new([]),
         }),
         span,
+    };
+    let result = if transformer.is_some() {
+        function
+    } else {
+        ResolvedExpr {
+            kind: ResolvedExprKind::Apply(crate::resolved::ResolvedApplicationExpr {
+                expansion: None,
+                function: Box::new(function),
+                argument: Box::new(ResolvedExpr {
+                    kind: ResolvedExprKind::Unit,
+                    span,
+                }),
+            }),
+            span,
+        }
     };
     let registry = Arc::new(
         ResolvedRegistry::combine_checked(&modules, type_work, constraint_work)
@@ -25380,11 +25442,7 @@ pub(crate) fn link_modules_with_budgets(
         .try_reserve(modules.len())
         .map_err(|_| constraint_resource())?;
     for module in modules {
-        groups.push(
-            module
-                .into_group(constraint_work)
-                .map_err(|()| constraint_resource())?,
-        );
+        groups.push(make_group(module, constraint_work).map_err(|()| constraint_resource())?);
     }
     Ok(ResolvedModuleProgram::new(
         registry,

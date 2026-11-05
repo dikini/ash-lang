@@ -8,6 +8,7 @@ pub(crate) use constructor_original::ConstructorOriginal;
 mod image_subset_tests;
 
 use std::{
+    borrow::Borrow,
     cmp::Ordering,
     collections::{HashMap, HashSet, hash_map::Entry},
     hash::Hash,
@@ -2057,6 +2058,7 @@ impl CheckedModule {
             typed_fragment: self.typed_fragment.take(),
             local_lowering,
             span: self.span,
+            shared_owner: None,
         })
     }
 }
@@ -2097,19 +2099,72 @@ pub struct ResolvedModuleGroup {
     typed_fragment: Option<crate::elaborate::CheckedTypedModule>,
     local_lowering: Option<crate::elaborate::SharedModuleLowering>,
     span: Span,
+    // A compile-time link borrows the same checked owner needed by final linking.
+    shared_owner: Option<Arc<CheckedModule>>,
 }
 
 impl ResolvedModuleGroup {
+    pub(crate) fn from_shared(
+        owner: Arc<CheckedModule>,
+        work: &mut crate::interface::InterfaceConstraintBudget,
+    ) -> Result<Self, ()> {
+        let local_lowering = owner
+            .exports
+            .lowerings
+            .iter()
+            .find(|lowering| lowering.module() == owner.module)
+            .cloned();
+        if owner.typed_fragment.is_some() && local_lowering.is_none() {
+            return Err(());
+        }
+        work.charge(owner.exports.implementations.len())?;
+        let mut public_implementations = Vec::new();
+        public_implementations
+            .try_reserve_exact(owner.exports.implementations.len())
+            .map_err(|_| ())?;
+        for implementation in &owner.exports.implementations {
+            public_implementations.push(PublicImplementationAuthorization {
+                id: implementation.fact.id,
+                authorization: implementation.authorization.clone_with_budget(work)?,
+            });
+        }
+        Ok(Self {
+            module: owner.module,
+            direct_dependencies: Box::new([]),
+            declaration_order: Box::new([]),
+            interfaces: Box::new([]),
+            implementations: Box::new([]),
+            definitions: Box::new([]),
+            available_implementations: Box::new([]),
+            public_implementations: public_implementations.into_boxed_slice(),
+            schemes: Box::new([]),
+            checked_interfaces: Box::new([]),
+            checked_implementations: Box::new([]),
+            interface_facts: Box::new([]),
+            implementation_facts: Box::new([]),
+            typed_fragment: None,
+            local_lowering,
+            span: owner.span,
+            shared_owner: Some(owner),
+        })
+    }
+
     pub(crate) fn local_lowering(&self) -> Option<&crate::elaborate::SharedModuleLowering> {
         self.local_lowering.as_ref()
     }
     pub(crate) fn typed_fragment(&self) -> Option<&crate::elaborate::CheckedTypedModule> {
-        self.typed_fragment.as_ref()
+        self.shared_owner
+            .as_ref()
+            .and_then(|owner| owner.typed_fragment.as_ref())
+            .or(self.typed_fragment.as_ref())
     }
 
     #[cfg(test)]
     pub(crate) fn typed_fragment_for_test(&self) -> Option<&crate::elaborate::CheckedTypedModule> {
-        self.typed_fragment.as_ref()
+        self.shared_owner
+            .as_ref()
+            .and_then(|owner| owner.typed_fragment.as_ref())
+            .or(self.typed_fragment.as_ref())
     }
 
     /// Returns the stable canonical module identity.
@@ -2120,38 +2175,54 @@ impl ResolvedModuleGroup {
 
     /// Returns the resolver-authenticated direct dependency edges in source order.
     #[must_use]
-    pub const fn direct_dependencies(&self) -> &[DirectDependencyRoute] {
-        &self.direct_dependencies
+    pub fn direct_dependencies(&self) -> &[DirectDependencyRoute] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.direct_dependencies, |owner| {
+                &owner.direct_dependencies
+            })
     }
 
     /// Returns the cross-family declaration order within this module.
     #[must_use]
-    pub const fn declaration_order(&self) -> &[ResolvedDeclarationIndex] {
-        &self.declaration_order
+    pub fn declaration_order(&self) -> &[ResolvedDeclarationIndex] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.declaration_order, |owner| &owner.declaration_order)
     }
 
     /// Returns resolved local interfaces retained with checked metadata.
     #[must_use]
-    pub const fn interfaces(&self) -> &[ResolvedInterfaceDeclaration] {
-        &self.interfaces
+    pub fn interfaces(&self) -> &[ResolvedInterfaceDeclaration] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.interfaces, |owner| &owner.interfaces)
     }
 
     /// Returns checked local implementation bodies in declaration order.
     #[must_use]
-    pub const fn implementations(&self) -> &[CheckedImplementationBody] {
-        &self.implementations
+    pub fn implementations(&self) -> &[CheckedImplementationBody] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.implementations, |owner| &owner.implementations)
     }
 
     /// Returns checked local definitions in source order.
     #[must_use]
-    pub const fn definitions(&self) -> &[CheckedDefinition] {
-        &self.definitions
+    pub fn definitions(&self) -> &[CheckedDefinition] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.definitions, |owner| &owner.definitions)
     }
 
     /// Returns the effective implementation environment in deterministic order.
     #[must_use]
-    pub const fn available_implementations(&self) -> &[AvailableImplementation] {
-        &self.available_implementations
+    pub fn available_implementations(&self) -> &[AvailableImplementation] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.available_implementations, |owner| {
+                &owner.available_implementations
+            })
     }
 
     /// Returns lightweight public implementation authorizations in summary order.
@@ -2164,32 +2235,46 @@ impl ResolvedModuleGroup {
 
     /// Returns checked global schemes in definition order.
     #[must_use]
-    pub const fn schemes(&self) -> &[CheckedGlobalScheme] {
-        &self.schemes
+    pub fn schemes(&self) -> &[CheckedGlobalScheme] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.schemes, |owner| &owner.schemes)
     }
 
     /// Returns local interface authentication records in source order.
     #[must_use]
-    pub const fn checked_interfaces(&self) -> &[CheckedInterface] {
-        &self.checked_interfaces
+    pub fn checked_interfaces(&self) -> &[CheckedInterface] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.checked_interfaces, |owner| &owner.checked_interfaces)
     }
 
     /// Returns checked local implementations in declaration order.
     #[must_use]
-    pub const fn checked_implementations(&self) -> &[CheckedImplementation] {
-        &self.checked_implementations
+    pub fn checked_implementations(&self) -> &[CheckedImplementation] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.checked_implementations, |owner| {
+                &owner.checked_implementations
+            })
     }
 
     /// Returns checked local interface semantic facts in declaration order.
     #[must_use]
-    pub const fn interface_facts(&self) -> &[SharedCheckedInterfaceFact] {
-        &self.interface_facts
+    pub fn interface_facts(&self) -> &[SharedCheckedInterfaceFact] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.interface_facts, |owner| &owner.interface_facts)
     }
 
     /// Returns checked local implementation semantic facts in declaration order.
     #[must_use]
-    pub const fn implementation_facts(&self) -> &[CheckedImplementationFact] {
-        &self.implementation_facts
+    pub fn implementation_facts(&self) -> &[CheckedImplementationFact] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.implementation_facts, |owner| {
+                &owner.implementation_facts
+            })
     }
 
     /// Returns the complete defining source span.
@@ -14330,9 +14415,9 @@ impl CombinedRegistryBuilder {
         Ok(builder)
     }
 
-    fn retain_global_parameter_row(
+    fn retain_global_parameter_row<M>(
         &mut self,
-        _validated: &ValidatedCheckedRegistries<'_>,
+        _validated: &ValidatedCheckedRegistries<'_, M>,
         owner: BinderId,
         parameters: &[(TypeVariableId, Kind)],
     ) -> Result<(), ResolvedBuildFailure> {
@@ -14481,14 +14566,15 @@ fn retained_kind_record_work(kind: &Kind) -> Result<usize, ResolvedBuildFailure>
     Ok(work)
 }
 
-fn checked_registry_counts(
-    modules: &[CheckedModule],
+fn checked_registry_counts<M: Borrow<CheckedModule>>(
+    modules: &[M],
 ) -> Result<CombinedRegistryCounts, ResolvedBuildFailure> {
     let mut counts = CombinedRegistryCounts {
         modules: modules.len(),
         ..CombinedRegistryCounts::default()
     };
     for checked in modules {
+        let checked = checked.borrow();
         let registry = checked.registry();
         checked_accumulate(&mut counts.nominals, registry.nominals.len())?;
         checked_accumulate(&mut counts.constructors, registry.constructors.len())?;
@@ -14628,23 +14714,23 @@ fn checked_registry_counts(
 }
 
 /// Borrowed checked registries whose destination identities are unique.
-struct ValidatedCheckedRegistries<'a> {
-    modules: &'a [CheckedModule],
+struct ValidatedCheckedRegistries<'a, M> {
+    modules: &'a [M],
 }
 
-impl ValidatedCheckedRegistries<'_> {
+impl<M> ValidatedCheckedRegistries<'_, M> {
     #[cfg(test)]
-    fn modules(&self) -> &[CheckedModule] {
+    fn modules(&self) -> &[M] {
         self.modules
     }
 }
 
-fn validate_checked_registries<'a>(
-    modules: &'a [CheckedModule],
+fn validate_checked_registries<'a, M: Borrow<CheckedModule>>(
+    modules: &'a [M],
     counts: &CombinedRegistryCounts,
     _type_work: &mut TypeWorkBudget,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
-) -> Result<ValidatedCheckedRegistries<'a>, ResolvedBuildFailure> {
+) -> Result<ValidatedCheckedRegistries<'a, M>, ResolvedBuildFailure> {
     // Each defining registry was completed by its own checker. This pass
     // charges and checks only identities that share a new destination index.
     constraint_work
@@ -14683,6 +14769,7 @@ fn validate_checked_registries<'a>(
         .try_reserve(counts.global_rows)
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
     for checked in modules {
+        let checked = checked.borrow();
         let module = checked.module();
         let registry = checked.registry();
         if !module_ids.insert(module) {
@@ -14782,11 +14869,12 @@ fn clone_type_variable_row_after_combined_precharge(
     Ok(cloned.into_vec().into_boxed_slice())
 }
 
-fn retain_checked_registries(
-    validated: ValidatedCheckedRegistries<'_>,
+fn retain_checked_registries<M: Borrow<CheckedModule>>(
+    validated: ValidatedCheckedRegistries<'_, M>,
     mut builder: CombinedRegistryBuilder,
 ) -> Result<ResolvedRegistry, ResolvedBuildFailure> {
     for checked in validated.modules {
+        let checked = checked.borrow();
         let registry = checked.registry();
         for nominal in registry.nominals() {
             let position = builder.nominals.0.len();
@@ -16670,8 +16758,8 @@ impl ResolvedRegistry {
     /// Destination identities and the exact compiler TypeWork precharge are
     /// checked before retained carriers are copied. A later allocation failure
     /// dismantles staging without publishing a registry.
-    pub(crate) fn combine_checked(
-        modules: &[CheckedModule],
+    pub(crate) fn combine_checked<M: Borrow<CheckedModule>>(
+        modules: &[M],
         type_work: &mut TypeWorkBudget,
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<Self, ResolvedBuildFailure> {
@@ -16683,6 +16771,7 @@ impl ResolvedRegistry {
         let builder = CombinedRegistryBuilder::with_counts(&counts)?;
         let mut registry = retain_checked_registries(validated, builder)?;
         for module in modules {
+            let module = module.borrow();
             retain_native_symbols(
                 &mut registry.native_symbols,
                 &module.registry().native_symbols,
@@ -16690,6 +16779,7 @@ impl ResolvedRegistry {
             )?;
         }
         for checked in modules {
+            let checked = checked.borrow();
             let defining = checked.registry();
             type_work
                 .charge(defining.owner_definitions.len())
@@ -24024,6 +24114,7 @@ mod tests {
                 typed_fragment,
                 local_lowering,
                 span,
+                shared_owner,
             } = group;
             let _: &Option<crate::elaborate::SharedModuleLowering> = local_lowering;
             let _ = (
@@ -24043,6 +24134,7 @@ mod tests {
                 typed_fragment,
                 local_lowering,
                 span,
+                shared_owner,
             );
         }
 
@@ -25096,7 +25188,7 @@ mod tests {
         let mut constraint_work =
             crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
         let mut type_work = TypeWorkBudget::default();
-        let witness: ValidatedCheckedRegistries<'_> =
+        let witness: ValidatedCheckedRegistries<'_, CheckedModule> =
             validate_checked_registries(&modules, &counts, &mut type_work, &mut constraint_work)
                 .expect("the exact prevalidation budget should produce row-retention authority");
         assert_eq!(constraint_work.used(), CONSTRAINT_WORK);

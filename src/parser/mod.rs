@@ -553,6 +553,105 @@ pub(crate) fn parse_with_budget_and_header(
     (tree, imports)
 }
 
+/// Parses a transformer result with protected fragments as expression atoms.
+/// The token stream is constructed directly; no generated text is lexed.
+pub(crate) fn parse_macro_expression(
+    source: &SourceFile,
+    invocation: Span,
+    output: Vec<crate::syntax::MacroOutputNode>,
+) -> Result<
+    (
+        crate::surface::SurfaceExpr,
+        Vec<crate::surface::SurfaceSyntaxMatcherPart>,
+        Vec<crate::surface::SurfaceSyntaxCapture>,
+    ),
+    (),
+> {
+    use crate::source::ByteRange;
+    use crate::surface::{
+        SurfaceName, SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind, SurfaceSyntaxMatcherPart,
+    };
+    use crate::syntax::MacroOutputNode;
+    let start = invocation.range().start();
+    let anchor = source
+        .span(ByteRange::new(start, start).map_err(|_| ())?)
+        .map_err(|_| ())?;
+    let end = u32::try_from(source.text().len()).map_err(|_| ())?;
+    let eof = source
+        .span(ByteRange::new(end, end).map_err(|_| ())?)
+        .map_err(|_| ())?;
+    let mut tokens = Vec::new();
+    let mut fragments = std::collections::HashMap::new();
+    let mut matcher = Vec::new();
+    let mut captures = Vec::new();
+    for piece in output {
+        let kind = match piece {
+            MacroOutputNode::Expression(expression, origin) => {
+                if origin != invocation {
+                    return Err(());
+                }
+                let name = SurfaceName {
+                    text: format!("__ash_fragment_{}", captures.len()),
+                    span: anchor,
+                    introduction: 0,
+                    introduced_at: None,
+                };
+                fragments.insert(tokens.len(), name.clone());
+                matcher.push(SurfaceSyntaxMatcherPart::Capture {
+                    name: name.clone(),
+                    kind: SurfaceSyntaxCaptureKind::Expression,
+                });
+                captures.push(SurfaceSyntaxCapture::Expression(expression));
+                TokenKind::Identifier(name.text)
+            }
+            MacroOutputNode::Token(kind, origin) => {
+                if origin != invocation {
+                    return Err(());
+                }
+                kind
+            }
+        };
+        tokens.push(crate::lexer::Token { kind, span: anchor });
+    }
+    tokens.push(crate::lexer::Token {
+        kind: TokenKind::EndOfFile,
+        span: eof,
+    });
+    let mut parser = Parser {
+        tokens: &tokens,
+        position: 0,
+        events: Vec::new(),
+        diagnostics: Vec::new(),
+        pending_recoveries: Vec::new(),
+        recovered_expression_group_boundary: false,
+        nesting_depth: 0,
+        resource_failure: None,
+        syntax_budget: SyntaxBudget::default(),
+        syntax_work_exhausted: false,
+        in_template: false,
+        syntax: &[],
+        syntax_source: Some(source),
+        syntax_stops: Vec::new(),
+    };
+    parser.start(NodeKind::Module);
+    grammar::expression(&mut parser);
+    if !parser.at(&TokenKind::EndOfFile) {
+        return Err(());
+    }
+    let _ = parser.bump();
+    parser.finish();
+    let Parser {
+        events,
+        diagnostics,
+        resource_failure,
+        ..
+    } = parser;
+    let tree = cst::build(tokens, Vec::new(), diagnostics, events, resource_failure);
+    let expression =
+        project::project_macro_expression(source, &tree, &fragments).map_err(|_| ())?;
+    Ok((expression, matcher, captures))
+}
+
 fn parse_parts(
     tokens: Vec<crate::lexer::Token>,
     lexical_diagnostics: Vec<Diagnostic<crate::lexer::LexReason>>,

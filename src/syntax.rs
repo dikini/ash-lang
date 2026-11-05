@@ -10,10 +10,16 @@ use crate::{
         SurfaceBinder, SurfaceBlock, SurfaceDefinitionKind, SurfaceExpr, SurfaceExprKind,
         SurfaceLocalDeclaration, SurfaceModule, SurfaceName, SurfacePattern, SurfacePatternKind,
         SurfaceReference, SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind, SurfaceSyntaxDeclaration,
-        SurfaceSyntaxMatcherPart, SurfaceType, SurfaceTypeKind,
+        SurfaceSyntaxImplementation, SurfaceSyntaxMatcherPart, SurfaceType, SurfaceTypeKind,
     },
     types::TypeWorkBudget,
 };
+
+/// Structured output transferred from one completed transformer invocation.
+pub(crate) enum MacroOutputNode {
+    Expression(SurfaceExpr, Span),
+    Token(crate::lexer::TokenKind, Span),
+}
 
 #[derive(Clone)]
 pub(crate) struct SelectedSyntax {
@@ -236,7 +242,10 @@ pub(crate) fn validate_template(declaration: &SurfaceSyntaxDeclaration) -> Resul
             _ => Err(expression.span),
         }
     }
-    check(&declaration.template, &declaration.matcher)
+    match &declaration.implementation {
+        SurfaceSyntaxImplementation::Template(template) => check(template, &declaration.matcher),
+        SurfaceSyntaxImplementation::Transformer(_) => Ok(()),
+    }
 }
 
 fn capture_by_name<'a>(
@@ -329,6 +338,19 @@ fn collect_pattern_names(pattern: &SurfacePattern, names: &mut Vec<SurfaceName>)
         }
         _ => {}
     }
+}
+
+pub(crate) fn admit_transformer_output(
+    source: &crate::source::SourceFile,
+    invocation: Span,
+    output: Vec<MacroOutputNode>,
+) -> Result<SurfaceExpr, Span> {
+    let (mut expression, matcher, captures) =
+        crate::parser::parse_macro_expression(source, invocation, output)
+            .map_err(|()| invocation)?;
+    substitute(&mut expression, &matcher, &captures, 0, invocation)?;
+    expression.span = invocation;
+    Ok(expression)
 }
 
 fn substitute(
@@ -465,9 +487,15 @@ pub(crate) fn expand_module(
     module: &mut SurfaceModule,
     selected: &[SelectedSyntax],
     owner_imports: &[Vec<SelectedSyntax>],
+    transformer: &mut dyn FnMut(
+        &SelectedSyntax,
+        &[SurfaceSyntaxCapture],
+        Span,
+    ) -> Result<SurfaceExpr, Span>,
 ) -> Result<Vec<SyntaxNameUse>, Span> {
     let mut next_introduction = ExpansionContexts {
         owner_imports,
+        transformer,
         owners: Vec::new(),
         names: Vec::new(),
     };
@@ -518,6 +546,11 @@ pub(crate) fn expand_module(
 
 struct ExpansionContexts<'a> {
     owner_imports: &'a [Vec<SelectedSyntax>],
+    transformer: &'a mut dyn FnMut(
+        &SelectedSyntax,
+        &[SurfaceSyntaxCapture],
+        Span,
+    ) -> Result<SurfaceExpr, Span>,
     owners: Vec<SyntaxOwner>,
     names: Vec<SurfaceName>,
 }
@@ -581,7 +614,16 @@ fn expand_expression(
                 .find(|syntax| syntax.name == name.text)
                 .cloned()
                 .ok_or(expression.span)?;
-            let mut replacement = declaration.declaration.template.clone();
+            let template = match &declaration.declaration.implementation {
+                SurfaceSyntaxImplementation::Template(template) => template,
+                SurfaceSyntaxImplementation::Transformer(_) => {
+                    let replacement =
+                        (next_introduction.transformer)(&declaration, captures, invocation)?;
+                    *expression = replacement;
+                    return expand_expression(expression, selected, next_introduction);
+                }
+            };
+            let mut replacement = template.clone();
             next_introduction.owners.push(SyntaxOwner {
                 owner: declaration.owner,
                 declaration: declaration.declaration.span,

@@ -39,6 +39,8 @@ pub const MODULE_OWNER_FACT_LIMIT: usize = 262_144;
 /// Maximum active traversal and owner-propagation work items.
 pub const MODULE_PENDING_LIMIT: usize = 16_384;
 
+const COMPILER_SYNTAX_SOURCE: &str = include_str!("compiler_syntax.ash");
+
 const CELL_SOURCE: &str = concat!(
     "pub opaque type Handle<R> = Hidden\n",
     "pub effect Ops<R> {\nread : Handle<R> -> Int\nwrite : (Handle<R>, Int) -> Unit\n}\n",
@@ -278,6 +280,7 @@ enum ModuleIdNamespace {
     BuiltinString,
     BuiltinInteger,
     BuiltinForeign,
+    BuiltinCompilerSyntax,
     DirectCoreSource,
 }
 
@@ -349,6 +352,10 @@ impl ModuleId {
         matches!(self.namespace, ModuleIdNamespace::BuiltinForeign)
     }
 
+    pub(crate) const fn is_builtin_compiler_syntax(self) -> bool {
+        matches!(self.namespace, ModuleIdNamespace::BuiltinCompilerSyntax)
+    }
+
     #[cfg(test)]
     pub(crate) const fn builtin_foreign_for_test(value: u32) -> Self {
         Self {
@@ -393,6 +400,13 @@ impl fmt::Display for ModuleId {
             }
             ModuleIdNamespace::BuiltinForeign => {
                 write!(formatter, "builtin.foreign:{}:{}", self.graph, self.value)
+            }
+            ModuleIdNamespace::BuiltinCompilerSyntax => {
+                write!(
+                    formatter,
+                    "builtin.compiler.syntax:{}:{}",
+                    self.graph, self.value
+                )
             }
             ModuleIdNamespace::Admitted => write!(formatter, "{}:{}", self.graph, self.value),
             ModuleIdNamespace::BuiltinGenericCell => {
@@ -1769,6 +1783,7 @@ fn discover_graph_with_budget(
         let mut builtin_bytes = None;
         let mut builtin_string = None;
         let mut builtin_foreign = None;
+        let mut builtin_compiler_syntax = None;
         let mut builtin_region = None;
         let mut builtin_region_facade = None;
 
@@ -1857,43 +1872,55 @@ fn discover_graph_with_budget(
             if let SurfaceModulePath::Absolute { root, segments } = &import.path
                 && root.text == "builtin"
             {
-                if segments.len() != 1
-                    || !matches!(
-                        segments[0].text.as_str(),
-                        "cell"
-                            | "generic_cell"
-                            | "retained_control"
-                            | "network"
-                            | "bytes"
-                            | "string"
-                            | "integer"
-                            | "foreign"
-                            | "regions"
-                    )
-                {
-                    return Err(ModuleFailure::source(
-                        ModuleReason::UnknownBuiltin,
-                        import.span,
-                        None,
-                    )
-                    .into());
-                }
-                let packed = matches!(segments[0].text.as_str(), "bytes" | "string" | "integer");
-                let cached = if segments[0].text == "regions" {
+                let name = match segments.as_slice() {
+                    [compiler, syntax]
+                        if compiler.text == "compiler" && syntax.text == "syntax" =>
+                    {
+                        "compiler.syntax"
+                    }
+                    [segment]
+                        if matches!(
+                            segment.text.as_str(),
+                            "cell"
+                                | "generic_cell"
+                                | "retained_control"
+                                | "network"
+                                | "bytes"
+                                | "string"
+                                | "integer"
+                                | "foreign"
+                                | "regions"
+                        ) =>
+                    {
+                        segment.text.as_str()
+                    }
+                    _ => {
+                        return Err(ModuleFailure::source(
+                            ModuleReason::UnknownBuiltin,
+                            import.span,
+                            None,
+                        )
+                        .into());
+                    }
+                };
+                let packed = matches!(name, "bytes" | "string" | "integer" | "compiler.syntax");
+                let cached = if name == "compiler.syntax" {
+                    &mut builtin_compiler_syntax
+                } else if name == "regions" {
                     &mut builtin_region_facade
-                } else if segments[0].text == "integer" {
+                } else if name == "integer" {
                     &mut builtin_integer
-                } else if segments[0].text == "bytes" {
+                } else if name == "bytes" {
                     &mut builtin_bytes
-                } else if segments[0].text == "string" {
+                } else if name == "string" {
                     &mut builtin_string
-                } else if segments[0].text == "foreign" {
+                } else if name == "foreign" {
                     &mut builtin_foreign
-                } else if segments[0].text == "generic_cell" {
+                } else if name == "generic_cell" {
                     &mut builtin_generic_cell
-                } else if segments[0].text == "retained_control" {
+                } else if name == "retained_control" {
                     &mut builtin_retained_control
-                } else if segments[0].text == "network" {
+                } else if name == "network" {
                     &mut builtin_network
                 } else {
                     &mut builtin_cell
@@ -1901,7 +1928,7 @@ fn discover_graph_with_budget(
                 let target = if let Some(id) = *cached {
                     id
                 } else {
-                    let id = if segments[0].text == "regions" {
+                    let id = if name == "regions" {
                         let service = builtin_region.ok_or_else(|| {
                             ModuleFailure::source(ModuleReason::UnknownBuiltin, import.span, None)
                         })?;
@@ -1913,7 +1940,7 @@ fn discover_graph_with_budget(
                             &mut staged,
                             &mut dependency_order,
                         )?
-                    } else if segments[0].text == "foreign" {
+                    } else if name == "foreign" {
                         admit_builtin_foreign(
                             graph_identity,
                             import.span,
@@ -1921,7 +1948,7 @@ fn discover_graph_with_budget(
                             &mut staged,
                             &mut dependency_order,
                         )?
-                    } else if segments[0].text == "retained_control" {
+                    } else if name == "retained_control" {
                         admit_builtin_retained_control(
                             graph_identity,
                             import.span,
@@ -1931,7 +1958,7 @@ fn discover_graph_with_budget(
                             &mut staged,
                             &mut dependency_order,
                         )?
-                    } else if segments[0].text == "network" {
+                    } else if name == "network" {
                         admit_builtin_network(
                             graph_identity,
                             import.span,
@@ -1943,7 +1970,7 @@ fn discover_graph_with_budget(
                         )?
                     } else if packed {
                         admit_builtin_packed(
-                            segments[0].text.as_str(),
+                            name,
                             builtin_region
                                 .ok_or_else(|| ModuleFailure::resource(ModuleResource::Sources))?,
                             graph_identity,
@@ -1954,7 +1981,7 @@ fn discover_graph_with_budget(
                         )?
                     } else {
                         admit_builtin_resource(
-                            segments[0].text == "generic_cell",
+                            name == "generic_cell",
                             graph_identity,
                             import.span,
                             &mut budget,
@@ -2264,6 +2291,11 @@ fn admit_builtin_packed(
             "@builtin.integer",
             INTEGER_SOURCE,
             ModuleIdNamespace::BuiltinInteger,
+        ),
+        "compiler.syntax" => (
+            "@builtin.compiler.syntax",
+            COMPILER_SYNTAX_SOURCE,
+            ModuleIdNamespace::BuiltinCompilerSyntax,
         ),
         _ => {
             return Err(
@@ -3257,6 +3289,10 @@ pub(crate) fn restore_image_module(
         graph,
         value: source.id().value(),
     })
+}
+
+pub(crate) fn compiler_syntax_builtin_source_text() -> &'static str {
+    COMPILER_SYNTAX_SOURCE
 }
 
 pub(crate) fn foreign_builtin_source_text() -> &'static str {

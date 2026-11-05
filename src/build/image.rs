@@ -855,7 +855,9 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
         let slot = push(
             &mut encoder.image.sources,
             SourceRecord {
-                role: if module.is_builtin_foreign() {
+                role: if module.is_builtin_compiler_syntax() {
+                    return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+                } else if module.is_builtin_foreign() {
                     ModuleRoleRecord::BuiltinForeign
                 } else if module.is_builtin_region_facade() {
                     ModuleRoleRecord::BuiltinRegionFacade

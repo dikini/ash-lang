@@ -1298,7 +1298,7 @@ where
         &ValidatedInterfaceProgram,
     ) -> ModularEffectCoreResult,
 {
-    let mut checked: Vec<crate::resolved::CheckedModule> = Vec::with_capacity(input.len());
+    let mut checked: Vec<Arc<crate::resolved::CheckedModule>> = Vec::with_capacity(input.len());
     let mut checked_syntax = Vec::<Vec<crate::surface::SurfaceSyntaxDeclaration>>::new();
     let mut checked_syntax_imports = Vec::<Vec<crate::syntax::SelectedSyntax>>::new();
     let mut checked_syntax_terms = Vec::<crate::syntax::SyntaxOwnerBindings>::new();
@@ -1421,12 +1421,43 @@ where
             Some(module.clone())
         };
         let syntax_uses = if let Some(expanded) = expanded.as_mut() {
-            crate::syntax::expand_module(expanded.surface_mut(), &selected, &checked_syntax_imports)
-                .map_err(|span| {
-                    FileFailure::from(PipelineFailure::Resolution(
-                        crate::resolve::unsupported_syntax_template(span),
-                    ))
-                })?
+            let mut transformer_failure = None;
+            let mut transformer = |selection: &crate::syntax::SelectedSyntax,
+                                   captures: &[crate::surface::SurfaceSyntaxCapture],
+                                   span: Span| {
+                match prepare_transformer_entry(selection, &checked, constraint_work) {
+                    Ok(entry) => match crate::eval::evaluate_transformer(&entry, captures, span) {
+                        Ok(output) => {
+                            crate::syntax::admit_transformer_output(module.source(), span, output)
+                        }
+                        Err(error) => {
+                            transformer_failure =
+                                Some(FileFailure::from(PipelineFailure::Runtime(error)));
+                            Err(span)
+                        }
+                    },
+                    Err(error) => {
+                        transformer_failure = Some(error);
+                        Err(span)
+                    }
+                }
+            };
+            let expanded = crate::syntax::expand_module(
+                expanded.surface_mut(),
+                &selected,
+                &checked_syntax_imports,
+                &mut transformer,
+            );
+            match expanded {
+                Ok(uses) => uses,
+                Err(span) => {
+                    return Err(transformer_failure.unwrap_or_else(|| {
+                        FileFailure::from(PipelineFailure::Resolution(
+                            crate::resolve::unsupported_syntax_template(span),
+                        ))
+                    }));
+                }
+            }
         } else {
             Vec::new()
         };
@@ -1520,7 +1551,7 @@ where
         checked_syntax.push(module.surface().syntax_declarations.clone());
         checked_syntax_imports.push(selected);
         checked_syntax_terms.push(syntax_terms);
-        checked.push(checked_module);
+        checked.push(Arc::new(checked_module));
         source_phase.finish(
             Some(checking_type_work.used()),
             source_normal_limit,
@@ -1673,6 +1704,10 @@ where
         true,
     );
     let linking_phase = crate::calibration::Phase::start("module-linking");
+    let checked = checked
+        .into_iter()
+        .map(|owner| Arc::try_unwrap(owner).map_err(|_| internal_file_failure()))
+        .collect::<Result<Vec<_>, _>>()?;
     let linked = link_modules_with_budget(checked, graph.entry(), constraint_work)
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::from)?;
@@ -1863,6 +1898,108 @@ fn modular_phase_work(
     let normal = work.limit();
     work.finish_sizing(crate::calibration::limit(normal, owner))?;
     Ok((work, normal, source_bytes))
+}
+
+fn prepare_transformer_entry(
+    selection: &crate::syntax::SelectedSyntax,
+    checked: &[Arc<crate::resolved::CheckedModule>],
+    constraint_work: &mut InterfaceConstraintBudget,
+) -> Result<crate::core::validate::ValidatedMacroEntry, FileFailure> {
+    let owner = checked
+        .get(selection.owner)
+        .ok_or_else(internal_file_failure)?;
+    let crate::surface::SurfaceSyntaxImplementation::Transformer(name) =
+        &selection.declaration.implementation
+    else {
+        return Err(internal_file_failure());
+    };
+    let binder = owner
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.spelling == name.text)
+        .map(|scheme| scheme.binder)
+        .ok_or_else(internal_file_failure)?;
+    let mut reachable = std::collections::HashSet::new();
+    let mut pending = vec![owner.module()];
+    while let Some(id) = pending.pop() {
+        if !reachable.insert(id) {
+            continue;
+        }
+        let module = checked
+            .iter()
+            .find(|module| module.module() == id)
+            .ok_or_else(internal_file_failure)?;
+        pending.extend(
+            module
+                .direct_dependencies()
+                .iter()
+                .map(|edge| edge.target()),
+        );
+    }
+    let modules = checked
+        .iter()
+        .filter(|module| reachable.contains(&module.module()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let syntax_module = modules
+        .iter()
+        .find(|module| module.module().is_builtin_compiler_syntax())
+        .map(|module| module.module())
+        .ok_or_else(internal_file_failure)?;
+    let retained_sources = owner.exports().defining_sources();
+    let sources = modules
+        .iter()
+        .map(|module| {
+            retained_sources
+                .iter()
+                .find(|(id, _)| *id == module.module())
+                .map(|(_, source)| source.as_ref())
+                .ok_or_else(internal_file_failure)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let module_sources = modules
+        .iter()
+        .zip(&sources)
+        .map(|(module, source)| (module.module(), source.id()))
+        .collect::<Vec<_>>();
+    let mut work = TypeWorkBudget::default();
+    let linked = crate::elaborate::link_transformer_modules(
+        modules,
+        owner.module(),
+        binder,
+        constraint_work,
+        &mut work,
+    )
+    .map_err(PipelineFailure::Typing)
+    .map_err(FileFailure::from)?;
+    let linked = validate_interface_evidence_with_budget(linked, constraint_work, &mut work)
+        .map_err(PipelineFailure::EvidenceValidation)
+        .map_err(FileFailure::from)?;
+    let mut elaborator = EffectElaborator::for_module_program(&linked)
+        .map_err(TypeError::Internal)
+        .map_err(PipelineFailure::Typing)
+        .map_err(FileFailure::from)?;
+    let typed = elaborator
+        .synthesize_effect_transformer_program(&linked)
+        .map_err(PipelineFailure::Typing)
+        .map_err(FileFailure::from)?;
+    let _ty = IterativeTypeOwner::new(typed.ty);
+    let program = elaborator
+        .finish(typed.node)
+        .map_err(TypeError::Internal)
+        .map_err(PipelineFailure::Typing)
+        .map_err(FileFailure::from)?;
+    crate::core::validate::validate_effect_macro_modules_linked_with_work(
+        program,
+        &sources,
+        &module_sources,
+        &linked,
+        binder,
+        syntax_module,
+        &mut work,
+    )
+    .map_err(PipelineFailure::Validation)
+    .map_err(FileFailure::from)
 }
 
 fn modular_primary_limit(source_bytes: usize) -> Result<usize, ()> {

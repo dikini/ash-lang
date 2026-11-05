@@ -233,6 +233,10 @@ impl Drop for ObservedHeap {
 }
 
 impl ObservedHeap {
+    pub(super) fn cells(&self) -> &[HeapCell] {
+        &self.cells
+    }
+
     #[cfg(test)]
     pub(crate) fn new(registry: Arc<ResolvedRegistry>, cells: Vec<HeapCell>) -> Arc<Self> {
         Self::with_root_completion(registry, cells, None)
@@ -283,6 +287,10 @@ impl fmt::Debug for ObservedHeap {
 }
 
 impl ObservedValue {
+    pub(super) fn root(&self) -> Location {
+        self.root
+    }
+
     pub(crate) fn new(heap: Arc<ObservedHeap>, root: Location) -> Self {
         Self {
             heap,
@@ -324,6 +332,7 @@ impl ObservedValue {
                     active.remove(&location);
                 }
                 Task::Value(value) => match value {
+                    Value::CompilerSyntaxHandle(_) => output.push_str("<compiler-syntax>"),
                     Value::RegionRequest(_) => output.push_str("<allocation-request>"),
                     Value::RegionStorage(_) => output.push_str("<storage>"),
                     Value::RegionBackingFunction(_) => output.push_str("<function>"),
@@ -576,12 +585,31 @@ pub struct RegionStorage {
     pub(crate) record: usize,
 }
 
+/// Compiler-issued opaque syntax value, scoped to one transformer invocation.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct CompilerSyntaxHandle {
+    pub(super) invocation: Arc<()>,
+    pub(super) kind: CompilerSyntaxHandleKind,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum CompilerSyntaxHandleKind {
+    Input,
+    Origin(crate::source::Span),
+    Expression(usize),
+    Token(usize),
+}
+
 /// A fully evaluated Ash value.
 ///
 /// Values intentionally do not implement host equality because Ash functions
 /// have no equality operation or observable identity.
 #[derive(Clone, Debug)]
 pub enum Value {
+    /// An opaque compiler-issued value inside a transformer invocation.
+    #[doc(hidden)]
+    CompilerSyntaxHandle(CompilerSyntaxHandle),
     /// Private, nonrecursive allocation request descriptor.
     RegionRequest(RegionRequest),
     /// Private, pending supplied storage token.
@@ -665,6 +693,7 @@ impl Value {
 impl fmt::Display for Value {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::CompilerSyntaxHandle(_) => formatter.write_str("<compiler-syntax>"),
             Self::RegionRequest(_) => formatter.write_str("<allocation-request>"),
             Self::RegionStorage(_) => formatter.write_str("<storage>"),
             Self::RegionBackingFunction(_) => formatter.write_str("<function>"),

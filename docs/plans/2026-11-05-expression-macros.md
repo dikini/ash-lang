@@ -828,32 +828,50 @@ full gate may serve the pre-Main gate without a duplicate identical-input run.
 
 ## Estimate and re-planning
 
-The whole outstanding chain is an uncalibrated 30–55 focused engineer-days:
+After the first computed and combined graphs ran to 42, the developer's
+provisional forecast is **11–23 additional Codex elapsed hours**, with **15–18
+hours** as the planning range. This replaces the earlier 10–24 and 21–51
+clock-hour forecasts. It is a whole-chain estimate, not a deadline or a measured
+model-runtime total; independent review may revise it.
 
-| Delivery | Range | Includes |
-| --- | --- | --- |
-| D0 | 2–5 | Review repairs, compiling connected interfaces, graph and budget parity, vocabulary work planning. |
-| D1 | 9–15 | Staged loader/parser, contextual templates, private closure, real caller integration, focused checks and review. |
-| D2 | 9–16 | Canonical interface/vocabulary, real Ash host, validation, transfer/failure/limits, C1 and review. |
-| D3 | 6–11 | Remaining scopes/checks, origins/locales, reproducibility, image/build/native consumers and review. |
-| D4 | 4–8 | Remaining specification/docs, repair, C2, product/milestone retention, acceptance and cleanup. |
+| Remaining connected work | Codex elapsed hours |
+| --- | --- |
+| Remaining Ops, vocabulary, output forms, transfer failures, and limits | 3–6 |
+| Complete contexts, copied identities, grants, and Core coordinates | 3–7 |
+| Diagnostics and actual image/build/native path | 2–4 |
+| Remaining evidence, docs, gates, review, and retained acceptance | 3–6 |
 
-This revision accounts for the reviewed parser-checkpoint budget parity,
-mixed-context lookup, explicit validated host entry and borrowed-fragment
-ownership work. These are planning judgments, not measured model runtime or
-calendar promises.
-They include consumers, integration, reviews, required gates, and acceptance;
-the next helper or local fix is not milestone completion. They assume reuse of
-current checked-module linking/evaluation, one product writer/heavy-build slot,
-one integration owner, and no effects redesign or extra output category. The
-largest uncertainty is authority/context/origin closure across existing checking,
-linking, evaluation roots, and images. Vocabulary names are bounded interface
-work, not a separate macro research project.
+The ranges include about 1–3 hours of command/gate time and 1–2 hours of
+review/correction; they overlap in the chain and are not separate forecasts to
+add again. External waiting and separately authorized Main integration are
+excluded. Assumptions: one product writer/build operator, compatible warm cache,
+current checker/linker/evaluator reuse, no effects redesign or extra output
+category, and no new ownership/validator architecture contradiction. Such a
+contradiction requires a new forecast and a recorded plan change.
 
-Re-estimate the entire remainder after reviewed D0 and the first D1 vertical
-path, and after any changed interface or repeated repair. Record available
-inspection/build/test/docs/review/integration/cleanup/wait timing in existing
-receipts and task handoffs, with model/effort and exact model runtime marked
-unavailable when not exposed. Do not add benchmarks or verification solely for
-timing. Preserve confirmed failures and simplification decisions in TASK-0066;
-ask the same reviewer to challenge a stalled path before expanding it.
+Git commit spans provide the available calibration: boundary checkpoint
+`f791b95c` at 15:42:37 to reviewed template repair `26b43869` at 18:57:59 is
+3 hours 15 minutes. The preceding accepted-design-to-boundary span is about
+38 minutes, giving about 3 hours 53 minutes including setup. Early retained
+increments took 20–27 minutes, the connected template increment about 64
+minutes, and its repair about 10 minutes. These are elapsed proxies containing
+coding, tools, review and waiting, not exact model compute time; that is unavailable.
+
+[TASK-0066's weighted ledger](../tasks/TASK-0066-expression-macros.md#weighted-delivery-progress)
+sets fixed effort-weighted delivery credits, with an agreed 20-point reviewed
+baseline supported by retained results and their review. That is a delivery
+estimate, not a measured fraction of model effort; it is not derived from the
+forecast and does not move when the ETA changes. The observed session pace is a
+calibration check only. The separate 7.5 provisional credits record the unreviewed canonical module,
+checked entry, partial host/output and frozen combined graph; they do not claim
+a complete procedural host or borrowed-owner acceptance. The ledger changes no M01–M14 acceptance requirement. Its remaining
+weights favor unresolved contexts/grants and consumers; implementations and their
+negative/transfer/mutation evidence receive disjoint credit.
+
+Use that ledger's small observable increments for requested half-hour reports,
+including honest zero-credit investigation and actual-versus-estimated elapsed.
+The first real checked `twice 21` and frozen combined graph both produced 42
+about 33 minutes after the reviewed template checkpoint, faster than the prior
+1.5–4 hour hypothesis. Re-estimate after repeated repairs or changed interfaces. Keep confirmed findings in the task and use the same reviewer
+to challenge a stalled path. Do not add tests, benchmarks, or gates solely to
+produce progress points or timing data.

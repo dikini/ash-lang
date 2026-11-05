@@ -121,15 +121,111 @@ findings here before adding mechanisms.
 
 ## Progress
 
-Two of the six product outcomes below have run successfully in the delivery
-worktree. The current template changes have not yet received independent review;
-their results are checkpoints, not acceptance of M01–M14. The previous
-checkpoint is `00d9f06680f00457f4105cf955a32b6146362bbf`.
+The agreed reviewed baseline is **20/100 delivery points, about 20%**, through
+`26b43869`. A separate 7.5 provisional points records unreviewed canonical-module,
+entry, transformer execution, partial Ops and output admission, and the frozen
+combined graph. Do not include these silently in the reviewed score. Observed
+root-close evidence and all M01–M14 acceptance criteria remain pending.
+
+### Weighted delivery progress
+
+The cap is 100 estimated effort points for the complete milestone through
+verified retention in `integration/expression-macros`; Main integration is
+excluded. Weights reflect expected work, not an equal share per acceptance case
+or feature. They are approximate: display about 20%, not a precise completion
+probability. The current Codex elapsed forecast is in the
+[plan](../plans/2026-11-05-expression-macros.md#estimate-and-re-planning).
+
+`R` means independently reviewed at a named retained checkpoint; `D` means a
+reported demonstrated result awaiting review. A zero has no earned credit.
+Rows list bounded, separately creditable increments; numbers in parentheses are
+point caps, not required test counts. The developer owns `Dev`, the independent
+reviewer owns `Rev`, and the orchestrator owns `PM`.
+
+| ID | Cap | Owner / credit | Observable increments and evidence |
+| --- | --- | --- | --- |
+| P01 | 3 | PM+Rev / R3 | Parser decision, owning task, reviewed boundaries and frozen graph/controls; `f791b95c`. |
+| P02 | 2 | Dev / R2 | Parser checkpoint and recovery; `27d80b28` and its receipt below. |
+| P03 | 2 | Dev / R2 | Fixed header projection before invalid bodies and source spans; `80beb331`. |
+| P04 | 2.5 | Dev / R2.5 | Staged real driver, graph/source census and dependency-before-body checks; `0274daf9`/`60d79992`. |
+| P05 | 2 | Dev / R2 | Contextual selectors and ordinary `syntax` compatibility; `9bb0c720`. |
+| P06 | 2 | Dev / R2 | Imported/renamed protected-capture template executes to 35; `00d9f066`. |
+| P07 | 5.5 | Dev / R5.5 | Restricted combined template graph to 42, supplied/introduced binders, private helper/opaque owner and nested DSL; `4a4c01b0`, reviewed through `26b43869`. |
+| P08 | 1 | Dev+Rev / R1 | Operator-stop and annotation-admission review repair; `26b43869`. Full annotation support remains P10. |
+| P09 | 4 | Dev / 0 | Shared sequential (1.5), recursive (1), and pattern/function (1.5) contextual term scopes. |
+| P10 | 5 | Dev / 0 | Copied binder/use identities (1), copied nominal/region identities (2), definition-site annotations/type scopes (1), resource/region scopes (1). |
+| P11 | 5 | Dev / 0 | Authenticated grants/access (2), retained checked private closure and real Core-coordinate consumer (2), qualified/facade route and mutation refusals (1), beyond P07. |
+| P12 | 3 | Dev / 0 | Ordinary method evidence (1), structural continuation capability (1), resource escape and effect count/order (1). |
+| P13 | 3 | Dev / 0 | Retained/constructed syntax contexts and leading-identifier caller context (2); remaining import/reservation/conflict cases (1), excluding P05 evidence. |
+| P14 | 3 | Dev / D0.5 | Canonical module load/check/link (0.5, reported `compiler_syntax_module_loads_through_the_driver`); API identity authentication (0.5); complete public vocabulary (1); spelling/version conformance (1). |
+| P15 | 2 | Dev / D1 | Exact checked transformer type admission (1), `/tmp/ash-transformer-entry-forwarder.log`; wrong type/row/polymorphism/constraint refusal (1) pending. |
+| P16 | 3 | Dev / D2.5 | Mainless compile-time entry (1), independent entry validation (1), and real checked Ash body execution (0.5), `/tmp/ash-transformer-machine-step.log`; retained helper closure (0.5) pending. |
+| P17 | 2 | Dev / 0 | Authenticated invocation Input (1), unchanged validated-program reuse (0.5), changed-program revalidation (0.5). |
+| P18 | 2.5 | Dev / 0 | Input tree encoding (1), compilation-owned handle registry/borrows (0.5), input round trip and stale/foreign/forged refusal (1). No credit for types alone. |
+| P19 | 3 | Dev / D1 | Actual expression capture (0.5) and `Plus` construction (0.5), `/tmp/ash-transformer-machine-step.log`; remaining total capture, token and identifier operations pending. |
+| P20 | 4 | Dev / 0 | Explicit fragment unwrapping (1.5), parse without resolution/expansion (1.5), preserved SyntaxDiagnostic (1). |
+| P21 | 3.5 | Dev / 0 | Fresh private identifiers (1.5), definition identifiers (1), deliberate caller capture (1), with hygiene/authority contrasts. |
+| P22 | 1 | Dev / 0 | Invocation/definition origins and empty/nonempty combination (0.5), authored rejection and causal origins (0.5). |
+| P23 | 4 | Dev / D1.5 | Partial expression/token decoding (0.5), transfer (0.5) and structured protected-fragment output parsing (0.5), `/tmp/ash-transformer-output-driver.log`; complete output, failure and observed root-close behavior pending. |
+| P24 | 2.5 | Dev / 0 | Evaluator/service failures (1), malformed output/transfer failures (0.5), paired primary/teardown failures (1); every path closes and publishes nothing. |
+| P25 | 1 | Dev / 0 | Bounded transformer execution, including a real non-requesting recursive transformer that terminates as an expansion failure. |
+| P26 | 0.5 | Dev / 0 | Required service, output, and expansion limits produce ordinary closed-invocation failures. |
+| P27 | 2.5 | Dev / D1 | Frozen computed graph to 42 (1), `/tmp/ash-transformer-combined-driver.log`; template/procedure equivalence (0.5), discarded and repeated nested invocation behavior (1) pending. |
+| P28 | 2.5 | Dev / 0 | Independent declaration-coordinate/grant/type/provenance mutation checks (1), distinct compile-time/final validation (1), completed dependency reuse (0.5). |
+| P29 | 2 | Dev / 0 | Repeat compilation modulo fresh identities (1), changed semantic inputs update/reject output (1). |
+| P30 | 2.5 | Dev / 0 | Ordered multi-input/frame representation (1), ordinary semantic causes/locations (1), bounded copying/relocation preservation (0.5). |
+| P31 | 2.5 | Dev / 0 | Actual human diagnostic variants (1), JSON causal/frame variants (1), locales/catalog conformance (0.5). |
+| P32 | 2.5 | Dev / 0 | Required image records (1), reconstruction/round trip (1), corruption refusal (0.5). |
+| P33 | 2.5 | Dev / 0 | Public build preparation/link (1), real generated executable matches interpretation (1), source removal/cleanup/no runtime syntax service (0.5). |
+| P34 | 2 | Dev / 0 | Implemented language delta in specification (1), executable positive/negative examples (1). |
+| P35 | 2 | Dev / 0 | Public vocabulary/API and tool docs (1), status/link/authority and transition cleanup (1). |
+| P36 | 1.5 | Rev+Dev / 0 | Connected C1 independent review (0.5), fresh pinned full gate (1). |
+| P37 | 2.5 | Rev+QA / 0 | Final whole-path independent review (1), independent M01–M14/consumer evidence audit (1.5). |
+| P38 | 1.5 | Dev+Rev / 0 | Fresh C2 full gate (1), retained-input/evidence equality and affected refresh (0.5). |
+| P39 | 1.5 | PM+Dev+Rev / 0 | Milestone merge and retained verification (1), acceptance readback and owned cleanup (0.5). |
+
+Weights total 100: reviewed foundation/template 20; remaining scope/grants 20;
+API/entry 10; Ops/interchange 14; transfer/failure/limits 8; graph/Core/repeatability
+7; diagnostics 5; image/build 5; spec/tool docs 4; review/QA/gates/integration 7.
+The independent review assigns more weight to the unresolved contextual,
+non-term, copied-identity, grant, and Core-coordinate consumers than the first
+draft. The 20-point reviewed baseline is frozen; a changed ETA does not reweight it.
+Reviewed effort is 20, demonstrated provisional effort is 7.5, and 72.5 points
+have no credit. Review upgrades D to R without awarding implementation points
+again. Explicit review/gate rows cover their own work, not a second implementation
+credit. Record the exact commit or source hash, real consumer observation/test
+receipt, and reviewer decision when changing a row. Withdraw credit if disproved.
+One assertion has one primary credit owner. A shared graph/run may support
+several rows only through distinct named assertions: exact type/row refusals,
+service round trips, post-root-close transfer, graph composition, and independent
+mutations are different observations. One positive graph does not earn all of
+entry, bridge, transfer, full-graph, and mutation points.
+
+When progress reports are requested about every 30 minutes, report: interval
+actual elapsed versus estimate; R/D totals and changed IDs; concrete evidence;
+current work/confirmed finding; next observable increment; and the whole remaining
+Codex clock range. Pending rows split into 0.5–2-point increments; combine small
+increments into a meaningful report. Half-hour reporting is not a requirement to
+commit, freeze, review, or run a gate every half hour. Investigation can earn zero:
+state what was learned and the next check. Time spent, commits, lines, test runs,
+or adding another checkpoint do not themselves earn points. Keep the next
+increment small when possible; do not invent work or extra tests for credit.
+
+These are effort-weighted delivery credits, not measured model effort or time
+remaining. M01–M14 and C1/C2 remain required. Review weights only when the work
+decomposition or scope changes; preserve the old score and explain any agreed
+rebasing. A forecast change alone does not change earned points.
+
+### Component observations
+
+The following observations retain their evidence and limits. They are not six
+equal progress units. The restricted template is reviewed at `26b43869`; the
+procedural working tree is unreviewed.
 
 1. **Template grouping — demonstrated.** `cargo test -j 1 -p ash --test
    surface_macros template_macro_preserves_expression_capture_grouping --
    --exact` must compile and execute the imported template to `Int 35`.
-2. **Combined template graph — demonstrated, review pending.** `cargo test -j 1
+2. **Combined template graph — reviewed restricted slice.** `cargo test -j 1
    -p ash --test surface_macros template_graph_preserves_bindings_and_private_helpers
    -- --exact` compiled the real graph and executed to `Int 42`. It exercises
    captured and introduced binders, an opaque constructor, a private helper and
@@ -137,34 +233,40 @@ checkpoint is `00d9f06680f00457f4105cf955a32b6146362bbf`.
    same-spelled caller binding also ran in isolation; direct caller access was
    rejected. The template driver suite also checks that an opaque re-export
    remains opaque and that an ordinary coverage diagnostic does not reveal its
-   private constructor. Syntax-specific authority and the complete hygiene rules
-   still require independent review and remaining acceptance cases. Operator
+   private constructor. The restricted review does not establish the complete syntax-specific
+   authority, hygiene, or remaining acceptance cases. Operator
    matcher separators stop at the current expression level, including around
    grouped expressions. Named and effect-row template annotations currently fail
    closed until definition-site type lookup is implemented. The driver suite
    passes 17 cases with the computed-transformer case filtered:
    `cargo test -j 1 -p ash --test surface_macros -- --skip
    imported_templates_and_ash_transformer_run_through_the_driver`.
-3. **Computed Ash transformer — pending.** `cargo test -j 1 -p ash --test
-   surface_macros imported_templates_and_ash_transformer_run_through_the_driver
-   -- --exact` must run the accepted transformer graph and produce `Int 42`;
-   `cargo test -j 1 -p ash --test macro_host` must also pass. The compiler
-   syntax service and checked transformer entry are not implemented.
+3. **Computed Ash transformer — partial.** The actual Ash `twice` body executes
+   through the checked entry and three syntax services, then its structured
+   expression/token output crosses the ordinary parser and final pipeline.
+   `checked_ash_transformer_constructs_expression_from_capture` runs `twice 21`
+   to `Int 42` (`/tmp/ash-transformer-output-driver.log`). The frozen combined
+   graph also runs to `Int 42`, matching its handwritten equivalent
+   (`/tmp/ash-transformer-combined-driver.log`). `TokenKind` currently exposes
+   only `Plus`; identifier/group output, remaining services and vocabulary,
+   complete origins and diagnostics, and image support remain pending.
 4. **Diagnostics and refusal — partial.** Malformed selected syntax and direct
    private-helper access are rejected. Complete the proposal's negative cases
    and verify causal details in human and JSON diagnostics.
-5. **Interpreter and build/image — pending.** Run the complete macro graph with
-   the interpreter, build it, remove its source inputs, and run the built artifact
-   with the same result. The current template checkpoints use the interpreter;
-   no macro build/image result is claimed.
+5. **Interpreter and build/image — partial.** The frozen combined macro graph
+   runs through the interpreter. Build it, remove its source inputs, and run the
+   built artifact with the same result; no macro build/image result is claimed.
 6. **Review and acceptance — pending.** Pin the completed implementation and
    evidence, obtain independent review and QA, run a fresh full gate, then
    integrate into `integration/expression-macros` and record acceptance. Main
    integration and signing remain separate human gates.
 
-The independent reviewer has cleared staged parsing and syntax selectors.
-Origin and checked-owner changes in the current working tree are not yet
-reviewed. Core declaration-coordinate handling, copied declarations, complete
+The current Codex elapsed forecast and measured commit-span limits are recorded
+in the plan; historical engineer-day estimates below are superseded forecasts.
+
+The independent reviewer has cleared staged parsing, syntax selectors, and the
+restricted template through `26b43869`. Procedural origin/checked-owner changes
+in the current working tree are not yet reviewed. Core declaration-coordinate handling, copied declarations, complete
 contextual resolution, grants, the transformer host, diagnostics and build
 remain open. Historical D0 receipts follow; they describe earlier candidates.
 

@@ -550,9 +550,14 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
         parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
     }
     let _ = parser.expect(&TokenKind::FatArrow, ExpectedForm::FatArrow);
-    parser.in_template = true;
-    block(parser);
-    parser.in_template = false;
+    if parser.at(&TokenKind::Using) {
+        let _ = parser.bump();
+        expect_lower_identifier(parser);
+    } else {
+        parser.in_template = true;
+        block(parser);
+        parser.in_template = false;
+    }
     parser.finish();
 }
 
