@@ -1510,7 +1510,7 @@ where
         }
         let module = input.current().ok_or_else(internal_file_failure)?;
         for declaration in &module.surface().syntax_declarations {
-            let qualified_term = |name: &crate::surface::SurfaceQualifiedName| {
+            let qualified_name = |name: &crate::surface::SurfaceQualifiedName| {
                 module
                     .surface()
                     .imports
@@ -1529,13 +1529,19 @@ where
                             checked_by_module
                                 .get(&edge.target())
                                 .and_then(|index| checked.get(*index))
-                                .and_then(|dependency| dependency.exports().term(&name.member.text))
+                                .map(|dependency| {
+                                    dependency.exports().term(&name.member.text).is_some()
+                                        || dependency
+                                            .exports()
+                                            .constructor(&name.member.text)
+                                            .is_some()
+                                })
                         }
                         _ => None,
                     })
-                    .is_some()
+                    .unwrap_or(false)
             };
-            crate::syntax::validate_template(declaration, &qualified_term).map_err(|span| {
+            crate::syntax::validate_template(declaration, &qualified_name).map_err(|span| {
                 FileFailure::from(PipelineFailure::Resolution(
                     crate::resolve::unsupported_syntax_template(span),
                 ))
@@ -2609,6 +2615,94 @@ mod tests {
         source::{ByteRange, Origin},
         types::{InferenceVariableId, NominalTypeId, TypeVariableId},
     };
+
+    #[test]
+    fn copied_macro_fragments_have_distinct_checked_local_identities() {
+        let fixture = |name: &str| RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/copied-declarations")
+                .join(name),
+            roots: ModuleRoots::empty(),
+        };
+
+        let compiled = compile_path(fixture("binder.ash")).expect("copied binders compile");
+        let (program, _) = compiled
+            .effect_build_input()
+            .expect("validated effect Core");
+        let source = compiled
+            .provenance
+            .iter()
+            .find(|(_, source)| {
+                source
+                    .display_path()
+                    .ends_with("copied-declarations/binder.ash")
+            })
+            .expect("caller source")
+            .1
+            .id();
+        let binders = program
+            .nodes()
+            .iter()
+            .filter_map(|node| match &node.kind {
+                crate::core::EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+                    crate::core::PureComputation::Bind(binding),
+                )) if binding.binder().origin().primary_span().source() == source => {
+                    Some(binding.binder())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(binders.iter().enumerate().any(|(index, first)| {
+            binders[index + 1..].iter().any(|second| {
+                first.origin().primary_span() == second.origin().primary_span()
+                    && first.id() != second.id()
+            })
+        }));
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+
+        let compiled = compile_path(fixture("combined.ash"))
+            .expect("copied newtypes, resources, and nested syntax compile");
+        let (program, _) = compiled
+            .effect_build_input()
+            .expect("validated effect Core");
+        let [first, second] = program.registry().lexical_nominals() else {
+            panic!("the two copies retain two local nominal declarations");
+        };
+        assert_eq!(first.origin.primary_span(), second.origin.primary_span());
+        assert_ne!(first.id, second.id);
+        assert_eq!(first.constructors.len(), 1);
+        assert_eq!(second.constructors.len(), 1);
+        assert_eq!(first.constructors[0].owner(), first.id);
+        assert_eq!(second.constructors[0].owner(), second.id);
+        let resources = program
+            .nodes()
+            .iter()
+            .filter_map(|node| match &node.kind {
+                crate::core::EffectExprKind::Operation(crate::core::EffectOperation::Resource(
+                    resource,
+                )) => Some(resource),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [first, second] = resources.as_slice() else {
+            panic!("the two copies retain two resource scopes");
+        };
+        assert_ne!(first.acquisition.identity, second.acquisition.identity);
+        assert_ne!(first.handle().id(), second.handle().id());
+        let first_identity = program
+            .registry()
+            .type_variable(first.acquisition.identity)
+            .expect("first resource identity");
+        let second_identity = program
+            .registry()
+            .type_variable(second.acquisition.identity)
+            .expect("second resource identity");
+        assert_eq!(
+            first_identity.origin.primary_span(),
+            second_identity.origin.primary_span()
+        );
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+    }
 
     #[test]
     fn deep_local_nominal_scope_census_fits_a_small_stack() {

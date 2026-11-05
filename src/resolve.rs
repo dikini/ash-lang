@@ -2474,6 +2474,7 @@ struct Resolver {
     binder_introductions: HashMap<BinderId, usize>,
     syntax_terms: HashMap<(String, usize), ResolvedTermBinding>,
     syntax_qualified_terms: HashMap<(String, String, usize), ResolvedTermBinding>,
+    syntax_qualified_constructors: HashMap<(String, String, usize), ConstructorId>,
     syntax_constructors: HashMap<(String, usize), ConstructorId>,
     globals: HashMap<String, GlobalFact>,
     type_names: HashMap<String, NominalTypeId>,
@@ -2887,6 +2888,7 @@ impl Resolver {
             binder_introductions: HashMap::new(),
             syntax_terms: HashMap::new(),
             syntax_qualified_terms: HashMap::new(),
+            syntax_qualified_constructors: HashMap::new(),
             syntax_constructors: HashMap::new(),
             globals: HashMap::new(),
             type_names: HashMap::new(),
@@ -5655,32 +5657,57 @@ impl Resolver {
                     .iter()
                     .find(|candidate| candidate.module() == route.target())
                     .ok_or_else(invalid)?;
-                let exported = dependency.exports().term(&usage.name.text).ok_or_else(|| {
-                    withheld_export_error(usage.name.span, &usage.name.text, None)
-                })?;
                 let key = (
                     qualifier.text.clone(),
                     usage.name.text.clone(),
                     usage.name.introduction,
                 );
-                if !self.syntax_qualified_terms.contains_key(&key) {
-                    self.retain_imported_global_from_owner(
-                        exported,
-                        dependency.exports(),
-                        usage.import_span,
-                        &mut capture_graph_visits,
-                        Some(SyntaxOwnerLookup {
-                            owner: dependency,
-                            graph: syntax.owners,
-                        }),
-                    )?;
-                    self.syntax_qualified_terms.insert(
-                        key,
-                        ResolvedTermBinding::imported(
-                            ResolvedTermName::Global(exported.binder),
-                            route.import_span(),
-                        ),
-                    );
+                if let Some(exported) = dependency.exports().term(&usage.name.text) {
+                    if !self.syntax_qualified_terms.contains_key(&key) {
+                        self.retain_imported_global_from_owner(
+                            exported,
+                            dependency.exports(),
+                            usage.import_span,
+                            &mut capture_graph_visits,
+                            Some(SyntaxOwnerLookup {
+                                owner: dependency,
+                                graph: syntax.owners,
+                            }),
+                        )?;
+                        self.syntax_qualified_terms.insert(
+                            key,
+                            ResolvedTermBinding::imported(
+                                ResolvedTermName::Global(exported.binder),
+                                route.import_span(),
+                            ),
+                        );
+                    }
+                } else if let Some(constructor) = dependency.exports().constructor(&usage.name.text)
+                {
+                    if !self.syntax_qualified_constructors.contains_key(&key) {
+                        let nominal = dependency
+                            .exports()
+                            .nominal_fact(constructor.id.owner())
+                            .ok_or_else(invalid)?;
+                        let mut syntax_facts = self.imported.take_syntax_facts();
+                        std::mem::swap(&mut self.imported, &mut syntax_facts);
+                        let retained = self.retain_imported_constructor_family(
+                            nominal,
+                            dependency.exports(),
+                            usage.import_span,
+                        );
+                        std::mem::swap(&mut self.imported, &mut syntax_facts);
+                        self.imported.set_syntax_facts(syntax_facts);
+                        retained?;
+                        self.syntax_qualified_constructors
+                            .insert(key, constructor.id);
+                    }
+                } else {
+                    return Err(withheld_export_error(
+                        usage.name.span,
+                        &usage.name.text,
+                        None,
+                    ));
                 }
                 continue;
             }
@@ -7809,6 +7836,28 @@ impl Resolver {
         reference: &SurfaceReference,
     ) -> Result<ConstructorId, ResolveError> {
         let member = reference.member();
+        if let SurfaceReference::Qualified(name) = reference
+            && (name.qualifier.introduction != 0 || member.introduction != 0)
+        {
+            let selected = (name.qualifier.introduction == member.introduction)
+                .then(|| {
+                    self.syntax_qualified_constructors
+                        .get(&(
+                            name.qualifier.text.clone(),
+                            member.text.clone(),
+                            member.introduction,
+                        ))
+                        .copied()
+                })
+                .flatten();
+            return selected.ok_or_else(|| {
+                error(
+                    ResolveReason::UnknownConstructor,
+                    member.span,
+                    "this constructor is not exported through the syntax owner's alias",
+                )
+            });
+        }
         if member.introduction != 0 {
             return self
                 .syntax_constructors
@@ -13504,7 +13553,17 @@ impl Resolver {
                             } else {
                                 None
                             },
-                            None,
+                            if qualified.qualifier.introduction == member.introduction {
+                                self.syntax_qualified_constructors
+                                    .get(&(
+                                        qualified.qualifier.text.clone(),
+                                        member.text.clone(),
+                                        member.introduction,
+                                    ))
+                                    .copied()
+                            } else {
+                                None
+                            },
                             None,
                         )
                     } else if let Some(namespace) = self.imported_namespace(name)? {

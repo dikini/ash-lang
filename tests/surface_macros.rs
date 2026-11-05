@@ -77,6 +77,35 @@ fn template_qualified_import_follows_the_owners_public_facade() {
 }
 
 #[test]
+fn template_qualified_constructor_uses_its_owner_and_rejects_opaque_constructors() {
+    for path in [
+        "qualified-constructor/entry.ash",
+        "qualified-constructor/entry_same.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    for path in [
+        "qualified-constructor/invalid_hidden.ash",
+        "qualified-constructor/invalid_hidden_pattern.ash",
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert!(failure.graph_failure().is_none(), "{path}: {failure:?}");
+    }
+}
+
+#[test]
+fn template_qualified_constructor_pattern_uses_its_owner() {
+    for path in [
+        "qualified-constructor/entry_pattern.ash",
+        "qualified-constructor/entry_function.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+}
+
+#[test]
 fn template_qualified_import_does_not_expose_dependency_privates_or_caller_aliases() {
     for path in [
         "qualified-owner/invalid_hidden.ash",
@@ -105,6 +134,38 @@ fn template_recursive_members_share_scope_without_capturing_the_caller() {
 fn captured_recursive_binder_scopes_over_its_initializer_and_body() {
     let compiled = compile_path(fixture("template-recursive/captured.ash"))
         .expect("the captured binder is recursive and does not escape its scope");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn copied_expression_binders_keep_distinct_scopes() {
+    let compiled = compile_path(fixture("copied-declarations/binder.ash"))
+        .expect("each copy keeps its own binder and use");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn copied_expression_local_newtypes_keep_distinct_scopes() {
+    let compiled = compile_path(fixture("copied-declarations/newtype.ash"))
+        .expect("each copy keeps its own local newtype and constructor");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn copied_expression_resources_keep_distinct_scopes() {
+    for path in [
+        "copied-declarations/resource.ash",
+        "copied-declarations/resource_foreign.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+}
+
+#[test]
+fn copied_expression_preserves_nested_syntax_and_caller_references() {
+    let compiled = compile_path(fixture("copied-declarations/combined.ash"))
+        .expect("copied declarations and nested syntax preserve the caller reference");
     assert_eq!(execute(&compiled).unwrap().value_display(), "42");
 }
 
