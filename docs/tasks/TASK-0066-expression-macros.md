@@ -138,8 +138,11 @@ checkpoint is `00d9f06680f00457f4105cf955a32b6146362bbf`.
    rejected. The template driver suite also checks that an opaque re-export
    remains opaque and that an ordinary coverage diagnostic does not reveal its
    private constructor. Syntax-specific authority and the complete hygiene rules
-   still require independent review and remaining acceptance cases. The driver
-   suite passes 13 cases with the computed-transformer case filtered:
+   still require independent review and remaining acceptance cases. Operator
+   matcher separators stop at the current expression level, including around
+   grouped expressions. Named and effect-row template annotations currently fail
+   closed until definition-site type lookup is implemented. The driver suite
+   passes 17 cases with the computed-transformer case filtered:
    `cargo test -j 1 -p ash --test surface_macros -- --skip
    imported_templates_and_ash_transformer_run_through_the_driver`.
 3. **Computed Ash transformer — pending.** `cargo test -j 1 -p ash --test

@@ -195,6 +195,9 @@ fn current_infix<'a>(
     parser: &Parser<'_>,
     descriptors: &'a [InfixDescriptor],
 ) -> Option<&'a InfixDescriptor> {
+    if parser.at_syntax_stop() {
+        return None;
+    }
     let current = parser.current()?;
     descriptors
         .iter()

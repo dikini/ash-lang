@@ -131,3 +131,34 @@ fn template_private_constructor_keeps_ordinary_coverage_opaque() {
         other => panic!("expected an ordinary coverage diagnostic, got {other:?}"),
     }
 }
+
+#[test]
+fn template_operator_separator_stops_the_expression_capture() {
+    let compiled = compile_path(fixture("template-only/operator.ash"))
+        .expect("the operator separates the expression captures");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn template_operator_separator_preserves_grouped_operators() {
+    let compiled = compile_path(fixture("template-only/operator-group.ash"))
+        .expect("an operator inside parentheses stays in the first capture");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn template_named_annotation_does_not_resolve_in_the_caller() {
+    let failure = compile_path(fixture("template-annotation/entry.ash"))
+        .expect_err("a definition-site named annotation must not use the caller's type");
+    assert!(matches!(
+        failure.pipeline_failure(),
+        Some(ash::driver::PipelineFailure::Resolution(_))
+    ));
+}
+
+#[test]
+fn template_primitive_annotation_remains_supported() {
+    let compiled = compile_path(fixture("template-only/primitive-annotation.ash"))
+        .expect("a primitive annotation needs no definition-site lookup");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}

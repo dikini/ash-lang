@@ -10,7 +10,7 @@ use crate::{
         SurfaceBinder, SurfaceBlock, SurfaceDefinitionKind, SurfaceExpr, SurfaceExprKind,
         SurfaceLocalDeclaration, SurfaceModule, SurfaceName, SurfacePattern, SurfacePatternKind,
         SurfaceReference, SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind, SurfaceSyntaxDeclaration,
-        SurfaceSyntaxMatcherPart,
+        SurfaceSyntaxMatcherPart, SurfaceType, SurfaceTypeKind,
     },
     types::TypeWorkBudget,
 };
@@ -122,6 +122,27 @@ impl Drop for SyntaxOwnerBindings {
 
 /// Reject forms that still need definition-site binding and authority.
 pub(crate) fn validate_template(declaration: &SurfaceSyntaxDeclaration) -> Result<(), Span> {
+    fn check_annotation(annotation: &SurfaceType) -> Result<(), Span> {
+        match &annotation.kind {
+            SurfaceTypeKind::Int
+            | SurfaceTypeKind::Bytes
+            | SurfaceTypeKind::String
+            | SurfaceTypeKind::Bool
+            | SurfaceTypeKind::Unit => Ok(()),
+            SurfaceTypeKind::Tuple(elements) => {
+                for element in elements {
+                    check_annotation(element)?;
+                }
+                Ok(())
+            }
+            SurfaceTypeKind::Function(function) if function.effects.is_none() => {
+                check_annotation(&function.domain)?;
+                check_annotation(&function.codomain)
+            }
+            _ => Err(annotation.span),
+        }
+    }
+
     fn check_pattern(
         pattern: &SurfacePattern,
         matcher: &[SurfaceSyntaxMatcherPart],
@@ -197,6 +218,9 @@ pub(crate) fn validate_template(declaration: &SurfaceSyntaxDeclaration) -> Resul
                         return Err(block.span);
                     };
                     check_pattern(&binding.pattern, matcher)?;
+                    if let Some(annotation) = &binding.annotation {
+                        check_annotation(annotation)?;
+                    }
                     check(&binding.initializer, matcher)?;
                 }
                 check(&block.result, matcher)
