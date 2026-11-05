@@ -154,6 +154,45 @@ fn template_method_uses_caller_evidence_without_importing_owner_implementation()
 }
 
 #[test]
+fn template_continuations_use_the_actual_handler_capability() {
+    for path in [
+        "template-resume/entry.ash",
+        "template-resume/procedural.ash",
+        "template-resume/discard.ash",
+        "template-resume/retain.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+
+    for (path, expected) in [
+        (
+            "template-resume/outside.ash",
+            "effect.resume-outside-clause",
+        ),
+        (
+            "template-resume/procedural_outside.ash",
+            "effect.resume-outside-clause",
+        ),
+        (
+            "template-resume/nested_function.ash",
+            "effect.resume-capture",
+        ),
+        (
+            "template-resume/discard_outside.ash",
+            "effect.resume-outside-clause",
+        ),
+        (
+            "template-resume/retain_outside.ash",
+            "effect.retain-outside-root",
+        ),
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), expected, "{path}: {failure:?}");
+    }
+}
+
+#[test]
 fn template_qualified_import_does_not_expose_dependency_privates_or_caller_aliases() {
     for path in [
         "qualified-owner/invalid_hidden.ash",

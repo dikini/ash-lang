@@ -846,15 +846,14 @@ full gate may serve the pre-Main gate without a duplicate identical-input run.
 
 ## Estimate and re-planning
 
-After the targeted-constructor and introduced-local-newtype driver cases, the
-provisional forecast is **about 8.0 additional Codex elapsed hours**, with a
-tentative **6–13 hour** range. At 23:05 Sofia time, 49 reviewed and 1
-provisional weighted points over about 8 elapsed hours, including setup, inform
-the midpoint. The latest 31-minute interval added 1 provisional point and
-repaired a previously unobserved small-stack regression; review can change that
-credit. The range is not a confidence interval. This replaces the earlier
-7.8-hour forecast. It is a whole-chain estimate, not a deadline or a measured
-model-runtime total; independent review may revise it.
+After the method-evidence and continuation driver cases, the provisional
+forecast is **about 7.7 additional Codex elapsed hours**, with a tentative
+**6–13 hour** range. At 23:26 Sofia time, 51 reviewed and 1 provisional
+weighted points over about 8.35 elapsed hours, including setup, inform the
+midpoint. The latest 21-minute interval added two points; review can change the
+provisional credit. The range is not a confidence interval. This replaces the
+earlier 8.0-hour forecast. It is a whole-chain estimate, not a deadline or a
+measured model-runtime total; independent review may revise it.
 
 | Remaining connected work | Codex elapsed hours |
 | --- | --- |

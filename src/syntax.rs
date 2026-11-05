@@ -555,6 +555,8 @@ pub(crate) fn validate_template(
             | SurfaceExprKind::String(_)
             | SurfaceExprKind::Boolean(_)
             | SurfaceExprKind::Name(SurfaceReference::Unqualified(_))
+            | SurfaceExprKind::Discard
+            | SurfaceExprKind::Retain
             | SurfaceExprKind::Unit => Ok(()),
             SurfaceExprKind::Name(SurfaceReference::Qualified(name))
                 if qualified_name(name) => Ok(()),
@@ -566,6 +568,7 @@ pub(crate) fn validate_template(
                 check(&application.function, matcher, qualified_name)?;
                 check(&application.argument, matcher, qualified_name)
             }
+            SurfaceExprKind::Resume(value) => check(value, matcher, qualified_name),
             SurfaceExprKind::Multiply(binary)
             | SurfaceExprKind::Add(binary)
             | SurfaceExprKind::Equal(binary) => {
@@ -975,6 +978,9 @@ fn substitute(
                 substitute(&mut arm.body, matcher, captures, introduction, invocation)?;
             }
         }
+        SurfaceExprKind::Resume(value) => {
+            substitute(value, matcher, captures, introduction, invocation)?;
+        }
         SurfaceExprKind::Name(SurfaceReference::Unqualified(name)) => {
             if introduction != 0 {
                 name.introduction = introduction;
@@ -994,6 +1000,8 @@ fn substitute(
         SurfaceExprKind::Integer(_)
         | SurfaceExprKind::String(_)
         | SurfaceExprKind::Boolean(_)
+        | SurfaceExprKind::Discard
+        | SurfaceExprKind::Retain
         | SurfaceExprKind::Unit => {}
         _ => return Err(expression.span),
     }
