@@ -711,10 +711,33 @@ fn projects_expression_template_with_a_capture_splice() {
     assert_eq!(module.syntax_declarations.len(), 1);
     let syntax = &module.syntax_declarations[0];
     assert_eq!(syntax.name.text, "times_five");
-    assert_eq!(syntax.capture.text, "value");
+    assert!(matches!(
+        &syntax.matcher[..],
+        [ash::surface::SurfaceSyntaxMatcherPart::Capture {
+            name,
+            kind: ash::surface::SurfaceSyntaxCaptureKind::Expression,
+        }] if name.text == "value"
+    ));
     assert!(matches!(
         syntax.template.kind,
         ash::surface::SurfaceExprKind::Block(_)
+    ));
+}
+
+#[test]
+fn projects_literal_separated_expression_matcher() {
+    let module = parse_valid(
+        "pub syntax choose $condition:expr then $yes:expr else $no:expr => {\n    match $condition {\n        true => $yes\n        false => $no\n    }\n}\n",
+    );
+    let matcher = &module.syntax_declarations[0].matcher;
+    assert_eq!(matcher.len(), 5);
+    assert!(matches!(
+        &matcher[1],
+        ash::surface::SurfaceSyntaxMatcherPart::Literal { spelling, .. } if spelling == "then"
+    ));
+    assert!(matches!(
+        &matcher[3],
+        ash::surface::SurfaceSyntaxMatcherPart::Literal { spelling, .. } if spelling == "else"
     ));
 }
 

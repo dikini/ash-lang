@@ -144,8 +144,18 @@ struct SpanRecord {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 enum OriginRecord {
     Source(SpanRecord),
-    Generated { cause: u32, reason: GeneratedReason },
-    Related { primary: u32, related: Slice },
+    Expansion {
+        invocation: SpanRecord,
+        definition: SpanRecord,
+    },
+    Generated {
+        cause: u32,
+        reason: GeneratedReason,
+    },
+    Related {
+        primary: u32,
+        related: Slice,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -1063,6 +1073,17 @@ impl Encoder<'_> {
                 Origin::Source(span) => {
                     let span = self.span(*span)?;
                     break self.intern_origin(OriginRecord::Source(span))?;
+                }
+                Origin::Expansion {
+                    invocation,
+                    definition,
+                } => {
+                    let invocation = self.span(*invocation)?;
+                    let definition = self.span(*definition)?;
+                    break self.intern_origin(OriginRecord::Expansion {
+                        invocation,
+                        definition,
+                    })?;
                 }
                 Origin::Generated { cause, reason } => {
                     push(&mut frames, (Some(*reason), None), self.work)?;
@@ -2058,6 +2079,14 @@ impl Wire for OriginRecord {
                 primary.write(writer)?;
                 related.write(writer)
             }
+            Self::Expansion {
+                invocation,
+                definition,
+            } => {
+                3u8.write(writer)?;
+                invocation.write(writer)?;
+                definition.write(writer)
+            }
         }
     }
     fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
@@ -2070,6 +2099,10 @@ impl Wire for OriginRecord {
             2 => Self::Related {
                 primary: Wire::read(reader)?,
                 related: Wire::read(reader)?,
+            },
+            3 => Self::Expansion {
+                invocation: Wire::read(reader)?,
+                definition: Wire::read(reader)?,
             },
             _ => return Err(ImageFailure::InvalidEncoding),
         })
@@ -3220,6 +3253,15 @@ impl Decoder<'_> {
                 OriginRecord::Source(span) => {
                     break OriginOwner(Some(Origin::Source(self.span(span)?)));
                 }
+                OriginRecord::Expansion {
+                    invocation,
+                    definition,
+                } => {
+                    break OriginOwner(Some(Origin::Expansion {
+                        invocation: self.span(invocation)?,
+                        definition: self.span(definition)?,
+                    }));
+                }
                 OriginRecord::Generated { cause, .. }
                 | OriginRecord::Related { primary: cause, .. } => {
                     if cause >= current {
@@ -3248,7 +3290,9 @@ impl Decoder<'_> {
                         related: spans,
                     }
                 }
-                OriginRecord::Source(_) => return Err(ImageFailure::InvalidRecord),
+                OriginRecord::Source(_) | OriginRecord::Expansion { .. } => {
+                    return Err(ImageFailure::InvalidRecord);
+                }
             };
             origin = OriginOwner(Some(restored));
         }

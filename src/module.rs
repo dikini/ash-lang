@@ -1396,7 +1396,7 @@ impl StagedModule {
     fn into_loaded(
         self,
         budget: &mut SyntaxBudget,
-        syntax_names: &[String],
+        syntax: &[crate::syntax::SelectedSyntax],
     ) -> Result<LoadedModule, LoadGraphError> {
         let StagedSyntax {
             imports,
@@ -1413,7 +1413,8 @@ impl StagedModule {
                 let (tree, retained) = finish_module_from_checkpoint_with_syntax(
                     checkpoint,
                     budget.clone(),
-                    syntax_names,
+                    Some(&self.source),
+                    syntax,
                 );
                 *budget = retained;
                 let (source, mut surface) =
@@ -1501,12 +1502,12 @@ impl HeaderGraph {
 
     pub(crate) fn next_module_with_syntax(
         &mut self,
-        syntax_names: &[String],
+        syntax: &[crate::syntax::SelectedSyntax],
     ) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
         let Some(module) = self.pending.pop_front() else {
             return Ok(None);
         };
-        match module.into_loaded(&mut self.syntax_budget, syntax_names) {
+        match module.into_loaded(&mut self.syntax_budget, syntax) {
             Ok(module) => {
                 self.loaded.push(module);
                 Ok(self.loaded.last())

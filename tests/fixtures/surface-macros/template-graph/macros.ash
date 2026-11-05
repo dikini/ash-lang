@@ -3,6 +3,9 @@ import other_dsl (syntax bump, syntax choose)
 
 pub opaque type Secret = Hidden(Int)
 
+pub make_secret : Int -> Secret
+make_secret value = Hidden(value)
+
 private_increment : Int -> Int
 private_increment value = Helpers.increment(value)
 

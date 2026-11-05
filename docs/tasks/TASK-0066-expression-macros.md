@@ -121,47 +121,49 @@ findings here before adding mechanisms.
 
 ## Progress
 
-- Parser amendment, task and execution plan are recorded. D0 has a concrete
-  producer/consumer proposal and a frozen fixture family. The checkpoint,
-  header projection, source census and staged driver compile; syntax contexts,
-  grants and the macro host do not. Procedural execution and general expansion
-  remain absent.
-- Contextual syntax selectors and the `$` token now parse; misplaced `$` fails
-  at the parser. The checked driver rejects a missing syntax export before
-  parsing the importer body, and the syntax-free loader reports that such
-  selectors require the driver. A restricted template with one expression
-  capture now runs through the driver. Other matcher forms, template bindings,
-  definition-site authority and procedural expansion remain unfinished.
-- The frozen macro graph now reaches the unimplemented
-  `@builtin.compiler.syntax` import and fails as unknown builtin. The
-  independent handwritten graph executes to `Int` value `42`, and the proposed
-  procedural transformer's ordinary Ash body parses and projects. These are
-  baseline observations, not macro acceptance.
-- The independent boundary challenge identified three required repairs: resume
-  retained header parser state without duplicate event charges; look up generated
-  syntax by each leading identifier's retained context; and independently
-  validate a dedicated compile-time entry and authenticated input handoff.
-  The plan now records those contracts and the source census and borrowed
-  checked-fragment ownership they require. The staged driver now discovers
-  canonical headers, pays one source census, and checks each dependency before
-  parsing its importer body. The public syntax-free loader retains its original
-  complete-body schedule. Syntax contexts, grants and the validated macro host
-  are not yet connected or compiled. D1–D4 and every M01–M14 criterion remain
-  pending. No retained macro implementation or fresh full gate is claimed.
-- Re-review found that retained contexts cannot borrow exports from a checked
-  module vector that continues to grow. The plan now uses compilation-owned,
-  append-only immutable context/export records addressed by authenticated stable
-  IDs; operation-local views may borrow them without outliving a lookup.
-- Independent Core validation currently reparses original source without a
-  syntax environment to authenticate declaration coordinates and resolved
-  effect summaries. Binder ownership, order, and resource coordinates also
-  assume source spans. Its evidence must account for copied and generated
-  occurrences separately from diagnostic origins. The same
-  reviewer is challenging this boundary. The earlier whole-chain estimate is at
-  risk until this remaining validator work is sized.
-- Next actor: developer verifies and pins this repair; the orchestrator sends
-  that exact candidate to the same reviewer. The remaining interfaces must be
-  completed before claiming the D0 gate or substantial feature work complete.
+Two of the six product outcomes below have run successfully in the delivery
+worktree. The current template changes have not yet received independent review;
+their results are checkpoints, not acceptance of M01–M14. The previous
+checkpoint is `00d9f06680f00457f4105cf955a32b6146362bbf`.
+
+1. **Template grouping — demonstrated.** `cargo test -j 1 -p ash --test
+   surface_macros template_macro_preserves_expression_capture_grouping --
+   --exact` must compile and execute the imported template to `Int 35`.
+2. **Combined template graph — demonstrated, review pending.** `cargo test -j 1
+   -p ash --test surface_macros template_graph_preserves_bindings_and_private_helpers
+   -- --exact` compiled the real graph and executed to `Int 42`. It exercises
+   captured and introduced binders, an opaque constructor, a private helper and
+   its dependency, and definition-site syntax imports. The helper and
+   same-spelled caller binding also ran in isolation; direct caller access was
+   rejected. The template driver suite also checks that an opaque re-export
+   remains opaque and that an ordinary coverage diagnostic does not reveal its
+   private constructor. Syntax-specific authority and the complete hygiene rules
+   still require independent review and remaining acceptance cases. The driver
+   suite passes 13 cases with the computed-transformer case filtered:
+   `cargo test -j 1 -p ash --test surface_macros -- --skip
+   imported_templates_and_ash_transformer_run_through_the_driver`.
+3. **Computed Ash transformer — pending.** `cargo test -j 1 -p ash --test
+   surface_macros imported_templates_and_ash_transformer_run_through_the_driver
+   -- --exact` must run the accepted transformer graph and produce `Int 42`;
+   `cargo test -j 1 -p ash --test macro_host` must also pass. The compiler
+   syntax service and checked transformer entry are not implemented.
+4. **Diagnostics and refusal — partial.** Malformed selected syntax and direct
+   private-helper access are rejected. Complete the proposal's negative cases
+   and verify causal details in human and JSON diagnostics.
+5. **Interpreter and build/image — pending.** Run the complete macro graph with
+   the interpreter, build it, remove its source inputs, and run the built artifact
+   with the same result. The current template checkpoints use the interpreter;
+   no macro build/image result is claimed.
+6. **Review and acceptance — pending.** Pin the completed implementation and
+   evidence, obtain independent review and QA, run a fresh full gate, then
+   integrate into `integration/expression-macros` and record acceptance. Main
+   integration and signing remain separate human gates.
+
+The independent reviewer has cleared staged parsing and syntax selectors.
+Origin and checked-owner changes in the current working tree are not yet
+reviewed. Core declaration-coordinate handling, copied declarations, complete
+contextual resolution, grants, the transformer host, diagnostics and build
+remain open. Historical D0 receipts follow; they describe earlier candidates.
 
 ### D0 baseline receipt
 

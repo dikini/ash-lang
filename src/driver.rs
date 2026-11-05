@@ -1156,7 +1156,7 @@ impl CompilationInput<'_> {
         }
     }
 
-    fn advance(&mut self, syntax_names: &[String]) -> Result<bool, FileFailure> {
+    fn advance(&mut self, syntax: &[crate::syntax::SelectedSyntax]) -> Result<bool, FileFailure> {
         match self {
             #[cfg(test)]
             Self::Parsed { graph, next } => {
@@ -1173,7 +1173,7 @@ impl CompilationInput<'_> {
                 }
                 let phase = crate::calibration::Phase::start("loading");
                 let advanced = graph
-                    .next_module_with_syntax(syntax_names)
+                    .next_module_with_syntax(syntax)
                     .map(|module| module.is_some())
                     .map_err(FileFailure::Graph)?;
                 phase.finish(None, 0, 0);
@@ -1300,6 +1300,8 @@ where
 {
     let mut checked: Vec<crate::resolved::CheckedModule> = Vec::with_capacity(input.len());
     let mut checked_syntax = Vec::<Vec<crate::surface::SurfaceSyntaxDeclaration>>::new();
+    let mut checked_syntax_imports = Vec::<Vec<crate::syntax::SelectedSyntax>>::new();
+    let mut checked_syntax_terms = Vec::<crate::syntax::SyntaxOwnerBindings>::new();
     let mut checked_by_module: HashMap<ModuleId, usize> = HashMap::with_capacity(input.len());
     let (mut checking_type_work, source_bytes) = input.source_work().map_err(|()| {
         FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
@@ -1389,15 +1391,13 @@ where
                     selected.push(crate::syntax::SelectedSyntax {
                         name: local.text.clone(),
                         declaration: declaration.clone(),
+                        owner: index,
+                        import_span: import.span,
                     });
                 }
             }
         }
-        let syntax_names = selected
-            .iter()
-            .map(|syntax| syntax.name.clone())
-            .collect::<Vec<_>>();
-        if !input.advance(&syntax_names)? {
+        if !input.advance(&selected)? {
             return Err(internal_file_failure());
         }
         #[cfg(feature = "resource-calibration")]
@@ -1420,13 +1420,16 @@ where
         } else {
             Some(module.clone())
         };
-        if let Some(expanded) = expanded.as_mut() {
-            crate::syntax::expand_module(expanded.surface_mut(), &selected).map_err(|span| {
-                FileFailure::from(PipelineFailure::Resolution(
-                    crate::resolve::unsupported_syntax_template(span),
-                ))
-            })?;
-        }
+        let syntax_uses = if let Some(expanded) = expanded.as_mut() {
+            crate::syntax::expand_module(expanded.surface_mut(), &selected, &checked_syntax_imports)
+                .map_err(|span| {
+                    FileFailure::from(PipelineFailure::Resolution(
+                        crate::resolve::unsupported_syntax_template(span),
+                    ))
+                })?
+        } else {
+            Vec::new()
+        };
         let module_for_resolution = expanded.as_ref().unwrap_or(module);
         let dependencies = module
             .dependencies()
@@ -1447,11 +1450,14 @@ where
             .collect::<Result<Vec<_>, _>>()
             .map_err(FileFailure::from)?;
         let resolution_phase = crate::calibration::Phase::start("resolution");
-        let resolved = crate::resolve::resolve_module_with_budget(
+        let resolved = crate::resolve::resolve_module_with_syntax(
             module_for_resolution,
             &dependencies,
             &mut resolution_type_work,
             constraint_work,
+            &syntax_uses,
+            &checked,
+            &checked_syntax_terms,
         )
         .map_err(|error| match error {
             ResolveModuleError::Resolution(error) => PipelineFailure::Resolution(error),
@@ -1500,8 +1506,20 @@ where
                     .incomplete(),
             )
         })?;
+        let syntax_terms = if module.surface().syntax_declarations.is_empty() {
+            crate::syntax::SyntaxOwnerBindings::empty(checked_module.module())
+        } else {
+            crate::syntax::SyntaxOwnerBindings::new(&checked_module, &mut checking_type_work)
+                .map_err(|()| {
+                    FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                        crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                    )))
+                })?
+        };
         checked_by_module.insert(module.id(), checked.len());
         checked_syntax.push(module.surface().syntax_declarations.clone());
+        checked_syntax_imports.push(selected);
+        checked_syntax_terms.push(syntax_terms);
         checked.push(checked_module);
         source_phase.finish(
             Some(checking_type_work.used()),

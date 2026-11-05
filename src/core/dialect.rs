@@ -1356,7 +1356,7 @@ pub(super) fn origin_depth_within_limit(root: &Origin) -> bool {
     let mut current = root;
     for _ in 0..=CORE_PAYLOAD_DEPTH_LIMIT {
         match current {
-            Origin::Source(_) => return true,
+            Origin::Source(_) | Origin::Expansion { .. } => return true,
             Origin::Generated { cause, .. } => current = cause,
             Origin::Related { primary, .. } => current = primary,
         }
@@ -5247,6 +5247,7 @@ enum OriginAdmissionTask {
 
 enum OriginToken {
     Source(Span),
+    Expansion { invocation: Span, definition: Span },
     Generated(GeneratedReason),
     Related(Vec<Span>),
 }
@@ -5259,6 +5260,18 @@ fn admit_origin(origin: Origin) -> Result<Origin, BuildError> {
         match task {
             OriginAdmissionTask::Visit(Origin::Source(span), _) => {
                 tokens.push(OriginToken::Source(span));
+            }
+            OriginAdmissionTask::Visit(
+                Origin::Expansion {
+                    invocation,
+                    definition,
+                },
+                _,
+            ) => {
+                tokens.push(OriginToken::Expansion {
+                    invocation,
+                    definition,
+                });
             }
             OriginAdmissionTask::Visit(Origin::Generated { cause, reason }, depth) => {
                 let child_depth = depth.saturating_add(1);
@@ -5288,6 +5301,15 @@ fn admit_origin(origin: Origin) -> Result<Origin, BuildError> {
     for token in tokens {
         match token {
             OriginToken::Source(span) => rebuilt.push(Origin::Source(span)),
+            OriginToken::Expansion {
+                invocation,
+                definition,
+            } => {
+                rebuilt.push(Origin::Expansion {
+                    invocation,
+                    definition,
+                });
+            }
             OriginToken::Generated(reason) => {
                 let Some(cause) = rebuilt.pop() else {
                     return Err(BuildError::InvalidPayload);

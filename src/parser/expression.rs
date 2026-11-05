@@ -207,6 +207,7 @@ pub(super) fn starts_primary(parser: &Parser<'_>) -> bool {
 
 fn starts_primary_in(parser: &Parser<'_>, forms: &[PrimaryForm]) -> bool {
     !parser.at_syntax_name()
+        && !parser.at_syntax_stop()
         && ((parser.in_template && parser.at(&TokenKind::Dollar))
             || primary_form(parser, forms).is_some())
 }
@@ -353,7 +354,9 @@ mod tests {
             syntax_budget: crate::syntax_resource::SyntaxBudget::default(),
             syntax_work_exhausted: false,
             in_template: false,
-            syntax_names: &[],
+            syntax: &[],
+            syntax_source: None,
+            syntax_stops: Vec::new(),
         };
 
         operator_expression_with(&mut parser, &dialect);

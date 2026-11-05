@@ -126,6 +126,11 @@ pub struct Span {
 }
 
 impl Span {
+    #[cfg(test)]
+    pub(crate) const fn unchecked_for_test(source: SourceId, range: ByteRange) -> Self {
+        Self { source, range }
+    }
+
     /// Returns the source containing this span.
     #[must_use]
     pub const fn source(self) -> SourceId {
@@ -186,6 +191,13 @@ impl fmt::Display for GeneratedReason {
 pub enum Origin {
     /// A node corresponds directly to one source span.
     Source(Span),
+    /// A template construct was introduced at an invocation.
+    Expansion {
+        /// The invocation which caused this occurrence.
+        invocation: Span,
+        /// The template construct used to make this occurrence.
+        definition: Span,
+    },
     /// A compiler-owned node was generated because of another origin.
     Generated {
         /// The source or generated construct that caused this node.
@@ -211,9 +223,18 @@ impl Clone for Origin {
 
         let mut current = self;
         let mut frames = Vec::new();
-        let span = loop {
+        let mut cloned = loop {
             match current {
-                Self::Source(span) => break *span,
+                Self::Source(span) => break Self::Source(*span),
+                Self::Expansion {
+                    invocation,
+                    definition,
+                } => {
+                    break Self::Expansion {
+                        invocation: *invocation,
+                        definition: *definition,
+                    };
+                }
                 Self::Generated { cause, reason } => {
                     frames.push(Frame::Generated(*reason));
                     current = cause;
@@ -225,7 +246,6 @@ impl Clone for Origin {
             }
         };
 
-        let mut cloned = Self::Source(span);
         for frame in frames.into_iter().rev() {
             cloned = match frame {
                 Frame::Generated(reason) => Self::Generated {
@@ -247,7 +267,7 @@ pub(crate) fn discard_origin_iteratively(root: Origin) {
     let mut current = root;
     loop {
         match current {
-            Origin::Source(_) => return,
+            Origin::Source(_) | Origin::Expansion { .. } => return,
             Origin::Generated { cause, .. } => current = *cause,
             Origin::Related { primary, .. } => current = *primary,
         }
@@ -262,6 +282,7 @@ impl Origin {
         loop {
             match current {
                 Self::Source(span) => return *span,
+                Self::Expansion { invocation, .. } => return *invocation,
                 Self::Generated { cause, .. } => current = cause,
                 Self::Related { primary, .. } => current = primary,
             }
@@ -274,7 +295,7 @@ impl Origin {
         let mut current = self;
         loop {
             match current {
-                Self::Source(_) => return &[],
+                Self::Source(_) | Self::Expansion { .. } => return &[],
                 Self::Generated { cause, .. } => current = cause,
                 Self::Related { related, .. } => return related,
             }
@@ -287,7 +308,7 @@ impl Origin {
         let mut current = self;
         loop {
             match current {
-                Self::Source(_) => return None,
+                Self::Source(_) | Self::Expansion { .. } => return None,
                 Self::Generated { reason, .. } => return Some(*reason),
                 Self::Related { primary, .. } => current = primary,
             }

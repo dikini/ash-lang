@@ -52,8 +52,12 @@ pub enum NodeKind {
     ImportItem,
     /// One public expression syntax declaration.
     SyntaxDeclaration,
+    /// One named syntax matcher capture.
+    SyntaxCapture,
     /// One imported expression syntax invocation.
     SyntaxInvocation,
+    /// One identifier or expression captured by an invocation.
+    SyntaxArgument,
     /// One passive source-authored foreign library.
     ForeignLibrary,
     /// One structured foreign member.
@@ -627,7 +631,9 @@ pub(crate) fn parse_module_header(
             syntax_budget,
             syntax_work_exhausted: false,
             in_template: false,
-            syntax_names: &[],
+            syntax: &[],
+            syntax_source: None,
+            syntax_stops: Vec::new(),
         };
         grammar::module_header(&mut parser);
         (
@@ -661,13 +667,14 @@ pub(crate) fn finish_module_from_checkpoint(
     checkpoint: ParserCheckpoint,
     syntax_budget: SyntaxBudget,
 ) -> (ConcreteTree, SyntaxBudget) {
-    finish_module_from_checkpoint_with_syntax(checkpoint, syntax_budget, &[])
+    finish_module_from_checkpoint_with_syntax(checkpoint, syntax_budget, None, &[])
 }
 
 pub(crate) fn finish_module_from_checkpoint_with_syntax(
     checkpoint: ParserCheckpoint,
     syntax_budget: SyntaxBudget,
-    syntax_names: &[String],
+    source: Option<&SourceFile>,
+    syntax: &[crate::syntax::SelectedSyntax],
 ) -> (ConcreteTree, SyntaxBudget) {
     let ParserCheckpoint {
         tokens,
@@ -693,7 +700,9 @@ pub(crate) fn finish_module_from_checkpoint_with_syntax(
         syntax_budget,
         syntax_work_exhausted,
         in_template: false,
-        syntax_names,
+        syntax,
+        syntax_source: source,
+        syntax_stops: Vec::new(),
     };
     grammar::module_body(&mut parser);
     let Parser {
@@ -739,12 +748,35 @@ pub(crate) struct Parser<'tokens> {
     syntax_budget: SyntaxBudget,
     syntax_work_exhausted: bool,
     in_template: bool,
-    syntax_names: &'tokens [String],
+    syntax: &'tokens [crate::syntax::SelectedSyntax],
+    syntax_source: Option<&'tokens SourceFile>,
+    syntax_stops: Vec<(TokenKind, String, usize)>,
 }
 
 impl Parser<'_> {
     fn at_syntax_name(&self) -> bool {
-        matches!(self.current(), Some(TokenKind::Identifier(name)) if self.syntax_names.contains(name))
+        matches!(self.current(), Some(TokenKind::Identifier(name)) if self.syntax.iter().any(|syntax| syntax.name == *name))
+    }
+
+    fn at_syntax_literal(&self, kind: &TokenKind, spelling: &str) -> bool {
+        let Some(token) = self.tokens.get(self.position) else {
+            return false;
+        };
+        let Some(source) = self.syntax_source else {
+            return false;
+        };
+        let range = token.span.range();
+        token.kind == *kind
+            && source
+                .text()
+                .get(range.start() as usize..range.end() as usize)
+                == Some(spelling)
+    }
+
+    fn at_syntax_stop(&self) -> bool {
+        self.syntax_stops.iter().any(|(kind, spelling, depth)| {
+            *depth == self.nesting_depth && self.at_syntax_literal(kind, spelling)
+        })
     }
     fn start(&mut self, kind: NodeKind) {
         let _ = self.retain_event(Event::Start(kind));

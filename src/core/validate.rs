@@ -7532,6 +7532,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             self.charge_type_work(1)?;
             match current {
                 Origin::Source(span) => return Ok(span.range().start()),
+                Origin::Expansion { invocation, .. } => return Ok(invocation.range().start()),
                 Origin::Generated { cause, .. } => current = cause,
                 Origin::Related { primary, .. } => current = primary,
             }
@@ -10038,6 +10039,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         while let Some(current) = work.pop() {
             match current {
                 Origin::Source(span) => self.validate_span(*span, node)?,
+                Origin::Expansion {
+                    invocation,
+                    definition,
+                } => {
+                    self.validate_span(*invocation, node)?;
+                    self.validate_span(*definition, node)?;
+                }
                 Origin::Generated { cause, .. } => work.push(cause),
                 Origin::Related { primary, related } => {
                     let primary_source = primary.primary_span().source();
@@ -19355,6 +19363,77 @@ mod tests {
         assert_eq!(error.cause_name(), Some("unknown-variable-binder"));
         let error = validator.validate_scopes().unwrap_err();
         assert_eq!(error.cause_name(), Some("unbound-core-binder"));
+    }
+
+    #[test]
+    fn expansion_binder_origin_checks_both_sources_and_the_caller_owner() {
+        let caller = SourceFile::new("caller.ash", "call").unwrap();
+        let definition = SourceFile::new("forms.ash", "temp").unwrap();
+        let other = SourceFile::new("other.ash", "x").unwrap();
+        let caller_span = caller.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        let definition_span = definition.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        let other_span = other.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let invalid_definition = crate::source::Span::unchecked_for_test(
+            definition.id(),
+            ByteRange::new(20, 21).unwrap(),
+        );
+        let module = ModuleId::new(9_101);
+        let other_module = ModuleId::new(9_102);
+        let modules = [(module, caller.id()), (other_module, definition.id())];
+        let mut builder = CoreBuilder::new();
+        let root = builder
+            .unit(Type::Unit, Origin::Source(caller_span))
+            .unwrap();
+        let program = builder.finish(root).unwrap();
+        let check = |origin| {
+            let binder = TypedBinder::new(
+                program.arena,
+                BinderId::resolved(module, 0),
+                Type::Unit,
+                origin,
+            );
+            Validator::new_modules(&program, &[&caller, &definition], &modules)
+                .unwrap()
+                .collect_binder(root, &binder, ValidationReason::NodeType, false, false)
+        };
+        assert!(
+            check(Origin::Expansion {
+                invocation: caller_span,
+                definition: definition_span,
+            })
+            .is_ok()
+        );
+        assert_eq!(
+            check(Origin::Source(definition_span)).unwrap_err().reason(),
+            ValidationReason::Registry
+        );
+        assert_eq!(
+            check(Origin::Expansion {
+                invocation: definition_span,
+                definition: caller_span,
+            })
+            .unwrap_err()
+            .reason(),
+            ValidationReason::Registry
+        );
+        assert_eq!(
+            check(Origin::Expansion {
+                invocation: caller_span,
+                definition: other_span,
+            })
+            .unwrap_err()
+            .cause_name(),
+            Some("unadmitted-origin-source")
+        );
+        assert_eq!(
+            check(Origin::Expansion {
+                invocation: caller_span,
+                definition: invalid_definition,
+            })
+            .unwrap_err()
+            .cause_name(),
+            Some("invalid-origin-span")
+        );
     }
 
     #[test]

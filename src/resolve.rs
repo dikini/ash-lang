@@ -1591,6 +1591,60 @@ pub(crate) fn resolve_module_with_budget(
     resolve_module_with_foreign_catalog(loaded, dependencies, type_work, constraint_work, None)
 }
 
+pub(crate) fn resolve_module_with_syntax(
+    loaded: &LoadedModule,
+    dependencies: &[DependencyExports<'_>],
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
+    uses: &[crate::syntax::SyntaxNameUse],
+    owners: &[crate::resolved::CheckedModule],
+    terms: &[crate::syntax::SyntaxOwnerBindings],
+) -> Result<ResolvedModule, ResolveModuleError> {
+    resolve_module_for_catalogue(
+        loaded,
+        dependencies,
+        type_work,
+        constraint_work,
+        None,
+        Some(SyntaxInputs {
+            uses,
+            owners,
+            terms,
+        }),
+    )
+}
+
+#[derive(Clone, Copy)]
+struct SyntaxInputs<'a> {
+    uses: &'a [crate::syntax::SyntaxNameUse],
+    owners: &'a [crate::resolved::CheckedModule],
+    terms: &'a [crate::syntax::SyntaxOwnerBindings],
+}
+
+#[derive(Clone, Copy)]
+struct SyntaxOwnerLookup<'a> {
+    owner: &'a crate::resolved::CheckedModule,
+    graph: &'a [crate::resolved::CheckedModule],
+}
+
+impl<'a> SyntaxOwnerLookup<'a> {
+    fn effect(self, id: EffectId) -> Option<&'a ResolvedEffectDeclaration> {
+        self.owner.effect(id).or_else(|| {
+            self.graph
+                .iter()
+                .find(|module| module.module() == id.module())
+                .and_then(|module| module.effect(id))
+        })
+    }
+
+    fn nominal_summary(self, id: NominalTypeId) -> Option<&'a ExportSummary> {
+        self.graph
+            .iter()
+            .find(|module| module.module() == id.module())
+            .map(|module| module.exports())
+    }
+}
+
 /// Optional authoring-only retention of the original passive declarations.
 /// The driver exposes this catalogue only after the complete compilation succeeds.
 pub(crate) fn resolve_module_with_foreign_catalog(
@@ -1600,7 +1654,14 @@ pub(crate) fn resolve_module_with_foreign_catalog(
     constraint_work: &mut InterfaceConstraintBudget,
     catalogue: Option<&mut Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>>,
 ) -> Result<ResolvedModule, ResolveModuleError> {
-    resolve_module_for_catalogue(loaded, dependencies, type_work, constraint_work, catalogue)
+    resolve_module_for_catalogue(
+        loaded,
+        dependencies,
+        type_work,
+        constraint_work,
+        catalogue,
+        None,
+    )
 }
 
 fn resolve_module_for_catalogue(
@@ -1609,6 +1670,7 @@ fn resolve_module_for_catalogue(
     type_work: &mut TypeWorkBudget,
     constraint_work: &mut InterfaceConstraintBudget,
     catalogue: Option<&mut Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>>,
+    syntax: Option<SyntaxInputs<'_>>,
 ) -> Result<ResolvedModule, ResolveModuleError> {
     let admission = resolve_module_names_with_budget(
         loaded,
@@ -1616,6 +1678,7 @@ fn resolve_module_for_catalogue(
         type_work,
         constraint_work,
         catalogue,
+        syntax,
     )
     .map_err(ResolveModuleError::Resolution)?;
     finish_module_resolution(loaded, dependencies, type_work, admission)
@@ -1704,6 +1767,7 @@ fn resolve_module_names_with_budget(
     type_work: &mut TypeWorkBudget,
     constraint_work: &mut InterfaceConstraintBudget,
     catalogue: Option<&mut Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>>,
+    syntax: Option<SyntaxInputs<'_>>,
 ) -> Result<ResolvedModuleAdmission, ResolveError> {
     let module = loaded.id();
     let surface = loaded.surface();
@@ -1841,6 +1905,9 @@ fn resolve_module_names_with_budget(
             DirectDependencyRoute::new(dependency.edge.target(), dependency.edge.import_span())
         }));
         resolver.install_imports(surface, dependencies)?;
+        if let Some(syntax) = syntax {
+            resolver.install_syntax_terms(syntax)?;
+        }
         resolver.validate_source_foreign_members(surface)?;
         resolver.validate_local_namespaces(surface)?;
         let prepared_foreign = resolver.prepare_source_foreign(surface)?;
@@ -2391,7 +2458,10 @@ struct Resolver {
     next_lexical_evidence: u32,
     resolved_interfaces: ResolvedInterfaceBuffer,
     lexical_method_parameters: ImportedTypeVariableBuffer,
-    scopes: Vec<HashMap<String, ResolvedTermBinding>>,
+    scopes: Vec<HashMap<(String, usize), ResolvedTermBinding>>,
+    binder_introductions: HashMap<BinderId, usize>,
+    syntax_terms: HashMap<(String, usize), ResolvedTermBinding>,
+    syntax_constructors: HashMap<(String, usize), ConstructorId>,
     globals: HashMap<String, GlobalFact>,
     type_names: HashMap<String, NominalTypeId>,
     interface_names: HashMap<String, InterfaceId>,
@@ -2801,6 +2871,9 @@ impl Resolver {
             resolved_interfaces: ResolvedInterfaceBuffer(Vec::new()),
             lexical_method_parameters: ImportedTypeVariableBuffer(Vec::new()),
             scopes: vec![HashMap::new()],
+            binder_introductions: HashMap::new(),
+            syntax_terms: HashMap::new(),
+            syntax_constructors: HashMap::new(),
             globals: HashMap::new(),
             type_names: HashMap::new(),
             interface_names: HashMap::new(),
@@ -3030,7 +3103,7 @@ impl Resolver {
             || self
                 .scopes
                 .first()
-                .is_some_and(|scope| scope.contains_key(&name.text))
+                .is_some_and(|scope| scope.contains_key(&(name.text.clone(), 0)))
         {
             return Err(import_conflict(name.span, &name.text));
         }
@@ -4004,11 +4077,11 @@ impl Resolver {
                                 )
                                 .with_context(ResolveContext::MissingFileScope)
                             })?;
-                            if scope.contains_key(&local.text) {
+                            if scope.contains_key(&(local.text.clone(), 0)) {
                                 return Err(import_conflict(local.span, &local.text));
                             }
                             scope.insert(
-                                local.text.clone(),
+                                (local.text.clone(), 0),
                                 ResolvedTermBinding::imported(
                                     ResolvedTermName::Global(exported.binder),
                                     *span,
@@ -4039,10 +4112,9 @@ impl Resolver {
                             selected = true;
                             if self.constructor_names.contains_key(&local.text)
                                 || self.method_names.contains_key(&local.text)
-                                || self
-                                    .scopes
-                                    .first()
-                                    .is_some_and(|scope| scope.contains_key(&local.text))
+                                || self.scopes.first().is_some_and(|scope| {
+                                    scope.contains_key(&(local.text.clone(), 0))
+                                })
                             {
                                 return Err(import_conflict(local.span, &local.text));
                             }
@@ -4191,10 +4263,9 @@ impl Resolver {
                             selected = true;
                             if self.constructor_names.contains_key(&local.text)
                                 || self.method_names.contains_key(&local.text)
-                                || self
-                                    .scopes
-                                    .first()
-                                    .is_some_and(|scope| scope.contains_key(&local.text))
+                                || self.scopes.first().is_some_and(|scope| {
+                                    scope.contains_key(&(local.text.clone(), 0))
+                                })
                             {
                                 return Err(import_conflict(local.span, &local.text));
                             }
@@ -4621,9 +4692,19 @@ impl Resolver {
         summary: &ExportSummary,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
+        self.retain_imported_effect_from_owner(exported, summary, span, None)
+    }
+
+    fn retain_imported_effect_from_owner(
+        &mut self,
+        exported: &ResolvedEffectDeclaration,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+        owner: Option<SyntaxOwnerLookup<'_>>,
+    ) -> Result<(), ResolveError> {
         self.retain_imported_effect_fact(exported, span)?;
         for operation in &exported.operations {
-            self.retain_type_nominals(&operation.annotation.ty, summary, span)?;
+            self.retain_type_nominals_with(&operation.annotation.ty, summary, span, false, owner)?;
         }
         Ok(())
     }
@@ -5522,12 +5603,94 @@ impl Resolver {
         Ok(())
     }
 
+    fn install_syntax_terms(&mut self, syntax: SyntaxInputs<'_>) -> Result<(), ResolveError> {
+        let mut capture_graph_visits = CaptureGraphVisits::default();
+        for usage in syntax.uses {
+            let invalid = || {
+                error(
+                    ResolveReason::InternalState,
+                    usage.name.span,
+                    "the syntax name lost its checked defining owner",
+                )
+            };
+            let owner = syntax.owners.get(usage.owner).ok_or_else(invalid)?;
+            let terms = syntax.terms.get(usage.owner).ok_or_else(invalid)?;
+            if usage.name.introduction == 0
+                || terms.module != owner.module()
+                || usage.declaration.source() != owner.span().source()
+                || usage.name.span.source() != owner.span().source()
+            {
+                return Err(invalid());
+            }
+            let key = (usage.name.text.clone(), usage.name.introduction);
+            let lookup = SyntaxOwnerLookup {
+                owner,
+                graph: syntax.owners,
+            };
+            if let Some(exported) = terms.get(&usage.name.text) {
+                if exported.binder.module() != Some(owner.module()) {
+                    return Err(invalid());
+                }
+                if !self.syntax_terms.contains_key(&key) {
+                    self.retain_imported_global_from_owner(
+                        exported,
+                        owner.exports(),
+                        usage.import_span,
+                        &mut capture_graph_visits,
+                        Some(lookup),
+                    )?;
+                    self.syntax_terms.insert(
+                        key,
+                        ResolvedTermBinding::imported(
+                            ResolvedTermName::Global(exported.binder),
+                            usage.import_span,
+                        ),
+                    );
+                }
+            } else if let Some(constructor) = terms.constructor(&usage.name.text) {
+                if constructor.id.owner().module() != owner.module() {
+                    return Err(invalid());
+                }
+                if !self.syntax_constructors.contains_key(&key) {
+                    let nominal = owner
+                        .syntax_nominal_fact(constructor.id.owner())
+                        .ok_or_else(invalid)?;
+                    self.retain_scheme_nominal_fact(nominal, usage.import_span)?;
+                    let mut syntax_facts = self.imported.take_syntax_facts();
+                    std::mem::swap(&mut self.imported, &mut syntax_facts);
+                    let retained = self.retain_imported_constructor_family_from_syntax(
+                        nominal,
+                        owner.exports(),
+                        usage.import_span,
+                        Some((terms, lookup)),
+                    );
+                    std::mem::swap(&mut self.imported, &mut syntax_facts);
+                    self.imported.set_syntax_facts(syntax_facts);
+                    retained?;
+                    self.syntax_constructors.insert(key, constructor.id);
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn retain_imported_global<'a>(
         &mut self,
         exported: &'a ExportedGlobal,
         summary: &ExportSummary,
         span: crate::source::Span,
         capture_graph_visits: &mut CaptureGraphVisits<'a>,
+    ) -> Result<(), ResolveError> {
+        self.retain_imported_global_from_owner(exported, summary, span, capture_graph_visits, None)
+    }
+
+    fn retain_imported_global_from_owner<'a>(
+        &mut self,
+        exported: &'a ExportedGlobal,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+        capture_graph_visits: &mut CaptureGraphVisits<'a>,
+        owner: Option<SyntaxOwnerLookup<'_>>,
     ) -> Result<(), ResolveError> {
         let constrained = !exported.scheme.requirements.is_empty();
         if constrained {
@@ -5643,7 +5806,7 @@ impl Resolver {
             })?;
         self.global_requirement_counts
             .insert(exported.binder, exported.scheme.requirements.len());
-        self.retain_scheme_nominals(&exported.scheme, summary, span)?;
+        self.retain_scheme_nominals_from_owner(&exported.scheme, summary, span, owner)?;
         if capture_graph_visits
             .visit(&exported.capture, &mut self.type_work)
             .map_err(|()| {
@@ -5661,7 +5824,7 @@ impl Resolver {
                     "imported capture type scan exceeded its work budget",
                 )
             })? {
-                self.retain_capture_type_metadata(ty, summary, span)?;
+                self.retain_type_nominals_with(ty, summary, span, true, owner)?;
             }
             for effect in exported
                 .capture
@@ -5674,18 +5837,21 @@ impl Resolver {
                     )
                 })?
             {
-                let declaration = summary.effect_by_id(effect).ok_or_else(|| {
-                    error(
-                        ResolveReason::InternalState,
-                        span,
-                        "an exported capture graph references missing effect metadata",
-                    )
-                    .with_context(ResolveContext::WorkState {
-                        part: "export-capture-effect",
-                        problem: "missing",
-                    })
-                })?;
-                self.retain_imported_effect(declaration, summary, span)?;
+                let declaration = summary
+                    .effect_by_id(effect)
+                    .or_else(|| owner.and_then(|owner| owner.effect(effect)))
+                    .ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "an exported capture graph references missing effect metadata",
+                        )
+                        .with_context(ResolveContext::WorkState {
+                            part: "export-capture-effect",
+                            problem: "missing",
+                        })
+                    })?;
+                self.retain_imported_effect_from_owner(declaration, summary, span, owner)?;
             }
         }
         Ok(())
@@ -5697,10 +5863,20 @@ impl Resolver {
         summary: &ExportSummary,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
-        self.retain_type_nominals(&scheme.value_type, summary, span)?;
+        self.retain_scheme_nominals_from_owner(scheme, summary, span, None)
+    }
+
+    fn retain_scheme_nominals_from_owner(
+        &mut self,
+        scheme: &ConstrainedScheme,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+        owner: Option<SyntaxOwnerLookup<'_>>,
+    ) -> Result<(), ResolveError> {
+        self.retain_type_nominals_with(&scheme.value_type, summary, span, false, owner)?;
         for requirement in &scheme.requirements {
             for argument in requirement.arguments() {
-                self.retain_argument_nominals(argument, summary, span)?;
+                self.retain_argument_nominals_from_owner(argument, summary, span, owner)?;
             }
         }
         Ok(())
@@ -5807,6 +5983,16 @@ impl Resolver {
         summary: &ExportSummary,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
+        self.retain_argument_nominals_from_owner(argument, summary, span, None)
+    }
+
+    fn retain_argument_nominals_from_owner(
+        &mut self,
+        argument: &crate::types::KindedArgument,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+        owner: Option<SyntaxOwnerLookup<'_>>,
+    ) -> Result<(), ResolveError> {
         let resource = || {
             error(
                 ResolveReason::TypeResourceExhausted,
@@ -5821,7 +6007,7 @@ impl Resolver {
         while let Some(argument) = pending.pop() {
             match argument {
                 crate::types::KindedArgument::TypeArg(ty) => {
-                    self.retain_type_nominals(ty, summary, span)?
+                    self.retain_type_nominals_with(ty, summary, span, false, owner)?
                 }
                 crate::types::KindedArgument::RowArg(row) => {
                     self.type_work
@@ -5833,14 +6019,17 @@ impl Resolver {
                         .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
                     {
                         self.type_work.charge(1).map_err(|()| resource())?;
-                        let effect = summary.effect_by_id(instance.effect()).ok_or_else(|| {
-                            error(
-                                ResolveReason::InternalState,
-                                span,
-                                "an exported argument references missing effect metadata",
-                            )
-                        })?;
-                        self.retain_imported_effect(effect, summary, span)?;
+                        let effect = summary
+                            .effect_by_id(instance.effect())
+                            .or_else(|| owner.and_then(|owner| owner.effect(instance.effect())))
+                            .ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    span,
+                                    "an exported argument references missing effect metadata",
+                                )
+                            })?;
+                        self.retain_imported_effect_from_owner(effect, summary, span, owner)?;
                         self.type_work
                             .charge(instance.arguments().len())
                             .map_err(|()| resource())?;
@@ -5861,7 +6050,7 @@ impl Resolver {
         summary: &ExportSummary,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
-        self.retain_type_nominals_with(scheme, summary, span, false)
+        self.retain_type_nominals_with(scheme, summary, span, false, None)
     }
 
     fn retain_capture_type_metadata(
@@ -5870,7 +6059,7 @@ impl Resolver {
         summary: &ExportSummary,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
-        self.retain_type_nominals_with(ty, summary, span, true)
+        self.retain_type_nominals_with(ty, summary, span, true, None)
     }
 
     fn retain_type_nominals_with(
@@ -5879,6 +6068,7 @@ impl Resolver {
         summary: &ExportSummary,
         span: crate::source::Span,
         external_capture_facts: bool,
+        owner: Option<SyntaxOwnerLookup<'_>>,
     ) -> Result<(), ResolveError> {
         enum Task<'a> {
             Type(&'a Type),
@@ -5970,13 +6160,16 @@ impl Resolver {
                                 )
                             })?;
                             seen_effects.push(identity);
-                            let declaration = summary.effect_by_id(identity).ok_or_else(|| {
-                                error(
-                                    ResolveReason::InternalState,
-                                    span,
-                                    "an exported scheme references missing effect metadata",
-                                )
-                            })?;
+                            let declaration = summary
+                                .effect_by_id(identity)
+                                .or_else(|| owner.and_then(|owner| owner.effect(identity)))
+                                .ok_or_else(|| {
+                                    error(
+                                        ResolveReason::InternalState,
+                                        span,
+                                        "an exported scheme references missing effect metadata",
+                                    )
+                                })?;
                             // Memoize the canonical fact before following operation rows.
                             // Keep transitive signatures on this iterative type frontier.
                             self.retain_imported_effect_fact(declaration, span)?;
@@ -6129,7 +6322,14 @@ impl Resolver {
                 )?;
                 continue;
             }
-            let exported = Self::scheme_nominal_fact(summary, id, span)?;
+            let source = if summary.nominal_fact(id).is_some() {
+                summary
+            } else {
+                owner
+                    .and_then(|owner| owner.nominal_summary(id))
+                    .unwrap_or(summary)
+            };
+            let exported = Self::scheme_nominal_fact(source, id, span)?;
             self.retain_scheme_nominal_fact(exported, span)?;
         }
         Ok(())
@@ -6392,6 +6592,16 @@ impl Resolver {
         summary: &ExportSummary,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
+        self.retain_imported_constructor_family_from_syntax(owner, summary, span, None)
+    }
+
+    fn retain_imported_constructor_family_from_syntax(
+        &mut self,
+        owner: crate::resolved::ImportedNominalFactRef<'_>,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+        syntax: Option<(&crate::syntax::SyntaxOwnerBindings, SyntaxOwnerLookup<'_>)>,
+    ) -> Result<(), ResolveError> {
         let owner_was_retained = self.imported.nominal(owner.id).is_some();
         let validated_owner = self
             .imported
@@ -6419,17 +6629,20 @@ impl Resolver {
         let mut nominal_identities = MatchedNominalIdentities::default();
         let mut new_constructor_count = 0_usize;
         for identity in owner.constructors {
-            let exported = summary.constructor_by_id(*identity).ok_or_else(|| {
-                error(
-                    ResolveReason::InternalState,
-                    span,
-                    "a transparent type summary lost one of its constructors",
-                )
-                .with_context(ResolveContext::WorkState {
-                    part: "transparent-constructor",
-                    problem: "missing",
-                })
-            })?;
+            let exported = summary
+                .constructor_by_id(*identity)
+                .or_else(|| syntax.and_then(|(bindings, _)| bindings.constructor_by_id(*identity)))
+                .ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "a transparent type summary lost one of its constructors",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "transparent-constructor",
+                        problem: "missing",
+                    })
+                })?;
             if let Some(existing) = self.imported.constructor(*identity) {
                 let matches = same_imported_constructor_fact_observing_nominals_with_budget(
                     existing,
@@ -6477,7 +6690,18 @@ impl Resolver {
         let mut foreign_validated = Vec::<ValidatedImportedNominalMerge<'_>>::new();
         let mut owner_metadata_observed = false;
         for id in nominal_identities.identities() {
-            let candidate = Self::scheme_nominal_fact(summary, *id, span)?;
+            let candidate = if *id == owner.id && syntax.is_some() {
+                owner
+            } else {
+                let source = if summary.nominal_fact(*id).is_some() {
+                    summary
+                } else {
+                    syntax
+                        .and_then(|(_, lookup)| lookup.nominal_summary(*id))
+                        .unwrap_or(summary)
+                };
+                Self::scheme_nominal_fact(source, *id, span)?
+            };
             if *id == owner.id {
                 owner_metadata_observed = true;
                 if owner_was_retained {
@@ -6712,9 +6936,20 @@ impl Resolver {
             for route in &constructor_routes {
                 let exported = route.exported;
                 if let Some(payload) = &exported.payload {
-                    self.retain_type_nominals(payload, summary, span)?;
+                    self.retain_type_nominals_with(
+                        payload,
+                        summary,
+                        span,
+                        false,
+                        syntax.map(|(_, lookup)| lookup),
+                    )?;
                 }
-                self.retain_scheme_nominals(&exported.scheme, summary, span)?;
+                self.retain_scheme_nominals_from_owner(
+                    &exported.scheme,
+                    summary,
+                    span,
+                    syntax.map(|(_, lookup)| lookup),
+                )?;
             }
         }
         Ok(())
@@ -6813,7 +7048,7 @@ impl Resolver {
             || self
                 .scopes
                 .first()
-                .is_some_and(|scope| scope.contains_key(spelling))
+                .is_some_and(|scope| scope.contains_key(&(spelling.to_owned(), 0)))
     }
 
     fn expression_name_is_bound(&self, spelling: &str) -> bool {
@@ -6823,7 +7058,7 @@ impl Resolver {
             || self
                 .scopes
                 .first()
-                .is_some_and(|scope| scope.contains_key(spelling))
+                .is_some_and(|scope| scope.contains_key(&(spelling.to_owned(), 0)))
     }
 
     fn imported_namespace(
@@ -7481,6 +7716,20 @@ impl Resolver {
         &mut self,
         reference: &SurfaceReference,
     ) -> Result<ConstructorId, ResolveError> {
+        let member = reference.member();
+        if member.introduction != 0 {
+            return self
+                .syntax_constructors
+                .get(&(member.text.clone(), member.introduction))
+                .copied()
+                .ok_or_else(|| {
+                    error(
+                        ResolveReason::UnknownConstructor,
+                        member.span,
+                        "this constructor is not declared in the syntax owner",
+                    )
+                });
+        }
         if let Some(namespace) = self.imported_namespace(reference)? {
             return namespace
                 .constructors
@@ -7620,7 +7869,7 @@ impl Resolver {
             .with_context(ResolveContext::MissingFileScope));
         };
         file_scope.insert(
-            global.spelling.clone(),
+            (global.spelling.clone(), 0),
             ResolvedTermBinding::local(ResolvedTermName::Global(global.id)),
         );
         self.globals.insert(
@@ -8872,10 +9121,9 @@ impl Resolver {
                 if self.module_aliases.contains_key(&constructor.name.text)
                     || self.constructor_names.contains_key(&constructor.name.text)
                     || self.method_names.contains_key(&constructor.name.text)
-                    || self
-                        .scopes
-                        .first()
-                        .is_some_and(|scope| scope.contains_key(&constructor.name.text))
+                    || self.scopes.first().is_some_and(|scope| {
+                        scope.contains_key(&(constructor.name.text.clone(), 0))
+                    })
                 {
                     return Err(import_conflict(
                         constructor.name.span,
@@ -9367,7 +9615,13 @@ impl Resolver {
                 .iter()
                 .map(|binder| {
                     (
-                        binder.spelling.clone(),
+                        (
+                            binder.spelling.clone(),
+                            self.binder_introductions
+                                .get(&binder.id)
+                                .copied()
+                                .unwrap_or(0),
+                        ),
                         ResolvedTermBinding::local(ResolvedTermName::Global(binder.id)),
                     )
                 })
@@ -10110,12 +10364,22 @@ impl Resolver {
     fn resolve_pattern(
         &mut self,
         pattern: &SurfacePattern,
-        seen: &mut HashMap<String, crate::source::Span>,
+        seen: &mut HashMap<(String, usize), crate::source::Span>,
         binders: &mut Vec<Binder>,
     ) -> Result<ResolvedPattern, ResolveError> {
         let kind = match &pattern.kind {
+            SurfacePatternKind::TemplateSplice(_) => {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    pattern.span,
+                    "unexpanded template pattern",
+                ));
+            }
             SurfacePatternKind::Binder(surface) => {
-                if let Some(first) = seen.insert(surface.name.text.clone(), surface.name.span) {
+                if let Some(first) = seen.insert(
+                    (surface.name.text.clone(), surface.name.introduction),
+                    surface.name.span,
+                ) {
                     let mut diagnostic = Diagnostic::new(
                         ResolveReason::DuplicatePatternBinder,
                         SourceLabel::new(
@@ -10129,7 +10393,22 @@ impl Resolver {
                     diagnostic.found = Some(surface.name.text.clone());
                     return Err(diagnostic.into());
                 }
-                let binder = self.allocate_binder(&surface.name.text, surface.name.span)?;
+                let mut binder = self.allocate_binder(&surface.name.text, surface.name.span)?;
+                if surface.name.introduction != 0 {
+                    let invocation = surface.name.introduced_at.ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.name.span,
+                            "introduced binder has no invocation origin",
+                        )
+                    })?;
+                    binder.origin = Origin::Expansion {
+                        invocation,
+                        definition: surface.name.span,
+                    };
+                    self.binder_introductions
+                        .insert(binder.id, surface.name.introduction);
+                }
                 binders.push(binder.clone());
                 ResolvedPatternKind::Binder(binder)
             }
@@ -10290,6 +10569,7 @@ impl Resolver {
         let owner = callback.id;
         declarations.push(ResolvedLocalDeclaration::Binding(Box::new(
             ResolvedBinding {
+                expansion: None,
                 pattern: ResolvedPattern {
                     kind: ResolvedPatternKind::Binder(callback),
                     span: action_span,
@@ -10301,6 +10581,7 @@ impl Resolver {
         )));
         let action = ResolvedExpr {
             kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
+                expansion: None,
                 function: Box::new(ResolvedExpr {
                     kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
                         term: ResolvedTermName::Global(owner),
@@ -10402,6 +10683,7 @@ impl Resolver {
         };
         let binding = |binder, initializer| {
             ResolvedLocalDeclaration::Binding(Box::new(ResolvedBinding {
+                expansion: None,
                 pattern: ResolvedPattern {
                     kind: ResolvedPatternKind::Binder(binder),
                     span: target_span,
@@ -10433,6 +10715,7 @@ impl Resolver {
             next,
             ResolvedExpr {
                 kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
+                    expansion: None,
                     function: Box::new(occurrence(contract.callback)),
                     argument: Box::new(occurrence(contract.previous)),
                 }),
@@ -10954,7 +11237,7 @@ impl Resolver {
             )
         })?;
         terms.insert(
-            handle.spelling.clone(),
+            (handle.spelling.clone(), 0),
             ResolvedTermBinding::local(ResolvedTermName::Global(handle.id)),
         );
         let mut types = HashMap::new();
@@ -11077,7 +11360,7 @@ impl Resolver {
             )
         })?;
         terms.insert(
-            handle.spelling.clone(),
+            (handle.spelling.clone(), 0),
             ResolvedTermBinding::local(ResolvedTermName::Global(handle.id)),
         );
         let mut types = HashMap::new();
@@ -11250,7 +11533,7 @@ impl Resolver {
             )
         })?;
         terms.insert(
-            handle.spelling.clone(),
+            (handle.spelling.clone(), 0),
             ResolvedTermBinding::local(ResolvedTermName::Global(handle.id)),
         );
         let mut types = HashMap::new();
@@ -11655,7 +11938,7 @@ impl Resolver {
                     )
                 })?;
                 terms.insert(
-                    handle.spelling.clone(),
+                    (handle.spelling.clone(), 0),
                     ResolvedTermBinding::local(ResolvedTermName::Global(handle.id)),
                 );
                 self.scopes.try_reserve(1).map_err(|_| {
@@ -12007,7 +12290,7 @@ impl Resolver {
                 };
                 for binder in binders.iter() {
                     scope.insert(
-                        binder.spelling.clone(),
+                        (binder.spelling.clone(), 0),
                         ResolvedTermBinding::local(ResolvedTermName::Global(binder.id)),
                     );
                 }
@@ -12016,12 +12299,13 @@ impl Resolver {
                     tasks.push(ResolveTask::VisitExpr(&member.initializer));
                 }
             }
-            ResolveTask::FinishApplication { span } => {
+            ResolveTask::FinishApplication { span, expansion } => {
                 let (function, argument) = take_expression_pair(expressions, span)?;
                 expressions.push(ResolvedExpr {
                     kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
                         function: Box::new(function),
                         argument: Box::new(argument),
+                        expansion,
                     }),
                     span,
                 });
@@ -12085,7 +12369,13 @@ impl Resolver {
                 };
                 for binder in binders {
                     scope.insert(
-                        binder.spelling.clone(),
+                        (
+                            binder.spelling.clone(),
+                            self.binder_introductions
+                                .get(&binder.id)
+                                .copied()
+                                .unwrap_or(0),
+                        ),
                         ResolvedTermBinding::local(ResolvedTermName::Global(binder.id)),
                     );
                 }
@@ -12094,6 +12384,7 @@ impl Resolver {
                         pattern: pattern.into_inner(),
                         annotation: annotation.map(ResolvedTypeOccurrenceOwner::into_inner),
                         initializer: initializer.into_inner(),
+                        expansion: binding.expansion,
                         span: binding.span,
                     },
                 )));
@@ -13116,22 +13407,36 @@ impl Resolver {
                     self.scopes
                         .iter()
                         .rev()
-                        .find_map(|scope| scope.get(&member.text))
+                        .find_map(|scope| scope.get(&(member.text.clone(), member.introduction)))
                         .copied()
-                        .or_else(|| self.method_names.get(&member.text).copied())
+                        .or_else(|| {
+                            self.syntax_terms
+                                .get(&(member.text.clone(), member.introduction))
+                                .copied()
+                        })
+                        .or_else(|| {
+                            (member.introduction == 0)
+                                .then(|| self.method_names.get(&member.text).copied())
+                                .flatten()
+                        })
                 };
-                let unqualified_constructor = if binding.is_none() && !is_qualified {
-                    charged_lexical_scope_lookup(
-                        &self.lexical_constructor_scopes,
-                        &member.text,
-                        member.span,
-                        &mut self.type_work,
-                        "inline lexical constructor lookup exceeded its type-work budget",
-                    )?
-                    .or_else(|| self.constructor_names.get(&member.text).copied())
-                } else {
-                    None
-                };
+                let unqualified_constructor =
+                    if binding.is_none() && !is_qualified && member.introduction != 0 {
+                        self.syntax_constructors
+                            .get(&(member.text.clone(), member.introduction))
+                            .copied()
+                    } else if binding.is_none() && !is_qualified {
+                        charged_lexical_scope_lookup(
+                            &self.lexical_constructor_scopes,
+                            &member.text,
+                            member.span,
+                            &mut self.type_work,
+                            "inline lexical constructor lookup exceeded its type-work budget",
+                        )?
+                        .or_else(|| self.constructor_names.get(&member.text).copied())
+                    } else {
+                        None
+                    };
                 if let Some(binding) = binding {
                     let term = binding.term;
                     let evidence_count = match term {
@@ -13218,6 +13523,7 @@ impl Resolver {
             SurfaceExprKind::Apply(application) => {
                 tasks.push(ResolveTask::FinishApplication {
                     span: expression.span,
+                    expansion: application.expansion,
                 });
                 tasks.push(ResolveTask::VisitExpr(&application.argument));
                 tasks.push(ResolveTask::VisitExpr(&application.function));
@@ -13562,6 +13868,7 @@ enum ResolveTask<'a> {
     VisitRecursiveGroup(&'a SurfaceRecursiveGroup),
     FinishApplication {
         span: crate::source::Span,
+        expansion: Option<Span>,
     },
     FinishBinary {
         kind: BinaryKind,
@@ -13635,7 +13942,7 @@ impl ResolveTask<'_> {
             Self::VisitExpr(expression) => expression.span,
             Self::VisitBlock(block) => block.span,
             Self::VisitRecursiveGroup(group) => group.span,
-            Self::FinishApplication { span }
+            Self::FinishApplication { span, .. }
             | Self::FinishPerform { span, .. }
             | Self::FinishResume { span, .. }
             | Self::FinishCleanup { span }
@@ -17182,6 +17489,7 @@ mod tests {
             &mut type_work,
             &mut constraint_work,
             None,
+            None,
         )
         .map(|admission| ResolvedModule::new(admission.parts));
         (result, constraint_work.used())
@@ -17221,6 +17529,7 @@ mod tests {
             &dependencies,
             &mut type_work,
             &mut constraint_work,
+            None,
             None,
         )
         .map(|admission| ResolvedModule::new(admission.parts));
@@ -19516,6 +19825,8 @@ mod tests {
                     SurfaceReference::Unqualified(SurfaceName {
                         text: text.to_owned(),
                         span,
+                        introduction: 0,
+                        introduced_at: None,
                     })
                 };
                 let wide = || SurfaceType {
@@ -19535,6 +19846,7 @@ mod tests {
                     kind: SurfaceExprKind::Block(SurfaceBlock {
                         declarations: vec![SurfaceLocalDeclaration::Binding(Box::new(
                             SurfaceBinding {
+                                expansion: None,
                                 pattern: SurfacePattern {
                                     kind: SurfacePatternKind::Wildcard,
                                     span,
@@ -19614,6 +19926,7 @@ mod tests {
                     kind: SurfaceExprKind::Block(SurfaceBlock {
                         declarations: vec![SurfaceLocalDeclaration::Binding(Box::new(
                             SurfaceBinding {
+                                expansion: None,
                                 pattern: SurfacePattern {
                                     kind: SurfacePatternKind::Wildcard,
                                     span,
@@ -19864,6 +20177,8 @@ mod tests {
         let reference = SurfaceReference::Unqualified(SurfaceName {
             text: "Deep".to_owned(),
             span,
+            introduction: 0,
+            introduced_at: None,
         });
         let owner = NominalTypeId::lexical(ModuleId::new(7_014), 0);
         let constructor = ConstructorId::new(owner, 0);
@@ -20736,6 +21051,8 @@ mod tests {
         SurfaceReference::Unqualified(SurfaceName {
             text: text.to_owned(),
             span,
+            introduction: 0,
+            introduced_at: None,
         })
     }
 
@@ -20766,6 +21083,7 @@ mod tests {
         SurfaceExpr {
             kind: SurfaceExprKind::Block(SurfaceBlock {
                 declarations: vec![SurfaceLocalDeclaration::Binding(Box::new(SurfaceBinding {
+                    expansion: None,
                     pattern: SurfacePattern {
                         kind: SurfacePatternKind::Wildcard,
                         span,
@@ -21110,6 +21428,8 @@ mod tests {
                 kind: SurfaceTypeKind::Named(SurfaceReference::Unqualified(SurfaceName {
                     text: text.to_owned(),
                     span,
+                    introduction: 0,
+                    introduced_at: None,
                 })),
                 span,
             }
@@ -21346,6 +21666,8 @@ mod tests {
                 constructor: SurfaceReference::Unqualified(SurfaceName {
                     text: "Wide".to_owned(),
                     span: constructor_span,
+                    introduction: 0,
+                    introduced_at: None,
                 }),
                 arguments: vec![argument; WIDTH],
             },
@@ -21391,6 +21713,8 @@ mod tests {
                 constructor: SurfaceReference::Unqualified(SurfaceName {
                     text: "Pair".to_owned(),
                     span: constructor_span,
+                    introduction: 0,
+                    introduced_at: None,
                 }),
                 arguments: vec![
                     SurfaceType {
@@ -21471,6 +21795,8 @@ mod tests {
                 constructor: SurfaceReference::Unqualified(SurfaceName {
                     text: "Triple".to_owned(),
                     span: constructor_span,
+                    introduction: 0,
+                    introduced_at: None,
                 }),
                 arguments: vec![
                     SurfaceType {
@@ -21554,6 +21880,8 @@ mod tests {
                                 constructor: SurfaceReference::Unqualified(SurfaceName {
                                     text: "Wide".to_owned(),
                                     span: constructor_span,
+                                    introduction: 0,
+                                    introduced_at: None,
                                 }),
                                 arguments: vec![
                                     SurfaceType {
@@ -21570,6 +21898,8 @@ mod tests {
                                 SurfaceName {
                                     text: "Missing".to_owned(),
                                     span: missing_span,
+                                    introduction: 0,
+                                    introduced_at: None,
                                 },
                             )),
                             span: missing_span,

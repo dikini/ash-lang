@@ -2440,7 +2440,7 @@ mod tests {
         let mut current = root;
         loop {
             match current {
-                Origin::Source(_) => return depth,
+                Origin::Source(_) | Origin::Expansion { .. } => return depth,
                 Origin::Generated { cause, .. } => current = cause,
                 Origin::Related { primary, .. } => current = primary,
             }

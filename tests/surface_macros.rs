@@ -66,3 +66,68 @@ fn template_graph_preserves_bindings_and_private_helpers() {
     assert_eq!(actual.value_display(), "42");
     assert_eq!(actual.type_display(), "Int");
 }
+
+#[test]
+fn template_with_literal_separators_selects_the_captured_branch() {
+    let compiled = compile_path(fixture("template-graph/choose.ash"))
+        .expect("the multi-capture template graph compiles");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "35");
+}
+
+#[test]
+fn nested_template_matchers_keep_their_own_literal_boundaries() {
+    let compiled = compile_path(fixture("template-graph/nested-choose.ash"))
+        .expect("nested template graph compiles");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "35");
+}
+
+#[test]
+fn captured_identifier_binds_the_captured_expression() {
+    let compiled = compile_path(fixture("template-binder/entry.ash"))
+        .expect("a captured identifier binds its body");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn introduced_template_binder_does_not_capture_the_caller() {
+    let compiled = compile_path(fixture("template-hygiene/entry.ash"))
+        .expect("the template keeps its introduced binder private");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn template_uses_its_defining_modules_syntax_imports() {
+    let compiled = compile_path(fixture("template-imported-syntax/entry.ash"))
+        .expect("the template can use its own syntax import");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn template_calls_its_private_helper_without_caller_shadowing() {
+    let compiled = compile_path(fixture("template-private/entry.ash"))
+        .expect("the template can call its private helper");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+    let failure = compile_path(fixture("template-private/direct.ash")).unwrap_err();
+    assert!(failure.is_source_rejection(), "{failure:?}");
+}
+
+#[test]
+fn template_private_constructor_preserves_an_opaque_reexport() {
+    let compiled = compile_path(fixture("template-graph/opaque-reexport.ash"))
+        .expect("using syntax must preserve the opaque re-export");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn template_private_constructor_keeps_ordinary_coverage_opaque() {
+    let failure = compile_path(fixture("template-graph/opaque-diagnostic.ash")).unwrap_err();
+    match failure.pipeline_failure() {
+        Some(ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(
+            diagnostic,
+        ))) => {
+            assert_eq!(diagnostic.reason, ash::elaborate::TypeReason::NonExhaustive);
+            assert_eq!(diagnostic.found.as_deref(), Some("(_, false)"));
+        }
+        other => panic!("expected an ordinary coverage diagnostic, got {other:?}"),
+    }
+}

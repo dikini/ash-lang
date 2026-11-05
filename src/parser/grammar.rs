@@ -499,12 +499,54 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
     let _ = parser.bump(); // pub
     let _ = parser.bump(); // syntax
     expect_syntax_name(parser);
-    let _ = parser.expect(&TokenKind::Dollar, ExpectedForm::Identifier);
-    expect_lower_identifier(parser);
-    let _ = parser.expect(&TokenKind::Colon, ExpectedForm::Colon);
-    if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "expr") {
-        let _ = parser.bump();
-    } else {
+    let mut names = std::collections::HashSet::new();
+    let mut previous_capture = false;
+    let mut final_expression = false;
+    while !matches!(
+        parser.current(),
+        Some(TokenKind::FatArrow | TokenKind::LineEnd | TokenKind::EndOfFile) | None
+    ) {
+        if parser.at(&TokenKind::Dollar) {
+            parser.start(NodeKind::SyntaxCapture);
+            if previous_capture {
+                parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+            }
+            let _ = parser.bump();
+            if let Some(TokenKind::Identifier(name)) = parser.current() {
+                if !names.insert(name.clone()) {
+                    parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+                }
+            }
+            expect_lower_identifier(parser);
+            let _ = parser.expect(&TokenKind::Colon, ExpectedForm::Colon);
+            final_expression =
+                matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "expr");
+            if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "expr" || name == "ident")
+            {
+                let _ = parser.bump();
+            } else {
+                parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+            }
+            parser.finish();
+            previous_capture = true;
+        } else {
+            if matches!(
+                parser.current(),
+                Some(
+                    TokenKind::LeftParen
+                        | TokenKind::RightParen
+                        | TokenKind::LeftBrace
+                        | TokenKind::RightBrace
+                )
+            ) {
+                parser.report(ParseReason::ExpectedForm, ExpectedForm::FatArrow);
+            }
+            let _ = parser.bump();
+            previous_capture = false;
+            final_expression = false;
+        }
+    }
+    if !previous_capture || !final_expression || names.is_empty() {
         parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
     }
     let _ = parser.expect(&TokenKind::FatArrow, ExpectedForm::FatArrow);
@@ -1636,11 +1678,78 @@ fn inline_operational_global(parser: &mut Parser<'_>) -> TypeParametersOutcome {
 }
 
 pub(super) fn expression(parser: &mut Parser<'_>) {
+    if parser.at_syntax_stop() {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Expression);
+        return;
+    }
     if parser.at_syntax_name() {
+        let matcher = parser.syntax.iter().find(|syntax| {
+            matches!(parser.current(), Some(TokenKind::Identifier(name)) if *name == syntax.name)
+        }).expect("the selected syntax name has a matcher").declaration.matcher.clone();
         parser.start(NodeKind::SyntaxInvocation);
         let _ = parser.bump();
+        let outer_depth = parser.nesting_depth;
         if parser.enter_structure() {
-            expression(parser);
+            let inherited = parser
+                .syntax_stops
+                .iter()
+                .enumerate()
+                .filter_map(|(index, (_, _, depth))| (*depth == outer_depth).then_some(index))
+                .collect::<Vec<_>>();
+            for index in &inherited {
+                parser.syntax_stops[*index].2 += 1;
+            }
+            for (index, part) in matcher.iter().enumerate() {
+                match part {
+                    crate::surface::SurfaceSyntaxMatcherPart::Literal { kind, spelling } => {
+                        if !parser.at_syntax_literal(kind, spelling) {
+                            parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+                            break;
+                        }
+                        let _ = parser.bump();
+                    }
+                    crate::surface::SurfaceSyntaxMatcherPart::Capture { kind, .. } => {
+                        parser.start(NodeKind::SyntaxArgument);
+                        match kind {
+                            crate::surface::SurfaceSyntaxCaptureKind::Expression => {
+                                let stop = matcher.get(index + 1).and_then(|part| match part {
+                                    crate::surface::SurfaceSyntaxMatcherPart::Literal {
+                                        kind,
+                                        spelling,
+                                    } => {
+                                        Some((kind.clone(), spelling.clone(), parser.nesting_depth))
+                                    }
+                                    _ => None,
+                                });
+                                if let Some(stop) = stop.clone() {
+                                    parser.syntax_stops.push(stop);
+                                }
+                                expression(parser);
+                                if stop.is_some() {
+                                    let _ = parser.syntax_stops.pop();
+                                }
+                            }
+                            crate::surface::SurfaceSyntaxCaptureKind::Identifier => {
+                                if matches!(
+                                    parser.current(),
+                                    Some(TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_))
+                                ) {
+                                    let _ = parser.bump();
+                                } else {
+                                    parser.report(
+                                        ParseReason::ExpectedForm,
+                                        ExpectedForm::Identifier,
+                                    );
+                                }
+                            }
+                        }
+                        parser.finish();
+                    }
+                }
+            }
+            for index in inherited {
+                parser.syntax_stops[index].2 -= 1;
+            }
             parser.leave_structure();
         } else {
             parser.consume_rest();
@@ -2388,6 +2497,12 @@ fn pattern(parser: &mut Parser<'_>) {
 
 fn pattern_inner(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
     parser.start(NodeKind::Pattern);
+    if parser.in_template && parser.at(&TokenKind::Dollar) {
+        let _ = parser.bump();
+        expect_lower_identifier(parser);
+        parser.finish();
+        return;
+    }
     let form = pattern_form(parser);
     let owns_structure = matches!(
         form,
@@ -2447,7 +2562,7 @@ fn pattern_form(parser: &Parser<'_>) -> Option<PatternForm> {
 }
 
 fn starts_pattern(parser: &Parser<'_>) -> bool {
-    pattern_form(parser).is_some()
+    (parser.in_template && parser.at(&TokenKind::Dollar)) || pattern_form(parser).is_some()
 }
 
 fn constructor_pattern(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
@@ -2720,9 +2835,10 @@ fn parenthesized_type(parser: &mut Parser<'_>) {
 }
 
 fn starts_expression(parser: &Parser<'_>) -> bool {
-    parser.at_syntax_name()
-        || expression_prefix_form(parser).is_some()
-        || expression::starts_primary(parser)
+    !parser.at_syntax_stop()
+        && (parser.at_syntax_name()
+            || expression_prefix_form(parser).is_some()
+            || expression::starts_primary(parser))
 }
 
 fn resource_field_word(parser: &mut Parser<'_>, word: &str) {

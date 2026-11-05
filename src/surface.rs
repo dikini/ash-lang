@@ -1,6 +1,6 @@
 //! Recovery-free, source-spanned syntax passed from parsing to resolution.
 
-use crate::{integer::Integer, source::Span};
+use crate::{integer::Integer, lexer::TokenKind, source::Span};
 
 mod foreign;
 pub use foreign::{
@@ -42,12 +42,33 @@ pub struct SurfaceModule {
 pub struct SurfaceSyntaxDeclaration {
     /// The exported syntax spelling.
     pub name: SurfaceName,
-    /// The expression capture in the matcher.
-    pub capture: SurfaceName,
+    /// The literal and capture sequence after the syntax name.
+    pub matcher: Vec<SurfaceSyntaxMatcherPart>,
     /// The template expression, including its capture splices.
     pub template: SurfaceExpr,
     /// The complete declaration span.
     pub span: Span,
+}
+
+/// One part of an expression syntax matcher.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SurfaceSyntaxMatcherPart {
+    /// A literal token, matched by kind and source spelling.
+    Literal { kind: TokenKind, spelling: String },
+    /// A named expression or identifier capture.
+    Capture {
+        name: SurfaceName,
+        kind: SurfaceSyntaxCaptureKind,
+    },
+}
+
+/// A capture admitted by an expression syntax matcher.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceSyntaxCaptureKind {
+    /// An unexpanded expression fragment.
+    Expression,
+    /// One identifier.
+    Identifier,
 }
 
 /// One source declaration's category and category-local position.
@@ -399,8 +420,8 @@ pub enum SurfaceExprKind {
     SyntaxInvocation {
         /// The selected local spelling.
         name: SurfaceName,
-        /// The protected expression capture.
-        capture: Box<SurfaceExpr>,
+        /// The ordered identifier and protected expression captures.
+        captures: Vec<SurfaceSyntaxCapture>,
     },
     /// An arbitrary-precision integer literal.
     Integer(Integer),
@@ -455,6 +476,15 @@ pub enum SurfaceExprKind {
     Discard,
     /// Nullary transfer of the nearest private checkpoint clause's capture.
     Retain,
+}
+
+/// One invocation's captured syntax.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SurfaceSyntaxCapture {
+    /// A protected, unexpanded expression.
+    Expression(SurfaceExpr),
+    /// An identifier with its caller spelling and source.
+    Identifier(SurfaceName),
 }
 
 /// The closed set of builtin acquisition designators.
@@ -607,6 +637,8 @@ pub struct ApplicationExpr {
     pub function: Box<SurfaceExpr>,
     /// The argument position.
     pub argument: Box<SurfaceExpr>,
+    /// The invocation that introduced this application, if any.
+    pub(crate) expansion: Option<Span>,
 }
 
 /// A sequential block expression.
@@ -677,6 +709,8 @@ pub struct SurfaceBinding {
     pub annotation: Option<SurfaceType>,
     /// The initializer expression.
     pub initializer: SurfaceExpr,
+    /// The invocation that introduced this binding, if any.
+    pub(crate) expansion: Option<Span>,
     /// The complete binding span.
     pub span: Span,
 }
@@ -697,6 +731,10 @@ pub struct SurfaceName {
     pub text: String,
     /// The exact name span.
     pub span: Span,
+    /// The compiler-issued template introduction, or zero for written names.
+    pub(crate) introduction: usize,
+    /// The invocation that introduced this template name, if any.
+    pub(crate) introduced_at: Option<Span>,
 }
 
 /// One declaration-level source type parameter.
@@ -827,6 +865,8 @@ pub struct SurfacePattern {
 /// The closed source pattern family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfacePatternKind {
+    /// An identifier capture used as a template pattern.
+    TemplateSplice(SurfaceName),
     /// An ordinary binding pattern.
     Binder(SurfaceBinder),
     /// A nonbinding wildcard.

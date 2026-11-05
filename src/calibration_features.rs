@@ -329,8 +329,14 @@ fn walk<'a>(features: &mut Features, pending: &mut Vec<Visit<'a>>) {
                     | SurfaceExprKind::TemplateSplice(_)
                     | SurfaceExprKind::Discard
                     | SurfaceExprKind::Retain => {}
-                    SurfaceExprKind::SyntaxInvocation { capture, .. } => {
-                        pending.push(Visit::Expr(capture, scope));
+                    SurfaceExprKind::SyntaxInvocation { captures, .. } => {
+                        for capture in captures {
+                            if let crate::surface::SurfaceSyntaxCapture::Expression(expression) =
+                                capture
+                            {
+                                pending.push(Visit::Expr(expression, scope));
+                            }
+                        }
                     }
                     SurfaceExprKind::Tuple(elements) => {
                         pending.extend(elements.iter().map(|value| Visit::Expr(value, scope)));
@@ -430,7 +436,8 @@ fn walk<'a>(features: &mut Features, pending: &mut Vec<Visit<'a>>) {
                             pending.push(Visit::Pattern(payload));
                         }
                     }
-                    SurfacePatternKind::Binder(_)
+                    SurfacePatternKind::TemplateSplice(_)
+                    | SurfacePatternKind::Binder(_)
                     | SurfacePatternKind::Wildcard
                     | SurfacePatternKind::Boolean(_)
                     | SurfacePatternKind::Unit => {}

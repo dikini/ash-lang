@@ -1915,6 +1915,66 @@ impl CheckedModule {
         &self.schemes
     }
 
+    pub(crate) fn syntax_constructor_facts(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Vec<ExportedConstructor>, ()> {
+        let mut facts = Vec::new();
+        for constructor in self
+            .registry
+            .constructors()
+            .iter()
+            .filter(|constructor| constructor.owner.module() == self.module)
+        {
+            let nominal = self.registry.nominal(constructor.owner).ok_or(())?;
+            let parameters = self.registry.nominal_parameters(nominal.id).ok_or(())?;
+            let payload = if nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype {
+                nominal.representation.as_ref()
+            } else {
+                constructor.payload.as_ref()
+            };
+            let original =
+                ConstructorOriginal::from_checked(&self.registry, work).map_err(|_| ())?;
+            facts.push(ExportedConstructor {
+                original: Some(original),
+                id: constructor.id,
+                spelling: constructor.spelling.clone(),
+                payload: payload
+                    .map(|payload| clone_type_with_budget(payload, work))
+                    .transpose()?,
+                scheme: canonical_constructor_scheme(nominal.id, parameters, payload, work)?,
+                origin: constructor.origin.clone(),
+            });
+        }
+        Ok(facts)
+    }
+
+    pub(crate) fn syntax_nominal_fact(
+        &self,
+        id: NominalTypeId,
+    ) -> Option<ImportedNominalFactRef<'_>> {
+        if id.module() != self.module {
+            return None;
+        }
+        let nominal = self.registry.nominal(id)?;
+        let parameters = self.registry.nominal_parameters(id)?;
+        let public = self.exports.nominal_fact(id);
+        Some(ImportedNominalFactRef {
+            id,
+            declaration_kind: nominal.declaration_kind,
+            parameter_count: parameters.len(),
+            constructor_count: nominal.constructors.len(),
+            parameters,
+            representation: nominal.representation.as_ref(),
+            representation_provenance: nominal.representation_provenance.as_ref(),
+            constructors: &nominal.constructors,
+            access: ImportedTypeAccess::Transparent,
+            display_spelling: Some(&nominal.spelling),
+            display_is_private: public.is_none(),
+            origin: &nominal.origin,
+        })
+    }
+
     /// Returns checked local interface authentication records in source order.
     #[must_use]
     pub const fn checked_interfaces(&self) -> &[CheckedInterface] {
@@ -2487,6 +2547,9 @@ pub struct ImportedFacts {
     resource_types: HashMap<String, Arc<ResourceTypeFact>>,
     resource_type_order: Vec<String>,
     constructors: HashMap<ConstructorId, ImportedConstructorFact>,
+    // Constructor families admitted solely for expansion checking do not change
+    // the source-visible import facts or their re-exports.
+    syntax_facts: Option<Box<ImportedFacts>>,
     interfaces: Vec<ImportedInterfaceFact>,
     interface_positions: HashMap<InterfaceId, usize>,
     effects: Vec<ResolvedEffectDeclaration>,
@@ -2737,6 +2800,51 @@ impl ImportedFacts {
         self.nominal_order
             .iter()
             .filter_map(|identity| self.nominals.get(identity))
+    }
+
+    pub(crate) fn take_syntax_facts(&mut self) -> ImportedFacts {
+        self.syntax_facts
+            .take()
+            .map(|facts| *facts)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn set_syntax_facts(&mut self, facts: ImportedFacts) {
+        debug_assert!(self.syntax_facts.is_none());
+        debug_assert!(facts.syntax_facts.is_none());
+        self.syntax_facts = Some(Box::new(facts));
+    }
+
+    // Only the checking registry sees a syntax-authorized family. Ordinary
+    // imports and export summaries continue to use `nominals`.
+    fn checking_nominals(&self) -> impl Iterator<Item = &ImportedNominalFact> {
+        let syntax = self.syntax_facts.as_deref();
+        self.nominals()
+            .filter(move |fact| {
+                !syntax
+                    .and_then(|facts| facts.nominal(fact.id))
+                    .is_some_and(|other| {
+                        other.access == ImportedTypeAccess::Transparent
+                            && fact.access != ImportedTypeAccess::Transparent
+                    })
+            })
+            .chain(
+                syntax
+                    .into_iter()
+                    .flat_map(ImportedFacts::nominals)
+                    .filter(move |fact| {
+                        self.nominal(fact.id).is_none()
+                            || fact.access == ImportedTypeAccess::Transparent
+                                && self.nominal(fact.id).is_some_and(|other| {
+                                    other.access != ImportedTypeAccess::Transparent
+                                })
+                    }),
+            )
+    }
+
+    fn checking_constructor(&self, id: ConstructorId) -> Option<&ImportedConstructorFact> {
+        self.constructor(id)
+            .or_else(|| self.syntax_facts.as_deref()?.constructor(id))
     }
 
     pub(crate) fn retain_implemented_interface(
@@ -6546,6 +6654,20 @@ fn same_origin_with_constraint_budget(
         match (left, right) {
             (Origin::Source(left), Origin::Source(right)) => return Ok(left == right),
             (
+                Origin::Expansion {
+                    invocation: left_invocation,
+                    definition: left_definition,
+                },
+                Origin::Expansion {
+                    invocation: right_invocation,
+                    definition: right_definition,
+                },
+            ) => {
+                return Ok(
+                    left_invocation == right_invocation && left_definition == right_definition
+                );
+            }
+            (
                 Origin::Generated {
                     cause: left_cause,
                     reason: left_reason,
@@ -6590,6 +6712,20 @@ fn same_origin_after_base_charge(
     loop {
         match (left, right) {
             (Origin::Source(left), Origin::Source(right)) => return Ok(left == right),
+            (
+                Origin::Expansion {
+                    invocation: left_invocation,
+                    definition: left_definition,
+                },
+                Origin::Expansion {
+                    invocation: right_invocation,
+                    definition: right_definition,
+                },
+            ) => {
+                return Ok(
+                    left_invocation == right_invocation && left_definition == right_definition
+                );
+            }
             (
                 Origin::Generated {
                     cause: left_cause,
@@ -13719,6 +13855,8 @@ pub struct ResolvedRegistry {
     global_parameter_positions: HashMap<BinderId, usize>,
     abstract_nominal_names: HashMap<NominalTypeId, String>,
     abstract_nominal_kinds: HashMap<NominalTypeId, NonMaterializedNominalKindFact>,
+    // These families are available to generated constructor patterns only.
+    syntax_only_families: HashSet<NominalTypeId>,
 
     native_symbols: HashMap<OperationId, Arc<crate::foreign::checked_source::CheckedForeignSymbol>>,
 }
@@ -14288,6 +14426,7 @@ impl CombinedRegistryBuilder {
             global_parameter_positions: std::mem::take(&mut self.global_parameter_positions),
             abstract_nominal_names: HashMap::new(),
             abstract_nominal_kinds: HashMap::new(),
+            syntax_only_families: HashSet::new(),
 
             native_symbols: HashMap::new(),
         }
@@ -14820,6 +14959,10 @@ impl Drop for ResolvedConstructorBuffer {
 }
 
 impl ResolvedRegistry {
+    pub(crate) fn syntax_only_family(&self, id: NominalTypeId) -> bool {
+        self.syntax_only_families.contains(&id)
+    }
+
     pub(crate) fn owner_signature(&self, owner: OwnerId) -> Option<&OwnerSignature> {
         self.owner_signatures.get(owner)
     }
@@ -15937,6 +16080,7 @@ impl ResolvedRegistry {
             global_parameter_positions: HashMap::new(),
             abstract_nominal_names: HashMap::new(),
             abstract_nominal_kinds: HashMap::new(),
+            syntax_only_families: HashSet::new(),
 
             native_symbols: HashMap::new(),
         }
@@ -16039,7 +16183,7 @@ impl ResolvedRegistry {
         imported: &ImportedFacts,
         budget: &mut TypeWorkBudget,
     ) -> Result<Self, ResolvedBuildFailure> {
-        for fact in imported.nominals() {
+        for fact in imported.checking_nominals() {
             budget
                 .charge(
                     fact.constructors
@@ -16053,7 +16197,7 @@ impl ResolvedRegistry {
             }
         }
         let materialized_import_count = imported
-            .nominals()
+            .checking_nominals()
             .filter(|fact| fact.access == ImportedTypeAccess::Transparent)
             .count();
         let materialized_nominal_count = self
@@ -16086,6 +16230,14 @@ impl ResolvedRegistry {
             .constructors
             .len()
             .checked_add(imported.constructors.len())
+            .and_then(|count| {
+                count.checked_add(
+                    imported
+                        .syntax_facts
+                        .as_deref()
+                        .map_or(0, |facts| facts.constructors.len()),
+                )
+            })
             .ok_or(ResolvedBuildFailure::TypeResource)?;
         let mut constructors = ResolvedConstructorBuffer(Vec::new());
         constructors
@@ -16194,7 +16346,7 @@ impl ResolvedRegistry {
             ));
         }
 
-        for fact in imported.nominals() {
+        for fact in imported.checking_nominals() {
             if fact.access != ImportedTypeAccess::Transparent {
                 continue;
             }
@@ -16205,7 +16357,7 @@ impl ResolvedRegistry {
             }
             for id in &fact.constructors {
                 let constructor = imported
-                    .constructor(*id)
+                    .checking_constructor(*id)
                     .ok_or(ResolvedBuildFailure::InvalidState)?;
                 if constructor.id.owner() != fact.id {
                     return Err(ResolvedBuildFailure::InvalidState);
@@ -16248,7 +16400,7 @@ impl ResolvedRegistry {
         }
 
         let abstract_nominal_count = imported
-            .nominals()
+            .checking_nominals()
             .filter(|fact| fact.access != ImportedTypeAccess::Transparent)
             .count();
         budget
@@ -16283,7 +16435,7 @@ impl ResolvedRegistry {
         // headers retained only by a method or a selective import.
 
         for fact in imported
-            .nominals()
+            .checking_nominals()
             .filter(|fact| fact.access != ImportedTypeAccess::Transparent)
         {
             let kind = clone_arrows_with_budget(
@@ -16362,6 +16514,19 @@ impl ResolvedRegistry {
             )
             .map_err(|()| ResolvedBuildFailure::TypeResource)?
             .with_abstract_nominal_facts(abstract_nominal_names, abstract_nominal_kinds);
+        if let Some(syntax) = imported.syntax_facts.as_deref() {
+            registry.syntax_only_families.extend(
+                syntax
+                    .nominals()
+                    .filter(|fact| {
+                        fact.access == ImportedTypeAccess::Transparent
+                            && !imported.nominal(fact.id).is_some_and(|ordinary| {
+                                ordinary.access == ImportedTypeAccess::Transparent
+                            })
+                    })
+                    .map(|fact| fact.id),
+            );
+        }
         let effect_count = self
             .effects
             .len()
@@ -17595,7 +17760,7 @@ fn charge_retained_origin(origin: &Origin, budget: &mut TypeWorkBudget) -> Resul
     loop {
         budget.charge(2)?;
         match current {
-            Origin::Source(_) => return Ok(()),
+            Origin::Source(_) | Origin::Expansion { .. } => return Ok(()),
             Origin::Generated { cause, .. } => current = cause,
             Origin::Related { primary, related } => {
                 budget.charge(related.len().checked_mul(2).ok_or(())?)?;
@@ -17679,6 +17844,20 @@ pub(crate) fn same_origin_with_budget(
         budget.charge(1)?;
         match (left, right) {
             (Origin::Source(left), Origin::Source(right)) => return Ok(left == right),
+            (
+                Origin::Expansion {
+                    invocation: left_invocation,
+                    definition: left_definition,
+                },
+                Origin::Expansion {
+                    invocation: right_invocation,
+                    definition: right_definition,
+                },
+            ) => {
+                return Ok(
+                    left_invocation == right_invocation && left_definition == right_definition
+                );
+            }
             (
                 Origin::Generated {
                     cause: left_cause,
@@ -17782,7 +17961,16 @@ pub(crate) fn clone_effect_origin_with_budget(
     let mut current = origin;
     let source = loop {
         match current {
-            Origin::Source(span) => break *span,
+            Origin::Source(span) => break Origin::Source(*span),
+            Origin::Expansion {
+                invocation,
+                definition,
+            } => {
+                break Origin::Expansion {
+                    invocation: *invocation,
+                    definition: *definition,
+                };
+            }
             Origin::Generated { cause, reason } => {
                 frames.try_reserve(1).map_err(|_| ())?;
                 frames.push(Frame::Generated(*reason));
@@ -17795,7 +17983,7 @@ pub(crate) fn clone_effect_origin_with_budget(
             }
         }
     };
-    let mut cloned = Owner(Some(Origin::Source(source)));
+    let mut cloned = Owner(Some(source));
     for frame in frames.into_iter().rev() {
         let related = match frame {
             Frame::Related(spans) => {
@@ -18855,6 +19043,8 @@ pub struct ResolvedBinding {
     pub annotation: Option<ResolvedType>,
     /// Initializer resolved in the incoming scope.
     pub initializer: ResolvedExpr,
+    /// The invocation that introduced this binding, if any.
+    pub(crate) expansion: Option<Span>,
     /// Complete binding span.
     pub span: Span,
 }
@@ -19459,6 +19649,8 @@ pub struct ResolvedApplicationExpr {
     pub function: Box<ResolvedExpr>,
     /// Resolved argument position.
     pub argument: Box<ResolvedExpr>,
+    /// The invocation that introduced this application, if any.
+    pub(crate) expansion: Option<Span>,
 }
 
 /// A resolved binary expression.
@@ -30249,6 +30441,7 @@ mod tests {
                     for _ in 0..20_000 {
                         body = ResolvedExpr {
                             kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
+                                expansion: None,
                                 function: Box::new(ResolvedExpr {
                                     kind: ResolvedExprKind::Unit,
                                     span,
