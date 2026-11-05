@@ -56,6 +56,13 @@ fn captured_function_parameter_binds_the_captured_body() {
 }
 
 #[test]
+fn template_recursive_members_share_scope_without_capturing_the_caller() {
+    let compiled = compile_path(fixture("template-recursive/entry.ash"))
+        .expect("the generated recursive group preserves its own and caller contexts");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
 fn renamed_template_macro_uses_the_selected_export() {
     let compiled = compile_path(fixture("template-only/renamed.ash"))
         .expect("the renamed syntax graph compiles");

@@ -409,14 +409,22 @@ pub(crate) fn validate_template(declaration: &SurfaceSyntaxDeclaration) -> Resul
     }
     fn check_block(block: &SurfaceBlock, matcher: &[SurfaceSyntaxMatcherPart]) -> Result<(), Span> {
         for declaration in &block.declarations {
-            let SurfaceLocalDeclaration::Binding(binding) = declaration else {
-                return Err(block.span);
-            };
-            check_pattern(&binding.pattern, matcher)?;
-            if let Some(annotation) = &binding.annotation {
-                check_annotation(annotation)?;
+            match declaration {
+                SurfaceLocalDeclaration::Binding(binding) => {
+                    check_pattern(&binding.pattern, matcher)?;
+                    if let Some(annotation) = &binding.annotation {
+                        check_annotation(annotation)?;
+                    }
+                    check(&binding.initializer, matcher)?;
+                }
+                SurfaceLocalDeclaration::Recursive(group) => {
+                    for member in &group.members {
+                        check_annotation(&member.annotation)?;
+                        check(&member.initializer, matcher)?;
+                    }
+                }
+                _ => return Err(block.span),
             }
-            check(&binding.initializer, matcher)?;
         }
         check(&block.result, matcher)
     }
@@ -649,24 +657,41 @@ fn substitute_block(
     invocation: Span,
 ) -> Result<(), Span> {
     for declaration in &mut block.declarations {
-        let SurfaceLocalDeclaration::Binding(binding) = declaration else {
-            return Err(block.span);
-        };
-        binding.expansion = Some(invocation);
-        substitute_pattern(
-            &mut binding.pattern,
-            matcher,
-            captures,
-            introduction,
-            invocation,
-        )?;
-        substitute(
-            &mut binding.initializer,
-            matcher,
-            captures,
-            introduction,
-            invocation,
-        )?;
+        match declaration {
+            SurfaceLocalDeclaration::Binding(binding) => {
+                binding.expansion = Some(invocation);
+                substitute_pattern(
+                    &mut binding.pattern,
+                    matcher,
+                    captures,
+                    introduction,
+                    invocation,
+                )?;
+                substitute(
+                    &mut binding.initializer,
+                    matcher,
+                    captures,
+                    introduction,
+                    invocation,
+                )?;
+            }
+            SurfaceLocalDeclaration::Recursive(group) => {
+                for member in &mut group.members {
+                    if introduction != 0 {
+                        member.binder.name.introduction = introduction;
+                        member.binder.name.introduced_at = Some(invocation);
+                    }
+                    substitute(
+                        &mut member.initializer,
+                        matcher,
+                        captures,
+                        introduction,
+                        invocation,
+                    )?;
+                }
+            }
+            _ => return Err(block.span),
+        }
     }
     substitute(
         &mut block.result,

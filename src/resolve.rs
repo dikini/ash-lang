@@ -10404,22 +10404,7 @@ impl Resolver {
                     diagnostic.found = Some(surface.name.text.clone());
                     return Err(diagnostic.into());
                 }
-                let mut binder = self.allocate_binder(&surface.name.text, surface.name.span)?;
-                if surface.name.introduction != 0 {
-                    let invocation = surface.name.introduced_at.ok_or_else(|| {
-                        error(
-                            ResolveReason::InternalState,
-                            surface.name.span,
-                            "introduced binder has no invocation origin",
-                        )
-                    })?;
-                    binder.origin = Origin::Expansion {
-                        invocation,
-                        definition: surface.name.span,
-                    };
-                    self.binder_introductions
-                        .insert(binder.id, surface.name.introduction);
-                }
+                let binder = self.allocate_contextual_binder(&surface.name)?;
                 binders.push(binder.clone());
                 ResolvedPatternKind::Binder(binder)
             }
@@ -10776,6 +10761,26 @@ impl Resolver {
             }),
             span,
         })
+    }
+
+    fn allocate_contextual_binder(&mut self, name: &SurfaceName) -> Result<Binder, ResolveError> {
+        let mut binder = self.allocate_binder(&name.text, name.span)?;
+        if name.introduction != 0 {
+            let invocation = name.introduced_at.ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    name.span,
+                    "introduced binder has no invocation origin",
+                )
+            })?;
+            binder.origin = Origin::Expansion {
+                invocation,
+                definition: name.span,
+            };
+            self.binder_introductions
+                .insert(binder.id, name.introduction);
+        }
+        Ok(binder)
     }
 
     fn allocate_binder(
@@ -12269,9 +12274,11 @@ impl Resolver {
                 let mut first_members = HashMap::with_capacity(group.members.len());
                 let mut binders = ResolvedBinderBuffer(Vec::with_capacity(group.members.len()));
                 for member in &group.members {
-                    if let Some(first_span) =
-                        first_members.get(member.binder.name.text.as_str()).copied()
-                    {
+                    let key = (
+                        member.binder.name.text.as_str(),
+                        member.binder.name.introduction,
+                    );
+                    if let Some(first_span) = first_members.get(&key).copied() {
                         let mut diagnostic = Diagnostic::new(
                             ResolveReason::DuplicateRecursiveMember,
                             SourceLabel::new(
@@ -12286,10 +12293,8 @@ impl Resolver {
                         diagnostic.found = Some(member.binder.name.text.clone());
                         return Err(diagnostic.into());
                     }
-                    first_members.insert(member.binder.name.text.as_str(), member.binder.name.span);
-                    binders.push(
-                        self.allocate_binder(&member.binder.name.text, member.binder.name.span)?,
-                    );
+                    first_members.insert(key, member.binder.name.span);
+                    binders.push(self.allocate_contextual_binder(&member.binder.name)?);
                 }
                 let Some(scope) = self.scopes.last_mut() else {
                     return Err(error(
@@ -12301,7 +12306,13 @@ impl Resolver {
                 };
                 for binder in binders.iter() {
                     scope.insert(
-                        (binder.spelling.clone(), 0),
+                        (
+                            binder.spelling.clone(),
+                            self.binder_introductions
+                                .get(&binder.id)
+                                .copied()
+                                .unwrap_or(0),
+                        ),
                         ResolvedTermBinding::local(ResolvedTermName::Global(binder.id)),
                     );
                 }

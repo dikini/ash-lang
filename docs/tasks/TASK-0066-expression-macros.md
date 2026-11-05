@@ -121,8 +121,8 @@ findings here before adding mechanisms.
 
 ## Progress
 
-The reviewed progress is **43.5/100 delivery points, about 44%**, through
-`93bc3964`. It includes the original 20-point template baseline through
+The reviewed progress is **44.5/100 delivery points, about 45%**, through
+`abd2e26f`. It includes the original 20-point template baseline through
 `26b43869`, 8 points for the restricted computed vertical and its R8/R9
 repairs, and 8.5 points for the expanded vocabulary, identifier operations,
 group output, one procedural binder scope, and a restricted parse/unwrap service
@@ -130,8 +130,10 @@ with contextual syntax selection. The latest 7 points record qualified caller-te
 combined-origin syntax round trip, authored and parser failures with human/JSON
 causes, malformed output refusal, and contextual failure of a non-terminating
 transformer, plus the combined graph's native build and matching execution.
-One provisional point covers introduced and captured function parameters in
+One reviewed point covers introduced and captured function parameters in
 template output; a procedural transformer exercises the captured case as well.
+An additional provisional half-point covers an introduced mutually recursive
+template group while retaining a same-spelled caller binding.
 Observed root-close
 evidence and all M01–M14 acceptance criteria remain pending.
 
@@ -140,7 +142,7 @@ evidence and all M01–M14 acceptance criteria remain pending.
 The cap is 100 estimated effort points for the complete milestone through
 verified retention in `integration/expression-macros`; Main integration is
 excluded. Weights reflect expected work, not an equal share per acceptance case
-or feature. They are approximate: display about 44%, not a precise completion
+or feature. They are approximate: display about 45%, not a precise completion
 probability. The current Codex elapsed forecast is in the
 [plan](../plans/2026-11-05-expression-macros.md#estimate-and-re-planning).
 
@@ -160,7 +162,7 @@ reviewer owns `Rev`, and the orchestrator owns `PM`.
 | P06 | 2 | Dev / R2 | Imported/renamed protected-capture template executes to 35; `00d9f066`. |
 | P07 | 5.5 | Dev / R5.5 | Restricted combined template graph to 42, supplied/introduced binders, private helper/opaque owner and nested DSL; `4a4c01b0`, reviewed through `26b43869`. |
 | P08 | 1 | Dev+Rev / R1 | Operator-stop and annotation-admission review repair; `26b43869`. Full annotation support remains P10. |
-| P09 | 4 | Dev / R0.5+D1 | Procedural captured binder with preceding initializer scope (0.5), `/tmp/ash-syntax-captured-binder-driver.log`. An introduced function parameter avoids a same-spelled caller binding (D0.5), and a captured parameter binds its captured body without escaping its scope (D0.5). A procedural transformer also constructs the captured-parameter function; the current host and template driver suites pass 31 and 20 cases, `/tmp/ash-syntax-function-regressions.log` (SHA-256 `3028b340cc8edc71728d62f8014a829514e1636a24d72b1f629739f8b2ae9f56`). Broader patterns and sequential/recursive scopes remain pending. |
+| P09 | 4 | Dev / R1.5+D0.5 | Procedural captured binder with preceding initializer scope (0.5), `/tmp/ash-syntax-captured-binder-driver.log`. An introduced function parameter avoids a same-spelled caller binding (0.5), and a captured parameter binds its captured body without escaping its scope (0.5). A procedural transformer also constructs the captured-parameter function; review cleared these cases at `abd2e26f`. An introduced mutually recursive group calls both members and retains a same-spelled caller binding (D0.5); the host and template driver suites pass 31 and 21 cases, `/tmp/ash-syntax-recursive-regressions.log` (SHA-256 `9ef4da1fb9dc8b5689dedbc4e6744809f7ef19c09f150099edba8dd76c220889`). Four ordinary recursive-resolution cases pass, `/tmp/ash-syntax-recursive-ordinary.log` (SHA-256 `181c8356ad82c22d8b75df3c75ce1861fb5b83f888c55ff90446f8da94023ac5`). Captured recursive binders, broader patterns, and sequential scopes remain pending. |
 | P10 | 5 | Dev / 0 | Copied binder/use identities (1), copied nominal/region identities (2), definition-site annotations/type scopes (1), resource/region scopes (1). |
 | P11 | 5 | Dev / 0 | Authenticated grants/access (2), retained checked private closure and real Core-coordinate consumer (2), qualified/facade route and mutation refusals (1), beyond P07. |
 | P12 | 3 | Dev / 0 | Ordinary method evidence (1), structural continuation capability (1), resource escape and effect count/order (1). |
@@ -198,7 +200,7 @@ API/entry 10; Ops/interchange 14; transfer/failure/limits 8; graph/Core/repeatab
 The independent review assigns more weight to the unresolved contextual,
 non-term, copied-identity, grant, and Core-coordinate consumers than the first
 draft. The 20-point reviewed baseline is frozen; a changed ETA does not reweight it.
-Reviewed effort is 43.5, demonstrated provisional effort is 1, and 55.5 points
+Reviewed effort is 44.5, demonstrated provisional effort is 0.5, and 55 points
 have no credit. Review upgrades D to R without awarding implementation points
 again. Explicit review/gate rows cover their own work, not a second implementation
 credit. Record the exact commit or source hash, real consumer observation/test
