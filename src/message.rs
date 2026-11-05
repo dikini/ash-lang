@@ -1374,6 +1374,13 @@ messages! {
     resolve_retain_outside_root => "resolve-retain-outside-root" {},
     /// An interface occupies a value-type position.
     syntax_invalid_transformer => "syntax-invalid-transformer" {},
+    /// A transformer explicitly rejected its input.
+    syntax_expansion_rejected => "syntax-expansion-rejected" { detail: &'a str = "invalid input" },
+    syntax_transformer_failed => "syntax-transformer-failed" { cause: &'a str = "runtime.resource-capacity" },
+    syntax_rejection_site => "syntax-rejection-site" {},
+    syntax_rejection_cause => "syntax-rejection-cause" {},
+    syntax_invocation_frame => "syntax-invocation-frame" {},
+    syntax_definition_frame => "syntax-definition-frame" {},
     resolve_type_kind => "resolve-type-kind" { name: &'a str = "Marker" },
     /// An interface position contains a known non-interface name.
     resolve_interface_kind => "resolve-interface-kind" { name: &'a str = "Thing" },

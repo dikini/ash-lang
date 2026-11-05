@@ -121,12 +121,16 @@ findings here before adding mechanisms.
 
 ## Progress
 
-The reviewed progress is **28/100 delivery points, about 28%**, through
-`ad8ca9cc`. It includes the original 20-point template baseline through
-`26b43869` and 8 points for the restricted computed vertical and its R8/R9
-repairs. A separate 8.5 provisional points records the expanded token vocabulary,
-token and identifier operations, group output, one procedural binder scope and a
-restricted parse/unwrap service with contextual syntax selection.
+The reviewed progress is **36.5/100 delivery points, about 37%**, through
+`3a7fe9f4`. It includes the original 20-point template baseline through
+`26b43869`, 8 points for the restricted computed vertical and its R8/R9
+repairs, and 8.5 points for the expanded vocabulary, identifier operations,
+group output, one procedural binder scope, and a restricted parse/unwrap service
+with contextual syntax selection.
+An additional 5 provisional points record qualified caller-term output, a
+combined-origin syntax round trip, authored and parser failures with human/JSON
+causes, malformed output refusal, and contextual failure of a non-terminating
+transformer.
 Observed root-close
 evidence and all M01–M14 acceptance criteria remain pending.
 
@@ -135,7 +139,7 @@ evidence and all M01–M14 acceptance criteria remain pending.
 The cap is 100 estimated effort points for the complete milestone through
 verified retention in `integration/expression-macros`; Main integration is
 excluded. Weights reflect expected work, not an equal share per acceptance case
-or feature. They are approximate: display about 28%, not a precise completion
+or feature. They are approximate: display about 37%, not a precise completion
 probability. The current Codex elapsed forecast is in the
 [plan](../plans/2026-11-05-expression-macros.md#estimate-and-re-planning).
 
@@ -155,29 +159,29 @@ reviewer owns `Rev`, and the orchestrator owns `PM`.
 | P06 | 2 | Dev / R2 | Imported/renamed protected-capture template executes to 35; `00d9f066`. |
 | P07 | 5.5 | Dev / R5.5 | Restricted combined template graph to 42, supplied/introduced binders, private helper/opaque owner and nested DSL; `4a4c01b0`, reviewed through `26b43869`. |
 | P08 | 1 | Dev+Rev / R1 | Operator-stop and annotation-admission review repair; `26b43869`. Full annotation support remains P10. |
-| P09 | 4 | Dev / D0.5 | Procedural captured binder with preceding initializer scope (0.5), `/tmp/ash-syntax-captured-binder-driver.log`; remaining sequential (1), recursive (1), and pattern/function (1.5) contextual scopes pending. |
+| P09 | 4 | Dev / R0.5 | Procedural captured binder with preceding initializer scope (0.5), `/tmp/ash-syntax-captured-binder-driver.log`; remaining sequential (1), recursive (1), and pattern/function (1.5) contextual scopes pending. |
 | P10 | 5 | Dev / 0 | Copied binder/use identities (1), copied nominal/region identities (2), definition-site annotations/type scopes (1), resource/region scopes (1). |
 | P11 | 5 | Dev / 0 | Authenticated grants/access (2), retained checked private closure and real Core-coordinate consumer (2), qualified/facade route and mutation refusals (1), beyond P07. |
 | P12 | 3 | Dev / 0 | Ordinary method evidence (1), structural continuation capability (1), resource escape and effect count/order (1). |
-| P13 | 3 | Dev / D1 | Generated definition context selects its owner's imported syntax, caller context selects a different caller import, and fresh context selects neither caller syntax nor binding (1), `/tmp/ash-syntax-generated-context-driver.log` (SHA-256 `3f3815fdaedc6ee7a41ff6053c64a75aa832ef96d10d2a5ca36f09cef955833a`); broader leading-context, import, reservation and conflict cases remain pending. |
-| P14 | 3 | Dev / R0.5+D1.5 | Reviewed canonical module load/check/link (0.5); new complete vocabulary (1) and lexer/declaration conformance (0.5), `/tmp/ash-syntax-token-vocabulary.log`; API identity and interface-version conformance remain pending. |
+| P13 | 3 | Dev / R1 | Generated definition context selects its owner's imported syntax, caller context selects a different caller import, and fresh context selects neither caller syntax nor binding (1), `/tmp/ash-syntax-generated-context-driver.log` (SHA-256 `3f3815fdaedc6ee7a41ff6053c64a75aa832ef96d10d2a5ca36f09cef955833a`); broader leading-context, import, reservation and conflict cases remain pending. |
+| P14 | 3 | Dev / R2 | Reviewed canonical module load/check/link (0.5); complete vocabulary (1) and lexer/declaration conformance (0.5), `/tmp/ash-syntax-token-vocabulary.log`; API identity and interface-version conformance remain pending. |
 | P15 | 2 | Dev / R1.5 | Entry-time exact checked transformer type admission (1); definition-time missing, wrong-type and disallowed-effect refusals (0.5), `/tmp/ash-transformer-review-repair-regressions.log`; polymorphism and constraint refusals (0.5) pending. The repair passed review at `ad8ca9cc`. |
 | P16 | 3 | Dev / R2.5 | Mainless compile-time entry (1), independent entry validation (1), and real checked Ash body execution (0.5), `/tmp/ash-transformer-machine-step.log`; retained helper closure (0.5) pending. |
 | P17 | 2 | Dev / 0 | Authenticated invocation Input (1), unchanged validated-program reuse (0.5), changed-program revalidation (0.5). |
-| P18 | 2.5 | Dev / D0.5 | Actual identifier capture and origin round trip (0.5), `/tmp/ash-syntax-captured-ident-driver.log`; complete input encoding (0.5), handle ownership (0.5), and broader round trips and stale/foreign/forged refusal (1) pending. |
-| P19 | 3 | Dev / R1+D1 | Reviewed expression capture (0.5) and `Plus` construction (0.5); token kind/spelling round trip and mismatch refusal (0.5), `/tmp/ash-syntax-token-ops-driver.log`, and identifier spelling (0.5), `/tmp/ash-syntax-captured-ident-driver.log`; remaining total capture pending. |
-| P20 | 4 | Dev / D2 | Structured parse rejects an incomplete expression, accepts an unresolved name without resolving it, and returns a protected fragment executing to 42 (0.5), `/tmp/ash-syntax-parse-service-driver.log` (SHA-256 `cb3b9e9e8f9376c505c8dd2c484a04940ba4b0d281e94b5ecb63b8b509024ee4`). Unwrapping `1 + 2` before `* 10` yields 21; protected, reparsed, and written-group forms yield 30, and template forwarding yields 21 (1), `/tmp/ash-syntax-unwrap-driver.log` (SHA-256 `5be6520598b42c1218239c23032279a0d5d682b009717f52b8c170cadbe005f2`). Parsing then discarding a nested rejecting transformer does not run it (0.5), `/tmp/ash-syntax-parse-no-expand-driver.log` (SHA-256 `4dd073d143a1f2da9658b8f22fc631d5a46fd488a57990f4332e16e3bd09b133`); parser causes and broader unwrapping contexts remain pending. |
-| P21 | 3.5 | Dev / D1.5 | Fresh binder avoids caller `temp` (0.5), definition identifier selects a private helper under caller shadowing (0.5), and caller identifier binds a caller body (0.5), `/tmp/ash-syntax-constructed-ident-driver.log` (SHA-256 `19f2462c862910b90739cfb207b2cdbf286bbe85ac0c1207714f5e5a287d29fa`); distinct fresh allocations and broader authority/context cases remain pending. |
-| P22 | 1 | Dev / 0 | Invocation/definition origins and empty/nonempty combination (0.5), authored rejection and causal origins (0.5). |
-| P23 | 4 | Dev / R1.5+D0.5 | Reviewed expression/token decoding, transfer and protected-fragment parsing (1.5); new parenthesis/brace group decoding and parsing (0.5), `/tmp/ash-syntax-vocabulary-groups-regressions.log`; complete output, failure and observed root-close behavior pending. |
-| P24 | 2.5 | Dev / 0 | Evaluator/service failures (1), malformed output/transfer failures (0.5), paired primary/teardown failures (1); every path closes and publishes nothing. |
-| P25 | 1 | Dev / 0 | Bounded transformer execution, including a real non-requesting recursive transformer that terminates as an expansion failure. |
+| P18 | 2.5 | Dev / R0.5 | Actual identifier capture and origin round trip (0.5), `/tmp/ash-syntax-captured-ident-driver.log`; complete input encoding (0.5), handle ownership (0.5), and broader round trips and stale/foreign/forged refusal (1) pending. |
+| P19 | 3 | Dev / R2 | Reviewed expression capture (0.5) and `Plus` construction (0.5); token kind/spelling round trip and mismatch refusal (0.5), `/tmp/ash-syntax-token-ops-driver.log`, and identifier spelling (0.5), `/tmp/ash-syntax-captured-ident-driver.log`; remaining total capture pending. |
+| P20 | 4 | Dev / R2+D1 | Structured parse rejects an incomplete expression, accepts an unresolved name without resolving it, and returns a protected fragment executing to 42 (0.5), `/tmp/ash-syntax-parse-service-driver.log` (SHA-256 `cb3b9e9e8f9376c505c8dd2c484a04940ba4b0d281e94b5ecb63b8b509024ee4`). Unwrapping `1 + 2` before `* 10` yields 21; protected, reparsed, and written-group forms yield 30, and template forwarding yields 21 (1), `/tmp/ash-syntax-unwrap-driver.log` (SHA-256 `5be6520598b42c1218239c23032279a0d5d682b009717f52b8c170cadbe005f2`). Parsing then discarding a nested rejecting transformer does not run it (0.5), `/tmp/ash-syntax-parse-no-expand-driver.log` (SHA-256 `4dd073d143a1f2da9658b8f22fc631d5a46fd488a57990f4332e16e3bd09b133`). Unwrapping a caller-qualified term retains its import and yields 30 (D0.5), `/tmp/ash-syntax-qualified-after.log` (SHA-256 `dfbe5239cb5aa17305ed3648e85ed916bc030ca645b537f870b56a443b06db5e`). `SyntaxDiagnostic` retains a parser reason and construction location (D0.5), `/tmp/ash-syntax-parser-diagnostic-driver.log` (SHA-256 `e8954105f99c7e0ff104fd5651ec14344b07bfda87310b58855e99ebd74d7472`); broader parse and unwrapping contexts remain pending. |
+| P21 | 3.5 | Dev / R1.5 | Fresh binder avoids caller `temp` (0.5), definition identifier selects a private helper under caller shadowing (0.5), and caller identifier binds a caller body (0.5), `/tmp/ash-syntax-constructed-ident-driver.log` (SHA-256 `19f2462c862910b90739cfb207b2cdbf286bbe85ac0c1207714f5e5a287d29fa`); distinct fresh allocations and broader authority/context cases remain pending. |
+| P22 | 1 | Dev / D1 | Empty origins return `MissingOrigins`; nonempty and nested combinations cross parse and unwrap before the graph executes to 42 (0.5), `/tmp/ash-syntax-combine-origins-driver.log` (SHA-256 `ca483c2b063c55e27a151adf79e1644a0b8e6f7f6e380c6fe11943688aa8dedd`). A transformer-authored rejection preserves its message and ordered caller/definition causes (0.5), `/tmp/ash-syntax-rejection-driver.log` (SHA-256 `dd3b9eea67d1ef9ac6191fdfa6b15df46fc270e969ab70018b23d6a0077ecccb`); final generated-program causal-origin propagation remains pending. |
+| P23 | 4 | Dev / R2 | Reviewed expression/token decoding, transfer and protected-fragment parsing (1.5); parenthesis/brace group decoding and parsing (0.5), `/tmp/ash-syntax-vocabulary-groups-regressions.log`; complete output, failure and observed root-close behavior pending. |
+| P24 | 2.5 | Dev / D1 | Malformed direct output reports `parse.expected-operand` (0.5), `/tmp/ash-syntax-invalid-output-driver.log` (SHA-256 `7d4df37046fea2bae1e0b14ac144bcd232809730f05ccd0df94be4edd455ef05`). Evaluator failure retains its underlying cause and invocation/definition locations (0.5), `/tmp/ash-syntax-diverge-after.log` (SHA-256 `4be2d989431d7da8b0844bb3af9dfe0a6e21afde7ba15f897f2dcda7ffbfd1a9`); other service failures, paired primary/teardown failures, and observed closure remain pending. |
+| P25 | 1 | Dev / D1 | A real non-requesting recursive transformer terminates as an expansion failure under the existing execution limit, `/tmp/ash-syntax-diverge-after.log` (SHA-256 `4be2d989431d7da8b0844bb3af9dfe0a6e21afde7ba15f897f2dcda7ffbfd1a9`). |
 | P26 | 0.5 | Dev / 0 | Required service, output, and expansion limits produce ordinary closed-invocation failures. |
 | P27 | 2.5 | Dev / R1 | Frozen computed graph to 42 (1), `/tmp/ash-transformer-combined-driver.log`; template/procedure equivalence (0.5), discarded and repeated nested invocation behavior (1) pending. |
 | P28 | 2.5 | Dev / 0 | Independent declaration-coordinate/grant/type/provenance mutation checks (1), distinct compile-time/final validation (1), completed dependency reuse (0.5). |
 | P29 | 2 | Dev / 0 | Repeat compilation modulo fresh identities (1), changed semantic inputs update/reject output (1). |
 | P30 | 2.5 | Dev / 0 | Ordered multi-input/frame representation (1), ordinary semantic causes/locations (1), bounded copying/relocation preservation (0.5). |
-| P31 | 2.5 | Dev / 0 | Actual human diagnostic variants (1), JSON causal/frame variants (1), locales/catalog conformance (0.5). |
+| P31 | 2.5 | Dev / D1 | Authored rejection (0.5) and retained parser failure (0.5) render their messages and caller/definition causes in human and JSON output, `/tmp/ash-syntax-rejection-driver.log` and `/tmp/ash-syntax-parser-diagnostic-driver.log`; remaining diagnostic variants, complete frame structure, and locale/catalog conformance are pending. |
 | P32 | 2.5 | Dev / 0 | Required image records (1), reconstruction/round trip (1), corruption refusal (0.5). |
 | P33 | 2.5 | Dev / 0 | Public build preparation/link (1), real generated executable matches interpretation (1), source removal/cleanup/no runtime syntax service (0.5). |
 | P34 | 2 | Dev / 0 | Implemented language delta in specification (1), executable positive/negative examples (1). |
@@ -193,7 +197,7 @@ API/entry 10; Ops/interchange 14; transfer/failure/limits 8; graph/Core/repeatab
 The independent review assigns more weight to the unresolved contextual,
 non-term, copied-identity, grant, and Core-coordinate consumers than the first
 draft. The 20-point reviewed baseline is frozen; a changed ETA does not reweight it.
-Reviewed effort is 28, demonstrated provisional effort is 8.5, and 63.5 points
+Reviewed effort is 36.5, demonstrated provisional effort is 5, and 58.5 points
 have no credit. Review upgrades D to R without awarding implementation points
 again. Explicit review/gate rows cover their own work, not a second implementation
 credit. Record the exact commit or source hash, real consumer observation/test
@@ -247,9 +251,23 @@ both programs now produce 30, and bare forwarding still produces 21
 The affected suite passes 23 host, 25 module-syntax, and 18 template cases
 (`/tmp/ash-syntax-r10-regressions.log`, SHA-256
 `1dee17cb3227324d7d686fb2224b3de4f6f8bd82fe30bcdc37851dbb01b30e4e`).
-Re-review and all M01–M14 remain pending. Unwrapping identifiers in qualified,
-type, and pattern positions still fails closed; `Text.equal(...)` is a concrete
-qualified-name case for that remaining work.
+R10 re-review passed at `3a7fe9f4`; all M01–M14 remain pending. A caller's
+qualified term now unwraps through its existing import, while definition-context
+qualified names and identifiers in type and pattern positions remain incomplete.
+
+At 21:07 Sofia time, the next 32-minute interval added 5 provisional points:
+P20, P22, P24, P25, and P31 each gained one point for the distinct observations
+listed above. The ledger stands at R36.5 + D5. The affected driver suites passed
+29 host, 25 module-syntax, and 18 template cases
+(`/tmp/ash-syntax-diagnostics-regressions.log`, SHA-256
+`46ac0fb593923f73be3e9487dd1cf0ff6056677d4e2c549fbd30fa8cf4afddfa`),
+the diagnostic presentation/catalogue suites passed 14 cases
+(`/tmp/ash-syntax-diagnostics-presentation.log`, SHA-256
+`9ffa74cdac9dc9d9dfab95b3924c880686fcd8ab8c18c4340a617aeeda798bd3`),
+and the observer suite passed three cases
+(`/tmp/ash-syntax-diagnostics-observer.log`, SHA-256
+`0f48fba50539eca8700ba26f4cd1b0fd911672b11d4f19c3719b41af2f008750`).
+These results await independent review. The remaining forecast is in the plan.
 
 1. **Template grouping — demonstrated.** `cargo test -j 1 -p ash --test
    surface_macros template_macro_preserves_expression_capture_grouping --

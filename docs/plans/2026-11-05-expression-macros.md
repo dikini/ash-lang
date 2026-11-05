@@ -846,17 +846,18 @@ full gate may serve the pre-Main gate without a duplicate identical-input run.
 
 ## Estimate and re-planning
 
-After the computed graph and initial constructed-identifier cases ran, the
-provisional forecast is **about 10 additional Codex elapsed hours**, with a
-tentative **7–15 hour** range. The observed pace of roughly 36.5 weighted points
-over five and a half elapsed hours informs the midpoint; the range is not a confidence
-interval. This replaces the earlier 11–23 hour forecast. It is a whole-chain
-estimate, not a deadline or a measured model-runtime total; independent review
-may revise it.
+After the diagnostics slice, the provisional forecast is **about 8.5 additional
+Codex elapsed hours**, with a tentative **6–13 hour** range. At 21:07 Sofia
+time, roughly 41.5 reviewed or provisional weighted points over six elapsed
+hours, including setup, informs the midpoint. The latest 32-minute interval
+added 5 provisional points; review can change those credits. The range is not a
+confidence interval. This replaces the earlier 10-hour forecast. It is a
+whole-chain estimate, not a deadline or a measured model-runtime total;
+independent review may revise it.
 
 | Remaining connected work | Codex elapsed hours |
 | --- | --- |
-| Remaining Ops, vocabulary, output forms, transfer failures, and limits | 2–4 |
+| Remaining Ops, vocabulary, output forms, transfer failures, and limits | 2–3 |
 | Complete contexts, copied identities, grants, and Core coordinates | 2–5 |
 | Diagnostics and actual image/build/native path | 1–3 |
 | Remaining evidence, docs, gates, review, and retained acceptance | 2–3 |

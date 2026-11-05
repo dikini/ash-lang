@@ -6872,7 +6872,7 @@ pub(crate) fn evaluate_transformer(
     caller: &crate::surface::SurfaceName,
     introduction: usize,
     contexts: std::sync::Arc<crate::syntax::SyntaxContexts>,
-) -> Result<(Vec<crate::syntax::MacroOutputNode>, usize), RuntimeFailure> {
+) -> Result<(crate::syntax::TransformerOutput, usize), RuntimeFailure> {
     let scope = disposal::Scope::enter();
     let result = (|| {
         let mut machine = Machine::new_effect(&entry.program);
@@ -6893,8 +6893,8 @@ pub(crate) fn evaluate_transformer(
             .as_ref()
             .ok_or(RuntimeFailure::InvalidControlState)?;
         let transferred = host
-            .transfer(&value, heap.cells())
-            .map(|nodes| (nodes, host.fresh_count()));
+            .transfer(&value, heap.cells(), &mut machine.instantiation_work)
+            .map(|output| (output, host.fresh_count()));
         drop(value);
         drop(heap);
         drop(machine);

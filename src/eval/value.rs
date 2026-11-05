@@ -596,11 +596,11 @@ pub struct CompilerSyntaxHandle {
 #[derive(Clone, Copy, Debug)]
 pub(super) enum CompilerSyntaxHandleKind {
     Input,
-    Origin(crate::source::Span),
+    Origin(usize),
     Expression(usize),
     Identifier(usize),
     Token(usize),
-    ParseFailure,
+    ParseFailure(usize),
 }
 
 /// A fully evaluated Ash value.

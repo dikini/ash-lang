@@ -2180,8 +2180,8 @@ fn capture_contents(
                         InternalReason::UnexpectedShape,
                     ))?;
                 let origin = match originals.get(&index) {
-                    Some(MacroOutputNode::Group(_, _, origin)) => *origin,
-                    _ => join_spans(source, token.span, close.span)?,
+                    Some(MacroOutputNode::Group(_, _, origin)) => origin.clone(),
+                    _ => join_spans(source, token.span, close.span)?.into(),
                 };
                 output.push(MacroOutputNode::Group(delimiter, children, origin));
             } else if matches!(token.kind, TokenKind::Dollar) {
@@ -2200,7 +2200,7 @@ fn capture_contents(
                 TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
             ) {
                 let name = surface_name(token)?;
-                output.push(MacroOutputNode::Identifier(name, token.span));
+                output.push(MacroOutputNode::Identifier(name, token.span.into()));
             } else {
                 let start = usize::try_from(token.span.range().start())
                     .map_err(|_| ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
@@ -2213,7 +2213,7 @@ fn capture_contents(
                 output.push(MacroOutputNode::Token(
                     token.kind.clone(),
                     spelling.into(),
-                    token.span,
+                    token.span.into(),
                 ));
             }
         }
@@ -2271,6 +2271,8 @@ pub(super) fn project_macro_expression(
                         && node.kind != NodeKind::PrimaryExpression
                         && node.kind != NodeKind::SyntaxInvocation
                         && node.kind != NodeKind::SyntaxArgument
+                        && !(node.kind == NodeKind::QualifiedName
+                            && parent == Some(NodeKind::PrimaryExpression))
                         && !(node.kind == NodeKind::Binder
                             && parent == Some(NodeKind::Pattern)) =>
                 {
@@ -2711,7 +2713,8 @@ fn project_expression_with_fragments(
                     } else if let Some(name) =
                         optional_child_of_kind(node, NodeKind::QualifiedName)?
                     {
-                        let name = project_qualified_name(source, name, tokens)?;
+                        let name =
+                            project_macro_qualified_name(source, name, tokens, original_nodes)?;
                         projected.push(SurfaceExpr {
                             span: name.span,
                             kind: SurfaceExprKind::Name(SurfaceReference::Qualified(name)),
@@ -3599,6 +3602,49 @@ fn project_qualified_name(
     let member = surface_name(names.next().ok_or(ProjectionError::MalformedTree(
         InternalReason::UnexpectedShape,
     ))?)?;
+    if names.next().is_some() {
+        return malformed(InternalReason::UnexpectedShape);
+    }
+    Ok(SurfaceQualifiedName {
+        qualifier,
+        member,
+        span: node_span(source, node, tokens)?,
+    })
+}
+
+fn project_macro_qualified_name(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+    originals: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
+) -> Result<SurfaceQualifiedName, ProjectionError> {
+    require_kind(node, NodeKind::QualifiedName)?;
+    let mut names = node.children.iter().filter_map(|child| match child {
+        ConcreteElement::Token(index)
+            if tokens.get(*index).is_some_and(|token| {
+                matches!(
+                    token.kind,
+                    TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
+                )
+            }) =>
+        {
+            Some(*index)
+        }
+        _ => None,
+    });
+    let mut name = || {
+        let index = names.next().ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?;
+        match originals.get(&index) {
+            Some(crate::syntax::MacroOutputNode::Identifier(name, _)) => Ok(name.clone()),
+            _ => surface_name(tokens.get(index).ok_or(ProjectionError::MalformedTree(
+                InternalReason::TokenOutOfRange,
+            ))?),
+        }
+    };
+    let qualifier = name()?;
+    let member = name()?;
     if names.next().is_some() {
         return malformed(InternalReason::UnexpectedShape);
     }

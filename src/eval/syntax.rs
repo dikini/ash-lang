@@ -12,7 +12,7 @@ use crate::{
     resolved::BinderId,
     source::{SourceFile, Span},
     surface::{SurfaceExpressionCapture, SurfaceName, SurfaceSyntaxCapture},
-    syntax::{MacroDelimiter, MacroOutputNode, SyntaxContexts},
+    syntax::{MacroDelimiter, MacroOrigin, MacroOutputNode, SyntaxContexts, TransformerOutput},
     types::{ConstructorId, EffectId, OperationId, TypeWorkBudget},
 };
 
@@ -40,6 +40,11 @@ pub(super) struct SyntaxHost {
     captures: Vec<SurfaceSyntaxCapture>,
     expressions: Vec<SurfaceExpressionCapture>,
     identifiers: Vec<SurfaceName>,
+    origins: Vec<MacroOrigin>,
+    parse_failures: Vec<(
+        Vec<crate::parser::ParseDiagnostic>,
+        Option<crate::parser::ResourceFailure>,
+    )>,
     tokens: Vec<SyntaxToken>,
     constructors: HashMap<String, ConstructorId>,
     operations: HashMap<OperationId, String>,
@@ -97,6 +102,8 @@ impl SyntaxHost {
             captures: captures.to_vec(),
             expressions: Vec::new(),
             identifiers: Vec::new(),
+            origins: Vec::new(),
+            parse_failures: Vec::new(),
             tokens: Vec::new(),
             constructors,
             operations,
@@ -126,6 +133,41 @@ impl SyntaxHost {
             return Err(RuntimeFailure::InvalidControlState);
         }
         Ok(handle.kind)
+    }
+
+    fn issue_origin(&mut self, origin: MacroOrigin) -> Value {
+        let index = self.origins.len();
+        self.origins.push(origin);
+        self.handle(CompilerSyntaxHandleKind::Origin(index))
+    }
+
+    fn admitted_origin(&self, value: &Value) -> Result<&MacroOrigin, RuntimeFailure> {
+        let CompilerSyntaxHandleKind::Origin(index) = self.admitted_handle(value)? else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        self.origins
+            .get(index)
+            .ok_or(RuntimeFailure::InvalidControlState)
+    }
+
+    fn read_origins<'a>(
+        &self,
+        mut origins: &'a Value,
+        heap: &'a [HeapCell],
+    ) -> Result<Vec<MacroOrigin>, RuntimeFailure> {
+        let mut inputs = Vec::new();
+        loop {
+            let (tag, payload) = constructor_fields(origins, heap)?;
+            if tag == self.constructor("NoOrigins")? && payload.is_none() {
+                return Ok(inputs);
+            }
+            if tag != self.constructor("MoreOrigins")? {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            let (origin, rest) = pair(payload.ok_or(RuntimeFailure::InvalidControlState)?, heap)?;
+            inputs.push(self.admitted_origin(origin)?.clone());
+            origins = rest;
+        }
     }
 
     fn constructor(&self, name: &str) -> Result<ConstructorId, RuntimeFailure> {
@@ -158,9 +200,9 @@ impl SyntaxHost {
         let operation = self
             .operations
             .get(&operation)
-            .map(String::as_str)
+            .cloned()
             .ok_or(RuntimeFailure::InvalidControlState)?;
-        match operation {
+        match operation.as_str() {
             "invocation_origin" | "definition_origin" => {
                 if !matches!(
                     self.admitted_handle(&argument)?,
@@ -173,7 +215,7 @@ impl SyntaxHost {
                 } else {
                     self.definition_span
                 };
-                Ok(self.handle(CompilerSyntaxHandleKind::Origin(origin)))
+                Ok(self.issue_origin(origin.into()))
             }
             "capture" => {
                 let (input, index) = pair(&argument, heap)?;
@@ -184,20 +226,18 @@ impl SyntaxHost {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
                 let index = read_integer(index, heap, work)?.to_usize();
-                match index
-                    .and_then(|index| self.captures.get(index).map(|capture| (index, capture)))
-                {
-                    Some((_, SurfaceSyntaxCapture::Expression(expression))) => {
+                match index.and_then(|index| self.captures.get(index)).cloned() {
+                    Some(SurfaceSyntaxCapture::Expression(expression)) => {
                         let index = self.expressions.len();
-                        self.expressions.push(expression.clone());
+                        self.expressions.push(expression);
                         let fragment = self.handle(CompilerSyntaxHandleKind::Expression(index));
                         let capture = self.construct(heap, "ExpressionCapture", Some(fragment))?;
                         self.construct(heap, "Captured", Some(capture))
                     }
-                    Some((_, SurfaceSyntaxCapture::Identifier(name))) => {
-                        let origin = self.handle(CompilerSyntaxHandleKind::Origin(name.span));
+                    Some(SurfaceSyntaxCapture::Identifier(name)) => {
+                        let origin = self.issue_origin(name.span.into());
                         let index = self.identifiers.len();
-                        self.identifiers.push(name.clone());
+                        self.identifiers.push(name);
                         let identifier = self.handle(CompilerSyntaxHandleKind::Identifier(index));
                         let fields = vec![identifier, origin].into_boxed_slice();
                         let fields = Value::Location(allocate_heap(heap, HeapCell::Tuple(fields))?);
@@ -253,9 +293,7 @@ impl SyntaxHost {
                 ) {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
-                let CompilerSyntaxHandleKind::Origin(origin) = self.admitted_handle(origin)? else {
-                    return Err(RuntimeFailure::InvalidControlState);
-                };
+                let origin = self.admitted_origin(origin)?.primary();
                 let (spelling, is_string) = borrowed_bytes(spelling, heap, work)?;
                 let spelling = std::str::from_utf8(spelling)
                     .map_err(|_| RuntimeFailure::InvalidControlState)?;
@@ -267,7 +305,7 @@ impl SyntaxHost {
                 {
                     return self.construct(heap, "InvalidIdentifier", None);
                 }
-                let (introduction, introduced_at) = match operation {
+                let (introduction, introduced_at) = match operation.as_str() {
                     "fresh_identifier" => {
                         self.fresh_count = self
                             .fresh_count
@@ -292,6 +330,25 @@ impl SyntaxHost {
                 });
                 let identifier = self.handle(CompilerSyntaxHandleKind::Identifier(index));
                 self.construct(heap, "MadeIdentifier", Some(identifier))
+            }
+            "combine_origins" => {
+                let (input, origins) = pair(&argument, heap)?;
+                if !matches!(
+                    self.admitted_handle(input)?,
+                    CompilerSyntaxHandleKind::Input
+                ) {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let inputs = self.read_origins(origins, heap)?;
+                if inputs.is_empty() {
+                    return self.construct(heap, "MissingOrigins", None);
+                }
+                let combined = self.issue_origin(MacroOrigin::Combined {
+                    inputs: inputs.into(),
+                    invocation: self.invocation_span,
+                    definition: self.definition_span,
+                });
+                self.construct(heap, "Combined", Some(combined))
             }
             "parse_expression" => {
                 let (input, syntax) = pair(&argument, heap)?;
@@ -318,9 +375,17 @@ impl SyntaxHost {
                         let fragment = self.handle(CompilerSyntaxHandleKind::Expression(index));
                         self.construct(heap, "Parsed", Some(fragment))
                     }
-                    Err(_) => {
-                        let failure = self.handle(CompilerSyntaxHandleKind::ParseFailure);
+                    Err(crate::parser::MacroParseFailure::Syntax {
+                        diagnostics,
+                        resource,
+                    }) => {
+                        let index = self.parse_failures.len();
+                        self.parse_failures.push((diagnostics, resource));
+                        let failure = self.handle(CompilerSyntaxHandleKind::ParseFailure(index));
                         self.construct(heap, "ParseRejected", Some(failure))
+                    }
+                    Err(crate::parser::MacroParseFailure::Invalid) => {
+                        Err(RuntimeFailure::InvalidControlState)
                     }
                 }
             }
@@ -371,12 +436,59 @@ impl SyntaxHost {
         &self,
         result: &Value,
         heap: &[HeapCell],
-    ) -> Result<Vec<MacroOutputNode>, RuntimeFailure> {
+        work: &mut TypeWorkBudget,
+    ) -> Result<TransformerOutput, RuntimeFailure> {
         let (tag, syntax) = constructor_fields(result, heap)?;
-        if tag != self.constructor("Expanded")? {
+        if tag == self.constructor("Expanded")? {
+            return self
+                .transfer_syntax(syntax.ok_or(RuntimeFailure::InvalidControlState)?, heap, 0)
+                .map(TransformerOutput::Expanded);
+        }
+        if tag != self.constructor("Rejected")? {
             return Err(RuntimeFailure::InvalidControlState);
         }
-        self.transfer_syntax(syntax.ok_or(RuntimeFailure::InvalidControlState)?, heap, 0)
+        let (tag, fields) =
+            constructor_fields(syntax.ok_or(RuntimeFailure::InvalidControlState)?, heap)?;
+        if tag == self.constructor("SyntaxDiagnostic")? {
+            let CompilerSyntaxHandleKind::ParseFailure(index) =
+                self.admitted_handle(fields.ok_or(RuntimeFailure::InvalidControlState)?)?
+            else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            let (diagnostics, resource) = self
+                .parse_failures
+                .get(index)
+                .ok_or(RuntimeFailure::InvalidControlState)?;
+            return Ok(TransformerOutput::SyntaxRejected(
+                crate::driver::SyntaxParseFailure {
+                    diagnostics: diagnostics.clone(),
+                    resource: *resource,
+                    invocation: self.invocation_span,
+                    definition: self.definition_span,
+                },
+            ));
+        }
+        if tag != self.constructor("MacroDiagnostic")? {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let (message, primary, related) =
+            triple(fields.ok_or(RuntimeFailure::InvalidControlState)?, heap)?;
+        let (message, is_string) = borrowed_bytes(message, heap, work)?;
+        if !is_string {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let message = std::str::from_utf8(message)
+            .map_err(|_| RuntimeFailure::InvalidControlState)?
+            .to_owned();
+        Ok(TransformerOutput::Rejected(
+            crate::driver::SyntaxExpansionFailure {
+                message,
+                primary: self.admitted_origin(primary)?.clone(),
+                related: self.read_origins(related, heap)?,
+                invocation: self.invocation_span,
+                definition: self.definition_span,
+            },
+        ))
     }
 
     fn transfer_syntax(
@@ -421,16 +533,12 @@ impl SyntaxHost {
                 } else {
                     return Err(RuntimeFailure::InvalidControlState);
                 };
-                let CompilerSyntaxHandleKind::Origin(origin) = self.admitted_handle(origin)? else {
-                    return Err(RuntimeFailure::InvalidControlState);
-                };
+                let origin = self.admitted_origin(origin)?.clone();
                 let children = self.transfer_syntax(syntax, heap, depth + 1)?;
                 output.push(MacroOutputNode::Group(delimiter, children, origin));
             } else {
                 let (value, origin) = pair(payload, heap)?;
-                let CompilerSyntaxHandleKind::Origin(origin) = self.admitted_handle(origin)? else {
-                    return Err(RuntimeFailure::InvalidControlState);
-                };
+                let origin = self.admitted_origin(origin)?.clone();
                 if tag == self.constructor("ExpressionNode")? {
                     let CompilerSyntaxHandleKind::Expression(index) =
                         self.admitted_handle(value)?
@@ -494,7 +602,7 @@ impl SyntaxHost {
                         "ExpressionNode",
                         vec![
                             self.handle(CompilerSyntaxHandleKind::Expression(index)),
-                            self.handle(CompilerSyntaxHandleKind::Origin(*origin)),
+                            self.issue_origin(origin.clone()),
                         ],
                     )
                 }
@@ -505,7 +613,7 @@ impl SyntaxHost {
                         "IdentifierNode",
                         vec![
                             self.handle(CompilerSyntaxHandleKind::Identifier(index)),
-                            self.handle(CompilerSyntaxHandleKind::Origin(*origin)),
+                            self.issue_origin(origin.clone()),
                         ],
                     )
                 }
@@ -519,7 +627,7 @@ impl SyntaxHost {
                         "TokenNode",
                         vec![
                             self.handle(CompilerSyntaxHandleKind::Token(index)),
-                            self.handle(CompilerSyntaxHandleKind::Origin(*origin)),
+                            self.issue_origin(origin.clone()),
                         ],
                     )
                 }
@@ -532,11 +640,7 @@ impl SyntaxHost {
                     let children = self.syntax_value(children, heap, depth + 1)?;
                     (
                         "GroupNode",
-                        vec![
-                            delimiter,
-                            children,
-                            self.handle(CompilerSyntaxHandleKind::Origin(*origin)),
-                        ],
+                        vec![delimiter, children, self.issue_origin(origin.clone())],
                     )
                 }
                 MacroOutputNode::Splice(_) => return Err(RuntimeFailure::InvalidControlState),

@@ -1182,6 +1182,52 @@ pub fn compile_file_diagnostics(
             "input.source-model",
         ),
         FileFailure::Pipeline(context) => match context.failure() {
+            PipelineFailure::SyntaxExpansion(error) => {
+                compile_syntax_expansion_failure(error, &sources)?
+            }
+            PipelineFailure::SyntaxRuntime(error) => {
+                compile_syntax_runtime_failure(error, &sources)?
+            }
+            PipelineFailure::SyntaxParse(error) => {
+                let mut diagnostics = compile_syntax_diagnostics(
+                    &[],
+                    &error.diagnostics,
+                    error.resource,
+                    &sources,
+                    None,
+                )?;
+                for diagnostic in &mut diagnostics {
+                    for (span, relationship, message) in [
+                        (
+                            error.invocation,
+                            "syntax_invocation",
+                            Message::syntax_invocation_frame(),
+                        ),
+                        (
+                            error.definition,
+                            "syntax_definition",
+                            Message::syntax_definition_frame(),
+                        ),
+                    ] {
+                        let source = sources
+                            .iter()
+                            .copied()
+                            .find(|source| source.id() == span.source())
+                            .ok_or(PresentationError::MissingSource)?;
+                        source
+                            .location(span)
+                            .map_err(|_| PresentationError::MissingSource)?;
+                        diagnostic.related.push(Label {
+                            source,
+                            span,
+                            message,
+                            relationship,
+                            facts: Vec::new(),
+                        });
+                    }
+                }
+                return Ok(diagnostics);
+            }
             PipelineFailure::Resolution(error) => compile_resolve_diagnostic(error, &sources)?,
             PipelineFailure::Kind(error) => compile_kind_failure(error, &sources)?,
             PipelineFailure::Typing(TypeError::Source(error)) => {
@@ -1221,6 +1267,99 @@ pub fn compile_file_diagnostics(
         },
     };
     Ok(vec![diagnostic])
+}
+
+fn compile_syntax_expansion_failure<'a>(
+    failure: &'a crate::driver::SyntaxExpansionFailure,
+    sources: &[&'a SourceFile],
+) -> Result<CompileDiagnostic<'a>, PresentationError> {
+    let label = |span: Span, relationship, message| {
+        let source = sources
+            .iter()
+            .copied()
+            .find(|source| source.id() == span.source())
+            .ok_or(PresentationError::MissingSource)?;
+        source
+            .location(span)
+            .map_err(|_| PresentationError::MissingSource)?;
+        Ok(Label {
+            source,
+            span,
+            message,
+            relationship,
+            facts: Vec::new(),
+        })
+    };
+    let primary = label(
+        failure.primary_span(),
+        "syntax_rejection",
+        Message::syntax_rejection_site(),
+    )?;
+    let mut related = Vec::new();
+    for (span, relationship) in failure.related_spans() {
+        let message = match relationship {
+            "syntax_invocation" => Message::syntax_invocation_frame(),
+            "syntax_definition" => Message::syntax_definition_frame(),
+            _ => Message::syntax_rejection_cause(),
+        };
+        related.push(label(span, relationship, message)?);
+    }
+    Ok(CompileDiagnostic {
+        reason: "syntax.rejected".into(),
+        responsibility: "source",
+        message: Message::syntax_expansion_rejected(failure.message()),
+        primary: Some(primary),
+        related,
+        facts: vec![Fact {
+            name: "message",
+            kind: "text",
+            value: FactValue::Text(failure.message()),
+        }],
+    })
+}
+
+fn compile_syntax_runtime_failure<'a>(
+    failure: &'a crate::driver::SyntaxRuntimeFailure,
+    sources: &[&'a SourceFile],
+) -> Result<CompileDiagnostic<'a>, PresentationError> {
+    let label = |span: Span, relationship, message| {
+        let source = sources
+            .iter()
+            .copied()
+            .find(|source| source.id() == span.source())
+            .ok_or(PresentationError::MissingSource)?;
+        source
+            .location(span)
+            .map_err(|_| PresentationError::MissingSource)?;
+        Ok(Label {
+            source,
+            span,
+            message,
+            relationship,
+            facts: Vec::new(),
+        })
+    };
+    let cause = failure.cause().reason_code();
+    Ok(CompileDiagnostic {
+        reason: "syntax.transformer-failed".into(),
+        responsibility: "compiler",
+        message: Message::syntax_transformer_failed(cause),
+        primary: Some(label(
+            failure.invocation,
+            "syntax_invocation",
+            Message::syntax_invocation_frame(),
+        )?),
+        related: vec![label(
+            failure.definition,
+            "syntax_definition",
+            Message::syntax_definition_frame(),
+        )?],
+        facts: vec![Fact {
+            name: "cause",
+            kind: "runtime-reason",
+            value: FactValue::Text(cause),
+        }],
+    })
 }
 
 fn compile_projection_error<'a>(

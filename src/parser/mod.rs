@@ -555,6 +555,15 @@ pub(crate) fn parse_with_budget_and_header(
 
 /// Parses a transformer result with protected fragments as expression atoms.
 /// The token stream is constructed directly; no generated text is lexed.
+#[derive(Clone, Debug)]
+pub(crate) enum MacroParseFailure {
+    Syntax {
+        diagnostics: Vec<ParseDiagnostic>,
+        resource: Option<ResourceFailure>,
+    },
+    Invalid,
+}
+
 pub(crate) fn parse_macro_expression(
     source: &SourceFile,
     invocation: Span,
@@ -566,7 +575,7 @@ pub(crate) fn parse_macro_expression(
         Vec<crate::surface::SurfaceSyntaxMatcherPart>,
         Vec<crate::surface::SurfaceSyntaxCapture>,
     ),
-    (),
+    MacroParseFailure,
 > {
     use crate::source::ByteRange;
     use crate::surface::{
@@ -575,12 +584,12 @@ pub(crate) fn parse_macro_expression(
     use crate::syntax::MacroOutputNode;
     let start = invocation.range().start();
     let anchor = source
-        .span(ByteRange::new(start, start).map_err(|_| ())?)
-        .map_err(|_| ())?;
-    let end = u32::try_from(source.text().len()).map_err(|_| ())?;
+        .span(ByteRange::new(start, start).map_err(|_| MacroParseFailure::Invalid)?)
+        .map_err(|_| MacroParseFailure::Invalid)?;
+    let end = u32::try_from(source.text().len()).map_err(|_| MacroParseFailure::Invalid)?;
     let eof = source
-        .span(ByteRange::new(end, end).map_err(|_| ())?)
-        .map_err(|_| ())?;
+        .span(ByteRange::new(end, end).map_err(|_| MacroParseFailure::Invalid)?)
+        .map_err(|_| MacroParseFailure::Invalid)?;
     let mut tokens = Vec::new();
     let mut fragments = std::collections::HashMap::new();
     let mut original_nodes = std::collections::HashMap::new();
@@ -657,7 +666,7 @@ pub(crate) fn parse_macro_expression(
             MacroOutputNode::Group(delimiter, children, origin) => {
                 original_nodes.insert(
                     tokens.len(),
-                    MacroOutputNode::Group(delimiter.clone(), Vec::new(), origin),
+                    MacroOutputNode::Group(delimiter.clone(), Vec::new(), origin.clone()),
                 );
                 let (open, close) = match delimiter {
                     crate::syntax::MacroDelimiter::Parentheses => {
@@ -676,10 +685,24 @@ pub(crate) fn parse_macro_expression(
                 pieces.extend(children.into_iter().rev());
                 open
             }
-            MacroOutputNode::Splice(_) => return Err(()),
+            MacroOutputNode::Splice(_) => return Err(MacroParseFailure::Invalid),
         };
         tokens.push(crate::lexer::Token { kind, span: anchor });
     }
+    let mut diagnostic_spans = original_nodes
+        .iter()
+        .map(|(index, node)| {
+            let origin = match node {
+                MacroOutputNode::Expression(_, origin)
+                | MacroOutputNode::Identifier(_, origin)
+                | MacroOutputNode::Token(_, _, origin)
+                | MacroOutputNode::Group(_, _, origin) => origin,
+                MacroOutputNode::Splice(_) => unreachable!(),
+            };
+            (*index, origin.primary())
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    diagnostic_spans.insert(tokens.len(), invocation);
     tokens.push(crate::lexer::Token {
         kind: TokenKind::EndOfFile,
         span: eof,
@@ -700,12 +723,19 @@ pub(crate) fn parse_macro_expression(
         syntax_source: Some(source),
         syntax_selections: Some(&syntax_selections),
         syntax_spellings: Some(&syntax_spellings),
+        diagnostic_spans: Some(&diagnostic_spans),
         syntax_stops: Vec::new(),
     };
     parser.start(NodeKind::Module);
     grammar::expression(&mut parser);
     if !parser.at(&TokenKind::EndOfFile) {
-        return Err(());
+        parser.error_at_current(ParseReason::UnexpectedToken);
+    }
+    if !parser.diagnostics.is_empty() || parser.resource_failure.is_some() {
+        return Err(MacroParseFailure::Syntax {
+            diagnostics: parser.diagnostics,
+            resource: parser.resource_failure,
+        });
     }
     let _ = parser.bump();
     parser.finish();
@@ -717,7 +747,7 @@ pub(crate) fn parse_macro_expression(
     } = parser;
     let tree = cst::build(tokens, Vec::new(), diagnostics, events, resource_failure);
     let expression = project::project_macro_expression(source, &tree, &fragments, &original_nodes)
-        .map_err(|_| ())?;
+        .map_err(|_| MacroParseFailure::Invalid)?;
     Ok((expression, matcher, captures))
 }
 
@@ -803,6 +833,7 @@ pub(crate) fn parse_module_header(
             syntax_source: None,
             syntax_selections: None,
             syntax_spellings: None,
+            diagnostic_spans: None,
             syntax_stops: Vec::new(),
         };
         grammar::module_header(&mut parser);
@@ -874,6 +905,7 @@ pub(crate) fn finish_module_from_checkpoint_with_syntax(
         syntax_source: source,
         syntax_selections: None,
         syntax_spellings: None,
+        diagnostic_spans: None,
         syntax_stops: Vec::new(),
     };
     grammar::module_body(&mut parser);
@@ -925,6 +957,7 @@ pub(crate) struct Parser<'tokens> {
     syntax_selections:
         Option<&'tokens std::collections::HashMap<usize, crate::syntax::SelectedSyntax>>,
     syntax_spellings: Option<&'tokens std::collections::HashMap<usize, std::sync::Arc<str>>>,
+    diagnostic_spans: Option<&'tokens std::collections::HashMap<usize, Span>>,
     syntax_stops: Vec<(TokenKind, String, usize)>,
 }
 
@@ -1097,6 +1130,11 @@ impl Parser<'_> {
     }
 
     fn current_span(&self) -> Option<Span> {
+        if let Some(spans) = self.diagnostic_spans
+            && let Some(span) = spans.get(&self.position)
+        {
+            return Some(*span);
+        }
         self.tokens
             .get(self.position)
             .or_else(|| self.tokens.last())

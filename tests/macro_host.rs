@@ -179,6 +179,141 @@ fn generated_nested_unwrap_keeps_the_protected_fragment() {
 }
 
 #[test]
+fn unwrapping_preserves_a_qualified_caller_reference() {
+    let compiled = compile_path(macro_fixture("entry_unwrap_qualified.ash"))
+        .expect("unwrapping retains the caller's imported module reference");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "30");
+}
+
+#[test]
+fn transformer_combines_origins_and_round_trips_the_result() {
+    let compiled = compile_path(macro_fixture("entry_origin_ops.ash"))
+        .expect("combined origins survive parse and syntax transfer");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn transformer_rejection_preserves_message_and_causes_in_human_and_json() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_file_diagnostics, write_json, write_short},
+    };
+    let failure = compile_path(macro_fixture("entry_reject_ops.ash")).unwrap_err();
+    assert!(failure.is_source_rejection(), "{failure:?}");
+    assert_eq!(failure.reason_code(), "syntax.rejected");
+    let diagnostics =
+        compile_file_diagnostics(&failure).expect("authored rejection is presentable");
+    let [diagnostic] = diagnostics.as_slice() else {
+        panic!("one rejection");
+    };
+    let mut human = Vec::new();
+    write_short(
+        &mut human,
+        diagnostic,
+        &Catalogue::new(Locale::English).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        String::from_utf8(human)
+            .unwrap()
+            .contains("expected a positive value")
+    );
+    let mut json = Vec::new();
+    write_json(&mut json, diagnostic).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    assert_eq!(json["reason"], "syntax.rejected");
+    assert_eq!(json["facts"][0]["value"], "expected a positive value");
+    assert!(
+        json["labels"][0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("entry_reject_ops.ash")
+    );
+    assert!(
+        json["labels"][1]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("syntax_reject_ops.ash")
+    );
+    assert!(
+        json["labels"][2]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("entry_reject_ops.ash")
+    );
+}
+
+#[test]
+fn syntax_diagnostic_preserves_the_parser_reason_and_construction_location() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_file_diagnostics, write_json, write_short},
+    };
+    let failure = compile_path(macro_fixture("entry_parse_failure.ash")).unwrap_err();
+    assert!(failure.is_source_rejection(), "{failure:?}");
+    assert_eq!(failure.reason_code(), "parse.expected-operand");
+    let diagnostics = compile_file_diagnostics(&failure).expect("parser cause is presentable");
+    let [diagnostic] = diagnostics.as_slice() else {
+        panic!("one parser failure");
+    };
+    let mut human = Vec::new();
+    write_short(
+        &mut human,
+        diagnostic,
+        &Catalogue::new(Locale::English).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        String::from_utf8(human)
+            .unwrap()
+            .contains("The operator needs a right operand")
+    );
+    let mut json = Vec::new();
+    write_json(&mut json, diagnostic).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    assert_eq!(json["reason"], "parse.expected-operand");
+    assert_eq!(json["labels"][0]["relationship"], "operator");
+    assert!(
+        json["labels"][0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("syntax_parse_failure.ash")
+    );
+    assert_eq!(json["labels"][1]["relationship"], "syntax_invocation");
+    assert!(
+        json["labels"][1]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("entry_parse_failure.ash")
+    );
+    assert_eq!(json["labels"][2]["relationship"], "syntax_definition");
+}
+
+#[test]
+fn invalid_transformer_output_reports_its_parser_reason() {
+    let failure = compile_path(macro_fixture("entry_invalid_output.ash")).unwrap_err();
+    assert!(failure.is_source_rejection(), "{failure:?}");
+    assert_eq!(failure.reason_code(), "parse.expected-operand");
+}
+
+#[test]
+fn non_requesting_infinite_transformer_fails_with_expansion_context() {
+    let failure = compile_path(macro_fixture("entry_diverge.ash")).unwrap_err();
+    assert_eq!(failure.reason_code(), "syntax.transformer-failed");
+    assert!(!failure.sources().is_empty());
+    let diagnostics = ash::presentation::compile_file_diagnostics(&failure).unwrap();
+    let [diagnostic] = diagnostics.as_slice() else {
+        panic!("one transformer failure");
+    };
+    let mut json = Vec::new();
+    ash::presentation::write_json(&mut json, diagnostic).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    assert_eq!(json["facts"][0]["value"], "runtime.resource-capacity");
+    assert_eq!(json["labels"][0]["relationship"], "syntax_invocation");
+    assert_eq!(json["labels"][1]["relationship"], "syntax_definition");
+}
+
+#[test]
 fn generated_definition_context_recognizes_nested_syntax() {
     let compiled = compile_path(macro_fixture("entry_generated_nested.ash"))
         .expect("generated name selects syntax imported by its definition owner");

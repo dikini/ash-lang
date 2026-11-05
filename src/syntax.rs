@@ -19,11 +19,71 @@ use crate::{
 /// Structured output transferred from one completed transformer invocation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MacroOutputNode {
-    Expression(SurfaceExpressionCapture, Span),
-    Identifier(SurfaceName, Span),
-    Token(crate::lexer::TokenKind, Arc<str>, Span),
-    Group(MacroDelimiter, Vec<MacroOutputNode>, Span),
+    Expression(SurfaceExpressionCapture, MacroOrigin),
+    Identifier(SurfaceName, MacroOrigin),
+    Token(crate::lexer::TokenKind, Arc<str>, MacroOrigin),
+    Group(MacroDelimiter, Vec<MacroOutputNode>, MacroOrigin),
     Splice(SurfaceName),
+}
+
+/// Ordered causal inputs retained by the invocation-owned syntax interface.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum MacroOrigin {
+    Source(Span),
+    Combined {
+        inputs: Arc<[MacroOrigin]>,
+        invocation: Span,
+        definition: Span,
+    },
+}
+
+impl MacroOrigin {
+    pub(crate) fn primary(&self) -> Span {
+        let mut origin = self;
+        loop {
+            match origin {
+                Self::Source(span) => return *span,
+                Self::Combined { inputs, .. } => origin = &inputs[0],
+            }
+        }
+    }
+
+    pub(crate) fn spans(&self) -> Vec<Span> {
+        enum Pending<'a> {
+            Origin(&'a MacroOrigin),
+            Span(Span),
+        }
+        let mut spans = Vec::new();
+        let mut pending = vec![Pending::Origin(self)];
+        while let Some(item) = pending.pop() {
+            match item {
+                Pending::Span(span) => spans.push(span),
+                Pending::Origin(MacroOrigin::Source(span)) => spans.push(*span),
+                Pending::Origin(MacroOrigin::Combined {
+                    inputs,
+                    invocation,
+                    definition,
+                }) => {
+                    pending.push(Pending::Span(*definition));
+                    pending.push(Pending::Span(*invocation));
+                    pending.extend(inputs.iter().rev().map(Pending::Origin));
+                }
+            }
+        }
+        spans
+    }
+}
+
+pub(crate) enum TransformerOutput {
+    Expanded(Vec<MacroOutputNode>),
+    Rejected(crate::driver::SyntaxExpansionFailure),
+    SyntaxRejected(crate::driver::SyntaxParseFailure),
+}
+
+impl From<Span> for MacroOrigin {
+    fn from(span: Span) -> Self {
+        Self::Source(span)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -464,11 +524,11 @@ pub(crate) fn admit_transformer_output(
     invocation: Span,
     output: Vec<MacroOutputNode>,
     contexts: &SyntaxContexts,
-) -> Result<SurfaceExpr, Span> {
+) -> Result<SurfaceExpr, crate::parser::MacroParseFailure> {
     let (mut expression, matcher, captures) =
-        crate::parser::parse_macro_expression(source, invocation, output, contexts)
-            .map_err(|()| invocation)?;
-    substitute(&mut expression, &matcher, &captures, 0, invocation)?;
+        crate::parser::parse_macro_expression(source, invocation, output, contexts)?;
+    substitute(&mut expression, &matcher, &captures, 0, invocation)
+        .map_err(|_| crate::parser::MacroParseFailure::Invalid)?;
     expression.span = invocation;
     Ok(expression)
 }
@@ -513,10 +573,10 @@ fn substitute_contents(
             MacroOutputNode::Splice(name) => {
                 *node = match capture_by_name(name, matcher, captures)? {
                     SurfaceSyntaxCapture::Expression(capture) => {
-                        MacroOutputNode::Expression(capture.clone(), invocation)
+                        MacroOutputNode::Expression(capture.clone(), invocation.into())
                     }
                     SurfaceSyntaxCapture::Identifier(name) => {
-                        MacroOutputNode::Identifier(name.clone(), name.span)
+                        MacroOutputNode::Identifier(name.clone(), name.span.into())
                     }
                 };
             }
@@ -660,6 +720,10 @@ fn substitute(
                 name.introduced_at = Some(invocation);
             }
         }
+        SurfaceExprKind::Name(SurfaceReference::Qualified(name))
+            if introduction == 0
+                && name.qualifier.introduction == 0
+                && name.member.introduction == 0 => {}
         SurfaceExprKind::Integer(_)
         | SurfaceExprKind::String(_)
         | SurfaceExprKind::Boolean(_)

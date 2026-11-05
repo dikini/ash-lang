@@ -487,6 +487,88 @@ pub struct SyntaxFailure {
     pub resource: Option<ResourceFailure>,
 }
 
+/// A transformer-authored rejection and its retained causal locations.
+#[derive(Debug)]
+pub struct SyntaxExpansionFailure {
+    pub(crate) message: String,
+    pub(crate) primary: crate::syntax::MacroOrigin,
+    pub(crate) related: Vec<crate::syntax::MacroOrigin>,
+    pub(crate) invocation: Span,
+    pub(crate) definition: Span,
+}
+
+impl SyntaxExpansionFailure {
+    /// Returns the transformer's message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Returns the primary causal source span.
+    #[must_use]
+    pub fn primary_span(&self) -> Span {
+        self.primary.primary()
+    }
+
+    pub(crate) fn related_spans(&self) -> Vec<(Span, &'static str)> {
+        let mut spans = self
+            .primary
+            .spans()
+            .into_iter()
+            .skip(1)
+            .map(|span| (span, "syntax_cause"))
+            .collect::<Vec<_>>();
+        for origin in &self.related {
+            spans.extend(
+                origin
+                    .spans()
+                    .into_iter()
+                    .map(|span| (span, "syntax_cause")),
+            );
+        }
+        if self.invocation != self.primary_span() {
+            spans.push((self.invocation, "syntax_invocation"));
+        }
+        if self.definition != self.primary_span() {
+            spans.push((self.definition, "syntax_definition"));
+        }
+        spans
+    }
+}
+
+/// Parser facts retained from syntax produced by a transformer.
+#[derive(Debug)]
+pub struct SyntaxParseFailure {
+    pub(crate) diagnostics: Vec<ParseDiagnostic>,
+    pub(crate) resource: Option<ResourceFailure>,
+    pub(crate) invocation: Span,
+    pub(crate) definition: Span,
+}
+
+/// A transformer evaluator failure with its expansion context.
+#[derive(Debug)]
+pub struct SyntaxRuntimeFailure {
+    pub(crate) cause: RuntimeFailure,
+    pub(crate) invocation: Span,
+    pub(crate) definition: Span,
+}
+
+impl SyntaxRuntimeFailure {
+    /// Returns the unchanged evaluator failure.
+    #[must_use]
+    pub const fn cause(&self) -> RuntimeFailure {
+        self.cause
+    }
+}
+
+impl SyntaxParseFailure {
+    /// Returns the original parser diagnostics in order.
+    #[must_use]
+    pub fn diagnostics(&self) -> &[ParseDiagnostic] {
+        &self.diagnostics
+    }
+}
+
 /// A failure from one explicit compiler or runtime stage.
 #[derive(Debug)]
 pub enum PipelineFailure {
@@ -494,6 +576,12 @@ pub enum PipelineFailure {
     SourceModel(SourceError),
     /// Lexing or parsing retained diagnostics or exhausted a resource budget.
     Syntax(Box<SyntaxFailure>),
+    /// An Ash syntax transformer rejected its invocation.
+    SyntaxExpansion(SyntaxExpansionFailure),
+    /// Transformer-produced syntax retained parser failures.
+    SyntaxParse(SyntaxParseFailure),
+    /// Evaluating a syntax transformer failed.
+    SyntaxRuntime(SyntaxRuntimeFailure),
     /// Recovery-free concrete syntax violated the projection contract.
     Projection(ProjectionError),
     /// Name resolution rejected the source or lost an invariant.
@@ -521,6 +609,11 @@ impl PipelineFailure {
             Self::Syntax(failure) => {
                 syntax_reason_code(&failure.lexical, &failure.parser, failure.resource)
             }
+            Self::SyntaxExpansion(_) => "syntax.rejected".into(),
+            Self::SyntaxParse(failure) => {
+                syntax_reason_code(&[], &failure.diagnostics, failure.resource)
+            }
+            Self::SyntaxRuntime(_) => "syntax.transformer-failed".into(),
             Self::Projection(error) => projection_reason(*error).into(),
             Self::Resolution(error) => error.reason.to_string(),
             Self::Kind(error) => error.reason_code(),
@@ -543,6 +636,10 @@ impl PipelineFailure {
                 failure.resource.is_none()
                     && (!failure.lexical.is_empty() || !failure.parser.is_empty())
             }
+            Self::SyntaxExpansion(_) => true,
+            Self::SyntaxParse(failure) => {
+                failure.resource.is_none() && !failure.diagnostics.is_empty()
+            }
             Self::Resolution(error) => error.is_source_rejection(),
             Self::Kind(error) => error.is_source_rejection(),
             Self::Typing(
@@ -551,6 +648,7 @@ impl PipelineFailure {
             Self::Entry(_) => true,
             Self::SourceModel(_)
             | Self::Projection(_)
+            | Self::SyntaxRuntime(_)
             | Self::Typing(TypeError::Internal(_))
             | Self::EvidenceValidation(_)
             | Self::Validation(_)
@@ -564,6 +662,9 @@ impl fmt::Display for PipelineFailure {
         formatter.write_str(match self {
             Self::SourceModel(_) => "source-model failure",
             Self::Syntax(_) => "source syntax failure",
+            Self::SyntaxExpansion(_) => "syntax expansion rejection",
+            Self::SyntaxParse(_) => "syntax expansion parse failure",
+            Self::SyntaxRuntime(_) => "syntax transformer failure",
             Self::Projection(_) => "surface projection failure",
             Self::Resolution(_) => "name-resolution failure",
             Self::Kind(_) => "resolved-kind failure",
@@ -1444,16 +1545,49 @@ where
                         introduction,
                         std::sync::Arc::clone(&contexts),
                     ) {
-                        Ok((output, fresh_count)) => crate::syntax::admit_transformer_output(
-                            module.source(),
-                            span,
-                            output,
-                            &contexts,
-                        )
-                        .map(|expression| (expression, fresh_count)),
-                        Err(error) => {
+                        Ok((crate::syntax::TransformerOutput::Expanded(output), fresh_count)) => {
+                            match crate::syntax::admit_transformer_output(
+                                module.source(),
+                                span,
+                                output,
+                                &contexts,
+                            ) {
+                                Ok(expression) => Ok((expression, fresh_count)),
+                                Err(crate::parser::MacroParseFailure::Syntax {
+                                    diagnostics,
+                                    resource,
+                                }) => {
+                                    transformer_failure = Some(FileFailure::from(
+                                        PipelineFailure::SyntaxParse(SyntaxParseFailure {
+                                            diagnostics,
+                                            resource,
+                                            invocation: span,
+                                            definition: selection.declaration.span,
+                                        }),
+                                    ));
+                                    Err(span)
+                                }
+                                Err(crate::parser::MacroParseFailure::Invalid) => Err(span),
+                            }
+                        }
+                        Ok((crate::syntax::TransformerOutput::Rejected(failure), _)) => {
                             transformer_failure =
-                                Some(FileFailure::from(PipelineFailure::Runtime(error)));
+                                Some(FileFailure::from(PipelineFailure::SyntaxExpansion(failure)));
+                            Err(span)
+                        }
+                        Ok((crate::syntax::TransformerOutput::SyntaxRejected(failure), _)) => {
+                            transformer_failure =
+                                Some(FileFailure::from(PipelineFailure::SyntaxParse(failure)));
+                            Err(span)
+                        }
+                        Err(error) => {
+                            transformer_failure = Some(FileFailure::from(
+                                PipelineFailure::SyntaxRuntime(SyntaxRuntimeFailure {
+                                    cause: error,
+                                    invocation: span,
+                                    definition: selection.declaration.span,
+                                }),
+                            ));
                             Err(span)
                         }
                     },
