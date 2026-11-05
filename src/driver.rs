@@ -1733,6 +1733,7 @@ where
             crate::syntax::SyntaxOwnerBindings::new(
                 &checked_module,
                 module,
+                &checked,
                 &mut checking_type_work,
             )
             .map_err(|()| {

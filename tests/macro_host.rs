@@ -146,6 +146,15 @@ fn checked_transformer_definition_identifier_uses_its_private_helper() {
 }
 
 #[test]
+fn checked_transformer_definition_identifier_uses_its_owners_targeted_import() {
+    let compiled = compile_path(macro_fixture(
+        "qualified-owner/entry_procedural_targeted.ash",
+    ))
+    .expect("the definition-context name keeps its owner's renamed import");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
 fn checked_transformer_parses_without_resolving_and_reuses_a_fragment() {
     let compiled = compile_path(macro_fixture("entry_parse_ops.ash"))
         .expect("transformer can parse structured syntax without resolving it");

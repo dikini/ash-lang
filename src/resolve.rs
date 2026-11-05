@@ -5731,6 +5731,36 @@ impl Resolver {
                     retained?;
                     self.syntax_constructors.insert(key, constructor.id);
                 }
+            } else if let Some((route, original, selector_span)) = terms.targeted(&usage.name.text)
+            {
+                if !owner.direct_dependencies().contains(&route) {
+                    return Err(invalid());
+                }
+                let dependency = syntax
+                    .owners
+                    .iter()
+                    .find(|candidate| candidate.module() == route.target())
+                    .ok_or_else(invalid)?;
+                let exported = dependency.exports().term(original).ok_or_else(invalid)?;
+                if !self.syntax_terms.contains_key(&key) {
+                    self.retain_imported_global_from_owner(
+                        exported,
+                        dependency.exports(),
+                        usage.import_span,
+                        &mut capture_graph_visits,
+                        Some(SyntaxOwnerLookup {
+                            owner: dependency,
+                            graph: syntax.owners,
+                        }),
+                    )?;
+                    self.syntax_terms.insert(
+                        key,
+                        ResolvedTermBinding::imported(
+                            ResolvedTermName::Global(exported.binder),
+                            selector_span,
+                        ),
+                    );
+                }
             }
         }
         Ok(())

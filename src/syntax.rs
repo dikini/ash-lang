@@ -11,10 +11,11 @@ use crate::{
     source::Span,
     surface::{
         SurfaceBinder, SurfaceBlock, SurfaceDefinitionKind, SurfaceExpr, SurfaceExprKind,
-        SurfaceExpressionCapture, SurfaceImportSelection, SurfaceLocalDeclaration, SurfaceModule,
-        SurfaceName, SurfacePattern, SurfacePatternKind, SurfaceQualifiedName, SurfaceReference,
-        SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind, SurfaceSyntaxDeclaration,
-        SurfaceSyntaxImplementation, SurfaceSyntaxMatcherPart, SurfaceType, SurfaceTypeKind,
+        SurfaceExpressionCapture, SurfaceImportItem, SurfaceImportSelection,
+        SurfaceLocalDeclaration, SurfaceModule, SurfaceName, SurfacePattern, SurfacePatternKind,
+        SurfaceQualifiedName, SurfaceReference, SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind,
+        SurfaceSyntaxDeclaration, SurfaceSyntaxImplementation, SurfaceSyntaxMatcherPart,
+        SurfaceType, SurfaceTypeKind,
     },
     types::TypeWorkBudget,
 };
@@ -191,12 +192,14 @@ pub(crate) struct SyntaxOwnerBindings {
     terms: HashMap<String, ExportedGlobal>,
     constructors: HashMap<String, ExportedConstructor>,
     qualified: HashMap<String, DirectDependencyRoute>,
+    targeted: HashMap<String, (DirectDependencyRoute, String, Span)>,
 }
 
 impl SyntaxOwnerBindings {
     pub(crate) fn new(
         owner: &CheckedModule,
         loaded: &LoadedModule,
+        graph: &[Arc<CheckedModule>],
         work: &mut TypeWorkBudget,
     ) -> Result<Self, ()> {
         if owner.module() != loaded.id() || owner.span().source() != loaded.source().id() {
@@ -238,19 +241,42 @@ impl SyntaxOwnerBindings {
             }
         }
         let mut qualified = HashMap::new();
+        let mut targeted = HashMap::new();
         for (import, edge) in loaded.surface().imports.iter().zip(
             loaded
                 .dependencies()
                 .iter()
                 .filter(|edge| !edge.is_region_service()),
         ) {
-            if let SurfaceImportSelection::Qualified { alias } = &import.selection {
-                let route = DirectDependencyRoute::new(edge.target(), import.span);
-                if edge.import_span() != import.span
-                    || !owner.direct_dependencies().contains(&route)
-                    || qualified.insert(alias.text.clone(), route).is_some()
-                {
-                    return Err(());
+            let route = DirectDependencyRoute::new(edge.target(), import.span);
+            if edge.import_span() != import.span || !owner.direct_dependencies().contains(&route) {
+                return Err(());
+            }
+            match &import.selection {
+                SurfaceImportSelection::Qualified { alias } => {
+                    if qualified.insert(alias.text.clone(), route).is_some() {
+                        return Err(());
+                    }
+                }
+                SurfaceImportSelection::Targeted(items) => {
+                    let dependency = graph
+                        .iter()
+                        .find(|candidate| candidate.module() == route.target())
+                        .ok_or(())?;
+                    for item in items {
+                        let SurfaceImportItem::Name { name, alias, span } = item else {
+                            continue;
+                        };
+                        if dependency.exports().term(&name.text).is_some() {
+                            let local = alias.as_ref().unwrap_or(name);
+                            if targeted
+                                .insert(local.text.clone(), (route, name.text.clone(), *span))
+                                .is_some()
+                            {
+                                return Err(());
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -259,6 +285,7 @@ impl SyntaxOwnerBindings {
             terms,
             constructors,
             qualified,
+            targeted,
         })
     }
 
@@ -268,6 +295,7 @@ impl SyntaxOwnerBindings {
             terms: HashMap::new(),
             constructors: HashMap::new(),
             qualified: HashMap::new(),
+            targeted: HashMap::new(),
         }
     }
 
@@ -281,6 +309,11 @@ impl SyntaxOwnerBindings {
 
     pub(crate) fn qualified(&self, spelling: &str) -> Option<DirectDependencyRoute> {
         self.qualified.get(spelling).copied()
+    }
+
+    pub(crate) fn targeted(&self, spelling: &str) -> Option<(DirectDependencyRoute, &str, Span)> {
+        let (route, original, selector) = self.targeted.get(spelling)?;
+        Some((*route, original, *selector))
     }
 
     pub(crate) fn constructor_by_id(

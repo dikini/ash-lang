@@ -56,6 +56,20 @@ fn template_qualified_import_uses_its_owner_despite_caller_alias() {
 }
 
 #[test]
+fn template_targeted_import_uses_its_owner_despite_caller_shadowing() {
+    for path in [
+        "qualified-owner/entry_targeted.ash",
+        "qualified-owner/entry_targeted_facade.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    let failure = compile_path(fixture("qualified-owner/invalid_targeted_caller.ash"))
+        .expect_err("the syntax import does not bind the owner's targeted name");
+    assert!(failure.graph_failure().is_none(), "{failure:?}");
+}
+
+#[test]
 fn template_qualified_import_follows_the_owners_public_facade() {
     let compiled = compile_path(fixture("qualified-owner/entry_facade.ash"))
         .expect("the template keeps the selected facade's original exported member");
