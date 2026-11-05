@@ -129,13 +129,20 @@ findings here before adding mechanisms.
   expected. The independent handwritten graph executes to `Int` value `42`,
   and the proposed procedural transformer's ordinary Ash body parses and
   projects. These are baseline observations, not macro acceptance.
-- D0's independent boundary challenge, agreed-interface compilation and
-  whole-chain re-estimate remain pending. D1–D4 and every M01–M14 criterion
+- The independent boundary challenge identified three required repairs: resume
+  retained header parser state without duplicate event charges; look up generated
+  syntax by each leading identifier's retained context; and independently
+  validate a dedicated compile-time entry and authenticated input handoff.
+  The plan now records those contracts and the source census and borrowed
+  checked-fragment ownership they require. The parser checkpoint and shared
+  canonical-source census compile and have focused checks. The staged loader,
+  syntax contexts, grants and validated macro host are not yet connected or
+  compiled; the reviewer's re-review remains pending. D1–D4 and every M01–M14 criterion
   remain pending. No retained macro implementation or fresh full gate is
   claimed.
-- Next actor: orchestrator sends the pinned D0 candidate to the assigned
-  independent reviewer. The developer resolves confirmed boundary findings
-  before substantial implementation.
+- Next actor: orchestrator sends the exact repair candidate to the same reviewer.
+  The developer resolves its findings and completes the remaining interfaces
+  before claiming the D0 gate or substantial feature work complete.
 
 ### D0 baseline receipt
 
@@ -151,9 +158,33 @@ findings here before adding mechanisms.
 - `cargo fmt --all -- --check`, `python3 tools/ash_indent.py --check
   tests/fixtures/surface-macros/*.ash`, and `git diff --check` pass on the D0
   candidate. No full workspace gate has run for this candidate.
-- Whole-chain estimate remains the plan's uncalibrated 25–45 focused
-  engineer-days. One cold compile does not calibrate the unresolved ownership,
-  context, host, validator, build-consumer, review, and integration work.
+- The whole-chain estimate is revised to an uncalibrated 30–55 focused
+  engineer-days, accounting for reviewed checkpoint, context, checked entry and
+  borrowed-fragment work. One cold compile does not calibrate the unresolved
+  host, validator, build-consumer, review, and integration work.
+
+### D0 boundary-repair receipt
+
+- Reviewed candidate: `f791b95c4345d591abe269c7e3969bd7f89ed7b5`.
+  This repair candidate records the subsequent parser/census changes; its
+  retaining commit pins the exact inputs.
+- `cargo test -j 1 -p ash --lib parser::checkpoint_tests -- --nocapture`:
+  two pass. Tests compare the original 52/104/70-unit costs, exact and
+  one-below boundaries, tiny budgets, and interleaved header checkpoints with
+  recovery under a single 174-unit budget.
+- `cargo test -j 1 -p ash --lib
+  compiler_work::tests::source_census_retains_the_paid_ledger_for_each_admitted_source
+  -- --exact`: one passes. The source census keeps the paid unit per admitted
+  source and checks empty and arithmetic-overflow refusal.
+- `cargo test -j 1 -p ash --test parser --test modules_syntax --test
+  module_loading --test compiler_work_reporting --no-fail-fast`: parser 50,
+  module syntax 20, module loading 24 and work reporting 6 pass. The frame
+  composition work-reporting case took 100.47 seconds. This run preceded the
+  addition of tiny-budget assertions in the test-only checkpoint module; no
+  production source changed between that run and this candidate.
+- The two full macro graph tests still fail at unsupported targeted syntax
+  imports; the handwritten execution and ordinary Ash transformer parser checks
+  pass. The staged graph and macro behavior are not implemented.
 
 ## Verification
 
@@ -199,10 +230,10 @@ and the orchestrator confirms its readback before advancing.
 
 ### Checkpoints and commands
 
-The plan maps D0–D4 to focused targets. Proposed `surface_macros` and
-`macro_host` targets do not exist yet; D0 establishes their failing cases before
-support. Run one Cargo job and the pinned toolchain. Use the existing shared
-cache, not a cold comparison.
+The plan maps D0–D4 to focused targets. `surface_macros` and `macro_host` exist
+with the expected failing graph cases and passing baseline cases recorded above;
+neither target establishes macro support yet. Run one Cargo job and the pinned
+toolchain. Reuse the delivery checkout's compatible cache.
 
 ```sh
 cargo test -j 1 -p ash --test surface_macros

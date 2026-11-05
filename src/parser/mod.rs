@@ -1,5 +1,7 @@
 //! Event-producing recursive-descent parsing and checked surface projection.
 
+#[cfg(test)]
+mod checkpoint_tests;
 mod cst;
 mod event;
 mod expression;
@@ -533,7 +535,45 @@ fn parse_parts(
         );
     }
 
-    let (events, diagnostics, resource_failure, syntax_work_exhausted, syntax_budget) = {
+    let (checkpoint, syntax_budget) =
+        parse_module_header(tokens, lexical_diagnostics, syntax_budget);
+    finish_module_from_checkpoint(checkpoint, syntax_budget)
+}
+
+/// Retained parser state at the boundary between a module's header and body.
+///
+/// The token stream and lexical diagnostics remain with their parser state;
+/// the graph-wide budget remains with the caller. The event stream still has
+/// its module node open and can only be finished once.
+pub(crate) struct ParserCheckpoint {
+    tokens: Vec<crate::lexer::Token>,
+    lexical_diagnostics: Vec<Diagnostic<crate::lexer::LexReason>>,
+    position: usize,
+    events: Vec<Event>,
+    diagnostics: Vec<ParseDiagnostic>,
+    pending_recoveries: Vec<usize>,
+    recovered_expression_group_boundary: bool,
+    nesting_depth: usize,
+    resource_failure: Option<ResourceFailure>,
+    syntax_work_exhausted: bool,
+}
+
+pub(crate) fn parse_module_header(
+    tokens: Vec<crate::lexer::Token>,
+    lexical_diagnostics: Vec<Diagnostic<crate::lexer::LexReason>>,
+    syntax_budget: SyntaxBudget,
+) -> (ParserCheckpoint, SyntaxBudget) {
+    let (
+        position,
+        events,
+        diagnostics,
+        pending_recoveries,
+        recovered_expression_group_boundary,
+        nesting_depth,
+        resource_failure,
+        syntax_work_exhausted,
+        syntax_budget,
+    ) = {
         let mut parser = Parser {
             tokens: &tokens,
             position: 0,
@@ -546,15 +586,71 @@ fn parse_parts(
             syntax_budget,
             syntax_work_exhausted: false,
         };
-        grammar::module(&mut parser);
+        grammar::module_header(&mut parser);
         (
+            parser.position,
             parser.events,
             parser.diagnostics,
+            parser.pending_recoveries,
+            parser.recovered_expression_group_boundary,
+            parser.nesting_depth,
             parser.resource_failure,
             parser.syntax_work_exhausted,
             parser.syntax_budget,
         )
     };
+    let checkpoint = ParserCheckpoint {
+        tokens,
+        lexical_diagnostics,
+        position,
+        events,
+        diagnostics,
+        pending_recoveries,
+        recovered_expression_group_boundary,
+        nesting_depth,
+        resource_failure,
+        syntax_work_exhausted,
+    };
+    (checkpoint, syntax_budget)
+}
+
+pub(crate) fn finish_module_from_checkpoint(
+    checkpoint: ParserCheckpoint,
+    syntax_budget: SyntaxBudget,
+) -> (ConcreteTree, SyntaxBudget) {
+    let ParserCheckpoint {
+        tokens,
+        lexical_diagnostics,
+        position,
+        events,
+        diagnostics,
+        pending_recoveries,
+        recovered_expression_group_boundary,
+        nesting_depth,
+        resource_failure,
+        syntax_work_exhausted,
+    } = checkpoint;
+    let mut parser = Parser {
+        tokens: &tokens,
+        position,
+        events,
+        diagnostics,
+        pending_recoveries,
+        recovered_expression_group_boundary,
+        nesting_depth,
+        resource_failure,
+        syntax_budget,
+        syntax_work_exhausted,
+    };
+    grammar::module_body(&mut parser);
+    let Parser {
+        events,
+        diagnostics,
+        resource_failure,
+        syntax_work_exhausted,
+        syntax_budget,
+        ..
+    } = parser;
     if syntax_work_exhausted {
         return (
             cst::resource_limited(

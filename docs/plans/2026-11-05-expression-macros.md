@@ -265,15 +265,45 @@ repeat the compiler proof. Runtime completion and build cleanup remain required.
 These crate-private Rust interfaces freeze the connected handoffs for review.
 They are planned interfaces, not implemented APIs or Ash semantics. A change
 to ownership, admission, or failure behavior returns to the same reviewer.
+Only the parser checkpoint and canonical-source census interfaces below have
+been compiled so far. The graph, context, grant and host interfaces remain
+planned; the checkpoint does not yet expose projected imports to the loader.
+
+```rust
+fn parse_module_header(
+    tokens: Vec<Token>,
+    lexical_diagnostics: Vec<Diagnostic<LexReason>>,
+    syntax_budget: SyntaxBudget,
+) -> (ParserCheckpoint, SyntaxBudget);
+fn finish_module_from_checkpoint(
+    checkpoint: ParserCheckpoint,
+    syntax_budget: SyntaxBudget,
+) -> (ConcreteTree, SyntaxBudget);
+fn source_work_for_sources<'a>(
+    sources: impl ExactSizeIterator<Item = &'a SourceFile>,
+) -> Result<(TypeWorkBudget, usize), ()>;
+```
 
 ```rust
 struct HeaderModule {
     id: ModuleId,
     canonical_path: PathBuf,
     source: Arc<SourceFile>,
-    lexed: Option<Lexed>,
+    parser: Option<ParserCheckpoint>,
     imports: Box<[SurfaceImport]>,
     dependencies: Box<[ModuleDependency]>,
+}
+struct ParserCheckpoint {
+    tokens: Vec<Token>,
+    lexical_diagnostics: Vec<Diagnostic<LexReason>>,
+    position: usize,
+    events: Vec<Event>,
+    diagnostics: Vec<ParseDiagnostic>,
+    pending_recoveries: Vec<usize>,
+    recovered_expression_group_boundary: bool,
+    nesting_depth: usize,
+    resource_failure: Option<ResourceFailure>,
+    syntax_work_exhausted: bool,
 }
 struct HeaderGraph {
     modules: Box<[HeaderModule]>, // dependencies first
@@ -295,12 +325,23 @@ fn check_staged_graph(
 
 `discover_headers` reads and lexes each source once, parses only its fixed
 header, discovers canonical edges and owners, and retains the complete token
-stream. It executes no transformer. Header and body parsing share the graph's
-syntax budget; re-parsing a header for the final concrete tree is charged.
+stream. It executes no transformer. The checkpoint owns the still-open module
+event stream, token cursor, diagnostics and recovery state; it borrows no token
+slice. Body parsing reconstructs that borrow and resumes the same stream after
+checked imports are available. The checkpoint owns its tokens and lexical
+diagnostics so it cannot be resumed against another module's token stream.
+Header and body share one graph syntax budget;
+ordinary source and header events are charged exactly once as before. Compare
+the existing and staged paths at exact and one-below limits, including recovery.
 `check_staged_graph` processes each dependency first: select its already checked
 exports, build the immutable matcher environment, parse/project the next body,
 expand it while resolving, check it, and only then publish its syntax exports.
-The driver links the returned checked modules without rechecking their bodies.
+Before checking, the completed header graph's canonical sources, including
+implicit builtins, pay the same `compiler_work::source_work` census once.
+Carry that ledger and source-size allowance through checking; aliases and
+diamonds do not mint source credit. Test overflow/low-budget refusal and
+existing reporting/calibration. The driver links the returned checked modules
+without rechecking their bodies.
 It retains the parsed graph and sources for diagnostics and builds. Lexical and
 header errors remain structured; missing, duplicate, re-exported, or
 inaccessible syntax selections fail before importer expansion. Recovery nodes
@@ -337,6 +378,9 @@ struct SelectedSyntax<'checked> {
 struct MatcherEnvironment<'checked> {
     selections: Box<[SelectedSyntax<'checked>]>,
 }
+struct SyntaxContextTable<'checked> {
+    environments: Box<[MatcherEnvironment<'checked>]>,
+}
 enum SyntaxNode {
     Token(ContextToken),
     Identifier(ContextName),
@@ -352,7 +396,7 @@ struct ContextName {
 }
 fn parse_syntax_expression(
     input: &SyntaxSequence,
-    syntax: &MatcherEnvironment<'_>,
+    contexts: &SyntaxContextTable<'_>,
     budget: &mut SyntaxBudget,
 ) -> Result<SurfaceExpr, ExpansionFailure>;
 fn resolve_module_with_expansion(
@@ -365,8 +409,12 @@ fn resolve_module_with_expansion(
 ```
 
 `CheckedModule` owns each checked `SyntaxExport`; a matcher's borrow cannot
-outlive that owner. A retained syntax context identifies its original checked
-environment. `ContextToken` retains lexical kind, exact spelling and origin;
+outlive that owner. The compilation-owned immutable table retains checked-export
+owners and maps each identifier's `SyntaxContextId` to its own environment.
+Parsing a mixed output consults the leading identifier's context, never a
+single caller-wide spelling map. Empty and fresh-private contexts contain no
+syntax binding and cannot fall back to the caller. `ContextToken` retains
+lexical kind, exact spelling and origin;
 it does not reconstruct literals from decoded values. The source parser stores
 immutable fragment IDs only after recovery-free parsing. Generated parser input
 is a structured token/group/fragment sequence, never text. A protected fragment
@@ -416,10 +464,12 @@ route before admitting a surviving reference. Linking retains the checked
 private declaration and executable closure without importing its name or
 definition-site implementation evidence into the caller. A compile-time link
 borrows completed checked modules and constructs a separately owned entry and
-closure with charged copying or shared immutable fragments; the final link can
-still consume the original checked modules. It does not consume them or repeat
-their source checking. Compile-time and final linked programs each cross
-independent validation.
+closure using `SharedModuleLowering` and bounded `copy_checked_fragment`-style
+relocation. It retains selected evidence, layouts, cleanup, provenance and
+authenticated routes. The final link can still consume the original checked
+modules; compile-time linking does not repeat their source checking. An
+unchanged validated compile-time entry can serve repeated inputs. Compile-time
+and final linked programs each cross independent validation.
 
 ```rust
 struct InvocationFailure {
@@ -427,13 +477,35 @@ struct InvocationFailure {
     teardown: Option<ResourceFailure>,
     cleanup: CleanupStatus,
 }
+struct ValidatedMacroEntry {
+    program: ValidatedEffectProgram,
+    transformer: BinderId,
+    input_nominal: NominalTypeId,
+    result_nominal: NominalTypeId,
+    service_effect: EffectId,
+}
+fn validate_macro_entry(
+    program: UnvalidatedEffectProgram,
+    contract: MacroEntryContract,
+    linked: &ValidatedInterfaceProgram,
+    budget: &mut TypeWorkBudget,
+) -> Result<ValidatedMacroEntry, MacroEntryFailure>;
 fn invoke_checked_transformer(
-    program: &ValidatedEffectProgram,
+    entry: &ValidatedMacroEntry,
     input: InvocationInput,
     service: &mut SyntaxService<'_>,
     budget: &mut MacroBudget,
 ) -> Result<TransferredMacroResult, InvocationFailure>;
 ```
+
+The independent validator checks the selected monomorphic, unconstrained
+`Input -> MacroResult` global, canonical nominal/effect identities, permitted
+closed row, generated entry root and linked closure. It returns the private
+entry capability only after the normal interface and Core validation. The
+machine's dedicated host handoff authenticates one compiler-issued input and
+applies it to that validated entry without synthesizing unvalidated Core or
+revalidating an unchanged program. Ordinary runtime and image validation keep
+their existing entry contract.
 
 The compiler issues the input; service handles carry private compilation
 identity, kind and table index, and capture lookup authenticates the invocation.
@@ -689,17 +761,20 @@ full gate may serve the pre-Main gate without a duplicate identical-input run.
 
 ## Estimate and re-planning
 
-The whole outstanding chain is an uncalibrated 25–45 focused engineer-days:
+The whole outstanding chain is an uncalibrated 30–55 focused engineer-days:
 
 | Delivery | Range | Includes |
 | --- | --- | --- |
-| D0 | 2–3 | Concrete interfaces, initial graph, boundary review, shared vocabulary work planning. |
-| D1 | 7–12 | Staged loader/parser, contextual templates, private closure, real caller integration, focused checks and review. |
-| D2 | 8–14 | Canonical interface/vocabulary, real Ash host, validation, transfer/failure/limits, C1 and review. |
-| D3 | 5–10 | Remaining scopes/checks, origins/locales, reproducibility, image/build/native consumers and review. |
-| D4 | 3–6 | Remaining specification/docs, repair, C2, product/milestone retention, acceptance and cleanup. |
+| D0 | 2–5 | Review repairs, compiling connected interfaces, graph and budget parity, vocabulary work planning. |
+| D1 | 9–15 | Staged loader/parser, contextual templates, private closure, real caller integration, focused checks and review. |
+| D2 | 9–16 | Canonical interface/vocabulary, real Ash host, validation, transfer/failure/limits, C1 and review. |
+| D3 | 6–11 | Remaining scopes/checks, origins/locales, reproducibility, image/build/native consumers and review. |
+| D4 | 4–8 | Remaining specification/docs, repair, C2, product/milestone retention, acceptance and cleanup. |
 
-These are planning judgments, not measured model runtime or calendar promises.
+This revision accounts for the reviewed parser-checkpoint budget parity,
+mixed-context lookup, explicit validated host entry and borrowed-fragment
+ownership work. These are planning judgments, not measured model runtime or
+calendar promises.
 They include consumers, integration, reviews, required gates, and acceptance;
 the next helper or local fix is not milestone completion. They assume reuse of
 current checked-module linking/evaluation, one product writer/heavy-build slot,

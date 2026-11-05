@@ -58,13 +58,15 @@ fn size_sources<'a>(
 pub(crate) fn source_work(graph: &ModuleGraph) -> Result<(TypeWorkBudget, usize), ()> {
     // The loader has already admitted one source per canonical module. Aliases
     // and repeated import edges do not add modules or size credit here.
-    let bootstrap = graph.modules().len().checked_add(1).ok_or(())?;
+    source_work_for_sources(graph.modules().iter().map(|module| module.source()))
+}
+
+pub(crate) fn source_work_for_sources<'a>(
+    sources: impl ExactSizeIterator<Item = &'a SourceFile>,
+) -> Result<(TypeWorkBudget, usize), ()> {
+    let bootstrap = sources.len().checked_add(1).ok_or(())?;
     let mut work = TypeWorkBudget::with_limit(bootstrap);
-    let (total, bytes) = size_sources(
-        graph.modules().iter().map(|module| module.source()),
-        CompilationPhase::SourceChecking,
-        &mut work,
-    )?;
+    let (total, bytes) = size_sources(sources, CompilationPhase::SourceChecking, &mut work)?;
     work.finish_sizing(total)?;
     Ok((work, bytes))
 }
@@ -216,6 +218,28 @@ pub struct CompilationWork {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_census_retains_the_paid_ledger_for_each_admitted_source() {
+        let first = SourceFile::new("first.ash", "main : Unit -> Int\nmain () = 42\n").unwrap();
+        let second =
+            SourceFile::new("second.ash", "pub value : Unit -> Int\nvalue () = 1\n").unwrap();
+        let bytes = first.text().len() + second.text().len();
+        let (work, actual_bytes) =
+            resident_phase_work(CompilationPhase::SourceChecking, &[&first, &second]).unwrap();
+        assert_eq!(actual_bytes, bytes);
+        assert_eq!((work.used(), work.limit()), (3, 10_000 * bytes));
+        let (staged_work, staged_bytes) =
+            source_work_for_sources([&first, &second].into_iter()).unwrap();
+        assert_eq!(staged_bytes, actual_bytes);
+        assert_eq!(
+            (staged_work.used(), staged_work.limit()),
+            (work.used(), work.limit())
+        );
+        assert!(source_work_for_sources(std::iter::empty()).is_err());
+        assert!(resident_phase_work(CompilationPhase::SourceChecking, &[]).is_err());
+        assert!(source_total(usize::MAX / 10_000 + 1).is_err());
+    }
 
     #[test]
     fn rewrite_gas_uses_the_paid_size_and_checked_scalar_total() {

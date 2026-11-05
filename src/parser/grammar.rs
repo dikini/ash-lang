@@ -216,7 +216,7 @@ pub(super) const fn selected_dialect() -> &'static ParserDialect {
     &CURRENT_ASH_DIALECT
 }
 
-pub(super) fn module(parser: &mut Parser<'_>) {
+pub(super) fn module_header(parser: &mut Parser<'_>) {
     parser.start(NodeKind::Module);
     while parser.at(&TokenKind::Import)
         || (parser.at(&TokenKind::Pub) && parser.nth(1) == Some(&TokenKind::Import))
@@ -226,6 +226,9 @@ pub(super) fn module(parser: &mut Parser<'_>) {
             break;
         }
     }
+}
+
+pub(super) fn module_body(parser: &mut Parser<'_>) {
     let mut declaration_boundary_failed = false;
     while starts_module_declaration(parser) {
         let declaration_outcome = module_declaration(parser);
