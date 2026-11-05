@@ -1,7 +1,7 @@
 # Expression Macros Implementation Plan
 
 > Execute task by task using `superpowers:executing-plans` and the Ash developer
-> workflow. [TASK-0066](../tasks/TASK-0066-expression-macros.md) owns this
+> workflow. [TASK-0067](../tasks/TASK-0067-expression-macros.md) owns this
 > temporary plan; remove it when that task finishes.
 
 **Goal:** Deliver accepted CP-0033 through one real file graph, checked Ash
@@ -680,7 +680,7 @@ owning boundary rather than adding a product tracing facility.
 Each step follows the Ash developer workflow: add a focused failing case, run
 it to identify the intended missing behavior, implement the minimum connected
 change, and rerun the case plus affected callers. Record exact new test names
-and filters in TASK-0066 as they are created. Commit only a reviewable coherent
+and filters in TASK-0067 as they are created. Commit only a reviewable coherent
 delivery under the authorized Git workflow; do not switch branches with active
 readers or dirty work. Full gates occur at C1/C2, not after each local step.
 
@@ -828,7 +828,7 @@ task acceptance, and proposal/plan lifecycle cleanup.
    including acceptance/failure/cleanup consumers and all M01–M14 obligations.
 4. Complete the authorized product checkpoint and transition cleanup: remove
    CP-0033 only when implementation, tests, specification, review, and verification
-   have been retained together; remove this plan when TASK-0066 finishes. Check
+   have been retained together; remove this plan when TASK-0067 finishes. Check
    links after cleanup and refresh evidence affected by changed verification
    inputs. Do not claim Main semantics from branch-local specification updates.
 5. Orchestrator integrates the released clean checkpoint into
@@ -879,7 +879,7 @@ increments took 20–27 minutes, the connected template increment about 64
 minutes, and its repair about 10 minutes. These are elapsed proxies containing
 coding, tools, review and waiting, not exact model compute time; that is unavailable.
 
-[TASK-0066's weighted ledger](../tasks/TASK-0066-expression-macros.md#weighted-delivery-progress)
+[TASK-0067's weighted ledger](../tasks/TASK-0067-expression-macros.md#weighted-delivery-progress)
 sets fixed effort-weighted delivery credits, with an agreed 20-point reviewed
 baseline supported by retained results and their review. That is a delivery
 estimate, not a measured fraction of model effort; it is not derived from the

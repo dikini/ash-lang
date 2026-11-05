@@ -5,7 +5,7 @@ design behind [CP-0033](../../proposals/CP-0033-hygienic-expression-syntax.md).
 CP-0033 accepts this first slice, which is not implemented or current Ash.
 The parser amendment is recorded in
 [AD-0005](../../decisions/AD-0005-parser-architecture.md);
-[TASK-0066](../../tasks/TASK-0066-expression-macros.md) owns implementation and
+[TASK-0067](../../tasks/TASK-0067-expression-macros.md) owns implementation and
 its execution plan. This companion remains design rationale. Examples use
 accepted future syntax.
 
@@ -584,7 +584,7 @@ completion prerequisite. Normal errors must be useful without one.
 [CP-0033](../../proposals/CP-0033-hygienic-expression-syntax.md) owns the
 complete semantic evidence requirements. The pending M01–M14 delivery matrix
 has moved to its owning
-[TASK-0066 acceptance record](../../tasks/TASK-0066-expression-macros.md#acceptance-evidence).
+[TASK-0067 acceptance record](../../tasks/TASK-0067-expression-macros.md#acceptance-evidence).
 The task retains the positive and negative cases, the real file-graph acceptance,
 checkpoint obligations, and retained verification. No case is implemented or
 accepted by this transfer.

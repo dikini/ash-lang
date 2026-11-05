@@ -4,7 +4,7 @@
 - Status: accepted
 - Related: [DN-0062](../design/DN-0062-hygienic-surface-macros.md),
   [first-slice design](../design/macros/first-slice.md),
-  [TASK-0066](../tasks/TASK-0066-expression-macros.md),
+  [TASK-0067](../tasks/TASK-0067-expression-macros.md),
   [AD-0005](../decisions/AD-0005-parser-architecture.md),
   [AD-0006](../decisions/AD-0006-front-end-semantic-boundaries.md),
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md),
@@ -12,7 +12,7 @@
 
 > This proposal records the accepted first expression-macro slice. It is not
 > current Ash; no macro implementation or supporting experiment is claimed.
-> Amended AD-0005 records the parser decision; TASK-0066 owns delivery.
+> Amended AD-0005 records the parser decision; TASK-0067 owns delivery.
 
 ## Current behavior
 
@@ -283,7 +283,7 @@ The accepted amendment to AD-0005 extends its closed built-in assembly with one
 expression-prefix mechanism parameterized by a data-defined imported matcher
 environment. Its lexer/precedence/recovery/projection boundaries remain. The
 amendment is architectural authority separate from this proposal and remains
-unimplemented under TASK-0066.
+unimplemented under TASK-0067.
 
 ## Resulting specification truth
 
@@ -334,7 +334,7 @@ registration, and optimization questions remain separate.
 
 ## Required evidence
 
-Retain all [M01–M14 cases](../tasks/TASK-0066-expression-macros.md#acceptance-evidence)
+Retain all [M01–M14 cases](../tasks/TASK-0067-expression-macros.md#acceptance-evidence)
 through implementation and one product checkpoint. They cover positive and
 negative parsing/grouping, real checked-Ash execution, term and non-term
 hygiene, copied declaration occurrences, deliberate capture, private authority,
@@ -353,7 +353,7 @@ output survives host-root teardown and that failed expansion publishes nothing.
 The [task-owned execution plan](../plans/2026-11-05-expression-macros.md)
 records producer/consumer agreements, D0–D4 dependencies, integration ownership,
 focused verification, full-gate checkpoints, and the whole-chain estimate.
-[TASK-0066](../tasks/TASK-0066-expression-macros.md) retains that plan and
+[TASK-0067](../tasks/TASK-0067-expression-macros.md) retains that plan and
 evidence matrix; component work does not close production acceptance. An
 independent reviewer
 must challenge the boundary map and review the retained end-to-end result.

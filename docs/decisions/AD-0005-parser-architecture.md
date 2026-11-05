@@ -7,7 +7,7 @@
   [DN-0016](../design/DN-0016-first-mini-ash-corpus.md),
   [first-stratum parser comparison](../design/mini-ash/first-stratum/comparisons/parser-architecture.md),
   [CP-0033](../proposals/CP-0033-hygienic-expression-syntax.md),
-  [TASK-0066](../tasks/TASK-0066-expression-macros.md)
+  [TASK-0067](../tasks/TASK-0067-expression-macros.md)
 
 ## Decision
 
@@ -90,7 +90,7 @@ matchers as data for one built-in prefix mechanism preserves the existing parser
 boundaries. Executable grammar callbacks would add parsing, recovery, and
 execution contracts outside the accepted slice; printing expansions and
 reparsing them would lose protected grouping and context. This amendment records
-the architecture for TASK-0066, not an implementation claim or a broader grammar
+the architecture for TASK-0067, not an implementation claim or a broader grammar
 extension API.
 
 ## Consequences
@@ -135,7 +135,7 @@ Parser implementation and every grammar-changing task must show:
 - agreement between the implementation grammar and the applicable normative
   grammar without publishing parser extension points as Ash syntax.
 
-TASK-0066 additionally verifies the data-defined prefix mechanism against
+TASK-0067 additionally verifies the data-defined prefix mechanism against
 CP-0033's M01/M02/M07/M08 cases: checked imports reach the real body parser,
 nested forms consume their own separators, protected fragments keep grouping,
 and recovery-bearing structures are rejected before expansion. Existing valid

@@ -8,14 +8,14 @@
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md),
   [AD-0010](../decisions/AD-0010-human-diagnostic-presentation-and-localization.md),
   [CP-0033](../proposals/CP-0033-hygienic-expression-syntax.md),
-  [TASK-0066](../tasks/TASK-0066-expression-macros.md),
+  [TASK-0067](../tasks/TASK-0067-expression-macros.md),
   [DN-0030](DN-0030-typed-compiler-macros-and-hooks.md),
   [DN-0061](DN-0061-effects-and-resources-first-slice.md)
 
 > The first expression-macro slice in CP-0033 is accepted but unimplemented.
 > Broader macro ideas and illustrations in this note remain exploratory. This
 > note does not define current Ash. AD-0005 records the accepted parser amendment;
-> TASK-0066 owns the unimplemented delivery.
+> TASK-0067 owns the unimplemented delivery.
 
 ## Question
 
@@ -97,7 +97,7 @@ imported keyword-led expression syntax, templates and
 Ash-authored procedural transformers over a shared binding-aware syntax
 representation. It defines import, parsing, expansion, binding, bridge,
 diagnostic and admission boundaries and required acceptance cases. The slice is
-unimplemented; amended AD-0005 and TASK-0066 now record parser architecture and
+unimplemented; amended AD-0005 and TASK-0067 now record parser architecture and
 delivery ownership. Where
 an earlier exploratory alternative below differs, CP-0033 and the companion
 state the accepted first slice. The task's M01–M14 cases cover that slice;

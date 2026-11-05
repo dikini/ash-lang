@@ -187,7 +187,7 @@ and exclusions remain at their linked owners.
   compiler interfaces and diagnostics. The expression-macro slice in accepted
   [CP-0033](../proposals/CP-0033-hygienic-expression-syntax.md) is unimplemented;
   see its [design](macros/first-slice.md) and owning
-  [TASK-0066](../tasks/TASK-0066-expression-macros.md). Broader ideas remain
+  [TASK-0067](../tasks/TASK-0067-expression-macros.md). Broader ideas remain
   exploratory.
 - [DN-0061: Effects and Resources as the First Typed Slice](DN-0061-effects-and-resources-first-slice.md)
   — the first semantic slice and its opaque data and function boundaries; its
