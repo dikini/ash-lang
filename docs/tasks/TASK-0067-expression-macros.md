@@ -150,7 +150,7 @@ evidence and all M01–M14 acceptance criteria remain pending.
 The cap is 100 estimated effort points for the complete milestone through
 verified retention in `integration/expression-macros`; Main integration is
 excluded. Weights reflect expected work, not an equal share per acceptance case
-or feature. They are approximate: display about 49%, not a precise completion
+or feature. They are approximate: display about 50%, not a precise completion
 probability. The current Codex elapsed forecast is in the
 [plan](../plans/2026-11-05-expression-macros.md#estimate-and-re-planning).
 
@@ -171,8 +171,8 @@ reviewer owns `Rev`, and the orchestrator owns `PM`.
 | P07 | 5.5 | Dev / R5.5 | Restricted combined template graph to 42, supplied/introduced binders, private helper/opaque owner and nested DSL; `4a4c01b0`, reviewed through `26b43869`. |
 | P08 | 1 | Dev+Rev / R1 | Operator-stop and annotation-admission review repair; `26b43869`. Full annotation support remains P10. |
 | P09 | 4 | Dev / R3 | Procedural captured binder with preceding initializer scope (0.5), `/tmp/ash-syntax-captured-binder-driver.log`. An introduced function parameter avoids a same-spelled caller binding (0.5), and a captured parameter binds its captured body without escaping its scope (0.5); review cleared these function cases at `abd2e26f`. An introduced mutually recursive group retains a same-spelled caller binding (0.5), reviewed at `bc431118`. A captured recursive binder scopes over its initializer and body without escaping (0.5); template and procedural variants, fresh binders, and same-spelled distinct recursive members run to 42. A later sequential initializer sees the preceding captured binder (0.5), `/tmp/ash-syntax-recursive-capture-regressions.log` (SHA-256 `55937b612d95a37d110402814301820f0832c0113f5e1a6aed54337c0c541810`). Four ordinary recursive-resolution cases pass, `/tmp/ash-syntax-recursive-capture-ordinary.log` (SHA-256 `ea829a715c07691b22d1c07c85977e911398f57d0836ebf9685785edfd9974a0`). These cases and the R12 repair were reviewed at `a1135e26`. Broader patterns and sequential scopes remain pending. |
-| P10 | 5 | Dev / R1.5 | Duplicated captures retain distinct local binder IDs (0.5), local newtype and constructor IDs (0.5), and resource identity and handle IDs (0.5); the combined graph preserves nested syntax and a caller free reference and executes to 42. The independently validated Core is inspected in `/tmp/ash-syntax-copy-identities-batch.log` (SHA-256 `98dac1c11adf058b33a84ec3a6efb1fe95b3662a93796aacc8ea6163112b3afd`); review cleared these cases at `82d2f219`. Other copied binder/use cases (0.5), copied nominal/region cases (1), definition-site annotations/type scopes (1), and resource/region scopes (1) remain pending. |
-| P11 | 5 | Dev / R1.5 | A template's direct and facade-qualified public term retains the owner's route despite a conflicting caller alias; unused dependency-private references and ordinary caller use of the owner's alias are refused (0.5), `/tmp/ash-syntax-owner-qualified-regressions.log` (SHA-256 `c7c147b247ef8307a18adf5e65bfcbd719b14eade02b09ee2684f135cd6ebab9`), reviewed at `98613915`. A renamed targeted public import works in template and procedural output, through a facade and under caller shadowing; captured caller references retain caller access and ordinary caller access to the owner-only name is refused (0.5), `/tmp/ash-syntax-owner-targeted-regressions.log` (SHA-256 `625b357e3890ca7a2c59b11bd19c0266afd6e164e8fb83a51273c080c212f996`), reviewed at `1bd1a08e`. Owner-qualified public constructor expressions, match and function-parameter patterns work with caller shadowing; dependency opaque constructors remain refused and ordinary access/re-export coexists (0.5), `/tmp/ash-syntax-copy-constructor-final.log` (SHA-256 `6546d7ff826e169e5e32b31983fd3362e6381b8c07b6e50bdc86d56cb0bce5b2`), reviewed at `82d2f219`. Full authenticated grants/access (1), retained checked private closure and real Core-coordinate consumer (2), and route mutation refusals (0.5) remain pending, beyond P07. |
+| P10 | 5 | Dev / R1.5 + D0.5 | Duplicated captures retain distinct local binder IDs (0.5), local newtype and constructor IDs (0.5), and resource identity and handle IDs (0.5); the combined graph preserves nested syntax and a caller free reference and executes to 42. The independently validated Core is inspected in `/tmp/ash-syntax-copy-identities-batch.log` (SHA-256 `98dac1c11adf058b33a84ec3a6efb1fe95b3662a93796aacc8ea6163112b3afd`); review cleared these cases at `82d2f219`. A template-introduced local newtype and its constructor remain distinct from the caller’s same-spelled nominal and constructor; the captured caller annotation retains its own type and the real graph executes to 42 (D0.5), `/tmp/ash-syntax-generated-newtype-origin.log` (SHA-256 `88b3373f0c8cfac57aa157f315748da7e55e56effa3d4cca981a7be1cdd131a4`). Independent Core rejects ten construction-origin and representation mutations and continues to reject wrapped source-only origins; five local-newtype checks pass in `/tmp/ash-syntax-newtype-lib-batch.log` (SHA-256 `2ae8d4a8ea3f5808eceed197f1515fcac1bd28ccde4fc357d0123a3b22afed7c`). Other copied binder/use cases (0.5), copied nominal/region cases (1), named definition-site annotations and additional type scopes (0.5), and resource/region scopes (1) remain pending. |
+| P11 | 5 | Dev / R1.5 + D0.5 | A template's direct and facade-qualified public term retains the owner's route despite a conflicting caller alias; unused dependency-private references and ordinary caller use of the owner's alias are refused (0.5), `/tmp/ash-syntax-owner-qualified-regressions.log` (SHA-256 `c7c147b247ef8307a18adf5e65bfcbd719b14eade02b09ee2684f135cd6ebab9`), reviewed at `98613915`. A renamed targeted public import works in template and procedural output, through a facade and under caller shadowing; captured caller references retain caller access and ordinary caller access to the owner-only name is refused (0.5), `/tmp/ash-syntax-owner-targeted-regressions.log` (SHA-256 `625b357e3890ca7a2c59b11bd19c0266afd6e164e8fb83a51273c080c212f996`), reviewed at `1bd1a08e`. Owner-qualified public constructor expressions, match and function-parameter patterns work with caller shadowing; dependency opaque constructors remain refused and ordinary access/re-export coexists (0.5), `/tmp/ash-syntax-copy-constructor-final.log` (SHA-256 `6546d7ff826e169e5e32b31983fd3362e6381b8c07b6e50bdc86d56cb0bce5b2`), reviewed at `82d2f219`. A renamed targeted constructor works in template expressions and patterns, procedural output, a facade, and caller shadowing while ordinary caller access is refused (D0.5), `/tmp/ash-syntax-targeted-constructor-current.log` (SHA-256 `90534ec49a44823be92f9f09f5bb6a36307558106c753fe98b0389959925b707`); the current batch is based on `0cd326dc`, with combined SHA-256 `7091e75c5d1b1e51aed543614a9be923f34bc38c1de1c69d92997fd6b011a1cb` for the six changed Rust files and generated-newtype and targeted-constructor fixtures. Remaining full authenticated grants/access (0.5), retained checked private closure and real Core-coordinate consumer (2), and route mutation refusals (0.5) remain pending, beyond P07. |
 | P12 | 3 | Dev / 0 | Ordinary method evidence (1), structural continuation capability (1), resource escape and effect count/order (1). |
 | P13 | 3 | Dev / R1 | Generated definition context selects its owner's imported syntax, caller context selects a different caller import, and fresh context selects neither caller syntax nor binding (1), `/tmp/ash-syntax-generated-context-driver.log` (SHA-256 `3f3815fdaedc6ee7a41ff6053c64a75aa832ef96d10d2a5ca36f09cef955833a`); broader leading-context, import, reservation and conflict cases remain pending. |
 | P14 | 3 | Dev / R2 | Reviewed canonical module load/check/link (0.5); complete vocabulary (1) and lexer/declaration conformance (0.5), `/tmp/ash-syntax-token-vocabulary.log`; API identity and interface-version conformance remain pending. |
@@ -208,7 +208,7 @@ API/entry 10; Ops/interchange 14; transfer/failure/limits 8; graph/Core/repeatab
 The independent review assigns more weight to the unresolved contextual,
 non-term, copied-identity, grant, and Core-coordinate consumers than the first
 draft. The 20-point reviewed baseline is frozen; a changed ETA does not reweight it.
-Reviewed effort is 49, demonstrated provisional effort is 0, and 51 points
+Reviewed effort is 49, demonstrated provisional effort is 1, and 50 points
 have no credit. Review upgrades D to R without awarding implementation points
 again. Explicit review/gate rows cover their own work, not a second implementation
 credit. Record the exact commit or source hash, real consumer observation/test
@@ -233,6 +233,28 @@ These are effort-weighted delivery credits, not measured model effort or time
 remaining. M01–M14 and C1/C2 remain required. Review weights only when the work
 decomposition or scope changes; preserve the old score and explain any agreed
 rebasing. A forecast change alone does not change earned points.
+
+The unchanged 4,096-local-newtype program on a 256 KiB thread overflowed at
+reviewed `82d2f219`, `/tmp/ash-expression-baseline-82d-small-stack.log`
+(SHA-256 `6d1f647a6954a04c2c143d6fbe71e9f533942204e41b8c47f43134d1782957b0`).
+Separating post-parse checking from staged projection restores its accept and
+escape checks; 105 macro, newtype, module-loading, resolution, and visibility
+cases pass in `/tmp/ash-syntax-targeted-newtype-stack-regressions.log`
+(SHA-256 `4c7a7f6cffce56ff4e16ed4c26b123afdfca9f130eec2b471c1a0ff9f56d193e`).
+Eight local-nominal scope checks and the copied-identity Core check also pass in
+`/tmp/ash-syntax-nominal-lib-batch.log` (SHA-256
+`9709ff1cc18172befde3c265cd3441dfae27886f75df9fe53aa3986c07930d06`) and
+`/tmp/ash-syntax-copy-identities-recheck.log` (SHA-256
+`2462cbc28eb5a9b13949443dac9a1a19154ec414c1b89e6263edce78e31ce265`).
+These compatibility repairs add no separate progress credit.
+
+A focused `cargo clippy -j 1 --lib -- -D warnings` is still failing with 17
+existing warnings; the same command at reviewed `82d2f219` reports the same
+17 sites. Current and baseline logs are `/tmp/ash-syntax-targeted-newtype-clippy.log`
+(SHA-256 `90b0f1cad1268c54d1975c5f5ba985b50242aa157baaa4bf5d179e44fbb0c311`)
+and `/tmp/ash-expression-baseline-82d-clippy.log` (SHA-256
+`802fca986bc4b20e457a9bc9ac5d67022e72cad86843b2b0d0edf83baad33099`).
+The all-target, all-feature lint and the complete C1 gate remain pending.
 
 ### Component observations
 

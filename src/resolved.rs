@@ -17352,6 +17352,18 @@ impl ResolvedRegistry {
     }
 
     #[cfg(test)]
+    pub(crate) fn first_lexical_newtype_for_core_test(
+        &mut self,
+    ) -> Option<(&mut ResolvedNominalType, &mut ResolvedConstructor)> {
+        let nominal = self.lexical_nominals.first_mut()?;
+        let constructor = self
+            .lexical_constructors
+            .iter_mut()
+            .find(|constructor| constructor.owner == nominal.id)?;
+        Some((nominal, constructor))
+    }
+
+    #[cfg(test)]
     pub(crate) fn duplicate_second_lexical_identity_for_core_test(&mut self) -> bool {
         let [first, second, ..] = self.lexical_nominals.as_mut() else {
             return false;

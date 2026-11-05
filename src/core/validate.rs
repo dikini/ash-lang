@@ -7991,6 +7991,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
+            self.validate_origin(&nominal.origin, self.program.root)?;
             let nominal_range = nominal.origin.primary_span().range();
             let parameters = registry
                 .nominal_parameters(nominal.id)
@@ -8057,6 +8058,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
+            self.validate_origin(&constructor.origin, self.program.root)?;
         }
         Ok(())
     }
@@ -8086,9 +8088,28 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 ) else {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
                 };
-                if !matches!(nominal.origin, Origin::Source(_))
-                    || !matches!(constructor.origin, Origin::Source(_))
-                    || constructor.owner != nominal.id
+                let (representation_source, declaration) =
+                    match (&nominal.origin, &constructor.origin) {
+                        (Origin::Source(_), Origin::Source(declaration)) => (source, *declaration),
+                        (
+                            Origin::Expansion {
+                                invocation,
+                                definition: nominal_definition,
+                            },
+                            Origin::Expansion {
+                                invocation: constructor_invocation,
+                                definition: constructor_definition,
+                            },
+                        ) if nominal.id.is_lexical()
+                            && invocation == constructor_invocation
+                            && nominal_definition.source() == constructor_definition.source()
+                            && span_contains(*nominal_definition, *constructor_definition) =>
+                        {
+                            (nominal_definition.source(), *constructor_definition)
+                        }
+                        _ => return Err(ValidationError::new(ValidationReason::Registry, None)),
+                    };
+                if constructor.owner != nominal.id
                     || constructor.spelling != nominal.spelling
                     || constructor.payload.is_some()
                     || !self.valid_registry_payload(
@@ -8104,8 +8125,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     || !self.valid_representation_provenance(
                         representation,
                         provenance,
-                        source,
-                        constructor.origin.primary_span(),
+                        representation_source,
+                        declaration,
                     )?
                 {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
@@ -30550,6 +30571,174 @@ mod tests {
                 );
                 assert_eq!(retry.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
             }
+        }
+    }
+
+    #[test]
+    fn generated_local_newtype_rejects_tampered_construction_origins() {
+        use crate::resolved::{ResolvedTypeProvenance, ResolvedTypeProvenanceNode};
+
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/generated-newtype/entry.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the generated newtype graph must compile");
+        let (program, provenance) = compiled
+            .effect_build_input()
+            .expect("validated Effect Core");
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let [nominal] = program.registry().lexical_nominals() else {
+            panic!("one generated local newtype")
+        };
+        let Origin::Expansion {
+            invocation,
+            definition,
+        } = nominal.origin
+        else {
+            panic!("the newtype retains its invocation and definition")
+        };
+        let forms = sources
+            .iter()
+            .find(|source| source.id() == definition.source())
+            .unwrap();
+        let caller = sources
+            .iter()
+            .find(|source| source.id() == invocation.source())
+            .unwrap();
+        let other_caller = caller.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let outside = forms.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let invalid_definition = crate::source::Span::unchecked_for_test(
+            forms.id(),
+            ByteRange::new(forms.text().len() as u32 + 1, forms.text().len() as u32 + 2).unwrap(),
+        );
+
+        let clean = identity_effect_traversal(program).unwrap();
+        validate_effect_modules(clean, &sources, &modules)
+            .expect("the ordinary independent revalidation accepts the generated newtype");
+
+        for mutation in 0..10 {
+            let mut forged = identity_effect_traversal(program).unwrap();
+            let mut registry = (*forged.registry).clone();
+            let (nominal, constructor) = registry.first_lexical_newtype_for_core_test().unwrap();
+            let representation = nominal
+                .representation_provenance
+                .as_ref()
+                .unwrap()
+                .span()
+                .unwrap();
+            match mutation {
+                0 => {
+                    nominal.origin = Origin::Expansion {
+                        invocation: definition,
+                        definition,
+                    };
+                    constructor.origin = Origin::Expansion {
+                        invocation: definition,
+                        definition,
+                    };
+                }
+                1 => {
+                    let Origin::Expansion { invocation, .. } = &mut constructor.origin else {
+                        unreachable!()
+                    };
+                    *invocation = other_caller;
+                }
+                2 => {
+                    let Origin::Expansion { definition, .. } = &mut constructor.origin else {
+                        unreachable!()
+                    };
+                    *definition = invocation;
+                }
+                3 => {
+                    let Origin::Expansion { definition, .. } = &mut constructor.origin else {
+                        unreachable!()
+                    };
+                    *definition = outside;
+                }
+                4 => {
+                    nominal.representation_provenance = Some(ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(invocation)],
+                        0,
+                    ));
+                }
+                5 => {
+                    nominal.representation_provenance = Some(ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(outside)],
+                        0,
+                    ));
+                }
+                6 => {
+                    nominal.representation_provenance = Some(ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Tuple {
+                            span: representation,
+                            elements: Box::new([]),
+                        }],
+                        0,
+                    ));
+                }
+                7 => {
+                    let Origin::Expansion { definition, .. } = &mut nominal.origin else {
+                        unreachable!()
+                    };
+                    *definition = invalid_definition;
+                }
+                8 => {
+                    nominal.origin = Origin::Related {
+                        primary: Box::new(nominal.origin.clone()),
+                        related: Vec::new(),
+                    };
+                }
+                9 => {
+                    nominal.origin = Origin::Generated {
+                        cause: Box::new(nominal.origin.clone()),
+                        reason: crate::source::GeneratedReason::TypeChecking,
+                    };
+                }
+                _ => unreachable!(),
+            }
+            forged.registry = Arc::new(registry);
+            assert!(
+                validate_effect_modules(forged, &sources, &modules).is_err(),
+                "independent Core accepted construction-origin mutation {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_local_newtypes_still_reject_wrapped_origins() {
+        for related in [false, true] {
+            let mut fixture = LinkedCoreValidationFixture::compile(
+                "",
+                "main : Unit -> Int\nmain () = {\nnewtype Token = Token(Int)\nmatch Token(42) {\nToken(value) => value\n}\n}\n",
+                &[],
+            );
+            let registry = Arc::get_mut(&mut fixture.program.registry).unwrap();
+            let (nominal, constructor) = registry.first_lexical_newtype_for_core_test().unwrap();
+            for origin in [&mut nominal.origin, &mut constructor.origin] {
+                *origin = if related {
+                    Origin::Related {
+                        primary: Box::new(origin.clone()),
+                        related: Vec::new(),
+                    }
+                } else {
+                    Origin::Generated {
+                        cause: Box::new(origin.clone()),
+                        reason: crate::source::GeneratedReason::TypeChecking,
+                    }
+                };
+            }
+            assert!(
+                fixture.validate().is_err(),
+                "wrapped source origins must be refused"
+            );
         }
     }
 

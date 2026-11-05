@@ -2486,8 +2486,8 @@ struct Resolver {
     method_names: HashMap<String, ResolvedTermBinding>,
     global_requirement_counts: HashMap<BinderId, usize>,
     constructor_names: HashMap<String, ConstructorId>,
-    lexical_nominal_scopes: Vec<HashMap<String, NominalTypeId>>,
-    lexical_constructor_scopes: Vec<HashMap<String, ConstructorId>>,
+    lexical_nominal_scopes: Vec<HashMap<(String, usize), NominalTypeId>>,
+    lexical_constructor_scopes: Vec<HashMap<(String, usize), ConstructorId>>,
     lexical_nominals: ResolvedNominalOwnerBuffer,
     lexical_constructors: ResolvedConstructorOwnerBuffer,
     lexical_nominal_parameters: ResolvedNominalParameterOwnerBuffer,
@@ -2617,14 +2617,26 @@ fn resolved_newtype_fact_pair(
             constructors: Box::new([constructor_id]),
             representation: Some(representation.into_inner()),
             representation_provenance: Some(provenance),
-            origin: Origin::Source(declaration.span),
+            origin: match declaration.name.introduced_at {
+                Some(invocation) => Origin::Expansion {
+                    invocation,
+                    definition: declaration.span,
+                },
+                None => Origin::Source(declaration.span),
+            },
         },
         ResolvedConstructor {
             id: constructor_id,
             owner: id,
             spelling: constructor_spelling,
             payload: None,
-            origin: Origin::Source(constructor.span),
+            origin: match constructor.name.introduced_at {
+                Some(invocation) => Origin::Expansion {
+                    invocation,
+                    definition: constructor.span,
+                },
+                None => Origin::Source(constructor.span),
+            },
         },
     ))
 }
@@ -5685,20 +5697,11 @@ impl Resolver {
                 } else if let Some(constructor) = dependency.exports().constructor(&usage.name.text)
                 {
                     if !self.syntax_qualified_constructors.contains_key(&key) {
-                        let nominal = dependency
-                            .exports()
-                            .nominal_fact(constructor.id.owner())
-                            .ok_or_else(invalid)?;
-                        let mut syntax_facts = self.imported.take_syntax_facts();
-                        std::mem::swap(&mut self.imported, &mut syntax_facts);
-                        let retained = self.retain_imported_constructor_family(
-                            nominal,
+                        self.retain_syntax_exported_constructor(
+                            constructor,
                             dependency.exports(),
                             usage.import_span,
-                        );
-                        std::mem::swap(&mut self.imported, &mut syntax_facts);
-                        self.imported.set_syntax_facts(syntax_facts);
-                        retained?;
+                        )?;
                         self.syntax_qualified_constructors
                             .insert(key, constructor.id);
                     }
@@ -5768,29 +5771,64 @@ impl Resolver {
                     .iter()
                     .find(|candidate| candidate.module() == route.target())
                     .ok_or_else(invalid)?;
-                let exported = dependency.exports().term(original).ok_or_else(invalid)?;
-                if !self.syntax_terms.contains_key(&key) {
-                    self.retain_imported_global_from_owner(
-                        exported,
-                        dependency.exports(),
-                        usage.import_span,
-                        &mut capture_graph_visits,
-                        Some(SyntaxOwnerLookup {
-                            owner: dependency,
-                            graph: syntax.owners,
-                        }),
-                    )?;
-                    self.syntax_terms.insert(
-                        key,
-                        ResolvedTermBinding::imported(
-                            ResolvedTermName::Global(exported.binder),
-                            selector_span,
-                        ),
-                    );
+                if let Some(exported) = dependency.exports().term(original) {
+                    if !self.syntax_terms.contains_key(&key) {
+                        self.retain_imported_global_from_owner(
+                            exported,
+                            dependency.exports(),
+                            usage.import_span,
+                            &mut capture_graph_visits,
+                            Some(SyntaxOwnerLookup {
+                                owner: dependency,
+                                graph: syntax.owners,
+                            }),
+                        )?;
+                        self.syntax_terms.insert(
+                            key,
+                            ResolvedTermBinding::imported(
+                                ResolvedTermName::Global(exported.binder),
+                                selector_span,
+                            ),
+                        );
+                    }
+                } else if let Some(constructor) = dependency.exports().constructor(original) {
+                    if !self.syntax_constructors.contains_key(&key) {
+                        self.retain_syntax_exported_constructor(
+                            constructor,
+                            dependency.exports(),
+                            usage.import_span,
+                        )?;
+                        self.syntax_constructors.insert(key, constructor.id);
+                    }
+                } else {
+                    return Err(invalid());
                 }
             }
         }
         Ok(())
+    }
+
+    fn retain_syntax_exported_constructor(
+        &mut self,
+        constructor: &ExportedConstructor,
+        summary: &ExportSummary,
+        span: Span,
+    ) -> Result<(), ResolveError> {
+        let nominal = summary
+            .nominal_fact(constructor.id.owner())
+            .ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "the syntax constructor lost its exported owner",
+                )
+            })?;
+        let mut syntax_facts = self.imported.take_syntax_facts();
+        std::mem::swap(&mut self.imported, &mut syntax_facts);
+        let retained = self.retain_imported_constructor_family(nominal, summary, span);
+        std::mem::swap(&mut self.imported, &mut syntax_facts);
+        self.imported.set_syntax_facts(syntax_facts);
+        retained
     }
 
     fn retain_imported_global<'a>(
@@ -7204,6 +7242,15 @@ impl Resolver {
         &mut self,
         reference: &SurfaceReference,
     ) -> Result<ImportedNominalName, ResolveError> {
+        if let SurfaceReference::Qualified(name) = reference
+            && (name.qualifier.introduction != 0 || name.member.introduction != 0)
+        {
+            return Err(error(
+                ResolveReason::UnknownType,
+                name.span,
+                "this qualified nominal type is not available in the syntax context",
+            ));
+        }
         if let Some(namespace) = self.imported_namespace(reference)? {
             if namespace.interfaces.contains_key(&reference.member().text) {
                 return Err(type_kind_error(
@@ -7229,12 +7276,18 @@ impl Resolver {
         let name = reference.member();
         if let Some(id) = charged_lexical_scope_lookup(
             &self.lexical_nominal_scopes,
-            &name.text,
-            name.span,
+            name,
             &mut self.type_work,
             "lexical nominal lookup exceeded its type-work budget",
         )? {
             return Ok(ImportedNominalName { id });
+        }
+        if name.introduction != 0 {
+            return Err(error(
+                ResolveReason::UnknownType,
+                name.span,
+                "this nominal type is not declared in the syntax context",
+            ));
         }
         if self.interface_names.contains_key(&name.text) {
             return Err(type_kind_error(name.span, &name.text));
@@ -7859,17 +7912,24 @@ impl Resolver {
             });
         }
         if member.introduction != 0 {
-            return self
-                .syntax_constructors
-                .get(&(member.text.clone(), member.introduction))
-                .copied()
-                .ok_or_else(|| {
-                    error(
-                        ResolveReason::UnknownConstructor,
-                        member.span,
-                        "this constructor is not declared in the syntax owner",
-                    )
-                });
+            return charged_lexical_scope_lookup(
+                &self.lexical_constructor_scopes,
+                member,
+                &mut self.type_work,
+                "lexical constructor lookup exceeded its type-work budget",
+            )?
+            .or_else(|| {
+                self.syntax_constructors
+                    .get(&(member.text.clone(), member.introduction))
+                    .copied()
+            })
+            .ok_or_else(|| {
+                error(
+                    ResolveReason::UnknownConstructor,
+                    member.span,
+                    "this constructor is not declared in the syntax owner",
+                )
+            });
         }
         if let Some(namespace) = self.imported_namespace(reference)? {
             return namespace
@@ -7892,8 +7952,7 @@ impl Resolver {
         }
         if let Some(constructor) = charged_lexical_scope_lookup(
             &self.lexical_constructor_scopes,
-            &reference.member().text,
-            reference.member().span,
+            reference.member(),
             &mut self.type_work,
             "lexical constructor lookup exceeded its type-work budget",
         )?
@@ -9458,11 +9517,14 @@ impl Resolver {
         self.lexical_nominal_scopes
             .last_mut()
             .expect("the local nominal scope was reserved")
-            .insert(nominal_name, id);
+            .insert((nominal_name, declaration.name.introduction), id);
         self.lexical_constructor_scopes
             .last_mut()
             .expect("the local constructor scope was reserved")
-            .insert(constructor_name, constructor_id);
+            .insert(
+                (constructor_name, constructor.name.introduction),
+                constructor_id,
+            );
         self.next_lexical_nominal = next;
         Ok(id)
     }
@@ -13602,23 +13664,25 @@ impl Resolver {
                                 .flatten()
                         })
                 };
-                let unqualified_constructor =
-                    if binding.is_none() && !is_qualified && member.introduction != 0 {
-                        self.syntax_constructors
-                            .get(&(member.text.clone(), member.introduction))
-                            .copied()
-                    } else if binding.is_none() && !is_qualified {
-                        charged_lexical_scope_lookup(
-                            &self.lexical_constructor_scopes,
-                            &member.text,
-                            member.span,
-                            &mut self.type_work,
-                            "inline lexical constructor lookup exceeded its type-work budget",
-                        )?
-                        .or_else(|| self.constructor_names.get(&member.text).copied())
-                    } else {
-                        None
-                    };
+                let unqualified_constructor = if binding.is_none() && !is_qualified {
+                    charged_lexical_scope_lookup(
+                        &self.lexical_constructor_scopes,
+                        member,
+                        &mut self.type_work,
+                        "inline lexical constructor lookup exceeded its type-work budget",
+                    )?
+                    .or_else(|| {
+                        if member.introduction != 0 {
+                            self.syntax_constructors
+                                .get(&(member.text.clone(), member.introduction))
+                                .copied()
+                        } else {
+                            self.constructor_names.get(&member.text).copied()
+                        }
+                    })
+                } else {
+                    None
+                };
                 if let Some(binding) = binding {
                     let term = binding.term;
                     let evidence_count = match term {
@@ -14524,17 +14588,17 @@ fn type_kind_error(span: crate::source::Span, spelling: &str) -> ResolveError {
 }
 
 fn charged_lexical_scope_lookup<Identity: Copy>(
-    scopes: &[HashMap<String, Identity>],
-    spelling: &str,
-    span: crate::source::Span,
+    scopes: &[HashMap<(String, usize), Identity>],
+    name: &SurfaceName,
     budget: &mut TypeWorkBudget,
     message: &'static str,
 ) -> Result<Option<Identity>, ResolveError> {
+    let key = (name.text.clone(), name.introduction);
     for scope in scopes.iter().rev() {
         budget
             .charge(1)
-            .map_err(|()| error(ResolveReason::TypeResourceExhausted, span, message))?;
-        if let Some(identity) = scope.get(spelling).copied() {
+            .map_err(|()| error(ResolveReason::TypeResourceExhausted, name.span, message))?;
+        if let Some(identity) = scope.get(&key).copied() {
             return Ok(Some(identity));
         }
     }
@@ -20347,12 +20411,12 @@ mod tests {
         assert_eq!(resolver.lexical_constructors.0.len(), 1);
         assert_eq!(resolver.lexical_nominal_parameters.0.len(), 1);
         assert_eq!(
-            resolver.lexical_nominal_scopes[0].get("Token"),
+            resolver.lexical_nominal_scopes[0].get(&("Token".to_owned(), 0)),
             Some(&owner)
         );
         assert_eq!(
             resolver.lexical_constructor_scopes[0]
-                .get("Token")
+                .get(&("Token".to_owned(), 0))
                 .map(|constructor| constructor.owner()),
             Some(owner),
         );
@@ -20377,13 +20441,13 @@ mod tests {
         let mut resolver =
             Resolver::with_type_work(ModuleId::new(7_014), TypeWorkBudget::with_limit(DEPTH - 1));
         let mut outer_nominals = HashMap::new();
-        outer_nominals.insert("Deep".to_owned(), owner);
+        outer_nominals.insert(("Deep".to_owned(), 0), owner);
         resolver.lexical_nominal_scopes.push(outer_nominals);
         resolver
             .lexical_nominal_scopes
             .extend((1..DEPTH).map(|_| HashMap::new()));
         let mut outer_constructors = HashMap::new();
-        outer_constructors.insert("Deep".to_owned(), constructor);
+        outer_constructors.insert(("Deep".to_owned(), 0), constructor);
         resolver.lexical_constructor_scopes.push(outer_constructors);
         resolver
             .lexical_constructor_scopes
@@ -20395,7 +20459,10 @@ mod tests {
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(resolver.type_work.used(), DEPTH - 1);
         assert_eq!(resolver.lexical_nominal_scopes.len(), DEPTH);
-        assert_eq!(resolver.lexical_nominal_scopes[0].get("Deep"), Some(&owner));
+        assert_eq!(
+            resolver.lexical_nominal_scopes[0].get(&("Deep".to_owned(), 0)),
+            Some(&owner)
+        );
 
         resolver.type_work = TypeWorkBudget::with_limit(DEPTH);
         assert_eq!(
@@ -20415,7 +20482,7 @@ mod tests {
         assert_eq!(resolver.type_work.used(), DEPTH - 1);
         assert_eq!(resolver.lexical_constructor_scopes.len(), DEPTH);
         assert_eq!(
-            resolver.lexical_constructor_scopes[0].get("Deep"),
+            resolver.lexical_constructor_scopes[0].get(&("Deep".to_owned(), 0)),
             Some(&constructor),
         );
 

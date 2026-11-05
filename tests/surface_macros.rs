@@ -106,6 +106,22 @@ fn template_qualified_constructor_pattern_uses_its_owner() {
 }
 
 #[test]
+fn template_targeted_constructor_uses_its_owner_under_caller_shadowing() {
+    for path in [
+        "qualified-constructor/entry_targeted.ash",
+        "qualified-constructor/entry_targeted_pattern.ash",
+        "qualified-constructor/entry_targeted_facade.ash",
+        "qualified-constructor/entry_procedural_targeted.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    let failure = compile_path(fixture("qualified-constructor/invalid_targeted_caller.ash"))
+        .expect_err("the syntax import does not bind the owner's constructor");
+    assert!(failure.graph_failure().is_none(), "{failure:?}");
+}
+
+#[test]
 fn template_qualified_import_does_not_expose_dependency_privates_or_caller_aliases() {
     for path in [
         "qualified-owner/invalid_hidden.ash",
@@ -166,6 +182,13 @@ fn copied_expression_resources_keep_distinct_scopes() {
 fn copied_expression_preserves_nested_syntax_and_caller_references() {
     let compiled = compile_path(fixture("copied-declarations/combined.ash"))
         .expect("copied declarations and nested syntax preserve the caller reference");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn template_local_newtype_does_not_capture_the_caller_nominal() {
+    let compiled = compile_path(fixture("generated-newtype/entry.ash"))
+        .expect("the generated local newtype preserves caller nominal references");
     assert_eq!(execute(&compiled).unwrap().value_display(), "42");
 }
 

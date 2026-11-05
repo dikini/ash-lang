@@ -267,7 +267,9 @@ impl SyntaxOwnerBindings {
                         let SurfaceImportItem::Name { name, alias, span } = item else {
                             continue;
                         };
-                        if dependency.exports().term(&name.text).is_some() {
+                        if dependency.exports().term(&name.text).is_some()
+                            || dependency.exports().constructor(&name.text).is_some()
+                        {
                             let local = alias.as_ref().unwrap_or(name);
                             if targeted
                                 .insert(local.text.clone(), (route, name.text.clone(), *span))
@@ -515,6 +517,16 @@ pub(crate) fn validate_template(
                         }
                         check_annotation(&member.annotation)?;
                         check(&member.initializer, matcher, qualified_name)?;
+                    }
+                }
+                SurfaceLocalDeclaration::Newtype(declaration) => {
+                    if !declaration.parameters.is_empty() {
+                        return Err(declaration.span);
+                    }
+                    for constructor in &declaration.constructors {
+                        for field in &constructor.fields {
+                            check_annotation(field)?;
+                        }
                     }
                 }
                 _ => return Err(block.span),
@@ -826,6 +838,16 @@ fn substitute_block(
                         introduction,
                         invocation,
                     )?;
+                }
+            }
+            SurfaceLocalDeclaration::Newtype(declaration) => {
+                if introduction != 0 {
+                    declaration.name.introduction = introduction;
+                    declaration.name.introduced_at = Some(invocation);
+                    for constructor in &mut declaration.constructors {
+                        constructor.name.introduction = introduction;
+                        constructor.name.introduced_at = Some(invocation);
+                    }
                 }
             }
             _ => return Err(block.span),
