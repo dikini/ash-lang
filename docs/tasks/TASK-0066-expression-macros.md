@@ -121,8 +121,8 @@ findings here before adding mechanisms.
 
 ## Progress
 
-The reviewed progress is **45/100 delivery points, about 45%**, through
-`bc431118`. It includes the original 20-point template baseline through
+The reviewed progress is **46/100 delivery points, about 46%**, through
+`a1135e26`. It includes the original 20-point template baseline through
 `26b43869`, 8 points for the restricted computed vertical and its R8/R9
 repairs, and 8.5 points for the expanded vocabulary, identifier operations,
 group output, one procedural binder scope, and a restricted parse/unwrap service
@@ -134,8 +134,10 @@ One reviewed point covers introduced and captured function parameters in
 template output; a procedural transformer exercises the captured case as well.
 A reviewed half-point covers an introduced mutually recursive template group
 while retaining a same-spelled caller binding.
-One provisional point covers captured recursive binders and a later sequential
+One reviewed point covers captured recursive binders and a later sequential
 initializer seeing an earlier captured binder.
+One provisional half-point covers direct and facade-qualified public terms in
+the syntax owner's environment despite a conflicting caller alias.
 Observed root-close
 evidence and all M01–M14 acceptance criteria remain pending.
 
@@ -144,7 +146,7 @@ evidence and all M01–M14 acceptance criteria remain pending.
 The cap is 100 estimated effort points for the complete milestone through
 verified retention in `integration/expression-macros`; Main integration is
 excluded. Weights reflect expected work, not an equal share per acceptance case
-or feature. They are approximate: display about 45%, not a precise completion
+or feature. They are approximate: display about 46.5%, not a precise completion
 probability. The current Codex elapsed forecast is in the
 [plan](../plans/2026-11-05-expression-macros.md#estimate-and-re-planning).
 
@@ -164,9 +166,9 @@ reviewer owns `Rev`, and the orchestrator owns `PM`.
 | P06 | 2 | Dev / R2 | Imported/renamed protected-capture template executes to 35; `00d9f066`. |
 | P07 | 5.5 | Dev / R5.5 | Restricted combined template graph to 42, supplied/introduced binders, private helper/opaque owner and nested DSL; `4a4c01b0`, reviewed through `26b43869`. |
 | P08 | 1 | Dev+Rev / R1 | Operator-stop and annotation-admission review repair; `26b43869`. Full annotation support remains P10. |
-| P09 | 4 | Dev / R2+D1 | Procedural captured binder with preceding initializer scope (0.5), `/tmp/ash-syntax-captured-binder-driver.log`. An introduced function parameter avoids a same-spelled caller binding (0.5), and a captured parameter binds its captured body without escaping its scope (0.5); review cleared these function cases at `abd2e26f`. An introduced mutually recursive group retains a same-spelled caller binding (0.5), reviewed at `bc431118`. A captured recursive binder scopes over its initializer and body without escaping (D0.5); template and procedural variants, fresh binders, and same-spelled distinct recursive members run to 42. A later sequential initializer sees the preceding captured binder (D0.5), `/tmp/ash-syntax-recursive-capture-regressions.log` (SHA-256 `55937b612d95a37d110402814301820f0832c0113f5e1a6aed54337c0c541810`). Four ordinary recursive-resolution cases pass, `/tmp/ash-syntax-recursive-capture-ordinary.log` (SHA-256 `ea829a715c07691b22d1c07c85977e911398f57d0836ebf9685785edfd9974a0`). Broader patterns and sequential scopes remain pending. |
+| P09 | 4 | Dev / R3 | Procedural captured binder with preceding initializer scope (0.5), `/tmp/ash-syntax-captured-binder-driver.log`. An introduced function parameter avoids a same-spelled caller binding (0.5), and a captured parameter binds its captured body without escaping its scope (0.5); review cleared these function cases at `abd2e26f`. An introduced mutually recursive group retains a same-spelled caller binding (0.5), reviewed at `bc431118`. A captured recursive binder scopes over its initializer and body without escaping (0.5); template and procedural variants, fresh binders, and same-spelled distinct recursive members run to 42. A later sequential initializer sees the preceding captured binder (0.5), `/tmp/ash-syntax-recursive-capture-regressions.log` (SHA-256 `55937b612d95a37d110402814301820f0832c0113f5e1a6aed54337c0c541810`). Four ordinary recursive-resolution cases pass, `/tmp/ash-syntax-recursive-capture-ordinary.log` (SHA-256 `ea829a715c07691b22d1c07c85977e911398f57d0836ebf9685785edfd9974a0`). These cases and the R12 repair were reviewed at `a1135e26`. Broader patterns and sequential scopes remain pending. |
 | P10 | 5 | Dev / 0 | Copied binder/use identities (1), copied nominal/region identities (2), definition-site annotations/type scopes (1), resource/region scopes (1). |
-| P11 | 5 | Dev / 0 | Authenticated grants/access (2), retained checked private closure and real Core-coordinate consumer (2), qualified/facade route and mutation refusals (1), beyond P07. |
+| P11 | 5 | Dev / D0.5 | A template's direct and facade-qualified public term retains the owner's route despite a conflicting caller alias; unused dependency-private references and ordinary caller use of the owner's alias are refused (D0.5), `/tmp/ash-syntax-owner-qualified-regressions.log` (SHA-256 `c7c147b247ef8307a18adf5e65bfcbd719b14eade02b09ee2684f135cd6ebab9`). Authenticated grants/access (2), retained checked private closure and real Core-coordinate consumer (2), and route mutation refusals (0.5) remain pending, beyond P07. |
 | P12 | 3 | Dev / 0 | Ordinary method evidence (1), structural continuation capability (1), resource escape and effect count/order (1). |
 | P13 | 3 | Dev / R1 | Generated definition context selects its owner's imported syntax, caller context selects a different caller import, and fresh context selects neither caller syntax nor binding (1), `/tmp/ash-syntax-generated-context-driver.log` (SHA-256 `3f3815fdaedc6ee7a41ff6053c64a75aa832ef96d10d2a5ca36f09cef955833a`); broader leading-context, import, reservation and conflict cases remain pending. |
 | P14 | 3 | Dev / R2 | Reviewed canonical module load/check/link (0.5); complete vocabulary (1) and lexer/declaration conformance (0.5), `/tmp/ash-syntax-token-vocabulary.log`; API identity and interface-version conformance remain pending. |
@@ -202,7 +204,7 @@ API/entry 10; Ops/interchange 14; transfer/failure/limits 8; graph/Core/repeatab
 The independent review assigns more weight to the unresolved contextual,
 non-term, copied-identity, grant, and Core-coordinate consumers than the first
 draft. The 20-point reviewed baseline is frozen; a changed ETA does not reweight it.
-Reviewed effort is 45, demonstrated provisional effort is 1, and 54 points
+Reviewed effort is 46, demonstrated provisional effort is 0.5, and 53.5 points
 have no credit. Review upgrades D to R without awarding implementation points
 again. Explicit review/gate rows cover their own work, not a second implementation
 credit. Record the exact commit or source hash, real consumer observation/test
@@ -335,7 +337,17 @@ The projection now refuses non-identifier fragments there. The negative and
 the captured and fresh identifier programs pass in 135 host, template, parser,
 and module tests (`/tmp/ash-syntax-r12-after.log`, SHA-256
 `c10a3036d194f407d20303ee5ebf7aa91b60d05715df808606238c31c880e4cd`).
-The prior one-point observation remains provisional pending re-review.
+The same reviewer cleared the repair and prior one-point observation at
+`a1135e26`.
+
+At 22:08 Sofia time, the 32-minute interval since the previous estimate added
+two points, including the provisional qualified-import result above. The
+owner-qualified graph previously failed at template admission
+(`/tmp/ash-syntax-owner-qualified-before.log`, SHA-256
+`e50d73122e40cc146a4f4747f4a4f75773c2265e06a95ef5d5023c7626cb0334`).
+The direct and facade graphs now return 42; the captured/fresh, ordinary import,
+and visibility suites also pass, 77 tests in total. Qualified constructors,
+methods, complete grants, and route mutation checks remain open.
 
 1. **Template grouping — demonstrated.** `cargo test -j 1 -p ash --test
    surface_macros template_macro_preserves_expression_capture_grouping --

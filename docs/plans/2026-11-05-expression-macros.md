@@ -846,13 +846,13 @@ full gate may serve the pre-Main gate without a duplicate identical-input run.
 
 ## Estimate and re-planning
 
-After native execution and the function-parameter cases, the provisional forecast
-is **about 8 additional Codex elapsed hours**, with a tentative **6–13 hour**
-range. At 21:36 Sofia time, roughly 44.5 reviewed or provisional weighted points
-over six and a half elapsed hours, including setup, informs the midpoint. The
-latest 29-minute interval added 3 points, one provisional; review can change
-that credit. The range is not a confidence interval. This replaces the earlier
-8.5-hour forecast. It is a
+After the recursive-binder review and qualified-owner driver cases, the
+provisional forecast is **about 8.1 additional Codex elapsed hours**, with a
+tentative **6–13 hour** range. At 22:08 Sofia time, 46 reviewed and 0.5
+provisional weighted points over about 7.1 elapsed hours, including setup,
+inform the midpoint. The latest 32-minute interval added 2 points, including
+0.5 provisional; review can change that credit. The range is not a confidence
+interval. This replaces the earlier 8-hour forecast. It is a
 whole-chain estimate, not a deadline or a measured model-runtime total;
 independent review may revise it.
 

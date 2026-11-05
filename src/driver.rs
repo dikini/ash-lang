@@ -1510,7 +1510,32 @@ where
         }
         let module = input.current().ok_or_else(internal_file_failure)?;
         for declaration in &module.surface().syntax_declarations {
-            crate::syntax::validate_template(declaration).map_err(|span| {
+            let qualified_term = |name: &crate::surface::SurfaceQualifiedName| {
+                module
+                    .surface()
+                    .imports
+                    .iter()
+                    .zip(
+                        module
+                            .dependencies()
+                            .iter()
+                            .filter(|edge| !edge.is_region_service()),
+                    )
+                    .find_map(|(import, edge)| match &import.selection {
+                        SurfaceImportSelection::Qualified { alias }
+                            if alias.text == name.qualifier.text
+                                && edge.import_span() == import.span =>
+                        {
+                            checked_by_module
+                                .get(&edge.target())
+                                .and_then(|index| checked.get(*index))
+                                .and_then(|dependency| dependency.exports().term(&name.member.text))
+                        }
+                        _ => None,
+                    })
+                    .is_some()
+            };
+            crate::syntax::validate_template(declaration, &qualified_term).map_err(|span| {
                 FileFailure::from(PipelineFailure::Resolution(
                     crate::resolve::unsupported_syntax_template(span),
                 ))
@@ -1705,12 +1730,16 @@ where
         let syntax_terms = if module.surface().syntax_declarations.is_empty() {
             crate::syntax::SyntaxOwnerBindings::empty(checked_module.module())
         } else {
-            crate::syntax::SyntaxOwnerBindings::new(&checked_module, &mut checking_type_work)
-                .map_err(|()| {
-                    FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
-                        crate::elaborate::ElaborationFailure::TypeResourceExhausted,
-                    )))
-                })?
+            crate::syntax::SyntaxOwnerBindings::new(
+                &checked_module,
+                module,
+                &mut checking_type_work,
+            )
+            .map_err(|()| {
+                FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                    crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                )))
+            })?
         };
         checked_by_module.insert(module.id(), checked.len());
         checked_syntax.push(module.surface().syntax_declarations.clone());

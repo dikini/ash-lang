@@ -2473,6 +2473,7 @@ struct Resolver {
     scopes: Vec<HashMap<(String, usize), ResolvedTermBinding>>,
     binder_introductions: HashMap<BinderId, usize>,
     syntax_terms: HashMap<(String, usize), ResolvedTermBinding>,
+    syntax_qualified_terms: HashMap<(String, String, usize), ResolvedTermBinding>,
     syntax_constructors: HashMap<(String, usize), ConstructorId>,
     globals: HashMap<String, GlobalFact>,
     type_names: HashMap<String, NominalTypeId>,
@@ -2885,6 +2886,7 @@ impl Resolver {
             scopes: vec![HashMap::new()],
             binder_introductions: HashMap::new(),
             syntax_terms: HashMap::new(),
+            syntax_qualified_terms: HashMap::new(),
             syntax_constructors: HashMap::new(),
             globals: HashMap::new(),
             type_names: HashMap::new(),
@@ -5632,6 +5634,55 @@ impl Resolver {
                 || usage.declaration.source() != owner.span().source()
             {
                 return Err(invalid());
+            }
+            if let Some(qualifier) = &usage.qualifier {
+                if qualifier.introduction != usage.name.introduction {
+                    return Err(invalid());
+                }
+                let route = terms.qualified(&qualifier.text).ok_or_else(|| {
+                    lookup_error(
+                        ResolveContext::MissingModuleAlias,
+                        qualifier.span,
+                        &qualifier.text,
+                        "this module alias is not bound in the syntax owner",
+                    )
+                })?;
+                if !owner.direct_dependencies().contains(&route) {
+                    return Err(invalid());
+                }
+                let dependency = syntax
+                    .owners
+                    .iter()
+                    .find(|candidate| candidate.module() == route.target())
+                    .ok_or_else(invalid)?;
+                let exported = dependency.exports().term(&usage.name.text).ok_or_else(|| {
+                    withheld_export_error(usage.name.span, &usage.name.text, None)
+                })?;
+                let key = (
+                    qualifier.text.clone(),
+                    usage.name.text.clone(),
+                    usage.name.introduction,
+                );
+                if !self.syntax_qualified_terms.contains_key(&key) {
+                    self.retain_imported_global_from_owner(
+                        exported,
+                        dependency.exports(),
+                        usage.import_span,
+                        &mut capture_graph_visits,
+                        Some(SyntaxOwnerLookup {
+                            owner: dependency,
+                            graph: syntax.owners,
+                        }),
+                    )?;
+                    self.syntax_qualified_terms.insert(
+                        key,
+                        ResolvedTermBinding::imported(
+                            ResolvedTermName::Global(exported.binder),
+                            route.import_span(),
+                        ),
+                    );
+                }
+                continue;
             }
             let key = (usage.name.text.clone(), usage.name.introduction);
             let lookup = SyntaxOwnerLookup {
@@ -13408,7 +13459,25 @@ impl Resolver {
                 let member = name.member();
                 let is_qualified = matches!(name, SurfaceReference::Qualified(_));
                 let (qualified_binding, qualified_constructor, qualified_withheld) =
-                    if let Some(namespace) = self.imported_namespace(name)? {
+                    if let SurfaceReference::Qualified(qualified) = name
+                        && (qualified.qualifier.introduction != 0 || member.introduction != 0)
+                    {
+                        (
+                            if qualified.qualifier.introduction == member.introduction {
+                                self.syntax_qualified_terms
+                                    .get(&(
+                                        qualified.qualifier.text.clone(),
+                                        member.text.clone(),
+                                        member.introduction,
+                                    ))
+                                    .copied()
+                            } else {
+                                None
+                            },
+                            None,
+                            None,
+                        )
+                    } else if let Some(namespace) = self.imported_namespace(name)? {
                         (
                             namespace.terms.get(&member.text).copied(),
                             namespace.constructors.get(&member.text).copied(),

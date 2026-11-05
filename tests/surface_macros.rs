@@ -49,6 +49,31 @@ fn template_function_parameter_keeps_its_introduction_context() {
 }
 
 #[test]
+fn template_qualified_import_uses_its_owner_despite_caller_alias() {
+    let compiled = compile_path(fixture("qualified-owner/entry.ash"))
+        .expect("the template keeps its defining module's qualified import");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn template_qualified_import_follows_the_owners_public_facade() {
+    let compiled = compile_path(fixture("qualified-owner/entry_facade.ash"))
+        .expect("the template keeps the selected facade's original exported member");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn template_qualified_import_does_not_expose_dependency_privates_or_caller_aliases() {
+    for path in [
+        "qualified-owner/invalid_hidden.ash",
+        "qualified-owner/invalid_caller.ash",
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert!(failure.graph_failure().is_none(), "{path}: {failure:?}");
+    }
+}
+
+#[test]
 fn captured_function_parameter_binds_the_captured_body() {
     let compiled = compile_path(fixture("template-function/captured.ash"))
         .expect("the captured function parameter scopes over the captured body");
