@@ -200,6 +200,15 @@ fn transformer_fresh_recursive_binder_does_not_capture_caller_body() {
 }
 
 #[test]
+fn transformer_rejects_an_expression_fragment_as_a_recursive_binder() {
+    let result = compile_path(macro_fixture("entry_recursive_bad_binder.ash"));
+    assert!(
+        result.is_err(),
+        "an expression fragment cannot be a recursive binder"
+    );
+}
+
+#[test]
 fn unwrapping_preserves_a_qualified_caller_reference() {
     let compiled = compile_path(macro_fixture("entry_unwrap_qualified.ash"))
         .expect("unwrapping retains the caller's imported module reference");

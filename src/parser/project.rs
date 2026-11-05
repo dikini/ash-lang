@@ -3595,12 +3595,13 @@ fn project_recursive_binder(
     tokens: &[Token],
     originals: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
 ) -> Result<(SurfaceBinder, bool), ProjectionError> {
-    if let Some(crate::syntax::MacroOutputNode::Identifier(name, _)) =
-        node.children.iter().find_map(|child| match child {
-            ConcreteElement::Token(index) => originals.get(index),
-            _ => None,
-        })
-    {
+    if let Some(original) = node.children.iter().find_map(|child| match child {
+        ConcreteElement::Token(index) => originals.get(index),
+        _ => None,
+    }) {
+        let crate::syntax::MacroOutputNode::Identifier(name, _) = original else {
+            return malformed(InternalReason::UnexpectedShape);
+        };
         return Ok((
             SurfaceBinder {
                 name: name.clone(),

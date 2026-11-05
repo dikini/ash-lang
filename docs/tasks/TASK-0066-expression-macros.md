@@ -326,6 +326,17 @@ in the plan. Two ordinary anonymous-function resolution cases also pass
 (`/tmp/ash-syntax-function-ordinary.log`, SHA-256
 `038764e1eee2faf4fa0187b1ce0e7c93acb74f4bafbdfe23d395ed9f8c7d1ecb`).
 
+Review of `ef5a5d95` found that an expression fragment emitted in a recursive
+binder position was accepted as a synthetic binder. The real transformer in
+`entry_recursive_bad_binder.ash` reproduced that acceptance before the repair
+(`/tmp/ash-syntax-r12-before.log`, SHA-256
+`39cebbd3c38e5f15f470dea8e22746bc4250c846fadb3cab0c5aec20e5a770e0`).
+The projection now refuses non-identifier fragments there. The negative and
+the captured and fresh identifier programs pass in 135 host, template, parser,
+and module tests (`/tmp/ash-syntax-r12-after.log`, SHA-256
+`c10a3036d194f407d20303ee5ebf7aa91b60d05715df808606238c31c880e4cd`).
+The prior one-point observation remains provisional pending re-review.
+
 1. **Template grouping — demonstrated.** `cargo test -j 1 -p ash --test
    surface_macros template_macro_preserves_expression_capture_grouping --
    --exact` must compile and execute the imported template to `Int 35`.
