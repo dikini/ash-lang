@@ -48,6 +48,8 @@ pub struct SurfaceSyntaxDeclaration {
     pub matcher: Vec<SurfaceSyntaxMatcherPart>,
     /// The template or checked Ash transformer selected by this declaration.
     pub implementation: SurfaceSyntaxImplementation,
+    /// The template's original structured syntax, retained for instantiation.
+    pub(crate) template_contents: Option<Arc<[crate::syntax::MacroOutputNode]>>,
     /// The complete declaration span.
     pub span: Span,
 }
@@ -655,8 +657,6 @@ pub struct ApplicationExpr {
     pub function: Box<SurfaceExpr>,
     /// The argument position.
     pub argument: Box<SurfaceExpr>,
-    /// The invocation that introduced this application, if any.
-    pub(crate) expansion: Option<Span>,
 }
 
 /// A sequential block expression.
@@ -729,8 +729,7 @@ pub struct SurfaceBinding {
     pub annotation: Option<SurfaceType>,
     /// The initializer expression.
     pub initializer: SurfaceExpr,
-    /// The invocation that introduced this binding, if any.
-    pub(crate) expansion: Option<Span>,
+
     /// The complete binding span.
     pub span: Span,
 }
@@ -742,8 +741,6 @@ pub struct FunctionExpr {
     pub parameter: SurfacePattern,
     /// The braced body.
     pub body: SurfaceBlock,
-    /// The invocation that introduced this function, if any.
-    pub(crate) expansion: Option<Span>,
 }
 
 /// An unresolved source name and its exact span.

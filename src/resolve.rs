@@ -961,6 +961,13 @@ impl ResolveIdentitySpace {
 }
 
 impl ResolveError {
+    pub(crate) fn is_syntax_depth(&self) -> bool {
+        self.0.context
+            == Some(ResolveContext::WorkState {
+                part: "syntax-expansion",
+                problem: "structural-depth",
+            })
+    }
     fn new(diagnostic: Diagnostic<ResolveReason>, context: Option<ResolveContext>) -> Self {
         Self(Box::new(ResolveErrorData {
             diagnostic,
@@ -1600,14 +1607,17 @@ pub(crate) fn resolve_module_with_budget(
     resolve_module_with_foreign_catalog(loaded, dependencies, type_work, constraint_work, None)
 }
 
-pub(crate) fn resolve_module_with_syntax(
+pub(crate) fn resolve_module_with_syntax<'a>(
     loaded: &LoadedModule,
     dependencies: &[DependencyExports<'_>],
     type_work: &mut TypeWorkBudget,
     constraint_work: &mut InterfaceConstraintBudget,
-    uses: &[crate::syntax::SyntaxNameUse],
-    owners: &[Arc<crate::resolved::CheckedModule>],
-    terms: &[crate::syntax::SyntaxOwnerBindings],
+    uses: &'a [crate::syntax::SyntaxNameUse],
+    owners: &'a [Arc<crate::resolved::CheckedModule>],
+    terms: &'a [crate::syntax::SyntaxOwnerBindings],
+    selected: &'a [crate::syntax::SelectedSyntax],
+    owner_imports: &'a [Vec<crate::syntax::SelectedSyntax>],
+    expansion: Option<&mut crate::syntax::SyntaxExpansion<'a>>,
 ) -> Result<ResolvedModule, ResolveModuleError> {
     resolve_module_for_catalogue(
         loaded,
@@ -1619,7 +1629,10 @@ pub(crate) fn resolve_module_with_syntax(
             uses,
             owners,
             terms,
+            selected,
+            owner_imports,
         }),
+        expansion,
     )
 }
 
@@ -1628,6 +1641,8 @@ struct SyntaxInputs<'a> {
     uses: &'a [crate::syntax::SyntaxNameUse],
     owners: &'a [Arc<crate::resolved::CheckedModule>],
     terms: &'a [crate::syntax::SyntaxOwnerBindings],
+    selected: &'a [crate::syntax::SelectedSyntax],
+    owner_imports: &'a [Vec<crate::syntax::SelectedSyntax>],
 }
 
 #[derive(Clone, Copy)]
@@ -1680,16 +1695,18 @@ pub(crate) fn resolve_module_with_foreign_catalog(
         constraint_work,
         catalogue,
         None,
+        None,
     )
 }
 
-fn resolve_module_for_catalogue(
+fn resolve_module_for_catalogue<'a>(
     loaded: &LoadedModule,
     dependencies: &[DependencyExports<'_>],
     type_work: &mut TypeWorkBudget,
     constraint_work: &mut InterfaceConstraintBudget,
     catalogue: Option<&mut Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>>,
-    syntax: Option<SyntaxInputs<'_>>,
+    syntax: Option<SyntaxInputs<'a>>,
+    expansion: Option<&mut crate::syntax::SyntaxExpansion<'a>>,
 ) -> Result<ResolvedModule, ResolveModuleError> {
     let admission = resolve_module_names_with_budget(
         loaded,
@@ -1698,6 +1715,7 @@ fn resolve_module_for_catalogue(
         constraint_work,
         catalogue,
         syntax,
+        expansion,
     )
     .map_err(ResolveModuleError::Resolution)?;
     finish_module_resolution(loaded, dependencies, type_work, admission)
@@ -1780,13 +1798,14 @@ pub(crate) struct WrittenEffectArity {
 }
 
 /// Performs name and identity resolution without publishing unchecked output.
-fn resolve_module_names_with_budget(
+fn resolve_module_names_with_budget<'a>(
     loaded: &LoadedModule,
     dependencies: &[DependencyExports<'_>],
     type_work: &mut TypeWorkBudget,
     constraint_work: &mut InterfaceConstraintBudget,
     catalogue: Option<&mut Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>>,
-    syntax: Option<SyntaxInputs<'_>>,
+    syntax: Option<SyntaxInputs<'a>>,
+    expansion: Option<&mut crate::syntax::SyntaxExpansion<'a>>,
 ) -> Result<ResolvedModuleAdmission, ResolveError> {
     let module = loaded.id();
     let surface = loaded.surface();
@@ -1899,6 +1918,8 @@ fn resolve_module_names_with_budget(
         std::mem::take(type_work),
         std::mem::take(constraint_work),
     );
+    resolver.syntax_inputs = syntax;
+    resolver.syntax_expansion = expansion;
     let result = (|| {
         resolver
             .constraint_work
@@ -1965,7 +1986,13 @@ fn resolve_module_names_with_budget(
             &mut declarations,
             dependencies,
         )?;
-        resolver.admit_templates(surface)?;
+        let contexts = match syntax {
+            Some(syntax) => {
+                crate::syntax::SyntaxContexts::new(syntax.selected, syntax.owner_imports, &[])
+            }
+            None => crate::syntax::SyntaxContexts::new(&[], &[], &[]),
+        };
+        resolver.admit_templates(surface, loaded.source(), &contexts)?;
 
         let imported = std::mem::take(&mut resolver.imported);
         let export_candidate = build_export_candidate(
@@ -2465,7 +2492,7 @@ fn surface_definition_name(definition: &SurfaceDefinition) -> &crate::surface::S
     }
 }
 
-struct Resolver {
+struct Resolver<'state, 'inputs> {
     module: ModuleId,
     builtin_cell: Option<ModuleId>,
     builtin_region: Option<ModuleId>,
@@ -2482,6 +2509,9 @@ struct Resolver {
     resolved_interfaces: ResolvedInterfaceBuffer,
     lexical_method_parameters: ImportedTypeVariableBuffer,
     scopes: Vec<HashMap<(String, usize), ResolvedTermBinding>>,
+    syntax_inputs: Option<SyntaxInputs<'inputs>>,
+    syntax_expansion: Option<&'state mut crate::syntax::SyntaxExpansion<'inputs>>,
+    active_expansions: usize,
     binder_introductions: HashMap<BinderId, usize>,
     syntax_terms: HashMap<(String, usize), ResolvedTermBinding>,
     syntax_qualified_terms: HashMap<(String, String, usize), ResolvedTermBinding>,
@@ -2871,7 +2901,7 @@ fn public_implementation_route_precedes(
         })
 }
 
-impl Resolver {
+impl Resolver<'_, '_> {
     fn resource_builtin(&self, kind: crate::surface::SurfaceResourceKind) -> Option<ModuleId> {
         match kind {
             crate::surface::SurfaceResourceKind::Cell => self.builtin_cell,
@@ -2913,6 +2943,9 @@ impl Resolver {
             resolved_interfaces: ResolvedInterfaceBuffer(Vec::new()),
             lexical_method_parameters: ImportedTypeVariableBuffer(Vec::new()),
             scopes: vec![HashMap::new()],
+            syntax_inputs: None,
+            syntax_expansion: None,
+            active_expansions: 0,
             binder_introductions: HashMap::new(),
             syntax_terms: HashMap::new(),
             syntax_qualified_terms: HashMap::new(),
@@ -5652,6 +5685,45 @@ impl Resolver {
         Ok(())
     }
 
+    fn retain_syntax_reference(
+        &mut self,
+        reference: &SurfaceReference,
+        namespace: crate::syntax::SyntaxNameNamespace,
+    ) -> Result<(), ResolveError> {
+        let name = reference.member();
+        if name.introduction == 0 {
+            return Ok(());
+        }
+        let Some(inputs) = self.syntax_inputs else {
+            return Ok(());
+        };
+        let Some(owner) = self
+            .syntax_expansion
+            .as_ref()
+            .and_then(|expansion| expansion.owner(name.introduction))
+        else {
+            return Ok(());
+        };
+        let Some(owner_index) = owner.owner else {
+            return Ok(());
+        };
+        let usage = crate::syntax::SyntaxNameUse {
+            name: name.clone(),
+            qualifier: match reference {
+                SurfaceReference::Qualified(qualified) => Some(qualified.qualifier.clone()),
+                SurfaceReference::Unqualified(_) => None,
+            },
+            namespace,
+            owner: owner_index,
+            declaration: owner.declaration,
+            import_span: owner.import_span,
+        };
+        self.install_syntax_terms(SyntaxInputs {
+            uses: std::slice::from_ref(&usage),
+            ..inputs
+        })
+    }
+
     fn install_syntax_terms(&mut self, syntax: SyntaxInputs<'_>) -> Result<(), ResolveError> {
         let mut capture_graph_visits = CaptureGraphVisits::default();
         for usage in syntax.uses {
@@ -7460,6 +7532,7 @@ impl Resolver {
         if let SurfaceReference::Qualified(name) = reference
             && (name.qualifier.introduction != 0 || name.member.introduction != 0)
         {
+            self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Type)?;
             return self
                 .syntax_qualified_nominals
                 .get(&(
@@ -7510,6 +7583,7 @@ impl Resolver {
             return Ok(ImportedNominalName { id });
         }
         if name.introduction != 0 {
+            self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Type)?;
             return self
                 .syntax_nominals
                 .get(&(name.text.clone(), name.introduction))
@@ -7602,9 +7676,10 @@ impl Resolver {
         Err(unknown_interface_error(member.span, &member.text))
     }
 
-    fn effect_reference(&self, reference: &SurfaceReference) -> Result<EffectId, ResolveError> {
+    fn effect_reference(&mut self, reference: &SurfaceReference) -> Result<EffectId, ResolveError> {
         let member = reference.member();
         if member.introduction != 0 {
+            self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Effect)?;
             return if matches!(reference, SurfaceReference::Unqualified(_)) {
                 self.syntax_effects
                     .get(&(member.text.clone(), member.introduction))
@@ -8143,6 +8218,7 @@ impl Resolver {
         if let SurfaceReference::Qualified(name) = reference
             && (name.qualifier.introduction != 0 || member.introduction != 0)
         {
+            self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Term)?;
             let selected = (name.qualifier.introduction == member.introduction)
                 .then(|| {
                     self.syntax_qualified_constructors
@@ -8163,24 +8239,26 @@ impl Resolver {
             });
         }
         if member.introduction != 0 {
-            return charged_lexical_scope_lookup(
+            if let Some(id) = charged_lexical_scope_lookup(
                 &self.lexical_constructor_scopes,
                 member,
                 &mut self.type_work,
                 "lexical constructor lookup exceeded its type-work budget",
-            )?
-            .or_else(|| {
-                self.syntax_constructors
-                    .get(&(member.text.clone(), member.introduction))
-                    .copied()
-            })
-            .ok_or_else(|| {
-                error(
-                    ResolveReason::UnknownConstructor,
-                    member.span,
-                    "this constructor is not declared in the syntax owner",
-                )
-            });
+            )? {
+                return Ok(id);
+            }
+            self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Term)?;
+            return self
+                .syntax_constructors
+                .get(&(member.text.clone(), member.introduction))
+                .copied()
+                .ok_or_else(|| {
+                    error(
+                        ResolveReason::UnknownConstructor,
+                        member.span,
+                        "this constructor is not declared in the syntax owner",
+                    )
+                });
         }
         if let Some(namespace) = self.imported_namespace(reference)? {
             return namespace
@@ -11031,7 +11109,6 @@ impl Resolver {
         let owner = callback.id;
         declarations.push(ResolvedLocalDeclaration::Binding(Box::new(
             ResolvedBinding {
-                expansion: None,
                 pattern: ResolvedPattern {
                     kind: ResolvedPatternKind::Binder(callback),
                     span: action_span,
@@ -11043,7 +11120,6 @@ impl Resolver {
         )));
         let action = ResolvedExpr {
             kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
-                expansion: None,
                 function: Box::new(ResolvedExpr {
                     kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
                         term: ResolvedTermName::Global(owner),
@@ -11145,7 +11221,6 @@ impl Resolver {
         };
         let binding = |binder, initializer| {
             ResolvedLocalDeclaration::Binding(Box::new(ResolvedBinding {
-                expansion: None,
                 pattern: ResolvedPattern {
                     kind: ResolvedPatternKind::Binder(binder),
                     span: target_span,
@@ -11177,7 +11252,6 @@ impl Resolver {
             next,
             ResolvedExpr {
                 kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
-                    expansion: None,
                     function: Box::new(occurrence(contract.callback)),
                     argument: Box::new(occurrence(contract.previous)),
                 }),
@@ -12302,10 +12376,16 @@ impl Resolver {
 
     // Keep window-only lookup temporaries off ordinary expression frames.
 
-    fn admit_templates(&mut self, surface: &SurfaceModule) -> Result<(), ResolveError> {
+    fn admit_templates(
+        &mut self,
+        surface: &SurfaceModule,
+        source: &crate::source::SourceFile,
+        contexts: &crate::syntax::SyntaxContexts,
+    ) -> Result<(), ResolveError> {
         for declaration in &surface.syntax_declarations {
-            let Some((template, identifiers)) = crate::syntax::template_for_admission(declaration)
-                .map_err(unsupported_syntax_template)?
+            let Some((template, identifiers)) =
+                crate::syntax::template_for_admission(declaration, source, contexts)
+                    .map_err(unsupported_syntax_template)?
             else {
                 continue;
             };
@@ -12895,13 +12975,12 @@ impl Resolver {
                     tasks.push(ResolveTask::VisitExpr(&member.initializer));
                 }
             }
-            ResolveTask::FinishApplication { span, expansion } => {
+            ResolveTask::FinishApplication { span } => {
                 let (function, argument) = take_expression_pair(expressions, span)?;
                 expressions.push(ResolvedExpr {
                     kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
                         function: Box::new(function),
                         argument: Box::new(argument),
-                        expansion,
                     }),
                     span,
                 });
@@ -12980,7 +13059,7 @@ impl Resolver {
                         pattern: pattern.into_inner(),
                         annotation: annotation.map(ResolvedTypeOccurrenceOwner::into_inner),
                         initializer: initializer.into_inner(),
-                        expansion: binding.expansion,
+
                         span: binding.span,
                     },
                 )));
@@ -13263,7 +13342,6 @@ impl Resolver {
                 parameter: pattern,
                 scope_checkpoint,
                 span,
-                expansion,
             } => {
                 let body_expression = expressions.pop_owned().ok_or_else(|| {
                     error(
@@ -13295,7 +13373,6 @@ impl Resolver {
                     kind: ResolvedExprKind::Function(ResolvedFunctionExpr {
                         pattern: pattern.into_inner(),
                         body,
-                        expansion,
                     }),
                     span,
                 });
@@ -13619,7 +13696,35 @@ impl Resolver {
                     span: expression.span,
                 });
             }
-            SurfaceExprKind::TemplateSplice(_) | SurfaceExprKind::SyntaxInvocation { .. } => {
+            SurfaceExprKind::SyntaxInvocation { name, captures } => {
+                if self.active_expansions >= crate::parser::STRUCTURAL_DEPTH_LIMIT {
+                    return Err(error(
+                        ResolveReason::InternalState,
+                        expression.span,
+                        "syntax expansion exceeded the structural depth limit",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "syntax-expansion",
+                        problem: "structural-depth",
+                    }));
+                }
+                let expansion = self.syntax_expansion.take().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        expression.span,
+                        "syntax expansion is unavailable",
+                    )
+                })?;
+                let replacement =
+                    expansion.expand(name, captures, expression.span, &mut self.constraint_work);
+                self.syntax_expansion = Some(expansion);
+                let replacement = replacement.map_err(unsupported_syntax_template)?;
+                self.active_expansions += 1;
+                let resolved = self.resolve_expr(&replacement);
+                self.active_expansions -= 1;
+                expressions.push(resolved?);
+            }
+            SurfaceExprKind::TemplateSplice(_) => {
                 return Err(error(
                     ResolveReason::InternalState,
                     expression.span,
@@ -14012,6 +14117,22 @@ impl Resolver {
             SurfaceExprKind::Name(name) => {
                 let member = name.member();
                 let is_qualified = matches!(name, SurfaceReference::Qualified(_));
+                let lexical_key = (member.text.clone(), member.introduction);
+                if member.introduction != 0
+                    && (is_qualified
+                        || (!self
+                            .scopes
+                            .iter()
+                            .rev()
+                            .any(|scope| scope.contains_key(&lexical_key))
+                            && !self
+                                .lexical_constructor_scopes
+                                .iter()
+                                .rev()
+                                .any(|scope| scope.contains_key(&lexical_key))))
+                {
+                    self.retain_syntax_reference(name, crate::syntax::SyntaxNameNamespace::Term)?;
+                }
                 let (qualified_binding, qualified_constructor, qualified_withheld) =
                     if let SurfaceReference::Qualified(qualified) = name
                         && (qualified.qualifier.introduction != 0 || member.introduction != 0)
@@ -14182,7 +14303,6 @@ impl Resolver {
             SurfaceExprKind::Apply(application) => {
                 tasks.push(ResolveTask::FinishApplication {
                     span: expression.span,
-                    expansion: application.expansion,
                 });
                 tasks.push(ResolveTask::VisitExpr(&application.argument));
                 tasks.push(ResolveTask::VisitExpr(&application.function));
@@ -14218,7 +14338,6 @@ impl Resolver {
                     parameter: ResolvedPatternOwner::new(parameter),
                     scope_checkpoint,
                     span: expression.span,
-                    expansion: function.expansion,
                 });
                 tasks.push(ResolveTask::VisitBlock(&function.body));
             }
@@ -14540,7 +14659,6 @@ enum ResolveTask<'a> {
     VisitRecursiveGroup(&'a SurfaceRecursiveGroup),
     FinishApplication {
         span: crate::source::Span,
-        expansion: Option<Span>,
     },
     FinishBinary {
         kind: BinaryKind,
@@ -14571,7 +14689,6 @@ enum ResolveTask<'a> {
         parameter: ResolvedPatternOwner,
         scope_checkpoint: usize,
         span: crate::source::Span,
-        expansion: Option<crate::source::Span>,
     },
     FinishTuple {
         count: usize,
@@ -15441,7 +15558,7 @@ fn collect_free_type_names<'a>(
 #[cfg(test)]
 mod module_tests;
 
-impl Resolver {
+impl Resolver<'_, '_> {
     fn resolve_resource_definitions(
         &mut self,
         declarations: &[crate::surface::SurfaceResourceDefinition],
@@ -15790,7 +15907,7 @@ impl Resolver {
     }
 }
 
-impl Resolver {
+impl Resolver<'_, '_> {
     fn retain_resource_contract_dependencies(
         &mut self,
         resource: &crate::resolved::ResourceTypeFact,
@@ -16119,9 +16236,9 @@ impl Resolver {
     }
 }
 
-impl Resolver {}
+impl Resolver<'_, '_> {}
 
-impl Resolver {
+impl Resolver<'_, '_> {
     fn resolve_resource_handlers(
         &mut self,
         effect: &ResolvedEffectInstance,
@@ -18171,6 +18288,7 @@ mod tests {
             &mut constraint_work,
             None,
             None,
+            None,
         )
         .map(|admission| ResolvedModule::new(admission.parts));
         (result, constraint_work.used())
@@ -18210,6 +18328,7 @@ mod tests {
             &dependencies,
             &mut type_work,
             &mut constraint_work,
+            None,
             None,
             None,
         )
@@ -20516,7 +20635,8 @@ mod tests {
             let scope_count = resolver.scopes.len();
             let effect_arity_count = resolver.written_effect_arities.len();
 
-            let result = resolver.admit_templates(&module);
+            let contexts = crate::syntax::SyntaxContexts::new(&[], &[], &[]);
+            let result = resolver.admit_templates(&module, &source, &contexts);
             assert_eq!(result.is_ok(), succeeds, "{tail}: {result:?}");
             assert_eq!(
                 counters,
@@ -20587,7 +20707,6 @@ mod tests {
                     kind: SurfaceExprKind::Block(SurfaceBlock {
                         declarations: vec![SurfaceLocalDeclaration::Binding(Box::new(
                             SurfaceBinding {
-                                expansion: None,
                                 pattern: SurfacePattern {
                                     kind: SurfacePatternKind::Wildcard,
                                     span,
@@ -20667,7 +20786,6 @@ mod tests {
                     kind: SurfaceExprKind::Block(SurfaceBlock {
                         declarations: vec![SurfaceLocalDeclaration::Binding(Box::new(
                             SurfaceBinding {
-                                expansion: None,
                                 pattern: SurfacePattern {
                                     kind: SurfacePatternKind::Wildcard,
                                     span,
@@ -21827,7 +21945,6 @@ mod tests {
         SurfaceExpr {
             kind: SurfaceExprKind::Block(SurfaceBlock {
                 declarations: vec![SurfaceLocalDeclaration::Binding(Box::new(SurfaceBinding {
-                    expansion: None,
                     pattern: SurfacePattern {
                         kind: SurfacePatternKind::Wildcard,
                         span,
@@ -21849,7 +21966,7 @@ mod tests {
         }
     }
 
-    fn declaration_resolver(surface: &SurfaceModule) -> Resolver {
+    fn declaration_resolver(surface: &SurfaceModule) -> Resolver<'static, 'static> {
         let module = ModuleId::new(0);
         let mut resolver = Resolver::new(module);
         resolver

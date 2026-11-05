@@ -132,10 +132,39 @@ fn checked_transformer_fresh_identifier_does_not_capture_the_caller() {
 }
 
 #[test]
+fn checked_transformer_emits_a_region_with_fresh_identifiers() {
+    let compiled = compile_path(macro_fixture("procedural-region/entry.ash"))
+        .expect("a structured region is parsed and checked normally");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
 fn checked_transformer_caller_identifier_can_bind_caller_syntax() {
     let compiled = compile_path(macro_fixture("entry_constructed_caller.ash"))
         .expect("a caller-context binder captures the caller expression");
     assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn checked_transformer_caller_identifier_uses_the_active_lexical_scope() {
+    let compiled = compile_path(macro_fixture("expansion-depth/caller.ash"))
+        .expect("a caller identifier resolves in the invocation's active scope");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn self_reproducing_syntax_stops_at_the_structural_depth_limit() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ash"))
+        .args(["--message-format", "json"])
+        .arg(macro_fixture("expansion-depth/infinite.ash").entry)
+        .output()
+        .expect("the compiler process starts");
+    assert!(!output.status.success());
+    let diagnostic = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        diagnostic.contains("internal.resource.structural-depth"),
+        "{diagnostic}"
+    );
 }
 
 #[test]

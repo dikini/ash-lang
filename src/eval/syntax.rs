@@ -610,7 +610,8 @@ impl SyntaxHost {
         let mut rest = self.construct(heap, "NoNodes", None)?;
         for node in nodes.iter().rev() {
             let (constructor, fields) = match node {
-                MacroOutputNode::Expression(expression, origin) => {
+                MacroOutputNode::Expression(expression, origin)
+                | MacroOutputNode::ForwardedExpression(expression, origin) => {
                     let index = self.expressions.len();
                     self.expressions.push(expression.clone());
                     (

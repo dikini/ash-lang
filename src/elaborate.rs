@@ -17231,7 +17231,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     function_span,
                     argument,
                     recursive_call,
-                    expansion,
                 } => {
                     let function = values.pop().ok_or_else(invalid_state)?;
                     self.schedule_application_argument(
@@ -17239,7 +17238,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         function_span,
                         argument,
                         recursive_call,
-                        expansion,
                         function.into_inner(),
                         &mut tasks,
                     )?;
@@ -18018,7 +18016,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     function_span: application.function.span,
                     argument: &application.argument,
                     recursive_call,
-                    expansion: application.expansion,
                 });
                 tasks.push(ElaborationTask::Synthesize {
                     expression: &application.function,
@@ -18300,7 +18297,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 whole_span,
                 function_span,
                 argument_span,
-                expansion,
                 function,
                 codomain,
                 latent_effects,
@@ -18310,7 +18306,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     whole_span,
                     function_span,
                     argument_span,
-                    expansion,
                     function,
                     codomain,
                     latent_effects,
@@ -18964,7 +18959,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         function_span: Span,
         argument: &'a ResolvedExpr,
         recursive_call: bool,
-        expansion: Option<Span>,
         function: TypedNode,
         tasks: &mut ElaborationTaskBuffer<'a>,
     ) -> Result<(), TypeError> {
@@ -19041,7 +19035,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             whole_span,
             function_span,
             argument_span: argument.span,
-            expansion,
             function: function.into_inner(),
             codomain: codomain.into_inner(),
             latent_effects,
@@ -19064,7 +19057,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         whole_span: Span,
         function_span: Span,
         argument_span: Span,
-        expansion: Option<Span>,
         function: TypedNode,
         codomain: ProvenancedType,
         latent_effects: EffectRow,
@@ -19087,16 +19079,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let effects = self.union_effects(&effects, &latent_effects, whole_span)?;
         let core_codomain = IterativeTypeOwner::new(self.pure_core_type(&ty)?);
         let core_effects = self.core_effect_row(&effects)?;
-        let origin = if let Some(invocation) = expansion {
-            Origin::Expansion {
-                invocation,
-                definition: whole_span,
-            }
-        } else {
-            Origin::Related {
-                primary: Box::new(Origin::Source(whole_span)),
-                related: vec![function_span, argument_span],
-            }
+        let origin = Origin::Related {
+            primary: Box::new(Origin::Source(whole_span)),
+            related: vec![function_span, argument_span],
         };
         let node = F::push_application(
             &mut self.builder,
@@ -25423,7 +25408,6 @@ fn link_checked_modules<M: std::borrow::Borrow<CheckedModule>>(
     } else {
         ResolvedExpr {
             kind: ResolvedExprKind::Apply(crate::resolved::ResolvedApplicationExpr {
-                expansion: None,
                 function: Box::new(function),
                 argument: Box::new(ResolvedExpr {
                     kind: ResolvedExprKind::Unit,
@@ -25634,14 +25618,12 @@ enum ElaborationTask<'a> {
         function_span: Span,
         argument: &'a ResolvedExpr,
         recursive_call: bool,
-        expansion: Option<Span>,
     },
 
     FinishApplication {
         whole_span: Span,
         function_span: Span,
         argument_span: Span,
-        expansion: Option<Span>,
         function: TypedNode,
         codomain: ProvenancedType,
         latent_effects: EffectRow,
@@ -28243,15 +28225,6 @@ fn case_error(
 }
 
 fn binding_origin(binding: &ResolvedBinding) -> Origin {
-    if let Some(invocation) = binding.expansion {
-        return Origin::Generated {
-            cause: Box::new(Origin::Expansion {
-                invocation,
-                definition: binding.span,
-            }),
-            reason: GeneratedReason::BindingLowering,
-        };
-    }
     let mut related = vec![binding.initializer.span];
     if let Some(annotation) = &binding.annotation {
         related.push(annotation.span);
@@ -28626,12 +28599,6 @@ fn anonymous_function_origin(
     expression_span: Span,
     function: &crate::resolved::ResolvedFunctionExpr,
 ) -> Origin {
-    if let Some(invocation) = function.expansion {
-        return Origin::Expansion {
-            invocation,
-            definition: expression_span,
-        };
-    }
     Origin::Related {
         primary: Box::new(Origin::Source(expression_span)),
         related: vec![function.pattern.span, function.body.span],
@@ -42804,7 +42771,6 @@ mod tests {
                             whole_span: span,
                             function_span: span,
                             argument_span: span,
-                            expansion: None,
                             function: TypedNode {
                                 node: function_node,
                                 ty: Type::Unit,

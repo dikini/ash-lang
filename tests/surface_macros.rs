@@ -42,6 +42,21 @@ fn template_macro_preserves_expression_capture_grouping() {
 }
 
 #[test]
+fn template_cleanup_uses_the_ordinary_expression_pipeline() {
+    for path in ["template-cleanup/entry.ash", "template-cleanup/unused.ash"] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+}
+
+#[test]
+fn nested_template_expansions_resolve_in_order() {
+    let compiled = compile_path(fixture("expansion-depth/finite.ash"))
+        .expect("finite nested expansions resolve");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
 fn template_function_parameter_keeps_its_introduction_context() {
     let compiled = compile_path(fixture("template-function/hygiene.ash"))
         .expect("the introduced function parameter avoids the caller binding");
@@ -321,10 +336,7 @@ fn template_perform_uses_the_defining_effect_not_the_callers_shadow() {
         ),
         ("template-perform/incomplete.ash", "effect.handler-coverage"),
         ("template-perform/duplicate.ash", "effect.handler-coverage"),
-        (
-            "template-perform/unknown/entry.ash",
-            "resolve.internal-state",
-        ),
+        ("template-perform/unknown/entry.ash", "resolve.unknown-name"),
     ] {
         let failure = compile_path(fixture(path)).expect_err(path);
         assert_eq!(failure.reason_code(), expected, "{path}: {failure:?}");

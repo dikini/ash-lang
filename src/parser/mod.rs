@@ -567,20 +567,11 @@ pub(crate) enum MacroParseFailure {
 pub(crate) fn parse_macro_expression(
     source: &SourceFile,
     invocation: Span,
+    construction: Option<(Span, usize)>,
     output: Vec<crate::syntax::MacroOutputNode>,
     contexts: &crate::syntax::SyntaxContexts,
-) -> Result<
-    (
-        crate::surface::SurfaceExpr,
-        Vec<crate::surface::SurfaceSyntaxMatcherPart>,
-        Vec<crate::surface::SurfaceSyntaxCapture>,
-    ),
-    MacroParseFailure,
-> {
+) -> Result<crate::surface::SurfaceExpr, MacroParseFailure> {
     use crate::source::ByteRange;
-    use crate::surface::{
-        SurfaceName, SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind, SurfaceSyntaxMatcherPart,
-    };
     use crate::syntax::MacroOutputNode;
     let start = invocation.range().start();
     let anchor = source
@@ -591,33 +582,27 @@ pub(crate) fn parse_macro_expression(
         .span(ByteRange::new(end, end).map_err(|_| MacroParseFailure::Invalid)?)
         .map_err(|_| MacroParseFailure::Invalid)?;
     let mut tokens = Vec::new();
-    let mut fragments = std::collections::HashMap::new();
     let mut original_nodes = std::collections::HashMap::new();
     let mut syntax_selections = std::collections::HashMap::new();
     let mut syntax_spellings = std::collections::HashMap::new();
-    let mut matcher = Vec::new();
-    let mut captures = Vec::new();
+    let mut fragment_count = 0usize;
     let mut pieces = output.into_iter().rev().collect::<Vec<_>>();
     while let Some(piece) = pieces.pop() {
+        let forwarded = matches!(&piece, MacroOutputNode::ForwardedExpression(_, _));
         let kind = match piece {
-            MacroOutputNode::Expression(expression, origin) => {
+            MacroOutputNode::Expression(expression, origin)
+            | MacroOutputNode::ForwardedExpression(expression, origin) => {
                 original_nodes.insert(
                     tokens.len(),
-                    MacroOutputNode::Expression(expression.clone(), origin),
+                    if forwarded {
+                        MacroOutputNode::ForwardedExpression(expression, origin)
+                    } else {
+                        MacroOutputNode::Expression(expression, origin)
+                    },
                 );
-                let name = SurfaceName {
-                    text: format!("__ash_fragment_{}", captures.len()),
-                    span: anchor,
-                    introduction: 0,
-                    introduced_at: None,
-                };
-                fragments.insert(tokens.len(), name.clone());
-                matcher.push(SurfaceSyntaxMatcherPart::Capture {
-                    name: name.clone(),
-                    kind: SurfaceSyntaxCaptureKind::Expression,
-                });
-                captures.push(SurfaceSyntaxCapture::Expression(expression));
-                TokenKind::Identifier(name.text)
+                let name = format!("__ash_fragment_{fragment_count}");
+                fragment_count += 1;
+                TokenKind::Identifier(name)
             }
             MacroOutputNode::Identifier(identifier, origin) => {
                 original_nodes.insert(
@@ -631,24 +616,12 @@ pub(crate) fn parse_macro_expression(
                     tokens.len(),
                     std::sync::Arc::<str>::from(identifier.text.as_str()),
                 );
-                let name = SurfaceName {
-                    text: format!("__ash_fragment_{}", captures.len()),
-                    span: anchor,
-                    introduction: 0,
-                    introduced_at: None,
-                };
-                fragments.insert(tokens.len(), name.clone());
-                matcher.push(SurfaceSyntaxMatcherPart::Capture {
-                    name: name.clone(),
-                    kind: SurfaceSyntaxCaptureKind::Identifier,
-                });
                 let uppercase = identifier
                     .text
                     .as_bytes()
                     .first()
                     .is_some_and(u8::is_ascii_uppercase);
                 let spelling = identifier.text.clone();
-                captures.push(SurfaceSyntaxCapture::Identifier(identifier));
                 if uppercase {
                     TokenKind::UpperIdentifier(spelling)
                 } else {
@@ -694,6 +667,7 @@ pub(crate) fn parse_macro_expression(
         .map(|(index, node)| {
             let origin = match node {
                 MacroOutputNode::Expression(_, origin)
+                | MacroOutputNode::ForwardedExpression(_, origin)
                 | MacroOutputNode::Identifier(_, origin)
                 | MacroOutputNode::Token(_, _, origin)
                 | MacroOutputNode::Group(_, _, origin) => origin,
@@ -746,9 +720,10 @@ pub(crate) fn parse_macro_expression(
         ..
     } = parser;
     let tree = cst::build(tokens, Vec::new(), diagnostics, events, resource_failure);
-    let expression = project::project_macro_expression(source, &tree, &fragments, &original_nodes)
-        .map_err(|_| MacroParseFailure::Invalid)?;
-    Ok((expression, matcher, captures))
+    let expression =
+        project::project_macro_expression(source, invocation, construction, &tree, &original_nodes)
+            .map_err(|_| MacroParseFailure::Invalid)?;
+    Ok(expression)
 }
 
 fn parse_parts(

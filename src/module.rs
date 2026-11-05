@@ -507,10 +507,6 @@ impl LoadedModule {
         &self.surface
     }
 
-    pub(crate) fn surface_mut(&mut self) -> &mut SurfaceModule {
-        &mut self.surface
-    }
-
     /// Returns source-ordered dependency edges.
     #[must_use]
     pub fn dependencies(&self) -> &[ModuleDependency] {

@@ -9865,7 +9865,6 @@ mod tests {
                 for _ in 0..DEPTH {
                     expression = ResolvedExpr {
                         kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
-                            expansion: None,
                             function: Box::new(expression),
                             argument: Box::new(unit_expression(span)),
                         }),

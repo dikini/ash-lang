@@ -672,7 +672,6 @@ mod tests {
                 for _ in 0..20_000 {
                     body = ResolvedExpr {
                         kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
-                            expansion: None,
                             function: Box::new(ResolvedExpr {
                                 kind: ResolvedExprKind::Unit,
                                 span,

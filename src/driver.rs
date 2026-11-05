@@ -1517,80 +1517,15 @@ where
         }
         let module = input.current().ok_or_else(internal_file_failure)?;
         check_loaded_module(|| -> Result<(), FileFailure> {
-            for declaration in &module.surface().syntax_declarations {
-                let qualified_name = |name: &crate::surface::SurfaceQualifiedName| {
-                    module
-                        .surface()
-                        .imports
-                        .iter()
-                        .zip(
-                            module
-                                .dependencies()
-                                .iter()
-                                .filter(|edge| !edge.is_region_service()),
-                        )
-                        .find_map(|(import, edge)| match &import.selection {
-                            SurfaceImportSelection::Qualified { alias }
-                                if alias.text == name.qualifier.text
-                                    && edge.import_span() == import.span =>
-                            {
-                                checked_by_module
-                                    .get(&edge.target())
-                                    .and_then(|index| checked.get(*index))
-                                    .map(|dependency| {
-                                        dependency.exports().term(&name.member.text).is_some()
-                                            || dependency
-                                                .exports()
-                                                .method(&name.member.text)
-                                                .is_some()
-                                            || dependency
-                                                .exports()
-                                                .constructor(&name.member.text)
-                                                .is_some()
-                                    })
-                            }
-                            _ => None,
-                        })
-                        .unwrap_or(false)
-                };
-                let owner_effect =
-                    |reference: &crate::surface::SurfaceReference,
-                     arguments: &[crate::surface::SurfaceType],
-                     operation: &crate::surface::SurfaceName| {
-                        let crate::surface::SurfaceReference::Unqualified(name) = reference else {
-                            return false;
-                        };
-                        arguments.is_empty()
-                            && module.surface().effects.iter().any(|effect| {
-                                effect.name.text == name.text
-                                    && effect.parameters.is_empty()
-                                    && effect
-                                        .operations
-                                        .iter()
-                                        .any(|candidate| candidate.name.text == operation.text)
-                            })
-                    };
-                crate::syntax::validate_template(declaration, &qualified_name, &owner_effect)
-                    .map_err(|span| {
-                        FileFailure::from(PipelineFailure::Resolution(
-                            crate::resolve::unsupported_syntax_template(span),
-                        ))
-                    })?;
-            }
-            let mut expanded = if selected.is_empty() {
-                None
-            } else {
-                Some(module.clone())
-            };
-            let syntax_uses = if let Some(expanded) = expanded.as_mut() {
-                let mut transformer_failure = None;
-                let mut transformer =
+            let mut transformer_failure = None;
+            let mut transformer =
                     |selection: &crate::syntax::SelectedSyntax,
                      captures: &[crate::surface::SurfaceSyntaxCapture],
                      span: Span,
                      caller: &crate::surface::SurfaceName,
                      introduction: usize,
-                     owners: &[Option<usize>]| {
+                     owners: &[Option<usize>],
+                     constraint_work: &mut crate::interface::InterfaceConstraintBudget| {
                         let contexts = std::sync::Arc::new(crate::syntax::SyntaxContexts::new(
                             &selected,
                             &checked_syntax_imports,
@@ -1667,26 +1602,12 @@ where
                             }
                         }
                     };
-                let expanded = crate::syntax::expand_module(
-                    expanded.surface_mut(),
-                    &selected,
-                    &checked_syntax_imports,
-                    &mut transformer,
-                );
-                match expanded {
-                    Ok(uses) => uses,
-                    Err(span) => {
-                        return Err(transformer_failure.unwrap_or_else(|| {
-                            FileFailure::from(PipelineFailure::Resolution(
-                                crate::resolve::unsupported_syntax_template(span),
-                            ))
-                        }));
-                    }
-                }
-            } else {
-                Vec::new()
-            };
-            let module_for_resolution = expanded.as_ref().unwrap_or(module);
+            let mut syntax_expansion = crate::syntax::SyntaxExpansion::new(
+                module.source(),
+                &selected,
+                &checked_syntax_imports,
+                &mut transformer,
+            );
             let dependencies = module
                 .dependencies()
                 .iter()
@@ -1707,20 +1628,36 @@ where
                 .map_err(FileFailure::from)?;
             let resolution_phase = crate::calibration::Phase::start("resolution");
             let resolved = crate::resolve::resolve_module_with_syntax(
-                module_for_resolution,
+                module,
                 &dependencies,
                 &mut resolution_type_work,
                 constraint_work,
-                &syntax_uses,
+                &[],
                 &checked,
                 &checked_syntax_terms,
-            )
-            .map_err(|error| match error {
-                ResolveModuleError::Resolution(error) => PipelineFailure::Resolution(error),
-                ResolveModuleError::Kind(error) => PipelineFailure::Kind(error),
-                ResolveModuleError::Representation(error) => PipelineFailure::Typing(error),
-            })
-            .map_err(FileFailure::from)?;
+                &selected,
+                &checked_syntax_imports,
+                Some(&mut syntax_expansion),
+            );
+            drop(syntax_expansion);
+            drop(transformer);
+            if let Some(failure) = transformer_failure {
+                return Err(failure);
+            }
+            let resolved = resolved
+                .map_err(|error| match error {
+                    ResolveModuleError::Resolution(error) if error.is_syntax_depth() => {
+                        PipelineFailure::Projection(ProjectionError::ResourceLimit(
+                            ResourceFailure::StructuralDepth {
+                                limit: crate::parser::STRUCTURAL_DEPTH_LIMIT,
+                            },
+                        ))
+                    }
+                    ResolveModuleError::Resolution(error) => PipelineFailure::Resolution(error),
+                    ResolveModuleError::Kind(error) => PipelineFailure::Kind(error),
+                    ResolveModuleError::Representation(error) => PipelineFailure::Typing(error),
+                })
+                .map_err(FileFailure::from)?;
             resolution_phase.finish(
                 Some(resolution_type_work.used()),
                 resolution_normal_limit,

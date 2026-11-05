@@ -19167,8 +19167,7 @@ pub struct ResolvedBinding {
     pub annotation: Option<ResolvedType>,
     /// Initializer resolved in the incoming scope.
     pub initializer: ResolvedExpr,
-    /// The invocation that introduced this binding, if any.
-    pub(crate) expansion: Option<Span>,
+
     /// Complete binding span.
     pub span: Span,
 }
@@ -19773,8 +19772,6 @@ pub struct ResolvedApplicationExpr {
     pub function: Box<ResolvedExpr>,
     /// Resolved argument position.
     pub argument: Box<ResolvedExpr>,
-    /// The invocation that introduced this application, if any.
-    pub(crate) expansion: Option<Span>,
 }
 
 /// A resolved binary expression.
@@ -19795,8 +19792,6 @@ pub struct ResolvedFunctionExpr {
     pub pattern: ResolvedPattern,
     /// Resolved braced body.
     pub body: ResolvedBlock,
-    /// The invocation that introduced this function, if any.
-    pub(crate) expansion: Option<Span>,
 }
 
 pub(crate) fn discard_resolved_definition_iteratively(definition: ResolvedDefinition) {
@@ -30571,7 +30566,6 @@ mod tests {
                     for _ in 0..20_000 {
                         body = ResolvedExpr {
                             kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
-                                expansion: None,
                                 function: Box::new(ResolvedExpr {
                                     kind: ResolvedExprKind::Unit,
                                     span,
