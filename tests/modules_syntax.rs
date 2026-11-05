@@ -706,6 +706,19 @@ fn projects_imports_visibility_and_a_declarations_only_root() {
 }
 
 #[test]
+fn projects_expression_template_with_a_capture_splice() {
+    let module = parse_valid("pub syntax times_five $value:expr => {\n    $value * 5\n}\n");
+    assert_eq!(module.syntax_declarations.len(), 1);
+    let syntax = &module.syntax_declarations[0];
+    assert_eq!(syntax.name.text, "times_five");
+    assert_eq!(syntax.capture.text, "value");
+    assert!(matches!(
+        syntax.template.kind,
+        ash::surface::SurfaceExprKind::Block(_)
+    ));
+}
+
+#[test]
 fn syntax_imports_are_contextual_and_preserve_ordinary_syntax_names() {
     let module = parse_valid(
         "import macros (syntax choose as selected, syntax)\nsyntax : Unit -> Int\nsyntax () = 42\n",

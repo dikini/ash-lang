@@ -3933,8 +3933,8 @@ impl Resolver {
                 }
                 SurfaceImportSelection::Targeted(items) => {
                     for (selector_source_order, item) in items.iter().enumerate() {
-                        if let SurfaceImportItem::Syntax { name, .. } = item {
-                            return Err(unavailable_syntax_export(name));
+                        if let SurfaceImportItem::Syntax { .. } = item {
+                            continue;
                         }
                         if let SurfaceImportItem::Implementation { interface, span } = item {
                             let route_rank = ImplementationRouteRank::new(
@@ -12724,6 +12724,13 @@ impl Resolver {
         expressions: &mut ResolvedExpressionBuffer,
     ) -> Result<(), ResolveError> {
         match &expression.kind {
+            SurfaceExprKind::TemplateSplice(_) | SurfaceExprKind::SyntaxInvocation { .. } => {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    expression.span,
+                    "unexpanded template splice",
+                ));
+            }
             SurfaceExprKind::Cleanup(cleanup) => {
                 self.type_work.charge(3).map_err(|()| {
                     error(
@@ -13746,6 +13753,22 @@ pub(crate) fn unavailable_syntax_export(name: &SurfaceName) -> ResolveError {
         name.span,
         &name.text,
         "this syntax declaration is not exported by the selected module",
+    )
+}
+
+pub(crate) fn unsupported_syntax_template(span: Span) -> ResolveError {
+    error(
+        ResolveReason::InternalState,
+        span,
+        "this syntax template is not implemented yet",
+    )
+}
+
+pub(crate) fn duplicate_syntax_import(name: &SurfaceName) -> ResolveError {
+    error(
+        ResolveReason::ImportConflict,
+        name.span,
+        "this syntax spelling is already imported",
     )
 }
 

@@ -19,8 +19,8 @@ syntax data/services, generated program images, and current diagnostic catalogs.
 This plan implements [CP-0033](../proposals/CP-0033-hygienic-expression-syntax.md)
 and its [design companion](../design/macros/first-slice.md); it defines no new
 semantics or architecture. The task holds scope, refs, role ownership, the only
-M01–M14 acceptance matrix, and checkpoint status. All implementation below is
-pending. Main integration and signing remain outside authorization.
+M01–M14 acceptance matrix, and checkpoint status. The acceptance obligations
+below remain pending. Main integration and signing remain outside authorization.
 
 ## Boundary agreements
 
@@ -278,8 +278,9 @@ These crate-private Rust interfaces freeze the connected handoffs for review.
 They are implementation contracts, not Ash semantics. A change to ownership,
 admission, or failure behavior returns to the same reviewer. The checkpoint,
 header projection, canonical-source census and staged driver compile. The
-driver checks each dependency before resuming its importer. Syntax contexts,
-grants, matcher admission and the host interfaces remain planned.
+driver checks each dependency before resuming its importer. A restricted
+single-expression-capture template runs through the driver. Syntax contexts,
+grants, general matcher admission and the host interfaces remain planned.
 
 ```rust
 fn parse_module_header(

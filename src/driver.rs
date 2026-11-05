@@ -1156,7 +1156,7 @@ impl CompilationInput<'_> {
         }
     }
 
-    fn advance(&mut self) -> Result<bool, FileFailure> {
+    fn advance(&mut self, syntax_names: &[String]) -> Result<bool, FileFailure> {
         match self {
             #[cfg(test)]
             Self::Parsed { graph, next } => {
@@ -1173,7 +1173,7 @@ impl CompilationInput<'_> {
                 }
                 let phase = crate::calibration::Phase::start("loading");
                 let advanced = graph
-                    .next_module()
+                    .next_module_with_syntax(syntax_names)
                     .map(|module| module.is_some())
                     .map_err(FileFailure::Graph)?;
                 phase.finish(None, 0, 0);
@@ -1299,6 +1299,7 @@ where
     ) -> ModularEffectCoreResult,
 {
     let mut checked: Vec<crate::resolved::CheckedModule> = Vec::with_capacity(input.len());
+    let mut checked_syntax = Vec::<Vec<crate::surface::SurfaceSyntaxDeclaration>>::new();
     let mut checked_by_module: HashMap<ModuleId, usize> = HashMap::with_capacity(input.len());
     let (mut checking_type_work, source_bytes) = input.source_work().map_err(|()| {
         FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
@@ -1340,8 +1341,7 @@ where
     })?;
     let mut coverage_work = UsefulnessBudget::default();
     while input.has_next() {
-        // No checked syntax export producer exists yet. Verify the dependency
-        // owner before rejecting its unavailable selector, before body parsing.
+        let mut selected = Vec::new();
         if let Some((imports, edges)) = input.next_imports() {
             for (import, edge) in imports
                 .iter()
@@ -1351,21 +1351,53 @@ where
                     continue;
                 };
                 for item in items {
-                    let SurfaceImportItem::Syntax { name, .. } = item else {
+                    let SurfaceImportItem::Syntax { name, alias, .. } = item else {
                         continue;
                     };
-                    checked_by_module
+                    let index = *checked_by_module
                         .get(&edge.target())
-                        .and_then(|index| checked.get(*index))
-                        .filter(|dependency| dependency.module() == edge.target())
                         .ok_or_else(internal_file_failure)?;
-                    return Err(FileFailure::from(PipelineFailure::Resolution(
-                        crate::resolve::unavailable_syntax_export(name),
-                    )));
+                    if checked
+                        .get(index)
+                        .is_none_or(|dependency| dependency.module() != edge.target())
+                    {
+                        return Err(internal_file_failure());
+                    }
+                    let declaration = checked_syntax
+                        .get(index)
+                        .and_then(|exports| {
+                            exports
+                                .iter()
+                                .find(|declaration| declaration.name.text == name.text)
+                        })
+                        .ok_or_else(|| {
+                            FileFailure::from(PipelineFailure::Resolution(
+                                crate::resolve::unavailable_syntax_export(name),
+                            ))
+                        })?;
+                    let local = alias.as_ref().unwrap_or(name);
+                    if selected
+                        .iter()
+                        .any(|selection: &crate::syntax::SelectedSyntax| {
+                            selection.name == local.text
+                        })
+                    {
+                        return Err(FileFailure::from(PipelineFailure::Resolution(
+                            crate::resolve::duplicate_syntax_import(local),
+                        )));
+                    }
+                    selected.push(crate::syntax::SelectedSyntax {
+                        name: local.text.clone(),
+                        declaration: declaration.clone(),
+                    });
                 }
             }
         }
-        if !input.advance()? {
+        let syntax_names = selected
+            .iter()
+            .map(|syntax| syntax.name.clone())
+            .collect::<Vec<_>>();
+        if !input.advance(&syntax_names)? {
             return Err(internal_file_failure());
         }
         #[cfg(feature = "resource-calibration")]
@@ -1376,6 +1408,26 @@ where
             metrics.finish(None, 0, 0);
         }
         let module = input.current().ok_or_else(internal_file_failure)?;
+        for declaration in &module.surface().syntax_declarations {
+            crate::syntax::validate_template(declaration).map_err(|span| {
+                FileFailure::from(PipelineFailure::Resolution(
+                    crate::resolve::unsupported_syntax_template(span),
+                ))
+            })?;
+        }
+        let mut expanded = if selected.is_empty() {
+            None
+        } else {
+            Some(module.clone())
+        };
+        if let Some(expanded) = expanded.as_mut() {
+            crate::syntax::expand_module(expanded.surface_mut(), &selected).map_err(|span| {
+                FileFailure::from(PipelineFailure::Resolution(
+                    crate::resolve::unsupported_syntax_template(span),
+                ))
+            })?;
+        }
+        let module_for_resolution = expanded.as_ref().unwrap_or(module);
         let dependencies = module
             .dependencies()
             .iter()
@@ -1396,7 +1448,7 @@ where
             .map_err(FileFailure::from)?;
         let resolution_phase = crate::calibration::Phase::start("resolution");
         let resolved = crate::resolve::resolve_module_with_budget(
-            module,
+            module_for_resolution,
             &dependencies,
             &mut resolution_type_work,
             constraint_work,
@@ -1449,6 +1501,7 @@ where
             )
         })?;
         checked_by_module.insert(module.id(), checked.len());
+        checked_syntax.push(module.surface().syntax_declarations.clone());
         checked.push(checked_module);
         source_phase.finish(
             Some(checking_type_work.used()),

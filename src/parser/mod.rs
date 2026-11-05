@@ -50,6 +50,10 @@ pub enum NodeKind {
     ModulePath,
     /// One selected public spelling and its optional local alias.
     ImportItem,
+    /// One public expression syntax declaration.
+    SyntaxDeclaration,
+    /// One imported expression syntax invocation.
+    SyntaxInvocation,
     /// One passive source-authored foreign library.
     ForeignLibrary,
     /// One structured foreign member.
@@ -622,6 +626,8 @@ pub(crate) fn parse_module_header(
             resource_failure: None,
             syntax_budget,
             syntax_work_exhausted: false,
+            in_template: false,
+            syntax_names: &[],
         };
         grammar::module_header(&mut parser);
         (
@@ -655,6 +661,14 @@ pub(crate) fn finish_module_from_checkpoint(
     checkpoint: ParserCheckpoint,
     syntax_budget: SyntaxBudget,
 ) -> (ConcreteTree, SyntaxBudget) {
+    finish_module_from_checkpoint_with_syntax(checkpoint, syntax_budget, &[])
+}
+
+pub(crate) fn finish_module_from_checkpoint_with_syntax(
+    checkpoint: ParserCheckpoint,
+    syntax_budget: SyntaxBudget,
+    syntax_names: &[String],
+) -> (ConcreteTree, SyntaxBudget) {
     let ParserCheckpoint {
         tokens,
         lexical_diagnostics,
@@ -678,6 +692,8 @@ pub(crate) fn finish_module_from_checkpoint(
         resource_failure,
         syntax_budget,
         syntax_work_exhausted,
+        in_template: false,
+        syntax_names,
     };
     grammar::module_body(&mut parser);
     let Parser {
@@ -722,9 +738,14 @@ pub(crate) struct Parser<'tokens> {
     resource_failure: Option<ResourceFailure>,
     syntax_budget: SyntaxBudget,
     syntax_work_exhausted: bool,
+    in_template: bool,
+    syntax_names: &'tokens [String],
 }
 
 impl Parser<'_> {
+    fn at_syntax_name(&self) -> bool {
+        matches!(self.current(), Some(TokenKind::Identifier(name)) if self.syntax_names.contains(name))
+    }
     fn start(&mut self, kind: NodeKind) {
         let _ = self.retain_event(Event::Start(kind));
     }

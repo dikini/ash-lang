@@ -18,8 +18,8 @@ use crate::{
     lexer::{LexReason, lex_with_budget},
     parser::{
         ParseDiagnostic, ParserCheckpoint, ProjectionError, ResourceFailure,
-        finish_module_from_checkpoint, module_span_from_checkpoint, parse_module_header,
-        parse_with_budget_and_header, project_module, project_module_header,
+        finish_module_from_checkpoint_with_syntax, module_span_from_checkpoint,
+        parse_module_header, parse_with_budget_and_header, project_module, project_module_header,
     },
     source::{SourceError, SourceFile, SourceId, Span},
     surface::{
@@ -491,6 +491,10 @@ impl LoadedModule {
     #[must_use]
     pub const fn surface(&self) -> &SurfaceModule {
         &self.surface
+    }
+
+    pub(crate) fn surface_mut(&mut self) -> &mut SurfaceModule {
+        &mut self.surface
     }
 
     /// Returns source-ordered dependency edges.
@@ -1389,7 +1393,11 @@ impl StagedSyntax {
 }
 
 impl StagedModule {
-    fn into_loaded(self, budget: &mut SyntaxBudget) -> Result<LoadedModule, LoadGraphError> {
+    fn into_loaded(
+        self,
+        budget: &mut SyntaxBudget,
+        syntax_names: &[String],
+    ) -> Result<LoadedModule, LoadGraphError> {
         let StagedSyntax {
             imports,
             span,
@@ -1402,7 +1410,11 @@ impl StagedModule {
                 (self.source, surface)
             }
             ModuleBody::Header(checkpoint) => {
-                let (tree, retained) = finish_module_from_checkpoint(checkpoint, budget.clone());
+                let (tree, retained) = finish_module_from_checkpoint_with_syntax(
+                    checkpoint,
+                    budget.clone(),
+                    syntax_names,
+                );
                 *budget = retained;
                 let (source, mut surface) =
                     project_finished_module(self.source, tree, import_span)?;
@@ -1484,10 +1496,17 @@ impl HeaderGraph {
     }
 
     pub(crate) fn next_module(&mut self) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
+        self.next_module_with_syntax(&[])
+    }
+
+    pub(crate) fn next_module_with_syntax(
+        &mut self,
+        syntax_names: &[String],
+    ) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
         let Some(module) = self.pending.pop_front() else {
             return Ok(None);
         };
-        match module.into_loaded(&mut self.syntax_budget) {
+        match module.into_loaded(&mut self.syntax_budget, syntax_names) {
             Ok(module) => {
                 self.loaded.push(module);
                 Ok(self.loaded.last())
@@ -3142,6 +3161,7 @@ mod tests {
             source: std::sync::Arc::new(source),
             surface: SurfaceModule {
                 imports: Vec::new(),
+                syntax_declarations: Vec::new(),
                 declaration_order: Vec::new(),
                 type_declarations: Vec::new(),
                 interfaces: Vec::new(),

@@ -124,12 +124,14 @@ findings here before adding mechanisms.
 - Parser amendment, task and execution plan are recorded. D0 has a concrete
   producer/consumer proposal and a frozen fixture family. The checkpoint,
   header projection, source census and staged driver compile; syntax contexts,
-  grants and the macro host do not. Macro execution and expansion are absent.
+  grants and the macro host do not. Procedural execution and general expansion
+  remain absent.
 - Contextual syntax selectors and the `$` token now parse; misplaced `$` fails
   at the parser. The checked driver rejects a missing syntax export before
   parsing the importer body, and the syntax-free loader reports that such
-  selectors require the driver. This is fail-closed: no syntax export can yet
-  be published or used. Specification changes await the integrated feature.
+  selectors require the driver. A restricted template with one expression
+  capture now runs through the driver. Other matcher forms, template bindings,
+  definition-site authority and procedural expansion remain unfinished.
 - The frozen macro graph now reaches the unimplemented
   `@builtin.compiler.syntax` import and fails as unknown builtin. The
   independent handwritten graph executes to `Int` value `42`, and the proposed
@@ -261,9 +263,13 @@ findings here before adding mechanisms.
   `syntax`; public syntax re-exports and names not beginning with lowercase are
   rejected. The ordinary `syntax` global still executes through the driver.
 - The driver authenticates that the selected dependency has been checked and
-  rejects its unavailable syntax export before importer-body parsing. This
-  temporary refusal is not checked syntax publication, matcher selection or
-  expansion; those paths and the acceptance matrix remain pending.
+  rejects an unavailable syntax export before importer-body parsing. It can
+  select a restricted checked template and expand a single expression capture.
+  Its real file graph evaluates `times_five 6 + 1` to `35`, preserving capture
+  grouping; a renamed selector also executes, and a missing capture rejects.
+  Templates requiring name binding or definition authority are refused. The
+  separate binding/private-helper graph currently fails on its multi-capture
+  matcher. No acceptance criterion is closed by this partial path.
 
 ## Verification
 

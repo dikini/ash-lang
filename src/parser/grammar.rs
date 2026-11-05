@@ -455,7 +455,10 @@ fn starts_module_declaration(parser: &Parser<'_>) -> bool {
 }
 
 fn module_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
-    if foreign::starts_library(parser) {
+    if starts_syntax_declaration(parser) {
+        syntax_declaration(parser);
+        TypeParametersOutcome::Complete
+    } else if foreign::starts_library(parser) {
         foreign::library(parser)
     } else if parser.at(&TokenKind::Resource)
         || parser.at(&TokenKind::Pub) && parser.nth(1) == Some(&TokenKind::Resource)
@@ -483,6 +486,32 @@ fn module_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
     } else {
         global_definition(parser)
     }
+}
+
+fn starts_syntax_declaration(parser: &Parser<'_>) -> bool {
+    parser.at(&TokenKind::Pub)
+        && matches!(parser.nth(1), Some(TokenKind::Identifier(name)) if name == "syntax")
+        && matches!(parser.nth(2), Some(TokenKind::Identifier(_)))
+}
+
+fn syntax_declaration(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::SyntaxDeclaration);
+    let _ = parser.bump(); // pub
+    let _ = parser.bump(); // syntax
+    expect_syntax_name(parser);
+    let _ = parser.expect(&TokenKind::Dollar, ExpectedForm::Identifier);
+    expect_lower_identifier(parser);
+    let _ = parser.expect(&TokenKind::Colon, ExpectedForm::Colon);
+    if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "expr") {
+        let _ = parser.bump();
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+    let _ = parser.expect(&TokenKind::FatArrow, ExpectedForm::FatArrow);
+    parser.in_template = true;
+    block(parser);
+    parser.in_template = false;
+    parser.finish();
 }
 
 fn starts_newtype_declaration(parser: &Parser<'_>) -> bool {
@@ -1607,6 +1636,18 @@ fn inline_operational_global(parser: &mut Parser<'_>) -> TypeParametersOutcome {
 }
 
 pub(super) fn expression(parser: &mut Parser<'_>) {
+    if parser.at_syntax_name() {
+        parser.start(NodeKind::SyntaxInvocation);
+        let _ = parser.bump();
+        if parser.enter_structure() {
+            expression(parser);
+            parser.leave_structure();
+        } else {
+            parser.consume_rest();
+        }
+        parser.finish();
+        return;
+    }
     match expression_prefix_form(parser) {
         Some(ExpressionPrefixForm::Block) => block_expression(parser),
         Some(ExpressionPrefixForm::Function) => function_expression(parser),
@@ -2679,7 +2720,9 @@ fn parenthesized_type(parser: &mut Parser<'_>) {
 }
 
 fn starts_expression(parser: &Parser<'_>) -> bool {
-    expression_prefix_form(parser).is_some() || expression::starts_primary(parser)
+    parser.at_syntax_name()
+        || expression_prefix_form(parser).is_some()
+        || expression::starts_primary(parser)
 }
 
 fn resource_field_word(parser: &mut Parser<'_>, word: &str) {

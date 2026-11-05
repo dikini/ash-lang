@@ -13,6 +13,8 @@ pub use foreign::{
 pub struct SurfaceModule {
     /// Imports in source order.
     pub imports: Vec<SurfaceImport>,
+    /// Public expression syntax declarations in source order.
+    pub syntax_declarations: Vec<SurfaceSyntaxDeclaration>,
     /// Cross-family declaration order using category-local indices.
     pub declaration_order: Vec<SurfaceDeclarationIndex>,
     /// Passive source-authored foreign libraries in source order.
@@ -32,6 +34,19 @@ pub struct SurfaceModule {
     /// Global definitions in source order.
     pub definitions: Vec<SurfaceDefinition>,
     /// The complete accepted source span.
+    pub span: Span,
+}
+
+/// A source expression syntax declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceSyntaxDeclaration {
+    /// The exported syntax spelling.
+    pub name: SurfaceName,
+    /// The expression capture in the matcher.
+    pub capture: SurfaceName,
+    /// The template expression, including its capture splices.
+    pub template: SurfaceExpr,
+    /// The complete declaration span.
     pub span: Span,
 }
 
@@ -378,6 +393,15 @@ pub struct SurfaceExpr {
 /// The closed Ash expression family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceExprKind {
+    /// An expression capture referenced from a syntax template.
+    TemplateSplice(SurfaceName),
+    /// An imported expression syntax invocation awaiting expansion.
+    SyntaxInvocation {
+        /// The selected local spelling.
+        name: SurfaceName,
+        /// The protected expression capture.
+        capture: Box<SurfaceExpr>,
+    },
     /// An arbitrary-precision integer literal.
     Integer(Integer),
     /// An experimental decoded UTF-8 string literal.

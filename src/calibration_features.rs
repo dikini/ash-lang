@@ -326,8 +326,12 @@ fn walk<'a>(features: &mut Features, pending: &mut Vec<Visit<'a>>) {
                     | SurfaceExprKind::Boolean(_)
                     | SurfaceExprKind::Unit
                     | SurfaceExprKind::Name(_)
+                    | SurfaceExprKind::TemplateSplice(_)
                     | SurfaceExprKind::Discard
                     | SurfaceExprKind::Retain => {}
+                    SurfaceExprKind::SyntaxInvocation { capture, .. } => {
+                        pending.push(Visit::Expr(capture, scope));
+                    }
                     SurfaceExprKind::Tuple(elements) => {
                         pending.extend(elements.iter().map(|value| Visit::Expr(value, scope)));
                     }
