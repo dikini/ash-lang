@@ -660,6 +660,54 @@ pub(crate) fn validate_template(
     }
 }
 
+/// Instantiate placeholders for definition-site name admission. Nested syntax
+/// remains opaque to the resolver until an invocation actually expands it.
+pub(crate) fn template_for_admission(
+    declaration: &SurfaceSyntaxDeclaration,
+) -> Result<Option<(SurfaceExpr, Vec<SurfaceName>)>, Span> {
+    let SurfaceSyntaxImplementation::Template(template) = &declaration.implementation else {
+        return Ok(None);
+    };
+    let mut captures = Vec::new();
+    let mut identifiers = Vec::new();
+    for part in &declaration.matcher {
+        let SurfaceSyntaxMatcherPart::Capture { name, kind } = part else {
+            continue;
+        };
+        let capture = match kind {
+            SurfaceSyntaxCaptureKind::Expression => {
+                SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
+                    expression: SurfaceExpr {
+                        kind: SurfaceExprKind::Unit,
+                        span: name.span,
+                    },
+                    contents: Arc::from([]),
+                })
+            }
+            SurfaceSyntaxCaptureKind::Identifier => {
+                let placeholder = SurfaceName {
+                    text: format!("__ash_template_capture_{}", captures.len()),
+                    span: name.span,
+                    introduction: usize::MAX - captures.len(),
+                    introduced_at: Some(name.span),
+                };
+                identifiers.push(placeholder.clone());
+                SurfaceSyntaxCapture::Identifier(placeholder)
+            }
+        };
+        captures.push(capture);
+    }
+    let mut template = template.clone();
+    substitute(
+        &mut template,
+        &declaration.matcher,
+        &captures,
+        0,
+        declaration.span,
+    )?;
+    Ok(Some((template, identifiers)))
+}
+
 fn capture_by_name<'a>(
     name: &SurfaceName,
     matcher: &[SurfaceSyntaxMatcherPart],
@@ -972,8 +1020,21 @@ fn substitute(
                 name.introduced_at = Some(invocation);
             }
             for capture in nested {
-                if let SurfaceSyntaxCapture::Expression(expression) = capture {
-                    substitute_capture(expression, matcher, captures, introduction, invocation)?;
+                match capture {
+                    SurfaceSyntaxCapture::Expression(expression) => {
+                        substitute_capture(
+                            expression,
+                            matcher,
+                            captures,
+                            introduction,
+                            invocation,
+                        )?;
+                    }
+                    SurfaceSyntaxCapture::Identifier(name) if introduction != 0 => {
+                        name.introduction = introduction;
+                        name.introduced_at = Some(invocation);
+                    }
+                    SurfaceSyntaxCapture::Identifier(_) => {}
                 }
             }
         }

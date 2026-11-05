@@ -193,12 +193,48 @@ fn template_continuations_use_the_actual_handler_capability() {
 }
 
 #[test]
+fn unused_template_checks_direct_names_but_defers_nested_syntax() {
+    for path in [
+        "template-admission/missing/entry.ash",
+        "template-admission/missing_nested/entry.ash",
+    ] {
+        let failure = compile_path(fixture(path))
+            .expect_err("an unused template cannot name a missing defining-module helper");
+        assert_eq!(
+            failure.reason_code(),
+            "resolve.unknown-name",
+            "{path}: {failure:?}"
+        );
+    }
+    for path in [
+        "template-admission/good/entry.ash",
+        "template-admission/good/reuse.ash",
+        "template-admission/deferred/entry.ash",
+        "nested-identifier/unused.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    let failure = compile_path(fixture("nested-identifier/invalid.ash"))
+        .expect_err("a surviving nested free name cannot use a caller helper");
+    assert_eq!(failure.reason_code(), "resolve.unknown-name");
+}
+
+#[test]
+fn nested_syntax_identifier_keeps_the_outer_template_context() {
+    let compiled = compile_path(fixture("nested-identifier/entry.ash"))
+        .expect("the nested syntax binds the outer template's literal identifier");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
 fn template_perform_uses_the_defining_effect_not_the_callers_shadow() {
     for path in [
         "template-perform/entry.ash",
         "template-perform/private.ash",
         "template-perform/private_signature.ash",
         "template-perform/private_nested_signature.ash",
+        "template-perform/handler_capture.ash",
         "template-perform/outer_resume.ash",
         "template-perform/captured_resume.ash",
     ] {

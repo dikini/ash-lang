@@ -13,3 +13,9 @@ pub syntax clause $value:expr => {
         ask value => $value
     }
 }
+
+pub syntax add $body:expr => {
+    handle (perform Ask.ask 2) with Ask {
+        ask value => resume ($body + value)
+    }
+}

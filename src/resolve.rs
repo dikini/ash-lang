@@ -1965,6 +1965,7 @@ fn resolve_module_names_with_budget(
             &mut declarations,
             dependencies,
         )?;
+        resolver.admit_templates(surface)?;
 
         let imported = std::mem::take(&mut resolver.imported);
         let export_candidate = build_export_candidate(
@@ -2513,6 +2514,7 @@ struct Resolver {
     nominal_parameter_counts: HashMap<NominalTypeId, usize>,
     active_resumes: Vec<ResumeId>,
     retained_clause: Option<ResumeId>,
+    admitting_template: bool,
     next_resume: u32,
     type_work: TypeWorkBudget,
     constraint_work: InterfaceConstraintBudget,
@@ -2941,6 +2943,7 @@ impl Resolver {
             nominal_parameter_counts: HashMap::new(),
             active_resumes: Vec::new(),
             retained_clause: None,
+            admitting_template: false,
             next_resume: 0,
             type_work,
             constraint_work,
@@ -12167,6 +12170,65 @@ impl Resolver {
 
     // Keep window-only lookup temporaries off ordinary expression frames.
 
+    fn admit_templates(&mut self, surface: &SurfaceModule) -> Result<(), ResolveError> {
+        for declaration in &surface.syntax_declarations {
+            let Some((template, identifiers)) = crate::syntax::template_for_admission(declaration)
+                .map_err(unsupported_syntax_template)?
+            else {
+                continue;
+            };
+            let binder_checkpoint = self.next_binder;
+            let type_checkpoint = self.next_type_variable;
+            let nominal_checkpoint = self.next_lexical_nominal;
+            let evidence_checkpoint = self.next_lexical_evidence;
+            let resume_checkpoint = self.next_resume;
+            let nominal_len = self.lexical_nominals.0.len();
+            let constructor_len = self.lexical_constructors.0.len();
+            let parameter_len = self.lexical_nominal_parameters.0.len();
+            let method_parameter_len = self.lexical_method_parameters.0.len();
+            let scope_checkpoint = self.scopes.len();
+            let effect_arity_checkpoint = self.written_effect_arities.len();
+            let result = (|| {
+                let mut captures = HashMap::new();
+                for name in &identifiers {
+                    let binder = self.allocate_contextual_binder(name)?;
+                    captures.insert(
+                        (name.text.clone(), name.introduction),
+                        ResolvedTermBinding::local(ResolvedTermName::Global(binder.id)),
+                    );
+                }
+                self.scopes.push(captures);
+                self.admitting_template = true;
+                self.resolve_expr(&template)
+                    .map(discard_resolved_expression_iteratively)
+            })();
+            self.admitting_template = false;
+            self.scopes.truncate(scope_checkpoint);
+            self.written_effect_arities
+                .truncate(effect_arity_checkpoint);
+            self.lexical_nominals.0.truncate(nominal_len);
+            self.lexical_constructors.0.truncate(constructor_len);
+            self.lexical_nominal_parameters.0.truncate(parameter_len);
+            self.lexical_method_parameters
+                .0
+                .truncate(method_parameter_len);
+            self.binder_introductions
+                .retain(|id, _| id.module() != Some(self.module) || id.local() < binder_checkpoint);
+            self.nominal_parameter_counts.retain(|id, _| {
+                id.module() != self.module
+                    || !id.is_lexical()
+                    || id.declaration() < nominal_checkpoint
+            });
+            self.next_binder = binder_checkpoint;
+            self.next_type_variable = type_checkpoint;
+            self.next_lexical_nominal = nominal_checkpoint;
+            self.next_lexical_evidence = evidence_checkpoint;
+            self.next_resume = resume_checkpoint;
+            result?;
+        }
+        Ok(())
+    }
+
     fn resolve_expr(&mut self, expression: &SurfaceExpr) -> Result<ResolvedExpr, ResolveError> {
         self.resolve_work(ResolveTask::VisitExpr(expression))
     }
@@ -13408,6 +13470,12 @@ impl Resolver {
         expressions: &mut ResolvedExpressionBuffer,
     ) -> Result<(), ResolveError> {
         match &expression.kind {
+            SurfaceExprKind::SyntaxInvocation { .. } if self.admitting_template => {
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Unit,
+                    span: expression.span,
+                });
+            }
             SurfaceExprKind::TemplateSplice(_) | SurfaceExprKind::SyntaxInvocation { .. } => {
                 return Err(error(
                     ResolveReason::InternalState,
@@ -14051,6 +14119,9 @@ impl Resolver {
                 tasks.push(ResolveTask::VisitExpr(&request.operand));
             }
             SurfaceExprKind::Handle(_) => unreachable!("handlers use their separate reentry path"),
+            SurfaceExprKind::Resume(value) if self.admitting_template => {
+                tasks.push(ResolveTask::VisitExpr(value));
+            }
             SurfaceExprKind::Resume(value) => {
                 let owner = self
                     .active_resumes
@@ -14076,6 +14147,12 @@ impl Resolver {
                     span: expression.span,
                 });
                 tasks.push(ResolveTask::VisitExpr(value));
+            }
+            SurfaceExprKind::Discard | SurfaceExprKind::Retain if self.admitting_template => {
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Unit,
+                    span: expression.span,
+                });
             }
             SurfaceExprKind::Discard => {
                 let owner = self
@@ -20236,6 +20313,66 @@ mod tests {
 
             assert_eq!(error.reason, ResolveReason::UnknownName);
             assert_eq!(resolver.scopes.len(), initial_scope_count);
+        }
+    }
+
+    #[test]
+    fn template_name_admission_discards_temporary_resolver_state() {
+        for (tail, succeeds) in [("value", true), ("missing", false)] {
+            let text = format!(
+                "effect Ask {{\nask : Int -> Int\n}}\nmain : Unit -> Int\nmain () = {{\nnewtype Existing = Existing(Int)\n42\n}}\npub syntax scratch $name:ident then $ignored:expr => {{\nnewtype Token = Token(Int)\nlet $name = 1\nhandle (perform Ask.ask $name) with Ask {{\nask value => resume {tail}\n}}\n}}\n"
+            );
+            let source = SourceFile::new("admission-scratch.ash", text).unwrap();
+            let tree = parse(lex(&source).unwrap());
+            let module = project_module(&source, &tree).unwrap();
+            assert_eq!(module.syntax_declarations.len(), 1);
+            let mut resolver = Resolver::new(ModuleId::new(0));
+            resolver.validate_local_namespaces(&module).unwrap();
+            let declarations = resolver.resolve_declarations(&module).unwrap();
+            let registry_counts = (
+                declarations.registry.nominals().len(),
+                declarations.registry.constructors().len(),
+            );
+            let counters = (
+                resolver.next_binder,
+                resolver.next_type_variable,
+                resolver.next_lexical_nominal,
+                resolver.next_lexical_evidence,
+                resolver.next_resume,
+            );
+            let introductions = resolver.binder_introductions.clone();
+            let nominal_counts = resolver.nominal_parameter_counts.clone();
+            let scope_count = resolver.scopes.len();
+            let effect_arity_count = resolver.written_effect_arities.len();
+
+            let result = resolver.admit_templates(&module);
+            assert_eq!(result.is_ok(), succeeds, "{tail}: {result:?}");
+            assert_eq!(
+                counters,
+                (
+                    resolver.next_binder,
+                    resolver.next_type_variable,
+                    resolver.next_lexical_nominal,
+                    resolver.next_lexical_evidence,
+                    resolver.next_resume,
+                )
+            );
+            assert_eq!(resolver.binder_introductions, introductions);
+            assert_eq!(resolver.nominal_parameter_counts, nominal_counts);
+            assert!(resolver.lexical_nominals.0.is_empty());
+            assert!(resolver.lexical_constructors.0.is_empty());
+            assert!(resolver.lexical_nominal_parameters.0.is_empty());
+            assert!(resolver.lexical_method_parameters.0.is_empty());
+            assert_eq!(resolver.scopes.len(), scope_count);
+            assert_eq!(resolver.written_effect_arities.len(), effect_arity_count);
+            assert!(!resolver.admitting_template);
+            assert_eq!(
+                registry_counts,
+                (
+                    declarations.registry.nominals().len(),
+                    declarations.registry.constructors().len(),
+                )
+            );
         }
     }
 
