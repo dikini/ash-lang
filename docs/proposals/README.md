@@ -25,7 +25,8 @@ No proposed transitions are listed.
 
 - [CP-0033: Hygienic Expression Syntax](CP-0033-hygienic-expression-syntax.md)
   — imported expression syntax, shared hygiene and provenance, and checked
-  Ash transformers; unimplemented, with a prospective delivery plan.
+  Ash transformers; unimplemented, with delivery owned by
+  [TASK-0066](../tasks/TASK-0066-expression-macros.md) and its execution plan.
 
 - [CP-0032: Row-Indexed Handler Contexts](CP-0032-row-indexed-handler-contexts.md),
   accepted as one package with

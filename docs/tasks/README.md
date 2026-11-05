@@ -9,6 +9,10 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
+- [TASK-0066: Expression Macros](TASK-0066-expression-macros.md) owns delivery
+  of accepted, unimplemented
+  [CP-0033](../proposals/CP-0033-hygienic-expression-syntax.md), its M01–M14
+  evidence matrix, and its task-owned execution plan.
 - [TASK-0060: Frame Composition Work](TASK-0060-frame-composition-work.md) tracks
   the capacity repair for [issue #196](https://github.com/dikini/ash-lang/issues/196).
 - [TASK-0059: Nested Cell Validation](TASK-0059-nested-cell-validation.md) tracks

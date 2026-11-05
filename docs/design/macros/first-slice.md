@@ -3,9 +3,11 @@
 This companion to [DN-0062](../DN-0062-hygienic-surface-macros.md) records the
 design behind [CP-0033](../../proposals/CP-0033-hygienic-expression-syntax.md).
 CP-0033 accepts this first slice, which is not implemented or current Ash.
-This document does not accept a parser architecture decision or create an
-implementation task. Examples use accepted future syntax. The delivery plan
-below is prospective planning, not an active task or task-owned execution plan.
+The parser amendment is recorded in
+[AD-0005](../../decisions/AD-0005-parser-architecture.md);
+[TASK-0066](../../tasks/TASK-0066-expression-macros.md) owns implementation and
+its execution plan. This companion remains design rationale. Examples use
+accepted future syntax.
 
 ## Scope and choice
 
@@ -579,106 +581,30 @@ completion prerequisite. Normal errors must be useful without one.
 
 ## Required acceptance evidence
 
-The proposal owns the complete evidence requirements. This matrix gives stable
-case names for delivery planning; all are pending implementation.
+[CP-0033](../../proposals/CP-0033-hygienic-expression-syntax.md) owns the
+complete semantic evidence requirements. The pending M01–M14 delivery matrix
+has moved to its owning
+[TASK-0066 acceptance record](../../tasks/TASK-0066-expression-macros.md#acceptance-evidence).
+The task retains the positive and negative cases, the real file-graph acceptance,
+checkpoint obligations, and retained verification. No case is implemented or
+accepted by this transfer.
 
-| Case | Positive and negative evidence |
-| --- | --- |
-| M01: natural syntax | Imported template `if`, both nestings above, precedence, parentheses, LF/CRLF, missing capture/separator, and no ordinary-application fallback. |
-| M02: grouping | Splice `a + b`, blocks, and nested DSL forms as arguments; inspect protected fragments and compare handwritten parenthesized behavior. Reject trailing output and recovery-bearing fragments. |
-| M03: procedural path | An Ash transformer reads captures, computes an output tree, and executes through the real host. A discarded nested rejection does not run. Compare a template result; reject wrong signature/row, malformed output, authored rejection, and evaluator failure. |
-| M04: term hygiene | Caller/introduced temporary collision, reused and distinct fresh identifiers, supplied binder/body with preceding initializer, repeated splices, and nested expansion. Assert exact binder/use relationships. |
-| M05: non-term scope | Local `newtype` and constructor, parameters, annotation types, recursive groups, and resource/region type and value scopes. Duplicate a fragment containing local binders, local nominal/region identities, and nested syntax; assert distinct output declarations with connected internal uses and unchanged caller free references. Include invalid scope and duplicate cases. |
-| M06: definition authority | Private helper and own opaque construction; targeted/qualified/facade imports with caller shadowing. Reject ordinary caller private access, another module's withheld constructor, forged/retargeted grants, and missing definition helpers. |
-| M07: imports and staging | Renamed and duplicate syntax imports, term-name conflicts, no activation through complete import, missing exports, unsupported re-exports/local definitions, and canonical dependency cycles. Unused imports cannot run transformers. |
-| M08: DSL composition | Two separately authored forms nest and embed Ash. A template invokes a syntax dependency absent from caller imports. A same-spelled caller syntax import cannot redirect a generated identifier. |
-| M09: current checks | Generated method obligations require ordinary evidence; wrappers preserve current handler selection and observable effect count/order. Test valid/invalid `resume` and resource escape/use, including a nested function and required direct builtin import. |
-| M10: bridge and origins | Identity transformer round-trips token/group/fragment structure, contexts, grants, and origins. Reject wrong nominal constructors, malformed data, and stale/foreign handles. Assert multiple input origins and nested frames in human/JSON diagnostics. |
-| M11: completion and limits | Successful output survives evaluation-root teardown; authored failure, malformed output, evaluator/transfer failure, and exhausted budgets publish no partial result and retain teardown information. Bound self-producing recursive expansion. |
-| M12: reproducibility | Repeat equal compilations modulo fresh identity renaming; change caller binding, matcher, helper, imported syntax, and interface/semantic inputs and show updated output or rejection. No persistent cache is required. |
-| M13: module/Core boundary | Reuse a completed dependency without repeating its source proof; validate new compile-time and final linked Core independently. Reject mutations of declaration grants, scope, type, and provenance at their owning boundaries. |
-| M14: compatibility | Existing valid no-syntax programs keep their behavior; retain unaffected diagnostic regression cases and test the specified new syntax error for out-of-place `$`. Compile generated output through the current interpreted and supported program-image/build paths; generated runtime code needs no syntax-service interpretation. |
+## Delivery ownership
 
-The production acceptance is a real file graph: a helper dependency, a public
-syntax module with both a template and computed Ash transformer, a second DSL
-dependency, and an entry module importing renamed syntax. Compile that graph
-through the public compiler driver, execute the entry, and observe a private
-definition helper surviving linking, caller binding preservation, nested DSL
-expansion, and useful diagnostics from an invalid variant. Internal fixtures
-alone cannot close this acceptance.
+The prospective D0–D4 sequence is now the task-owned
+[execution plan](../../plans/2026-11-05-expression-macros.md). It records the
+producer/consumer agreements, source/header staging, private reference closure,
+checked Ash host transfer and failure, shared public token vocabulary,
+real interpreter/build consumers, integration ownership, checkpoints, and the
+whole remaining delivery estimate. It has no independent semantic authority.
 
-## Prospective delivery plan
+The accepted parser amendment in
+[AD-0005](../../decisions/AD-0005-parser-architecture.md) admits one built-in
+prefix mechanism parameterized by imported matcher data. Lexer separation,
+shared precedence, token-complete recovery, and rejection at projection remain.
+It admits no executable parser registry. The implementation remains pending.
 
-Before implementation, record the corresponding parser-architecture decision
-and create one owning delivery task. Assign one
-production integration owner and the same independent reviewer for the
-boundary map and retained result. This is a delivery sequence, not an active
-task. Transfer this plan and pending M01–M14 matrix to
-that task; do not create a parallel acceptance ledger.
-
-The parser decision must explicitly extend
-[AD-0005](../../decisions/AD-0005-parser-architecture.md)'s closed assembly with
-an imported matcher environment for one built-in expression-prefix mechanism.
-It must keep lexer/parser separation, the shared precedence owner,
-token-complete recovery, and projection rejection. It must not imply an open
-registry of executable parser callbacks. The semantic contract above is
-accepted; an implementation encountering a missing rule
-returns to CP-0033 instead of inventing one locally.
-
-Agree on these producer/consumer interfaces before dividing work:
-
-| Boundary | Producer → consumer and ownership | Failure and real-path check |
-| --- | --- | --- |
-| Import header → body parser | Loader publishes canonical selected syntax identities, matchers, source routes, and checked dependency ownership; integration owner coordinates loader/parser work. | Cycles/conflicts fail before expansion. M07/M08 observe the imported matcher through entry compilation. |
-| Parser → expansion/resolution | Parser supplies protected unexpanded fragments, token-complete invocation, contexts, and origins; frontend owner retains one lexical-scope policy. | No recovery node crosses. M01/M02/M04/M05 assert grouping and final binder identities. |
-| Checked module → compile-time host | Checker supplies completed transformer/helper fragments, canonical API identities, checked signature/row, and metadata; host owner links and validates its program. | No dependency body recheck. M03/M13 call the actual checked Ash body through the compiler entry. |
-| Ash value → admitted syntax | Host supplies decoded syntax and authenticated handles; expansion owner transfers them before root teardown. | Invalid output/failure publishes nothing. M10/M11 inspect output after teardown and exercise failure paths. |
-| Definition context → caller/linker | Frontend supplies exact grants, original declaration/import provenance, and executable closure; linker validates new connections. | No arbitrary private import or evidence capture. M06/M09/M13 execute a retained private helper and reject grant mutation. |
-| Expanded caller → runtime/reporting | Checker/linker supply checked, independently validated Core and causal diagnostics; integration owner owns interpreter and supported build consumers. | M09/M10/M14 observe runtime behavior and human/JSON causes from the actual driver. |
-
-Implement these ordered deliveries in the authorized task. File areas are
-existing owners to inspect, not a demand for one Rust module per row.
-
-| Delivery | Scope and dependencies | Verification and completion |
-| --- | --- | --- |
-| D0: freeze contracts | Confirm parser decision, builtin declarations, scope/grant representation, driver entry, and M01–M14 fixtures. Inspect `src/module.rs`, `src/parser/`, `src/resolve.rs`, `src/resolved.rs`, `src/elaborate.rs`, `src/eval/`, and `src/core/validate.rs`. | Reviewer challenges the whole path before substantial implementation. Establish the graph acceptance test with expected rejection before support exists. |
-| D1: first template path | Add contextual syntax forms, header discovery/import exports, restricted matcher, protected fragments, lexical expansion, and definition grants. Wire through caller checking and linking; do not deliver a parser-only facility. | M01/M02/M04/M06/M07/M08 and a real entry with a private helper. Focused parser/module/resolution tests plus the vertical fixture. |
-| D2: checked Ash path | Add canonical Ash syntax declarations, `Ops` interpretation, interchange conversion, transformer admission/compile-time entry, root transfer and failure cleanup. Depends on D1 interfaces; uses the same expansion consumer. | M03/M10/M11/M13 through the real graph. First full-gate checkpoint when both authoring forms execute and the transfer/failure path is covered. |
-| D3: complete scope and consumers | Complete M05/M09/M12/M14, causal diagnostics/locales, supported image/build consumer, deterministic ordering and invalidation. Reuse existing runtime checks rather than add macro-specific type/effect rules. | All M01–M14 evidence, focused affected callers, source examples, and runtime/build observations. Independent review covers admission, authorization, execution, and teardown. |
-| D4: product checkpoint | Update specification and tool docs with implementation, amend design/decision status only for retained scope, refresh checks after review repairs, and retain the authorized integration candidate. | Fresh `cargo xtask verify` on the pinned candidate, Markdown/link/authority checks, reviewed graph evidence, and acceptance by the assigned owner. Main integration and proposal retirement follow the artifact workflow. |
-
-Plan new `tests/surface_macros.rs` for production file graphs, parsing, hygiene,
-and composition, and `tests/macro_host.rs` for transformer admission, bridge
-round-trips, limits, and root teardown. Extend the current diagnostic and build
-consumer tests where they own the behavior. The focused commands, after those
-new test targets exist, are:
-
-```text
-cargo test -j 1 -p ash --test surface_macros
-cargo test -j 1 -p ash --test macro_host
-cargo test -j 1 -p ash --test diagnostic_json
-cargo test -j 1 -p ash --test program_build_native
-```
-
-Internal parser/resolver/validator mutation tests complement these targets;
-the owning task records their exact filters and the retained inputs. Builtin
-source and authentication belong with the compiler-owned modules in
-`src/module.rs`; service adapters belong with `src/eval/`, not the public Ash
-data definition. D0 may refine file organization while preserving these checks
-and the single production acceptance path.
-
-The whole remaining implementation chain is roughly 25–45 focused
-engineer-days: D0 2–3, D1 7–12, D2 8–14, D3 5–10, and D4 3–6. These are
-uncalibrated planning ranges, not measured timings or calendar commitments.
-They assume reuse of the current checked-module linker and evaluator, one
-integration owner, no effects redesign, and no additional output category.
-The main uncertainty is connecting authenticated syntax handles and definition
-grants to existing checking, lowering, images, and allocation ownership.
-Re-estimate the whole remainder after D0 and the first vertical path. A shorter
-component estimate cannot stand in for that remaining chain.
-
-No experiment is a prerequisite to these design choices. Implementation must
-supply the specified evidence; a contradiction or missing semantic rule reopens
-the proposal. Persistent caches, an expansion UI, declaration macros, typed
-compiler transformations, self-hosting, browser hosting, and migrations that
-shrink the foundation remain separate work.
+No experiment is a prerequisite to the accepted design choices. A contradiction
+or missing semantic rule returns to CP-0033. Persistent caches, an expansion UI,
+declaration macros, typed compiler transformations, self-hosting, browser hosting,
+and migrations that shrink the foundation remain separate work.

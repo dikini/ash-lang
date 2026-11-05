@@ -3,7 +3,8 @@
 - ID: `CP-0033`
 - Status: accepted
 - Related: [DN-0062](../design/DN-0062-hygienic-surface-macros.md),
-  [first-slice design and delivery plan](../design/macros/first-slice.md),
+  [first-slice design](../design/macros/first-slice.md),
+  [TASK-0066](../tasks/TASK-0066-expression-macros.md),
   [AD-0005](../decisions/AD-0005-parser-architecture.md),
   [AD-0006](../decisions/AD-0006-front-end-semantic-boundaries.md),
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md),
@@ -11,7 +12,7 @@
 
 > This proposal records the accepted first expression-macro slice. It is not
 > current Ash; no macro implementation or supporting experiment is claimed.
-> Implementation also requires the parser decision and an owning task.
+> Amended AD-0005 records the parser decision; TASK-0066 owns delivery.
 
 ## Current behavior
 
@@ -278,10 +279,11 @@ The compiler need not infer a DSL-specific role description from a source span.
   chapter if needed for organization, and current compiler/tool documentation.
   A new chapter would organize these rules rather than add an authority level.
 
-The parser architecture needs an accepted amendment to AD-0005's closed
-assembly for the data-defined imported matcher environment. Preserve its
-lexer/precedence/recovery/projection boundaries. No architectural acceptance
-is recorded by this proposal.
+The accepted amendment to AD-0005 extends its closed built-in assembly with one
+expression-prefix mechanism parameterized by a data-defined imported matcher
+environment. Its lexer/precedence/recovery/projection boundaries remain. The
+amendment is architectural authority separate from this proposal and remains
+unimplemented under TASK-0066.
 
 ## Resulting specification truth
 
@@ -332,7 +334,7 @@ registration, and optimization questions remain separate.
 
 ## Required evidence
 
-Retain all [M01–M14 cases](../design/macros/first-slice.md#required-acceptance-evidence)
+Retain all [M01–M14 cases](../tasks/TASK-0066-expression-macros.md#acceptance-evidence)
 through implementation and one product checkpoint. They cover positive and
 negative parsing/grouping, real checked-Ash execution, term and non-term
 hygiene, copied declaration occurrences, deliberate capture, private authority,
@@ -348,11 +350,12 @@ bindings and diagnostic variants. Compile supported generated output through
 the build/image consumer as well as the interpreter. Observe that returned
 output survives host-root teardown and that failed expansion publishes nothing.
 
-The [prospective delivery plan](../design/macros/first-slice.md#prospective-delivery-plan)
+The [task-owned execution plan](../plans/2026-11-05-expression-macros.md)
 records producer/consumer agreements, D0–D4 dependencies, integration ownership,
 focused verification, full-gate checkpoints, and the whole-chain estimate.
-One owning task must retain that plan and evidence matrix;
-component work does not close production acceptance. An independent reviewer
+[TASK-0066](../tasks/TASK-0066-expression-macros.md) retains that plan and
+evidence matrix; component work does not close production acceptance. An
+independent reviewer
 must challenge the boundary map and review the retained end-to-end result.
 
 Update implementation, positive/negative tests, specification, tool docs,
