@@ -177,11 +177,18 @@ impl SyntaxContexts {
     }
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum SyntaxNameNamespace {
+    Term,
+    Type,
+    Effect,
+}
+
 /// A literal name and the checked syntax selection that introduced it.
 pub(crate) struct SyntaxNameUse {
     pub(crate) name: SurfaceName,
     pub(crate) qualifier: Option<SurfaceName>,
-    pub(crate) type_reference: bool,
+    pub(crate) namespace: SyntaxNameNamespace,
     pub(crate) owner: usize,
     pub(crate) declaration: Span,
     pub(crate) import_span: Span,
@@ -423,6 +430,7 @@ pub(crate) fn validate_template(
     declaration: &SurfaceSyntaxDeclaration,
     qualified_name: &dyn Fn(&SurfaceQualifiedName) -> bool,
     owner_type: &dyn Fn(&SurfaceName) -> bool,
+    owner_effect: &dyn Fn(&SurfaceReference, &[SurfaceType], &SurfaceName) -> bool,
 ) -> Result<(), Span> {
     fn check_annotation(
         annotation: &SurfaceType,
@@ -504,6 +512,7 @@ pub(crate) fn validate_template(
         matcher: &[SurfaceSyntaxMatcherPart],
         qualified_name: &dyn Fn(&SurfaceQualifiedName) -> bool,
         owner_type: &dyn Fn(&SurfaceName) -> bool,
+        owner_effect: &dyn Fn(&SurfaceReference, &[SurfaceType], &SurfaceName) -> bool,
     ) -> Result<(), Span> {
         for declaration in &block.declarations {
             match declaration {
@@ -512,7 +521,13 @@ pub(crate) fn validate_template(
                     if let Some(annotation) = &binding.annotation {
                         check_annotation(annotation, owner_type)?;
                     }
-                    check(&binding.initializer, matcher, qualified_name, owner_type)?;
+                    check(
+                        &binding.initializer,
+                        matcher,
+                        qualified_name,
+                        owner_type,
+                        owner_effect,
+                    )?;
                 }
                 SurfaceLocalDeclaration::Recursive(group) => {
                     for member in &group.members {
@@ -526,7 +541,13 @@ pub(crate) fn validate_template(
                             return Err(member.binder.name.span);
                         }
                         check_annotation(&member.annotation, owner_type)?;
-                        check(&member.initializer, matcher, qualified_name, owner_type)?;
+                        check(
+                            &member.initializer,
+                            matcher,
+                            qualified_name,
+                            owner_type,
+                            owner_effect,
+                        )?;
                     }
                 }
                 SurfaceLocalDeclaration::Newtype(declaration) => {
@@ -542,19 +563,26 @@ pub(crate) fn validate_template(
                 _ => return Err(block.span),
             }
         }
-        check(&block.result, matcher, qualified_name, owner_type)
+        check(
+            &block.result,
+            matcher,
+            qualified_name,
+            owner_type,
+            owner_effect,
+        )
     }
     fn check(
         expression: &SurfaceExpr,
         matcher: &[SurfaceSyntaxMatcherPart],
         qualified_name: &dyn Fn(&SurfaceQualifiedName) -> bool,
         owner_type: &dyn Fn(&SurfaceName) -> bool,
+        owner_effect: &dyn Fn(&SurfaceReference, &[SurfaceType], &SurfaceName) -> bool,
     ) -> Result<(), Span> {
         match &expression.kind {
             SurfaceExprKind::SyntaxInvocation { captures, .. } => {
                 for capture in captures {
                     if let SurfaceSyntaxCapture::Expression(expression) = capture {
-                        check(&expression.expression, matcher, qualified_name, owner_type)?;
+                        check(&expression.expression, matcher, qualified_name, owner_type, owner_effect)?;
                     }
                 }
                 Ok(())
@@ -571,30 +599,49 @@ pub(crate) fn validate_template(
             SurfaceExprKind::Name(SurfaceReference::Qualified(name))
                 if qualified_name(name) => Ok(()),
             SurfaceExprKind::Tuple(elements) => {
-                for element in elements { check(element, matcher, qualified_name, owner_type)?; }
+                for element in elements { check(element, matcher, qualified_name, owner_type, owner_effect)?; }
                 Ok(())
             }
             SurfaceExprKind::Apply(application) => {
-                check(&application.function, matcher, qualified_name, owner_type)?;
-                check(&application.argument, matcher, qualified_name, owner_type)
+                check(&application.function, matcher, qualified_name, owner_type, owner_effect)?;
+                check(&application.argument, matcher, qualified_name, owner_type, owner_effect)
             }
-            SurfaceExprKind::Resume(value) => check(value, matcher, qualified_name, owner_type),
+            SurfaceExprKind::Perform(request)
+                if owner_effect(&request.effect, &request.arguments, &request.operation) =>
+            {
+                check(&request.operand, matcher, qualified_name, owner_type, owner_effect)
+            }
+            SurfaceExprKind::Handle(handler)
+                if handler.store.is_none()
+                    && !handler.clauses.is_empty()
+                    && handler.clauses.iter().all(|clause| {
+                        owner_effect(&handler.effect.effect, &handler.effect.arguments, &clause.operation)
+                    }) =>
+            {
+                check(&handler.body, matcher, qualified_name, owner_type, owner_effect)?;
+                for clause in &handler.clauses {
+                    check_pattern(&clause.pattern, matcher, qualified_name)?;
+                    check(&clause.body, matcher, qualified_name, owner_type, owner_effect)?;
+                }
+                Ok(())
+            }
+            SurfaceExprKind::Resume(value) => check(value, matcher, qualified_name, owner_type, owner_effect),
             SurfaceExprKind::Multiply(binary)
             | SurfaceExprKind::Add(binary)
             | SurfaceExprKind::Equal(binary) => {
-                check(&binary.left, matcher, qualified_name, owner_type)?;
-                check(&binary.right, matcher, qualified_name, owner_type)
+                check(&binary.left, matcher, qualified_name, owner_type, owner_effect)?;
+                check(&binary.right, matcher, qualified_name, owner_type, owner_effect)
             }
-            SurfaceExprKind::Block(block) => check_block(block, matcher, qualified_name, owner_type),
+            SurfaceExprKind::Block(block) => check_block(block, matcher, qualified_name, owner_type, owner_effect),
             SurfaceExprKind::Function(function) => {
                 check_pattern(&function.parameter, matcher, qualified_name)?;
-                check_block(&function.body, matcher, qualified_name, owner_type)
+                check_block(&function.body, matcher, qualified_name, owner_type, owner_effect)
             }
             SurfaceExprKind::Match(matching) => {
-                check(&matching.scrutinee, matcher, qualified_name, owner_type)?;
+                check(&matching.scrutinee, matcher, qualified_name, owner_type, owner_effect)?;
                 for arm in &matching.arms {
                     check_pattern(&arm.pattern, matcher, qualified_name)?;
-                    check(&arm.body, matcher, qualified_name, owner_type)?;
+                    check(&arm.body, matcher, qualified_name, owner_type, owner_effect)?;
                 }
                 Ok(())
             }
@@ -602,9 +649,13 @@ pub(crate) fn validate_template(
         }
     }
     match &declaration.implementation {
-        SurfaceSyntaxImplementation::Template(template) => {
-            check(template, &declaration.matcher, qualified_name, owner_type)
-        }
+        SurfaceSyntaxImplementation::Template(template) => check(
+            template,
+            &declaration.matcher,
+            qualified_name,
+            owner_type,
+            owner_effect,
+        ),
         SurfaceSyntaxImplementation::Transformer(_) => Ok(()),
     }
 }
@@ -1016,6 +1067,54 @@ fn substitute(
                 substitute(&mut arm.body, matcher, captures, introduction, invocation)?;
             }
         }
+        SurfaceExprKind::Perform(request) => {
+            let SurfaceReference::Unqualified(effect) = &mut request.effect else {
+                return Err(expression.span);
+            };
+            if introduction != 0 {
+                effect.introduction = introduction;
+                effect.introduced_at = Some(invocation);
+            }
+            substitute(
+                &mut request.operand,
+                matcher,
+                captures,
+                introduction,
+                invocation,
+            )?;
+        }
+        SurfaceExprKind::Handle(handler) => {
+            let SurfaceReference::Unqualified(effect) = &mut handler.effect.effect else {
+                return Err(expression.span);
+            };
+            if introduction != 0 {
+                effect.introduction = introduction;
+                effect.introduced_at = Some(invocation);
+            }
+            substitute(
+                &mut handler.body,
+                matcher,
+                captures,
+                introduction,
+                invocation,
+            )?;
+            for clause in &mut handler.clauses {
+                substitute_pattern(
+                    &mut clause.pattern,
+                    matcher,
+                    captures,
+                    introduction,
+                    invocation,
+                )?;
+                substitute(
+                    &mut clause.body,
+                    matcher,
+                    captures,
+                    introduction,
+                    invocation,
+                )?;
+            }
+        }
         SurfaceExprKind::Resume(value) => {
             substitute(value, matcher, captures, introduction, invocation)?;
         }
@@ -1066,6 +1165,7 @@ pub(crate) fn expand_module(
         names: Vec::new(),
         qualified_names: Vec::new(),
         type_names: Vec::new(),
+        effect_names: Vec::new(),
     };
     for definition in &mut module.definitions {
         match &mut definition.kind {
@@ -1106,7 +1206,7 @@ pub(crate) fn expand_module(
             uses.push(SyntaxNameUse {
                 name,
                 qualifier: None,
-                type_reference: false,
+                namespace: SyntaxNameNamespace::Term,
                 owner: owner_index,
                 declaration: owner.declaration,
                 import_span: owner.import_span,
@@ -1122,7 +1222,7 @@ pub(crate) fn expand_module(
             uses.push(SyntaxNameUse {
                 name: name.member,
                 qualifier: Some(name.qualifier),
-                type_reference: false,
+                namespace: SyntaxNameNamespace::Term,
                 owner: owner_index,
                 declaration: owner.declaration,
                 import_span: owner.import_span,
@@ -1138,7 +1238,23 @@ pub(crate) fn expand_module(
             uses.push(SyntaxNameUse {
                 name,
                 qualifier: None,
-                type_reference: true,
+                namespace: SyntaxNameNamespace::Type,
+                owner: owner_index,
+                declaration: owner.declaration,
+                import_span: owner.import_span,
+            });
+        }
+    }
+    for name in next_introduction.effect_names {
+        let owner = next_introduction
+            .owners
+            .get(name.introduction - 1)
+            .ok_or(name.span)?;
+        if let Some(owner_index) = owner.owner {
+            uses.push(SyntaxNameUse {
+                name,
+                qualifier: None,
+                namespace: SyntaxNameNamespace::Effect,
                 owner: owner_index,
                 declaration: owner.declaration,
                 import_span: owner.import_span,
@@ -1162,6 +1278,7 @@ struct ExpansionContexts<'a> {
     names: Vec<SurfaceName>,
     qualified_names: Vec<SurfaceQualifiedName>,
     type_names: Vec<SurfaceName>,
+    effect_names: Vec<SurfaceName>,
 }
 
 struct SyntaxOwner {
@@ -1363,14 +1480,29 @@ fn expand_expression(
             }
         }
         SurfaceExprKind::Perform(perform) => {
+            if let SurfaceReference::Unqualified(name) = &perform.effect
+                && name.introduction != 0
+            {
+                next_introduction.effect_names.push(name.clone());
+            }
             expand_expression(&mut perform.operand, selected, next_introduction)?
         }
         SurfaceExprKind::Handle(handler) => {
+            if let SurfaceReference::Unqualified(name) = &handler.effect.effect
+                && name.introduction != 0
+            {
+                next_introduction.effect_names.push(name.clone());
+            }
             expand_expression(&mut handler.body, selected, next_introduction)?;
             if let Some(store) = &mut handler.store {
                 expand_expression(store, selected, next_introduction)?;
             }
             for clause in &mut handler.clauses {
+                collect_pattern_names(
+                    &clause.pattern,
+                    &mut next_introduction.names,
+                    &mut next_introduction.qualified_names,
+                );
                 expand_expression(&mut clause.body, selected, next_introduction)?;
             }
         }

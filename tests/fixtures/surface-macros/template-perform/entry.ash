@@ -1,0 +1,11 @@
+import forms as Forms
+import forms (syntax send)
+
+effect Ask {
+    ask : Int -> Int
+}
+
+main : Unit -> Int
+main () = handle (send 42) with Forms.Ask {
+    ask value => resume value
+}

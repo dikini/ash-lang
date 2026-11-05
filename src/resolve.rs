@@ -1646,6 +1646,16 @@ impl<'a> SyntaxOwnerLookup<'a> {
         })
     }
 
+    fn private_nominal(
+        self,
+        id: NominalTypeId,
+    ) -> Option<crate::resolved::ImportedNominalFactRef<'a>> {
+        if id.is_lexical() || id.module() != self.owner.module() {
+            return None;
+        }
+        self.owner.syntax_nominal_fact(id)
+    }
+
     fn nominal_summary(self, id: NominalTypeId) -> Option<&'a ExportSummary> {
         self.graph
             .iter()
@@ -2477,6 +2487,7 @@ struct Resolver {
     syntax_qualified_constructors: HashMap<(String, String, usize), ConstructorId>,
     syntax_constructors: HashMap<(String, usize), ConstructorId>,
     syntax_nominals: HashMap<(String, usize), NominalTypeId>,
+    syntax_effects: HashMap<(String, usize), EffectId>,
     globals: HashMap<String, GlobalFact>,
     type_names: HashMap<String, NominalTypeId>,
     interface_names: HashMap<String, InterfaceId>,
@@ -2904,6 +2915,7 @@ impl Resolver {
             syntax_qualified_constructors: HashMap::new(),
             syntax_constructors: HashMap::new(),
             syntax_nominals: HashMap::new(),
+            syntax_effects: HashMap::new(),
             globals: HashMap::new(),
             type_names: HashMap::new(),
             interface_names: HashMap::new(),
@@ -5651,7 +5663,7 @@ impl Resolver {
             {
                 return Err(invalid());
             }
-            if usage.type_reference {
+            if usage.namespace == crate::syntax::SyntaxNameNamespace::Type {
                 if usage.qualifier.is_some() {
                     return Err(invalid());
                 }
@@ -5670,6 +5682,34 @@ impl Resolver {
                 self.retain_scheme_nominal_fact(nominal, usage.import_span)?;
                 self.syntax_nominals
                     .insert((usage.name.text.clone(), usage.name.introduction), id);
+                continue;
+            }
+            if usage.namespace == crate::syntax::SyntaxNameNamespace::Effect {
+                if usage.qualifier.is_some() {
+                    return Err(invalid());
+                }
+                let effect = owner
+                    .effects()
+                    .iter()
+                    .find(|effect| {
+                        effect.id.module() == owner.module()
+                            && effect.parameters.is_empty()
+                            && effect.spelling == usage.name.text
+                    })
+                    .ok_or_else(invalid)?;
+                self.retain_imported_effect_from_owner(
+                    effect,
+                    owner.exports(),
+                    usage.import_span,
+                    Some(SyntaxOwnerLookup {
+                        owner,
+                        graph: syntax.owners,
+                    }),
+                )?;
+                self.syntax_effects.insert(
+                    (usage.name.text.clone(), usage.name.introduction),
+                    effect.id,
+                );
                 continue;
             }
             if let Some(qualifier) = &usage.qualifier {
@@ -6584,7 +6624,13 @@ impl Resolver {
                     .and_then(|owner| owner.nominal_summary(id))
                     .unwrap_or(summary)
             };
-            let exported = Self::scheme_nominal_fact(source, id, span)?;
+            let exported = if source.nominal_fact(id).is_none()
+                && let Some(private) = owner.and_then(|owner| owner.private_nominal(id))
+            {
+                private
+            } else {
+                Self::scheme_nominal_fact(source, id, span)?
+            };
             self.retain_scheme_nominal_fact(exported, span)?;
         }
         Ok(())
@@ -6955,7 +7001,14 @@ impl Resolver {
                         .and_then(|(_, lookup)| lookup.nominal_summary(*id))
                         .unwrap_or(summary)
                 };
-                Self::scheme_nominal_fact(source, *id, span)?
+                if source.nominal_fact(*id).is_none()
+                    && let Some(private) =
+                        syntax.and_then(|(_, lookup)| lookup.private_nominal(*id))
+                {
+                    private
+                } else {
+                    Self::scheme_nominal_fact(source, *id, span)?
+                }
             };
             if *id == owner.id {
                 owner_metadata_observed = true;
@@ -7475,6 +7528,23 @@ impl Resolver {
 
     fn effect_reference(&self, reference: &SurfaceReference) -> Result<EffectId, ResolveError> {
         let member = reference.member();
+        if member.introduction != 0 {
+            return if matches!(reference, SurfaceReference::Unqualified(_)) {
+                self.syntax_effects
+                    .get(&(member.text.clone(), member.introduction))
+                    .copied()
+            } else {
+                None
+            }
+            .ok_or_else(|| {
+                lookup_error(
+                    ResolveContext::Effect,
+                    member.span,
+                    &member.text,
+                    "this effect is not declared in the syntax context",
+                )
+            });
+        }
         if let Some(namespace) = self.imported_namespace(reference)? {
             if let Some(id) = namespace.effects.get(&member.text).copied() {
                 return Ok(id);

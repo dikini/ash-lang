@@ -193,6 +193,62 @@ fn template_continuations_use_the_actual_handler_capability() {
 }
 
 #[test]
+fn template_perform_uses_the_defining_effect_not_the_callers_shadow() {
+    for path in [
+        "template-perform/entry.ash",
+        "template-perform/private.ash",
+        "template-perform/private_signature.ash",
+        "template-perform/private_nested_signature.ash",
+        "template-perform/outer_resume.ash",
+        "template-perform/captured_resume.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    for (path, expected) in [
+        (
+            "template-perform/wrong_handler.ash",
+            "effect.handler-missing-input",
+        ),
+        ("template-perform/caller_private.ash", "effect.unknown"),
+        ("template-perform/private_caller.ash", "effect.unknown"),
+        (
+            "template-perform/private_signature_type.ash",
+            "resolve.unknown-type",
+        ),
+        (
+            "template-perform/private_signature_constructor.ash",
+            "resolve.unknown-constructor",
+        ),
+        (
+            "template-perform/private_nested_signature_type.ash",
+            "resolve.unknown-type",
+        ),
+        (
+            "template-perform/private_nested_signature_constructor.ash",
+            "resolve.unknown-constructor",
+        ),
+        (
+            "template-perform/private_nested_signature_hidden.ash",
+            "resolve.unknown-constructor",
+        ),
+        (
+            "template-perform/private_nested.ash",
+            "effect.resume-capture",
+        ),
+        ("template-perform/incomplete.ash", "effect.handler-coverage"),
+        ("template-perform/duplicate.ash", "effect.handler-coverage"),
+        (
+            "template-perform/unknown/entry.ash",
+            "resolve.internal-state",
+        ),
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), expected, "{path}: {failure:?}");
+    }
+}
+
+#[test]
 fn expanded_effects_and_resource_scopes_follow_ordinary_rules() {
     for (path, expected) in [
         ("template-effects/entry.ash", "42"),

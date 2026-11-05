@@ -1560,12 +1560,34 @@ where
                         .iter()
                         .any(|declaration| declaration.name.text == name.text)
                 };
-                crate::syntax::validate_template(declaration, &qualified_name, &owner_type)
-                    .map_err(|span| {
-                        FileFailure::from(PipelineFailure::Resolution(
-                            crate::resolve::unsupported_syntax_template(span),
-                        ))
-                    })?;
+                let owner_effect =
+                    |reference: &crate::surface::SurfaceReference,
+                     arguments: &[crate::surface::SurfaceType],
+                     operation: &crate::surface::SurfaceName| {
+                        let crate::surface::SurfaceReference::Unqualified(name) = reference else {
+                            return false;
+                        };
+                        arguments.is_empty()
+                            && module.surface().effects.iter().any(|effect| {
+                                effect.name.text == name.text
+                                    && effect.parameters.is_empty()
+                                    && effect
+                                        .operations
+                                        .iter()
+                                        .any(|candidate| candidate.name.text == operation.text)
+                            })
+                    };
+                crate::syntax::validate_template(
+                    declaration,
+                    &qualified_name,
+                    &owner_type,
+                    &owner_effect,
+                )
+                .map_err(|span| {
+                    FileFailure::from(PipelineFailure::Resolution(
+                        crate::resolve::unsupported_syntax_template(span),
+                    ))
+                })?;
             }
             let mut expanded = if selected.is_empty() {
                 None
