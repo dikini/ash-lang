@@ -763,6 +763,8 @@ pub enum ResolveReason {
     SealedNetwork,
     /// Resource acquisition requires a direct compiler-owned cell dependency.
     ResourceBuiltinRequired,
+    /// A syntax declaration does not name an admitted local transformer.
+    InvalidSyntaxTransformer,
     /// An occurrence has no binding in lexical scope.
     UnknownName,
     /// The equation head repeats a different name from its interface.
@@ -831,6 +833,7 @@ impl fmt::Display for ResolveReason {
             Self::SealedDrive => "resolve.sealed-drive",
             Self::SealedNetwork => "resolve.sealed-network",
             Self::ResourceBuiltinRequired => "resolve.resource-builtin-required",
+            Self::InvalidSyntaxTransformer => "syntax.invalid-transformer",
             Self::UnknownName => "resolve.unknown-name",
             Self::EquationNameMismatch => "resolve.equation-name-mismatch",
             Self::DuplicateGlobal => "resolve.duplicate-global",
@@ -1097,6 +1100,9 @@ impl ResolveError {
             ResolveReason::EffectOperationShape => {
                 return Some((self.message()?, "effect_operation_signature"));
             }
+            ResolveReason::InvalidSyntaxTransformer => {
+                return Some((self.message()?, "syntax_transformer"));
+            }
             ResolveReason::SealedProvider => {
                 return Some((self.message()?, "sealed_provider_declaration"));
             }
@@ -1339,6 +1345,9 @@ impl ResolveError {
             }
             ResolveReason::EffectOperationShape => {
                 return Some(crate::message::Message::resolve_operation_shape());
+            }
+            ResolveReason::InvalidSyntaxTransformer => {
+                return Some(crate::message::Message::syntax_invalid_transformer());
             }
             ResolveReason::SealedProvider => {
                 return Some(crate::message::Message::resolve_sealed_provider());
@@ -14063,6 +14072,14 @@ pub(crate) fn unavailable_syntax_export(name: &SurfaceName) -> ResolveError {
         name.span,
         &name.text,
         "this syntax declaration is not exported by the selected module",
+    )
+}
+
+pub(crate) fn invalid_syntax_transformer(span: Span) -> ResolveError {
+    error(
+        ResolveReason::InvalidSyntaxTransformer,
+        span,
+        "the syntax transformer must be a local monomorphic Input -> MacroResult function with only permitted effects",
     )
 }
 

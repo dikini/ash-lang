@@ -1373,6 +1373,7 @@ messages! {
     /// Retain cannot reach through an intervening clause to an older root.
     resolve_retain_outside_root => "resolve-retain-outside-root" {},
     /// An interface occupies a value-type position.
+    syntax_invalid_transformer => "syntax-invalid-transformer" {},
     resolve_type_kind => "resolve-type-kind" { name: &'a str = "Marker" },
     /// An interface position contains a known non-interface name.
     resolve_interface_kind => "resolve-interface-kind" { name: &'a str = "Thing" },

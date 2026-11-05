@@ -122,10 +122,13 @@ findings here before adding mechanisms.
 ## Progress
 
 The agreed reviewed baseline is **20/100 delivery points, about 20%**, through
-`26b43869`. A separate 7.5 provisional points records unreviewed canonical-module,
+`26b43869`. A separate 8 provisional points records unreviewed canonical-module,
 entry, transformer execution, partial Ops and output admission, and the frozen
 combined graph. Do not include these silently in the reviewed score. Observed
-root-close evidence and all M01–M14 acceptance criteria remain pending.
+root-close evidence and all M01–M14 acceptance criteria remain pending. The
+partial review of `1dd2da54` requested repairs for template-introduced procedural
+invocation anchors (R8) and unchecked unused transformer targets (R9); the
+repairs remain provisional until re-review.
 
 ### Weighted delivery progress
 
@@ -158,7 +161,7 @@ reviewer owns `Rev`, and the orchestrator owns `PM`.
 | P12 | 3 | Dev / 0 | Ordinary method evidence (1), structural continuation capability (1), resource escape and effect count/order (1). |
 | P13 | 3 | Dev / 0 | Retained/constructed syntax contexts and leading-identifier caller context (2); remaining import/reservation/conflict cases (1), excluding P05 evidence. |
 | P14 | 3 | Dev / D0.5 | Canonical module load/check/link (0.5, reported `compiler_syntax_module_loads_through_the_driver`); API identity authentication (0.5); complete public vocabulary (1); spelling/version conformance (1). |
-| P15 | 2 | Dev / D1 | Exact checked transformer type admission (1), `/tmp/ash-transformer-entry-forwarder.log`; wrong type/row/polymorphism/constraint refusal (1) pending. |
+| P15 | 2 | Dev / D1.5 | Entry-time exact checked transformer type admission (1); definition-time missing, wrong-type and disallowed-effect refusals (0.5), `/tmp/ash-transformer-review-repair-regressions.log`; polymorphism and constraint refusals (0.5) pending. The repair awaits re-review. |
 | P16 | 3 | Dev / D2.5 | Mainless compile-time entry (1), independent entry validation (1), and real checked Ash body execution (0.5), `/tmp/ash-transformer-machine-step.log`; retained helper closure (0.5) pending. |
 | P17 | 2 | Dev / 0 | Authenticated invocation Input (1), unchanged validated-program reuse (0.5), changed-program revalidation (0.5). |
 | P18 | 2.5 | Dev / 0 | Input tree encoding (1), compilation-owned handle registry/borrows (0.5), input round trip and stale/foreign/forged refusal (1). No credit for types alone. |
@@ -190,7 +193,7 @@ API/entry 10; Ops/interchange 14; transfer/failure/limits 8; graph/Core/repeatab
 The independent review assigns more weight to the unresolved contextual,
 non-term, copied-identity, grant, and Core-coordinate consumers than the first
 draft. The 20-point reviewed baseline is frozen; a changed ETA does not reweight it.
-Reviewed effort is 20, demonstrated provisional effort is 7.5, and 72.5 points
+Reviewed effort is 20, demonstrated provisional effort is 8, and 72 points
 have no credit. Review upgrades D to R without awarding implementation points
 again. Explicit review/gate rows cover their own work, not a second implementation
 credit. Record the exact commit or source hash, real consumer observation/test

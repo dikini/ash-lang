@@ -44,3 +44,47 @@ fn compiler_syntax_module_loads_through_the_driver() {
     let compiled = compile_path(configuration).expect("compiler syntax module loads and checks");
     assert_eq!(execute(&compiled).unwrap().value_display(), "42");
 }
+
+fn macro_fixture(name: &str) -> RunConfiguration {
+    RunConfiguration {
+        entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/surface-macros")
+            .join(name),
+        roots: ModuleRoots::empty(),
+    }
+}
+
+#[test]
+fn template_can_invoke_an_imported_transformer_from_another_source() {
+    let compiled = compile_path(macro_fixture("entry_procedural_wrapper.ash"))
+        .expect("template-invoked transformer compiles");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn unused_transformer_rejects_a_missing_local_target() {
+    let failure = compile_path(macro_fixture("invalid_transformer_missing.ash")).unwrap_err();
+    assert!(failure.is_source_rejection(), "{failure:?}");
+    assert_eq!(failure.reason_code(), "syntax.invalid-transformer");
+}
+
+#[test]
+fn unused_transformer_rejects_a_wrong_type() {
+    let failure = compile_path(macro_fixture("invalid_transformer_type.ash")).unwrap_err();
+    assert!(failure.is_source_rejection(), "{failure:?}");
+    assert_eq!(failure.reason_code(), "syntax.invalid-transformer");
+}
+
+#[test]
+fn unused_private_transformer_is_checked_without_being_run() {
+    let compiled = compile_path(macro_fixture("unused_private_transformer.ash"))
+        .expect("an unused valid private transformer is admitted without running it");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn unused_transformer_rejects_other_effects() {
+    let failure = compile_path(macro_fixture("invalid_transformer_effect.ash")).unwrap_err();
+    assert!(failure.is_source_rejection(), "{failure:?}");
+    assert_eq!(failure.reason_code(), "syntax.invalid-transformer");
+}

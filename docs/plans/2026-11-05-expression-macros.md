@@ -862,7 +862,7 @@ sets fixed effort-weighted delivery credits, with an agreed 20-point reviewed
 baseline supported by retained results and their review. That is a delivery
 estimate, not a measured fraction of model effort; it is not derived from the
 forecast and does not move when the ETA changes. The observed session pace is a
-calibration check only. The separate 7.5 provisional credits record the unreviewed canonical module,
+calibration check only. The separate 8 provisional credits record the unreviewed canonical module,
 checked entry, partial host/output and frozen combined graph; they do not claim
 a complete procedural host or borrowed-owner acceptance. The ledger changes no M01–M14 acceptance requirement. Its remaining
 weights favor unresolved contexts/grants and consumers; implementations and their

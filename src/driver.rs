@@ -1537,6 +1537,16 @@ where
                     .incomplete(),
             )
         })?;
+        crate::syntax::validate_transformers(
+            &checked_module,
+            &checked,
+            &module.surface().syntax_declarations,
+        )
+        .map_err(|span| {
+            FileFailure::from(PipelineFailure::Resolution(
+                crate::resolve::invalid_syntax_transformer(span),
+            ))
+        })?;
         let syntax_terms = if module.surface().syntax_declarations.is_empty() {
             crate::syntax::SyntaxOwnerBindings::empty(checked_module.module())
         } else {

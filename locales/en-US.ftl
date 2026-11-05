@@ -270,6 +270,7 @@ resolve-sealed-network = Network service effects can be named in effect rows but
 resolve-builtin-required = This resource acquisition requires a direct import of `{ $builtin }`.
 resolve-continuation-outside = `{ $operation }` is only available inside an effect operation clause.
 resolve-retain-outside-root = `retain` is only available in the nearest clause of a private checkpoint root.
+syntax-invalid-transformer = The syntax transformer must be a local monomorphic Input -> MacroResult function with only permitted effects.
 resolve-type-kind = The interface `{ $name }` cannot be used as a value type.
 resolve-interface-kind = The name `{ $name }` does not refer to an interface.
 resolve-effect-kind = The name `{ $name }` does not refer to an effect.

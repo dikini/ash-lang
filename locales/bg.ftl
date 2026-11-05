@@ -271,6 +271,7 @@ resolve-sealed-network = Мрежовите ефекти могат да се п
 resolve-builtin-required = Това придобиване на ресурс изисква пряк импорт на `{ $builtin }`.
 resolve-continuation-outside = `{ $operation }` е достъпно само в клауза за операция на ефект.
 resolve-retain-outside-root = `retain` е достъпно само в най-близката клауза на частен корен на контролна точка.
+syntax-invalid-transformer = Преобразувателят на синтаксис трябва да е локална мономорфна функция Input -> MacroResult само с допустими ефекти.
 resolve-type-kind = Интерфейсът `{ $name }` не може да се използва като тип на стойност.
 resolve-interface-kind = Името `{ $name }` не обозначава интерфейс.
 resolve-effect-kind = Името `{ $name }` не обозначава ефект.

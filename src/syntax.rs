@@ -126,6 +126,82 @@ impl Drop for SyntaxOwnerBindings {
     }
 }
 
+/// Admit each procedural target from the completed defining module without
+/// linking or executing the transformer.
+pub(crate) fn validate_transformers(
+    owner: &CheckedModule,
+    checked: &[Arc<CheckedModule>],
+    declarations: &[SurfaceSyntaxDeclaration],
+) -> Result<(), Span> {
+    for declaration in declarations {
+        let SurfaceSyntaxImplementation::Transformer(name) = &declaration.implementation else {
+            continue;
+        };
+        let scheme = owner
+            .schemes()
+            .iter()
+            .find(|scheme| scheme.spelling == name.text)
+            .ok_or(name.span)?;
+        let syntax = checked
+            .iter()
+            .find(|module| module.module().is_builtin_compiler_syntax())
+            .ok_or(name.span)?;
+        let registry = syntax.registry();
+        let input = registry
+            .nominals()
+            .iter()
+            .find(|nominal| nominal.id.module() == syntax.module() && nominal.spelling == "Input")
+            .ok_or(name.span)?
+            .id;
+        let output = registry
+            .nominals()
+            .iter()
+            .find(|nominal| {
+                nominal.id.module() == syntax.module() && nominal.spelling == "MacroResult"
+            })
+            .ok_or(name.span)?
+            .id;
+        let ops = registry
+            .effects()
+            .iter()
+            .find(|effect| effect.id.module() == syntax.module() && effect.spelling == "Ops")
+            .ok_or(name.span)?
+            .id;
+        if scheme.binder.module() != Some(owner.module())
+            || !scheme.scheme.type_parameters.is_empty()
+            || !scheme.scheme.requirements.is_empty()
+        {
+            return Err(name.span);
+        }
+        let (domain, result, row) = match &scheme.scheme.value_type {
+            crate::types::Type::Function(domain, result) => {
+                (domain.as_ref(), result.as_ref(), None)
+            }
+            crate::types::Type::EffectfulFunction(domain, result) => {
+                (domain.as_ref(), result.value(), Some(result.effects()))
+            }
+            _ => return Err(name.span),
+        };
+        if domain != &crate::types::Type::Nominal(input)
+            || result != &crate::types::Type::Nominal(output)
+            || row.is_some_and(|row| {
+                row.tail().is_some()
+                    || row.known().iter().any(|instance| {
+                        !instance.arguments().is_empty()
+                            || (instance.effect() != ops
+                                && !crate::resolved::RegionApi::for_module(
+                                    instance.effect().module(),
+                                )
+                                .is_some_and(|api| api.default_alloc() == instance.effect()))
+                    })
+            })
+        {
+            return Err(name.span);
+        }
+    }
+    Ok(())
+}
+
 /// Reject forms that still need definition-site binding and authority.
 pub(crate) fn validate_template(declaration: &SurfaceSyntaxDeclaration) -> Result<(), Span> {
     fn check_annotation(annotation: &SurfaceType) -> Result<(), Span> {
@@ -618,7 +694,7 @@ fn expand_expression(
                 SurfaceSyntaxImplementation::Template(template) => template,
                 SurfaceSyntaxImplementation::Transformer(_) => {
                     let replacement =
-                        (next_introduction.transformer)(&declaration, captures, invocation)?;
+                        (next_introduction.transformer)(&declaration, captures, expansion_anchor)?;
                     *expression = replacement;
                     return expand_expression(expression, selected, next_introduction);
                 }
