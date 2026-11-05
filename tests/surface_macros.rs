@@ -63,6 +63,34 @@ fn template_recursive_members_share_scope_without_capturing_the_caller() {
 }
 
 #[test]
+fn captured_recursive_binder_scopes_over_its_initializer_and_body() {
+    let compiled = compile_path(fixture("template-recursive/captured.ash"))
+        .expect("the captured binder is recursive and does not escape its scope");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn same_spelled_recursive_binders_keep_distinct_contexts() {
+    let compiled = compile_path(fixture("template-recursive/mixed.ash"))
+        .expect("introduced and captured recursive names remain distinct");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn recursive_binder_splice_requires_an_identifier_capture() {
+    let failure = compile_path(fixture("template-recursive/invalid.ash")).unwrap_err();
+    assert!(failure.graph_failure().is_none(), "{failure:?}");
+    assert_eq!(failure.reason_code(), "resolve.internal-state");
+}
+
+#[test]
+fn sequential_captured_binders_enter_scope_only_after_their_initializer() {
+    let compiled = compile_path(fixture("template-sequential/entry.ash"))
+        .expect("captured binders respect sequential initializer scope");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
 fn renamed_template_macro_uses_the_selected_export() {
     let compiled = compile_path(fixture("template-only/renamed.ash"))
         .expect("the renamed syntax graph compiles");

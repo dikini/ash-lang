@@ -710,6 +710,8 @@ pub struct SurfaceRecursiveMember {
     pub introducer_span: Span,
     /// The introduced binder.
     pub binder: SurfaceBinder,
+    /// Whether the binder is an identifier-capture splice.
+    pub(crate) binder_splice: bool,
     /// The required declared monotype.
     pub annotation: SurfaceType,
     /// The initializer expression.

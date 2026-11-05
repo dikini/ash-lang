@@ -100,15 +100,20 @@ fn parse_tree(text: &str) -> (SourceFile, ash::parser::ConcreteTree) {
 
 #[test]
 fn out_of_place_dollar_is_a_parser_error() {
-    let (source, tree) = parse_tree("$value");
-    assert!(tree.lexical_diagnostics().is_empty());
-    assert!(tree.parse_diagnostics().iter().any(|diagnostic| {
-        diagnostic.found_token() == Some(ash::parser::FoundToken::Spelling("$"))
-    }));
-    assert_eq!(
-        project(&source, &tree),
-        Err(ProjectionError::RecoveryNodesPresent)
-    );
+    for expression in [
+        "$value",
+        "{\nlet rec $name : Int -> Int = fn(value) {\nvalue\n}\n42\n}",
+    ] {
+        let (source, tree) = parse_tree(expression);
+        assert!(tree.lexical_diagnostics().is_empty());
+        assert!(tree.parse_diagnostics().iter().any(|diagnostic| {
+            diagnostic.found_token() == Some(ash::parser::FoundToken::Spelling("$"))
+        }));
+        assert_eq!(
+            project(&source, &tree),
+            Err(ProjectionError::RecoveryNodesPresent)
+        );
+    }
 }
 
 fn assert_name(expression: &SurfaceExpr, expected: &str) {

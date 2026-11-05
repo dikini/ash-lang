@@ -419,6 +419,15 @@ pub(crate) fn validate_template(declaration: &SurfaceSyntaxDeclaration) -> Resul
                 }
                 SurfaceLocalDeclaration::Recursive(group) => {
                     for member in &group.members {
+                        if member.binder_splice
+                            && !matcher.iter().any(|part| {
+                                matches!(part, SurfaceSyntaxMatcherPart::Capture {
+                                    name, kind: SurfaceSyntaxCaptureKind::Identifier,
+                                } if name.text == member.binder.name.text)
+                            })
+                        {
+                            return Err(member.binder.name.span);
+                        }
                         check_annotation(&member.annotation)?;
                         check(&member.initializer, matcher)?;
                     }
@@ -497,6 +506,29 @@ fn capture_by_name<'a>(
     captures.get(index).ok_or(name.span)
 }
 
+fn captured_binder(
+    name: &SurfaceName,
+    matcher: &[SurfaceSyntaxMatcherPart],
+    captures: &[SurfaceSyntaxCapture],
+) -> Result<SurfaceBinder, Span> {
+    let SurfaceSyntaxCapture::Identifier(capture) = capture_by_name(name, matcher, captures)?
+    else {
+        return Err(name.span);
+    };
+    if !capture
+        .text
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| byte.is_ascii_lowercase() || *byte == b'_')
+    {
+        return Err(capture.span);
+    }
+    Ok(SurfaceBinder {
+        name: capture.clone(),
+        span: capture.span,
+    })
+}
+
 fn substitute_pattern(
     pattern: &mut SurfacePattern,
     matcher: &[SurfaceSyntaxMatcherPart],
@@ -506,25 +538,10 @@ fn substitute_pattern(
 ) -> Result<(), Span> {
     match &mut pattern.kind {
         SurfacePatternKind::TemplateSplice(name) => {
-            let SurfaceSyntaxCapture::Identifier(capture) =
-                capture_by_name(name, matcher, captures)?
-            else {
-                return Err(name.span);
-            };
-            if !capture
-                .text
-                .as_bytes()
-                .first()
-                .is_some_and(|byte| byte.is_ascii_lowercase() || *byte == b'_')
-            {
-                return Err(capture.span);
-            }
+            let binder = captured_binder(name, matcher, captures)?;
             *pattern = SurfacePattern {
-                kind: SurfacePatternKind::Binder(SurfaceBinder {
-                    name: capture.clone(),
-                    span: capture.span,
-                }),
-                span: capture.span,
+                span: binder.span,
+                kind: SurfacePatternKind::Binder(binder),
             };
         }
         SurfacePatternKind::Binder(binder) => {
@@ -677,7 +694,10 @@ fn substitute_block(
             }
             SurfaceLocalDeclaration::Recursive(group) => {
                 for member in &mut group.members {
-                    if introduction != 0 {
+                    if member.binder_splice {
+                        member.binder = captured_binder(&member.binder.name, matcher, captures)?;
+                        member.binder_splice = false;
+                    } else if introduction != 0 {
                         member.binder.name.introduction = introduction;
                         member.binder.name.introduced_at = Some(invocation);
                     }

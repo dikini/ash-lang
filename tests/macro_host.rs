@@ -186,6 +186,20 @@ fn transformer_constructs_a_function_with_a_captured_parameter() {
 }
 
 #[test]
+fn transformer_constructs_a_recursive_group_with_a_captured_binder() {
+    let compiled = compile_path(macro_fixture("entry_recursive_ops.ash"))
+        .expect("the transformer builds a recursive group using the captured binder");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn transformer_fresh_recursive_binder_does_not_capture_caller_body() {
+    let compiled = compile_path(macro_fixture("entry_recursive_fresh.ash"))
+        .expect("the fresh recursive binder preserves the captured caller context");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
 fn unwrapping_preserves_a_qualified_caller_reference() {
     let compiled = compile_path(macro_fixture("entry_unwrap_qualified.ash"))
         .expect("unwrapping retains the caller's imported module reference");

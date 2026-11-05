@@ -2101,7 +2101,8 @@ fn recursive_binding_group(parser: &mut Parser<'_>) {
 fn recursive_binding_member(parser: &mut Parser<'_>) {
     parser.start(NodeKind::RecursiveBindingMember);
     let recovery_start = parser.pending_recovery_count();
-    if !matches!(parser.current(), Some(TokenKind::Identifier(_))) {
+    let splice = parser.in_template && parser.at(&TokenKind::Dollar);
+    if !splice && !matches!(parser.current(), Some(TokenKind::Identifier(_))) {
         if let Some(primary) = parser.current_span()
             && let Some(diagnostic) = parser.report_at(
                 ParseReason::ExpectedRecursiveMember,
@@ -2116,7 +2117,14 @@ fn recursive_binding_member(parser: &mut Parser<'_>) {
         parser.finish();
         return;
     }
-    binder(parser);
+    if splice {
+        parser.start(NodeKind::Binder);
+        let _ = parser.bump();
+        expect_lower_identifier(parser);
+        parser.finish();
+    } else {
+        binder(parser);
+    }
     if parser.at(&TokenKind::Colon) {
         let _ = parser.bump();
         type_expression(parser);

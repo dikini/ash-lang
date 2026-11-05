@@ -1131,6 +1131,9 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
         }
         NodeKind::UnitPattern => shape.token(&TokenKind::RightParen)?,
         NodeKind::Binder => {
+            if shape.peek_token_is(&TokenKind::Dollar) {
+                shape.token(&TokenKind::Dollar)?;
+            }
             shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?
         }
         NodeKind::TypedBinder => {
@@ -2274,7 +2277,10 @@ pub(super) fn project_macro_expression(
                         && !(node.kind == NodeKind::QualifiedName
                             && parent == Some(NodeKind::PrimaryExpression))
                         && !(node.kind == NodeKind::Binder
-                            && parent == Some(NodeKind::Pattern)) =>
+                            && matches!(
+                                parent,
+                                Some(NodeKind::Pattern | NodeKind::RecursiveBindingMember)
+                            )) =>
                 {
                     return malformed(InternalReason::UnexpectedShape);
                 }
@@ -2360,7 +2366,7 @@ fn project_expression_with_fragments(
                     tasks.extend(expressions.into_iter().rev().map(ExpressionTask::Visit));
                 }
                 NodeKind::Block => {
-                    schedule_block(source, node, tokens, fragments, &mut tasks)?;
+                    schedule_block(source, node, tokens, fragments, original_nodes, &mut tasks)?;
                 }
                 NodeKind::FunctionExpression => {
                     let mut parameters = child_nodes(node)
@@ -3091,6 +3097,7 @@ fn project_expression_with_fragments(
                                 members.push(SurfaceRecursiveMember {
                                     introducer_span: member.introducer_span,
                                     binder: member.binder,
+                                    binder_splice: member.binder_splice,
                                     annotation: member.annotation,
                                     initializer,
                                     span: member.span,
@@ -3295,6 +3302,7 @@ struct PendingRecursiveGroup {
 struct PendingRecursiveMember {
     introducer_span: Span,
     binder: SurfaceBinder,
+    binder_splice: bool,
     annotation: SurfaceType,
     span: Span,
 }
@@ -3304,6 +3312,7 @@ fn schedule_block<'a>(
     node: &'a ConcreteNode,
     tokens: &[Token],
     fragments: &std::collections::HashMap<usize, SurfaceName>,
+    originals: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
     tasks: &mut Vec<ExpressionTask<'a>>,
 ) -> Result<(), ProjectionError> {
     require_kind(node, NodeKind::Block)?;
@@ -3351,11 +3360,17 @@ fn schedule_block<'a>(
                 if member.kind != NodeKind::RecursiveBindingMember {
                     return malformed(InternalReason::UnexpectedShape);
                 }
+                let (binder, binder_splice) = project_recursive_binder(
+                    only_child_of_kind(member, NodeKind::Binder)?,
+                    tokens,
+                    originals,
+                )?;
                 members.push(PendingRecursiveMember {
                     introducer_span: member_introducers.next().ok_or(
                         ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
                     )?,
-                    binder: project_binder(only_child_of_kind(member, NodeKind::Binder)?, tokens)?,
+                    binder,
+                    binder_splice,
                     annotation: project_type(
                         source,
                         only_child_of_kind(member, NodeKind::Type)?,
@@ -3573,6 +3588,47 @@ fn project_binder(node: &ConcreteNode, tokens: &[Token]) -> Result<SurfaceBinder
         name,
         span: token.span,
     })
+}
+
+fn project_recursive_binder(
+    node: &ConcreteNode,
+    tokens: &[Token],
+    originals: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
+) -> Result<(SurfaceBinder, bool), ProjectionError> {
+    if let Some(crate::syntax::MacroOutputNode::Identifier(name, _)) =
+        node.children.iter().find_map(|child| match child {
+            ConcreteElement::Token(index) => originals.get(index),
+            _ => None,
+        })
+    {
+        return Ok((
+            SurfaceBinder {
+                name: name.clone(),
+                span: name.span,
+            },
+            false,
+        ));
+    }
+    let mut direct = direct_tokens(node, tokens);
+    let Some(first) = direct.next() else {
+        return malformed(InternalReason::UnexpectedShape);
+    };
+    if !matches!(first.kind, TokenKind::Dollar) {
+        return project_binder(node, tokens).map(|binder| (binder, false));
+    }
+    let token = direct.next().ok_or(ProjectionError::MalformedTree(
+        InternalReason::UnexpectedShape,
+    ))?;
+    if direct.next().is_some() || !matches!(token.kind, TokenKind::Identifier(_)) {
+        return malformed(InternalReason::UnexpectedShape);
+    }
+    Ok((
+        SurfaceBinder {
+            name: surface_name(token)?,
+            span: token.span,
+        },
+        true,
+    ))
 }
 
 fn surface_name(token: &Token) -> Result<SurfaceName, ProjectionError> {
