@@ -145,20 +145,48 @@ pub(crate) fn build(
     events: Vec<Event>,
     resource_failure: Option<ResourceFailure>,
 ) -> ConcreteTree {
+    let (root, malformed) = build_root(tokens.len(), &events, false);
+    ConcreteTree {
+        root,
+        tokens,
+        events,
+        lexical_diagnostics,
+        parse_diagnostics,
+        malformed,
+        resource_failure,
+    }
+}
+
+pub(super) fn build_header(
+    token_count: usize,
+    events: &[Event],
+) -> Result<ConcreteNode, InternalReason> {
+    let (root, malformed) = build_root(token_count, events, true);
+    if let Some(reason) = malformed {
+        return Err(reason);
+    }
+    root.ok_or(InternalReason::InvalidRootCount)
+}
+
+fn build_root(
+    token_count: usize,
+    events: &[Event],
+    open_header: bool,
+) -> (Option<ConcreteNode>, Option<InternalReason>) {
     let mut stack: Vec<ConcreteNode> = Vec::new();
     let mut roots = Vec::new();
     let mut malformed = None;
-    let mut seen = vec![false; tokens.len()];
+    let mut seen = vec![false; token_count];
     let mut last_token_index = None;
 
-    for event in &events {
+    for event in events {
         match event {
             Event::Start(kind) => stack.push(ConcreteNode {
                 kind: *kind,
                 children: Vec::new(),
             }),
             Event::Token(index) => {
-                if *index >= tokens.len() {
+                if *index >= token_count {
                     malformed.get_or_insert(InternalReason::TokenOutOfRange);
                 } else if seen[*index] {
                     malformed.get_or_insert(InternalReason::DuplicateToken);
@@ -205,6 +233,13 @@ pub(crate) fn build(
         }
     }
 
+    if open_header {
+        if roots.is_empty() && stack.len() == 1 && stack[0].kind == NodeKind::Module {
+            roots.push(stack.pop().expect("one open module root"));
+        } else {
+            malformed.get_or_insert(InternalReason::UnexpectedShape);
+        }
+    }
     if !stack.is_empty() {
         malformed.get_or_insert(InternalReason::UnclosedNode);
     }
@@ -218,15 +253,7 @@ pub(crate) fn build(
         None
     };
 
-    ConcreteTree {
-        root,
-        tokens,
-        events,
-        lexical_diagnostics,
-        parse_diagnostics,
-        malformed,
-        resource_failure,
-    }
+    (root, malformed)
 }
 
 pub(crate) fn resource_limited(

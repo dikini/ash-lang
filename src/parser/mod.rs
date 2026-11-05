@@ -14,13 +14,15 @@ use std::ops::Deref;
 pub use crate::syntax_resource::{ResourceFailure, SYNTAX_WORK_LIMIT};
 pub use cst::{ConcreteElement, ConcreteNode, ConcreteTree, InternalReason};
 pub use event::Event;
+pub(crate) use project::project_module_header;
 pub(crate) use project::structural_weight as source_structural_weight;
 pub use project::{ProjectionError, project_module};
 
 use crate::{
     diagnostic::{Diagnostic, SourceLabel},
     lexer::{Lexed, TokenKind},
-    source::Span,
+    source::{SourceFile, Span},
+    surface::SurfaceImport,
     syntax_resource::SyntaxBudget,
 };
 
@@ -520,6 +522,26 @@ pub(crate) fn parse_with_budget(lexed: Lexed, syntax_budget: &mut SyntaxBudget) 
     );
     *syntax_budget = retained_budget;
     tree
+}
+
+pub(crate) fn parse_with_budget_and_header(
+    source: &SourceFile,
+    lexed: Lexed,
+    syntax_budget: &mut SyntaxBudget,
+) -> (ConcreteTree, Result<Vec<SurfaceImport>, ProjectionError>) {
+    let (tokens, lexical_diagnostics, _, lexical_failure) = lexed.into_parts();
+    if let Some(failure) = lexical_failure {
+        return (
+            cst::resource_limited(tokens, lexical_diagnostics, Vec::new(), failure),
+            Err(ProjectionError::ResourceLimit(failure)),
+        );
+    }
+    let (checkpoint, retained_budget) =
+        parse_module_header(tokens, lexical_diagnostics, syntax_budget.clone());
+    let imports = project_module_header(source, &checkpoint);
+    let (tree, retained_budget) = finish_module_from_checkpoint(checkpoint, retained_budget);
+    *syntax_budget = retained_budget;
+    (tree, imports)
 }
 
 fn parse_parts(

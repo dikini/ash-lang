@@ -121,10 +121,10 @@ findings here before adding mechanisms.
 
 ## Progress
 
-- Parser amendment, task and execution plan are recorded. D0 now has a
-  concrete producer/consumer proposal and a frozen fixture family; the
-  interfaces have not yet been implemented or compiled. No current
-  specification or runtime behavior has changed.
+- Parser amendment, task and execution plan are recorded. D0 has a concrete
+  producer/consumer proposal and a frozen fixture family. The checkpoint,
+  header projection and source census compile; other planned interfaces do not.
+  No current specification or macro behavior has changed.
 - The initial driver tests fail at unsupported targeted `syntax` imports, as
   expected. The independent handwritten graph executes to `Int` value `42`,
   and the proposed procedural transformer's ordinary Ash body parses and
@@ -134,15 +134,19 @@ findings here before adding mechanisms.
   syntax by each leading identifier's retained context; and independently
   validate a dedicated compile-time entry and authenticated input handoff.
   The plan now records those contracts and the source census and borrowed
-  checked-fragment ownership they require. The parser checkpoint and shared
-  canonical-source census compile and have focused checks. The staged loader,
-  syntax contexts, grants and validated macro host are not yet connected or
-  compiled; the reviewer's re-review remains pending. D1–D4 and every M01–M14 criterion
-  remain pending. No retained macro implementation or fresh full gate is
-  claimed.
-- Next actor: orchestrator sends the exact repair candidate to the same reviewer.
-  The developer resolves its findings and completes the remaining interfaces
-  before claiming the D0 gate or substantial feature work complete.
+  checked-fragment ownership they require. The parser checkpoint, projected
+  header and shared canonical-source census compile and have focused checks.
+  The existing loader consumes projected imports while still parsing complete
+  bodies. The staged loader, syntax contexts, grants and validated macro host
+  are not yet connected or compiled. D1–D4 and every M01–M14 criterion remain
+  pending. No retained macro implementation or fresh full gate is claimed.
+- Re-review found that retained contexts cannot borrow exports from a checked
+  module vector that continues to grow. The plan now uses compilation-owned,
+  append-only immutable context/export records addressed by authenticated stable
+  IDs; operation-local views may borrow them without outliving a lookup.
+- Next actor: developer verifies and pins this repair; the orchestrator sends
+  that exact candidate to the same reviewer. The remaining interfaces must be
+  completed before claiming the D0 gate or substantial feature work complete.
 
 ### D0 baseline receipt
 
@@ -185,6 +189,28 @@ findings here before adding mechanisms.
 - The two full macro graph tests still fail at unsupported targeted syntax
   imports; the handwritten execution and ordinary Ash transformer parser checks
   pass. The staged graph and macro behavior are not implemented.
+
+### D0 header-projection repair receipt
+
+- Reviewed candidate: `27d80b2859706cda1934dabf1ad305189fde7d31`.
+  The retaining commit pins this repair and its evidence. The revised 30–55
+  focused engineer-day estimate remains uncalibrated for the whole chain.
+- `cargo test -j 1 -p ash --lib parser::checkpoint_tests -- --nocapture`:
+  eight pass. They cover projection before an invalid body, import-form parity,
+  header and body lexical errors, foreign sources, recovery and malformed
+  events, and budget refusal. The actual loader parser adapter matches the
+  original parser's tree and paid work at low, exact and one-below limits.
+- `cargo test -j 1 -p ash --lib parser::cst::tests -- --nocapture`: four
+  pass, covering the shared complete-event builder and malformed trees.
+- `cargo test -j 1 -p ash --test parser --test modules_syntax --test
+  module_loading --test compiler_work_reporting --no-fail-fast`: parser 50,
+  module syntax 20, module loading 24 and work reporting 6 pass. The long
+  work-reporting case took 99.41 seconds. The loader budget comparison was
+  added to the test-only checkpoint module after this run; production source
+  did not change between these runs.
+- The frozen macro graph tests still fail at unsupported syntax imports; their
+  handwritten execution and ordinary transformer-parser controls pass. The
+  existing loader uses the projected header but does not yet stage the graph.
 
 ## Verification
 

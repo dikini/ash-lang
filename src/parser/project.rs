@@ -26,7 +26,8 @@ use crate::{
 };
 
 use super::{
-    ConcreteElement, ConcreteNode, ConcreteTree, InternalReason, NodeKind, ResourceFailure,
+    ConcreteElement, ConcreteNode, ConcreteTree, InternalReason, NodeKind, ParserCheckpoint,
+    ResourceFailure, cst,
 };
 
 /// Why concrete syntax cannot cross the surface projection boundary.
@@ -94,6 +95,49 @@ pub fn project_module(
 ) -> Result<SurfaceModule, ProjectionError> {
     let (root, tokens) = validated_root(source, tree)?;
     project_surface_module(source, root, tokens)
+}
+
+/// Projects the retained fixed header while the module body is still unparsed.
+pub(crate) fn project_module_header(
+    source: &SourceFile,
+    checkpoint: &ParserCheckpoint,
+) -> Result<Vec<SurfaceImport>, ProjectionError> {
+    if let Some(failure) = checkpoint.resource_failure {
+        return Err(ProjectionError::ResourceLimit(failure));
+    }
+    validate_tokens(source, &checkpoint.tokens)?;
+    let consumed =
+        checkpoint
+            .tokens
+            .get(..checkpoint.position)
+            .ok_or(ProjectionError::MalformedTree(
+                InternalReason::TokenOutOfRange,
+            ))?;
+    let header_end = consumed.last().map_or(0, |token| token.span.range().end());
+    if !checkpoint.diagnostics.is_empty()
+        || checkpoint
+            .lexical_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.primary.span().range().start() < header_end)
+    {
+        return Err(ProjectionError::RecoveryNodesPresent);
+    }
+    let root = cst::build_header(consumed.len(), &checkpoint.events)
+        .map_err(ProjectionError::MalformedTree)?;
+    if has_recovery(&root) {
+        return Err(ProjectionError::RecoveryNodesPresent);
+    }
+    require_kind(&root, NodeKind::Module)?;
+    let mut shape = ShapeCursor::new(&root, &checkpoint.tokens);
+    let mut imports = Vec::new();
+    while let Some(node) = shape.peek_node() {
+        validate_node_shape(node, &checkpoint.tokens)?;
+        imports.push(project_import(source, node, &checkpoint.tokens)?);
+        shape.node(NodeKind::ImportDeclaration)?;
+        shape.token(&TokenKind::LineEnd)?;
+    }
+    shape.finish()?;
+    Ok(imports)
 }
 
 fn validated_root<'tree>(

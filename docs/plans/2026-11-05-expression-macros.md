@@ -39,11 +39,12 @@ checking and supplies selected checked syntax to the importer body parser in
 
 **Data/lifetime:** Retain source bytes/IDs, lexed token coverage, import spans,
 canonical IDs, graph order, root/path ownership, and unparsed body extent for
-the compilation. Checked dependencies own immutable syntax exports: declaration
-identity, restricted matcher, local alias/import route, template or transformer,
-definition environment/origins, and checked closure. A parser environment borrows
-or retains those owners; it cannot outlive them. Generated parsing uses the
-identifier's retained syntax environment, including definition-site imports.
+the compilation. Checked dependencies publish immutable syntax exports:
+declaration identity, restricted matcher, local alias/import route, template or
+transformer, definition environment/origins, and checked closure. Compilation-owned
+stable IDs retain those records and their checked owners; each operation borrows
+only for its duration. Generated parsing uses the identifier's retained syntax
+environment, including definition-site imports.
 
 **Failure/check:** Header discovery executes no transformer and publishes no
 unchecked syntax. Reject graph cycles, selection conflicts, absent exports, and
@@ -263,11 +264,11 @@ repeat the compiler proof. Runtime completion and build cleanup remain required.
 ### D0 concrete carriers and calls
 
 These crate-private Rust interfaces freeze the connected handoffs for review.
-They are planned interfaces, not implemented APIs or Ash semantics. A change
-to ownership, admission, or failure behavior returns to the same reviewer.
-Only the parser checkpoint and canonical-source census interfaces below have
-been compiled so far. The graph, context, grant and host interfaces remain
-planned; the checkpoint does not yet expose projected imports to the loader.
+They are implementation contracts, not Ash semantics. A change to ownership,
+admission, or failure behavior returns to the same reviewer. The checkpoint,
+header projection and canonical-source census below compile. The existing
+loader consumes projected imports but still parses complete bodies before graph
+checking. The staged graph, context, grant and host interfaces remain planned.
 
 ```rust
 fn parse_module_header(
@@ -275,6 +276,10 @@ fn parse_module_header(
     lexical_diagnostics: Vec<Diagnostic<LexReason>>,
     syntax_budget: SyntaxBudget,
 ) -> (ParserCheckpoint, SyntaxBudget);
+fn project_module_header(
+    source: &SourceFile,
+    checkpoint: &ParserCheckpoint,
+) -> Result<Vec<SurfaceImport>, ProjectionError>;
 fn finish_module_from_checkpoint(
     checkpoint: ParserCheckpoint,
     syntax_budget: SyntaxBudget,
@@ -314,7 +319,8 @@ fn discover_headers(entry: &Path, roots: &ModuleRoots)
     -> Result<HeaderGraph, GraphDiagnostic>;
 fn parse_staged_module(
     module: &mut HeaderModule,
-    syntax: &MatcherEnvironment<'_>,
+    syntax: SyntaxContextId,
+    syntax_registry: &CheckedSyntaxRegistry,
     budget: &mut SyntaxBudget,
 ) -> Result<LoadedModule, LoadGraphError>;
 fn check_staged_graph(
@@ -362,7 +368,8 @@ keep the syntax-free wrapper rather than acquiring implicit checking or a
 `main` requirement. External low-level callers receive the same limitation.
 
 ```rust
-struct SyntaxId { module: ModuleId, declaration: u32 }
+struct SyntaxId { compilation: CompilationId, module: ModuleId, declaration: u32 }
+struct SyntaxContextId { compilation: CompilationId, index: u32 }
 struct SyntaxExport {
     id: SyntaxId,
     matcher: Matcher,
@@ -370,17 +377,30 @@ struct SyntaxExport {
     definition_origin: Origin,
     implementation: SyntaxImplementation, // checked template or global BinderId
 }
-struct SelectedSyntax<'checked> {
-    export: &'checked SyntaxExport,
+struct SyntaxSelection {
+    export: SyntaxId,
     local_name: String,
     import_span: Span,
 }
-struct MatcherEnvironment<'checked> {
-    selections: Box<[SelectedSyntax<'checked>]>,
+struct SyntaxContext {
+    selections: Box<[SyntaxSelection]>,
 }
-struct SyntaxContextTable<'checked> {
-    environments: Box<[MatcherEnvironment<'checked>]>,
+struct CheckedSyntaxRegistry {
+    compilation: CompilationId,
+    exports: Vec<SyntaxExport>,
+    contexts: Vec<SyntaxContext>,
 }
+struct SelectedSyntax<'registry> {
+    export: &'registry SyntaxExport,
+    local_name: &'registry str,
+    import_span: Span,
+}
+fn select_syntax<'registry>(
+    registry: &'registry CheckedSyntaxRegistry,
+    checked: &CheckedModules,
+    context: SyntaxContextId,
+    local_name: &str,
+) -> Result<Option<SelectedSyntax<'registry>>, ExpansionFailure>;
 enum SyntaxNode {
     Token(ContextToken),
     Identifier(ContextName),
@@ -396,24 +416,35 @@ struct ContextName {
 }
 fn parse_syntax_expression(
     input: &SyntaxSequence,
-    contexts: &SyntaxContextTable<'_>,
+    syntax_registry: &CheckedSyntaxRegistry,
+    checked: &CheckedModules,
     budget: &mut SyntaxBudget,
 ) -> Result<SurfaceExpr, ExpansionFailure>;
 fn resolve_module_with_expansion(
     module: &LoadedModule,
     dependencies: &[DependencyExports<'_>],
-    syntax: &MatcherEnvironment<'_>,
+    syntax: SyntaxContextId,
+    syntax_registry: &CheckedSyntaxRegistry,
     expansion: &mut ExpansionState,
     budgets: &mut CompilationBudgets,
 ) -> Result<ResolvedModule, ExpansionFailure>;
 ```
 
-`CheckedModule` owns each checked `SyntaxExport`; a matcher's borrow cannot
-outlive that owner. The compilation-owned immutable table retains checked-export
-owners and maps each identifier's `SyntaxContextId` to its own environment.
-Parsing a mixed output consults the leading identifier's context, never a
-single caller-wide spelling map. Empty and fresh-private contexts contain no
-syntax binding and cannot fall back to the caller. `ContextToken` retains
+The compilation-owned registry holds append-only immutable export and context
+records addressed by private stable IDs; `CheckedModule` publishes only IDs to
+exports checked with that owner. Records reference other records and owners by
+ID, not by pointers into a growable checked-module vector. Each lookup
+authenticates the compilation, checked owner, export and original import route
+and returns only a short-lived borrowed view. Appending another checked module
+cannot invalidate retained contexts, and the registry and checked owners live
+until expansion and linking finish. The acyclic ID relations create no ownership
+cycle. The compilation identity is privately allocated with checked exhaustion;
+constructors for these IDs stay compiler-owned. No ID or context is accepted
+from a different compilation.
+
+Parsing mixed output consults the leading identifier's context, never a single
+caller-wide spelling map. Empty and fresh-private contexts contain no syntax
+binding and cannot fall back to the caller. `ContextToken` retains
 lexical kind, exact spelling and origin;
 it does not reconstruct literals from decoded values. The source parser stores
 immutable fragment IDs only after recovery-free parsing. Generated parser input

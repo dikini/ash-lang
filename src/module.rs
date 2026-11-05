@@ -13,7 +13,8 @@ use crate::{
     diagnostic::Diagnostic,
     lexer::{LexReason, lex_with_budget},
     parser::{
-        ParseDiagnostic, ProjectionError, ResourceFailure, parse_with_budget, project_module,
+        ParseDiagnostic, ProjectionError, ResourceFailure, parse_with_budget_and_header,
+        project_module,
     },
     source::{SourceError, SourceFile, SourceId, Span},
     surface::{SurfaceImport, SurfaceModule, SurfaceModulePath},
@@ -2248,7 +2249,7 @@ fn parse_surface_module(
             operation: crate::source::SourceOperation::SpanConstruction,
             import_span,
         })?;
-    let tree = parse_with_budget(lexed, syntax_budget);
+    let (tree, header_imports) = parse_with_budget_and_header(&source, lexed, syntax_budget);
     if tree.resource_failure().is_some()
         || !tree.lexical_diagnostics().is_empty()
         || !tree.parse_diagnostics().is_empty()
@@ -2261,7 +2262,16 @@ fn parse_surface_module(
             import_span,
         })));
     }
-    let surface = match project_module(&source, &tree) {
+    let surface = match project_module(&source, &tree).and_then(|mut surface| {
+        let imports = header_imports?;
+        if surface.imports != imports {
+            return Err(ProjectionError::MalformedTree(
+                crate::parser::InternalReason::UnexpectedShape,
+            ));
+        }
+        surface.imports = imports;
+        Ok(surface)
+    }) {
         Ok(surface) => surface,
         Err(error) => {
             return Err(LoadGraphError::Projection {
@@ -2511,6 +2521,8 @@ fn is_reserved_word(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::parser::parse_with_budget;
+
     use super::*;
 
     #[test]
