@@ -269,6 +269,7 @@ impl SyntaxOwnerBindings {
                         };
                         if dependency.exports().term(&name.text).is_some()
                             || dependency.exports().constructor(&name.text).is_some()
+                            || dependency.exports().method(&name.text).is_some()
                         {
                             let local = alias.as_ref().unwrap_or(name);
                             if targeted

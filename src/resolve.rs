@@ -5694,6 +5694,22 @@ impl Resolver {
                             ),
                         );
                     }
+                } else if let Some(method) = dependency.exports().method(&usage.name.text) {
+                    if !self.syntax_qualified_terms.contains_key(&key) {
+                        self.retain_syntax_exported_method(
+                            method,
+                            dependency.exports(),
+                            owner.module(),
+                            usage.import_span,
+                        )?;
+                        self.syntax_qualified_terms.insert(
+                            key,
+                            ResolvedTermBinding::imported(
+                                ResolvedTermName::Method(method),
+                                route.import_span(),
+                            ),
+                        );
+                    }
                 } else if let Some(constructor) = dependency.exports().constructor(&usage.name.text)
                 {
                     if !self.syntax_qualified_constructors.contains_key(&key) {
@@ -5739,6 +5755,20 @@ impl Resolver {
                         ),
                     );
                 }
+            } else if let Some(method) = owner
+                .exports()
+                .method(&usage.name.text)
+                .filter(|method| method.interface().module() == owner.module())
+            {
+                if self.imported.interface(method.interface()).is_none() {
+                    return Err(invalid());
+                }
+                self.syntax_terms.entry(key).or_insert_with(|| {
+                    ResolvedTermBinding::imported(
+                        ResolvedTermName::Method(method),
+                        usage.import_span,
+                    )
+                });
             } else if let Some(constructor) = terms.constructor(&usage.name.text) {
                 if constructor.id.owner().module() != owner.module() {
                     return Err(invalid());
@@ -5791,6 +5821,22 @@ impl Resolver {
                             ),
                         );
                     }
+                } else if let Some(method) = dependency.exports().method(original) {
+                    if !self.syntax_terms.contains_key(&key) {
+                        self.retain_syntax_exported_method(
+                            method,
+                            dependency.exports(),
+                            owner.module(),
+                            usage.import_span,
+                        )?;
+                        self.syntax_terms.insert(
+                            key,
+                            ResolvedTermBinding::imported(
+                                ResolvedTermName::Method(method),
+                                selector_span,
+                            ),
+                        );
+                    }
                 } else if let Some(constructor) = dependency.exports().constructor(original) {
                     if !self.syntax_constructors.contains_key(&key) {
                         self.retain_syntax_exported_constructor(
@@ -5829,6 +5875,35 @@ impl Resolver {
         std::mem::swap(&mut self.imported, &mut syntax_facts);
         self.imported.set_syntax_facts(syntax_facts);
         retained
+    }
+
+    fn retain_syntax_exported_method(
+        &mut self,
+        method: MethodId,
+        summary: &ExportSummary,
+        owner: ModuleId,
+        span: Span,
+    ) -> Result<(), ResolveError> {
+        let interface = summary
+            .interfaces()
+            .chain(summary.hidden_interfaces())
+            .find(|interface| {
+                interface.id == method.interface() && interface.method(method).is_some()
+            })
+            .ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "the syntax method lost its checked interface",
+                )
+            })?;
+        self.retain_imported_interface_fact(
+            interface,
+            summary,
+            ImportedInterfaceAccess::HiddenSummaryClosure,
+            owner,
+            span,
+        )
     }
 
     fn retain_imported_global<'a>(

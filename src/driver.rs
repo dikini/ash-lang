@@ -1541,6 +1541,10 @@ where
                                         dependency.exports().term(&name.member.text).is_some()
                                             || dependency
                                                 .exports()
+                                                .method(&name.member.text)
+                                                .is_some()
+                                            || dependency
+                                                .exports()
                                                 .constructor(&name.member.text)
                                                 .is_some()
                                     })

@@ -122,6 +122,38 @@ fn template_targeted_constructor_uses_its_owner_under_caller_shadowing() {
 }
 
 #[test]
+fn template_method_uses_caller_evidence_without_importing_owner_implementation() {
+    for path in [
+        "template-method/entry.ash",
+        "template-method/entry_targeted.ash",
+        "template-method/entry_qualified.ash",
+        "template-method/entry_facade.ash",
+        "template-method/entry_procedural.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    for path in [
+        "template-method/missing_evidence.ash",
+        "template-method/missing_targeted_evidence.ash",
+        "template-method/missing_qualified_evidence.ash",
+        "template-method/missing_facade_evidence.ash",
+        "template-method/missing_procedural_evidence.ash",
+    ] {
+        let failure = compile_path(fixture(path))
+            .expect_err("the owner's implementation is not imported with syntax");
+        assert_eq!(
+            failure.reason_code(),
+            "constraint.unsatisfied",
+            "{path}: {failure:?}"
+        );
+    }
+    let failure = compile_path(fixture("template-method/caller_cannot_name_method.ash"))
+        .expect_err("the syntax import does not bind the method in caller source");
+    assert_eq!(failure.reason_code(), "resolve.unknown-name");
+}
+
+#[test]
 fn template_qualified_import_does_not_expose_dependency_privates_or_caller_aliases() {
     for path in [
         "qualified-owner/invalid_hidden.ash",
