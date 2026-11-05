@@ -12,6 +12,10 @@ pub struct Token {
 }
 
 /// The complete token family available to the Ash parser.
+// This Rust enum is an implementation detail, not an Ash-facing token API.
+// The accepted macro interface depends on a shared public lexical vocabulary
+// whose constructor names and spelling mapping are not defined yet. See
+// ../../docs/design/macros/first-slice.md#ash-syntax-interface.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TokenKind {
     /// An ASCII identifier.

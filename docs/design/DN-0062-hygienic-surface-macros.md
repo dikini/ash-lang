@@ -1,18 +1,19 @@
 # DN-0062: Hygienic Surface Macros
 
 - ID: `DN-0062`
-- Status: exploring
+- Status: accepted
 - Related: [AD-0001](../decisions/AD-0001-implementation-environment.md),
   [AD-0005](../decisions/AD-0005-parser-architecture.md),
   [AD-0006](../decisions/AD-0006-front-end-semantic-boundaries.md),
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md),
   [AD-0010](../decisions/AD-0010-human-diagnostic-presentation-and-localization.md),
+  [CP-0033](../proposals/CP-0033-hygienic-expression-syntax.md),
   [DN-0030](DN-0030-typed-compiler-macros-and-hooks.md),
   [DN-0061](DN-0061-effects-and-resources-first-slice.md)
 
-> This draft is informative. It does not define current Ash, accept a language
-> change or architecture, or authorize implementation. All macro syntax and
-> diagnostic text below are illustrations, not selected grammar or wording.
+> The first expression-macro slice in CP-0033 is accepted but unimplemented.
+> Broader macro ideas and illustrations in this note remain exploratory. This
+> note does not define current Ash or accept a parser architecture decision.
 
 ## Question
 
@@ -41,11 +42,13 @@ require only the compiler services and rules needed by its syntax, dependencies,
 inferred contracts and generated code, plus a shared foundation. Reducing total
 compiler and library code is an aspiration, not the primary measure of success.
 
-The immediate motivation is the effects work. Some wrappers, declarations,
-and notational forms may be expressible as syntax expansion over a smaller
-set of operations. The amount of compiler work that can move to libraries is
-not yet established. Compare actual transformations and their obligations
-before identifying a smaller language nucleus.
+Some wrappers, declarations, and notational forms may be expressible as syntax
+expansion over a smaller set of operations. The amount of compiler work that
+can move to libraries is not yet established. Compare actual transformations
+and their obligations before identifying a smaller language nucleus. This
+design proceeds independently of effects redesign; effects work may take the
+macro contract into account without this expression-only slice determining
+its elaboration strategy.
 
 ## Context and boundaries
 
@@ -56,15 +59,10 @@ any future expanded program unless a separate language change replaces them.
 A macro cannot establish a missing runtime operation or prove an ownership,
 completion, or continuation property merely by generating syntax.
 
-The accepted, unimplemented [effects-to-interfaces elaboration package](effects-resources/effect-interface-elaboration-proposal.md)
-keeps effect syntax while translating effectful functions, requests and handlers
-through typed contracts and generated continuations. It changes handler-context
-behavior and carries an explicit one-shot verification gap; neither the
-translation nor that proposed change is current Ash. Its treatment of rows,
-handler boundaries and whole-function conversion challenges the assumption
-that a local, untyped surface rewrite is sufficient. Compare it separately with
-surface convenience forms and with later typed transformations. Do not infer
-that macros can replace the package without evidence for its complete contract.
+Effects-to-interfaces elaboration is separate work, not a dependency or a
+contract this design reconciles with. Current specified effect and resource
+behavior supplies independent regression pressure. Syntax expansion does not
+supply missing control or resource mechanisms.
 
 [DN-0030](DN-0030-typed-compiler-macros-and-hooks.md) explores transformations
 at typed compiler boundaries, registration and selection. Those questions are
@@ -91,16 +89,24 @@ a macro model.
 
 ## Working direction
 
-Compare a single binding-aware syntax representation with two authoring forms:
+The [first-slice design and delivery plan](macros/first-slice.md) supports the
+accepted [CP-0033](../proposals/CP-0033-hygienic-expression-syntax.md):
+imported keyword-led expression syntax, templates and
+Ash-authored procedural transformers over a shared binding-aware syntax
+representation. It defines import, parsing, expansion, binding, bridge,
+diagnostic and admission boundaries and required acceptance cases. The slice is
+unimplemented; a parser decision and owning task precede implementation. Where
+an earlier exploratory alternative below differs, CP-0033 and the companion
+state the accepted first slice. Their M01–M14 cases cover that slice;
+the broader corpus below includes later output categories and transformations.
+
+The two authoring forms are:
 
 - Declarative patterns and templates for local, syntax-directed expansion.
 - Procedural transformers for computations that inspect and construct syntax.
 
-Both would use the same expansion and hygiene rules. This is a working
-preference, not a decision. It avoids requiring two independent accounts of
-binding, but a token-oriented interface or a smaller initial rules-only system
-may prove preferable. Surface macros and typed compiler transformations need
-not use the same public representation.
+Both use the same expansion and hygiene rules. Surface macros and later typed
+compiler transformations need not use the same public representation.
 
 ### Domain-specific languages
 
@@ -141,10 +147,10 @@ ownership and completion. Ash code could construct and compose the associated
 terms and contracts through compiler interfaces. The checker must establish
 their premises; a syntactic wrapper or a general-looking function call does
 not supply a missing ownership or one-shot guarantee. Trace each existing
-check to a replacement, a retained boundary or a remaining obligation. The
-first-slice work in [DN-0061](DN-0061-effects-and-resources-first-slice.md)
-owns the corresponding rule development; this note does not preselect its
-answer or waive [AD-0007](../decisions/AD-0007-typed-core-dialects.md)'s
+check to a replacement, a retained boundary or a remaining obligation.
+That rule development is outside the expression-syntax slice; this note does
+not preselect its answer or waive
+[AD-0007](../decisions/AD-0007-typed-core-dialects.md)'s
 independent validation of transformed Core.
 
 Distinguish the implementation present in a compiler artifact, the components
@@ -171,8 +177,9 @@ of it merely because a compiler uses them.
 Compiler-provided operations or authenticated identities may need a small
 `@builtin` boundary. Under this direction, builtin means a facility supplied
 according to an Ash contract, not a Rust object exposed as language truth.
-Whether the contracts are ordinary Ash modules, compiler-owned declarations,
-or a combination remains a design question. Current Ash has no macro bridge
+The first slice selects canonical compiler-owned declarations with ordinary
+Ash data and opaque handles, backed by a checked transformer host. Later typed
+compiler interfaces remain separate design work. Current Ash has no macro bridge
 or compile-time transformer invocation. [AD-0001](../decisions/AD-0001-implementation-environment.md)
 selects Rust for the current implementation; it does not establish a
 self-hosted compiler or browser execution.
@@ -284,12 +291,10 @@ resolution, typing and elaboration applicable to its category. Generated Core,
 if a later interface can produce it, still crosses AD-0007's independent
 validation boundary.
 
-Whether transformers are written in Ash, how compile-time code is built and
-executed, its allowed effects, resource limits, dependency tracking and build
-inputs remain open. Imports of transformer code and its compile-time
-prerequisites must not silently create module cycles or ambient execution.
-Describe nontermination and failure as compiler diagnostics or build behavior
-only after selecting an execution model.
+The first slice selects Ash-authored transformer functions with an explicitly
+bounded compile-time execution environment. The first-slice design states its
+allowed effects, dependency and failure contracts. Wider compiler services and
+other execution environments remain future design work.
 
 ### Comparison with Scheme and Rust
 
@@ -396,15 +401,16 @@ in the caller's context. The identifier `Integer` in a qualified reference is
 a module alias in a distinct syntactic role; its member must be resolved through
 the correct module, not looked up independently by spelling.
 
-This is the intended behavior to test, not a claim that Ash already permits
-exporting macros or accessing a defining module's private functions through
-them. Definition-site reference preservation needs a separate policy for
-private helpers, dependency edges, checked exports, retained executable
-artifacts and separate compilation. Identity alone is not authorization. A
-future design could allow an exported macro to retain an authenticated private
-helper reference, require a public helper, or use another explicit mechanism;
-compare the costs and access rules before choosing. None permits arbitrary
-source access to unrelated private declarations or opaque constructors.
+This is accepted future behavior, not a claim that Ash already permits exporting
+macros or using private helpers through them. The first slice selects
+authenticated definition-site references: publication authorizes the syntax
+declaration to use its module's lexical access, while each surviving reference
+retains the original declaration, grant and import route. The owner may expose
+its own private helper or opaque operation through syntax as through a public
+helper function. Neither the macro nor its caller gains access to another
+module's withheld members. Ordinary caller source gains no private name.
+Requiring public helpers would avoid this grant channel but would add names to
+the public API solely for expansion. Identity alone is not authorization.
 
 The same concern applies to types, constructors, interfaces, methods, effects
 and operations. Definition-site identity for a method or function also does
@@ -625,10 +631,9 @@ semantics; no operator rewrite is established by this note.
 Longer-term candidates include effects and handlers, scoped resources and
 cleanup, hooks and registration, interface evidence, and nominal identities.
 These require typed elaboration or general rules that establish their actual
-contracts. The accepted effects package is a concrete direction but is not
-implemented; its explicit continuation-use gap remains. Current resource,
-cleanup and hook carriers have ownership, authentication and completion
-obligations that a surface rewrite alone does not eliminate. The effects and
+contracts. Current resource, cleanup and hook carriers have ownership,
+authentication and completion obligations that a surface rewrite alone does
+not eliminate. The effects and
 resource slice must determine which machinery can be replaced, which is
 shared and which remains necessary.
 
@@ -650,10 +655,9 @@ compiler components present and loaded, and the work actually performed.
 
 ## Evidence and experiments
 
-Before selecting a design, compare rules-only expansion, shared declarative
-and procedural syntax objects, and a token-oriented or hybrid interface.
-Compare natural keyword-led syntax with explicitly delimited invocations. Use
-the same corpus and distinguish unavailable features from implementation bugs:
+The first-slice design selects shared declarative and procedural syntax objects
+and keyword-led invocations. Use the following corpus to assess the accepted
+contract and distinguish unavailable features from implementation bugs:
 
 1. The `if` example, including nested forms, precedence, a non-Boolean
    condition and incompatible branch types.
@@ -663,9 +667,9 @@ the same corpus and distinguish unavailable features from implementation bugs:
    shadowing and valid and invalid continuation or resource uses.
 4. Repeated declarations or clauses that test whether procedural computation
    provides a material benefit over declarative rules.
-5. A bounded fragment of the accepted effects elaboration, recording required
-   row, identity, continuation, context and checking information; identify the
-   exact point at which surface expansion ceases to suffice.
+5. Wrappers over current effect and resource operations, recording required
+   row, identity, continuation, context and checking information; identify
+   obligations that the target mechanisms must establish independently.
 6. Two separately authored DSLs, each with domain syntax and embedded Ash
    expressions, used together in a module. Include a deliberate syntax conflict,
    shadowed names, an invalid DSL form and a type or effect error in embedded
@@ -697,16 +701,21 @@ compiler changes. A new optional DSL is not evidence that the shared foundation
 grew; moving an obligatory construct into a library is not by itself evidence
 that users learn less syntax.
 
-A future bounded prototype could test whether the shared syntax-object model
-supports this corpus while fitting the parser and resolver boundaries. Its
-comparison criteria are the cases and obligations above, implementation
+A prototype is not a prerequisite to CP-0033's accepted design choices. A
+separately authorized future bounded prototype could test whether the shared
+syntax-object model supports this corpus while fitting the parser and resolver
+boundaries. Its comparison criteria are the cases and obligations above, implementation
 complexity, quality of errors and information needed at each phase. Record
 both successful and contrary observations. Retain a prototype only as named,
 bounded design evidence if it changes the comparison; otherwise discard it.
 Neither outcome establishes product semantics or authorizes production code.
-This draft alone does not authorize a prototype or select an implementation.
+This note alone does not authorize a prototype or select an implementation.
 
 ## Open questions
+
+The accepted first slice fixes its own boundaries in the linked design. These
+questions concern later extensions or the broader direction; they do not
+replace the first-slice contract.
 
 - Which natural syntax forms and output categories are essential, and which
   should remain delimited or ordinary functions?

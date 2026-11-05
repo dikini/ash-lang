@@ -184,7 +184,10 @@ and exclusions remain at their linked owners.
 
 - [DN-0062: Hygienic Surface Macros](DN-0062-hygienic-surface-macros.md)
   — a smaller surface and Core, Ash-authored DSLs, hygienic expansion,
-  compiler interfaces and diagnostics; exploring.
+  compiler interfaces and diagnostics. The expression-macro slice in accepted
+  [CP-0033](../proposals/CP-0033-hygienic-expression-syntax.md) is unimplemented;
+  see its [design and delivery plan](macros/first-slice.md). Broader ideas remain
+  exploratory.
 - [DN-0061: Effects and Resources as the First Typed Slice](DN-0061-effects-and-resources-first-slice.md)
   — the first semantic slice and its opaque data and function boundaries; its
   [effects elaboration package](effects-resources/effect-interface-elaboration-proposal.md)

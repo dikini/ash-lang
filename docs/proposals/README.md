@@ -23,6 +23,10 @@ No proposed transitions are listed.
 
 ## Accepted changes
 
+- [CP-0033: Hygienic Expression Syntax](CP-0033-hygienic-expression-syntax.md)
+  — imported expression syntax, shared hygiene and provenance, and checked
+  Ash transformers; unimplemented, with a prospective delivery plan.
+
 - [CP-0032: Row-Indexed Handler Contexts](CP-0032-row-indexed-handler-contexts.md),
   accepted as one package with
   [Effects as Interfaces: Elaboration Proposal](../design/effects-resources/effect-interface-elaboration-proposal.md).
