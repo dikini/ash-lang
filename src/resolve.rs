@@ -2476,6 +2476,7 @@ struct Resolver {
     syntax_qualified_terms: HashMap<(String, String, usize), ResolvedTermBinding>,
     syntax_qualified_constructors: HashMap<(String, String, usize), ConstructorId>,
     syntax_constructors: HashMap<(String, usize), ConstructorId>,
+    syntax_nominals: HashMap<(String, usize), NominalTypeId>,
     globals: HashMap<String, GlobalFact>,
     type_names: HashMap<String, NominalTypeId>,
     interface_names: HashMap<String, InterfaceId>,
@@ -2902,6 +2903,7 @@ impl Resolver {
             syntax_qualified_terms: HashMap::new(),
             syntax_qualified_constructors: HashMap::new(),
             syntax_constructors: HashMap::new(),
+            syntax_nominals: HashMap::new(),
             globals: HashMap::new(),
             type_names: HashMap::new(),
             interface_names: HashMap::new(),
@@ -5649,6 +5651,27 @@ impl Resolver {
             {
                 return Err(invalid());
             }
+            if usage.type_reference {
+                if usage.qualifier.is_some() {
+                    return Err(invalid());
+                }
+                let id = owner
+                    .registry()
+                    .nominals()
+                    .iter()
+                    .find(|nominal| {
+                        nominal.id.module() == owner.module()
+                            && !nominal.id.is_lexical()
+                            && nominal.spelling == usage.name.text
+                    })
+                    .map(|nominal| nominal.id)
+                    .ok_or_else(invalid)?;
+                let nominal = owner.syntax_nominal_fact(id).ok_or_else(invalid)?;
+                self.retain_scheme_nominal_fact(nominal, usage.import_span)?;
+                self.syntax_nominals
+                    .insert((usage.name.text.clone(), usage.name.introduction), id);
+                continue;
+            }
             if let Some(qualifier) = &usage.qualifier {
                 if qualifier.introduction != usage.name.introduction {
                     return Err(invalid());
@@ -7358,11 +7381,18 @@ impl Resolver {
             return Ok(ImportedNominalName { id });
         }
         if name.introduction != 0 {
-            return Err(error(
-                ResolveReason::UnknownType,
-                name.span,
-                "this nominal type is not declared in the syntax context",
-            ));
+            return self
+                .syntax_nominals
+                .get(&(name.text.clone(), name.introduction))
+                .copied()
+                .map(|id| ImportedNominalName { id })
+                .ok_or_else(|| {
+                    error(
+                        ResolveReason::UnknownType,
+                        name.span,
+                        "this nominal type is not declared in the syntax context",
+                    )
+                });
         }
         if self.interface_names.contains_key(&name.text) {
             return Err(type_kind_error(name.span, &name.text));
@@ -10029,6 +10059,7 @@ impl Resolver {
                         }
                         SurfaceTypeKind::Named(name) => {
                             if matches!(name, SurfaceReference::Unqualified(_))
+                                && name.member().introduction == 0
                                 && let Some(variable) = self
                                     .type_scopes
                                     .iter()
@@ -10049,6 +10080,7 @@ impl Resolver {
                             arguments,
                         } => {
                             let head = if matches!(constructor, SurfaceReference::Unqualified(_))
+                                && constructor.member().introduction == 0
                                 && let Some(variable) = self
                                     .type_scopes
                                     .iter()

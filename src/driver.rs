@@ -1553,11 +1553,19 @@ where
                         })
                         .unwrap_or(false)
                 };
-                crate::syntax::validate_template(declaration, &qualified_name).map_err(|span| {
-                    FileFailure::from(PipelineFailure::Resolution(
-                        crate::resolve::unsupported_syntax_template(span),
-                    ))
-                })?;
+                let owner_type = |name: &crate::surface::SurfaceName| {
+                    module
+                        .surface()
+                        .type_declarations
+                        .iter()
+                        .any(|declaration| declaration.name.text == name.text)
+                };
+                crate::syntax::validate_template(declaration, &qualified_name, &owner_type)
+                    .map_err(|span| {
+                        FileFailure::from(PipelineFailure::Resolution(
+                            crate::resolve::unsupported_syntax_template(span),
+                        ))
+                    })?;
             }
             let mut expanded = if selected.is_empty() {
                 None

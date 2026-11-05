@@ -193,6 +193,35 @@ fn template_continuations_use_the_actual_handler_capability() {
 }
 
 #[test]
+fn expanded_effects_and_resource_scopes_follow_ordinary_rules() {
+    for (path, expected) in [
+        ("template-effects/entry.ash", "42"),
+        ("template-effects/handwritten.ash", "42"),
+        ("template-effects/reversed.ash", "33"),
+        ("template-effects/twice.ash", "42"),
+        ("template-effects/resource_ok.ash", "42"),
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(
+            execute(&compiled).unwrap().value_display(),
+            expected,
+            "{path}"
+        );
+    }
+    for path in [
+        "template-effects/resource_escape.ash",
+        "template-effects/resource_escape_handwritten.ash",
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(
+            failure.reason_code(),
+            "type.resource-escape",
+            "{path}: {failure:?}"
+        );
+    }
+}
+
+#[test]
 fn template_qualified_import_does_not_expose_dependency_privates_or_caller_aliases() {
     for path in [
         "qualified-owner/invalid_hidden.ash",
@@ -390,13 +419,40 @@ fn template_operator_separator_preserves_grouped_operators() {
 }
 
 #[test]
+fn template_named_annotation_uses_owner_and_introduced_local_types() {
+    for path in [
+        "template-annotation/valid.ash",
+        "template-annotation/local.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+}
+
+#[test]
 fn template_named_annotation_does_not_resolve_in_the_caller() {
-    let failure = compile_path(fixture("template-annotation/entry.ash"))
-        .expect_err("a definition-site named annotation must not use the caller's type");
-    assert!(matches!(
-        failure.pipeline_failure(),
-        Some(ash::driver::PipelineFailure::Resolution(_))
-    ));
+    for (path, expected) in [
+        ("template-annotation/entry.ash", "type.binding-initializer"),
+        (
+            "template-annotation/generic.ash",
+            "type.binding-initializer",
+        ),
+        (
+            "template-annotation/caller_type.ash",
+            "resolve.unknown-type",
+        ),
+        (
+            "template-annotation/caller_constructor.ash",
+            "resolve.unknown-constructor",
+        ),
+        (
+            "template-annotation/unknown/entry.ash",
+            "resolve.internal-state",
+        ),
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), expected, "{path}: {failure:?}");
+    }
 }
 
 #[test]
