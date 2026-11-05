@@ -3153,7 +3153,11 @@ fn project_expression_with_fragments(
                     return malformed(InternalReason::UnexpectedShape);
                 };
                 projected.push(SurfaceExpr {
-                    kind: SurfaceExprKind::Function(FunctionExpr { parameter, body }),
+                    kind: SurfaceExprKind::Function(FunctionExpr {
+                        parameter,
+                        body,
+                        expansion: None,
+                    }),
                     span,
                 });
             }

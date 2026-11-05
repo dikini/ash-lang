@@ -740,6 +740,8 @@ pub struct FunctionExpr {
     pub parameter: SurfacePattern,
     /// The braced body.
     pub body: SurfaceBlock,
+    /// The invocation that introduced this function, if any.
+    pub(crate) expansion: Option<Span>,
 }
 
 /// An unresolved source name and its exact span.

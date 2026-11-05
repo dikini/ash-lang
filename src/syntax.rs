@@ -407,6 +407,19 @@ pub(crate) fn validate_template(declaration: &SurfaceSyntaxDeclaration) -> Resul
             _ => Err(pattern.span),
         }
     }
+    fn check_block(block: &SurfaceBlock, matcher: &[SurfaceSyntaxMatcherPart]) -> Result<(), Span> {
+        for declaration in &block.declarations {
+            let SurfaceLocalDeclaration::Binding(binding) = declaration else {
+                return Err(block.span);
+            };
+            check_pattern(&binding.pattern, matcher)?;
+            if let Some(annotation) = &binding.annotation {
+                check_annotation(annotation)?;
+            }
+            check(&binding.initializer, matcher)?;
+        }
+        check(&block.result, matcher)
+    }
     fn check(expression: &SurfaceExpr, matcher: &[SurfaceSyntaxMatcherPart]) -> Result<(), Span> {
         match &expression.kind {
             SurfaceExprKind::SyntaxInvocation { captures, .. } => {
@@ -438,18 +451,10 @@ pub(crate) fn validate_template(declaration: &SurfaceSyntaxDeclaration) -> Resul
                 check(&binary.left, matcher)?;
                 check(&binary.right, matcher)
             }
-            SurfaceExprKind::Block(block) => {
-                for declaration in &block.declarations {
-                    let SurfaceLocalDeclaration::Binding(binding) = declaration else {
-                        return Err(block.span);
-                    };
-                    check_pattern(&binding.pattern, matcher)?;
-                    if let Some(annotation) = &binding.annotation {
-                        check_annotation(annotation)?;
-                    }
-                    check(&binding.initializer, matcher)?;
-                }
-                check(&block.result, matcher)
+            SurfaceExprKind::Block(block) => check_block(block, matcher),
+            SurfaceExprKind::Function(function) => {
+                check_pattern(&function.parameter, matcher)?;
+                check_block(&function.body, matcher)
             }
             SurfaceExprKind::Match(matching) => {
                 check(&matching.scrutinee, matcher)?;
@@ -636,6 +641,42 @@ fn substitute_contents(
     Ok(())
 }
 
+fn substitute_block(
+    block: &mut SurfaceBlock,
+    matcher: &[SurfaceSyntaxMatcherPart],
+    captures: &[SurfaceSyntaxCapture],
+    introduction: usize,
+    invocation: Span,
+) -> Result<(), Span> {
+    for declaration in &mut block.declarations {
+        let SurfaceLocalDeclaration::Binding(binding) = declaration else {
+            return Err(block.span);
+        };
+        binding.expansion = Some(invocation);
+        substitute_pattern(
+            &mut binding.pattern,
+            matcher,
+            captures,
+            introduction,
+            invocation,
+        )?;
+        substitute(
+            &mut binding.initializer,
+            matcher,
+            captures,
+            introduction,
+            invocation,
+        )?;
+    }
+    substitute(
+        &mut block.result,
+        matcher,
+        captures,
+        introduction,
+        invocation,
+    )
+}
+
 fn substitute(
     expression: &mut SurfaceExpr,
     matcher: &[SurfaceSyntaxMatcherPart],
@@ -708,28 +749,21 @@ fn substitute(
             )?;
         }
         SurfaceExprKind::Block(block) => {
-            for declaration in &mut block.declarations {
-                let SurfaceLocalDeclaration::Binding(binding) = declaration else {
-                    return Err(block.span);
-                };
-                binding.expansion = Some(invocation);
-                substitute_pattern(
-                    &mut binding.pattern,
-                    matcher,
-                    captures,
-                    introduction,
-                    invocation,
-                )?;
-                substitute(
-                    &mut binding.initializer,
-                    matcher,
-                    captures,
-                    introduction,
-                    invocation,
-                )?;
+            substitute_block(block, matcher, captures, introduction, invocation)?;
+        }
+        SurfaceExprKind::Function(function) => {
+            if introduction != 0 {
+                function.expansion = Some(invocation);
             }
-            substitute(
-                &mut block.result,
+            substitute_pattern(
+                &mut function.parameter,
+                matcher,
+                captures,
+                introduction,
+                invocation,
+            )?;
+            substitute_block(
+                &mut function.body,
                 matcher,
                 captures,
                 introduction,

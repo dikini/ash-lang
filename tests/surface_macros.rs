@@ -42,6 +42,20 @@ fn template_macro_preserves_expression_capture_grouping() {
 }
 
 #[test]
+fn template_function_parameter_keeps_its_introduction_context() {
+    let compiled = compile_path(fixture("template-function/hygiene.ash"))
+        .expect("the introduced function parameter avoids the caller binding");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn captured_function_parameter_binds_the_captured_body() {
+    let compiled = compile_path(fixture("template-function/captured.ash"))
+        .expect("the captured function parameter scopes over the captured body");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
 fn renamed_template_macro_uses_the_selected_export() {
     let compiled = compile_path(fixture("template-only/renamed.ash"))
         .expect("the renamed syntax graph compiles");

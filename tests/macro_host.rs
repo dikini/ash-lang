@@ -179,6 +179,13 @@ fn generated_nested_unwrap_keeps_the_protected_fragment() {
 }
 
 #[test]
+fn transformer_constructs_a_function_with_a_captured_parameter() {
+    let compiled = compile_path(macro_fixture("entry_function_ops.ash"))
+        .expect("the transformer builds a function with the captured binder");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
 fn unwrapping_preserves_a_qualified_caller_reference() {
     let compiled = compile_path(macro_fixture("entry_unwrap_qualified.ash"))
         .expect("unwrapping retains the caller's imported module reference");

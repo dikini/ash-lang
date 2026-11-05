@@ -12678,6 +12678,7 @@ impl Resolver {
                 parameter: pattern,
                 scope_checkpoint,
                 span,
+                expansion,
             } => {
                 let body_expression = expressions.pop_owned().ok_or_else(|| {
                     error(
@@ -12709,6 +12710,7 @@ impl Resolver {
                     kind: ResolvedExprKind::Function(ResolvedFunctionExpr {
                         pattern: pattern.into_inner(),
                         body,
+                        expansion,
                     }),
                     span,
                 });
@@ -13570,6 +13572,7 @@ impl Resolver {
                     parameter: ResolvedPatternOwner::new(parameter),
                     scope_checkpoint,
                     span: expression.span,
+                    expansion: function.expansion,
                 });
                 tasks.push(ResolveTask::VisitBlock(&function.body));
             }
@@ -13910,6 +13913,7 @@ enum ResolveTask<'a> {
         parameter: ResolvedPatternOwner,
         scope_checkpoint: usize,
         span: crate::source::Span,
+        expansion: Option<crate::source::Span>,
     },
     FinishTuple {
         count: usize,

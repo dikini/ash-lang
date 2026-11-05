@@ -28626,6 +28626,12 @@ fn anonymous_function_origin(
     expression_span: Span,
     function: &crate::resolved::ResolvedFunctionExpr,
 ) -> Origin {
+    if let Some(invocation) = function.expansion {
+        return Origin::Expansion {
+            invocation,
+            definition: expression_span,
+        };
+    }
     Origin::Related {
         primary: Box::new(Origin::Source(expression_span)),
         related: vec![function.pattern.span, function.body.span],

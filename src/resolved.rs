@@ -19761,6 +19761,8 @@ pub struct ResolvedFunctionExpr {
     pub pattern: ResolvedPattern,
     /// Resolved braced body.
     pub body: ResolvedBlock,
+    /// The invocation that introduced this function, if any.
+    pub(crate) expansion: Option<Span>,
 }
 
 pub(crate) fn discard_resolved_definition_iteratively(definition: ResolvedDefinition) {
