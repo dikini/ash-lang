@@ -1553,13 +1553,6 @@ where
                         })
                         .unwrap_or(false)
                 };
-                let owner_type = |name: &crate::surface::SurfaceName| {
-                    module
-                        .surface()
-                        .type_declarations
-                        .iter()
-                        .any(|declaration| declaration.name.text == name.text)
-                };
                 let owner_effect =
                     |reference: &crate::surface::SurfaceReference,
                      arguments: &[crate::surface::SurfaceType],
@@ -1577,17 +1570,12 @@ where
                                         .any(|candidate| candidate.name.text == operation.text)
                             })
                     };
-                crate::syntax::validate_template(
-                    declaration,
-                    &qualified_name,
-                    &owner_type,
-                    &owner_effect,
-                )
-                .map_err(|span| {
-                    FileFailure::from(PipelineFailure::Resolution(
-                        crate::resolve::unsupported_syntax_template(span),
-                    ))
-                })?;
+                crate::syntax::validate_template(declaration, &qualified_name, &owner_effect)
+                    .map_err(|span| {
+                        FileFailure::from(PipelineFailure::Resolution(
+                            crate::resolve::unsupported_syntax_template(span),
+                        ))
+                    })?;
             }
             let mut expanded = if selected.is_empty() {
                 None

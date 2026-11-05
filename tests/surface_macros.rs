@@ -515,6 +515,11 @@ fn template_named_annotation_uses_owner_and_introduced_local_types() {
     for path in [
         "template-annotation/valid.ash",
         "template-annotation/local.ash",
+        "template-annotation/unique.ash",
+        "template-annotation/imported/entry.ash",
+        "template-annotation/imported/facade_entry.ash",
+        "template-annotation/imported/qualified_entry.ash",
+        "template-annotation/imported/qualified_facade_entry.ash",
     ] {
         let compiled = compile_path(fixture(path)).expect(path);
         assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
@@ -539,7 +544,28 @@ fn template_named_annotation_does_not_resolve_in_the_caller() {
         ),
         (
             "template-annotation/unknown/entry.ash",
-            "resolve.internal-state",
+            "resolve.unknown-type",
+        ),
+        ("template-annotation/late.ash", "resolve.unknown-type"),
+        (
+            "template-annotation/imported/wrong_type.ash",
+            "type.binding-initializer",
+        ),
+        (
+            "template-annotation/imported/caller_type.ash",
+            "resolve.unknown-type",
+        ),
+        (
+            "template-annotation/imported/qualified_wrong.ash",
+            "type.binding-initializer",
+        ),
+        (
+            "template-annotation/imported/qualified_caller.ash",
+            "resolve.unavailable-export",
+        ),
+        (
+            "template-annotation/imported/private_entry.ash",
+            "resolve.unavailable-export",
         ),
     ] {
         let failure = compile_path(fixture(path)).expect_err(path);

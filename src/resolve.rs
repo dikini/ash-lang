@@ -2488,6 +2488,7 @@ struct Resolver {
     syntax_qualified_constructors: HashMap<(String, String, usize), ConstructorId>,
     syntax_constructors: HashMap<(String, usize), ConstructorId>,
     syntax_nominals: HashMap<(String, usize), NominalTypeId>,
+    syntax_qualified_nominals: HashMap<(String, String, usize), NominalTypeId>,
     syntax_effects: HashMap<(String, usize), EffectId>,
     globals: HashMap<String, GlobalFact>,
     type_names: HashMap<String, NominalTypeId>,
@@ -2917,6 +2918,7 @@ impl Resolver {
             syntax_qualified_constructors: HashMap::new(),
             syntax_constructors: HashMap::new(),
             syntax_nominals: HashMap::new(),
+            syntax_qualified_nominals: HashMap::new(),
             syntax_effects: HashMap::new(),
             globals: HashMap::new(),
             type_names: HashMap::new(),
@@ -5667,10 +5669,39 @@ impl Resolver {
                 return Err(invalid());
             }
             if usage.namespace == crate::syntax::SyntaxNameNamespace::Type {
-                if usage.qualifier.is_some() {
-                    return Err(invalid());
+                if let Some(qualifier) = &usage.qualifier {
+                    if qualifier.introduction != usage.name.introduction {
+                        return Err(invalid());
+                    }
+                    let route = terms.qualified(&qualifier.text).ok_or_else(invalid)?;
+                    if !owner.direct_dependencies().contains(&route) {
+                        return Err(invalid());
+                    }
+                    let dependency = syntax
+                        .owners
+                        .iter()
+                        .find(|candidate| candidate.module() == route.target())
+                        .ok_or_else(invalid)?;
+                    let exported = dependency
+                        .exports()
+                        .nominal(&usage.name.text)
+                        .ok_or_else(invalid)?;
+                    let nominal = dependency
+                        .exports()
+                        .nominal_fact(exported.id)
+                        .ok_or_else(invalid)?;
+                    self.retain_scheme_nominal_fact(nominal, usage.import_span)?;
+                    self.syntax_qualified_nominals.insert(
+                        (
+                            qualifier.text.clone(),
+                            usage.name.text.clone(),
+                            usage.name.introduction,
+                        ),
+                        nominal.id,
+                    );
+                    continue;
                 }
-                let id = owner
+                let local = owner
                     .registry()
                     .nominals()
                     .iter()
@@ -5679,12 +5710,40 @@ impl Resolver {
                             && !nominal.id.is_lexical()
                             && nominal.spelling == usage.name.text
                     })
-                    .map(|nominal| nominal.id)
-                    .ok_or_else(invalid)?;
-                let nominal = owner.syntax_nominal_fact(id).ok_or_else(invalid)?;
-                self.retain_scheme_nominal_fact(nominal, usage.import_span)?;
-                self.syntax_nominals
-                    .insert((usage.name.text.clone(), usage.name.introduction), id);
+                    .map(|nominal| nominal.id);
+                let (nominal, span) = if let Some(id) = local {
+                    (
+                        owner.syntax_nominal_fact(id).ok_or_else(invalid)?,
+                        usage.import_span,
+                    )
+                } else if let Some((route, original, selector)) =
+                    terms.targeted_nominal(&usage.name.text)
+                {
+                    if !owner.direct_dependencies().contains(&route) {
+                        return Err(invalid());
+                    }
+                    let dependency = syntax
+                        .owners
+                        .iter()
+                        .find(|candidate| candidate.module() == route.target())
+                        .ok_or_else(invalid)?;
+                    let exported = dependency.exports().nominal(original).ok_or_else(invalid)?;
+                    (
+                        dependency
+                            .exports()
+                            .nominal_fact(exported.id)
+                            .ok_or_else(invalid)?,
+                        selector,
+                    )
+                } else {
+                    // A generated lexical nominal is resolved in its own scope.
+                    continue;
+                };
+                self.retain_scheme_nominal_fact(nominal, span)?;
+                self.syntax_nominals.insert(
+                    (usage.name.text.clone(), usage.name.introduction),
+                    nominal.id,
+                );
                 continue;
             }
             if usage.namespace == crate::syntax::SyntaxNameNamespace::Effect {
@@ -7399,11 +7458,23 @@ impl Resolver {
         if let SurfaceReference::Qualified(name) = reference
             && (name.qualifier.introduction != 0 || name.member.introduction != 0)
         {
-            return Err(error(
-                ResolveReason::UnknownType,
-                name.span,
-                "this qualified nominal type is not available in the syntax context",
-            ));
+            return self
+                .syntax_qualified_nominals
+                .get(&(
+                    name.qualifier.text.clone(),
+                    name.member.text.clone(),
+                    name.member.introduction,
+                ))
+                .filter(|_| name.qualifier.introduction == name.member.introduction)
+                .copied()
+                .map(|id| ImportedNominalName { id })
+                .ok_or_else(|| {
+                    error(
+                        ResolveReason::UnknownType,
+                        name.span,
+                        "this qualified nominal type is not available in the syntax context",
+                    )
+                });
         }
         if let Some(namespace) = self.imported_namespace(reference)? {
             if namespace.interfaces.contains_key(&reference.member().text) {
