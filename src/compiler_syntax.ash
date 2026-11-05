@@ -7,32 +7,83 @@ pub opaque type ParseFailure = HiddenParseFailure
 
 pub type Syntax = Syntax(Nodes)
 pub type Nodes = NoNodes
-| MoreNodes(Node, Nodes)
+    | MoreNodes(Node, Nodes)
 pub type Node = TokenNode(Token, Origin)
-| IdentifierNode(Identifier, Origin)
-| GroupNode(Delimiter, Syntax, Origin)
-| ExpressionNode(ExpressionFragment, Origin)
+    | IdentifierNode(Identifier, Origin)
+    | GroupNode(Delimiter, Syntax, Origin)
+    | ExpressionNode(ExpressionFragment, Origin)
 pub type Delimiter = Parentheses
-| Braces
+    | Braces
 pub type Origins = NoOrigins
-| MoreOrigins(Origin, Origins)
+    | MoreOrigins(Origin, Origins)
 pub type Capture = ExpressionCapture(ExpressionFragment)
-| IdentifierCapture(Identifier, Origin)
+    | IdentifierCapture(Identifier, Origin)
 pub type CaptureResult = Captured(Capture)
-| MissingCapture
+    | MissingCapture
 pub type OriginsResult = Combined(Origin)
-| MissingOrigins
+    | MissingOrigins
 pub type IdentifierResult = MadeIdentifier(Identifier)
-| InvalidIdentifier
-pub type TokenKind = Plus
+    | InvalidIdentifier
+pub type TokenKind = Wildcard
+    | IntegerLiteral
+    | StringLiteral
+    | True
+    | False
+    | Fn
+    | Let
+    | Rec
+    | And
+    | Type
+    | Newtype
+    | Effect
+    | Match
+    | Perform
+    | Handle
+    | With
+    | Resume
+    | Resource
+    | Region
+    | Using
+    | Hook
+    | Register
+    | Cleanup
+    | Discard
+    | Retain
+    | Import
+    | As
+    | Pub
+    | Opaque
+    | Interface
+    | Impl
+    | Where
+    | IntType
+    | BytesType
+    | StringType
+    | BoolType
+    | UnitType
+    | At
+    | Dot
+    | Colon
+    | Equal
+    | EqualEqual
+    | Plus
+    | Star
+    | Arrow
+    | FatArrow
+    | Pipe
+    | Bang
+    | Comma
+    | Less
+    | Greater
+    | LineEnd
 pub type TokenResult = MadeToken(Token)
-| InvalidToken
+    | InvalidToken
 pub type ParseResult = Parsed(ExpressionFragment)
-| ParseRejected(ParseFailure)
+    | ParseRejected(ParseFailure)
 pub type MacroDiagnostic = MacroDiagnostic(String, Origin, Origins)
-| SyntaxDiagnostic(ParseFailure)
+    | SyntaxDiagnostic(ParseFailure)
 pub type MacroResult = Expanded(Syntax)
-| Rejected(MacroDiagnostic)
+    | Rejected(MacroDiagnostic)
 
 pub effect Ops {
     capture : (Input, Int) -> CaptureResult

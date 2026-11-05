@@ -598,7 +598,9 @@ pub(super) enum CompilerSyntaxHandleKind {
     Input,
     Origin(crate::source::Span),
     Expression(usize),
+    Identifier(usize),
     Token(usize),
+    ParseFailure,
 }
 
 /// A fully evaluated Ash value.

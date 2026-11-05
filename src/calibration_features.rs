@@ -334,7 +334,7 @@ fn walk<'a>(features: &mut Features, pending: &mut Vec<Visit<'a>>) {
                             if let crate::surface::SurfaceSyntaxCapture::Expression(expression) =
                                 capture
                             {
-                                pending.push(Visit::Expr(expression, scope));
+                                pending.push(Visit::Expr(&expression.expression, scope));
                             }
                         }
                     }

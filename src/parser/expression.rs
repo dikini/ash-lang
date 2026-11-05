@@ -359,6 +359,8 @@ mod tests {
             in_template: false,
             syntax: &[],
             syntax_source: None,
+            syntax_selections: None,
+            syntax_spellings: None,
             syntax_stops: Vec::new(),
         };
 

@@ -592,14 +592,32 @@ and any retained image representation; today's first flat related-span list is
 insufficient. The build consumer remains `prepare_program` followed by
 `build_prepared` on the independently validated runtime program.
 
-The shared lexical vocabulary uses `Plus` for `+` in the frozen computed
-fixture. D2 completes one public vocabulary table from the lexical specification
-and expression grammar, including exact spellings and logical line-end
-representation, before publishing the interface. Identifiers use opaque
-handles; parentheses/braces use groups; EOF, semicolon and declaration-only
-`$` are excluded from output tokens. Reserved words needed by expressions and
-literal spellings receive table-driven valid/invalid and round-trip conformance
-evidence. Rust enum ordinals are not exposed.
+The working shared lexical vocabulary maps `Wildcard` to `_`, `IntegerLiteral`
+to an ordinary decimal literal, `StringLiteral` to an ordinary quoted string,
+and `LineEnd` to LF or CRLF. For reserved words, the constructor names are
+`True`, `False`, `Fn`, `Let`, `Rec`, `And`, `Type`, `Newtype`, `Effect`, `Match`,
+`Perform`, `Handle`, `With`, `Resume`, `Resource`, `Region`, `Using`, `Hook`,
+`Register`, `Cleanup`, `Discard`, `Retain`, `Import`, `As`, `Pub`, `Opaque`,
+`Interface`, `Impl`, and `Where`; each maps to the corresponding lowercase
+reserved spelling. `IntType`, `BytesType`, `StringType`, `BoolType`, and
+`UnitType` map to `Int`, `Bytes`, `String`, `Bool`, and `Unit`.
+
+| Constructor | Spelling | Constructor | Spelling |
+| --- | --- | --- | --- |
+| `At` | `@` | `Dot` | `.` |
+| `Colon` | `:` | `Equal` | `=` |
+| `EqualEqual` | `==` | `Plus` | `+` |
+| `Star` | `*` | `Arrow` | `->` |
+| `FatArrow` | `=>` | `Pipe` | `\|` |
+| `Bang` | `!` | `Comma` | `,` |
+| `Less` | `<` | `Greater` | `>` |
+
+`make_token` requires one exact spelling without surrounding whitespace and
+rejects a kind mismatch. Identifiers use opaque handles; parentheses and braces
+use groups; EOF, semicolon and declaration-only `$` are excluded. The lexer,
+canonical declarations and this table must agree; move the reviewed vocabulary
+to the shared language and tool interface documentation at delivery. Rust enum
+ordinals are not exposed.
 
 The fixture files under `tests/fixtures/surface-macros/` freeze the D2 graph.
 `bind` introduces `temp = 1`, binds caller-supplied `item = 5`, constructs and
@@ -828,18 +846,20 @@ full gate may serve the pre-Main gate without a duplicate identical-input run.
 
 ## Estimate and re-planning
 
-After the first computed and combined graphs ran to 42, the developer's
-provisional forecast is **11–23 additional Codex elapsed hours**, with **15–18
-hours** as the planning range. This replaces the earlier 10–24 and 21–51
-clock-hour forecasts. It is a whole-chain estimate, not a deadline or a measured
-model-runtime total; independent review may revise it.
+After the computed graph and initial constructed-identifier cases ran, the
+provisional forecast is **about 10 additional Codex elapsed hours**, with a
+tentative **7–15 hour** range. The observed pace of roughly 36.5 weighted points
+over five and a half elapsed hours informs the midpoint; the range is not a confidence
+interval. This replaces the earlier 11–23 hour forecast. It is a whole-chain
+estimate, not a deadline or a measured model-runtime total; independent review
+may revise it.
 
 | Remaining connected work | Codex elapsed hours |
 | --- | --- |
-| Remaining Ops, vocabulary, output forms, transfer failures, and limits | 3–6 |
-| Complete contexts, copied identities, grants, and Core coordinates | 3–7 |
-| Diagnostics and actual image/build/native path | 2–4 |
-| Remaining evidence, docs, gates, review, and retained acceptance | 3–6 |
+| Remaining Ops, vocabulary, output forms, transfer failures, and limits | 2–4 |
+| Complete contexts, copied identities, grants, and Core coordinates | 2–5 |
+| Diagnostics and actual image/build/native path | 1–3 |
+| Remaining evidence, docs, gates, review, and retained acceptance | 2–3 |
 
 The ranges include about 1–3 hours of command/gate time and 1–2 hours of
 review/correction; they overlap in the chain and are not separate forecasts to
@@ -862,7 +882,7 @@ sets fixed effort-weighted delivery credits, with an agreed 20-point reviewed
 baseline supported by retained results and their review. That is a delivery
 estimate, not a measured fraction of model effort; it is not derived from the
 forecast and does not move when the ETA changes. The observed session pace is a
-calibration check only. The separate 8 provisional credits record the unreviewed canonical module,
+calibration check only. The additional 8 reviewed credits at `ad8ca9cc` record the canonical module,
 checked entry, partial host/output and frozen combined graph; they do not claim
 a complete procedural host or borrowed-owner acceptance. The ledger changes no M01–M14 acceptance requirement. Its remaining
 weights favor unresolved contexts/grants and consumers; implementations and their

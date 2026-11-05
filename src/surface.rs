@@ -1,5 +1,7 @@
 //! Recovery-free, source-spanned syntax passed from parsing to resolution.
 
+use std::sync::Arc;
+
 use crate::{integer::Integer, lexer::TokenKind, source::Span};
 
 mod foreign;
@@ -491,9 +493,16 @@ pub enum SurfaceExprKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceSyntaxCapture {
     /// A protected, unexpanded expression.
-    Expression(SurfaceExpr),
+    Expression(SurfaceExpressionCapture),
     /// An identifier with its caller spelling and source.
     Identifier(SurfaceName),
+}
+
+/// An expression and its immutable, protected syntax contents.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceExpressionCapture {
+    pub(crate) expression: SurfaceExpr,
+    pub(crate) contents: Arc<[crate::syntax::MacroOutputNode]>,
 }
 
 /// The closed set of builtin acquisition designators.

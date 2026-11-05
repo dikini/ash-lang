@@ -1688,9 +1688,12 @@ pub(super) fn expression(parser: &mut Parser<'_>) {
         return;
     }
     if parser.at_syntax_name() {
-        let matcher = parser.syntax.iter().find(|syntax| {
-            matches!(parser.current(), Some(TokenKind::Identifier(name)) if *name == syntax.name)
-        }).expect("the selected syntax name has a matcher").declaration.matcher.clone();
+        let matcher = parser
+            .selected_syntax()
+            .expect("the selected syntax name has a matcher")
+            .declaration
+            .matcher
+            .clone();
         parser.start(NodeKind::SyntaxInvocation);
         let _ = parser.bump();
         let outer_depth = parser.nesting_depth;

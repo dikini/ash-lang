@@ -5630,7 +5630,6 @@ impl Resolver {
             if usage.name.introduction == 0
                 || terms.module != owner.module()
                 || usage.declaration.source() != owner.span().source()
-                || usage.name.span.source() != owner.span().source()
             {
                 return Err(invalid());
             }

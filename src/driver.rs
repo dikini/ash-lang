@@ -1424,12 +1424,33 @@ where
             let mut transformer_failure = None;
             let mut transformer = |selection: &crate::syntax::SelectedSyntax,
                                    captures: &[crate::surface::SurfaceSyntaxCapture],
-                                   span: Span| {
+                                   span: Span,
+                                   caller: &crate::surface::SurfaceName,
+                                   introduction: usize,
+                                   owners: &[Option<usize>]| {
+                let contexts = std::sync::Arc::new(crate::syntax::SyntaxContexts::new(
+                    &selected,
+                    &checked_syntax_imports,
+                    owners,
+                ));
                 match prepare_transformer_entry(selection, &checked, constraint_work) {
-                    Ok(entry) => match crate::eval::evaluate_transformer(&entry, captures, span) {
-                        Ok(output) => {
-                            crate::syntax::admit_transformer_output(module.source(), span, output)
-                        }
+                    Ok(entry) => match crate::eval::evaluate_transformer(
+                        &entry,
+                        captures,
+                        span,
+                        module.source(),
+                        selection.declaration.span,
+                        caller,
+                        introduction,
+                        std::sync::Arc::clone(&contexts),
+                    ) {
+                        Ok((output, fresh_count)) => crate::syntax::admit_transformer_output(
+                            module.source(),
+                            span,
+                            output,
+                            &contexts,
+                        )
+                        .map(|expression| (expression, fresh_count)),
                         Err(error) => {
                             transformer_failure =
                                 Some(FileFailure::from(PipelineFailure::Runtime(error)));

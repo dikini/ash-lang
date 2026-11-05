@@ -559,6 +559,7 @@ pub(crate) fn parse_macro_expression(
     source: &SourceFile,
     invocation: Span,
     output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
 ) -> Result<
     (
         crate::surface::SurfaceExpr,
@@ -582,14 +583,19 @@ pub(crate) fn parse_macro_expression(
         .map_err(|_| ())?;
     let mut tokens = Vec::new();
     let mut fragments = std::collections::HashMap::new();
+    let mut original_nodes = std::collections::HashMap::new();
+    let mut syntax_selections = std::collections::HashMap::new();
+    let mut syntax_spellings = std::collections::HashMap::new();
     let mut matcher = Vec::new();
     let mut captures = Vec::new();
-    for piece in output {
+    let mut pieces = output.into_iter().rev().collect::<Vec<_>>();
+    while let Some(piece) = pieces.pop() {
         let kind = match piece {
             MacroOutputNode::Expression(expression, origin) => {
-                if origin != invocation {
-                    return Err(());
-                }
+                original_nodes.insert(
+                    tokens.len(),
+                    MacroOutputNode::Expression(expression.clone(), origin),
+                );
                 let name = SurfaceName {
                     text: format!("__ash_fragment_{}", captures.len()),
                     span: anchor,
@@ -604,12 +610,73 @@ pub(crate) fn parse_macro_expression(
                 captures.push(SurfaceSyntaxCapture::Expression(expression));
                 TokenKind::Identifier(name.text)
             }
-            MacroOutputNode::Token(kind, origin) => {
-                if origin != invocation {
-                    return Err(());
+            MacroOutputNode::Identifier(identifier, origin) => {
+                original_nodes.insert(
+                    tokens.len(),
+                    MacroOutputNode::Identifier(identifier.clone(), origin),
+                );
+                if let Some(selection) = contexts.select(&identifier) {
+                    syntax_selections.insert(tokens.len(), selection.clone());
                 }
+                syntax_spellings.insert(
+                    tokens.len(),
+                    std::sync::Arc::<str>::from(identifier.text.as_str()),
+                );
+                let name = SurfaceName {
+                    text: format!("__ash_fragment_{}", captures.len()),
+                    span: anchor,
+                    introduction: 0,
+                    introduced_at: None,
+                };
+                fragments.insert(tokens.len(), name.clone());
+                matcher.push(SurfaceSyntaxMatcherPart::Capture {
+                    name: name.clone(),
+                    kind: SurfaceSyntaxCaptureKind::Identifier,
+                });
+                let uppercase = identifier
+                    .text
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_uppercase);
+                let spelling = identifier.text.clone();
+                captures.push(SurfaceSyntaxCapture::Identifier(identifier));
+                if uppercase {
+                    TokenKind::UpperIdentifier(spelling)
+                } else {
+                    TokenKind::Identifier(spelling)
+                }
+            }
+            MacroOutputNode::Token(kind, spelling, origin) => {
+                syntax_spellings.insert(tokens.len(), std::sync::Arc::clone(&spelling));
+                original_nodes.insert(
+                    tokens.len(),
+                    MacroOutputNode::Token(kind.clone(), spelling, origin),
+                );
                 kind
             }
+            MacroOutputNode::Group(delimiter, children, origin) => {
+                original_nodes.insert(
+                    tokens.len(),
+                    MacroOutputNode::Group(delimiter.clone(), Vec::new(), origin),
+                );
+                let (open, close) = match delimiter {
+                    crate::syntax::MacroDelimiter::Parentheses => {
+                        (TokenKind::LeftParen, TokenKind::RightParen)
+                    }
+                    crate::syntax::MacroDelimiter::Braces => {
+                        (TokenKind::LeftBrace, TokenKind::RightBrace)
+                    }
+                };
+                let close_spelling = match close {
+                    TokenKind::RightParen => ")",
+                    TokenKind::RightBrace => "}",
+                    _ => unreachable!(),
+                };
+                pieces.push(MacroOutputNode::Token(close, close_spelling.into(), origin));
+                pieces.extend(children.into_iter().rev());
+                open
+            }
+            MacroOutputNode::Splice(_) => return Err(()),
         };
         tokens.push(crate::lexer::Token { kind, span: anchor });
     }
@@ -631,6 +698,8 @@ pub(crate) fn parse_macro_expression(
         in_template: false,
         syntax: &[],
         syntax_source: Some(source),
+        syntax_selections: Some(&syntax_selections),
+        syntax_spellings: Some(&syntax_spellings),
         syntax_stops: Vec::new(),
     };
     parser.start(NodeKind::Module);
@@ -647,8 +716,8 @@ pub(crate) fn parse_macro_expression(
         ..
     } = parser;
     let tree = cst::build(tokens, Vec::new(), diagnostics, events, resource_failure);
-    let expression =
-        project::project_macro_expression(source, &tree, &fragments).map_err(|_| ())?;
+    let expression = project::project_macro_expression(source, &tree, &fragments, &original_nodes)
+        .map_err(|_| ())?;
     Ok((expression, matcher, captures))
 }
 
@@ -732,6 +801,8 @@ pub(crate) fn parse_module_header(
             in_template: false,
             syntax: &[],
             syntax_source: None,
+            syntax_selections: None,
+            syntax_spellings: None,
             syntax_stops: Vec::new(),
         };
         grammar::module_header(&mut parser);
@@ -801,6 +872,8 @@ pub(crate) fn finish_module_from_checkpoint_with_syntax(
         in_template: false,
         syntax,
         syntax_source: source,
+        syntax_selections: None,
+        syntax_spellings: None,
         syntax_stops: Vec::new(),
     };
     grammar::module_body(&mut parser);
@@ -849,27 +922,47 @@ pub(crate) struct Parser<'tokens> {
     in_template: bool,
     syntax: &'tokens [crate::syntax::SelectedSyntax],
     syntax_source: Option<&'tokens SourceFile>,
+    syntax_selections:
+        Option<&'tokens std::collections::HashMap<usize, crate::syntax::SelectedSyntax>>,
+    syntax_spellings: Option<&'tokens std::collections::HashMap<usize, std::sync::Arc<str>>>,
     syntax_stops: Vec<(TokenKind, String, usize)>,
 }
 
 impl Parser<'_> {
     fn at_syntax_name(&self) -> bool {
-        matches!(self.current(), Some(TokenKind::Identifier(name)) if self.syntax.iter().any(|syntax| syntax.name == *name))
+        self.selected_syntax().is_some()
+    }
+
+    fn selected_syntax(&self) -> Option<&crate::syntax::SelectedSyntax> {
+        if let Some(selections) = self.syntax_selections {
+            return selections.get(&self.position);
+        }
+        let Some(TokenKind::Identifier(name)) = self.current() else {
+            return None;
+        };
+        self.syntax.iter().find(|syntax| syntax.name == *name)
     }
 
     fn at_syntax_literal(&self, kind: &TokenKind, spelling: &str) -> bool {
         let Some(token) = self.tokens.get(self.position) else {
             return false;
         };
+        if token.kind != *kind {
+            return false;
+        }
+        if let Some(spellings) = self.syntax_spellings {
+            return spellings
+                .get(&self.position)
+                .is_some_and(|found| found.as_ref() == spelling);
+        }
         let Some(source) = self.syntax_source else {
             return false;
         };
         let range = token.span.range();
-        token.kind == *kind
-            && source
-                .text()
-                .get(range.start() as usize..range.end() as usize)
-                == Some(spelling)
+        source
+            .text()
+            .get(range.start() as usize..range.end() as usize)
+            == Some(spelling)
     }
 
     fn at_syntax_stop(&self) -> bool {

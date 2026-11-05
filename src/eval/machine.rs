@@ -6867,18 +6867,34 @@ pub(crate) fn evaluate_transformer(
     entry: &crate::core::validate::ValidatedMacroEntry,
     captures: &[crate::surface::SurfaceSyntaxCapture],
     invocation: crate::source::Span,
-) -> Result<Vec<crate::syntax::MacroOutputNode>, RuntimeFailure> {
+    source: &crate::source::SourceFile,
+    definition: crate::source::Span,
+    caller: &crate::surface::SurfaceName,
+    introduction: usize,
+    contexts: std::sync::Arc<crate::syntax::SyntaxContexts>,
+) -> Result<(Vec<crate::syntax::MacroOutputNode>, usize), RuntimeFailure> {
     let scope = disposal::Scope::enter();
     let result = (|| {
         let mut machine = Machine::new_effect(&entry.program);
-        machine.syntax_host = Some(syntax::SyntaxHost::new(entry, captures, invocation)?);
+        machine.syntax_host = Some(syntax::SyntaxHost::new(
+            entry,
+            captures,
+            invocation,
+            source,
+            definition,
+            caller,
+            introduction,
+            contexts,
+        )?);
         let evaluation = machine.run_loop()?;
         let (value, heap) = evaluation.into_observation_parts();
-        let transferred = machine
+        let host = machine
             .syntax_host
             .as_ref()
-            .ok_or(RuntimeFailure::InvalidControlState)?
-            .transfer(&value, heap.cells());
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let transferred = host
+            .transfer(&value, heap.cells())
+            .map(|nodes| (nodes, host.fresh_count()));
         drop(value);
         drop(heap);
         drop(machine);

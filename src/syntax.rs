@@ -8,25 +8,68 @@ use crate::{
     source::Span,
     surface::{
         SurfaceBinder, SurfaceBlock, SurfaceDefinitionKind, SurfaceExpr, SurfaceExprKind,
-        SurfaceLocalDeclaration, SurfaceModule, SurfaceName, SurfacePattern, SurfacePatternKind,
-        SurfaceReference, SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind, SurfaceSyntaxDeclaration,
-        SurfaceSyntaxImplementation, SurfaceSyntaxMatcherPart, SurfaceType, SurfaceTypeKind,
+        SurfaceExpressionCapture, SurfaceLocalDeclaration, SurfaceModule, SurfaceName,
+        SurfacePattern, SurfacePatternKind, SurfaceReference, SurfaceSyntaxCapture,
+        SurfaceSyntaxCaptureKind, SurfaceSyntaxDeclaration, SurfaceSyntaxImplementation,
+        SurfaceSyntaxMatcherPart, SurfaceType, SurfaceTypeKind,
     },
     types::TypeWorkBudget,
 };
 
 /// Structured output transferred from one completed transformer invocation.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MacroOutputNode {
-    Expression(SurfaceExpr, Span),
-    Token(crate::lexer::TokenKind, Span),
+    Expression(SurfaceExpressionCapture, Span),
+    Identifier(SurfaceName, Span),
+    Token(crate::lexer::TokenKind, Arc<str>, Span),
+    Group(MacroDelimiter, Vec<MacroOutputNode>, Span),
+    Splice(SurfaceName),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum MacroDelimiter {
+    Parentheses,
+    Braces,
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct SelectedSyntax {
     pub(crate) name: String,
     pub(crate) declaration: SurfaceSyntaxDeclaration,
     pub(crate) owner: usize,
     pub(crate) import_span: Span,
+}
+
+/// The existing syntax imports visible from each issued introduction.
+#[derive(Clone, Debug)]
+pub(crate) struct SyntaxContexts {
+    caller: Vec<SelectedSyntax>,
+    owner_imports: Vec<Vec<SelectedSyntax>>,
+    owners: Vec<Option<usize>>,
+}
+
+impl SyntaxContexts {
+    pub(crate) fn new(
+        caller: &[SelectedSyntax],
+        owner_imports: &[Vec<SelectedSyntax>],
+        owners: &[Option<usize>],
+    ) -> Self {
+        Self {
+            caller: caller.to_vec(),
+            owner_imports: owner_imports.to_vec(),
+            owners: owners.to_vec(),
+        }
+    }
+
+    pub(crate) fn select(&self, name: &SurfaceName) -> Option<&SelectedSyntax> {
+        let imports = if name.introduction == 0 {
+            &self.caller
+        } else {
+            let owner = self.owners.get(name.introduction - 1)?.as_ref()?;
+            self.owner_imports.get(*owner)?
+        };
+        imports.iter().find(|syntax| syntax.name == name.text)
+    }
 }
 
 /// A literal name and the checked syntax selection that introduced it.
@@ -268,7 +311,7 @@ pub(crate) fn validate_template(declaration: &SurfaceSyntaxDeclaration) -> Resul
             SurfaceExprKind::SyntaxInvocation { captures, .. } => {
                 for capture in captures {
                     if let SurfaceSyntaxCapture::Expression(expression) = capture {
-                        check(expression, matcher)?;
+                        check(&expression.expression, matcher)?;
                     }
                 }
                 Ok(())
@@ -420,13 +463,75 @@ pub(crate) fn admit_transformer_output(
     source: &crate::source::SourceFile,
     invocation: Span,
     output: Vec<MacroOutputNode>,
+    contexts: &SyntaxContexts,
 ) -> Result<SurfaceExpr, Span> {
     let (mut expression, matcher, captures) =
-        crate::parser::parse_macro_expression(source, invocation, output)
+        crate::parser::parse_macro_expression(source, invocation, output, contexts)
             .map_err(|()| invocation)?;
     substitute(&mut expression, &matcher, &captures, 0, invocation)?;
     expression.span = invocation;
     Ok(expression)
+}
+
+fn substitute_capture(
+    capture: &mut SurfaceExpressionCapture,
+    matcher: &[SurfaceSyntaxMatcherPart],
+    captures: &[SurfaceSyntaxCapture],
+    introduction: usize,
+    invocation: Span,
+) -> Result<(), Span> {
+    if let SurfaceExprKind::TemplateSplice(name) = &capture.expression.kind
+        && let SurfaceSyntaxCapture::Expression(original) =
+            capture_by_name(name, matcher, captures)?
+    {
+        *capture = original.clone();
+        return Ok(());
+    }
+    substitute(
+        &mut capture.expression,
+        matcher,
+        captures,
+        introduction,
+        invocation,
+    )?;
+    let mut contents = capture.contents.to_vec();
+    substitute_contents(&mut contents, matcher, captures, introduction, invocation)?;
+    capture.contents = contents.into();
+    Ok(())
+}
+
+fn substitute_contents(
+    contents: &mut Vec<MacroOutputNode>,
+    matcher: &[SurfaceSyntaxMatcherPart],
+    captures: &[SurfaceSyntaxCapture],
+    introduction: usize,
+    invocation: Span,
+) -> Result<(), Span> {
+    for node in contents {
+        match node {
+            MacroOutputNode::Splice(name) => {
+                *node = match capture_by_name(name, matcher, captures)? {
+                    SurfaceSyntaxCapture::Expression(capture) => {
+                        MacroOutputNode::Expression(capture.clone(), invocation)
+                    }
+                    SurfaceSyntaxCapture::Identifier(name) => {
+                        MacroOutputNode::Identifier(name.clone(), name.span)
+                    }
+                };
+            }
+            MacroOutputNode::Identifier(name, _) => {
+                if introduction != 0 {
+                    name.introduction = introduction;
+                    name.introduced_at = Some(invocation);
+                }
+            }
+            MacroOutputNode::Group(_, children, _) => {
+                substitute_contents(children, matcher, captures, introduction, invocation)?;
+            }
+            MacroOutputNode::Token(_, _, _) | MacroOutputNode::Expression(_, _) => {}
+        }
+    }
+    Ok(())
 }
 
 fn substitute(
@@ -441,17 +546,19 @@ fn substitute(
             name,
             captures: nested,
         } => {
-            name.introduction = introduction;
-            name.introduced_at = Some(invocation);
+            if introduction != 0 {
+                name.introduction = introduction;
+                name.introduced_at = Some(invocation);
+            }
             for capture in nested {
                 if let SurfaceSyntaxCapture::Expression(expression) = capture {
-                    substitute(expression, matcher, captures, introduction, invocation)?;
+                    substitute_capture(expression, matcher, captures, introduction, invocation)?;
                 }
             }
         }
         SurfaceExprKind::TemplateSplice(name) => {
             *expression = match capture_by_name(name, matcher, captures)? {
-                SurfaceSyntaxCapture::Expression(capture) => capture.clone(),
+                SurfaceSyntaxCapture::Expression(capture) => capture.expression.clone(),
                 SurfaceSyntaxCapture::Identifier(capture) => SurfaceExpr {
                     kind: SurfaceExprKind::Name(SurfaceReference::Unqualified(capture.clone())),
                     span: capture.span,
@@ -547,8 +654,10 @@ fn substitute(
             }
         }
         SurfaceExprKind::Name(SurfaceReference::Unqualified(name)) => {
-            name.introduction = introduction;
-            name.introduced_at = Some(invocation);
+            if introduction != 0 {
+                name.introduction = introduction;
+                name.introduced_at = Some(invocation);
+            }
         }
         SurfaceExprKind::Integer(_)
         | SurfaceExprKind::String(_)
@@ -567,7 +676,10 @@ pub(crate) fn expand_module(
         &SelectedSyntax,
         &[SurfaceSyntaxCapture],
         Span,
-    ) -> Result<SurfaceExpr, Span>,
+        &SurfaceName,
+        usize,
+        &[Option<usize>],
+    ) -> Result<(SurfaceExpr, usize), Span>,
 ) -> Result<Vec<SyntaxNameUse>, Span> {
     let mut next_introduction = ExpansionContexts {
         owner_imports,
@@ -610,12 +722,14 @@ pub(crate) fn expand_module(
             .owners
             .get(name.introduction - 1)
             .ok_or(name.span)?;
-        uses.push(SyntaxNameUse {
-            name,
-            owner: owner.owner,
-            declaration: owner.declaration,
-            import_span: owner.import_span,
-        });
+        if let Some(owner_index) = owner.owner {
+            uses.push(SyntaxNameUse {
+                name,
+                owner: owner_index,
+                declaration: owner.declaration,
+                import_span: owner.import_span,
+            });
+        }
     }
     Ok(uses)
 }
@@ -626,13 +740,16 @@ struct ExpansionContexts<'a> {
         &SelectedSyntax,
         &[SurfaceSyntaxCapture],
         Span,
-    ) -> Result<SurfaceExpr, Span>,
+        &SurfaceName,
+        usize,
+        &[Option<usize>],
+    ) -> Result<(SurfaceExpr, usize), Span>,
     owners: Vec<SyntaxOwner>,
     names: Vec<SurfaceName>,
 }
 
 struct SyntaxOwner {
-    owner: usize,
+    owner: Option<usize>,
     declaration: Span,
     import_span: Span,
 }
@@ -682,7 +799,7 @@ fn expand_expression(
                     .ok_or(invocation)?;
                 next_introduction
                     .owner_imports
-                    .get(owner.owner)
+                    .get(owner.owner.ok_or(invocation)?)
                     .ok_or(invocation)?
             };
             let declaration = syntax
@@ -693,15 +810,39 @@ fn expand_expression(
             let template = match &declaration.declaration.implementation {
                 SurfaceSyntaxImplementation::Template(template) => template,
                 SurfaceSyntaxImplementation::Transformer(_) => {
-                    let replacement =
-                        (next_introduction.transformer)(&declaration, captures, expansion_anchor)?;
+                    next_introduction.owners.push(SyntaxOwner {
+                        owner: Some(declaration.owner),
+                        declaration: declaration.declaration.span,
+                        import_span: declaration.import_span,
+                    });
+                    let introduction = next_introduction.owners.len();
+                    let owners = next_introduction
+                        .owners
+                        .iter()
+                        .map(|owner| owner.owner)
+                        .collect::<Vec<_>>();
+                    let (replacement, fresh_count) = (next_introduction.transformer)(
+                        &declaration,
+                        captures,
+                        expansion_anchor,
+                        name,
+                        introduction,
+                        &owners,
+                    )?;
+                    for _ in 0..fresh_count {
+                        next_introduction.owners.push(SyntaxOwner {
+                            owner: None,
+                            declaration: declaration.declaration.span,
+                            import_span: declaration.import_span,
+                        });
+                    }
                     *expression = replacement;
                     return expand_expression(expression, selected, next_introduction);
                 }
             };
             let mut replacement = template.clone();
             next_introduction.owners.push(SyntaxOwner {
-                owner: declaration.owner,
+                owner: Some(declaration.owner),
                 declaration: declaration.declaration.span,
                 import_span: declaration.import_span,
             });
