@@ -215,8 +215,10 @@ findings here before adding mechanisms.
 ### D0 staged-graph receipt
 
 - Reviewed candidate: `80beb33105ed3cc2aad2bed31899561a48845b43`.
-  The retaining commit pins this staged repair and its evidence. The 30–55
-  focused engineer-day estimate remains uncalibrated for the remaining chain.
+  The staged source and tests were verified at
+  `0274daf9e644e4fb47845c794f2ea4da8f475f60`; the subsequent receipt update
+  changes this task only. The 30–55 focused engineer-day estimate remains
+  uncalibrated for the remaining chain.
 - `cargo test -j 1 -p ash --lib module::staged_tests -- --nocapture`: one
   passes. An alias and diamond graph includes the implicit builtins once and
   compares source census, edge order, spans and total syntax work with the
@@ -228,7 +230,7 @@ findings here before adding mechanisms.
 - `cargo test -j 1 -p ash --test parser --test modules_syntax --test
   module_loading --test module_resolution --test compiler_work_reporting
   --no-fail-fast`: parser 50, module syntax 20, module loading 27, module
-  resolution 11 and work reporting 6 pass. The long work case took 101.42
+  resolution 11 and work reporting 6 pass. The long work case took 101.01
   seconds. A real driver case proves a dependency check precedes a malformed
   importer body; other cases retain source/import diagnostics and paid partial
   checking work after body failure.
@@ -237,9 +239,7 @@ findings here before adding mechanisms.
   and off agree; complete surfaces produce one input record, early failures
   produce none, and incomplete compilation is not reported as complete.
 - Macro graph tests still fail at unsupported targeted syntax imports, while
-  their handwritten and ordinary transformer-parser controls pass. The source
-  catalogue assertion and API/calibration documentation comments changed after
-  these runs; the retaining source needs a frozen rerun.
+  their handwritten and ordinary transformer-parser controls pass.
 
 ## Verification
 
