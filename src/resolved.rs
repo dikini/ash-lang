@@ -17364,6 +17364,28 @@ impl ResolvedRegistry {
     }
 
     #[cfg(test)]
+    pub(crate) fn replace_first_lexical_parameter_origin_for_core_test(
+        &mut self,
+        index: usize,
+        origin: Origin,
+    ) -> bool {
+        let Some(nominal) = self.lexical_nominals.first() else {
+            return false;
+        };
+        let Some(parameter) = self
+            .nominal_parameters
+            .get_mut(&nominal.id)
+            .and_then(|parameters| parameters.get_mut(index))
+        else {
+            return false;
+        };
+        parameter.origin = origin;
+        let parameter = parameter.clone();
+        let _ = self.type_variables.insert(parameter.id, parameter.into());
+        true
+    }
+
+    #[cfg(test)]
     pub(crate) fn duplicate_second_lexical_identity_for_core_test(&mut self) -> bool {
         let [first, second, ..] = self.lexical_nominals.as_mut() else {
             return false;

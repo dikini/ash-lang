@@ -2512,6 +2512,7 @@ struct Resolver {
     implementation_route_ranks: HashMap<ImplId, ImplementationRouteRank>,
     public_implementation_route_ranks: HashMap<ImplId, ImplementationRouteRank>,
     type_scopes: Vec<HashMap<String, TypeVariableId>>,
+    syntax_type_scopes: Vec<HashMap<(String, usize), TypeVariableId>>,
     nominal_parameter_counts: HashMap<NominalTypeId, usize>,
     active_resumes: Vec<ResumeId>,
     retained_clause: Option<ResumeId>,
@@ -2942,6 +2943,7 @@ impl Resolver {
             implementation_route_ranks: HashMap::new(),
             public_implementation_route_ranks: HashMap::new(),
             type_scopes: Vec::new(),
+            syntax_type_scopes: Vec::new(),
             nominal_parameter_counts: HashMap::new(),
             active_resumes: Vec::new(),
             retained_clause: None,
@@ -9654,10 +9656,26 @@ impl Resolver {
         self.type_scopes.push(
             parameters
                 .iter()
-                .map(|parameter| (parameter.spelling.clone(), parameter.id))
+                .zip(&declaration.parameters)
+                .filter(|(_, source)| source.name.introduction == 0)
+                .map(|(parameter, _)| (parameter.spelling.clone(), parameter.id))
+                .collect(),
+        );
+        self.syntax_type_scopes.push(
+            parameters
+                .iter()
+                .zip(&declaration.parameters)
+                .filter(|(_, source)| source.name.introduction != 0)
+                .map(|(parameter, source)| {
+                    (
+                        (parameter.spelling.clone(), source.name.introduction),
+                        parameter.id,
+                    )
+                })
                 .collect(),
         );
         let resolved = self.resolve_newtype_representation(representation);
+        let _ = self.syntax_type_scopes.pop();
         self.type_scopes.truncate(type_scope_checkpoint);
         let (representation, provenance) = resolved?;
 
@@ -10109,6 +10127,20 @@ impl Resolver {
         }
     }
 
+    fn contextual_type_variable(&self, name: &SurfaceName) -> Option<TypeVariableId> {
+        if name.introduction == 0 {
+            self.type_scopes
+                .iter()
+                .rev()
+                .find_map(|scope| scope.get(&name.text).copied())
+        } else {
+            self.syntax_type_scopes
+                .iter()
+                .rev()
+                .find_map(|scope| scope.get(&(name.text.clone(), name.introduction)).copied())
+        }
+    }
+
     fn resolve_owner_argument(
         &mut self,
         surface: &SurfaceType,
@@ -10203,15 +10235,10 @@ impl Resolver {
                         }
                         SurfaceTypeKind::Named(name) => {
                             if matches!(name, SurfaceReference::Unqualified(_))
-                                && name.member().introduction == 0
-                                && let Some(variable) = self
-                                    .type_scopes
-                                    .iter()
-                                    .rev()
-                                    .find_map(|scope| scope.get(&name.member().text))
+                                && let Some(variable) = self.contextual_type_variable(name.member())
                             {
                                 provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                                completed.push((Type::Variable(*variable), provenance.len() - 1));
+                                completed.push((Type::Variable(variable), provenance.len() - 1));
                                 continue;
                             }
                             let nominal = self.nominal_reference(name)?;
@@ -10224,14 +10251,10 @@ impl Resolver {
                             arguments,
                         } => {
                             let head = if matches!(constructor, SurfaceReference::Unqualified(_))
-                                && constructor.member().introduction == 0
-                                && let Some(variable) = self
-                                    .type_scopes
-                                    .iter()
-                                    .rev()
-                                    .find_map(|scope| scope.get(&constructor.member().text))
+                                && let Some(variable) =
+                                    self.contextual_type_variable(constructor.member())
                             {
-                                ApplicationHead::Variable(*variable)
+                                ApplicationHead::Variable(variable)
                             } else {
                                 let family = self.nominal_reference(constructor)?.id;
                                 self.type_work.charge(1).map_err(|_| {
@@ -11309,7 +11332,20 @@ impl Resolver {
             id,
             spelling,
             kind,
-            origin: Origin::Source(name.span),
+            origin: if name.introduction == 0 {
+                Origin::Source(name.span)
+            } else {
+                Origin::Expansion {
+                    invocation: name.introduced_at.ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            name.span,
+                            "introduced type parameter has no invocation origin",
+                        )
+                    })?,
+                    definition: name.span,
+                }
+            },
         })
     }
 

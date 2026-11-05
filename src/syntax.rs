@@ -460,6 +460,12 @@ pub(crate) fn validate_template(
             | SurfaceTypeKind::Bool
             | SurfaceTypeKind::Unit => Ok(()),
             SurfaceTypeKind::Named(_) => Ok(()),
+            SurfaceTypeKind::Application { arguments, .. } => {
+                for argument in arguments {
+                    check_annotation(argument)?;
+                }
+                Ok(())
+            }
             SurfaceTypeKind::Tuple(elements) => {
                 for element in elements {
                     check_annotation(element)?;
@@ -553,9 +559,6 @@ pub(crate) fn validate_template(
                     }
                 }
                 SurfaceLocalDeclaration::Newtype(declaration) => {
-                    if !declaration.parameters.is_empty() {
-                        return Err(declaration.span);
-                    }
                     for constructor in &declaration.constructors {
                         for field in &constructor.fields {
                             check_annotation(field)?;
@@ -900,17 +903,41 @@ fn substitute_contents(
     Ok(())
 }
 
-fn substitute_annotation(annotation: &mut SurfaceType, introduction: usize, invocation: Span) {
-    match &mut annotation.kind {
-        SurfaceTypeKind::Named(SurfaceReference::Unqualified(name)) if introduction != 0 => {
+fn introduce_type_reference(
+    reference: &mut SurfaceReference,
+    introduction: usize,
+    invocation: Span,
+) {
+    if introduction == 0 {
+        return;
+    }
+    match reference {
+        SurfaceReference::Unqualified(name) => {
             name.introduction = introduction;
             name.introduced_at = Some(invocation);
         }
-        SurfaceTypeKind::Named(SurfaceReference::Qualified(name)) if introduction != 0 => {
+        SurfaceReference::Qualified(name) => {
             name.qualifier.introduction = introduction;
             name.qualifier.introduced_at = Some(invocation);
             name.member.introduction = introduction;
             name.member.introduced_at = Some(invocation);
+        }
+    }
+}
+
+fn substitute_annotation(annotation: &mut SurfaceType, introduction: usize, invocation: Span) {
+    match &mut annotation.kind {
+        SurfaceTypeKind::Named(reference) => {
+            introduce_type_reference(reference, introduction, invocation);
+        }
+        SurfaceTypeKind::Application {
+            constructor,
+            arguments,
+        } => {
+            introduce_type_reference(constructor, introduction, invocation);
+            for argument in arguments {
+                substitute_annotation(argument, introduction, invocation);
+            }
         }
         SurfaceTypeKind::Tuple(elements) => {
             for element in elements {
@@ -982,6 +1009,10 @@ fn substitute_block(
                 if introduction != 0 {
                     declaration.name.introduction = introduction;
                     declaration.name.introduced_at = Some(invocation);
+                    for parameter in &mut declaration.parameters {
+                        parameter.name.introduction = introduction;
+                        parameter.name.introduced_at = Some(invocation);
+                    }
                     for constructor in &mut declaration.constructors {
                         constructor.name.introduction = introduction;
                         constructor.name.introduced_at = Some(invocation);
@@ -1363,19 +1394,37 @@ struct SyntaxOwner {
     import_span: Span,
 }
 
+fn collect_type_reference(
+    reference: &SurfaceReference,
+    names: &mut Vec<SurfaceName>,
+    qualified: &mut Vec<SurfaceQualifiedName>,
+) {
+    match reference {
+        SurfaceReference::Unqualified(name) if name.introduction != 0 => {
+            names.push(name.clone());
+        }
+        SurfaceReference::Qualified(name) if name.member.introduction != 0 => {
+            qualified.push(name.clone());
+        }
+        _ => {}
+    }
+}
+
 fn collect_annotation_names(
     annotation: &SurfaceType,
     names: &mut Vec<SurfaceName>,
     qualified: &mut Vec<SurfaceQualifiedName>,
 ) {
     match &annotation.kind {
-        SurfaceTypeKind::Named(SurfaceReference::Unqualified(name)) if name.introduction != 0 => {
-            names.push(name.clone());
-        }
-        SurfaceTypeKind::Named(SurfaceReference::Qualified(name))
-            if name.member.introduction != 0 =>
-        {
-            qualified.push(name.clone());
+        SurfaceTypeKind::Named(reference) => collect_type_reference(reference, names, qualified),
+        SurfaceTypeKind::Application {
+            constructor,
+            arguments,
+        } => {
+            collect_type_reference(constructor, names, qualified);
+            for argument in arguments {
+                collect_annotation_names(argument, names, qualified);
+            }
         }
         SurfaceTypeKind::Tuple(elements) => {
             for element in elements {

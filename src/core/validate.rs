@@ -5476,6 +5476,27 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         &self,
         id: crate::types::TypeVariableId,
     ) -> Result<bool, ValidationError> {
+        if self
+            .program
+            .registry
+            .type_variable(id)
+            .is_some_and(|parameter| matches!(parameter.origin, Origin::Expansion { .. }))
+        {
+            for nominal in self.program.registry.lexical_nominals() {
+                if !matches!(nominal.origin, Origin::Expansion { .. }) {
+                    continue;
+                }
+                let parameters = self
+                    .program
+                    .registry
+                    .nominal_parameters(nominal.id)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+                self.charge_type_work(parameters.len().saturating_add(1))?;
+                if parameters.iter().any(|parameter| parameter.id == id) {
+                    return Ok(true);
+                }
+            }
+        }
         for owner in self.program.method_evidence.lexical_owners() {
             self.charge_type_work(
                 1usize
@@ -8009,6 +8030,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             names
                 .try_reserve(parameters.len())
                 .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+            let mut previous_definition_end = None;
             for parameter in parameters {
                 let parameter_range = parameter.origin.primary_span().range();
                 let canonical = registry
@@ -8023,6 +8045,32 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     || parameter_range.start() < nominal_range.start()
                     || parameter_range.end() > nominal_range.end()
                 {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                if let Origin::Expansion {
+                    invocation,
+                    definition,
+                } = &nominal.origin
+                {
+                    let Origin::Expansion {
+                        invocation: parameter_invocation,
+                        definition: parameter_definition,
+                    } = &parameter.origin
+                    else {
+                        return Err(ValidationError::new(ValidationReason::Registry, None));
+                    };
+                    if invocation != parameter_invocation
+                        || definition.source() != parameter_definition.source()
+                        || !span_contains(*definition, *parameter_definition)
+                        || parameter_definition.range().start()
+                            >= parameter_definition.range().end()
+                        || previous_definition_end
+                            .is_some_and(|previous| parameter_definition.range().start() < previous)
+                    {
+                        return Err(ValidationError::new(ValidationReason::Registry, None));
+                    }
+                    previous_definition_end = Some(parameter_definition.range().end());
+                } else if matches!(parameter.origin, Origin::Expansion { .. }) {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
                 }
             }
@@ -30708,6 +30756,127 @@ mod tests {
             assert!(
                 validate_effect_modules(forged, &sources, &modules).is_err(),
                 "independent Core accepted construction-origin mutation {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_local_type_parameters_reject_tampered_origins() {
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/template-annotation/generic_pair.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the generated generic newtype graph must compile");
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let [nominal] = program.registry().lexical_nominals() else {
+            panic!("one generated local newtype")
+        };
+        let [first, second] = program.registry().nominal_parameters(nominal.id).unwrap() else {
+            panic!("two generated type parameters")
+        };
+        let (first_origin, second_origin) = (first.origin.clone(), second.origin.clone());
+        let Origin::Expansion {
+            invocation,
+            definition,
+        } = first_origin
+        else {
+            panic!("the first parameter retains its construction origin")
+        };
+        let forms = sources
+            .iter()
+            .find(|source| source.id() == definition.source())
+            .unwrap();
+        let caller = sources
+            .iter()
+            .find(|source| source.id() == invocation.source())
+            .unwrap();
+        let other_caller = caller.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let outside = forms.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let invalid = crate::source::Span::unchecked_for_test(
+            forms.id(),
+            ByteRange::new(forms.text().len() as u32 + 1, forms.text().len() as u32 + 2).unwrap(),
+        );
+        let Origin::Expansion {
+            definition: second_definition,
+            ..
+        } = second_origin
+        else {
+            panic!("the second parameter retains its construction origin")
+        };
+        let empty = forms
+            .span(ByteRange::new(definition.range().start(), definition.range().start()).unwrap())
+            .unwrap();
+        let overlap = forms
+            .span(
+                ByteRange::new(definition.range().start(), second_definition.range().end())
+                    .unwrap(),
+            )
+            .unwrap();
+        validate_effect_modules(
+            identity_effect_traversal(program).unwrap(),
+            &sources,
+            &modules,
+        )
+        .expect("independent Core accepts the unmodified graph");
+
+        for mutation in 0..10 {
+            let mut forged = identity_effect_traversal(program).unwrap();
+            let mut registry = (*forged.registry).clone();
+            let replacement = match mutation {
+                0 => Origin::Expansion {
+                    invocation: other_caller,
+                    definition,
+                },
+                1 => Origin::Expansion {
+                    invocation: definition,
+                    definition,
+                },
+                2 => Origin::Expansion {
+                    invocation,
+                    definition: invocation,
+                },
+                3 => Origin::Expansion {
+                    invocation,
+                    definition: outside,
+                },
+                4 => Origin::Expansion {
+                    invocation,
+                    definition: invalid,
+                },
+                5 | 6 => second_origin.clone(),
+                7 => Origin::Source(definition),
+                8 => Origin::Expansion {
+                    invocation,
+                    definition: empty,
+                },
+                9 => Origin::Expansion {
+                    invocation,
+                    definition: overlap,
+                },
+                _ => unreachable!(),
+            };
+            assert!(registry.replace_first_lexical_parameter_origin_for_core_test(0, replacement));
+            if mutation == 6 {
+                assert!(
+                    registry.replace_first_lexical_parameter_origin_for_core_test(
+                        1,
+                        first_origin.clone(),
+                    )
+                );
+            }
+            forged.registry = Arc::new(registry);
+            assert!(
+                validate_effect_modules(forged, &sources, &modules).is_err(),
+                "independent Core accepted parameter-origin mutation {mutation}"
             );
         }
     }

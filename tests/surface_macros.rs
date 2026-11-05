@@ -516,10 +516,15 @@ fn template_named_annotation_uses_owner_and_introduced_local_types() {
         "template-annotation/valid.ash",
         "template-annotation/local.ash",
         "template-annotation/unique.ash",
+        "template-annotation/generic_local.ash",
+        "template-annotation/generic_pair.ash",
         "template-annotation/imported/entry.ash",
         "template-annotation/imported/facade_entry.ash",
         "template-annotation/imported/qualified_entry.ash",
         "template-annotation/imported/qualified_facade_entry.ash",
+        "template-annotation/imported/applied_entry.ash",
+        "template-annotation/imported/applied_qualified_entry.ash",
+        "template-annotation/imported/applied_nested_entry.ash",
     ] {
         let compiled = compile_path(fixture(path)).expect(path);
         assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
@@ -548,6 +553,10 @@ fn template_named_annotation_does_not_resolve_in_the_caller() {
         ),
         ("template-annotation/late.ash", "resolve.unknown-type"),
         (
+            "template-annotation/generic_escape.ash",
+            "resolve.unknown-type",
+        ),
+        (
             "template-annotation/imported/wrong_type.ash",
             "type.binding-initializer",
         ),
@@ -566,6 +575,18 @@ fn template_named_annotation_does_not_resolve_in_the_caller() {
         (
             "template-annotation/imported/private_entry.ash",
             "resolve.unavailable-export",
+        ),
+        (
+            "template-annotation/imported/applied_wrong.ash",
+            "type.binding-initializer",
+        ),
+        (
+            "template-annotation/imported/applied_generic.ash",
+            "type.binding-initializer",
+        ),
+        (
+            "template-annotation/imported/applied_unknown.ash",
+            "resolve.unknown-type",
         ),
     ] {
         let failure = compile_path(fixture(path)).expect_err(path);
