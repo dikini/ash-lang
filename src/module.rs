@@ -22,7 +22,9 @@ use crate::{
         parse_with_budget_and_header, project_module, project_module_header,
     },
     source::{SourceError, SourceFile, SourceId, Span},
-    surface::{SurfaceImport, SurfaceModule, SurfaceModulePath},
+    surface::{
+        SurfaceImport, SurfaceImportItem, SurfaceImportSelection, SurfaceModule, SurfaceModulePath,
+    },
     syntax_resource::SyntaxBudget,
 };
 
@@ -540,6 +542,8 @@ impl ModuleGraph {
 /// Stable module-loader reason families.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModuleReason {
+    /// A syntax selector requires the checked compilation driver.
+    SyntaxRequiresDriver,
     /// A configured root attempts to replace a compiler-owned module root.
     ReservedRoot,
     /// An absolute builtin import names no compiler-owned module.
@@ -569,6 +573,7 @@ pub enum ModuleReason {
 impl fmt::Display for ModuleReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::SyntaxRequiresDriver => "module.syntax-requires-driver",
             Self::ReservedRoot => "invocation.reserved-root",
             Self::UnknownBuiltin => "module.unknown-builtin",
             Self::UnknownForeign => "module.unknown-foreign",
@@ -695,6 +700,7 @@ impl ModuleFailure {
     pub(crate) const fn responsibility(&self) -> &'static str {
         match self.reason {
             ModuleReason::ReservedRoot
+            | ModuleReason::SyntaxRequiresDriver
             | ModuleReason::DuplicateRoot
             | ModuleReason::InvalidRootName
             | ModuleReason::RootUnavailable => "invocation",
@@ -711,6 +717,7 @@ impl ModuleFailure {
     pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
         use crate::message::Message;
         Some(match self.reason {
+            ModuleReason::SyntaxRequiresDriver => Message::module_syntax_requires_driver(),
             ModuleReason::ReservedRoot => Message::module_reserved_root(self.root()?),
             ModuleReason::DuplicateRoot => Message::module_duplicate_root(self.root()?),
             ModuleReason::InvalidRootName => Message::module_invalid_root_name(self.root()?),
@@ -1455,6 +1462,15 @@ impl HeaderGraph {
         !self.pending.is_empty()
     }
 
+    pub(crate) fn next_imports(&self) -> Option<(&[SurfaceImport], &[ModuleDependency])> {
+        self.pending.front().map(|module| {
+            (
+                module.surface.imports.as_slice(),
+                module.dependencies.as_slice(),
+            )
+        })
+    }
+
     #[cfg(feature = "resource-calibration")]
     pub(crate) fn all_loaded(&self) -> bool {
         self.pending.is_empty()
@@ -1653,7 +1669,8 @@ fn charge(
 /// # Errors
 ///
 /// Returns the first failing input or compiler stage in source-ordered
-/// depth-first traversal, with the admitted diagnostic sources retained.
+/// depth-first traversal, with the admitted diagnostic sources retained. Syntax
+/// selectors require [`crate::driver::compile_path`] and are rejected here.
 pub fn load_module_graph(
     entry: &Path,
     roots: &ModuleRoots,
@@ -1792,6 +1809,18 @@ fn discover_graph_with_budget(
                 &staged[module_index].surface.imports[import_index],
             ))?;
             let import = staged[module_index].surface.imports[import_index].clone();
+            if matches!(budget.mode, BodyMode::Complete)
+                && let SurfaceImportSelection::Targeted(items) = &import.selection
+                && let Some(span) = items.iter().find_map(|item| match item {
+                    SurfaceImportItem::Syntax { span, .. } => Some(*span),
+                    _ => None,
+                })
+            {
+                let mut failure =
+                    ModuleFailure::source(ModuleReason::SyntaxRequiresDriver, span, None);
+                failure.source_rejection = false;
+                return Err(failure.into());
+            }
             frames
                 .last_mut()
                 .expect("the loop observed one traversal frame")

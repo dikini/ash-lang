@@ -98,6 +98,19 @@ fn parse_tree(text: &str) -> (SourceFile, ash::parser::ConcreteTree) {
     (source, tree)
 }
 
+#[test]
+fn out_of_place_dollar_is_a_parser_error() {
+    let (source, tree) = parse_tree("$value");
+    assert!(tree.lexical_diagnostics().is_empty());
+    assert!(tree.parse_diagnostics().iter().any(|diagnostic| {
+        diagnostic.found_token() == Some(ash::parser::FoundToken::Spelling("$"))
+    }));
+    assert_eq!(
+        project(&source, &tree),
+        Err(ProjectionError::RecoveryNodesPresent)
+    );
+}
+
 fn assert_name(expression: &SurfaceExpr, expected: &str) {
     let SurfaceExprKind::Name(SurfaceReference::Unqualified(name)) = &expression.kind else {
         panic!("expected name expression, found {expression:?}");

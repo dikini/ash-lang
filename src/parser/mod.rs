@@ -1093,6 +1093,7 @@ fn retained_token(kind: &TokenKind) -> FoundToken {
         TokenKind::Greater => FoundToken::Spelling(">"),
         TokenKind::Semicolon => FoundToken::Spelling(";"),
         TokenKind::At => FoundToken::Spelling("@"),
+        TokenKind::Dollar => FoundToken::Spelling("$"),
         TokenKind::Dot => FoundToken::Spelling("."),
         TokenKind::LineEnd => FoundToken::LineEnd,
         TokenKind::EndOfFile => FoundToken::EndOfFile,

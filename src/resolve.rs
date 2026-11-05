@@ -3933,6 +3933,9 @@ impl Resolver {
                 }
                 SurfaceImportSelection::Targeted(items) => {
                     for (selector_source_order, item) in items.iter().enumerate() {
+                        if let SurfaceImportItem::Syntax { name, .. } = item {
+                            return Err(unavailable_syntax_export(name));
+                        }
                         if let SurfaceImportItem::Implementation { interface, span } = item {
                             let route_rank = ImplementationRouteRank::new(
                                 dependency_summary_order,
@@ -13735,6 +13738,15 @@ fn kind_context_error(
 
 fn error(reason: ResolveReason, span: crate::source::Span, message: &str) -> ResolveError {
     Diagnostic::new(reason, SourceLabel::new(span, message)).into()
+}
+
+pub(crate) fn unavailable_syntax_export(name: &SurfaceName) -> ResolveError {
+    lookup_error(
+        ResolveContext::MissingExport,
+        name.span,
+        &name.text,
+        "this syntax declaration is not exported by the selected module",
+    )
 }
 
 fn lookup_error(

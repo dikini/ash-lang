@@ -351,6 +351,12 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             let public = shape.peek_token_is(&TokenKind::Pub);
             if public {
                 shape.token(&TokenKind::Pub)?;
+                if child_nodes(node)
+                    .filter(|child| child.kind == NodeKind::ImportItem)
+                    .any(|item| is_syntax_import_item(item, tokens))
+                {
+                    return malformed(InternalReason::UnexpectedShape);
+                }
             }
             shape.token(&TokenKind::Import)?;
             shape.node(NodeKind::ModulePath)?;
@@ -386,7 +392,16 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             }
         }
         NodeKind::ImportItem => {
-            if shape.peek_token_is(&TokenKind::Impl) {
+            if is_syntax_import_item(node, tokens) {
+                shape.token_matching(
+                    |kind| matches!(kind, TokenKind::Identifier(text) if text == "syntax"),
+                )?;
+                shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(name) if name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)))?;
+                if shape.peek_token_is(&TokenKind::As) {
+                    shape.token(&TokenKind::As)?;
+                    shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(name) if name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)))?;
+                }
+            } else if shape.peek_token_is(&TokenKind::Impl) {
                 shape.token(&TokenKind::Impl)?;
                 shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
             } else {
@@ -1661,12 +1676,16 @@ fn project_import_item(
             span: node_span(source, node, tokens)?,
         });
     }
+    let syntax = is_syntax_import_item(node, tokens);
     let mut names = direct_tokens(node, tokens).filter(|token| {
         matches!(
             token.kind,
             TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
         )
     });
+    if syntax {
+        let _ = names.next();
+    }
     let name = surface_name(names.next().ok_or(ProjectionError::MalformedTree(
         InternalReason::UnexpectedShape,
     ))?)?;
@@ -1674,11 +1693,21 @@ fn project_import_item(
     if names.next().is_some() {
         return malformed(InternalReason::UnexpectedShape);
     }
-    Ok(SurfaceImportItem::Name {
-        name,
-        alias,
-        span: node_span(source, node, tokens)?,
+    let span = node_span(source, node, tokens)?;
+    Ok(if syntax {
+        SurfaceImportItem::Syntax { name, alias, span }
+    } else {
+        SurfaceImportItem::Name { name, alias, span }
     })
+}
+
+fn is_syntax_import_item(node: &ConcreteNode, tokens: &[Token]) -> bool {
+    let mut direct = direct_tokens(node, tokens);
+    matches!(direct.next().map(|token| &token.kind), Some(TokenKind::Identifier(name)) if name == "syntax")
+        && matches!(
+            direct.next().map(|token| &token.kind),
+            Some(TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_))
+        )
 }
 
 fn project_type_declaration(

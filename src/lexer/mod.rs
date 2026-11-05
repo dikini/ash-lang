@@ -338,6 +338,7 @@ pub(crate) fn lex_with_budget(
             b'{' => single(&mut offset, TokenKind::LeftBrace),
             b'}' => single(&mut offset, TokenKind::RightBrace),
             b'@' => single(&mut offset, TokenKind::At),
+            b'$' => single(&mut offset, TokenKind::Dollar),
             b'.' => single(&mut offset, TokenKind::Dot),
             b':' => single(&mut offset, TokenKind::Colon),
             b'+' => single(&mut offset, TokenKind::Plus),

@@ -390,6 +390,9 @@ fn module_failure(failure: &ModuleFailure) -> String {
 
 const fn module_primary_message(reason: ModuleReason) -> &'static str {
     match reason {
+        ModuleReason::SyntaxRequiresDriver => {
+            "this syntax selector requires the checked compilation driver"
+        }
         ModuleReason::UnknownBuiltin => "this import names no compiler-owned module",
         ModuleReason::UnknownForeign => "this import names no registered foreign module",
         ModuleReason::ReservedRoot => "the builtin module root is reserved",

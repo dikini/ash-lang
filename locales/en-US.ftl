@@ -108,6 +108,7 @@ module-duplicate-root = The module root `{ $root }` is configured more than once
 module-invalid-root-name = `{ $root }` is not a valid lowercase Ash identifier for a module root.
 module-unknown-root = No module root named `{ $root }` is configured.
 module-unknown-builtin = This import names no compiler-owned module.
+module-syntax-requires-driver = Syntax imports require the checked compilation driver.
 module-not-found = The imported source file `{ $path }` does not exist.
 module-import-cycle = This import creates a dependency cycle through `{ $path }`.
 module-path-escape = The imported source file `{ $path }` is outside a root that must contain it.

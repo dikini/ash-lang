@@ -285,10 +285,10 @@ fn import_declaration(parser: &mut Parser<'_>) {
         }
     } else if parser.at(&TokenKind::LeftParen) {
         let _ = parser.bump();
-        let mut complete = import_item(parser);
+        let mut complete = import_item(parser, public);
         while complete && parser.at(&TokenKind::Comma) {
             let _ = parser.bump();
-            complete = import_item(parser);
+            complete = import_item(parser, public);
         }
         if complete {
             let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
@@ -326,9 +326,26 @@ fn module_path(parser: &mut Parser<'_>) {
     parser.finish();
 }
 
-fn import_item(parser: &mut Parser<'_>) -> bool {
+fn import_item(parser: &mut Parser<'_>, public: bool) -> bool {
     parser.start(NodeKind::ImportItem);
-    if parser.at(&TokenKind::Impl) {
+    if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "syntax")
+        && matches!(
+            parser.nth(1),
+            Some(TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_))
+        )
+    {
+        if public {
+            reject_import_line(parser, ExpectedForm::Identifier);
+            parser.finish();
+            return false;
+        }
+        let _ = parser.bump();
+        expect_syntax_name(parser);
+        if parser.at(&TokenKind::As) {
+            let _ = parser.bump();
+            expect_syntax_name(parser);
+        }
+    } else if parser.at(&TokenKind::Impl) {
         let _ = parser.bump();
         if !matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
             reject_import_line(parser, ExpectedForm::Identifier);
@@ -388,6 +405,15 @@ fn expect_import_name(parser: &mut Parser<'_>) {
 
 fn expect_lower_identifier(parser: &mut Parser<'_>) {
     if matches!(parser.current(), Some(TokenKind::Identifier(_))) {
+        let _ = parser.bump();
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+}
+
+fn expect_syntax_name(parser: &mut Parser<'_>) {
+    if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name.as_bytes().first().is_some_and(u8::is_ascii_lowercase))
+    {
         let _ = parser.bump();
     } else {
         parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);

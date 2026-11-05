@@ -5,7 +5,7 @@ use std::{
 };
 
 use ash::{
-    driver::{FileFailure, PipelineFailure, RunConfiguration, compile_path},
+    driver::{FileFailure, PipelineFailure, RunConfiguration, compile_path, execute},
     module::{
         LoadGraphError, MODULE_PATH_SEGMENT_LIMIT, MODULE_PENDING_LIMIT, ModuleReason,
         ModuleResource, ModuleRoots, load_module_graph,
@@ -225,6 +225,94 @@ fn header_failure_precedes_source_census() {
         Some(LoadGraphError::Syntax(_))
     ));
     assert!(failure.compilation_work().is_none());
+}
+
+#[test]
+fn syntax_selector_requires_a_checked_export_before_importer_body() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        "import library (syntax absent)\nmain : Unit -> Int\nmain () = 42\n",
+    );
+    tree.write("library.ash", "pub value : Unit -> Int\nvalue () = 42\n");
+
+    let wrapper = load_module_graph(&entry, &ModuleRoots::empty()).unwrap_err();
+    assert_eq!(
+        wrapper.module_reason().unwrap().to_string(),
+        "module.syntax-requires-driver"
+    );
+    assert!(!wrapper.is_source_rejection());
+    let diagnostics = ash::presentation::compile_graph_diagnostics(&wrapper).unwrap();
+    let mut output = Vec::new();
+    ash::presentation::write_json(&mut output, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["reason"], "module.syntax-requires-driver");
+    assert_eq!(json["responsibility"], "invocation");
+    assert!(
+        json["labels"][0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("entry.ash")
+    );
+    tree.write(
+        "entry.ash",
+        "import library (syntax absent)\nmain : Unit -> Int\nmain () = )\n",
+    );
+    let failure = compile_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    assert_eq!(
+        failure.reason_code(),
+        "resolve.unavailable-export",
+        "{failure:?}"
+    );
+    assert!(failure.is_source_rejection());
+    let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+        panic!("expected a syntax selection failure");
+    };
+    assert_eq!(error.found.as_deref(), Some("absent"));
+    let source = failure
+        .sources()
+        .iter()
+        .find(|source| source.id() == error.primary.span().source())
+        .unwrap();
+    let range = error.primary.span().range();
+    assert_eq!(
+        &source.text()[range.start() as usize..range.end() as usize],
+        "absent"
+    );
+    assert!(
+        failure
+            .sources()
+            .iter()
+            .any(|source| source.display_path().ends_with("library.ash"))
+    );
+    assert!(
+        !failure
+            .compilation_work()
+            .unwrap()
+            .source_checking
+            .unwrap()
+            .completed
+    );
+}
+
+#[test]
+fn ordinary_global_named_syntax_remains_importable() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        "import library (syntax as value)\nmain : Unit -> Int\nmain () = value ()\n",
+    );
+    tree.write("library.ash", "pub syntax : Unit -> Int\nsyntax () = 42\n");
+    let compiled = compile_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap();
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
 }
 
 #[test]

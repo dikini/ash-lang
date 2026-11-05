@@ -196,7 +196,7 @@ fn header_projection_rejects_a_prematurely_closed_module_event() {
 fn projected_header_matches_complete_projection_for_import_forms() {
     let source = SourceFile::new(
         "imports.ash",
-        "import @std.collections.list as List\nimport helpers.math (sum, Number as ImportedNumber)\npub import equality (Equal as Equality, equal, impl Equal)\nmain : Unit -> Int\nmain () = 42\n",
+        "import @std.collections.list as List\nimport helpers.math (sum, Number as ImportedNumber)\nimport macros (syntax choose as select)\npub import equality (Equal as Equality, equal, impl Equal)\nmain : Unit -> Int\nmain () = 42\n",
     )
     .unwrap();
     let mut budget = SyntaxBudget::with_limit(10_000);

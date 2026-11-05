@@ -124,11 +124,17 @@ findings here before adding mechanisms.
 - Parser amendment, task and execution plan are recorded. D0 has a concrete
   producer/consumer proposal and a frozen fixture family. The checkpoint,
   header projection, source census and staged driver compile; syntax contexts,
-  grants and the macro host do not. No macro behavior has changed.
-- The initial driver tests fail at unsupported targeted `syntax` imports, as
-  expected. The independent handwritten graph executes to `Int` value `42`,
-  and the proposed procedural transformer's ordinary Ash body parses and
-  projects. These are baseline observations, not macro acceptance.
+  grants and the macro host do not. Macro execution and expansion are absent.
+- Contextual syntax selectors and the `$` token now parse; misplaced `$` fails
+  at the parser. The checked driver rejects a missing syntax export before
+  parsing the importer body, and the syntax-free loader reports that such
+  selectors require the driver. This is fail-closed: no syntax export can yet
+  be published or used. Specification changes await the integrated feature.
+- The frozen macro graph now reaches the unimplemented
+  `@builtin.compiler.syntax` import and fails as unknown builtin. The
+  independent handwritten graph executes to `Int` value `42`, and the proposed
+  procedural transformer's ordinary Ash body parses and projects. These are
+  baseline observations, not macro acceptance.
 - The independent boundary challenge identified three required repairs: resume
   retained header parser state without duplicate event charges; look up generated
   syntax by each leading identifier's retained context; and independently
@@ -144,6 +150,13 @@ findings here before adding mechanisms.
   module vector that continues to grow. The plan now uses compilation-owned,
   append-only immutable context/export records addressed by authenticated stable
   IDs; operation-local views may borrow them without outliving a lookup.
+- Independent Core validation currently reparses original source without a
+  syntax environment to authenticate declaration coordinates and resolved
+  effect summaries. Binder ownership, order, and resource coordinates also
+  assume source spans. Its evidence must account for copied and generated
+  occurrences separately from diagnostic origins. The same
+  reviewer is challenging this boundary. The earlier whole-chain estimate is at
+  risk until this remaining validator work is sized.
 - Next actor: developer verifies and pins this repair; the orchestrator sends
   that exact candidate to the same reviewer. The remaining interfaces must be
   completed before claiming the D0 gate or substantial feature work complete.
@@ -240,6 +253,17 @@ findings here before adding mechanisms.
   produce none, and incomplete compilation is not reported as complete.
 - Macro graph tests still fail at unsupported targeted syntax imports, while
   their handwritten and ordinary transformer-parser controls pass.
+
+### Contextual-selector progress
+
+- The lexer retains `$` and preserves `syntax` as an identifier. Parser and
+  header projection distinguish syntax selectors from ordinary imports named
+  `syntax`; public syntax re-exports and names not beginning with lowercase are
+  rejected. The ordinary `syntax` global still executes through the driver.
+- The driver authenticates that the selected dependency has been checked and
+  rejects its unavailable syntax export before importer-body parsing. This
+  temporary refusal is not checked syntax publication, matcher selection or
+  expansion; those paths and the acceptance matrix remain pending.
 
 ## Verification
 

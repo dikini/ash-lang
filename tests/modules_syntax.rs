@@ -706,6 +706,40 @@ fn projects_imports_visibility_and_a_declarations_only_root() {
 }
 
 #[test]
+fn syntax_imports_are_contextual_and_preserve_ordinary_syntax_names() {
+    let module = parse_valid(
+        "import macros (syntax choose as selected, syntax)\nsyntax : Unit -> Int\nsyntax () = 42\n",
+    );
+    let SurfaceImportSelection::Targeted(items) = &module.imports[0].selection else {
+        panic!("expected targeted selectors");
+    };
+    assert_eq!(items.len(), 2);
+    assert!(matches!(
+        &items[0],
+        SurfaceImportItem::Syntax { name, alias: Some(alias), .. }
+            if name.text == "choose" && alias.text == "selected"
+    ));
+    assert!(matches!(
+        &items[1],
+        SurfaceImportItem::Name { name, alias: None, .. } if name.text == "syntax"
+    ));
+    assert_eq!(module.definitions.len(), 1);
+}
+
+#[test]
+fn syntax_selectors_reject_reexports_and_non_lowercase_names() {
+    for text in [
+        "pub import macros (syntax choose)\n",
+        "import macros (syntax Choose)\n",
+        "import macros (syntax choose as Chosen)\n",
+        "import macros (syntax _choose)\n",
+        "import macros (syntax choose as _chosen)\n",
+    ] {
+        assert_parser_rejected("invalid syntax selector", text);
+    }
+}
+
+#[test]
 fn projects_public_imports_and_independent_selector_channels() {
     let text = "pub import equality (Equal as Equality, equal, impl Equal)\n";
     let source = SourceFile::new("public-import.ash", text).expect("module source should fit");

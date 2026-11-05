@@ -1554,6 +1554,8 @@ messages! {
     module_unknown_root => "module-unknown-root" { root: &'a str = "std" },
     /// No compiler-owned module matches the selected builtin path.
     module_unknown_builtin => "module-unknown-builtin" {},
+    /// A syntax selector needs the checked compilation driver.
+    module_syntax_requires_driver => "module-syntax-requires-driver" {},
     module_unknown_foreign => "module-unknown-foreign" {},
     /// Canonicalization reported that the imported file does not exist.
     module_not_found => "module-not-found" { path: &'a Path = Path::new("missing.ash") },

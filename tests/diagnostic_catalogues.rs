@@ -1,6 +1,20 @@
 use ash::message::{Catalogue, Locale, Message};
 
 #[test]
+fn syntax_driver_requirement_has_both_locales() {
+    let message = Message::module_syntax_requires_driver();
+    for locale in [Locale::English, Locale::Bulgarian] {
+        assert!(
+            !Catalogue::new(locale)
+                .unwrap()
+                .format(&message)
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
 fn binding_messages_have_precise_english_and_bulgarian_text() {
     let message = Message::binding_initializer("Bool", "Int");
     assert_eq!(

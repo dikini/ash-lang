@@ -2,6 +2,7 @@
 
 use std::{collections::HashMap, error::Error, fmt, io, path::PathBuf, sync::Arc};
 
+use crate::surface::{SurfaceImport, SurfaceImportItem, SurfaceImportSelection};
 use {
     crate::core::UnvalidatedEffectProgram, crate::core::UnvalidatedProgram,
     crate::core::ValidatedEffectProgram, crate::core::ValidatedProgram,
@@ -1139,6 +1140,22 @@ impl CompilationInput<'_> {
         }
     }
 
+    fn has_next(&self) -> bool {
+        match self {
+            #[cfg(test)]
+            Self::Parsed { graph, next } => *next < graph.modules().len(),
+            Self::Staged(graph) => graph.has_pending(),
+        }
+    }
+
+    fn next_imports(&self) -> Option<(&[SurfaceImport], &[crate::module::ModuleDependency])> {
+        match self {
+            #[cfg(test)]
+            Self::Parsed { .. } => None,
+            Self::Staged(graph) => graph.next_imports(),
+        }
+    }
+
     fn advance(&mut self) -> Result<bool, FileFailure> {
         match self {
             #[cfg(test)]
@@ -1322,7 +1339,35 @@ where
         )))
     })?;
     let mut coverage_work = UsefulnessBudget::default();
-    while input.advance()? {
+    while input.has_next() {
+        // No checked syntax export producer exists yet. Verify the dependency
+        // owner before rejecting its unavailable selector, before body parsing.
+        if let Some((imports, edges)) = input.next_imports() {
+            for (import, edge) in imports
+                .iter()
+                .zip(edges.iter().filter(|edge| !edge.is_region_service()))
+            {
+                let SurfaceImportSelection::Targeted(items) = &import.selection else {
+                    continue;
+                };
+                for item in items {
+                    let SurfaceImportItem::Syntax { name, .. } = item else {
+                        continue;
+                    };
+                    checked_by_module
+                        .get(&edge.target())
+                        .and_then(|index| checked.get(*index))
+                        .filter(|dependency| dependency.module() == edge.target())
+                        .ok_or_else(internal_file_failure)?;
+                    return Err(FileFailure::from(PipelineFailure::Resolution(
+                        crate::resolve::unavailable_syntax_export(name),
+                    )));
+                }
+            }
+        }
+        if !input.advance()? {
+            return Err(internal_file_failure());
+        }
         #[cfg(feature = "resource-calibration")]
         if crate::calibration::observing() && input.all_staged_surfaces_loaded() {
             let metrics = crate::calibration::Phase::start("input-metrics");

@@ -872,7 +872,7 @@ fn bare_carriage_return_is_a_structured_lexical_rejection() {
 
 #[test]
 fn an_independent_parser_failure_survives_an_earlier_lexical_failure() {
-    let source = TempSource::write("$\nmain : Unit -> Bool\nmain () = true == false == true\n");
+    let source = TempSource::write("?\nmain : Unit -> Bool\nmain () = true == false == true\n");
     let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
     let Some(LoadGraphError::Syntax(actual)) = failure.graph_failure() else {
         panic!("the mixed source should fail in the syntax pipeline");
@@ -898,7 +898,7 @@ fn an_independent_parser_failure_survives_an_earlier_lexical_failure() {
 
 #[test]
 fn a_complete_module_retains_an_independent_lexical_failure() {
-    let text = "$\nfn identity(value : Int) -> Int {\n    value\n}\n";
+    let text = "?\nfn identity(value : Int) -> Int {\n    value\n}\n";
     let source = TempSource::write(text);
     let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
     let Some(LoadGraphError::Syntax(actual)) = failure.graph_failure() else {
@@ -947,7 +947,7 @@ fn a_lexically_rejected_tail_does_not_create_a_parser_diagnostic() {
         ("// unavailable comment\n", LexReason::Comment),
         ("\u{feff}\n", LexReason::ByteOrderMark),
         ("\r", LexReason::BareCarriageReturn),
-        ("$\n", LexReason::UnknownCharacter),
+        ("?\n", LexReason::UnknownCharacter),
     ] {
         let text = format!("fn identity(value : Int) -> Int {{\n    value\n}}\n\n{tail}");
         let source = TempSource::write(&text);

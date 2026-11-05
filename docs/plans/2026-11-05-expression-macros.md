@@ -253,6 +253,17 @@ runtime code and independently validated metadata. A generated executable
 reconstructs the compiler-verified representation under the existing build
 contract, without reopening source or repeating dependency body checking.
 
+**Open validator boundary:** `core/validate/source_declarations.rs::syntax`
+currently reparses retained original sources without a checked syntax
+environment to authenticate declaration coordinates, including resolved effect
+summaries. Binder ownership, order, and resource coordinates also depend on
+source spans. Macro-bearing source can fail that parse, and copied or generated
+binders need independently authenticated coordinates separate from diagnostic
+origins. The same reviewer must challenge that validator input and coordinate
+strategy before this boundary is claimed connected. It must not replace
+independent validation with trusted generated coordinates or repeat dependency
+body checking.
+
 **Failure/check:** M09/M13/M14 reject invalid generated type/effect/evidence,
 resource/continuation behavior and corrupted retained relations before runtime.
 Run the same valid graph through interpretation and the supported real build;
