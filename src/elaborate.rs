@@ -1210,6 +1210,29 @@ impl TypeError {
         }
         self
     }
+
+    fn with_related_diagnostic(
+        mut self,
+        cause: Option<&crate::syntax::DiagnosticLocation>,
+    ) -> Self {
+        if let Some(cause) = cause {
+            match &mut self {
+                Self::Source(error) => error.primary.add_cause(cause),
+                Self::Interface(error) => error.primary.add_cause(cause),
+                Self::Mismatch(error) => {
+                    let span = error.span;
+                    error
+                        .diagnostic
+                        .get_or_insert_with(|| {
+                            Box::new(crate::syntax::DiagnosticLocation::new(span.into()))
+                        })
+                        .add_cause(cause);
+                }
+                Self::Internal(_) => {}
+            }
+        }
+        self
+    }
     fn source(diagnostic: Diagnostic<TypeReason>) -> Self {
         Self::Source(Box::new(diagnostic.into()))
     }
@@ -17517,6 +17540,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         kind: CheckKind,
         values: &mut TypedNodeBuffer,
     ) -> Result<(), TypeError> {
+        let (kind, expected_cause) = match kind {
+            CheckKind::GeneralWithCause(cause) => (CheckKind::General, Some(cause)),
+            other => (other, None),
+        };
         let expected = ProvenancedTypeOwner::new(expected);
         let synthesized = values.pop().ok_or_else(invalid_state)?;
         if !expected.provenance.aligns(&expected.ty)
@@ -17528,7 +17555,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Ok(()) => {}
             Err(UnificationFailure::RowExclusion) => {
                 return Err(row_exclusion_error(span, expected.provenance.span())
-                    .with_diagnostic_location(synthesized.diagnostic.as_deref()));
+                    .with_diagnostic_location(synthesized.diagnostic.as_deref())
+                    .with_related_diagnostic(expected_cause.as_deref()));
             }
             Err(UnificationFailure::Infinite) => {
                 return Err(inference_failure(
@@ -17536,7 +17564,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     span,
                     "this expression would require an infinite type",
                 )
-                .with_diagnostic_location(synthesized.diagnostic.as_deref()));
+                .with_diagnostic_location(synthesized.diagnostic.as_deref())
+                .with_related_diagnostic(expected_cause.as_deref()));
             }
             Err(UnificationFailure::Mismatch) => {
                 let expected_ty = IterativeTypeOwner::new(self.zonk(&expected.ty)?);
@@ -17549,7 +17578,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     expected.provenance.span(),
                     &self.registry,
                 )
-                .with_diagnostic_location(synthesized.diagnostic.as_deref()));
+                .with_diagnostic_location(synthesized.diagnostic.as_deref())
+                .with_related_diagnostic(expected_cause.as_deref()));
             }
             Err(UnificationFailure::Kind { context, span }) => {
                 return Err(TypeError::Internal(ElaborationFailure::Kind {
@@ -18258,7 +18288,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         match &expression.kind {
             ResolvedExprKind::Function(function) => {
                 let expected = ProvenancedTypeOwner::new(expected);
-                let mut expected = self.expose_expected_function(expected, expression.span)?;
+                let mut expected = self
+                    .expose_expected_function(expected, expression.span)
+                    .map_err(|error| {
+                        error
+                            .with_diagnostic_location(expression.diagnostic.as_deref())
+                            .with_related_diagnostic(kind.expected_cause())
+                    })?;
                 let ambient_rows = self.qualify_checking_type(&mut expected, false)?;
                 let (domain_ty, codomain_ty) =
                     clone_function_parts_with_budget(&expected.ty, &mut self.type_work).map_err(
@@ -18680,10 +18716,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 let body_effects = clone_effect_row_with_budget(&body.effects, &mut self.type_work)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 if progress.result_type.is_none() {
-                    let TypedNode { ty, provenance, .. } = body.into_inner();
+                    let TypedNode {
+                        ty,
+                        provenance,
+                        diagnostic,
+                        ..
+                    } = body.into_inner();
                     progress.set_result_type(
                         ProvenancedTypeOwner::new(ProvenancedType { ty, provenance }),
-                        CheckKind::General,
+                        diagnostic.map_or(CheckKind::General, CheckKind::GeneralWithCause),
                     )?;
                 }
                 progress.push_row(row.into_vec());
@@ -19372,7 +19413,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     ty: expected_ty,
                     provenance: provenance.clone(),
                 },
-                kind: *kind,
+                kind: kind.clone(),
             }
         } else {
             ElaborationTask::Synthesize {
@@ -21462,13 +21503,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             if matches!(&parameter.kind, ResolvedPatternKind::Binder(_)) {
                 (CorePatternOwner::new(None), false, false, 0)
             } else {
-                let checked = self.check_core_pattern(
-                    parameter,
-                    &domain.ty,
-                    context,
-                    &mut pattern_binders,
-                    GeneratedReason::FunctionLowering,
-                )?;
+                let checked = self
+                    .check_core_pattern(
+                        parameter,
+                        &domain.ty,
+                        context,
+                        &mut pattern_binders,
+                        GeneratedReason::FunctionLowering,
+                    )
+                    .map_err(|error| error.with_related_diagnostic(body_check.expected_cause()))?;
                 (
                     CorePatternOwner::new(Some(checked.pattern)),
                     checked.inference_changed,
@@ -25987,9 +26030,10 @@ enum FunctionBody<'a> {
     Block(&'a ResolvedBlock),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum CheckKind {
     General,
+    GeneralWithCause(Box<crate::syntax::DiagnosticLocation>),
     CleanupAction(usize),
     Argument {
         function_span: Span,
@@ -26003,6 +26047,15 @@ enum CheckKind {
         initializer_span: Span,
         annotation_span: Span,
     },
+}
+
+impl CheckKind {
+    fn expected_cause(&self) -> Option<&crate::syntax::DiagnosticLocation> {
+        match self {
+            Self::GeneralWithCause(cause) => Some(cause),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27633,16 +27686,18 @@ fn check_mismatch(
     let expected = IterativeTypeOwner::new(expected);
     let found = IterativeTypeOwner::new(found);
     match kind {
-        CheckKind::General | CheckKind::CleanupAction(_) => TypeError::Mismatch(TypeMismatch {
-            span,
-            diagnostic: None,
-            display: Box::new((
-                registry.display_source_type(&expected),
-                registry.display_source_type(&found),
-            )),
-            expected: Box::new(expected.into_inner()),
-            found: Box::new(found.into_inner()),
-        }),
+        CheckKind::General | CheckKind::GeneralWithCause(_) | CheckKind::CleanupAction(_) => {
+            TypeError::Mismatch(TypeMismatch {
+                span,
+                diagnostic: None,
+                display: Box::new((
+                    registry.display_source_type(&expected),
+                    registry.display_source_type(&found),
+                )),
+                expected: Box::new(expected.into_inner()),
+                found: Box::new(found.into_inner()),
+            })
+        }
         CheckKind::Argument {
             function_span,
             whole_span,

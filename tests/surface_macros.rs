@@ -403,6 +403,226 @@ fn captured_expression_diagnostics_preserve_source_and_invocation() {
 }
 
 #[test]
+fn match_mismatch_preserves_both_captured_causes() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    for (entry, source, invocation, first, second, expected, found) in [
+        (
+            "match_invalid.ash",
+            include_str!("fixtures/surface-macros/template-diagnostic/match_invalid.ash"),
+            "branches 1 else true",
+            "1",
+            "true",
+            "Int",
+            "Bool",
+        ),
+        (
+            "match_reverse.ash",
+            include_str!("fixtures/surface-macros/template-diagnostic/match_reverse.ash"),
+            "branches true else 1",
+            "true",
+            "1",
+            "Bool",
+            "Int",
+        ),
+    ] {
+        let failure = compile_path(fixture(&format!("template-diagnostic/{entry}")))
+            .expect_err("the match arms have different types");
+        assert_eq!(failure.reason_code(), "type.mismatch");
+        let diagnostics = compile_file_diagnostics(&failure).unwrap();
+        let mut json = Vec::new();
+        write_json(&mut json, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        let facts = json["facts"].as_array().unwrap();
+        for (name, value) in [("expected", expected), ("found", found)] {
+            assert!(
+                facts
+                    .iter()
+                    .any(|fact| fact["name"] == name && fact["value"] == value)
+            );
+        }
+        let invocation_start = source.find(invocation).unwrap();
+        let first_start = invocation_start + invocation.find(first).unwrap();
+        let second_start = invocation_start + invocation.rfind(second).unwrap();
+        let labels = json["labels"].as_array().unwrap();
+        assert_eq!(labels[0]["byte_start"], second_start);
+        assert_eq!(labels[0]["byte_end"], second_start + second.len());
+        assert!(
+            labels.iter().any(|label| {
+                label["relationship"] == "syntax_cause"
+                    && label["path"].as_str().unwrap().ends_with(entry)
+                    && label["byte_start"] == first_start
+                    && label["byte_end"] == first_start + first.len()
+            }),
+            "{entry}: {json}"
+        );
+        assert_eq!(
+            labels
+                .iter()
+                .filter(|label| label["relationship"] == "syntax_cause")
+                .count(),
+            1,
+            "{entry}: {json}"
+        );
+        for relationship in ["syntax_invocation", "syntax_definition"] {
+            assert_eq!(
+                labels
+                    .iter()
+                    .filter(|label| label["relationship"] == relationship)
+                    .count(),
+                1,
+                "{entry}: {json}"
+            );
+        }
+    }
+
+    let valid = compile_path(fixture("template-diagnostic/match_valid.ash")).unwrap();
+    assert_eq!(execute(&valid).unwrap().value_display(), "42");
+}
+
+#[test]
+fn match_function_failure_preserves_first_captured_cause() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    let path = "template-diagnostic/match_function.ash";
+    let source = include_str!("fixtures/surface-macros/template-diagnostic/match_function.ash");
+    let failure = compile_path(fixture(path)).expect_err("Int cannot provide a function context");
+    assert_eq!(failure.reason_code(), "type.function-needs-context");
+    let diagnostics = compile_file_diagnostics(&failure).unwrap();
+    let mut json = Vec::new();
+    write_json(&mut json, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    let labels = json["labels"].as_array().unwrap();
+    let function = source.find("fn(value)").unwrap();
+    let first = source.find("branches 1").unwrap() + "branches ".len();
+    assert_eq!(labels[0]["byte_start"], function);
+    assert!(
+        labels.iter().any(|label| {
+            label["relationship"] == "syntax_cause"
+                && label["byte_start"] == first
+                && label["byte_end"] == first + 1
+        }),
+        "{json}"
+    );
+}
+
+#[test]
+fn match_function_pattern_failure_preserves_first_captured_cause() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    let path = "template-diagnostic/match_pattern.ash";
+    let source = include_str!("fixtures/surface-macros/template-diagnostic/match_pattern.ash");
+    let failure = compile_path(fixture(path)).expect_err("Bool pattern cannot match Int");
+    assert_eq!(failure.reason_code(), "pattern.type-mismatch");
+    let diagnostics = compile_file_diagnostics(&failure).unwrap();
+    let mut json = Vec::new();
+    write_json(&mut json, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    let labels = json["labels"].as_array().unwrap();
+    let pattern = source.find("fn(true)").unwrap() + "fn(".len();
+    let first = source.find("branches id").unwrap() + "branches ".len();
+    assert_eq!(labels[0]["byte_start"], pattern);
+    assert!(
+        labels.iter().any(|label| {
+            label["relationship"] == "syntax_cause"
+                && label["byte_start"] == first
+                && label["byte_end"] == first + 2
+        }),
+        "{json}"
+    );
+}
+
+#[test]
+fn match_mismatch_preserves_procedural_expression_origin() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    let failure = compile_path(fixture("template-diagnostic/match_marked.ash"))
+        .expect_err("the marked Bool differs from the first Int arm");
+    assert_eq!(failure.reason_code(), "type.mismatch");
+    let diagnostics = compile_file_diagnostics(&failure).unwrap();
+    let mut json = Vec::new();
+    write_json(&mut json, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    let labels = json["labels"].as_array().unwrap();
+    let source = include_str!("fixtures/surface-macros/template-diagnostic/match_marked.ash");
+    let first = source.find("branches 1").unwrap() + "branches ".len();
+    assert!(
+        labels.iter().any(|label| {
+            label["relationship"] == "syntax_cause"
+                && label["path"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("match_marked.ash")
+                && label["byte_start"] == first
+                && label["byte_end"] == first + 1
+        }),
+        "{json}"
+    );
+    assert!(
+        labels.iter().any(|label| {
+            label["relationship"] == "syntax_cause"
+                && label["path"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("match_marked_forms.ash")
+        }),
+        "{json}"
+    );
+    assert_eq!(
+        labels
+            .iter()
+            .filter(|label| label["relationship"] == "syntax_invocation")
+            .count(),
+        2,
+        "{json}"
+    );
+}
+
+#[test]
+fn match_mismatch_preserves_combined_first_arm_origins() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    let failure = compile_path(fixture("template-diagnostic/match_combined.ash"))
+        .expect_err("the generated Bool differs from the second Int arm");
+    assert_eq!(failure.reason_code(), "type.mismatch");
+    let diagnostics = compile_file_diagnostics(&failure).unwrap();
+    let mut json = Vec::new();
+    write_json(&mut json, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    let labels = json["labels"].as_array().unwrap();
+    let causes: Vec<_> = labels
+        .iter()
+        .filter(|label| label["relationship"] == "syntax_cause")
+        .collect();
+    assert_eq!(causes.len(), 3, "{json}");
+    assert!(
+        causes[0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("match_combined.ash")
+    );
+    assert!(
+        causes[1]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("combined_forms.ash")
+    );
+    assert_eq!(causes[0]["byte_start"], causes[2]["byte_start"]);
+    assert_eq!(causes[0]["byte_end"], causes[2]["byte_end"]);
+    let frames: Vec<_> = labels
+        .iter()
+        .filter(|label| label["relationship"] == "syntax_definition")
+        .collect();
+    assert_eq!(frames.len(), 1, "{json}");
+    assert!(
+        frames[0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("combined_forms.ash")
+    );
+}
+
+#[test]
 fn captured_failures_before_completion_preserve_invocation() {
     use ash::presentation::{compile_file_diagnostics, write_json};
 

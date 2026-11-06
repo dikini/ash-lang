@@ -66,6 +66,13 @@ impl SourceLabel {
         }
     }
 
+    pub(crate) fn add_cause(&mut self, cause: &crate::syntax::DiagnosticLocation) {
+        let span = self.span;
+        self.diagnostic
+            .get_or_insert_with(|| Box::new(crate::syntax::DiagnosticLocation::new(span.into())))
+            .add_cause(cause);
+    }
+
     /// Returns the source span carrying this label.
     #[must_use]
     pub const fn span(&self) -> Span {

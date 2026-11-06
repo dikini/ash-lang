@@ -65,6 +65,14 @@ impl DiagnosticLocation {
             self.frames.push(Arc::clone(frame));
         }
     }
+
+    pub(crate) fn add_cause(&mut self, cause: &Self) {
+        self.related.push(cause.primary.clone());
+        self.related.extend(cause.related.iter().cloned());
+        for frame in &cause.frames {
+            self.add_frame(frame);
+        }
+    }
 }
 
 /// Ordered causal inputs retained by the invocation-owned syntax interface.

@@ -2561,9 +2561,11 @@ fn project_expression_with_fragments(
                 _ => None,
             });
             let (cause, capture, token_cause) = match original {
-                Some(crate::syntax::MacroOutputNode::Expression(_, origin))
-                | Some(crate::syntax::MacroOutputNode::ForwardedExpression(_, origin)) => {
+                Some(crate::syntax::MacroOutputNode::Expression(_, origin)) => {
                     (Some(origin.clone()), true, false)
+                }
+                Some(crate::syntax::MacroOutputNode::ForwardedExpression(_, _)) => {
+                    (None, true, false)
                 }
                 Some(crate::syntax::MacroOutputNode::Token(_, _, origin)) => {
                     (Some(origin.clone()), false, true)

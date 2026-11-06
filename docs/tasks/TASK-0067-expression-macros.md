@@ -668,8 +668,8 @@ and `/tmp/ash-occurrence-origin-final2-json.log` (SHA-256
 `0c801040ac15b1e77918a23cb196e9c84f9e59475ca987e7e944b9e0c03b0b5c`).
 The captured operator CLI receipt is `/tmp/ash-occurrence-origin-final2-capture.json`
 (SHA-256 `df570d149bbdd6e1b2fee57c8378cb86314211aaae4547f2e6f26e995c7a6d39`).
-This slice awaits independent review and adds no ledger credit. Multi-input
-checking diagnostics and complete origin preservation remain open.
+Independent review cleared this slice at `621f801c`; it adds no ledger credit.
+Multi-input checking diagnostics and complete origin preservation remain open.
 The private occurrence field also makes external Rust struct literals for
 `SurfaceExpr` and `ResolvedExpr` unavailable; their parsed results still expose
 their existing public kind and span fields.
@@ -680,6 +680,29 @@ optional locations and mismatch display strings compactly
 The existing small-stack mismatch and context disposal test also passes
 (`/tmp/ash-occurrence-origin-mismatch-final2.log`, SHA-256
 `e75fe50bcc91481a47422f40dbafba593be4f3a61748354f1aaea8c9fc0f7f66`).
+
+An inferred match now retains the first arm's occurrence when checking later
+arms. Real graphs for `branches 1 else true` and its reverse identify both
+caller inputs, retain the ordinary type reason and facts, and show one
+invocation/definition frame; the valid graph returns 42. The earlier omission
+is recorded in `/tmp/ash-origin-match-regression-red.log` (SHA-256
+`8b42e2528027f33f9dc98813e068c4d8aa3e658a539c3acbf0a50bece306684f`).
+The same expected cause survives a later function-context failure and a
+function parameter pattern mismatch. A procedural expression's explicit
+origin and an expected arm's combined origins also survive. Synthetic
+template-forwarding origins no longer repeat the invocation as an extra cause;
+the actual frame remains. The real human and JSON receipts are
+`/tmp/ash-origin-match-human-final.log` (SHA-256
+`9ea1c5c7b25e878ac4b2b16621575cf275ee8de1bebd506d61a487fa724b7e41`)
+and `/tmp/ash-origin-match-json-final.log` (SHA-256
+`d4ae1a926e0598d460f2f1da826e6d7fe069b9dcbb4eba0aa46dc29f4b9dafca`).
+Seven affected suites pass 260 cases (`/tmp/ash-origin-match-suite-final.log`,
+SHA-256 `ca15572ceb072895ebabcc65219f9a8a53319f916867a8aaa3a5e463a1c918da`),
+and the unchanged 256 KiB accept/escape case passes
+(`/tmp/ash-origin-match-stack-final.log`, SHA-256
+`3285fc840093992e0705c588c040f4aa927aa77d7a1fcd7cd7660b4f3f9214b5`).
+This result awaits independent review; broader causal diagnostics and M/C
+acceptance remain open.
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources
@@ -694,7 +717,7 @@ hygiene, causal diagnostics, M01–M14, C1 and C2 remain open.
 ## Progress
 
 The weighted ledger records **58.5/100 reviewed delivery points**. The latest
-reviewed implementation pin is `f106bbe7`. These are partial implementation
+reviewed implementation pin is `621f801c`. These are partial implementation
 observations, not acceptance of the whole feature.
 M01–M14 and C1/C2 remain pending.
 
