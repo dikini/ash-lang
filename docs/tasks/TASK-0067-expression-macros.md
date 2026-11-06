@@ -764,7 +764,8 @@ SHA-256 `7b990b3c47b373504d7a215fe855e33986d68b78fc66b14368b7ecaa5fac5e86`);
 the unchanged 256 KiB stack case also passes
 (`/tmp/ash-syntax-term-grant-small-stack.log`, SHA-256
 `7c3a2a76a38b0c0f37039ecfbbd19ce199bca053a27998f9b5831d9602dd0dbd`).
-Independent review, non-term grants and broader private closure remain open.
+Independent review passed at `ffe80802`; non-term grants and broader private
+closure remain open.
 
 The combined template and computed graph still interprets to 42 and its
 native executable returns 42 after the four copied source files are removed
@@ -775,6 +776,32 @@ The executable is `/tmp/ash-grant-native-CYM561/program`, SHA-256
 the exact probe is `/tmp/ash-grant-native-probe.sh`, SHA-256
 `5c17b43f7744d1c39150958d1961961a2ca151e51557c75b32195f1ec61262b4`.
 
+The same combined graph exposed a missing constructor handoff: its two copies
+retained only two helper grants rather than the six helper and constructor
+grants (`/tmp/ash-syntax-constructor-grant-red.log`, SHA-256
+`58286c1f96cd7df030c8ad7c24ac79f7e973ce7448bfa3e046225c4fe7bc1fa7`).
+The working-tree change retains the four constructor grants through the same
+checked occurrence and linked boundary. A nested constructor graph retains four
+distinct expression and pattern grants and returns 42; caller and generated
+lexical constructors receive none. The focused checks also verify the public
+facade route and refuse a withheld constructor or changed route
+(`/tmp/ash-syntax-constructor-grants-final.log`, SHA-256
+`417056a8ae800bf892b67f76c2b0039e037f7baac9dce66530dc9bcdb50b8d3a`).
+Linked grant mutations cover both global and constructor targets
+(`/tmp/ash-syntax-constructor-grants-mutations.log`, SHA-256
+`34c290ea2f2235fa573dc37cc0999889b11947e827bb8f47c61545f1494d5029`).
+All 78 driver cases pass (`/tmp/ash-syntax-constructor-grants-driver.log`,
+SHA-256 `ad894790bb0bb98c342f99f25d6f42d809e30cdc23d92fa9a8a015f8a2a822ff`),
+as does the unchanged 256 KiB case
+(`/tmp/ash-syntax-constructor-grants-small-stack.log`, SHA-256
+`8edf6fac405833a14c5b2687f3b25a18b3b1de45a4d1c90f379501a65160e2ee`).
+The combined graph also interprets and builds to 42 after deleting its copied
+sources (`/tmp/ash-syntax-constructor-grants-native.log`, SHA-256
+`a749664380cb69e6191ed2dc963f5d8748bbff5057ab98ea12e1879d19495163`;
+executable SHA-256
+`7ac2ed2291ba5a1a642ab7338a9a88fdb3dcf6dea2dd7e364cfbec7c115470f9`).
+Independent review and grants for the other namespaces remain open.
+
 A nested identifier-capture probe lost a combined origin: the outer transformer
 supplied the caller invocation and outer definition, but the inner rejection
 retained only the invocation and inner definition
@@ -783,13 +810,14 @@ retained only the invocation and inner definition
 working-tree repair retains the identifier's original origin through direct
 and template-forwarded capture. Both driver cases pass in
 `/tmp/ash-identifier-origin-capture-green.log` (SHA-256
-`0b3a4259fb1182b6d6eb97e7eeaef92208f8358a94296799ae6300316225d2e3`);
-independent review and broader P30/P31 causal-origin work remain open.
+`0b3a4259fb1182b6d6eb97e7eeaef92208f8358a94296799ae6300316225d2e3`).
+Independent review passed at `ffe80802`; broader P30/P31 causal-origin work
+remains open.
 
 ## Progress
 
 The weighted ledger records **61.5/100 reviewed delivery points**. The latest
-reviewed implementation pin is `a1fec7d7`. These are partial implementation
+reviewed implementation pin is `ffe80802`. These are partial implementation
 observations, not acceptance of the whole feature.
 M01–M14 and C1/C2 remain pending.
 

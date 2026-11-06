@@ -19927,6 +19927,8 @@ pub struct ResolvedConstructorOccurrence {
     pub spelling: String,
     /// Causal source provenance.
     pub origin: Origin,
+    /// Authorization retained only for an actual definition-context selection.
+    pub(crate) syntax_grant: Option<Arc<crate::resolve::SyntaxTermGrant>>,
 }
 
 /// A resolved structured match.

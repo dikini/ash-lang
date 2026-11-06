@@ -17446,15 +17446,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
     }
 
-    fn synthesize_global_occurrence(
+    fn retain_syntax_term_grant(
         &mut self,
-        binder: BinderId,
-        occurrence: &crate::resolved::ResolvedOccurrence,
-        span: Span,
-        context: &TypeContext,
-    ) -> Result<TypedNode, TypeError> {
-        if let Some(grant) = &occurrence.syntax_grant {
-            if grant.target() != binder {
+        grant: Option<&Arc<crate::resolve::SyntaxTermGrant>>,
+        target: crate::resolve::SyntaxTermTarget,
+    ) -> Result<(), TypeError> {
+        if let Some(grant) = grant {
+            if grant.target() != target {
                 return Err(invalid_state());
             }
             if self.purpose == ElaborationPurpose::ModuleCheck {
@@ -17464,6 +17462,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 self.syntax_grants.push(Arc::clone(grant));
             }
         }
+        Ok(())
+    }
+
+    fn synthesize_global_occurrence(
+        &mut self,
+        binder: BinderId,
+        occurrence: &crate::resolved::ResolvedOccurrence,
+        span: Span,
+        context: &TypeContext,
+    ) -> Result<TypedNode, TypeError> {
+        self.retain_syntax_term_grant(
+            occurrence.syntax_grant.as_ref(),
+            crate::resolve::SyntaxTermTarget::Global(binder),
+        )?;
         let fact = context.fact(binder).ok_or_else(invalid_state)?;
         let rigid = self.monomorphic_recursive.contains(&binder);
         let (ty, arguments, row_arguments) = self.instantiate(fact, rigid, span)?;
@@ -18013,6 +18025,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 }
             },
             ResolvedExprKind::Constructor(occurrence) => {
+                self.retain_syntax_term_grant(
+                    occurrence.syntax_grant.as_ref(),
+                    crate::resolve::SyntaxTermTarget::Constructor(occurrence.constructor),
+                )?;
                 let constructor = self
                     .registry
                     .constructor(occurrence.constructor)
@@ -21175,6 +21191,21 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         binder_reason: GeneratedReason,
         mut inference_changed: bool,
     ) -> Result<CheckedPattern, TypeError> {
+        let ResolvedPatternKind::Constructor {
+            constructor: outer,
+            occurrence,
+            ..
+        } = &whole_pattern.kind
+        else {
+            return Err(invalid_state());
+        };
+        if *outer != constructor || occurrence.constructor != constructor {
+            return Err(invalid_state());
+        }
+        self.retain_syntax_term_grant(
+            occurrence.syntax_grant.as_ref(),
+            crate::resolve::SyntaxTermTarget::Constructor(constructor),
+        )?;
         let mut expected = IterativeTypeOwner::new(expected);
         let Some(info) = self.registry.constructor(constructor) else {
             return Err(invalid_state());

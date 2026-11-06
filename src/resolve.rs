@@ -1658,6 +1658,12 @@ enum SyntaxTermRoute {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SyntaxTermTarget {
+    Global(BinderId),
+    Constructor(ConstructorId),
+}
+
 /// One definition-context selection, issued by resolution and checked at link.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct SyntaxTermGrant {
@@ -1665,12 +1671,12 @@ pub(crate) struct SyntaxTermGrant {
     occurrence_module: ModuleId,
     issuer: ModuleId,
     syntax_import: DirectDependencyRoute,
-    target: BinderId,
+    target: SyntaxTermTarget,
     route: SyntaxTermRoute,
 }
 
 impl SyntaxTermGrant {
-    pub(crate) const fn target(&self) -> BinderId {
+    pub(crate) const fn target(&self) -> SyntaxTermTarget {
         self.target
     }
 
@@ -1704,26 +1710,52 @@ impl SyntaxTermGrant {
         {
             return false;
         }
-        match &self.route {
-            SyntaxTermRoute::Owner { spelling, private } => {
+        match (&self.route, self.target) {
+            (SyntaxTermRoute::Owner { spelling, private }, SyntaxTermTarget::Global(binder)) => {
                 owner
                     .schemes()
                     .iter()
-                    .any(|scheme| scheme.binder == self.target && scheme.spelling == *spelling)
+                    .any(|scheme| scheme.binder == binder && scheme.spelling == *spelling)
                     && (owner
                         .exports()
                         .term(spelling)
-                        .is_none_or(|term| term.binder != self.target)
+                        .is_none_or(|term| term.binder != binder)
                         == *private)
             }
-            SyntaxTermRoute::Imported { route, spelling } => {
+            (
+                SyntaxTermRoute::Owner { spelling, private },
+                SyntaxTermTarget::Constructor(constructor),
+            ) => {
+                !constructor.owner().is_lexical()
+                    && constructor.owner().module() == owner.module()
+                    && owner
+                        .registry()
+                        .constructor(constructor)
+                        .is_some_and(|fact| {
+                            fact.owner == constructor.owner() && fact.spelling == *spelling
+                        })
+                    && (owner
+                        .exports()
+                        .constructor(spelling)
+                        .is_none_or(|fact| fact.id != constructor)
+                        == *private)
+            }
+            (SyntaxTermRoute::Imported { route, spelling }, target) => {
                 owner.direct_dependencies().contains(route)
                     && modules
                         .iter()
                         .map(std::borrow::Borrow::borrow)
                         .find(|module| module.module() == route.target())
-                        .and_then(|module| module.exports().term(spelling))
-                        .is_some_and(|term| term.binder == self.target)
+                        .is_some_and(|module| match target {
+                            SyntaxTermTarget::Global(binder) => module
+                                .exports()
+                                .term(spelling)
+                                .is_some_and(|term| term.binder == binder),
+                            SyntaxTermTarget::Constructor(constructor) => module
+                                .exports()
+                                .constructor(spelling)
+                                .is_some_and(|fact| fact.id == constructor),
+                        })
             }
         }
     }
@@ -5929,10 +5961,10 @@ impl Resolver<'_, '_> {
         })
     }
 
-    fn syntax_global_grant(
+    fn syntax_term_grant(
         &self,
         reference: &SurfaceReference,
-        binder: BinderId,
+        target: SyntaxTermTarget,
     ) -> Result<Arc<SyntaxTermGrant>, ResolveError> {
         let member = reference.member();
         let context = reference.qualifier().unwrap_or(member);
@@ -5969,8 +6001,20 @@ impl Resolver<'_, '_> {
                 member.text.as_str(),
             )),
             SurfaceReference::Unqualified(_) => {
-                if let Some(local) = terms.get(&member.text) {
-                    if local.binder != binder || binder.module() != Some(owner.module()) {
+                let local = match target {
+                    SyntaxTermTarget::Global(binder) => terms.get(&member.text).map(|fact| {
+                        fact.binder == binder && binder.module() == Some(owner.module())
+                    }),
+                    SyntaxTermTarget::Constructor(constructor) => {
+                        terms.constructor(&member.text).map(|fact| {
+                            fact.id == constructor
+                                && !constructor.owner().is_lexical()
+                                && constructor.owner().module() == owner.module()
+                        })
+                    }
+                };
+                if let Some(matches) = local {
+                    if !matches {
                         return Err(invalid());
                     }
                     None
@@ -5986,12 +6030,17 @@ impl Resolver<'_, '_> {
                 .iter()
                 .find(|dependency| dependency.module() == route.target())
                 .ok_or_else(invalid)?;
-            if !owner.direct_dependencies().contains(&route)
-                || dependency
+            let exported = match target {
+                SyntaxTermTarget::Global(binder) => dependency
                     .exports()
                     .term(spelling)
-                    .is_none_or(|exported| exported.binder != binder)
-            {
+                    .is_some_and(|fact| fact.binder == binder),
+                SyntaxTermTarget::Constructor(constructor) => dependency
+                    .exports()
+                    .constructor(spelling)
+                    .is_some_and(|fact| fact.id == constructor),
+            };
+            if !owner.direct_dependencies().contains(&route) || !exported {
                 return Err(invalid());
             }
             SyntaxTermRoute::Imported {
@@ -6001,10 +6050,16 @@ impl Resolver<'_, '_> {
         } else {
             SyntaxTermRoute::Owner {
                 spelling: member.text.clone(),
-                private: owner
-                    .exports()
-                    .term(&member.text)
-                    .is_none_or(|exported| exported.binder != binder),
+                private: match target {
+                    SyntaxTermTarget::Global(binder) => owner
+                        .exports()
+                        .term(&member.text)
+                        .is_none_or(|exported| exported.binder != binder),
+                    SyntaxTermTarget::Constructor(constructor) => owner
+                        .exports()
+                        .constructor(&member.text)
+                        .is_none_or(|exported| exported.id != constructor),
+                },
             }
         };
         Ok(Arc::new(SyntaxTermGrant {
@@ -6012,7 +6067,7 @@ impl Resolver<'_, '_> {
             occurrence_module: self.module,
             issuer: owner.module(),
             syntax_import: DirectDependencyRoute::new(owner.module(), selected.import_span),
-            target: binder,
+            target,
             route,
         }))
     }
@@ -8791,7 +8846,7 @@ impl Resolver<'_, '_> {
     fn constructor_reference(
         &mut self,
         reference: &SurfaceReference,
-    ) -> Result<ConstructorId, ResolveError> {
+    ) -> Result<(ConstructorId, bool), ResolveError> {
         let member = reference.member();
         if let SurfaceReference::Qualified(name) = reference
             && name.qualifier.introduction != 0
@@ -8805,7 +8860,7 @@ impl Resolver<'_, '_> {
                     name.qualifier.introduction,
                 ))
                 .copied();
-            return selected.ok_or_else(|| {
+            return selected.map(|id| (id, true)).ok_or_else(|| {
                 error(
                     ResolveReason::UnknownConstructor,
                     member.span,
@@ -8820,13 +8875,14 @@ impl Resolver<'_, '_> {
                 &mut self.type_work,
                 "lexical constructor lookup exceeded its type-work budget",
             )? {
-                return Ok(id);
+                return Ok((id, false));
             }
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Term)?;
             return self
                 .syntax_constructors
                 .get(&(member.text.clone(), member.introduction))
                 .copied()
+                .map(|id| (id, true))
                 .ok_or_else(|| {
                     error(
                         ResolveReason::UnknownConstructor,
@@ -8840,6 +8896,7 @@ impl Resolver<'_, '_> {
                 .constructors
                 .get(&reference.member().text)
                 .copied()
+                .map(|id| (id, false))
                 .ok_or_else(|| {
                     withheld_export_error(
                         reference.member().span,
@@ -8865,7 +8922,7 @@ impl Resolver<'_, '_> {
                 .get(&reference.member().text)
                 .copied()
         }) {
-            return Ok(constructor);
+            return Ok((constructor, false));
         }
         if let Some(kind) = self
             .targeted_withheld
@@ -11670,7 +11727,7 @@ impl Resolver<'_, '_> {
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             SurfacePatternKind::Constructor { name, payload } => {
-                let constructor = match self.constructor_reference(name) {
+                let (constructor, syntax_selected) = match self.constructor_reference(name) {
                     Ok(constructor) => constructor,
                     Err(failure)
                         if self.deferred_template_name(
@@ -11695,6 +11752,14 @@ impl Resolver<'_, '_> {
                         constructor,
                         spelling: name.member().text.clone(),
                         origin: Origin::Source(name.span()),
+                        syntax_grant: syntax_selected
+                            .then(|| {
+                                self.syntax_term_grant(
+                                    name,
+                                    SyntaxTermTarget::Constructor(constructor),
+                                )
+                            })
+                            .transpose()?,
                     },
                     payload: payload
                         .as_deref()
@@ -15168,25 +15233,29 @@ impl Resolver<'_, '_> {
                         false,
                     )
                 };
-                let unqualified_constructor = if binding.is_none() && !is_qualified {
-                    charged_lexical_scope_lookup(
-                        &self.lexical_constructor_scopes,
-                        member,
-                        &mut self.type_work,
-                        "inline lexical constructor lookup exceeded its type-work budget",
-                    )?
-                    .or_else(|| {
-                        if member.introduction != 0 {
-                            self.syntax_constructors
-                                .get(&(member.text.clone(), member.introduction))
-                                .copied()
+                let (unqualified_constructor, unqualified_constructor_from_syntax) =
+                    if binding.is_none() && !is_qualified {
+                        let lexical = charged_lexical_scope_lookup(
+                            &self.lexical_constructor_scopes,
+                            member,
+                            &mut self.type_work,
+                            "inline lexical constructor lookup exceeded its type-work budget",
+                        )?;
+                        if let Some(constructor) = lexical {
+                            (Some(constructor), false)
+                        } else if member.introduction != 0 {
+                            (
+                                self.syntax_constructors
+                                    .get(&(member.text.clone(), member.introduction))
+                                    .copied(),
+                                true,
+                            )
                         } else {
-                            self.constructor_names.get(&member.text).copied()
+                            (self.constructor_names.get(&member.text).copied(), false)
                         }
-                    })
-                } else {
-                    None
-                };
+                    } else {
+                        (None, false)
+                    };
                 if let Some(binding) = binding {
                     let term = binding.term;
                     let evidence_count = match term {
@@ -15215,7 +15284,7 @@ impl Resolver<'_, '_> {
                     evidence.extend((0..evidence_count).map(|_| EvidenceSlot::empty()));
                     let syntax_grant = match (syntax_selected, term) {
                         (true, ResolvedTermName::Global(binder)) => {
-                            Some(self.syntax_global_grant(name, binder)?)
+                            Some(self.syntax_term_grant(name, SyntaxTermTarget::Global(binder))?)
                         }
                         _ => None,
                     };
@@ -15233,12 +15302,25 @@ impl Resolver<'_, '_> {
                     });
                 } else if let Some(constructor) = qualified_constructor.or(unqualified_constructor)
                 {
+                    let syntax_selected = if qualified_constructor.is_some() {
+                        context.introduction != 0
+                    } else {
+                        unqualified_constructor_from_syntax
+                    };
                     expressions.push(ResolvedExpr {
                         diagnostic: None,
                         kind: ResolvedExprKind::Constructor(ResolvedConstructorOccurrence {
                             constructor,
                             spelling: member.text.clone(),
                             origin: Origin::Source(name.span()),
+                            syntax_grant: syntax_selected
+                                .then(|| {
+                                    self.syntax_term_grant(
+                                        name,
+                                        SyntaxTermTarget::Constructor(constructor),
+                                    )
+                                })
+                                .transpose()?,
                         }),
                         span: expression.span,
                     });
@@ -19298,7 +19380,7 @@ mod tests {
     fn linked_syntax_term_grants_require_the_original_export_target_and_route() {
         let fixture = ImportBudgetFixture::create(
             "import dependency as Dependency\nmain : Unit -> Int\nmain () = 42\n",
-            "private : Int -> Int\nprivate value = value + 1\nother : Int -> Int\nother value = value + 2\npub syntax inc $value:expr => {\nprivate $value\n}\n",
+            "type Secret = Hidden(Int)\ntype Other = Other(Int)\nprivate : Int -> Int\nprivate value = value + 1\nother : Int -> Int\nother value = value + 2\npub syntax inc $value:expr => {\nprivate $value\n}\n",
         );
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
             .expect("the syntax import graph loads");
@@ -19309,7 +19391,9 @@ mod tests {
             .find(|module| !module.surface().syntax_declarations.is_empty())
             .expect("syntax owner");
 
-        for mutation in 0..9 {
+        for case in 0..18 {
+            let is_constructor = case >= 9;
+            let mutation = case % 9;
             let mut checked = checked_import_dependencies(&graph);
             let owner_index = checked
                 .iter()
@@ -19331,18 +19415,36 @@ mod tests {
                 .collect::<Vec<_>>();
             let mut consumer = check_module(resolve_module(entry, &dependencies).unwrap()).unwrap();
             let owner = &checked[owner_index];
-            let target = owner
-                .schemes()
-                .iter()
-                .find(|scheme| scheme.spelling == "private")
-                .unwrap()
-                .binder;
-            let other = owner
-                .schemes()
-                .iter()
-                .find(|scheme| scheme.spelling == "other")
-                .unwrap()
-                .binder;
+            let (target, other, spelling) = if is_constructor {
+                let constructor = |name: &str| {
+                    owner
+                        .registry()
+                        .constructors()
+                        .iter()
+                        .find(|constructor| constructor.spelling == name)
+                        .unwrap()
+                        .id
+                };
+                (
+                    SyntaxTermTarget::Constructor(constructor("Hidden")),
+                    SyntaxTermTarget::Constructor(constructor("Other")),
+                    "Hidden",
+                )
+            } else {
+                let binder = |name: &str| {
+                    owner
+                        .schemes()
+                        .iter()
+                        .find(|scheme| scheme.spelling == name)
+                        .unwrap()
+                        .binder
+                };
+                (
+                    SyntaxTermTarget::Global(binder("private")),
+                    SyntaxTermTarget::Global(binder("other")),
+                    "private",
+                )
+            };
             let syntax_import = *consumer
                 .direct_dependencies()
                 .iter()
@@ -19366,7 +19468,7 @@ mod tests {
                 syntax_import,
                 target,
                 route: SyntaxTermRoute::Owner {
-                    spelling: "private".to_owned(),
+                    spelling: spelling.to_owned(),
                     private: true,
                 },
             };
@@ -19381,7 +19483,7 @@ mod tests {
                 4 => grant.export = Arc::new((*grant.export).clone()),
                 5 => {
                     grant.route = SyntaxTermRoute::Owner {
-                        spelling: "private".to_owned(),
+                        spelling: spelling.to_owned(),
                         private: false,
                     }
                 }
@@ -19397,7 +19499,146 @@ mod tests {
             consumer.replace_syntax_grants_for_test(grants);
             checked.push(consumer);
             let result = crate::elaborate::link_modules(checked, graph.entry());
-            assert_eq!(result.is_ok(), mutation == 0, "grant mutation {mutation}");
+            assert_eq!(
+                result.is_ok(),
+                mutation == 0,
+                "constructor={is_constructor}, grant mutation {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn constructor_grants_authenticate_the_public_facade_route() {
+        let fixture = ImportBudgetFixture::create(
+            "import dependency as Dependency\nmain : Unit -> Int\nmain () = 42\n",
+            "import facade as View\npub syntax inc $value:expr => {\nView.Boxed($value)\n}\n",
+        );
+        fs::write(fixture.0.join("facade.ash"), "pub import actual (Boxed)\n").unwrap();
+        fs::write(
+            fixture.0.join("actual.ash"),
+            "pub type Capsule = Boxed(Int)\npub opaque type Secret = Hidden(Int)\n",
+        )
+        .unwrap();
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
+            .expect("the constructor facade graph loads");
+        let entry = graph.module(graph.entry()).unwrap();
+        let issuer = graph
+            .modules()
+            .iter()
+            .find(|module| !module.surface().syntax_declarations.is_empty())
+            .unwrap();
+        let facade = graph
+            .modules()
+            .iter()
+            .find(|module| module.source().display_path().ends_with("facade.ash"))
+            .unwrap();
+        let actual = graph
+            .modules()
+            .iter()
+            .find(|module| module.source().display_path().ends_with("actual.ash"))
+            .unwrap();
+
+        let mut checked = checked_import_dependencies(&graph);
+        let owner_index = checked
+            .iter()
+            .position(|module| module.module() == issuer.id())
+            .unwrap();
+        checked[owner_index]
+            .retain_syntax_exports(&issuer.surface().syntax_declarations)
+            .unwrap();
+        let dependencies = entry
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let owner = checked
+                    .iter()
+                    .find(|module| module.module() == edge.target())
+                    .unwrap();
+                DependencyExports::new(edge, owner.exports()).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut consumer = check_module(resolve_module(entry, &dependencies).unwrap()).unwrap();
+        let owner = &checked[owner_index];
+        let facade_module = checked
+            .iter()
+            .find(|module| module.module() == facade.id())
+            .unwrap();
+        let actual_module = checked
+            .iter()
+            .find(|module| module.module() == actual.id())
+            .unwrap();
+        let target = facade_module.exports().constructor("Boxed").unwrap().id;
+        assert_eq!(target.owner().module(), actual.id());
+        let hidden = actual_module
+            .registry()
+            .constructors()
+            .iter()
+            .find(|constructor| constructor.spelling == "Hidden")
+            .unwrap()
+            .id;
+        let route = *owner
+            .direct_dependencies()
+            .iter()
+            .find(|route| route.target() == facade.id())
+            .unwrap();
+        let syntax_import = *consumer
+            .direct_dependencies()
+            .iter()
+            .find(|route| route.target() == issuer.id())
+            .unwrap();
+        let export = Arc::clone(&owner.syntax_exports()[0]);
+        consumer
+            .retain_syntax_imports(Arc::from([crate::syntax::SelectedSyntax {
+                name: "inc".to_owned(),
+                declaration: Arc::clone(&export),
+                owner: owner_index,
+                import_span: syntax_import.import_span(),
+            }]))
+            .unwrap();
+        checked.push(consumer);
+        let imported = |route, spelling: &str| SyntaxTermRoute::Imported {
+            route,
+            spelling: spelling.to_owned(),
+        };
+        let cases = [
+            (target, imported(route, "Boxed"), true),
+            (hidden, imported(route, "Hidden"), false),
+            (
+                target,
+                imported(
+                    DirectDependencyRoute::new(facade.id(), entry.surface().span),
+                    "Boxed",
+                ),
+                false,
+            ),
+            (
+                target,
+                SyntaxTermRoute::Owner {
+                    spelling: "Boxed".to_owned(),
+                    private: true,
+                },
+                false,
+            ),
+            (
+                target,
+                imported(
+                    DirectDependencyRoute::new(actual.id(), route.import_span()),
+                    "Boxed",
+                ),
+                false,
+            ),
+            (target, imported(route, "Hidden"), false),
+        ];
+        for (target, route, expected) in cases {
+            let grant = SyntaxTermGrant {
+                export: Arc::clone(&export),
+                occurrence_module: entry.id(),
+                issuer: issuer.id(),
+                syntax_import,
+                target: SyntaxTermTarget::Constructor(target),
+                route,
+            };
+            assert_eq!(grant.authenticate(entry.id(), &checked), expected);
         }
     }
 
@@ -22271,7 +22512,8 @@ mod tests {
         assert_eq!(
             resolver
                 .constructor_reference(&reference)
-                .expect("the exact retry should reach the outer constructor"),
+                .expect("the exact retry should reach the outer constructor")
+                .0,
             constructor,
         );
         assert_eq!(resolver.type_work.used(), DEPTH);

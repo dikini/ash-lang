@@ -30790,7 +30790,10 @@ mod tests {
                     .find(|scheme| scheme.spelling == "private_increment")
                     .unwrap()
                     .binder;
-                assert_eq!(grant.target(), target);
+                assert_eq!(
+                    grant.target(),
+                    crate::resolve::SyntaxTermTarget::Global(target)
+                );
                 let definition = group
                     .definitions()
                     .iter()
@@ -30829,6 +30832,140 @@ mod tests {
             },
         )
         .expect("the generated private-helper graph validates");
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+    }
+
+    #[test]
+    fn definition_site_constructor_grants_reach_the_checked_linked_group() {
+        for (entry, expected_grants) in [
+            // Two copies each use one helper and two owner constructors.
+            ("entry.ash", 6),
+            // Caller and generated lexical constructors need no grant.
+            ("generated-newtype/entry.ash", 0),
+        ] {
+            let compiled = crate::driver::compile_path_with_effect_validation_for_test(
+                crate::driver::RunConfiguration {
+                    entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/fixtures/surface-macros")
+                        .join(entry),
+                    roots: ModuleRoots::empty(),
+                },
+                |core, sources, modules, linked| {
+                    let group = linked
+                        .groups()
+                        .iter()
+                        .find(|group| group.module() == linked.entry())
+                        .unwrap();
+                    assert_eq!(group.syntax_grants().len(), expected_grants, "{entry}");
+                    validate_effect_modules_linked_with_work(
+                        core,
+                        sources,
+                        modules,
+                        linked,
+                        &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                    )
+                },
+            )
+            .expect("the generated constructor graph validates");
+            assert_eq!(
+                crate::driver::execute(&compiled).unwrap().value_display(),
+                "42",
+                "{entry}"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_private_constructor_grants_keep_distinct_occurrences() {
+        use crate::resolved::{ResolvedExprKind, ResolvedPatternKind};
+
+        let compiled = crate::driver::compile_path_with_effect_validation_for_test(
+            crate::driver::RunConfiguration {
+                entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/surface-macros/constructor-grants/entry.ash"),
+                roots: ModuleRoots::empty(),
+            },
+            |core, sources, modules, linked| {
+                let group = linked
+                    .groups()
+                    .iter()
+                    .find(|group| group.module() == linked.entry())
+                    .unwrap();
+                let definition = group
+                    .definitions()
+                    .iter()
+                    .find_map(|definition| {
+                        let crate::resolved::ResolvedDefinitionKind::Equational(global) =
+                            definition.kind()
+                        else {
+                            return None;
+                        };
+                        (global.interface.name.spelling == "main").then_some(global)
+                    })
+                    .unwrap();
+                let mut body = &definition.equations[0].body;
+                while let ResolvedExprKind::Block(block) = &body.kind {
+                    body = &block.result;
+                }
+                let ResolvedExprKind::Match(expression) = &body.kind else {
+                    panic!("the template expands to a match")
+                };
+                let ResolvedExprKind::Apply(outer) = &expression.scrutinee.kind else {
+                    panic!("the outer constructor is applied")
+                };
+                let ResolvedExprKind::Constructor(outer_expr) = &outer.function.kind else {
+                    panic!("the outer constructor occurrence is retained")
+                };
+                let ResolvedExprKind::Apply(inner) = &outer.argument.kind else {
+                    panic!("the inner constructor is applied")
+                };
+                let ResolvedExprKind::Constructor(inner_expr) = &inner.function.kind else {
+                    panic!("the inner constructor occurrence is retained")
+                };
+                let ResolvedPatternKind::Constructor {
+                    occurrence: outer_pattern,
+                    payload: Some(inner_pattern),
+                    ..
+                } = &expression.arms[0].pattern.kind
+                else {
+                    panic!("the outer constructor pattern is retained")
+                };
+                let ResolvedPatternKind::Constructor {
+                    occurrence: inner_pattern,
+                    ..
+                } = &inner_pattern.kind
+                else {
+                    panic!("the inner constructor pattern is retained")
+                };
+                let mut identities = std::collections::HashSet::new();
+                for occurrence in [outer_expr, inner_expr, outer_pattern, inner_pattern] {
+                    let grant = occurrence.syntax_grant.as_ref().unwrap();
+                    assert_eq!(
+                        grant.target(),
+                        crate::resolve::SyntaxTermTarget::Constructor(occurrence.constructor)
+                    );
+                    assert!(
+                        group
+                            .syntax_grants()
+                            .iter()
+                            .any(|retained| Arc::ptr_eq(grant, retained))
+                    );
+                    assert!(identities.insert(Arc::as_ptr(grant)));
+                }
+                assert_eq!(group.syntax_grants().len(), 4);
+                validate_effect_modules_linked_with_work(
+                    core,
+                    sources,
+                    modules,
+                    linked,
+                    &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                )
+            },
+        )
+        .expect("the nested private-constructor graph validates");
         assert_eq!(
             crate::driver::execute(&compiled).unwrap().value_display(),
             "42"
