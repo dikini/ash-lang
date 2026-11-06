@@ -217,6 +217,27 @@ fn captured_qualified_interfaces_use_the_alias_context() {
 }
 
 #[test]
+fn captured_effect_inside_an_owner_row_argument_uses_the_caller_effect() {
+    for path in [
+        "row-argument/manual.ash",
+        "row-argument/entry.ash",
+        "row-argument/owner_entry.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    for (path, reason) in [
+        ("row-argument/missing_member.ash", "effect.unknown"),
+        ("row-argument/missing_member_first.ash", "effect.unknown"),
+        ("row-argument/missing_argument.ash", "resolve.unknown-type"),
+        ("row-argument/wrong_kind.ash", "effect.kind"),
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), reason, "{path}: {failure:?}");
+    }
+}
+
+#[test]
 fn generated_token_diagnostics_point_to_the_invocation() {
     use ash::{
         message::{Catalogue, Locale},

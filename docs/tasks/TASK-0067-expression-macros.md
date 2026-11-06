@@ -578,7 +578,21 @@ affected suites pass 215 cases in `/tmp/ash-qualified-interface-suite.log`
 and the admission-isolation check passes in
 `/tmp/ash-qualified-interface-isolation.log` (SHA-256
 `48fbcc943750a091a493a5713c07e7e78e6017c38386ac4eb25469f7950f1ba2`). This
-partial result awaits review and adds no ledger credit.
+partial result was independently reviewed at `e9d873c5` and adds no ledger
+credit.
+
+A captured effect in a non-function row argument previously failed during
+name-only admission. It now uses the existing deferred effect lookup after
+resolving the row arguments, and transfers arguments only after an effect is
+known. The original graph, a handwritten control and an owner-qualified graph
+with a conflicting caller alias each return 42. Four negative cases refuse
+missing row members in either order, a missing type argument and a wrong-kind
+capture. The original failure is `/tmp/ash-captured-row-argument-red.log`
+(SHA-256 `8e8ca4e44c9f41f769de52c876a72139ba070b178dde685942e8b10dbca692ca`);
+seven affected suites pass 216 cases in `/tmp/ash-captured-row-argument-suite.log`
+(SHA-256 `8af99e77eeb16373b36ea94331c6ac36ee0b03d88496512156a42a39594d0d72`).
+Row-tail captures and broader row hygiene remain open. This partial result awaits
+review and adds no ledger credit.
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources
@@ -593,7 +607,7 @@ hygiene, causal diagnostics, M01–M14, C1 and C2 remain open.
 ## Progress
 
 The weighted ledger records **58.5/100 reviewed delivery points**. The latest
-reviewed implementation pin is `ee521864`. These are partial implementation
+reviewed implementation pin is `e9d873c5`. These are partial implementation
 observations, not acceptance of the whole feature.
 M01–M14 and C1/C2 remain pending.
 

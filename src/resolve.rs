@@ -11285,12 +11285,20 @@ impl Resolver<'_, '_> {
                                     "missing member argument",
                                 )
                             })?;
-                            args.push(argument.into_inner());
+                            args.push(argument);
                             roots.push(root);
                         }
                         args.reverse();
                         roots.reverse();
-                        let effect = self.effect_reference(&member.effect)?;
+                        let effect = match self.effect_reference(&member.effect) {
+                            Ok(effect) => effect,
+                            Err(failure)
+                                if self.deferred_template_effect(&member.effect, &failure)? =>
+                            {
+                                continue;
+                            }
+                            Err(failure) => return Err(failure),
+                        };
                         self.retain_written_effect_arity(
                             effect,
                             row.span,
@@ -11299,7 +11307,12 @@ impl Resolver<'_, '_> {
                             roots.first().copied(),
                         )?;
                         written.push((
-                            EffectInstance::new_kinded(effect, args.into_boxed_slice()),
+                            EffectInstance::new_kinded(
+                                effect,
+                                args.into_iter()
+                                    .map(|argument| argument.into_inner())
+                                    .collect(),
+                            ),
                             member.span,
                             roots.into_boxed_slice(),
                         ));
