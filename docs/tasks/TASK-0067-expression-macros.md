@@ -1153,8 +1153,8 @@ suites pass 233 cases in `/tmp/ash-acceptance-graph-suite.log` (SHA-256
 The test-target Clippy check also passes (`/tmp/ash-acceptance-graph-clippy.log`,
 SHA-256 `47b29dac0a3652d87fca542f99d2ec3b25b89abcc5702d6eeccb7fa7ddae0308`).
 
-The public build consumer built the computed, effectful graph; interpreter and
-executable both returned 42 after all five copied source files were deleted.
+The interpreter returned 42 for the computed, effectful graph. After building
+and deleting all five copied source files, the executable also returned 42.
 The exact commands, source/compiler and executable hashes, and artifact path
 are in `/tmp/ash-acceptance-native-final.log` (SHA-256
 `b063481ac8751cf1597915cad7f73c57fca31cb9f2beb8c1cc91f0832ced74fb`); the
