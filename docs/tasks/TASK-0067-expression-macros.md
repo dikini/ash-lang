@@ -492,7 +492,30 @@ SHA-256 `eb07eb623714bb91ee8ea71ac571c12ee64eae898364892c2c5fd5dee2657fbd`).
 Four affected integration suites pass 139 cases in
 `/tmp/ash-transformer-entry-reuse-regressions-final.log` (SHA-256
 `bab129c19d1f634a9ac87fd8c3da7535eb32304026c32f7e04ccf4c19482eb4d`).
-This reuse and changed-program observation awaits independent review.
+Independent review cleared reuse and changed-program revalidation at
+`f19b1ab2`.
+
+An ordinary type error in generated arithmetic previously labelled a zero-width
+parser anchor. Projected generated tokens now use the actual invocation extent
+while the parser retains its ordered grammar coordinates and the existing
+literal-construction proof remains separate. The invalid template keeps its
+`type.operator-operand` reason and `Int`/`Bool` facts, and its human and JSON
+labels identify the invocation; valid generated arithmetic still executes to
+42. The focused regression failed before this change
+(`/tmp/ash-generated-token-location-red.log`, SHA-256
+`bec841ce8d93654a0862279f87a63767e0c3c3e1b57ff266d63894f7c2f55781`)
+and passes after it (`/tmp/ash-generated-token-location-final.log`, SHA-256
+`435c338c3400f8e1abc3f6e8243882a737d78a9024c33d313180558c0a436795`).
+Five affected integration suites pass 151 cases
+(`/tmp/ash-generated-token-location-regressions.log`, SHA-256
+`12e6dcc73e1091f3fae5a070d5f7853a3c82f8fb729a7de9436502d2549983e7`);
+the existing literal-construction proof and five local-newtype checks pass
+(`/tmp/ash-generated-token-location-proof.log`, SHA-256
+`97fb32f9d2da260758df67d0e2627b43bd01a3e7980fae7a054c7997c125c228`, and
+`/tmp/ash-generated-token-location-core.log`, SHA-256
+`a653336fe52ee946c81d700967654037b4dd4e9cc5eaa1858d905639504d7fc5`).
+This partial repair awaits review; exact definition causes, combined inputs and
+nested expansion frames remain open and it earns no additional ledger credit.
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources
@@ -506,9 +529,8 @@ hygiene, causal diagnostics, M01–M14, C1 and C2 remain open.
 
 ## Progress
 
-The weighted ledger records **57.5/100 reviewed delivery points**, with 1
-additional point demonstrated and awaiting review. The latest reviewed
-implementation pin is `4a79dcf9`. These are partial implementation
+The weighted ledger records **58.5/100 reviewed delivery points**. The latest
+reviewed implementation pin is `f19b1ab2`. These are partial implementation
 observations, not acceptance of the whole feature.
 M01–M14 and C1/C2 remain pending.
 
@@ -517,7 +539,7 @@ M01–M14 and C1/C2 remain pending.
 The cap is 100 estimated effort points for the complete milestone through
 verified retention in `integration/expression-macros`; Main integration is
 excluded. Weights reflect expected work, not an equal share per acceptance case
-or feature. They are approximate: display about 57%, not a precise completion
+or feature. They are approximate: display about 59%, not a precise completion
 probability. The current Codex elapsed forecast is in the
 [plan](../plans/2026-11-05-expression-macros.md#estimate-and-re-planning).
 
@@ -545,7 +567,7 @@ reviewer owns `Rev`, and the orchestrator owns `PM`.
 | P14 | 3 | Dev / R2 | Reviewed canonical module load/check/link (0.5); complete vocabulary (1) and lexer/declaration conformance (0.5), `/tmp/ash-syntax-token-vocabulary.log`; API identity and interface-version conformance remain pending. |
 | P15 | 2 | Dev / R1.5 | Entry-time exact checked transformer type admission (1); definition-time missing, wrong-type and disallowed-effect refusals (0.5), `/tmp/ash-transformer-review-repair-regressions.log`; polymorphism and constraint refusals (0.5) pending. The repair passed review at `ad8ca9cc`. |
 | P16 | 3 | Dev / R2.5 | Mainless compile-time entry (1), independent entry validation (1), and real checked Ash body execution (0.5), `/tmp/ash-transformer-machine-step.log`; retained helper closure (0.5) pending. |
-| P17 | 2 | Dev / D1 | Unchanged validated-program reuse (0.5) and changed-program revalidation (0.5) are demonstrated above and await review. Complete authenticated invocation Input remains pending (1). |
+| P17 | 2 | Dev / R1 | Unchanged validated-program reuse (0.5) and changed-program revalidation (0.5) are demonstrated above and were reviewed at `f19b1ab2`. Complete authenticated invocation Input remains pending (1). |
 | P18 | 2.5 | Dev / R0.5 | Actual identifier capture and origin round trip (0.5), `/tmp/ash-syntax-captured-ident-driver.log`; complete input encoding (0.5), handle ownership (0.5), and broader round trips and stale/foreign/forged refusal (1) pending. |
 | P19 | 3 | Dev / R2 | Reviewed expression capture (0.5) and `Plus` construction (0.5); token kind/spelling round trip and mismatch refusal (0.5), `/tmp/ash-syntax-token-ops-driver.log`, and identifier spelling (0.5), `/tmp/ash-syntax-captured-ident-driver.log`; remaining total capture pending. |
 | P20 | 4 | Dev / R3 | Structured parse rejects an incomplete expression, accepts an unresolved name without resolving it, and returns a protected fragment executing to 42 (0.5), `/tmp/ash-syntax-parse-service-driver.log` (SHA-256 `cb3b9e9e8f9376c505c8dd2c484a04940ba4b0d281e94b5ecb63b8b509024ee4`). Unwrapping `1 + 2` before `* 10` yields 21; protected, reparsed, and written-group forms yield 30, and template forwarding yields 21 (1), `/tmp/ash-syntax-unwrap-driver.log` (SHA-256 `5be6520598b42c1218239c23032279a0d5d682b009717f52b8c170cadbe005f2`). Parsing then discarding a nested rejecting transformer does not run it (0.5), `/tmp/ash-syntax-parse-no-expand-driver.log` (SHA-256 `4dd073d143a1f2da9658b8f22fc631d5a46fd488a57990f4332e16e3bd09b133`). Unwrapping a caller-qualified term retains its import and yields 30 (0.5), `/tmp/ash-syntax-qualified-after.log` (SHA-256 `dfbe5239cb5aa17305ed3648e85ed916bc030ca645b537f870b56a443b06db5e`). `SyntaxDiagnostic` retains a parser reason and construction location (0.5), `/tmp/ash-syntax-parser-diagnostic-driver.log` (SHA-256 `e8954105f99c7e0ff104fd5651ec14344b07bfda87310b58855e99ebd74d7472`); broader parse and unwrapping contexts remain pending. |
@@ -575,7 +597,7 @@ API/entry 10; Ops/interchange 14; transfer/failure/limits 8; graph/Core/repeatab
 The independent review assigns more weight to the unresolved contextual,
 non-term, copied-identity, grant, and Core-coordinate consumers than the first
 draft. The 20-point reviewed baseline is frozen; a changed ETA does not reweight it.
-Reviewed effort is 57.5, demonstrated provisional effort is 1, and 41.5 points
+Reviewed effort is 58.5, demonstrated provisional effort is 0, and 41.5 points
 have no credit. Review upgrades D to R without awarding implementation points
 again. Explicit review/gate rows cover their own work, not a second implementation
 credit. Record the exact commit or source hash, real consumer observation/test

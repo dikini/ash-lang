@@ -119,6 +119,8 @@ impl std::ops::Deref for ProjectionTokens<'_> {
 #[derive(Clone, Copy)]
 struct ProjectionToken<'a> {
     token: &'a Token,
+    // Generated tokens retain their grammar coordinates in `token`.
+    span: Span,
     original: Option<&'a crate::syntax::MacroOutputNode>,
     admission_identifier: bool,
 }
@@ -145,6 +147,7 @@ impl ProjectionTokenSource for [Token] {
     fn projection_token(&self, index: usize) -> Option<ProjectionToken<'_>> {
         self.get(index).map(|token| ProjectionToken {
             token,
+            span: token.span,
             original: None,
             admission_identifier: false,
         })
@@ -155,6 +158,7 @@ impl ProjectionTokenSource for ProjectionTokens<'_> {
     fn projection_token(&self, index: usize) -> Option<ProjectionToken<'_>> {
         self.tokens.get(index).map(|token| ProjectionToken {
             token,
+            span: self.occurrence.unwrap_or(token.span),
             original: self.originals.and_then(|originals| originals.get(&index)),
             admission_identifier: self
                 .admission_identifiers

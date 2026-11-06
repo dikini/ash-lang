@@ -42,6 +42,50 @@ fn template_macro_preserves_expression_capture_grouping() {
 }
 
 #[test]
+fn generated_token_diagnostics_point_to_the_invocation() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_file_diagnostics, write_human, write_json},
+    };
+
+    let valid = compile_path(fixture("template-diagnostic/valid.ash"))
+        .expect("valid generated arithmetic still passes Core validation");
+    assert_eq!(execute(&valid).unwrap().value_display(), "42");
+
+    let failure = compile_path(fixture("template-diagnostic/invalid.ash"))
+        .expect_err("the generated Bool operand is not an Int");
+    assert_eq!(failure.reason_code(), "type.operator-operand");
+    let diagnostics = compile_file_diagnostics(&failure).unwrap();
+    let diagnostic = diagnostics
+        .first()
+        .expect("the type failure is presentable");
+    let mut human = Vec::new();
+    write_human(
+        &mut human,
+        diagnostic,
+        &Catalogue::new(Locale::English).unwrap(),
+    )
+    .unwrap();
+    assert!(String::from_utf8(human).unwrap().contains("add_boolean 40"));
+    let mut json = Vec::new();
+    write_json(&mut json, diagnostic).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    assert_eq!(json["reason"], "type.operator-operand");
+    let source = include_str!("fixtures/surface-macros/template-diagnostic/invalid.ash");
+    let invocation = "add_boolean 40";
+    let start = source.find(invocation).unwrap();
+    let labels = json["labels"].as_array().unwrap();
+    assert_eq!(labels.len(), 2);
+    assert_eq!(labels[0]["relationship"], "operator_operand");
+    assert_eq!(labels[1]["relationship"], "operator_requirement");
+    for label in labels {
+        assert!(label["path"].as_str().unwrap().ends_with("invalid.ash"));
+        assert_eq!(label["byte_start"], start);
+        assert_eq!(label["byte_end"], start + invocation.len());
+    }
+}
+
+#[test]
 fn template_cleanup_uses_the_ordinary_expression_pipeline() {
     for path in ["template-cleanup/entry.ash", "template-cleanup/unused.ash"] {
         let compiled = compile_path(fixture(path)).expect(path);
