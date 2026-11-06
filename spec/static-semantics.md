@@ -2422,6 +2422,15 @@ main () = measure(Some(1))
 
 ## Globals and modules
 
+A procedural syntax transformer is an unconstrained, monomorphic global of its
+defining module. Its domain and result are the canonical syntax `Input` and
+`MacroResult`; its closed latent row contains only default allocation and
+optionally the canonical syntax `Ops` effect. Admission checks the actual
+function type and does not add effect subtyping. A template's substituted
+output and a transformer's admitted output receive the ordinary checks in
+this chapter. The compile-time boundary is described in
+[syntax expansion](syntax-expansion.md#transformer-execution).
+
 An equational global signature must expose at least as many arrow layers as
 each clause has patterns. The patterns receive those domains in order, and the
 body checks against the remaining codomain. An inline operational header

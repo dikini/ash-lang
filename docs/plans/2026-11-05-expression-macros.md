@@ -969,3 +969,79 @@ work. External waiting and separately authorized Main integration are outside
 the scenario. The task's separate point-rate calculation gives **about 6.8
 hours** for 37.5 points at 5.55 points/hour; it is a low-confidence mechanical
 comparison, not an added buffer or a confidence interval.
+
+## 2026-11-06 operational update, 20:34
+
+This table supersedes the earlier remaining-time scenario. It records one
+connected delivery path in elapsed session minutes, not new point credit or
+measured active time. Completed evidence and the original weighted history
+remain unchanged. Estimates are conditional on the listed investigation
+finding no additional producer defect.
+
+| Work | State and owner | Previous / remaining minutes | Actual event or remaining outcome |
+| --- | --- | ---: | --- |
+| O01 Pattern/value diagnostics | Reviewed; Dev and Rev | 60 / 0 | The 19:12:28–19:48:04 checkpoint produced `a3f6650b`; P30 and P31 each gained 0.25 as recorded in the task. |
+| O02 Combined graph and copied uses | Reviewed; Dev and Rev | Not separately estimated / 0 | The 19:48:04–20:21:02 checkpoint produced `6216692f` and `cb9d8963`; P10 and P27 each gained 0.5. |
+| O03 Finish specification, API and tool candidate | Active; Dev | 30 / 30 | Complete the current draft, verify its examples and links, and hand it off. Host-request totality is already included in O04, not charged here. |
+| O04 Host input and output boundary evidence | Demonstrated; Dev, review pending | 25 / 0 | The real source fixture passed at 20:20:16; the private host identity test and 43-case host suite finished at 20:34:13. Review is included in O09. |
+| O05 Active-machine disposal failure | Remaining; Dev and Rev | 25 / 25 | Investigate the existing disposal hook and distinguish an observed refusal from ordinary active-root destruction. Re-estimate if a producer repair is demonstrated. |
+| O06 Repeat and changed-input evidence | Remaining; Dev | 30 / 30 | Compare repeated compilations and discriminating caller, matcher, helper, import and interface changes. |
+| O07 Remaining acceptance evidence | Remaining; Dev and Rev | 25 / 25 | Reconcile M01–M14, Core and image assertions, adding only demonstrated missing controls. |
+| O08 Status and documentation checks | Remaining; Dev | 15 / 15 | Reconcile implementation status, authority, links and executable documentation after the candidate is complete. |
+| O09 Independent whole-path review and corrections | Remaining; Rev and Dev | 25 / 25 | Review the connected candidate and repair concrete findings; O04 does not add a separate review allowance. |
+| O10 Fresh final gate | Remaining; Dev | 16 / 16 | Run one complete gate after prerequisites; the `6b72d2de` gate took 940.57 seconds but predates later source changes. |
+| O11 Retained handoff and acceptance readback | Remaining; PM, Dev and Rev | 20 / 20 | Verify the retained input and evidence, apply acceptance updates, and complete any separately authorized milestone merge. |
+| **Remaining scenario** | | **186** | **About 3 hours 6 minutes**, excluding external waiting and any newly demonstrated repair. |
+
+The 19:12–19:48 and 19:48–20:21 windows include review and tool time; they do
+not measure exclusive active work. O04's source receipt is
+`/tmp/ash-acceptance-host-requests.log`. Its final identity and host-suite
+receipts are `/tmp/ash-acceptance-host-identity-final.log` and
+`/tmp/ash-acceptance-host-suite-final.log`. O04 is demonstrated but has no
+reviewed-point increment yet. Update this table when a result, review, or
+re-estimate changes the remaining path; do not infer a time forecast from the
+historical point conversion.
+
+### 20:42 active-disposal investigation update
+
+O05's first investigation ran from approximately 20:37:00 to 20:42:18,
+including tool time. The real transformer reached its post-construction
+service request and dropped an active root after exhausting work, but made no
+disposal-worklist growth attempt; the injected refusal remained armed. The
+probe and receipt are retained in the task. This establishes no paired
+failure and earns no reviewed credit. The intentionally failing probe was
+removed from the candidate.
+
+The remaining O05 work is a bounded 20-minute review of the existing common
+disposal and failure handoff, replacing the 25-minute investigation allowance
+above. The resulting scenario is **181 minutes**, conditional on that review
+and other evidence finding no new repair. Four existing owning-boundary tests
+have since passed; the task records their separate observations. A new
+producer defect, if found, requires its own estimate rather than an assumed
+completion here.
+
+### 20:47 documentation and disposal handoff
+
+O03's specification and tool candidate is complete for independent review:
+its runnable example returns 42, the host suite and vocabulary checks pass,
+and the local-link and Clippy checks pass. Its 30-minute implementation
+allowance is now zero; status and authority cleanup remain in O08.
+
+O05's owning-path investigation is also complete for review. The transformer
+and ordinary evaluator use the same disposal-scope failure handoff; four
+existing tests pass across active-root destruction, actual refusal, and
+primary/teardown reporting. These are compositional observations, not one
+injected refusal in an active transformer. Its remaining 20-minute
+investigation allowance is now zero. Review of both handoffs remains in O09;
+no reviewed points or M11 closure are inferred here.
+
+The conditional remaining scenario is **131 minutes**: O06 30, O07 25, O08
+15, O09 25, O10 16 and O11 20. This remains an elapsed-work estimate and must
+be updated if review or an acceptance check identifies additional work.
+
+At 20:49, review found that the first wrong-nominal host test also lacked the
+required output payload. The corrected test first transfers a valid output,
+then changes only its outer nominal owner and observes refusal. The focused
+unit, 43-case host suite and refreshed Clippy pass. This correction
+is part of the existing O09 review-and-findings allowance, not a new point
+credit or an additional forecast item.

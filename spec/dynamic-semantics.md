@@ -51,6 +51,11 @@ static operations rather than values.
 
 ## Initial configuration
 
+Syntax expansion and any checked transformer execution finish before this
+runtime configuration is formed. Their bounded compile-time host and output
+transfer are specified by [syntax expansion](syntax-expansion.md#transformer-execution).
+The resulting runtime expression needs no syntax-service interpreter.
+
 Elaboration produces one validated linked Core expression: an explicit host-backed
 root outside dependency-ordered recursive global groups and the generated
 application of local main to unit, with required native interpretation. Root

@@ -351,6 +351,13 @@ fn transformer_combines_origins_and_round_trips_the_result() {
 }
 
 #[test]
+fn syntax_services_reject_invalid_requests_without_losing_a_valid_capture() {
+    let compiled = compile_path(macro_fixture("entry_acceptance_host_ops.ash"))
+        .expect("invalid requests return their documented result cases");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
 fn transformer_rejection_preserves_message_and_causes_in_human_and_json() {
     use ash::{
         message::{Catalogue, Locale},

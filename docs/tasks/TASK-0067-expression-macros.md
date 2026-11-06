@@ -1166,6 +1166,103 @@ the runtime fingerprint; its log remains under
 the compiler from the matching source first. These are partial observations;
 review, the remaining M01–M14 evidence, and C1/C2 remain pending.
 
+### Host boundary evidence
+
+The real Ash transformer in `acceptance_host_ops.ash` checks out-of-range and
+oversized capture indices, invalid identifier and token requests, and an
+empty origin combination, then forwards its valid captured expression to 42.
+The private host test exercises a valid identifier capture and a negative
+index, rejects live and stale inputs from other invocation tokens, and accepts
+a valid output before rejecting the same payload under a different outer
+constructor owner. A negative integer is injected at the host boundary because
+ordinary Ash source has no negative expression syntax.
+
+The corrected host and vocabulary unit tests pass in
+`/tmp/ash-spec-host-unit-final2.log` (SHA-256
+`9fb7c37fece82e9d7df834d578e02f98144ba5637d0d30e975cc04a78054b297`),
+and the full host integration suite passes 43 cases in
+`/tmp/ash-spec-host-suite-final2.log` (SHA-256
+`242405179807d12b1b321fc8b361807e4c5408b7de7c043fc20f0f625830e462`).
+The earlier identity test omitted the required output payload, so its refusal
+for the wrong nominal was not discriminating; the retained
+`/tmp/ash-acceptance-host-identity-final.log` is superseded for that claim.
+This evidence awaits independent review and does not close M10.
+
+The active-disposal probe built a tree of captured closures, reached a syntax
+service after construction, and then exhausted transformer work. The actual
+active root was dropped, but the disposal worklist made no growth attempt and
+the injected refusal remained armed. This does not demonstrate either a
+teardown failure or a leak. The paired active-disposal refusal remains open;
+the intentionally failing probe is retained outside the candidate in
+`/tmp/ash-active-disposal-probe.patch` and
+`/tmp/ash-disposal-active-probe/`. Its result is
+`/tmp/ash-active-disposal-curried-probe.log` (SHA-256
+`fd7adf00c46d18dd4d6c2141a7a49c7ae5a83147a8fd32e6afb2ef1656496569`).
+The production transformer handoff drops the machine within the same disposal
+scope whose `finish` method combines an error with the first teardown failure.
+Four existing tests now pass on this candidate for active-root destruction,
+that common failure combination, first-secondary retention, and a real refused
+environment disposal through ordinary `Machine::run`
+(`/tmp/ash-active-disposal-composition.log`, SHA-256
+`b7187769b6865b7b07dc86d8f1d53695fb91551f66e4ddc2bba950bbe7f2857e`).
+These are separate observations; they do not claim a single injected refusal
+in an active transformer.
+
+### Specification and tool documentation candidate
+
+The candidate describes the selected expression-syntax slice in a new
+specification chapter and connects it to the existing grammar, names, typing,
+elaboration, execution and tool chapters. The canonical token table and the
+13 service signatures are checked against the existing lexer test and Ash
+module. The documented `if` example runs and prints `42 : Int`
+(`/tmp/ash-spec-if-example.log`, SHA-256
+`93d158dc4f3e49e87da47f5208131722a2589ace79685e55de34a34302570487`).
+The host and vocabulary unit tests pass in `/tmp/ash-spec-host-unit-final2.log`
+(SHA-256 `9fb7c37fece82e9d7df834d578e02f98144ba5637d0d30e975cc04a78054b297`).
+All-target test Clippy passes in `/tmp/ash-spec-host-clippy-final2.log` (SHA-256
+`d33b5e8e5eb90c454bd45b83797477dc2d3344f23ce3882df36fd79f9bf5d48f`);
+changed-document relative links and the preserved historical ledger also
+pass manual checks. The documentation and host evidence await review. The
+accepted proposal remains until the complete product checkpoint is retained.
+
+### Reviewed progress update, 6 November
+
+Independent review cleared the pattern diagnostic at `a3f6650b` and the
+combined graph and identity evidence at `6216692f` and `cb9d8963`. The
+following increments apply to the remaining work recorded below; the earlier
+61.5-point ledger and its receipts remain historical records.
+
+| Item | Newly reviewed evidence | Credit and remaining work |
+| --- | --- | --- |
+| P10 | Copied binder, nominal, and resource uses are associated with their own declarations; both resource initializers target the caller's actual `outside` binder. | +0.5; 4.75/5 reviewed. Mixed copied nominal/region and broader type-scope work remains 0.25. |
+| P27 | The template and checked-transformer versions of the combined graph both return 42 under the caller's same-spelled DSL. | +0.5; 1.5/2.5 reviewed. Discarded and repeated nested invocation behavior remains 1. |
+| P30 | The ordinary pattern mismatch retains the captured value, failing pattern, and tuple-leaf causes. | +0.25; 1.75/2.5 reviewed. Other causes remain 0.25 and bounded copying/relocation remains 0.5. |
+| P31 | The pattern diagnostic presents its neutral value label and Boolean requirement in English, Bulgarian, and JSON, with the captured-block frame control. | +0.25; 1.75/2.5 reviewed. Other variants, frames, and catalog conformance remain 0.75. |
+
+The amended original scope is 99 points: **63 reviewed and 36 remaining**.
+The separately estimated 30 points of performed additional work give an
+effort index of **93/129, approximately 72%**; that index is not feature
+acceptance. The earlier seven-stage gate remains evidence for its exact pin,
+but P36 is not credited until its C1 prerequisites are met. No native-work
+credit is repeated here. M01–M14 and C1/C2 remain open.
+
+The [20:34 operational update](../plans/2026-11-05-expression-macros.md#2026-11-06-operational-update-2034)
+supersedes the earlier 4-hour-51-minute scenario. The host input and output
+boundary tests are demonstrated and await review; the current connected-work
+scenario is 186 minutes, conditional on the disposal investigation finding no
+additional repair. This is an elapsed-work estimate, not point credit or an
+acceptance claim.
+
+The [20:42 disposal update](../plans/2026-11-05-expression-macros.md#2042-active-disposal-investigation-update)
+records the completed probe and a 20-minute remaining owning-path review;
+the conditional scenario is now 181 minutes. The composed test observations
+above await the reviewer and do not by themselves close M11.
+
+The [20:47 handoff](../plans/2026-11-05-expression-macros.md#2047-documentation-and-disposal-handoff)
+records the completed documentation candidate and the common disposal-path
+investigation. Both await review; the remaining conditional scenario is 131
+minutes. No M/C criterion is closed by this estimate.
+
 ## Progress
 
 The weighted ledger records **61.5/100 reviewed delivery points**. The latest

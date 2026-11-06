@@ -876,6 +876,133 @@ mod tests {
     use super::{token_from_spelling, token_kind_name};
 
     #[test]
+    fn syntax_host_checks_invocation_and_nominal_identity() {
+        use super::{
+            HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap, constructor_fields,
+        };
+        use crate::{
+            core::CoreBuilder,
+            integer::Integer,
+            module::ModuleId,
+            resolved::BinderId,
+            source::{ByteRange, Origin, SourceFile},
+            surface::{SurfaceIdentifierCapture, SurfaceName, SurfaceSyntaxCapture},
+            syntax::{ExpansionFrame, SyntaxContexts},
+            types::{ConstructorId, EffectId, NominalTypeId, OperationId, Type, TypeWorkBudget},
+        };
+        use std::{collections::HashMap, sync::Arc};
+
+        let source = SourceFile::new("syntax-host.ash", "name").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        let occurrence = CoreBuilder::new()
+            .unit(Type::Unit, Origin::Source(span))
+            .unwrap();
+        let module = ModuleId::new(0);
+        let ops = EffectId::new(module, 0);
+        let capture = OperationId::new(ops, 0);
+        let owner = NominalTypeId::new(module, 0);
+        let constructors: HashMap<String, ConstructorId> = [
+            ("Captured".into(), ConstructorId::new(owner, 0)),
+            ("IdentifierCapture".into(), ConstructorId::new(owner, 1)),
+            ("MissingCapture".into(), ConstructorId::new(owner, 2)),
+            ("Expanded".into(), ConstructorId::new(owner, 3)),
+            ("Rejected".into(), ConstructorId::new(owner, 4)),
+            ("Syntax".into(), ConstructorId::new(owner, 5)),
+            ("NoNodes".into(), ConstructorId::new(owner, 6)),
+        ]
+        .into_iter()
+        .collect();
+        let name = SurfaceName {
+            text: "name".into(),
+            span,
+            introduction: 0,
+            introduced_at: None,
+        };
+        let make_host = || SyntaxHost {
+            occurrence,
+            binder: BinderId::new(0),
+            ops,
+            started: false,
+            steps_left: 100,
+            invocation: Arc::new(()),
+            frame: Arc::new(ExpansionFrame {
+                invocation: span,
+                definition: span,
+            }),
+            source: source.clone(),
+            caller: name.clone(),
+            introduction: 0,
+            contexts: Arc::new(SyntaxContexts::new(&[], &[], &[])),
+            fresh_count: 0,
+            captures: vec![SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+                name: name.clone(),
+                origin: span.into(),
+            })],
+            expressions: Vec::new(),
+            identifiers: Vec::new(),
+            origins: Vec::new(),
+            parse_failures: Vec::new(),
+            tokens: Vec::new(),
+            constructors: constructors.clone(),
+            operations: [(capture, "capture".into())].into_iter().collect(),
+        };
+        let mut host = make_host();
+        let foreign = make_host();
+        let foreign_input = foreign.input();
+        let stale_input = {
+            let finished = make_host();
+            finished.input()
+        };
+        let mut heap = Vec::new();
+        let request = |host: &mut SyntaxHost, input, index, heap: &mut Vec<HeapCell>| {
+            let fields = vec![input, Value::integer(Integer::from_i64(index))].into_boxed_slice();
+            let argument = Value::Location(allocate_heap(heap, HeapCell::Tuple(fields)).unwrap());
+            host.request(capture, argument, heap, &mut TypeWorkBudget::unbounded())
+        };
+
+        let input = host.input();
+        let captured = request(&mut host, input.clone(), 0, &mut heap).unwrap();
+        let (tag, payload) = constructor_fields(&captured, &heap).unwrap();
+        assert_eq!(tag, constructors["Captured"]);
+        assert_eq!(
+            constructor_fields(payload.unwrap(), &heap).unwrap().0,
+            constructors["IdentifierCapture"]
+        );
+        let missing = request(&mut host, input, -1, &mut heap).unwrap();
+        let (tag, payload) = constructor_fields(&missing, &heap).unwrap();
+        assert_eq!(tag, constructors["MissingCapture"]);
+        assert!(payload.is_none());
+        for input in [foreign_input, stale_input] {
+            assert!(matches!(
+                request(&mut host, input, 0, &mut heap),
+                Err(RuntimeFailure::InvalidControlState)
+            ));
+        }
+        let nodes = host.construct(&mut heap, "NoNodes", None).unwrap();
+        let syntax = host.construct(&mut heap, "Syntax", Some(nodes)).unwrap();
+        let valid_result = host
+            .construct(&mut heap, "Expanded", Some(syntax.clone()))
+            .unwrap();
+        assert!(matches!(
+            host.transfer(&valid_result, &heap, &mut TypeWorkBudget::unbounded()),
+            Ok(crate::syntax::TransformerOutput::Expanded(nodes)) if nodes.is_empty()
+        ));
+        let foreign_owner = NominalTypeId::new(ModuleId::new(1), 0);
+        let foreign_expanded = ConstructorId::new(foreign_owner, 3);
+        let foreign_result = Value::Location(
+            allocate_heap(
+                &mut heap,
+                HeapCell::Constructor(foreign_expanded, Some(syntax)),
+            )
+            .unwrap(),
+        );
+        assert!(matches!(
+            host.transfer(&foreign_result, &heap, &mut TypeWorkBudget::unbounded()),
+            Err(RuntimeFailure::InvalidControlState)
+        ));
+    }
+
+    #[test]
     fn token_vocabulary_matches_canonical_declarations_and_lexer() {
         let cases = [
             ("Wildcard", "_"),

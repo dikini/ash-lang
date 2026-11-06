@@ -24,6 +24,7 @@ module_declaration ::=
   | implementation_declaration
   | effect_declaration
   | foreign_library_declaration
+  | syntax_declaration
   | global_definition ;
 
 import_declaration ::=
@@ -37,8 +38,24 @@ relative_module_path ::= identifier { "." identifier } ;
 absolute_module_path ::= "@" identifier "." identifier { "." identifier } ;
 import_item ::=
     import_name [ "as" import_name ]
-  | "impl" upper_identifier ;
+  | "impl" upper_identifier
+  | "syntax" identifier [ "as" identifier ] ;
 import_name ::= identifier | upper_identifier ;
+
+syntax_declaration ::=
+  "pub" "syntax" identifier matcher_item { matcher_item }
+  "=>" ( template_block | "using" identifier ) ;
+matcher_item ::= matcher_literal | "$" identifier ":" ( "expr" | "ident" ) ;
+template_block ::= "{" { template_element } "}" ;
+template_element ::=
+    template_token
+  | "$" identifier
+  | "(" { template_element } ")"
+  | "{" { template_element } "}" ;
+syntax_invocation ::= identifier syntax_matcher_input ;
+matcher_literal ::= /one permitted literal token/ ;
+template_token ::= /one token other than a group delimiter or "$"/ ;
+syntax_matcher_input ::= /input accepted by the selected syntax matcher/ ;
 
 type_declaration ::=
   [ "pub" [ "opaque" ] ]
@@ -162,7 +179,8 @@ region_expression ::=
 region_selection_expression ::= "using" primary_expression block ;
 
 expression ::=
-    block
+    syntax_invocation
+  | block
   | function_expression
   | match_expression
   | handler_expression
@@ -248,6 +266,18 @@ boolean ::= "true" | "false" ;
 unit ::= "(" ")" ;
 line_end ::= /logical-newline-in-module-or-block-context/ ;
 ```
+
+`syntax_invocation` is selected by a locally imported syntax name; the
+remainder is determined by that declaration's matcher, not by a global parser
+extension. A syntax name begins with a lowercase letter and is not a reserved
+word. A matcher occupies one logical line, has at least one uniquely named
+capture, ends in an expression capture, and separates adjacent captures with
+literal tokens. It has no repetition, alternatives, or
+optional items. Group delimiters, logical line ends, `$`, and `=>` are not
+matcher literals. A template retains balanced token groups and named splices;
+its substituted body must parse as one block expression. The definition and
+import restrictions are specified in
+[syntax expansion](syntax-expansion.md#definitions-and-imports).
 
 `line_end` is the logical boundary defined by [lexical
 structure](lexical-structure.md#whitespace-and-logical-lines). Imports must
@@ -501,6 +531,14 @@ their operand extends to the handler delimiter or the end of the surrounding
 expression. A handled or resumed expression must be parenthesized to serve as
 an application or infix operand. Therefore `resume x + y` resumes with `x + y`,
 while `(resume x) + y` resumes with `x` and then adds `y`.
+
+An imported syntax invocation also has a loose prefix boundary. Its final
+expression capture extends to the enclosing expression boundary; a non-final
+expression capture stops at its next matcher literal at the current level.
+Complete nested invocations consume their own literals first. Parentheses are
+required to use an invocation as an application or infix operand. Once a
+syntax name is selected, malformed input does not fall back to an ordinary
+application. See [matching and expansion](syntax-expansion.md#matching-and-expansion).
 
 A resource expression ends at its body block. Like a block, it must be
 parenthesized to serve as an application or infix operand. The primary
