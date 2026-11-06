@@ -277,9 +277,29 @@ cases (`/tmp/ash-template-captured-categories-pin.log`, SHA-256
 the admission-state isolation test also passes
 (`/tmp/ash-template-captured-categories-pin-isolation.log`, SHA-256
 `9db7242c45f341b4fe61785ccd7c4298a368d368b6251d5daaf301bef94cad14`).
-This candidate awaits independent review. Qualified captured names, generated
-multi-parameter ordering, complete expansion provenance, and structured
-template-output parse failures remain open.
+Independent review cleared this candidate at `9f142555`. Qualified captured
+names, handler and row positions, generated multi-parameter ordering, and
+complete expansion provenance remain open.
+
+A lowercase identifier supplied for a template-generated newtype now retains
+the ordinary parser's `parse.expected-form` rejection instead of reporting an
+internal resolver error. The real CLI's human and JSON output identify the
+captured identifier, invocation, and selected definition; the prior focused
+run failed (`/tmp/ash-template-output-cause-before.log`, SHA-256
+`bcfbb88acd0c542c6063f65013cc5c6238fe4e8482a0f5eb21bc9973c4393c5d`). The
+surface macro, host, and JSON diagnostics suites pass 94 cases
+(`/tmp/ash-template-output-cause-regressions.log`, SHA-256
+`d91850bbd2f537a5306026fec930f378cae43237688a705aae82fedc8a0fabf9`).
+After `cargo build -j 1 --bin ash`, running `target/debug/ash` on
+`tests/fixtures/surface-macros/template-newtype-capture/lowercase.ash` with
+and without `--message-format json` produced
+`/tmp/ash-template-output-cause-pin-json.log` (SHA-256
+`ae1b56eb532e08db2a2c4076a9c9111d52ac495c2489038fdeb4b80c0a5a571c`)
+and `/tmp/ash-template-output-cause-pin-human.log` (SHA-256
+`cc8d8649729763f8ba148e88a831e0bf9756f26d469e3b15e793795c8ab061ce`).
+Projector-invalid output and complete causal expansion diagnostics remain
+open. This diagnostic change awaits independent review; it adds no ledger
+credit.
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources

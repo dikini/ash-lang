@@ -205,6 +205,7 @@ pub(crate) struct SyntaxExpansion<'a> {
     selected: &'a [SelectedSyntax],
     owner_imports: &'a [Vec<SelectedSyntax>],
     owners: Vec<SyntaxOwner>,
+    parse_failure: Option<crate::driver::SyntaxParseFailure>,
     transformer: &'a mut dyn FnMut(
         &SelectedSyntax,
         &[SurfaceSyntaxCapture],
@@ -236,8 +237,13 @@ impl<'a> SyntaxExpansion<'a> {
             selected,
             owner_imports,
             owners: Vec::new(),
+            parse_failure: None,
             transformer,
         }
+    }
+
+    pub(crate) fn take_parse_failure(&mut self) -> Option<crate::driver::SyntaxParseFailure> {
+        self.parse_failure.take()
     }
 
     pub(crate) fn owner(&self, introduction: usize) -> Option<SyntaxOwner> {
@@ -293,14 +299,28 @@ impl<'a> SyntaxExpansion<'a> {
                     anchor,
                 )?;
                 let contexts = SyntaxContexts::new(self.selected, self.owner_imports, &owners);
-                let expression = crate::parser::parse_macro_expression(
+                let expression = match crate::parser::parse_macro_expression(
                     self.source,
                     anchor,
                     Some((selection.declaration.span, introduction)),
                     contents,
                     &contexts,
-                )
-                .map_err(|_| invocation)?;
+                ) {
+                    Ok(expression) => expression,
+                    Err(crate::parser::MacroParseFailure::Syntax {
+                        diagnostics,
+                        resource,
+                    }) => {
+                        self.parse_failure = Some(crate::driver::SyntaxParseFailure {
+                            diagnostics,
+                            resource,
+                            invocation: anchor,
+                            definition: selection.declaration.span,
+                        });
+                        return Err(invocation);
+                    }
+                    Err(crate::parser::MacroParseFailure::Invalid) => return Err(invocation),
+                };
                 (expression, 0)
             }
             SurfaceSyntaxImplementation::Transformer(_) => (self.transformer)(

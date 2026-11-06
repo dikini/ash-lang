@@ -536,7 +536,7 @@ impl SyntaxExpansionFailure {
     }
 }
 
-/// Parser facts retained from syntax produced by a transformer.
+/// Parser facts retained from syntax produced by an expansion.
 #[derive(Debug)]
 pub struct SyntaxParseFailure {
     pub(crate) diagnostics: Vec<ParseDiagnostic>,
@@ -1665,8 +1665,12 @@ where
                 &admissions,
                 Some(&mut syntax_expansion),
             );
+            let template_parse_failure = syntax_expansion.take_parse_failure();
             drop(syntax_expansion);
             drop(transformer);
+            if let Some(failure) = template_parse_failure {
+                return Err(FileFailure::from(PipelineFailure::SyntaxParse(failure)));
+            }
             if let Some(failure) = transformer_failure {
                 return Err(failure);
             }

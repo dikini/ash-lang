@@ -470,6 +470,46 @@ fn template_captured_identifier_can_name_a_local_newtype() {
 }
 
 #[test]
+fn invalid_template_output_reports_the_parser_cause() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_file_diagnostics, write_human, write_json},
+    };
+    let failure = compile_path(fixture("template-newtype-capture/lowercase.ash"))
+        .expect_err("a lowercase identifier cannot name a newtype");
+    assert!(failure.is_source_rejection(), "{failure:?}");
+    assert_eq!(failure.reason_code(), "parse.expected-form");
+    let diagnostics = compile_file_diagnostics(&failure).expect("parser cause is presentable");
+    let diagnostic = diagnostics.first().expect("a parser diagnostic");
+    let mut human = Vec::new();
+    write_human(
+        &mut human,
+        diagnostic,
+        &Catalogue::new(Locale::English).unwrap(),
+    )
+    .unwrap();
+    let human = String::from_utf8(human).unwrap();
+    assert!(human.contains("lowercase.ash"), "{human}");
+    assert!(human.contains("forms.ash"), "{human}");
+    let mut json = Vec::new();
+    write_json(&mut json, diagnostic).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    assert_eq!(json["reason"], "parse.expected-form");
+    let labels = json["labels"].as_array().unwrap();
+    assert_eq!(labels[0]["relationship"], "expected_form");
+    assert!(
+        labels
+            .iter()
+            .any(|label| label["relationship"] == "syntax_invocation")
+    );
+    assert!(
+        labels
+            .iter()
+            .any(|label| label["relationship"] == "syntax_definition")
+    );
+}
+
+#[test]
 fn template_captured_identifier_resolves_a_caller_local_type() {
     for path in [
         "template-annotation/captured/entry.ash",
