@@ -1045,3 +1045,40 @@ then changes only its outer nominal owner and observes refusal. The focused
 unit, 43-case host suite and refreshed Clippy pass. This correction
 is part of the existing O09 review-and-findings allowance, not a new point
 credit or an additional forecast item.
+
+At 20:55:33, independent review cleared `7ae26e76`. O03 and O04 are reviewed;
+O05's shared disposal handoff is reviewed as compositional evidence, without
+claiming one injected refusal in an active transformer. The task records the
+six disjoint point increments. The remaining 131-minute scenario still
+includes the whole-path review in O09, the outstanding status work, and the
+fresh gate; this partial review does not close M11 or C1/C2.
+
+### 20:59 reproducibility handoff
+
+O06 is demonstrated and awaits review. The two-compilation comparison checks
+the existing copied graph's observed shape and binding relationships with fresh
+identities; caller, matcher, helper, imported syntax and interface changes
+produce the expected updated result or ordinary rejection. The three focused
+tests and their scope are recorded in the task. Its 30-minute implementation
+allowance is now zero; review remains in O09. The conditional remaining
+scenario is **101 minutes** (O07 25, O08 15, O09 25, O10 16 and O11 20).
+No new point credit or M12 closure is inferred before review.
+
+At 21:02, review identified that the first repeat check unnecessarily
+compared raw identity and Core node allocation order across compilations. The
+revised check repeats the existing per-copy use assertions and compares
+source-relative ranges and result type instead. All three focused tests pass;
+this refinement remains within O09's review allowance.
+
+### 21:06 remaining-work inventory
+
+The 101-minute figure is a conditional known-work scenario, not a calibrated
+completion forecast. O07 must inventory all 32 unearned original-scope points
+and the still-open M01–M14/C1–C2 obligations against actual evidence; any
+missing work needs a named estimate before the full remaining chain is known.
+The 25 minutes in O09 are a fresh estimate for the remaining whole-path review
+and known corrections, not a measurement of review time already spent. Actual
+event windows above are kept separate from these remaining estimates.
+Clippy also identified a complex tuple in the repeat test; flattening the
+test observation to a fixed array resolved it, and the focused tests and
+Clippy now pass. That correction is within O09's existing review allowance.

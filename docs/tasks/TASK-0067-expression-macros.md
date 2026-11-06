@@ -19,6 +19,21 @@
 > [2026-11-06 amendment](#2026-11-06-approved-amendment) gives the
 > current remaining scope where that text describes removed work.
 
+## Current delivery status, 6 November
+
+The latest reviewed product checkpoint is `7ae26e76`: **67/99 original-scope
+points are reviewed and 32 remain**. The separately estimated 30 points of
+additional performed work give an effort index of **97/129**, not an
+acceptance percentage. The repeated-compilation and changed-input tests are
+demonstrated and await review. M01–M14 and C1/C2 remain open.
+
+The [operational plan](../plans/2026-11-05-expression-macros.md#2026-11-06-operational-update-2034)
+records a 101-minute known-work scenario after that demonstrated batch. It is
+not a calibrated completion forecast: O07 must inventory all unearned
+obligations and any missing work before the remaining chain can be estimated
+as complete. Actual event windows and remaining estimates are recorded
+separately. The historical checkpoints below are preserved as written.
+
 ## Dependencies
 
 CP-0033 supplies the accepted semantic transition and Ash interface.
@@ -1262,6 +1277,64 @@ The [20:47 handoff](../plans/2026-11-05-expression-macros.md#2047-documentation-
 records the completed documentation candidate and the common disposal-path
 investigation. Both await review; the remaining conditional scenario is 131
 minutes. No M/C criterion is closed by this estimate.
+
+### Reviewed host and documentation update, 20:56
+
+Independent review cleared `7ae26e76`. The following disjoint increments use
+the host, specification and disposal evidence above; they do not alter the
+earlier completed ledger or count any observation twice.
+
+| Item | Newly reviewed evidence | Credit and remaining work |
+| --- | --- | --- |
+| P18 | An invocation accepts its own input and refuses live and stale inputs from other invocations. | +0.5; 1/2.5 reviewed. Other input ownership and bridge observations remain 1.5. |
+| P19 | The capture service returns `MissingCapture` for negative, out-of-range and oversized indices while a valid capture succeeds. | +1; 3/3 reviewed. |
+| P23 | Valid output transfers, while the same payload under a different outer nominal owner is refused. | +0.25; 2.25/4 reviewed. Other output and transfer observations remain 1.75. |
+| P24 | Actual active-root destruction and the shared primary/teardown handoff are supported by the separate production-boundary tests above. | +0.25; 2.25/2.5 reviewed. The remaining failure-path audit is 0.25; no single injected active-transformer refusal is claimed. |
+| P34 | The grammar, resolution, checking, elaboration and execution specification delta is documented. | +1; 1/2 reviewed. Executable positive and negative example reconciliation remains 1. |
+| P35 | The canonical syntax API, token vocabulary and tool guide are documented. | +1; 1/2 reviewed. Final status and authority cleanup remains 1. |
+
+The amended original scope is now **67/99 reviewed, with 32 remaining**. The
+unchanged 30 estimated points of additional performed effort give **97/129,
+approximately 75%**, for effort accounting only. No M01–M14 or C1/C2
+criterion is closed by this partial review.
+
+The [20:59 reproducibility handoff](../plans/2026-11-05-expression-macros.md#2059-reproducibility-handoff)
+records the newly demonstrated repeat and changed-input observations. The
+conditional remaining scenario is 101 minutes; review is still pending.
+
+### Reproducibility evidence
+
+The repeated copied-declarations check compiles the same graph twice and
+compares its source-relative binder, nominal and resource ranges and result
+type. In each compilation it independently checks distinct copied identities,
+their own binder, constructor/conversion and handle uses, and both
+initializers' connection to the caller's actual binder. It does not require
+raw identities or Core node allocation order to agree across compilations.
+
+In a fresh graph using the same copied body, changing the caller's value, a
+transitive helper, or the imported nested syntax changes 42 to 44. Changing a
+matcher literal makes the old invocation fail `parse.expected-form`; updating
+the invocation restores 42. Changing a used interface method's result type
+fails the ordinary `type.definition-result` check. The existing transformer
+reuse test also verifies that a changed helper is prepared and validated again.
+The first interface assertion expected the generic mismatch reason; the
+ordinary checker reported its more specific definition-result reason, which
+the final test now asserts.
+
+The first three-test receipt is `/tmp/ash-repro-final.log` (SHA-256
+`aa9b9784b3690a592ab9235993bf898f159ba45e0bbdb44895288766e2683e30`).
+Review found that its repeated-graph test imposed unnecessary cross-compilation
+identity and node-order comparisons. The revised existing copy/use test
+passes without those restrictions; all three focused tests pass in
+`/tmp/ash-repro-final3.log` (SHA-256
+`4ddc97d36f031a88c2a7ce249599e58bb49ac3a77a96364ba8184af6b280304a`).
+The first Clippy run found a test-only complex tuple; using one fixed array
+removed the warning. The refreshed all-target test check passes in
+`/tmp/ash-repro-clippy-final.log` (SHA-256
+`0891611c4246b7b9bf97769ecbc96a208303175ccb70f7c38f8390d8fd43a4eb`).
+The canonical interface is fixed by this compiler and no public version or
+semantic-option switch was invented for this test. This evidence awaits review
+and does not alone close M12.
 
 ## Progress
 
