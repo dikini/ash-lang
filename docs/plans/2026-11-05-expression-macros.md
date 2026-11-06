@@ -1,5 +1,9 @@
 # Expression Macros Implementation Plan
 
+> The original plan and completed checkpoints below are preserved as history.
+> The [2026-11-06 remaining-scope amendment](#2026-11-06-remaining-scope-amendment)
+> supersedes conflicting outstanding requirements and forecasts.
+
 > Execute task by task using `superpowers:executing-plans` and the Ash developer
 > workflow. [TASK-0067](../tasks/TASK-0067-expression-macros.md) owns this
 > temporary plan; remove it when that task finishes.
@@ -8,9 +12,9 @@
 execution, ordinary checking/linking, and the interpreter and build consumers.
 
 **Architecture:** Add one data-defined imported prefix mechanism under amended
-AD-0005. Share protected syntax, contextual expansion, checked name resolution,
-and provenance between templates and Ash procedures. Reuse checked dependencies
-and independently validate new compile-time and runtime Core programs.
+AD-0005. Share protected syntax, contextual expansion, definition grants, and
+provenance between templates and Ash procedures. Reuse checked dependencies and
+independently validate new compile-time and runtime Core programs.
 
 **Tech stack:** Existing Rust lexer/parser/front end, checked-module linker,
 Effect Core evaluator and allocation/completion machinery, Ash-defined canonical
@@ -89,29 +93,30 @@ cases; do not implement a parallel term-only scope walk.
 
 ### B3: definition authority and retained private closure
 
-**Producer/consumer:** Expansion retains compiler-issued identifier contexts;
-the existing resolver selects the checked owner environment and checks its
-actual names and import routes. Module linking retains the checked facts and
-executable dependencies. Developer owns the connected path.
+**Producer/consumer:** Template definition checking and expansion issue retained
+reference grants; `src/resolve.rs`, `src/resolved.rs`, `src/elaborate.rs`, module
+linking, and independent validators consume them. Developer owns both sides.
 
-**Data/lifetime:** Each identifier keeps its context and each resolved use keeps
-its declaration identity. Retain the owner's checked declaration facts and
-completed executable/helper dependencies while the caller needs them. Nested
-syntax preserves contexts; no separate per-reference grant object is needed.
+**Data/lifetime:** An authenticated grant ties the original syntax export,
+declaration, namespace/access, definition context, and original import route to
+the surviving reference. Retain its checked declaration fact and completed
+executable/helper dependencies for as long as the compiled caller needs them.
+Nested syntax preserves the issuer chain; relocation preserves original identity
+and source provenance. Existing hidden summary records can carry checked facts
+but do not create this new syntax authorization channel automatically.
 
-**Failure/check:** Templates receive syntax checks at definition time. Their
-free helpers and computed definition-context references resolve when expanded,
-after generated binders are known.
-Caller names, captured identifiers, forged origins and same-spelled aliases
-cannot gain the owner's private access. The syntax owner can use its own
-private/opaque declarations, not a dependency's withheld members. Method
-identity retains ordinary caller evidence obligations and does not import a
-chosen implementation or continuation capability.
+**Failure/check:** Template free helpers fail at definition time; computed
+definition-context references resolve after generated binders are known.
+Ordinary caller names, captured identifiers, caller-context construction, forged
+origins, and same-spelled aliases cannot gain or retarget grants. The syntax
+owner may delegate its own private/opaque access, not a dependency's withheld
+access. Method identity retains ordinary caller evidence obligations; grants
+cannot import chosen implementations or hidden continuation capability.
 
 M06/M09/M13 execute a private helper through `compile_path` and the final
-program and check source-level privacy, context and dependency routes, alongside
-existing scope/type/provenance validation. Verify checked closure reuse without
-dependency body rechecking.
+program, then reject grant/route/declaration/scope/type/provenance mutations at
+their owning admission or validation boundary. Verify checked closure reuse
+without dependency body rechecking, not merely successful source lookup.
 
 ### B4: public syntax vocabulary and compile-time entry
 
@@ -155,7 +160,7 @@ existing M02/M04/M10 criteria, alongside nominal/handle authentication:
   context is the invocation leading identifier's, not an arbitrary capture's.
 - `expression_syntax` removes only the returned sequence's outer fragment
   boundary. The original fragment remains intact; nested fragments, contexts,
-  origins, and sequence order survive. Compare grouped splicing with
+  grants, origins, and sequence order survive. Compare grouped splicing with
   explicit unwrapping and the corresponding handwritten expression.
 - `parse_expression` parses one complete expression without resolving names,
   expanding nested invocations, or executing another transformer. Observe zero
@@ -169,7 +174,7 @@ existing M02/M04/M10 criteria, alongside nominal/handle authentication:
 - Invalid identifier spellings return `InvalidIdentifier`; kind/spelling
   mismatches return `InvalidToken`. Display strings, supplied origins, captured
   or caller-context identifiers, and copied nominal declarations cannot mint
-  context, private access, evidence, or hidden continuation capability.
+  context, grants, private access, evidence, or hidden continuation capability.
 
 ### B5: host values, output transfer, root close, and limits
 
@@ -182,7 +187,7 @@ whole invocation lifecycle; reviewer audits success and failure consumers.
 authenticated `Input`. Opaque handles belong to the issuing compilation and
 retain their lexical/syntax context, authority, and origin closure. Capture
 lookup exposes only the issuing invocation. Decode and authenticate nominal
-shape, tokens, groups, fragments, and handles while the root is live;
+shape, tokens, groups, fragments, grants, and handles while the root is live;
 transfer complete output or failure data to compiler-owned storage, then close
 the root and publish only a complete admitted result. Do not retain `Value`,
 `ObservedValue`, or its backing allocation beyond the closed owner.
@@ -245,7 +250,7 @@ independent Core validators → `driver::execute` and the public build preparati
 image, generated-host, and executable paths in `src/build/`. Developer owns the
 connected path; orchestrator owns milestone retention.
 
-**Data/lifetime:** Preserve the checked declaration/private dependency and
+**Data/lifetime:** Preserve the checked declaration/grant/private dependency and
 source/origin closure as required until packaging; keep macro input/service
 state out of the runtime image. The final program contains ordinary checked
 runtime code and independently validated metadata. A generated executable
@@ -267,17 +272,19 @@ body checking.
 resource/continuation behavior and corrupted retained relations before runtime.
 Run the same valid graph through interpretation and the supported real build;
 generated runtime needs no syntax-service interpretation. Verify relevant
-identity/origin serialization and corruption checks where those facts are
+identity/origin/grant serialization and corruption checks where those facts are
 retained. Do not serialize compile-time handles or make image reconstruction
 repeat the compiler proof. Runtime completion and build cleanup remain required.
 
 ### D0 concrete carriers and calls
 
-The following D0 sketches record the initial staged-driver handoff. They are
-historical planning evidence, not a requirement to introduce these exact
-interfaces. The checked syntax path now uses the existing driver and resolver
-carriers. Changes to ownership, admission, or failure behavior return to the
-same reviewer. The task records the current demonstrated scope and remainder.
+These crate-private Rust interfaces freeze the connected handoffs for review.
+They are implementation contracts, not Ash semantics. A change to ownership,
+admission, or failure behavior returns to the same reviewer. The checkpoint,
+header projection, canonical-source census and staged driver compile. The
+driver checks each dependency before resuming its importer. A restricted
+single-expression-capture template runs through the driver. Syntax contexts,
+grants, general matcher admission and the host interfaces remain planned.
 
 ```rust
 fn parse_module_header(
@@ -343,7 +350,17 @@ impl HeaderGraph {
 }
 ```
 
-The staged driver supplies selected checked syntax when it resumes each importer.
+The still-planned syntax admission extends that handoff without changing its
+dependency order:
+
+```rust
+fn parse_staged_module(
+    module: &mut StagedModule,
+    syntax: SyntaxContextId,
+    syntax_registry: &CheckedSyntaxRegistry,
+    budget: &mut SyntaxBudget,
+) -> Result<LoadedModule, LoadGraphError>;
+```
 
 `discover_headers` reads and lexes each source once, parses only its fixed
 header, discovers canonical edges and owners, and retains the complete token
@@ -360,7 +377,7 @@ attribution do not imply identical first-failure sources. Each staged module's
 whole-module span uses its first retained token through EOF, preserving the
 implicit region edge's span and its position after explicit imports. The staged
 driver parses/projects and checks each dependency before its importer. Matcher
-selection, expansion and checked syntax publication use the same staged path.
+selection, expansion and checked syntax publication remain to be connected.
 Before checking, the completed header graph's canonical sources, including
 implicit builtins, pay the same `compiler_work::source_work_for_sources` census once.
 Carry that ledger and source-size allowance through checking; aliases and
@@ -390,12 +407,80 @@ architecture tests, including intentionally statically invalid programs. They
 keep the syntax-free wrapper rather than acquiring implicit checking or a
 `main` requirement. External low-level callers receive the same limitation.
 
-The driver retains each checked module's syntax declarations and selected
-imports for the compilation. An expansion uses the selected syntax owner and
-compiler-issued identifier contexts to choose the existing checked environment.
-The resolver then performs ordinary lexical and namespace lookup and retains the
-selected checked facts. This uses the existing owner and dependency carriers,
-not a new global syntax registry or per-reference authorization table.
+```rust
+struct SyntaxId { compilation: CompilationId, module: ModuleId, declaration: u32 }
+struct SyntaxContextId { compilation: CompilationId, index: u32 }
+struct SyntaxExport {
+    id: SyntaxId,
+    matcher: Matcher,
+    definition_context: ContextId,
+    definition_origin: Origin,
+    implementation: SyntaxImplementation, // checked template or global BinderId
+}
+struct SyntaxSelection {
+    export: SyntaxId,
+    local_name: String,
+    import_span: Span,
+}
+struct SyntaxContext {
+    selections: Box<[SyntaxSelection]>,
+}
+struct CheckedSyntaxRegistry {
+    compilation: CompilationId,
+    exports: Vec<SyntaxExport>,
+    contexts: Vec<SyntaxContext>,
+}
+struct SelectedSyntax<'registry> {
+    export: &'registry SyntaxExport,
+    local_name: &'registry str,
+    import_span: Span,
+}
+fn select_syntax<'registry>(
+    registry: &'registry CheckedSyntaxRegistry,
+    checked: &CheckedModules,
+    context: SyntaxContextId,
+    local_name: &str,
+) -> Result<Option<SelectedSyntax<'registry>>, ExpansionFailure>;
+enum SyntaxNode {
+    Token(ContextToken),
+    Identifier(ContextName),
+    Group(Delimiter, SyntaxSequence, Origin),
+    Expression(FragmentId, Origin),
+}
+struct ContextName {
+    spelling: String,
+    lexical_scopes: ScopeSetId,
+    syntax_context: SyntaxContextId,
+    origin: Origin,
+    grant: Option<SyntaxGrantId>,
+}
+fn parse_syntax_expression(
+    input: &SyntaxSequence,
+    syntax_registry: &CheckedSyntaxRegistry,
+    checked: &CheckedModules,
+    budget: &mut SyntaxBudget,
+) -> Result<SurfaceExpr, ExpansionFailure>;
+fn resolve_module_with_expansion(
+    module: &LoadedModule,
+    dependencies: &[DependencyExports<'_>],
+    syntax: SyntaxContextId,
+    syntax_registry: &CheckedSyntaxRegistry,
+    expansion: &mut ExpansionState,
+    budgets: &mut CompilationBudgets,
+) -> Result<ResolvedModule, ExpansionFailure>;
+```
+
+The compilation-owned registry holds append-only immutable export and context
+records addressed by private stable IDs; `CheckedModule` publishes only IDs to
+exports checked with that owner. Records reference other records and owners by
+ID, not by pointers into a growable checked-module vector. Each lookup
+authenticates the compilation, checked owner, export and original import route
+and returns only a short-lived borrowed view. Appending another checked module
+cannot invalidate retained contexts, and the registry and checked owners live
+until expansion and linking finish. The acyclic ID relations create no ownership
+cycle. The compilation identity is privately allocated with checked exhaustion;
+constructors for these IDs stay compiler-owned. No ID or context is accepted
+from a different compilation.
 
 Parsing mixed output consults the leading identifier's context, never a single
 caller-wide spelling map. Empty and fresh-private contexts contain no syntax
@@ -421,11 +506,34 @@ output. Work remains iterative and bounded. The surface carrier attaches context
 and origin to each applicable term, type, constructor, alias, interface and
 effect occurrence, not just terms.
 
-Compiler-issued contexts select the appropriate checked environment. The
-ordinary resolver checks the declaration, namespace, access and import route;
-linking retains the checked private declaration and executable closure without
-importing its name or definition-site implementation evidence into the caller.
-A compile-time link
+```rust
+struct SyntaxGrant {
+    issuer: SyntaxId,
+    declaration: DeclarationId,
+    namespace: Namespace,
+    access: Access,
+    original_route: ImportRoute,
+    origin: Origin,
+}
+fn authenticate_syntax_grant(
+    grant: SyntaxGrantId,
+    occurrence: &ContextName,
+    checked: &CheckedModules,
+) -> Result<AuthenticatedReference, ExpansionFailure>;
+fn link_syntax_closure(
+    modules: &[CheckedModule],
+    entry: MacroEntry,
+    grants: &AuthenticatedSyntaxGrants,
+    budget: &mut TypeWorkBudget,
+) -> Result<ResolvedModuleProgram, TypeError>;
+```
+
+Grant IDs index a compiler-owned compilation table and cannot be issued from an
+Ash value, spelling, origin or captured caller identifier. Authentication checks
+the issuing checked syntax export, declaration, namespace/access and original
+route before admitting a surviving reference. Linking retains the checked
+private declaration and executable closure without importing its name or
+definition-site implementation evidence into the caller. A compile-time link
 borrows completed checked modules and constructs a separately owned entry and
 closure using `SharedModuleLowering` and bounded `copy_checked_fragment`-style
 relocation. It retains selected evidence, layouts, cleanup, provenance and
@@ -475,7 +583,7 @@ identity, kind and table index, and capture lookup authenticates the invocation.
 The compile-time evaluator interprets only canonical `Ops` and default
 allocation. It charges a transition before every `Machine::run_loop` iteration
 in this invocation only. The decoder authenticates nominal constructors,
-handles and origins while the root is live and copies the complete
+handles, origins and grants while the root is live and copies the complete
 output or authored diagnostic into bounded compiler-owned staging. It closes
 the root inside a disposal-observation scope and returns the transferred result
 only if close succeeded. A primary failure and first teardown failure survive
@@ -564,7 +672,7 @@ cache. Compare its observation with interpretation. Run invalid variants through
 the CLI/reporting consumer for human and JSON observations; do not manufacture
 those diagnostics solely in a renderer fixture.
 
-Internal parser/scope/handle/validator mutation tests complement the real
+Internal parser/scope/grant/handle/validator mutation tests complement the real
 graph. Test-only observations must prove selected producer results reach their
 actual consumers: checked syntax selection, real Ash body invocation, distinct
 Core validation events, publication after close, no publication on failure,
@@ -622,7 +730,7 @@ Keep exact placement from D0; do not create one Rust module per plan boundary.
 3. Add restricted matcher recognition, nested stop boundaries, protected capture
    storage, and output admission with token-complete recovery/projection checks.
 4. Connect outermost-first template expansion with shared scope policies,
-   per-occurrence identities and retained syntax contexts.
+   per-occurrence identities, retained syntax contexts, and definition grants.
    Carry surviving private references and checked executable closure through
    ordinary caller checking, linking, and independent validation.
 5. Execute the template subset of the production graph, including private helper,
@@ -664,7 +772,7 @@ the same production graph, and the corresponding vocabulary/interface docs.
    recursing without any syntax request until its budget exhausts. Observe root
    close and no partial publication; retain ordinary runtime evaluator behavior.
 5. Run M03/M10/M11/M13 plus D1 regressions through the production graph; compare
-   template and computed results. Independently review admission, resolution,
+   template and computed results. Independently review admission, grants,
    validation, execution, transfer, cleanup, and failure consumers.
 6. Freeze C1 inputs and run fresh `cargo xtask verify` with one Cargo job. Record
    complete receipts and review; refresh affected checks after any repair.
@@ -742,10 +850,6 @@ full gate may serve the pre-Main gate without a duplicate identical-input run.
 
 ## Estimate and re-planning
 
-The user-approved removal of the redundant grant layer changes the remaining
-scope. The historical forecast below predates that amendment; a defensible new
-whole-chain estimate requires a fresh verified checkpoint.
-
 After the introduced resource and region graphs, the provisional forecast is
 **about 7.9 additional Codex elapsed hours**, with a tentative **6–13 hour**
 range. At 01:03 Sofia time on 6 November, 55.5 reviewed and 0.5 provisional
@@ -757,7 +861,7 @@ a measured model-runtime total; independent review may revise it.
 | Remaining connected work | Codex elapsed hours |
 | --- | --- |
 | Remaining Ops, vocabulary, output forms, transfer failures, and limits | 2–3 |
-| Complete contexts, copied identities, and Core coordinates | 2–5 |
+| Complete contexts, copied identities, grants, and Core coordinates | 2–5 |
 | Diagnostics and actual image/build/native path | 1–3 |
 | Remaining evidence, docs, gates, review, and retained acceptance | 2–3 |
 
@@ -785,7 +889,7 @@ forecast and does not move when the ETA changes. The observed session pace is a
 calibration check only. The additional 8 reviewed credits at `ad8ca9cc` record the canonical module,
 checked entry, partial host/output and frozen combined graph; they do not claim
 a complete procedural host or borrowed-owner acceptance. The ledger changes no M01–M14 acceptance requirement. Its remaining
-weights favor unresolved contexts and consumers; implementations and their
+weights favor unresolved contexts/grants and consumers; implementations and their
 negative/transfer/mutation evidence receive disjoint credit.
 
 Use that ledger's small observable increments for requested half-hour reports,
@@ -795,3 +899,73 @@ about 33 minutes after the reviewed template checkpoint, faster than the prior
 1.5–4 hour hypothesis. Re-estimate after repeated repairs or changed interfaces. Keep confirmed findings in the task and use the same reviewer
 to challenge a stalled path. Do not add tests, benchmarks, or gates solely to
 produce progress points or timing data.
+
+
+## 2026-11-06 remaining-scope amendment
+
+This section updates only work still outstanding. Earlier checkpoint descriptions,
+weights, evidence, sketches and estimates remain historical records; they do not
+require the removed implementation to be restored. The amended
+[CP-0033](../proposals/CP-0033-hygienic-expression-syntax.md) and
+[first-slice design](../design/macros/first-slice.md) govern the remaining work.
+
+- Definition-context references use compiler-issued contexts and ordinary
+  resolution in the checked defining environment. Checked facts and executable
+  dependencies survive linking. Separate post-resolution per-reference grant
+  records, their link rechecks and their grant-specific mutation tests are removed
+  from the outstanding work. Private and opaque access, original public import
+  routes, caller isolation and ordinary independent Core checks remain required.
+- Template bodies are parsed for syntactic validity at definition time. Their
+  literal free names resolve in the defining environment when expanded; an
+  unused unresolved name is not an error. The caller cannot supply or redirect
+  that name. Captures and introduced binders retain their contexts. Transformer
+  `using` targets and ordinary imports keep their existing admission checks.
+- M06 and M10 exercise source access, contextual behavior, origins and handle
+  isolation rather than a grant object. M13 retains checked-dependency reuse and
+  independent new Core validation, including existing scope, type, coordinate
+  and provenance refusals. The other M01–M14 and C1/C2 obligations remain open.
+- Completed checkpoints, their evidence and original weights are not altered
+  by this scope change. The historical estimates above are not a current ETA.
+  The task records the remaining-only reconciliation and additional corrective
+  work separately.
+
+The remaining-only estimate preserves the original 38.5 uncredited points and
+removes one point of grant-object and grant-only mutation work. It does not
+remove privacy, route, closure or ordinary validation obligations.
+
+| Remaining package | Original points | Current points |
+| --- | ---: | ---: |
+| Context, hygiene and definition access | 4.5 | 3.5 |
+| Canonical API and checked entry | 3 | 3 |
+| Services, transfer and lifecycle | 9 | 9 |
+| Graph, Core and reproducibility evidence | 6 | 6 |
+| Diagnostics | 2 | 2 |
+| Supported image/build evidence | 3 | 3 |
+| Specification and tool documentation | 4 | 4 |
+| Review, gates and milestone retention | 7 | 7 |
+| **Remaining** | **38.5** | **37.5** |
+
+The task separately records about 30 points of additional performed corrective
+work, estimated from disjoint session/receipt intervals and the previously
+recorded checkpoint pace. The original 61.5 reviewed points are unchanged;
+the resulting 91.5 of 129 is an effort-accounting index, not feature or
+acceptance completion. Removed work is not counted as a finished requirement.
+
+The current connected-work scenario totals **about 4 hours 51 minutes** of
+session elapsed time:
+
+| Remaining work | Estimate and basis |
+| --- | --- |
+| Pattern/scrutinee diagnostic repair | 60 minutes; the earlier match, application, and origin/stack changes took about 24, 10, and 57 minutes between their checkpoints. |
+| Evidence reconciliation and uncovered cases | 90 minutes; inspect existing bridge/input/handle contrasts (M10), paired active-failure disposal (M11), changed-input and repeat cases (M12), and API/version/image evidence. Add only missing discriminating cases. The timing and negative-control changes took about 19 minutes. |
+| Specification, API, `TokenKind`, and tool documentation | 75 minutes; a working estimate without a clean isolated documentation analogue. |
+| Independent review and corrections | 30 minutes; earlier partial verdicts took about 1–8 minutes, while this review covers more. |
+| Fresh C2 gate | 16 minutes, based on the 940.57-second full gate at `6b72d2de`. |
+| Native refresh, retention and acceptance readback | 20 minutes. |
+
+This is a scenario based on the current known work, not a deadline or measured
+active runtime. If evidence exposes a new producer defect, re-estimate that
+work. External waiting and separately authorized Main integration are outside
+the scenario. The task's separate point-rate calculation gives **about 6.8
+hours** for 37.5 points at 5.55 points/hour; it is a low-confidence mechanical
+comparison, not an added buffer or a confidence interval.
