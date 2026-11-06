@@ -362,6 +362,7 @@ mod tests {
             syntax_selections: None,
             syntax_spellings: None,
             diagnostic_spans: None,
+            admission_identifiers: None,
             syntax_stops: Vec::new(),
         };
 

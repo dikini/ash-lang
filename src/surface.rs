@@ -57,8 +57,8 @@ pub struct SurfaceSyntaxDeclaration {
 /// The source implementation of an expression syntax declaration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceSyntaxImplementation {
-    /// A template expression with capture splices.
-    Template(SurfaceExpr),
+    /// A template with capture splices.
+    Template,
     /// An ordinary global in the defining module.
     Transformer(SurfaceName),
 }

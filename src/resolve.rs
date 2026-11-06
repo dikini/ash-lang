@@ -1619,8 +1619,7 @@ pub(crate) fn resolve_module_with_syntax<'a>(
     uses: &'a [crate::syntax::SyntaxNameUse],
     owners: &'a [Arc<crate::resolved::CheckedModule>],
     terms: &'a [crate::syntax::SyntaxOwnerBindings],
-    selected: &'a [crate::syntax::SelectedSyntax],
-    owner_imports: &'a [Vec<crate::syntax::SelectedSyntax>],
+    admissions: &'a [(SurfaceExpr, Vec<SurfaceName>)],
     expansion: Option<&mut crate::syntax::SyntaxExpansion<'a>>,
 ) -> Result<ResolvedModule, ResolveModuleError> {
     resolve_module_for_catalogue(
@@ -1633,8 +1632,7 @@ pub(crate) fn resolve_module_with_syntax<'a>(
             uses,
             owners,
             terms,
-            selected,
-            owner_imports,
+            admissions,
         }),
         expansion,
     )
@@ -1645,8 +1643,7 @@ struct SyntaxInputs<'a> {
     uses: &'a [crate::syntax::SyntaxNameUse],
     owners: &'a [Arc<crate::resolved::CheckedModule>],
     terms: &'a [crate::syntax::SyntaxOwnerBindings],
-    selected: &'a [crate::syntax::SelectedSyntax],
-    owner_imports: &'a [Vec<crate::syntax::SelectedSyntax>],
+    admissions: &'a [(SurfaceExpr, Vec<SurfaceName>)],
 }
 
 #[derive(Clone, Copy)]
@@ -1813,6 +1810,22 @@ fn resolve_module_names_with_budget<'a>(
 ) -> Result<ResolvedModuleAdmission, ResolveError> {
     let module = loaded.id();
     let surface = loaded.surface();
+    let local_admissions;
+    let admissions = if let Some(syntax) = syntax {
+        syntax.admissions
+    } else {
+        let contexts = crate::syntax::SyntaxContexts::new(&[], &[], &[]);
+        local_admissions = surface
+            .syntax_declarations
+            .iter()
+            .filter_map(|declaration| {
+                crate::syntax::template_for_admission(declaration, loaded.source(), &contexts)
+                    .transpose()
+                    .map(|result| result.map_err(|_| unsupported_syntax_template(declaration.span)))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        &local_admissions
+    };
     // Reserved identities are observable coordinates. Authenticate the actual
     // source bytes before any role can be reconstructed from those coordinates.
     type_work.charge(dependencies.len()).map_err(|()| {
@@ -1990,13 +2003,7 @@ fn resolve_module_names_with_budget<'a>(
             &mut declarations,
             dependencies,
         )?;
-        let contexts = match syntax {
-            Some(syntax) => {
-                crate::syntax::SyntaxContexts::new(syntax.selected, syntax.owner_imports, &[])
-            }
-            None => crate::syntax::SyntaxContexts::new(&[], &[], &[]),
-        };
-        resolver.admit_templates(surface, loaded.source(), &contexts)?;
+        resolver.admit_templates(admissions)?;
 
         let imported = std::mem::take(&mut resolver.imported);
         let export_candidate = build_export_candidate(
@@ -12382,17 +12389,9 @@ impl Resolver<'_, '_> {
 
     fn admit_templates(
         &mut self,
-        surface: &SurfaceModule,
-        source: &crate::source::SourceFile,
-        contexts: &crate::syntax::SyntaxContexts,
+        admissions: &[(SurfaceExpr, Vec<SurfaceName>)],
     ) -> Result<(), ResolveError> {
-        for declaration in &surface.syntax_declarations {
-            let Some((template, identifiers)) =
-                crate::syntax::template_for_admission(declaration, source, contexts)
-                    .map_err(unsupported_syntax_template)?
-            else {
-                continue;
-            };
+        for (template, identifiers) in admissions {
             let binder_checkpoint = self.next_binder;
             let type_checkpoint = self.next_type_variable;
             let nominal_checkpoint = self.next_lexical_nominal;
@@ -12406,7 +12405,7 @@ impl Resolver<'_, '_> {
             let effect_arity_checkpoint = self.written_effect_arities.len();
             let result = (|| {
                 let mut captures = HashMap::new();
-                for name in &identifiers {
+                for name in identifiers {
                     let binder = self.allocate_contextual_binder(name)?;
                     captures.insert(
                         (name.text.clone(), name.introduction),
@@ -12415,7 +12414,7 @@ impl Resolver<'_, '_> {
                 }
                 self.scopes.push(captures);
                 self.admitting_template = true;
-                self.resolve_expr(&template)
+                self.resolve_expr(template)
                     .map(discard_resolved_expression_iteratively)
             })();
             self.admitting_template = false;
@@ -20662,7 +20661,14 @@ mod tests {
             let effect_arity_count = resolver.written_effect_arities.len();
 
             let contexts = crate::syntax::SyntaxContexts::new(&[], &[], &[]);
-            let result = resolver.admit_templates(&module, &source, &contexts);
+            let admissions = module
+                .syntax_declarations
+                .iter()
+                .filter_map(|declaration| {
+                    crate::syntax::template_for_admission(declaration, &source, &contexts).unwrap()
+                })
+                .collect::<Vec<_>>();
+            let result = resolver.admit_templates(&admissions);
             assert_eq!(result.is_ok(), succeeds, "{tail}: {result:?}");
             assert_eq!(
                 counters,

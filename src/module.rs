@@ -20,6 +20,7 @@ use crate::{
         ParseDiagnostic, ParserCheckpoint, ProjectionError, ResourceFailure,
         finish_module_from_checkpoint_with_syntax, module_span_from_checkpoint,
         parse_module_header, parse_with_budget_and_header, project_module, project_module_header,
+        project_module_retaining_templates,
     },
     source::{SourceError, SourceFile, SourceId, Span},
     surface::{
@@ -2643,7 +2644,7 @@ fn project_finished_module(
             import_span,
         })));
     }
-    match project_module(&source, &tree) {
+    match project_module_retaining_templates(&source, &tree) {
         Ok(surface) => Ok((source, surface)),
         Err(error) => Err(LoadGraphError::Projection {
             source,

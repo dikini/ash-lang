@@ -1517,6 +1517,33 @@ where
         }
         let module = input.current().ok_or_else(internal_file_failure)?;
         check_loaded_module(|| -> Result<(), FileFailure> {
+            let contexts =
+                crate::syntax::SyntaxContexts::new(&selected, &checked_syntax_imports, &[]);
+            let mut admissions = Vec::new();
+            for declaration in &module.surface().syntax_declarations {
+                match crate::syntax::template_for_admission(declaration, module.source(), &contexts)
+                {
+                    Ok(Some(admission)) => admissions.push(admission),
+                    Ok(None) => {}
+                    Err(crate::parser::MacroParseFailure::Syntax {
+                        diagnostics,
+                        resource,
+                    }) => {
+                        return Err(FileFailure::from(PipelineFailure::Syntax(Box::new(
+                            SyntaxFailure {
+                                lexical: Vec::new(),
+                                parser: diagnostics,
+                                resource,
+                            },
+                        ))));
+                    }
+                    Err(crate::parser::MacroParseFailure::Invalid) => {
+                        return Err(FileFailure::from(PipelineFailure::Resolution(
+                            crate::resolve::unsupported_syntax_template(declaration.span),
+                        )));
+                    }
+                }
+            }
             let mut transformer_failure = None;
             let mut transformer =
                     |selection: &crate::syntax::SelectedSyntax,
@@ -1635,8 +1662,7 @@ where
                 &[],
                 &checked,
                 &checked_syntax_terms,
-                &selected,
-                &checked_syntax_imports,
+                &admissions,
                 Some(&mut syntax_expansion),
             );
             drop(syntax_expansion);

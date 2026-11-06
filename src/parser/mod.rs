@@ -16,6 +16,7 @@ pub use cst::{ConcreteElement, ConcreteNode, ConcreteTree, InternalReason};
 pub use event::Event;
 pub(crate) use project::module_span_from_checkpoint;
 pub(crate) use project::project_module_header;
+pub(crate) use project::project_module_retaining_templates;
 pub(crate) use project::structural_weight as source_structural_weight;
 pub use project::{ProjectionError, project_module};
 
@@ -54,6 +55,8 @@ pub enum NodeKind {
     SyntaxDeclaration,
     /// One named syntax matcher capture.
     SyntaxCapture,
+    /// The balanced token contents of an expression syntax template.
+    TemplateBody,
     /// One imported expression syntax invocation.
     SyntaxInvocation,
     /// One identifier or expression captured by an invocation.
@@ -509,6 +512,9 @@ impl ParseDiagnostic {
 }
 
 /// Parses one complete lexer result into an error-bearing concrete tree.
+///
+/// Template bodies are retained as balanced syntax. Their contents are parsed
+/// after capture substitution, when the relevant syntax imports are known.
 #[must_use]
 pub fn parse(lexed: Lexed) -> ConcreteTree {
     let (tokens, lexical_diagnostics, syntax_budget, lexical_resource_failure) = lexed.into_parts();
@@ -571,6 +577,27 @@ pub(crate) fn parse_macro_expression(
     output: Vec<crate::syntax::MacroOutputNode>,
     contexts: &crate::syntax::SyntaxContexts,
 ) -> Result<crate::surface::SurfaceExpr, MacroParseFailure> {
+    parse_macro_expression_inner(source, invocation, construction, output, contexts, &[])
+}
+
+pub(crate) fn parse_template_admission(
+    source: &SourceFile,
+    invocation: Span,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    placeholders: &[crate::surface::SurfaceName],
+) -> Result<crate::surface::SurfaceExpr, MacroParseFailure> {
+    parse_macro_expression_inner(source, invocation, None, output, contexts, placeholders)
+}
+
+fn parse_macro_expression_inner(
+    source: &SourceFile,
+    invocation: Span,
+    construction: Option<(Span, usize)>,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    placeholders: &[crate::surface::SurfaceName],
+) -> Result<crate::surface::SurfaceExpr, MacroParseFailure> {
     use crate::source::ByteRange;
     use crate::syntax::MacroOutputNode;
     let start = invocation.range().start();
@@ -583,6 +610,7 @@ pub(crate) fn parse_macro_expression(
         .map_err(|_| MacroParseFailure::Invalid)?;
     let mut tokens = Vec::new();
     let mut original_nodes = std::collections::HashMap::new();
+    let mut admission_identifiers = std::collections::HashSet::new();
     let mut syntax_selections = std::collections::HashMap::new();
     let mut syntax_spellings = std::collections::HashMap::new();
     let mut fragment_count = 0usize;
@@ -605,6 +633,9 @@ pub(crate) fn parse_macro_expression(
                 TokenKind::Identifier(name)
             }
             MacroOutputNode::Identifier(identifier, origin) => {
+                if placeholders.iter().any(|name| name == &identifier) {
+                    admission_identifiers.insert(tokens.len());
+                }
                 original_nodes.insert(
                     tokens.len(),
                     MacroOutputNode::Identifier(identifier.clone(), origin),
@@ -698,6 +729,7 @@ pub(crate) fn parse_macro_expression(
         syntax_selections: Some(&syntax_selections),
         syntax_spellings: Some(&syntax_spellings),
         diagnostic_spans: Some(&diagnostic_spans),
+        admission_identifiers: Some(&admission_identifiers),
         syntax_stops: Vec::new(),
     };
     parser.start(NodeKind::Module);
@@ -720,9 +752,15 @@ pub(crate) fn parse_macro_expression(
         ..
     } = parser;
     let tree = cst::build(tokens, Vec::new(), diagnostics, events, resource_failure);
-    let expression =
-        project::project_macro_expression(source, invocation, construction, &tree, &original_nodes)
-            .map_err(|_| MacroParseFailure::Invalid)?;
+    let expression = project::project_macro_expression(
+        source,
+        invocation,
+        construction,
+        &tree,
+        &original_nodes,
+        &admission_identifiers,
+    )
+    .map_err(|_| MacroParseFailure::Invalid)?;
     Ok(expression)
 }
 
@@ -809,6 +847,7 @@ pub(crate) fn parse_module_header(
             syntax_selections: None,
             syntax_spellings: None,
             diagnostic_spans: None,
+            admission_identifiers: None,
             syntax_stops: Vec::new(),
         };
         grammar::module_header(&mut parser);
@@ -881,6 +920,7 @@ pub(crate) fn finish_module_from_checkpoint_with_syntax(
         syntax_selections: None,
         syntax_spellings: None,
         diagnostic_spans: None,
+        admission_identifiers: None,
         syntax_stops: Vec::new(),
     };
     grammar::module_body(&mut parser);
@@ -933,10 +973,21 @@ pub(crate) struct Parser<'tokens> {
         Option<&'tokens std::collections::HashMap<usize, crate::syntax::SelectedSyntax>>,
     syntax_spellings: Option<&'tokens std::collections::HashMap<usize, std::sync::Arc<str>>>,
     diagnostic_spans: Option<&'tokens std::collections::HashMap<usize, Span>>,
+    admission_identifiers: Option<&'tokens std::collections::HashSet<usize>>,
     syntax_stops: Vec<(TokenKind, String, usize)>,
 }
 
 impl Parser<'_> {
+    fn is_admission_identifier(&self) -> bool {
+        self.admission_identifiers
+            .is_some_and(|indices| indices.contains(&self.position))
+    }
+
+    fn at_upper_identifier(&self) -> bool {
+        self.is_admission_identifier()
+            || matches!(self.current(), Some(TokenKind::UpperIdentifier(_)))
+    }
+
     fn at_syntax_name(&self) -> bool {
         self.selected_syntax().is_some()
     }

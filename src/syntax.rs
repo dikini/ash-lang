@@ -278,7 +278,7 @@ impl<'a> SyntaxExpansion<'a> {
             .map(|owner| owner.owner)
             .collect::<Vec<_>>();
         let (mut expression, fresh_count) = match &selection.declaration.implementation {
-            SurfaceSyntaxImplementation::Template(_) => {
+            SurfaceSyntaxImplementation::Template => {
                 let mut contents = selection
                     .declaration
                     .template_contents
@@ -581,8 +581,8 @@ pub(crate) fn template_for_admission(
     declaration: &SurfaceSyntaxDeclaration,
     source: &crate::source::SourceFile,
     contexts: &SyntaxContexts,
-) -> Result<Option<(SurfaceExpr, Vec<SurfaceName>)>, Span> {
-    let SurfaceSyntaxImplementation::Template(_) = &declaration.implementation else {
+) -> Result<Option<(SurfaceExpr, Vec<SurfaceName>)>, crate::parser::MacroParseFailure> {
+    let SurfaceSyntaxImplementation::Template = &declaration.implementation else {
         return Ok(None);
     };
     let mut captures = Vec::new();
@@ -617,7 +617,7 @@ pub(crate) fn template_for_admission(
     let mut contents = declaration
         .template_contents
         .as_ref()
-        .ok_or(declaration.span)?
+        .ok_or(crate::parser::MacroParseFailure::Invalid)?
         .to_vec();
     substitute_contents(
         &mut contents,
@@ -625,15 +625,15 @@ pub(crate) fn template_for_admission(
         &captures,
         0,
         declaration.span,
-    )?;
-    let template = crate::parser::parse_macro_expression(
+    )
+    .map_err(|_| crate::parser::MacroParseFailure::Invalid)?;
+    let template = crate::parser::parse_template_admission(
         source,
         declaration.span,
-        Some((declaration.span, 0)),
         contents,
         contexts,
-    )
-    .map_err(|_| declaration.span)?;
+        &identifiers,
+    )?;
     Ok(Some((template, identifiers)))
 }
 

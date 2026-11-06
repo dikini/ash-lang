@@ -444,6 +444,32 @@ fn template_local_newtype_does_not_capture_the_caller_nominal() {
 }
 
 #[test]
+fn template_captured_identifier_can_name_a_local_newtype() {
+    let compiled = compile_path(fixture("template-newtype-capture/entry.ash"))
+        .expect("captured names work in ordinary local declarations");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+    for (path, expected) in [
+        (
+            "template-newtype-capture/wrong_kind.ash",
+            "parse.expected-form",
+        ),
+        (
+            "template-newtype-capture/malformed.ash",
+            "parse.expected-operand",
+        ),
+        (
+            "template-newtype-capture/nested_malformed.ash",
+            "parse.expected-form",
+        ),
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), expected, "{path}: {failure:?}");
+    }
+    compile_path(fixture("template-newtype-capture/lowercase.ash"))
+        .expect_err("an actual lowercase identifier cannot name a newtype");
+}
+
+#[test]
 fn same_spelled_recursive_binders_keep_distinct_contexts() {
     let compiled = compile_path(fixture("template-recursive/mixed.ash"))
         .expect("introduced and captured recursive names remain distinct");

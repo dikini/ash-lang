@@ -720,10 +720,39 @@ fn projects_expression_template_with_a_capture_splice() {
     ));
     assert!(matches!(
         syntax.implementation,
-        ash::surface::SurfaceSyntaxImplementation::Template(ash::surface::SurfaceExpr {
-            kind: ash::surface::SurfaceExprKind::Block(_),
-            ..
-        })
+        ash::surface::SurfaceSyntaxImplementation::Template
+    ));
+}
+
+#[test]
+fn rejects_a_balanced_malformed_template_at_projection() {
+    let source = SourceFile::new(
+        "malformed-template.ash",
+        "pub syntax bad $value:expr => {\nlet item =\n$value\n}\n",
+    )
+    .unwrap();
+    let tree = parse(lex(&source).unwrap());
+    assert!(matches!(
+        project_module(&source, &tree),
+        Err(ProjectionError::RecoveryNodesPresent)
+    ));
+}
+
+#[test]
+fn template_admission_preserves_structural_depth_failure() {
+    let expression =
+        std::iter::repeat_n(" + 1", ash::parser::STRUCTURAL_DEPTH_LIMIT + 1).collect::<String>();
+    let source = SourceFile::new(
+        "deep-template.ash",
+        format!("pub syntax deep $value:expr => {{\n$value{expression}\n}}\n"),
+    )
+    .unwrap();
+    let tree = parse(lex(&source).unwrap());
+    assert!(matches!(
+        project_module(&source, &tree),
+        Err(ProjectionError::ResourceLimit(
+            ash::parser::ResourceFailure::StructuralDepth { .. }
+        ))
     ));
 }
 

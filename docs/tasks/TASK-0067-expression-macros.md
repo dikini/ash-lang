@@ -132,12 +132,13 @@ are acceptance cases for the common path, not new cleanup or region rules.
 
 The current candidate changes the handoff:
 
-1. The existing module projector retains a template's parsed expression and
-   its immutable `MacroOutputNode` sequence from `capture_contents`. The checked
-   syntax export retains both with the same source and owner; it does not
-   re-lex source text or rerun a dependency body. Definition admission uses the
-   same carrier instantiator and parser with typed dummy captures, then the
-   existing name-only resolver; it must not depend on AST `substitute`.
+1. The module projector retains a balanced template as an immutable
+   `MacroOutputNode` sequence from `capture_contents`. After dependency syntax
+   selection, definition admission instantiates it with category-marked dummy
+   captures and parses it through the ordinary output parser before resolving
+   module bodies. The existing name-only resolver reuses that parsed value.
+   The checked export retains the sequence and owner without re-lexing source
+   or rerunning a dependency body.
 2. One instantiator maps template `Splice` nodes to the selected immutable
    expression or identifier capture, adds the issued introduction to literal
    identifiers, and preserves token spelling, groups, contexts and origins.
@@ -225,13 +226,41 @@ The four affected suites pass 114 cases
 `4b9680c8a8f57b6d3928f1a6b7781819d742d9d90f0f15dff26256f95876aeec`),
 and the existing generated/local Core mutation checks pass
 (`/tmp/ash-procedural-newtype/mutations.log`, `source-origin.log`, `scope.log`).
-This candidate awaits independent review. A real procedural newtype with two
+Independent review cleared this candidate at `e1780327`. A real procedural newtype with two
 type parameters still fails the existing parameter-order check because both
 parameter causes are the same invocation span; parsed occurrence order is still
 needed. A generated declaration whose name is captured currently carries a
-`Source` invocation anchor rather than complete expansion provenance. Template
-splices in local nominal and constructor name positions are also still rejected
-by the definition parser. These cases remain pending.
+`Source` invocation anchor rather than complete expansion provenance. At that
+pin, template splices in local nominal and constructor name positions were still
+rejected by the definition parser.
+
+The next candidate retains balanced template contents and parses their
+placeholder instantiation before any module body expansion. An identifier
+capture can now name both a local newtype and its constructor: the real driver
+graph executes to 42. Expression captures and lowercase actual identifiers are
+still refused in those positions. Malformed unused templates, including one
+with an imported nested matcher, fail before body expansion. The public
+`parse(lexed)` API retains balanced template contents; context-free projection
+checks their placeholder syntax, while the production driver uses selected
+matchers. This does not claim parser-recovery parity or full validation of
+imported syntax through the context-free API.
+
+Literal-only declarations keep their definition construction extents. A
+declaration containing captured syntax instead uses the invocation extent,
+without treating captured origins as literal proof. Existing Core checks remain
+unchanged. The original driver reproducer failed before this change
+(`/tmp/ash-template-newtype-before.log`, SHA-256
+`ec5d9da2affeee1eb1a953b761d9becf5bec29eb727fd4a6f41d344fb163c17d`).
+The affected driver, host and module suites pass 115 cases
+(`/tmp/ash-template-shared-pin-regressions.log`, SHA-256
+`d7ef0739c52ac4feb322c3ac11d1f413529642fe7ab3fdb63e6d33f191742fcb`).
+Focused generated-Core mutations, construction and admission checks, plus
+local-newtype and cleanup suites pass 33 cases
+(`/tmp/ash-template-shared-pin-core.log`, SHA-256
+`3129ae8812b35dbad5064475a04c01a1d2f158b992df4a7a955f17c29bf8dbb7`).
+This candidate awaits independent review. Captured names used only as type or
+effect references, parameter ordering, and full expansion provenance remain
+open; the newtype result does not establish all identifier positions.
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources
