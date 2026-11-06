@@ -180,6 +180,7 @@ pub(crate) enum SyntaxNameNamespace {
     Term,
     Type,
     Effect,
+    Interface,
 }
 
 /// A literal name and the checked syntax selection that introduced it.
@@ -352,6 +353,7 @@ pub(crate) struct SyntaxOwnerBindings {
     qualified: HashMap<String, DirectDependencyRoute>,
     targeted: HashMap<String, (DirectDependencyRoute, String, Span)>,
     targeted_nominals: HashMap<String, (DirectDependencyRoute, String, Span)>,
+    targeted_interfaces: HashMap<String, (DirectDependencyRoute, String, Span)>,
 }
 
 impl SyntaxOwnerBindings {
@@ -402,6 +404,7 @@ impl SyntaxOwnerBindings {
         let mut qualified = HashMap::new();
         let mut targeted = HashMap::new();
         let mut targeted_nominals = HashMap::new();
+        let mut targeted_interfaces = HashMap::new();
         for (import, edge) in loaded.surface().imports.iter().zip(
             loaded
                 .dependencies()
@@ -448,6 +451,15 @@ impl SyntaxOwnerBindings {
                                 return Err(());
                             }
                         }
+                        if dependency.exports().interface(&name.text).is_some() {
+                            let local = alias.as_ref().unwrap_or(name);
+                            if targeted_interfaces
+                                .insert(local.text.clone(), (route, name.text.clone(), *span))
+                                .is_some()
+                            {
+                                return Err(());
+                            }
+                        }
                     }
                 }
             }
@@ -459,6 +471,7 @@ impl SyntaxOwnerBindings {
             qualified,
             targeted,
             targeted_nominals,
+            targeted_interfaces,
         })
     }
 
@@ -470,6 +483,7 @@ impl SyntaxOwnerBindings {
             qualified: HashMap::new(),
             targeted: HashMap::new(),
             targeted_nominals: HashMap::new(),
+            targeted_interfaces: HashMap::new(),
         }
     }
 
@@ -495,6 +509,14 @@ impl SyntaxOwnerBindings {
         spelling: &str,
     ) -> Option<(DirectDependencyRoute, &str, Span)> {
         let (route, original, selector) = self.targeted_nominals.get(spelling)?;
+        Some((*route, original, *selector))
+    }
+
+    pub(crate) fn targeted_interface(
+        &self,
+        spelling: &str,
+    ) -> Option<(DirectDependencyRoute, &str, Span)> {
+        let (route, original, selector) = self.targeted_interfaces.get(spelling)?;
         Some((*route, original, *selector))
     }
 

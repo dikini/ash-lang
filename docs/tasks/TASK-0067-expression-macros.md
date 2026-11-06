@@ -431,14 +431,44 @@ same interface allocation and resolver state after success and failure
 Five affected suites pass 122 cases
 (`/tmp/ash-template-row-capture-regressions.log`, SHA-256
 `359ffbfb66faedaad3506f3cd88ccc89e293f9b49e06bc7a32b4dbb4f557dbdd`).
-This batch awaits review and adds no ledger credit. Other row positions remain
-open. A generated local-evidence graph also exposed a separate unresolved
-owner-interface lookup and, when the caller imports the interface and method,
-an independent Core `Registry` refusal; those were not repaired in this batch
+Independent review cleared this batch at `12e348ff`; it adds no ledger credit.
+Other row positions remain open. At that checkpoint a generated local-evidence
+graph exposed an owner-interface lookup failure and, when the caller imported
+the interface and method, an independent Core `Registry` refusal
 (`/tmp/ash-template-row-evidence-second.log`, SHA-256
 `2ff509183d94a883fb4642dfded19737c00cee50de4f3c1e0591e32fb591d0be`, and
 `/tmp/ash-template-row-capture-third.log`, SHA-256
 `15c4dc0a013cfbe593137fd5fceabaff1735544672c495d22db44cbce733082e`).
+
+The current candidate resolves the checked owner's private interface and
+method without importing an implementation. A generated local-evidence graph,
+its handwritten control, a private method-signature type, captured method
+selection, and qualified and renamed owner imports execute to 42, including
+caller-shadowing and same-interface method-alias collision controls. Direct
+caller access to the private interface and method remains refused; a method
+without evidence is unsatisfied. An unrelated resolved method is rejected in
+both handwritten and generated declarations, including when its alias matches
+a selected interface method. The focused driver receipt is
+`/tmp/ash-template-private-evidence-alias-final.log` (SHA-256
+`2259223e599963d7c25c266a79d3cab0d23a61b6acc6cc333cc611cf585d9f82`);
+the candidate's earlier mistaken acceptance is retained in
+`/tmp/ash-template-private-evidence-wrong-alias-red.log` (SHA-256
+`0e38ae0a90da03b0a6f935609abb16e0a8421597e3eb445072f01da24cdd0cf0`).
+Seven affected integration suites pass 194 cases in
+`/tmp/ash-template-private-evidence-regressions-final.log` (SHA-256
+`4ca697d0b0ec9f32e739abef43d26e1a940b6f49d7767ddb8be7ccf46b493b69`).
+The existing lexical-method and admission-isolation checks also pass
+(`/tmp/ash-template-private-evidence-method-unit-final.log`, SHA-256
+`d8a30e51dcc444a2021306531ebdb415975e48215f850b6f2350c66b9a2fde4c`, and
+`/tmp/ash-template-private-evidence-isolation-final.log`, SHA-256
+`4aa7c68492571a9bfc28d4cab96fb8303f1c183198eb4b84e19743691fb64d12`).
+The original private-interface and public-interface Core failures are retained
+in `/tmp/ash-template-private-evidence-red.log` (SHA-256
+`3511426481ec1db778d6beeebb31f8802f48c82285376e515ced04ed4bdb3b1b`)
+and `/tmp/ash-template-local-evidence-public-red.log` (SHA-256
+`becfbd71c9da82f054c03d169e6496523869c9b40a9237277e3ba35e81e6be68`).
+This observation awaits independent review; general private closure, route
+mutations, other row positions, and complete acceptance remain open.
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources
@@ -452,8 +482,9 @@ hygiene, causal diagnostics, M01–M14, C1 and C2 remain open.
 
 ## Progress
 
-The weighted ledger records **57/100 reviewed delivery points**. The latest
-reviewed implementation pin is `50ed262f`. These are partial implementation
+The weighted ledger records **57/100 reviewed delivery points**, with 0.5
+additional point demonstrated and awaiting review. The latest
+reviewed implementation pin is `12e348ff`. These are partial implementation
 observations, not acceptance of the whole feature.
 M01–M14 and C1/C2 remain pending.
 
@@ -462,7 +493,7 @@ M01–M14 and C1/C2 remain pending.
 The cap is 100 estimated effort points for the complete milestone through
 verified retention in `integration/expression-macros`; Main integration is
 excluded. Weights reflect expected work, not an equal share per acceptance case
-or feature. They are approximate: display about 56%, not a precise completion
+or feature. They are approximate: display about 57%, not a precise completion
 probability. The current Codex elapsed forecast is in the
 [plan](../plans/2026-11-05-expression-macros.md#estimate-and-re-planning).
 
@@ -484,7 +515,7 @@ reviewer owns `Rev`, and the orchestrator owns `PM`.
 | P08 | 1 | Dev+Rev / R1 | Operator-stop and annotation-admission review repair; `26b43869`. Full annotation support remains P10. |
 | P09 | 4 | Dev / R3.5 | Procedural captured binder with preceding initializer scope (0.5), `/tmp/ash-syntax-captured-binder-driver.log`. An introduced function parameter avoids a same-spelled caller binding (0.5), and a captured parameter binds its captured body without escaping its scope (0.5); review cleared these function cases at `abd2e26f`. An introduced mutually recursive group retains a same-spelled caller binding (0.5), reviewed at `bc431118`. A captured recursive binder scopes over its initializer and body without escaping (0.5); template and procedural variants, fresh binders, and same-spelled distinct recursive members run to 42. A later sequential initializer sees the preceding captured binder (0.5), `/tmp/ash-syntax-recursive-capture-regressions.log` (SHA-256 `55937b612d95a37d110402814301820f0832c0113f5e1a6aed54337c0c541810`). Four ordinary recursive-resolution cases pass, `/tmp/ash-syntax-recursive-capture-ordinary.log` (SHA-256 `ea829a715c07691b22d1c07c85977e911398f57d0836ebf9685785edfd9974a0`). These cases and the R12 repair were reviewed at `a1135e26`. Captured `resume` expressions use the actual inner or outer clause selected by their expanded position (0.5, reviewed at `89b21a51`). Both execute to 42; duplicate/missing handler clauses and nested-function capture retain their ordinary refusals. A further graph captures caller `value = 40` inside a clause with its own `value = 2` and returns 42. Broader patterns and sequential scopes remain pending. |
 | P10 | 5 | Dev / R4 | Duplicated captures retain distinct local binder IDs (0.5), local newtype and constructor IDs (0.5), and resource identity and handle IDs (0.5); the combined graph preserves nested syntax and a caller free reference and executes to 42. The independently validated Core is inspected in `/tmp/ash-syntax-copy-identities-batch.log` (SHA-256 `98dac1c11adf058b33a84ec3a6efb1fe95b3662a93796aacc8ea6163112b3afd`); review cleared these cases at `82d2f219`. A template-introduced local newtype and its constructor remain distinct from the caller’s same-spelled nominal and constructor; the captured caller annotation retains its own type and the real graph executes to 42 (0.5, reviewed at `9b1cb854`), `/tmp/ash-syntax-generated-newtype-origin.log` (SHA-256 `88b3373f0c8cfac57aa157f315748da7e55e56effa3d4cca981a7be1cdd131a4`). Independent Core rejects ten construction-origin and representation mutations and continues to reject wrapped source-only origins; five local-newtype checks pass in `/tmp/ash-syntax-newtype-lib-batch.log` (SHA-256 `2ae8d4a8ea3f5808eceed197f1515fcac1bd28ccde4fc357d0123a3b22afed7c`). An unqualified annotation selects the owner’s private nominal or an introduced local nominal instead of a same-spelled caller nominal or type parameter (0.5, reviewed at `47524835`). Both valid graphs return 42; distinct caller types, direct caller private access, and an unused unknown annotation are refused. A unique template-local nominal now resolves in its lexical scope even without a same-named owner nominal. Renamed targeted and qualified imported nominal annotations follow the checked owner route, including through a facade and under caller shadowing (0.5, reviewed at `d2d377bf`); wrong caller types, owner-only aliases, and an unused dependency-private qualified type are refused. Applied targeted and qualified types, including nested type arguments, use the defining context; one- and two-parameter template-local newtypes also execute to 42, while a parameter cannot escape its representation (0.5, reviewed at `ac1561e5`). Introduced cell and region scopes preserve caller bindings, initializer/provider order, generated type identities and ordinary escape checks; real graphs execute to 42 (0.5, reviewed at `57ce1f1f`). Other copied binder/use cases (0.5), and copied nominal/region cases, effect rows, and broader type scopes (0.5) remain pending. |
-| P11 | 5 | Dev / R2 | A template's direct and facade-qualified public term retains the owner's route despite a conflicting caller alias; unused dependency-private references and ordinary caller use of the owner's alias are refused (0.5), `/tmp/ash-syntax-owner-qualified-regressions.log` (SHA-256 `c7c147b247ef8307a18adf5e65bfcbd719b14eade02b09ee2684f135cd6ebab9`), reviewed at `98613915`. A renamed targeted public import works in template and procedural output, through a facade and under caller shadowing; captured caller references retain caller access and ordinary caller access to the owner-only name is refused (0.5), `/tmp/ash-syntax-owner-targeted-regressions.log` (SHA-256 `625b357e3890ca7a2c59b11bd19c0266afd6e164e8fb83a51273c080c212f996`), reviewed at `1bd1a08e`. Owner-qualified public constructor expressions, match and function-parameter patterns work with caller shadowing; dependency opaque constructors remain refused and ordinary access/re-export coexists (0.5), `/tmp/ash-syntax-copy-constructor-final.log` (SHA-256 `6546d7ff826e169e5e32b31983fd3362e6381b8c07b6e50bdc86d56cb0bce5b2`), reviewed at `82d2f219`. A renamed targeted constructor works in template expressions and patterns, procedural output, a facade, and caller shadowing while ordinary caller access is refused (0.5, reviewed at `9b1cb854`), `/tmp/ash-syntax-targeted-constructor-current.log` (SHA-256 `90534ec49a44823be92f9f09f5bb6a36307558106c753fe98b0389959925b707`); the current batch is based on `0cd326dc`, with combined SHA-256 `7091e75c5d1b1e51aed543614a9be923f34bc38c1de1c69d92997fd6b011a1cb` for the six changed Rust files and generated-newtype and targeted-constructor fixtures. Remaining full authenticated grants/access (0.5), retained checked private closure and real Core-coordinate consumer (2), and route mutation refusals (0.5) remain pending, beyond P07. |
+| P11 | 5 | Dev / R2+D0.5 | A template's direct and facade-qualified public term retains the owner's route despite a conflicting caller alias; unused dependency-private references and ordinary caller use of the owner's alias are refused (0.5), `/tmp/ash-syntax-owner-qualified-regressions.log` (SHA-256 `c7c147b247ef8307a18adf5e65bfcbd719b14eade02b09ee2684f135cd6ebab9`), reviewed at `98613915`. A renamed targeted public import works in template and procedural output, through a facade and under caller shadowing; captured caller references retain caller access and ordinary caller access to the owner-only name is refused (0.5), `/tmp/ash-syntax-owner-targeted-regressions.log` (SHA-256 `625b357e3890ca7a2c59b11bd19c0266afd6e164e8fb83a51273c080c212f996`), reviewed at `1bd1a08e`. Owner-qualified public constructor expressions, match and function-parameter patterns work with caller shadowing; dependency opaque constructors remain refused and ordinary access/re-export coexists (0.5), `/tmp/ash-syntax-copy-constructor-final.log` (SHA-256 `6546d7ff826e169e5e32b31983fd3362e6381b8c07b6e50bdc86d56cb0bce5b2`), reviewed at `82d2f219`. A renamed targeted constructor works in template expressions and patterns, procedural output, a facade, and caller shadowing while ordinary caller access is refused (0.5, reviewed at `9b1cb854`), `/tmp/ash-syntax-targeted-constructor-current.log` (SHA-256 `90534ec49a44823be92f9f09f5bb6a36307558106c753fe98b0389959925b707`); the current batch is based on `0cd326dc`, with combined SHA-256 `7091e75c5d1b1e51aed543614a9be923f34bc38c1de1c69d92997fd6b011a1cb` for the six changed Rust files and generated-newtype and targeted-constructor fixtures. A generated local-evidence graph retains its owner’s checked private interface and a private signature type, and validates its generated method binder through Core (0.5, awaiting review); its checked routes, caller shadowing and privacy controls are described above. Remaining full authenticated grants/access (0.5), broader retained private closure and Core consumers (1.5), and route mutation refusals (0.5) remain pending, beyond P07. |
 | P12 | 3 | Dev / R3 | A template or checked transformer selects a definition-site method, renamed targeted import, qualified import or public facade using caller-local evidence and executes to 42 under caller shadowing. Without caller evidence each fails `constraint.unsatisfied`; a syntax import does not introduce an ordinary caller method (1, reviewed at `b70c6bb3`), `/tmp/ash-macro-method-procedural.log` (SHA-256 `24cf1c1979cc1f0329109b71a2aca577b54e8c0cedf598f96e9ad6765830b84a`). Broader private-method cases remain pending. Six affected suites pass 167 cases in `/tmp/ash-macro-method-regressions.log` (SHA-256 `28baa45f8ca63a7b3b371c36f6398bcadb324b548fb3856af352ec6435e3363d`); the combined hash for the four changed Rust files and method fixtures is `0df274f24e1f2b92cb4f8d4f50abc2b71cb3273aced54ef728521b86c2af5a59`. Template-generated `resume`, `discard` and `retain`, plus a checked transformer producing `resume`, execute to 42 in their valid handler contexts; outside-clause, nested-function capture and outside-retained-root forms keep their ordinary refusals (1, reviewed at `d1e16df4`), `/tmp/ash-macro-continuations-procedural.log` (SHA-256 `160da5e3367be104cedfb308f77c13f4d588310569e9c6c0138c14091544f505`). Six affected suites pass 180 cases in `/tmp/ash-macro-continuations-regressions.log` (SHA-256 `243105483287c22e3ae8fe1d79b4b1c8acf79a708eef96ebf536a700ab4ec5a7`); the combined hash for the two changed Rust files and continuation fixtures is `46b508ae457b2574e94159fed18fc652744ce07499cc24f3bd338d0a92d53a42`. A copied effectful capture runs twice; two captured requests produce 42 in written order and 33 when reversed, with the handwritten control also producing 42. A captured resource read returns 42, and a captured closure escaping its resource is refused with the same `type.resource-escape` reason as handwritten source (1, reviewed at `47524835`), `/tmp/ash-macro-effects-resources.log` (SHA-256 `0fcd09a863e99691ed433f3061d2256c95dd8d527695f491ab2d0c5ba55eb31a`). The named-type and effect/resource batch passes 236 tests across seven affected suites in `/tmp/ash-macro-type-context-regressions.log` (SHA-256 `9fe3960da0c7118aa6c93713a91af245312d01f80f9c550fe91524c77027167c`); its combined Rust and fixture hash is `dfd5400b8d9f902dcf8072a259b6f6f6336d9b7b99029c853e0688286bd04483`. |
 | P13 | 3 | Dev / R1.5 | Generated definition context selects its owner's imported syntax, caller context selects a different caller import, and fresh context selects neither caller syntax nor binding (1), `/tmp/ash-syntax-generated-context-driver.log` (SHA-256 `3f3815fdaedc6ee7a41ff6053c64a75aa832ef96d10d2a5ca36f09cef955833a`). An outer template's literal identifier retains its context as the binder and body of a separately imported nested syntax; its local 32 and the caller's same-spelled 10 produce 42 (0.5, reviewed at `c5bf51f3`), `/tmp/ash-macro-definition-admission-regressions.log`. Broader leading-context, import, reservation and conflict cases remain pending. |
 | P14 | 3 | Dev / R2 | Reviewed canonical module load/check/link (0.5); complete vocabulary (1) and lexer/declaration conformance (0.5), `/tmp/ash-syntax-token-vocabulary.log`; API identity and interface-version conformance remain pending. |
@@ -520,7 +551,7 @@ API/entry 10; Ops/interchange 14; transfer/failure/limits 8; graph/Core/repeatab
 The independent review assigns more weight to the unresolved contextual,
 non-term, copied-identity, grant, and Core-coordinate consumers than the first
 draft. The 20-point reviewed baseline is frozen; a changed ETA does not reweight it.
-Reviewed effort is 57, demonstrated provisional effort is 0, and 43 points
+Reviewed effort is 57, demonstrated provisional effort is 0.5, and 42.5 points
 have no credit. Review upgrades D to R without awarding implementation points
 again. Explicit review/gate rows cover their own work, not a second implementation
 credit. Record the exact commit or source hash, real consumer observation/test

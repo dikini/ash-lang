@@ -687,6 +687,65 @@ fn template_captured_identifier_selects_an_effect_row_member() {
 }
 
 #[test]
+fn template_local_evidence_uses_its_owners_private_interface() {
+    for path in [
+        "template-private-evidence/manual.ash",
+        "template-private-evidence/entry.ash",
+        "template-private-evidence/shadow.ash",
+        "template-private-evidence/closure_entry.ash",
+        "template-private-evidence/captured_method.ash",
+        "template-private-evidence/qualified_entry.ash",
+        "template-private-evidence/qualified_shadow.ash",
+        "template-private-evidence/targeted_entry.ash",
+        "template-private-evidence/targeted_shadow.ash",
+        "template-private-evidence/alias_entry.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    for (path, reason) in [
+        (
+            "template-private-evidence/direct_interface.ash",
+            "resolve.unknown-interface",
+        ),
+        (
+            "template-private-evidence/direct_method.ash",
+            "resolve.unknown-name",
+        ),
+        (
+            "template-private-evidence/no_evidence.ash",
+            "constraint.unsatisfied",
+        ),
+        (
+            "template-private-evidence/wrong_method.ash",
+            "evidence.extra-method",
+        ),
+        (
+            "template-private-evidence/conflicting_method_manual.ash",
+            "evidence.extra-method",
+        ),
+        (
+            "template-private-evidence/conflicting_method_entry.ash",
+            "evidence.extra-method",
+        ),
+        (
+            "template-private-evidence/decoy_method_entry.ash",
+            "evidence.extra-method",
+        ),
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), reason, "{path}: {failure:?}");
+    }
+}
+
+#[test]
+fn template_local_evidence_uses_the_checked_public_interface() {
+    let compiled = compile_path(fixture("template-private-evidence/public_entry.ash"))
+        .expect("generated local evidence uses the selected checked interface");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
 fn same_spelled_recursive_binders_keep_distinct_contexts() {
     let compiled = compile_path(fixture("template-recursive/mixed.ash"))
         .expect("introduced and captured recursive names remain distinct");

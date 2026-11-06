@@ -2531,6 +2531,8 @@ struct Resolver<'state, 'inputs> {
     syntax_nominals: HashMap<(String, usize), NominalTypeId>,
     syntax_qualified_nominals: HashMap<(String, String, usize), NominalTypeId>,
     syntax_effects: HashMap<(String, usize), EffectId>,
+    syntax_interfaces: HashMap<(String, usize), InterfaceId>,
+    syntax_qualified_interfaces: HashMap<(String, String, usize), InterfaceId>,
     globals: HashMap<String, GlobalFact>,
     type_names: HashMap<String, NominalTypeId>,
     interface_names: HashMap<String, InterfaceId>,
@@ -3014,6 +3016,8 @@ impl Resolver<'_, '_> {
             syntax_nominals: HashMap::new(),
             syntax_qualified_nominals: HashMap::new(),
             syntax_effects: HashMap::new(),
+            syntax_interfaces: HashMap::new(),
+            syntax_qualified_interfaces: HashMap::new(),
             globals: HashMap::new(),
             type_names: HashMap::new(),
             interface_names: HashMap::new(),
@@ -4934,6 +4938,44 @@ impl Resolver<'_, '_> {
         direct_dependency: ModuleId,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
+        self.retain_imported_interface_fact_from_owner(
+            exported,
+            summary,
+            access,
+            direct_dependency,
+            span,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn retain_imported_interface_fact_from_owner(
+        &mut self,
+        exported: &CheckedInterfaceFact,
+        summary: &ExportSummary,
+        access: ImportedInterfaceAccess,
+        direct_dependency: ModuleId,
+        span: crate::source::Span,
+        owner: Option<(
+            &crate::resolved::SharedCheckedInterfaceFact,
+            SyntaxOwnerLookup<'_>,
+        )>,
+    ) -> Result<(), ResolveError> {
+        if let Some((original, lookup)) = owner
+            && (exported.id.module() != lookup.owner.module()
+                || !std::ptr::eq(original.as_ref(), exported)
+                || !lookup
+                    .owner
+                    .interface_facts()
+                    .iter()
+                    .any(|fact| std::ptr::eq(fact.as_ref(), exported)))
+        {
+            return Err(error(
+                ResolveReason::InternalState,
+                span,
+                "the syntax interface lost its checked defining owner",
+            ));
+        }
         self.constraint_work.charge(1).map_err(|()| {
             error(
                 ResolveReason::ConstraintResourceExhausted,
@@ -4962,7 +5004,12 @@ impl Resolver<'_, '_> {
                     problem: "mismatch",
                 }));
             }
-            self.compare_retained_nominal_closure(&nominal_identities, summary, span)?;
+            self.compare_retained_nominal_closure_from_owner(
+                &nominal_identities,
+                summary,
+                span,
+                owner.map(|(_, lookup)| lookup),
+            )?;
             self.imported.merge_interface_route(
                 exported.id,
                 direct_dependency,
@@ -5040,14 +5087,23 @@ impl Resolver<'_, '_> {
                         "imported method signature exceeded its work budget",
                     )
                 })?;
-            self.retain_type_nominals(&method.value_type, summary, span)?;
+            self.retain_type_nominals_with(
+                &method.value_type,
+                summary,
+                span,
+                false,
+                owner.map(|(_, lookup)| lookup),
+            )?;
             if authority_work != 0 {
                 authority_method_indices.push(method_index);
             }
         }
-        let retained = summary
-            .retain_interface_original(exported, &mut self.type_work)
-            .map_err(|failure| imported_fact_comparison_error(failure, span))?;
+        let retained = if let Some((original, _)) = owner {
+            original.clone_with_budget(&mut self.type_work)
+        } else {
+            summary.retain_interface_original(exported, &mut self.type_work)
+        }
+        .map_err(|failure| imported_fact_comparison_error(failure, span))?;
         self.imported.insert_interface_with_authority_indices(
             retained,
             authority_method_indices.into_boxed_slice(),
@@ -5881,6 +5937,89 @@ impl Resolver<'_, '_> {
                 );
                 continue;
             }
+            if usage.namespace == crate::syntax::SyntaxNameNamespace::Interface {
+                if let Some(qualifier) = &usage.qualifier {
+                    if qualifier.introduction != usage.name.introduction {
+                        return Err(invalid());
+                    }
+                    let route = terms.qualified(&qualifier.text).ok_or_else(invalid)?;
+                    if !owner.direct_dependencies().contains(&route) {
+                        return Err(invalid());
+                    }
+                    let dependency = syntax
+                        .owners
+                        .iter()
+                        .find(|candidate| candidate.module() == route.target())
+                        .ok_or_else(invalid)?;
+                    let interface = dependency
+                        .exports()
+                        .interface(&usage.name.text)
+                        .ok_or_else(invalid)?;
+                    self.retain_imported_interface_fact(
+                        interface,
+                        dependency.exports(),
+                        ImportedInterfaceAccess::HiddenSummaryClosure,
+                        owner.module(),
+                        usage.import_span,
+                    )?;
+                    self.syntax_qualified_interfaces.insert(
+                        (
+                            qualifier.text.clone(),
+                            usage.name.text.clone(),
+                            usage.name.introduction,
+                        ),
+                        interface.id,
+                    );
+                    continue;
+                }
+                if let Some(original) = owner.interface_facts().iter().find(|fact| {
+                    fact.id.module() == owner.module() && fact.spelling == usage.name.text
+                }) {
+                    let lookup = SyntaxOwnerLookup {
+                        owner,
+                        graph: syntax.owners,
+                    };
+                    self.retain_imported_interface_fact_from_owner(
+                        original.as_ref(),
+                        owner.exports(),
+                        ImportedInterfaceAccess::HiddenSummaryClosure,
+                        owner.module(),
+                        usage.import_span,
+                        Some((original, lookup)),
+                    )?;
+                    self.syntax_interfaces.insert(
+                        (usage.name.text.clone(), usage.name.introduction),
+                        original.id,
+                    );
+                } else if let Some((route, original, selector)) =
+                    terms.targeted_interface(&usage.name.text)
+                {
+                    if !owner.direct_dependencies().contains(&route) {
+                        return Err(invalid());
+                    }
+                    let dependency = syntax
+                        .owners
+                        .iter()
+                        .find(|candidate| candidate.module() == route.target())
+                        .ok_or_else(invalid)?;
+                    let interface = dependency
+                        .exports()
+                        .interface(original)
+                        .ok_or_else(invalid)?;
+                    self.retain_imported_interface_fact(
+                        interface,
+                        dependency.exports(),
+                        ImportedInterfaceAccess::HiddenSummaryClosure,
+                        owner.module(),
+                        selector,
+                    )?;
+                    self.syntax_interfaces.insert(
+                        (usage.name.text.clone(), usage.name.introduction),
+                        interface.id,
+                    );
+                }
+                continue;
+            }
             if usage.namespace == crate::syntax::SyntaxNameNamespace::Effect {
                 if usage.qualifier.is_some() {
                     return Err(invalid());
@@ -6029,6 +6168,34 @@ impl Resolver<'_, '_> {
                         usage.import_span,
                     )
                 });
+            } else if let Some((interface, method)) =
+                owner.interface_facts().iter().find_map(|fact| {
+                    if fact.id.module() != owner.module() {
+                        return None;
+                    }
+                    fact.methods
+                        .iter()
+                        .find(|method| method.spelling == usage.name.text)
+                        .map(|method| (fact, method.id))
+                })
+            {
+                if !self.syntax_terms.contains_key(&key) {
+                    self.retain_imported_interface_fact_from_owner(
+                        interface.as_ref(),
+                        owner.exports(),
+                        ImportedInterfaceAccess::HiddenSummaryClosure,
+                        owner.module(),
+                        usage.import_span,
+                        Some((interface, lookup)),
+                    )?;
+                    self.syntax_terms.insert(
+                        key,
+                        ResolvedTermBinding::imported(
+                            ResolvedTermName::Method(method),
+                            usage.import_span,
+                        ),
+                    );
+                }
             } else if let Some(constructor) = terms.constructor(&usage.name.text) {
                 if constructor.id.owner().module() != owner.module() {
                     return Err(invalid());
@@ -6873,6 +7040,16 @@ impl Resolver<'_, '_> {
         summary: &ExportSummary,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
+        self.compare_retained_nominal_closure_from_owner(nominal_identities, summary, span, None)
+    }
+
+    fn compare_retained_nominal_closure_from_owner(
+        &mut self,
+        nominal_identities: &MatchedNominalIdentities,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+        owner: Option<SyntaxOwnerLookup<'_>>,
+    ) -> Result<(), ResolveError> {
         for id in nominal_identities.identities() {
             if let Some(existing) = self.imported.resource_fact(*id) {
                 let (_, incoming) = summary
@@ -6911,7 +7088,20 @@ impl Resolver<'_, '_> {
                     problem: "missing",
                 })
             })?;
-            let candidate = Self::scheme_nominal_fact(summary, *id, span)?;
+            let source = if summary.nominal_fact(*id).is_some() {
+                summary
+            } else {
+                owner
+                    .and_then(|owner| owner.nominal_summary(*id))
+                    .unwrap_or(summary)
+            };
+            let candidate = if source.nominal_fact(*id).is_none()
+                && let Some(private) = owner.and_then(|owner| owner.private_nominal(*id))
+            {
+                private
+            } else {
+                Self::scheme_nominal_fact(source, *id, span)?
+            };
             let matches = same_imported_nominal_closure_with_constraint_budget(
                 existing,
                 candidate,
@@ -7680,10 +7870,37 @@ impl Resolver<'_, '_> {
     }
 
     fn interface_reference(
-        &self,
+        &mut self,
         reference: &SurfaceReference,
     ) -> Result<ResolvedInterfaceOccurrence, ResolveError> {
         let member = reference.member();
+        if member.introduction != 0 {
+            self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Interface)?;
+            let id = match reference {
+                SurfaceReference::Unqualified(_) => self
+                    .syntax_interfaces
+                    .get(&(member.text.clone(), member.introduction))
+                    .copied(),
+                SurfaceReference::Qualified(qualified)
+                    if qualified.qualifier.introduction == member.introduction =>
+                {
+                    self.syntax_qualified_interfaces
+                        .get(&(
+                            qualified.qualifier.text.clone(),
+                            member.text.clone(),
+                            member.introduction,
+                        ))
+                        .copied()
+                }
+                SurfaceReference::Qualified(_) => None,
+            }
+            .ok_or_else(|| unknown_interface_error(member.span, &member.text))?;
+            return Ok(ResolvedInterfaceOccurrence {
+                id,
+                spelling: member.text.clone(),
+                origin: Origin::Source(reference.span()),
+            });
+        }
         if let Some(namespace) = self.imported_namespace(reference)? {
             if let Some(id) = namespace.interfaces.get(&member.text).copied() {
                 return Ok(ResolvedInterfaceOccurrence {
@@ -11713,20 +11930,56 @@ impl Resolver<'_, '_> {
         &mut self,
         source: &crate::surface::SurfaceLexicalEvidence,
         start: usize,
+        selected_interface: Option<InterfaceId>,
     ) -> Result<(ResolvedImplementationMethodGroup, usize), ResolveError> {
         let first = &source.equations[start];
         let mut end = start + 1;
         while end < source.equations.len() && source.equations[end].name.text == first.name.text {
             end += 1;
         }
-        let binder = self.allocate_binder(&first.name.text, first.name.span)?;
-        let method =
+        let binder = self.allocate_contextual_binder(&first.name)?;
+        let ordinary_method =
             self.method_names
                 .get(&first.name.text)
                 .and_then(|binding| match binding.term {
                     ResolvedTermName::Method(method) => Some(method),
                     ResolvedTermName::Global(_) => None,
                 });
+        let contextual_method = if first.name.introduction == 0 {
+            ordinary_method
+        } else {
+            let reference = SurfaceReference::Unqualified(first.name.clone());
+            self.retain_syntax_reference(&reference, crate::syntax::SyntaxNameNamespace::Term)?;
+            self.syntax_terms
+                .get(&(first.name.text.clone(), first.name.introduction))
+                .and_then(|binding| match binding.term {
+                    ResolvedTermName::Method(method) => Some(method),
+                    ResolvedTermName::Global(_) => None,
+                })
+        };
+        let method = if let Some(interface) = selected_interface {
+            contextual_method.or_else(|| {
+                if interface.module() == self.module {
+                    self.resolved_interfaces
+                        .0
+                        .iter()
+                        .find(|fact| fact.id == interface)?
+                        .methods
+                        .iter()
+                        .find(|method| method.spelling == first.name.text)
+                        .map(|method| method.id)
+                } else {
+                    self.imported
+                        .interface(interface)?
+                        .methods
+                        .iter()
+                        .find(|method| method.spelling == first.name.text)
+                        .map(|method| method.id)
+                }
+            })
+        } else {
+            ordinary_method
+        };
         let mut contextual_parameters = ImportedTypeVariableBuffer(Vec::new());
         if let Some(method) = method {
             let parameters = if method.interface().module() == self.module {
@@ -13325,8 +13578,12 @@ impl Resolver<'_, '_> {
                         declarations.push(ResolvedLocalDeclaration::Evidence(Box::new(evidence)));
                         return Ok(());
                     }
+                    let selected = state
+                        .application
+                        .as_ref()
+                        .map(|application| application.interface.id);
                     let (group, end) =
-                        self.resolve_lexical_method_group(state.source, state.next)?;
+                        self.resolve_lexical_method_group(state.source, state.next, selected)?;
                     state.groups.0.push(group);
                     state.group_end = end;
                     state
@@ -21161,14 +21418,14 @@ mod tests {
             let mut short = fresh();
             short.type_work = TypeWorkBudget::with_limit(exact_work - 1);
             let failure = short
-                .resolve_lexical_method_group(source, 0)
+                .resolve_lexical_method_group(source, 0, None)
                 .expect_err("one-short lookup/registry work must reject");
             assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted);
             for _ in 0..2 {
                 let mut exact = fresh();
                 exact.type_work = TypeWorkBudget::with_limit(exact_work);
                 let (group, end) = exact
-                    .resolve_lexical_method_group(source, 0)
+                    .resolve_lexical_method_group(source, 0, None)
                     .expect("fresh exact retry");
                 assert_eq!(end, 1);
                 assert_eq!(group.contextual_parameters.len(), parameter_count);
@@ -21217,7 +21474,7 @@ mod tests {
                 let mut imported = imported_fresh();
                 imported.type_work =
                     TypeWorkBudget::with_limit(imported_work - usize::from(one_short));
-                let result = imported.resolve_lexical_method_group(source, 0);
+                let result = imported.resolve_lexical_method_group(source, 0, None);
                 if one_short {
                     assert_eq!(
                         result.expect_err("one-short imported method lookup").reason,
@@ -21233,7 +21490,7 @@ mod tests {
             no_method.method_names.clear();
             no_method.type_work = TypeWorkBudget::with_limit(0);
             let (group, _) = no_method
-                .resolve_lexical_method_group(source, 0)
+                .resolve_lexical_method_group(source, 0, None)
                 .expect("unknown method defers to existing membership checking");
             assert!(group.method.is_none());
             assert_eq!(no_method.type_work.used(), 0);
