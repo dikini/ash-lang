@@ -396,14 +396,49 @@ transfer cause and teardown failure. These observations pass with `cargo test
 and `cargo test -j 1 --test macro_host --test surface_macros` (96 tests,
 `/tmp/ash-transformer-transfer-regressions.log`, SHA-256
 `c47b9abb7de7e2d9e2d87c349a46fe3bf8f5d93b435a258a0bf671f93aad4c97`).
-This batch awaits review. An attempted completion-root injection on an active
-failure did not reach that completion-only hook; a separate active-disposal
+Independent review cleared this batch at `50ed262f`. An attempted
+completion-root injection on an active failure did not reach that
+completion-only hook; a separate active-disposal
 worklist injection did not encounter a worklist allocation. Neither establishes
 paired active failure and teardown preservation, which remains open (respectively
 `/tmp/ash-transformer-active-root-paired-red.log`, SHA-256
 `73e41daa7e69fb469fe4b8b03151a1d1a4cc620915d413cf0797a218d8872c6f`, and
 `/tmp/ash-transformer-active-closure-forest-probe2.log`, SHA-256
 `e38972e47b54dbc7213cd50cbee35f5e67b9ad8b12ebad72fd91388ba11a32f6`).
+A later balanced-closure Ash graph also failed to trigger the active-disposal
+worklist refusal (`/tmp/ash-transformer-active-forest-probe.log`, SHA-256
+`68ea6d2207e83ac1e2cfbd18e97f7da4882d39540bd349272f15e8cbda05a426`).
+
+A captured identifier now selects a caller effect in a generated function's
+effect-row annotation. The real template and handwritten graphs both execute
+to 42; a missing actual effect and an effect outside the declared row retain
+ordinary failures. Unused templates still reject missing literal effects and
+missing type arguments. Previously the valid template failed admission on the
+temporary identifier (`/tmp/ash-template-row-capture-red.log`, SHA-256
+`f249d04b50e567d0578b4646dec0781c819c72b5bb90ae4b52f1b1101dce7786`).
+The existing name resolver defers only that issued placeholder after resolving
+its arguments; actual expansion still resolves and checks the effect normally.
+
+An unused valid template with local evidence also failed because admission
+could not see its own module's original interface facts
+(`/tmp/ash-template-local-evidence-red.json`, SHA-256
+`23edcfe6694cc651d14af451c695a633d98a6be28e6e1eb6581e81d458afc150`).
+Admission now temporarily places those original facts in the resolver and
+returns them on either result. The existing isolation test confirms the
+same interface allocation and resolver state after success and failure
+(`/tmp/ash-template-row-admission-isolation-final.log`, SHA-256
+`6cb6c3aa462560306c679dd5f66b9a9010f05424b0b5206215dd8e1aa585fbbd`).
+Five affected suites pass 122 cases
+(`/tmp/ash-template-row-capture-regressions.log`, SHA-256
+`359ffbfb66faedaad3506f3cd88ccc89e293f9b49e06bc7a32b4dbb4f557dbdd`).
+This batch awaits review and adds no ledger credit. Other row positions remain
+open. A generated local-evidence graph also exposed a separate unresolved
+owner-interface lookup and, when the caller imports the interface and method,
+an independent Core `Registry` refusal; those were not repaired in this batch
+(`/tmp/ash-template-row-evidence-second.log`, SHA-256
+`2ff509183d94a883fb4642dfded19737c00cee50de4f3c1e0591e32fb591d0be`, and
+`/tmp/ash-template-row-capture-third.log`, SHA-256
+`15c4dc0a013cfbe593137fd5fceabaff1735544672c495d22db44cbce733082e`).
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources
@@ -417,10 +452,9 @@ hygiene, causal diagnostics, M01–M14, C1 and C2 remain open.
 
 ## Progress
 
-The weighted ledger records **56.5/100 reviewed delivery points** and **0.5
-demonstrated pending review**. The latest reviewed implementation pin is
-`93c0aa04`. These are partial implementation observations, not acceptance of the
-whole feature.
+The weighted ledger records **57/100 reviewed delivery points**. The latest
+reviewed implementation pin is `50ed262f`. These are partial implementation
+observations, not acceptance of the whole feature.
 M01–M14 and C1/C2 remain pending.
 
 ### Weighted delivery progress
@@ -463,7 +497,7 @@ reviewer owns `Rev`, and the orchestrator owns `PM`.
 | P21 | 3.5 | Dev / R1.5 | Fresh binder avoids caller `temp` (0.5), definition identifier selects a private helper under caller shadowing (0.5), and caller identifier binds a caller body (0.5), `/tmp/ash-syntax-constructed-ident-driver.log` (SHA-256 `19f2462c862910b90739cfb207b2cdbf286bbe85ac0c1207714f5e5a287d29fa`); distinct fresh allocations and broader authority/context cases remain pending. |
 | P22 | 1 | Dev / R1 | Empty origins return `MissingOrigins`; nonempty and nested combinations cross parse and unwrap before the graph executes to 42 (0.5), `/tmp/ash-syntax-combine-origins-driver.log` (SHA-256 `ca483c2b063c55e27a151adf79e1644a0b8e6f7f6e380c6fe11943688aa8dedd`). A transformer-authored rejection preserves its message and ordered caller/definition causes (0.5), `/tmp/ash-syntax-rejection-driver.log` (SHA-256 `dd3b9eea67d1ef9ac6191fdfa6b15df46fc270e969ab70018b23d6a0077ecccb`); final generated-program causal-origin propagation remains pending. |
 | P23 | 4 | Dev / R2 | Reviewed expression/token decoding, transfer and protected-fragment parsing (1.5); parenthesis/brace group decoding and parsing (0.5), `/tmp/ash-syntax-vocabulary-groups-regressions.log`; complete output, failure and observed root-close behavior pending. |
-| P24 | 2.5 | Dev / R1.5 + D0.5 | Malformed direct output reports `parse.expected-operand` (0.5), `/tmp/ash-syntax-invalid-output-driver.log` (SHA-256 `7d4df37046fea2bae1e0b14ac144bcd232809730f05ccd0df94be4edd455ef05`). Evaluator failure retains its underlying cause and invocation/definition locations (0.5), `/tmp/ash-syntax-diverge-after.log` (SHA-256 `4be2d989431d7da8b0844bb3af9dfe0a6e21afde7ba15f897f2dcda7ffbfd1a9`). A normal transformer closes its root before its output executes; an injected close failure retains authored or parser rejection plus teardown, and prevents successful output publication (0.5, reviewed at `93c0aa04`), `/tmp/ash-transformer-teardown-final.log` (SHA-256 `69eec7daac5be0f7f9cc4d7f76477ae5a24ebcb6f8f6c4580b67675ff0707d41`). Active-machine destruction on real evaluator and service failures, plus transfer failure and paired completed-root refusal, add 0.5 pending review (`/tmp/ash-transformer-lifecycle-stack-final.log`); paired active-disposal refusal and remaining failure paths are pending (0.5). |
+| P24 | 2.5 | Dev / R2 | Malformed direct output reports `parse.expected-operand` (0.5), `/tmp/ash-syntax-invalid-output-driver.log` (SHA-256 `7d4df37046fea2bae1e0b14ac144bcd232809730f05ccd0df94be4edd455ef05`). Evaluator failure retains its underlying cause and invocation/definition locations (0.5), `/tmp/ash-syntax-diverge-after.log` (SHA-256 `4be2d989431d7da8b0844bb3af9dfe0a6e21afde7ba15f897f2dcda7ffbfd1a9`). A normal transformer closes its root before its output executes; an injected close failure retains authored or parser rejection plus teardown, and prevents successful output publication (0.5, reviewed at `93c0aa04`), `/tmp/ash-transformer-teardown-final.log` (SHA-256 `69eec7daac5be0f7f9cc4d7f76477ae5a24ebcb6f8f6c4580b67675ff0707d41`). Active-machine destruction on real evaluator and service failures, plus transfer failure and paired completed-root refusal, add 0.5 reviewed at `50ed262f` (`/tmp/ash-transformer-lifecycle-stack-final.log`); paired active-disposal refusal and remaining failure paths are pending (0.5). |
 | P25 | 1 | Dev / R1 | A real non-requesting recursive transformer terminates as an expansion failure under the existing execution limit, `/tmp/ash-syntax-diverge-after.log` (SHA-256 `4be2d989431d7da8b0844bb3af9dfe0a6e21afde7ba15f897f2dcda7ffbfd1a9`). |
 | P26 | 0.5 | Dev / 0 | Required service, output, and expansion limits produce ordinary closed-invocation failures. |
 | P27 | 2.5 | Dev / R1 | Frozen computed graph to 42 (1), `/tmp/ash-transformer-combined-driver.log`; template/procedure equivalence (0.5), discarded and repeated nested invocation behavior (1) pending. |
@@ -486,7 +520,7 @@ API/entry 10; Ops/interchange 14; transfer/failure/limits 8; graph/Core/repeatab
 The independent review assigns more weight to the unresolved contextual,
 non-term, copied-identity, grant, and Core-coordinate consumers than the first
 draft. The 20-point reviewed baseline is frozen; a changed ETA does not reweight it.
-Reviewed effort is 56.5, demonstrated provisional effort is 0.5, and 43 points
+Reviewed effort is 57, demonstrated provisional effort is 0, and 43 points
 have no credit. Review upgrades D to R without awarding implementation points
 again. Explicit review/gate rows cover their own work, not a second implementation
 credit. Record the exact commit or source hash, real consumer observation/test

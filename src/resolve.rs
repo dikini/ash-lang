@@ -2003,7 +2003,7 @@ fn resolve_module_names_with_budget<'a>(
             &mut declarations,
             dependencies,
         )?;
-        resolver.admit_templates(admissions)?;
+        resolver.admit_templates(admissions, &mut declarations.interfaces)?;
 
         let imported = std::mem::take(&mut resolver.imported);
         let export_candidate = build_export_candidate(
@@ -10699,7 +10699,19 @@ impl Resolver<'_, '_> {
                             }
                             arguments.reverse();
                             roots.reverse();
-                            let effect = self.effect_reference(&source_instance.effect)?;
+                            let effect = match self.effect_reference(&source_instance.effect) {
+                                Ok(effect) => effect,
+                                Err(failure)
+                                    if failure.reason == ResolveReason::UnknownEffect
+                                        && self
+                                            .is_template_placeholder(&source_instance.effect) =>
+                                {
+                                    // Arguments were resolved above; this placeholder has no
+                                    // effect identity until the template is expanded.
+                                    continue;
+                                }
+                                Err(failure) => return Err(failure),
+                            };
                             self.retain_written_effect_arity(
                                 effect,
                                 span,
@@ -12519,6 +12531,18 @@ impl Resolver<'_, '_> {
     // Keep window-only lookup temporaries off ordinary expression frames.
 
     fn admit_templates(
+        &mut self,
+        admissions: &[(SurfaceExpr, Vec<SurfaceName>)],
+        interfaces: &mut Vec<ResolvedInterfaceDeclaration>,
+    ) -> Result<(), ResolveError> {
+        // The ordinary lexical-evidence resolver needs these original facts.
+        std::mem::swap(&mut self.resolved_interfaces.0, interfaces);
+        let result = self.admit_templates_inner(admissions);
+        std::mem::swap(&mut self.resolved_interfaces.0, interfaces);
+        result
+    }
+
+    fn admit_templates_inner(
         &mut self,
         admissions: &[(SurfaceExpr, Vec<SurfaceName>)],
     ) -> Result<(), ResolveError> {
@@ -20845,7 +20869,7 @@ mod tests {
     fn template_name_admission_discards_temporary_resolver_state() {
         for (tail, succeeds) in [("value", true), ("missing", false)] {
             let text = format!(
-                "effect Ask {{\nask : Int -> Int\n}}\nmain : Unit -> Int\nmain () = {{\nnewtype Existing = Existing(Int)\n42\n}}\npub syntax scratch $name:ident from $eff:ident then $ignored:expr => {{\nnewtype Token = Token(Int)\nlet placeholder : $name<Int> = 1\nlet $name = 1\nhandle (perform Ask.ask $name) with $eff using $name {{\nask value => resume {tail}\n}}\n}}\n"
+                "effect Ask {{\nask : Int -> Int\n}}\ninterface Check<Key> {{\ncheck : Key -> Int\n}}\nmain : Unit -> Int\nmain () = {{\nnewtype Existing = Existing(Int)\n42\n}}\npub syntax scratch $name:ident from $eff:ident then $ignored:expr => {{\nnewtype Token = Token(Int)\nwith Check<Token> {{\ncheck token = 42\n}}\nlet placeholder : $name<Int> = 1\nlet action : Unit -> Int ! {{$eff}} = fn(ignored) {{\n1\n}}\nlet $name = 1\nhandle (perform Ask.ask $name) with $eff using $name {{\nask value => resume {tail}\n}}\n}}\n"
             );
             let source = SourceFile::new("admission-scratch.ash", text).unwrap();
             let tree = parse(lex(&source).unwrap());
@@ -20853,7 +20877,10 @@ mod tests {
             assert_eq!(module.syntax_declarations.len(), 1);
             let mut resolver = Resolver::new(ModuleId::new(0));
             resolver.validate_local_namespaces(&module).unwrap();
-            let declarations = resolver.resolve_declarations(&module).unwrap();
+            let mut declarations = resolver.resolve_declarations(&module).unwrap();
+            let interface_count = declarations.interfaces.len();
+            let interface_pointer = declarations.interfaces.as_ptr();
+            assert_eq!(interface_count, 1);
             let registry_counts = (
                 declarations.registry.nominals().len(),
                 declarations.registry.constructors().len(),
@@ -20880,8 +20907,11 @@ mod tests {
                     crate::syntax::template_for_admission(declaration, &source, &contexts).unwrap()
                 })
                 .collect::<Vec<_>>();
-            let result = resolver.admit_templates(&admissions);
+            let result = resolver.admit_templates(&admissions, &mut declarations.interfaces);
             assert_eq!(result.is_ok(), succeeds, "{tail}: {result:?}");
+            assert_eq!(declarations.interfaces.len(), interface_count);
+            assert_eq!(declarations.interfaces.as_ptr(), interface_pointer);
+            assert!(resolver.resolved_interfaces.0.is_empty());
             assert_eq!(
                 counters,
                 (
