@@ -1206,3 +1206,12 @@ declaration controls establish the polymorphic and constrained unused-target
 refusals. Both observations are described in the task and await review. The
 term fresh-identifier association, remaining evidence reconciliation,
 whole-path review, final gate and retained readback remain open.
+
+### Reviewed admission and fresh-term evidence
+
+Independent review passed `a56d4f54`; the task records the P15 and P18
+increments. A real-driver fresh-term contrast now demonstrates distinct
+same-spelled handles against one reused handle, with checked binder/use
+associations. That observation awaits review. Remaining evidence
+reconciliation, whole-path review, final gate and retained readback remain
+open.

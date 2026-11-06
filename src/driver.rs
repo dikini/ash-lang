@@ -3430,6 +3430,107 @@ wrong input = {
     }
 
     #[test]
+    fn independently_issued_same_spelled_term_names_keep_their_bindings() {
+        let fixture = |name: &str| RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/fresh-term")
+                .join(name),
+            roots: ModuleRoots::empty(),
+        };
+        let compiled = compile_path(fixture("distinct.ash")).expect("fresh names compile");
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let source = provenance
+            .iter()
+            .find(|(_, source)| source.display_path().ends_with("fresh-term/distinct.ash"))
+            .unwrap()
+            .1
+            .id();
+        let fixture_source =
+            include_str!("../tests/fixtures/surface-macros/fresh-term/distinct.ash");
+        let offset = |name| u32::try_from(fixture_source.find(name).unwrap()).unwrap();
+        let caller = program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                crate::core::EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+                    crate::core::PureComputation::Bind(binding),
+                )) if binding.binder().origin().primary_span().source() == source
+                    && binding.binder().origin().primary_span().range().start()
+                        == offset("temp = 39") =>
+                {
+                    Some(binding.binder().id())
+                }
+                _ => None,
+            })
+            .expect("the caller's temp binding remains in checked Core");
+        let bindings = program
+            .nodes()
+            .iter()
+            .filter_map(|node| match &node.kind {
+                crate::core::EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+                    crate::core::PureComputation::Bind(binding),
+                )) if binding.binder().id().module().is_some()
+                    && binding.binder().origin().primary_span().source() == source
+                    && binding.binder().origin().primary_span().range().start()
+                        == offset("fresh_pair (temp") =>
+                {
+                    Some(binding)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [first, second] = bindings.as_slice() else {
+            panic!("the two fresh term binders remain in checked Core")
+        };
+        assert_ne!(first.binder().id(), second.binder().id());
+        let uses_caller = |root| {
+            let mut pending = vec![root];
+            let mut seen = std::collections::HashSet::new();
+            while let Some(id) = pending.pop() {
+                if !seen.insert(id) {
+                    continue;
+                }
+                let node = program.node(id).unwrap();
+                if matches!(&node.kind,
+                    crate::core::EffectExprKind::Pure(crate::core::PureExprKind::Variable(variable))
+                        if variable.binder() == caller)
+                {
+                    return true;
+                }
+                pending.extend(
+                    (0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)),
+                );
+            }
+            false
+        };
+        let (left, right) = match (
+            uses_caller(first.initializer()),
+            uses_caller(second.initializer()),
+        ) {
+            (true, false) => (first.binder().id(), second.binder().id()),
+            (false, true) => (second.binder().id(), first.binder().id()),
+            _ => panic!("only the first initializer uses the caller's temp"),
+        };
+        let variable = |node| match &program.node(node)?.kind {
+            crate::core::EffectExprKind::Pure(crate::core::PureExprKind::Variable(variable)) => {
+                Some(variable.binder())
+            }
+            _ => None,
+        };
+        assert!(program.nodes().iter().any(|node| matches!(
+            &node.kind,
+            crate::core::EffectExprKind::Operation(crate::core::EffectOperation::RegionBuffer(buffer))
+                if matches!(buffer.operation,
+                    crate::core::region::RegionBufferOperation::IntegerArithmetic(crate::core::Primitive::Add))
+                    && buffer.operand.and_then(variable) == Some(left)
+                    && buffer.right.and_then(variable) == Some(right)
+        )), "the final addition uses each fresh binder in order");
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+        let reused = compile_path(fixture("reused.ash")).expect("reused name compiles");
+        assert_eq!(execute(&reused).unwrap().value_display(), "4");
+    }
+
+    #[test]
     fn unchanged_transformer_entry_is_reused_only_within_one_compilation() {
         let fixture = TestSource::write(
             "import macros (syntax twice)\n\

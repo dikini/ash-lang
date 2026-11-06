@@ -21,9 +21,9 @@
 
 ## Current delivery status, 6 November
 
-The latest reviewed product checkpoint is `ad9cedb0`: **70.75/99 original-scope
-points are reviewed and 28.25 remain**. The separately estimated 30 points of
-additional performed work give an effort index of **100.75/129**, not an
+The latest reviewed product checkpoint is `a56d4f54`: **72.25/99 original-scope
+points are reviewed and 26.75 remain**. The separately estimated 30 points of
+additional performed work give an effort index of **102.25/129**, not an
 acceptance percentage. M01–M14 and C1/C2 remain open.
 
 The [operational plan](../plans/2026-11-05-expression-macros.md#2130-source-binder-reservation-finding)
@@ -1557,6 +1557,29 @@ those two restrictions. All-target Clippy passes
 (`/tmp/ash-syntax-bridge-admission-clippy.log`, SHA-256
 `2bf41681fed040c82ad126e9a326646353f28c9610797c1461b97ea124645fa4`). These
 observations await independent review and add no points yet.
+
+### Reviewed transformer admission and fresh-term observation
+
+Independent review passed `a56d4f54`. P15 gains its remaining 0.5 point for
+the paired polymorphic/open-row and constrained transformer-admission cases,
+completing that cap. P18 gains 1 point: 0.5 for issued mixed-capture encoding
+and 0.5 for the exact structure/context/origin round trip, bringing P18 to
+2/2.5 without repeating handle-ownership or P17 entry-wiring credit. The
+current total is **72.25/99 reviewed, with 26.75 remaining**; the separately
+estimated 30 corrective-work points remain unchanged. No M or C row closes
+here.
+
+A further real-driver control issues two distinct fresh identifiers with
+the same spelling, uses each as a term binder and in the final addition, and
+returns 42. A paired transformer reuses one handle for both sequential
+bindings and returns 4 through ordinary shadowing. Checked Core identifies
+the caller's `temp` in the first initializer and the two distinct generated
+binders in the addition's left and right operands
+(`/tmp/ash-syntax-fresh-term.log`, SHA-256
+`e5a49f5367f397124ad6f5f4b139a377082357b21c796b066d5e6e636a796af2`).
+All-target Clippy also passes (`/tmp/ash-syntax-fresh-term-clippy.log`, SHA-256
+`342d2943b458fb6b71d1582de4f4e556e58be9fc1621af26f223e55d026a8ff9`). This
+fresh-term observation awaits independent review.
 
 ## Progress
 
