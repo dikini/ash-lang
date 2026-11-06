@@ -529,8 +529,26 @@ case failed before this change (`/tmp/ash-qualified-capture-red.log`, SHA-256
 five affected integration suites now pass 151 cases
 (`/tmp/ash-qualified-context-suite.log`, SHA-256
 `1d50658e0ae2c1dbd58b51400274779ba69ce00a0583422b4e7eb7cabae2e91f`).
-This partial result awaits review and adds no ledger credit. Qualified effects,
-captured interface and pattern positions, and broader scope hygiene remain open.
+Independent review cleared this partial result at `24bd8410`; it adds no ledger
+credit. Captured interface and pattern positions and broader scope hygiene remain
+open.
+
+An owner-qualified public effect previously produced an internal error even
+though the handwritten equivalent ran to 42. The checked public-effect route
+now retains the original identity for generated requests, handlers and effect
+rows. Twelve real graphs, including the handwritten control, captured caller
+and owner qualifiers, a facade, and a parameterized effect, return 42. Seven
+negative cases refuse private effects, wrong kinds, lowercase names and missing
+operations, aliases, operands or type arguments. The initial mixed-case failure
+is retained in `/tmp/ash-qualified-effect-red.log` (SHA-256
+`1e0fc8cf5bf6a9e0354c319003b7395089fe56c77ee5037e634b13dbe6690068`).
+A first parser change broke the existing captured-operation case
+(`/tmp/ash-qualified-effect-suite.log`, SHA-256
+`9c5ac379f06e05058c1e85db3fec91630096842a317043e66cef4a551e6980d3`);
+the corrected lookahead and seven affected suites pass 184 cases
+(`/tmp/ash-qualified-effect-suite-pinned.log`, SHA-256
+`537640c96a9bd6b2c66c7f3b0c58d38979fe8b0b8abf49b8499a1a1fdf2376f2`).
+This partial result awaits review and adds no ledger credit.
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources
@@ -545,7 +563,7 @@ hygiene, causal diagnostics, M01–M14, C1 and C2 remain open.
 ## Progress
 
 The weighted ledger records **58.5/100 reviewed delivery points**. The latest
-reviewed implementation pin is `b2367131`. These are partial implementation
+reviewed implementation pin is `24bd8410`. These are partial implementation
 observations, not acceptance of the whole feature.
 M01–M14 and C1/C2 remain pending.
 

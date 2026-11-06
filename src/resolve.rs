@@ -2531,6 +2531,7 @@ struct Resolver<'state, 'inputs> {
     syntax_nominals: HashMap<(String, usize), NominalTypeId>,
     syntax_qualified_nominals: HashMap<(String, String, usize), NominalTypeId>,
     syntax_effects: HashMap<(String, usize), EffectId>,
+    syntax_qualified_effects: HashMap<(String, String, usize), EffectId>,
     syntax_interfaces: HashMap<(String, usize), InterfaceId>,
     syntax_qualified_interfaces: HashMap<(String, String, usize), InterfaceId>,
     globals: HashMap<String, GlobalFact>,
@@ -3016,6 +3017,7 @@ impl Resolver<'_, '_> {
             syntax_nominals: HashMap::new(),
             syntax_qualified_nominals: HashMap::new(),
             syntax_effects: HashMap::new(),
+            syntax_qualified_effects: HashMap::new(),
             syntax_interfaces: HashMap::new(),
             syntax_qualified_interfaces: HashMap::new(),
             globals: HashMap::new(),
@@ -6062,8 +6064,58 @@ impl Resolver<'_, '_> {
                 continue;
             }
             if usage.namespace == crate::syntax::SyntaxNameNamespace::Effect {
-                if usage.qualifier.is_some() {
-                    return Err(invalid());
+                if let Some(qualifier) = &usage.qualifier {
+                    let route = terms.qualified(&qualifier.text).ok_or_else(|| {
+                        lookup_error(
+                            ResolveContext::MissingModuleAlias,
+                            qualifier.span,
+                            &qualifier.text,
+                            "this module alias is not bound in the syntax owner",
+                        )
+                    })?;
+                    if !owner.direct_dependencies().contains(&route) {
+                        return Err(invalid());
+                    }
+                    let dependency = syntax
+                        .owners
+                        .iter()
+                        .find(|candidate| candidate.module() == route.target())
+                        .ok_or_else(invalid)?;
+                    let effect =
+                        dependency
+                            .exports()
+                            .effect(&usage.name.text)
+                            .ok_or_else(|| {
+                                if dependency.exports().nominal(&usage.name.text).is_some()
+                                    || dependency.exports().interface(&usage.name.text).is_some()
+                                {
+                                    return effect_kind_error(usage.name.span, &usage.name.text);
+                                }
+                                lookup_error(
+                                    ResolveContext::ExportedEffect,
+                                    usage.name.span,
+                                    &usage.name.text,
+                                    "this effect is not exported by the selected module",
+                                )
+                            })?;
+                    self.retain_imported_effect_from_owner(
+                        effect,
+                        dependency.exports(),
+                        usage.import_span,
+                        Some(SyntaxOwnerLookup {
+                            owner: dependency,
+                            graph: syntax.owners,
+                        }),
+                    )?;
+                    self.syntax_qualified_effects.insert(
+                        (
+                            qualifier.text.clone(),
+                            usage.name.text.clone(),
+                            introduction,
+                        ),
+                        effect.id,
+                    );
+                    continue;
                 }
                 let effect = owner
                     .effects()
@@ -8004,12 +8056,19 @@ impl Resolver<'_, '_> {
         let context = reference.qualifier().unwrap_or(member);
         if context.introduction != 0 {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Effect)?;
-            return if matches!(reference, SurfaceReference::Unqualified(_)) {
-                self.syntax_effects
+            return match reference {
+                SurfaceReference::Unqualified(_) => self
+                    .syntax_effects
                     .get(&(member.text.clone(), member.introduction))
-                    .copied()
-            } else {
-                None
+                    .copied(),
+                SurfaceReference::Qualified(qualified) => self
+                    .syntax_qualified_effects
+                    .get(&(
+                        qualified.qualifier.text.clone(),
+                        member.text.clone(),
+                        qualified.qualifier.introduction,
+                    ))
+                    .copied(),
             }
             .ok_or_else(|| {
                 lookup_error(
@@ -10622,6 +10681,23 @@ impl Resolver<'_, '_> {
         Ok(false)
     }
 
+    fn deferred_template_effect(
+        &self,
+        name: &SurfaceReference,
+        failure: &ResolveError,
+    ) -> Result<bool, ResolveError> {
+        if failure.reason == ResolveReason::UnknownEffect && self.is_template_placeholder(name) {
+            return Ok(true);
+        }
+        if matches!(
+            failure.reason,
+            ResolveReason::UnknownEffect | ResolveReason::UnavailableExport
+        ) {
+            return self.deferred_template_qualified_name(name);
+        }
+        Ok(false)
+    }
+
     fn resolve_owner_argument(
         &mut self,
         surface: &SurfaceType,
@@ -10993,9 +11069,10 @@ impl Resolver<'_, '_> {
                             let effect = match self.effect_reference(&source_instance.effect) {
                                 Ok(effect) => effect,
                                 Err(failure)
-                                    if failure.reason == ResolveReason::UnknownEffect
-                                        && self
-                                            .is_template_placeholder(&source_instance.effect) =>
+                                    if self.deferred_template_effect(
+                                        &source_instance.effect,
+                                        &failure,
+                                    )? =>
                                 {
                                     // Arguments were resolved above; this placeholder has no
                                     // effect identity until the template is expanded.
@@ -14040,10 +14117,7 @@ impl Resolver<'_, '_> {
             handler.effect.span,
         ) {
             Ok(effect) => Some(effect),
-            Err(failure)
-                if failure.reason == ResolveReason::UnknownEffect
-                    && self.is_template_placeholder(&handler.effect.effect) =>
-            {
+            Err(failure) if self.deferred_template_effect(&handler.effect.effect, &failure)? => {
                 for argument in &handler.effect.arguments {
                     self.resolve_owner_argument(argument)?.discard_iteratively();
                 }
@@ -14913,10 +14987,7 @@ impl Resolver<'_, '_> {
             SurfaceExprKind::Perform(request) => {
                 let identity = match self.effect_reference(&request.effect) {
                     Ok(identity) => identity,
-                    Err(failure)
-                        if failure.reason == ResolveReason::UnknownEffect
-                            && self.is_template_placeholder(&request.effect) =>
-                    {
+                    Err(failure) if self.deferred_template_effect(&request.effect, &failure)? => {
                         for argument in &request.arguments {
                             self.resolve_owner_argument(argument)?.discard_iteratively();
                         }

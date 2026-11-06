@@ -94,6 +94,54 @@ fn qualified_names_follow_the_captured_or_defining_alias_context() {
 }
 
 #[test]
+fn qualified_effects_follow_their_alias_context() {
+    for path in [
+        "qualified-effect/manual.ash",
+        "qualified-effect/owner.ash",
+        "qualified-effect/wrapped.ash",
+        "qualified-effect/caller_capture.ash",
+        "qualified-effect/owner_capture.ash",
+        "qualified-effect/handler_caller.ash",
+        "qualified-effect/handler_owner.ash",
+        "qualified-effect/row_caller.ash",
+        "qualified-effect/row_owner.ash",
+        "qualified-effect/facade.ash",
+        "qualified-effect/both_captured.ash",
+        "qualified-effect/parameterized.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    for (path, reason) in [
+        ("qualified-effect/private.ash", "effect.unknown"),
+        ("qualified-effect/wrong_kind.ash", "effect.kind"),
+        (
+            "qualified-effect/lowercase_effect.ash",
+            "parse.expected-operand",
+        ),
+        (
+            "qualified-effect/missing_operation.ash",
+            "resolve.unknown-name",
+        ),
+        (
+            "qualified-effect/missing_alias.ash",
+            "resolve.unavailable-export",
+        ),
+        (
+            "qualified-effect/missing_operand.ash",
+            "resolve.unknown-name",
+        ),
+        (
+            "qualified-effect/missing_argument.ash",
+            "resolve.unknown-type",
+        ),
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), reason, "{path}: {failure:?}");
+    }
+}
+
+#[test]
 fn generated_token_diagnostics_point_to_the_invocation() {
     use ash::{
         message::{Catalogue, Locale},

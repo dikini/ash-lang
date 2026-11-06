@@ -2001,7 +2001,9 @@ pub(super) fn perform_expression(parser: &mut Parser<'_>) {
     let _ = parser.bump();
     parser.start(NodeKind::OperationReference);
     if parser.nth(1) == Some(&TokenKind::Dot)
-        && matches!(parser.nth(2), Some(TokenKind::UpperIdentifier(_)))
+        && (matches!(parser.nth(2), Some(TokenKind::UpperIdentifier(_)))
+            || (parser.nth_is_admission_identifier(2)
+                && matches!(parser.nth(3), Some(TokenKind::Dot | TokenKind::Less))))
     {
         qualified_name(parser, true);
     } else {

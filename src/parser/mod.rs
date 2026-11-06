@@ -1026,8 +1026,14 @@ pub(crate) struct Parser<'tokens> {
 
 impl Parser<'_> {
     fn is_admission_identifier(&self) -> bool {
-        self.admission_identifiers
-            .is_some_and(|indices| indices.contains(&self.position))
+        self.nth_is_admission_identifier(0)
+    }
+
+    fn nth_is_admission_identifier(&self, distance: usize) -> bool {
+        self.position.checked_add(distance).is_some_and(|position| {
+            self.admission_identifiers
+                .is_some_and(|indices| indices.contains(&position))
+        })
     }
 
     fn at_upper_identifier(&self) -> bool {
