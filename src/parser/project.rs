@@ -40,6 +40,7 @@ struct ProjectionTokens<'a> {
     construction: Option<(Span, usize)>,
     construction_extents: bool,
     admission_identifiers: Option<&'a std::collections::HashSet<usize>>,
+    frame: Option<&'a std::sync::Arc<crate::syntax::ExpansionFrame>>,
 }
 
 impl<'a> ProjectionTokens<'a> {
@@ -51,6 +52,7 @@ impl<'a> ProjectionTokens<'a> {
             construction: None,
             construction_extents: false,
             admission_identifiers: None,
+            frame: None,
         }
     }
 
@@ -62,6 +64,7 @@ impl<'a> ProjectionTokens<'a> {
             construction: self.construction,
             construction_extents: true,
             admission_identifiers: self.admission_identifiers,
+            frame: self.frame,
         }
     }
 
@@ -2511,6 +2514,7 @@ pub(super) fn project_macro_expression(
     tree: &ConcreteTree,
     original_nodes: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
     admission_identifiers: &std::collections::HashSet<usize>,
+    frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
 ) -> Result<SurfaceExpr, ProjectionError> {
     if tree.resource_failure.is_some()
         || tree.malformed.is_some()
@@ -2537,6 +2541,7 @@ pub(super) fn project_macro_expression(
         construction,
         construction_extents: false,
         admission_identifiers: Some(admission_identifiers),
+        frame,
     };
     project_expression_with_fragments(source, expression, &tokens, original_nodes)
 }
@@ -2550,6 +2555,32 @@ fn project_expression_with_fragments(
     let mut tasks = vec![ExpressionTask::Visit(node)];
     let mut projected = Vec::new();
     while let Some(task) = tasks.pop() {
+        if let (ExpressionTask::Visit(node), Some(frame)) = (&task, tokens.frame) {
+            let original = node.children.iter().find_map(|child| match child {
+                ConcreteElement::Token(index) => original_nodes.get(index),
+                _ => None,
+            });
+            let (cause, capture, token_cause) = match original {
+                Some(crate::syntax::MacroOutputNode::Expression(_, origin))
+                | Some(crate::syntax::MacroOutputNode::ForwardedExpression(_, origin)) => {
+                    (Some(origin.clone()), true, false)
+                }
+                Some(crate::syntax::MacroOutputNode::Token(_, _, origin)) => {
+                    (Some(origin.clone()), false, true)
+                }
+                Some(crate::syntax::MacroOutputNode::Identifier(_, origin))
+                | Some(crate::syntax::MacroOutputNode::Group(_, _, origin)) => {
+                    (Some(origin.clone()), false, false)
+                }
+                _ => (None, false, false),
+            };
+            tasks.push(ExpressionTask::FinishDiagnostic {
+                cause,
+                capture,
+                token_cause,
+                frame: std::sync::Arc::clone(frame),
+            });
+        }
         match task {
             ExpressionTask::Visit(node) => match node.kind {
                 NodeKind::SyntaxInvocation => {
@@ -2971,6 +3002,7 @@ fn project_expression_with_fragments(
                     {
                         let name = project_qualified_name(source, name, tokens)?;
                         projected.push(SurfaceExpr {
+                            diagnostic: None,
                             span: name.span,
                             kind: SurfaceExprKind::Name(SurfaceReference::Qualified(name)),
                         });
@@ -3026,6 +3058,7 @@ fn project_expression_with_fragments(
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 projected.push(SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::SyntaxInvocation { name, captures },
                     span,
                 });
@@ -3037,6 +3070,7 @@ fn project_expression_with_fragments(
             } => {
                 let (left, right) = take_expression_pair(&mut projected)?;
                 projected.push(SurfaceExpr {
+                    diagnostic: None,
                     kind: make_kind(BinaryExpr {
                         left: Box::new(left),
                         right: Box::new(right),
@@ -3048,6 +3082,7 @@ fn project_expression_with_fragments(
             ExpressionTask::FinishApplication(span) => {
                 let (function, argument) = take_expression_pair(&mut projected)?;
                 projected.push(SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Apply(ApplicationExpr {
                         function: Box::new(function),
                         argument: Box::new(argument),
@@ -3065,6 +3100,7 @@ fn project_expression_with_fragments(
                         ))?;
                 let elements = projected.split_off(split);
                 projected.push(SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Tuple(elements),
                     span,
                 });
@@ -3099,6 +3135,7 @@ fn project_expression_with_fragments(
                     return malformed(InternalReason::UnexpectedShape);
                 }
                 projected.push(SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Match(SurfaceMatchExpr {
                         scrutinee: Box::new(scrutinee),
                         arms: projected_arms,
@@ -3116,6 +3153,7 @@ fn project_expression_with_fragments(
                     InternalReason::UnexpectedShape,
                 ))?;
                 projected.push(SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Perform(SurfacePerformExpr {
                         effect,
                         arguments,
@@ -3130,6 +3168,7 @@ fn project_expression_with_fragments(
                     InternalReason::UnexpectedShape,
                 ))?;
                 projected.push(SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Resume(Box::new(value)),
                     span,
                 });
@@ -3146,6 +3185,7 @@ fn project_expression_with_fragments(
                     return malformed(InternalReason::UnexpectedShape);
                 };
                 projected.push(SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::ProviderResource(Box::new(
                         crate::surface::SurfaceProviderResourceExpr {
                             family,
@@ -3178,6 +3218,7 @@ fn project_expression_with_fragments(
                     None
                 };
                 projected.push(SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Region(Box::new(crate::surface::SurfaceRegionExpr {
                         identity,
                         handle,
@@ -3193,6 +3234,7 @@ fn project_expression_with_fragments(
                     return malformed(InternalReason::UnexpectedShape);
                 };
                 projected.push(SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::RegionSelection(Box::new(
                         crate::surface::SurfaceRegionSelectionExpr { region, body },
                     )),
@@ -3210,6 +3252,7 @@ fn project_expression_with_fragments(
                     return malformed(InternalReason::UnexpectedShape);
                 };
                 projected.push(SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Resource(Box::new(
                         crate::surface::SurfaceResourceExpr {
                             kind,
@@ -3230,6 +3273,7 @@ fn project_expression_with_fragments(
                     return malformed(InternalReason::UnexpectedShape);
                 };
                 projected.push(SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Hook(Box::new(crate::surface::SurfaceHookExpr {
                         effect,
                         body,
@@ -3243,6 +3287,7 @@ fn project_expression_with_fragments(
                     return malformed(InternalReason::UnexpectedShape);
                 };
                 projected.push(SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Cleanup(Box::new(crate::surface::SurfaceCleanupExpr {
                         action,
                         body,
@@ -3256,6 +3301,7 @@ fn project_expression_with_fragments(
                     return malformed(InternalReason::UnexpectedShape);
                 };
                 projected.push(SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Registration(Box::new(
                         crate::surface::SurfaceRegistrationExpr {
                             effect,
@@ -3303,6 +3349,7 @@ fn project_expression_with_fragments(
                     })
                     .collect::<Result<Vec<_>, ProjectionError>>()?;
                 projected.push(SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Handle(SurfaceHandleExpr {
                         body: Box::new(body),
                         effect,
@@ -3398,6 +3445,7 @@ fn project_expression_with_fragments(
                     return malformed(InternalReason::UnexpectedShape);
                 }
                 projected.push(SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Block(SurfaceBlock {
                         declarations: projected_declarations,
                         result: Box::new(result),
@@ -3414,6 +3462,7 @@ fn project_expression_with_fragments(
                     return malformed(InternalReason::UnexpectedShape);
                 };
                 projected.push(SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Function(FunctionExpr { parameter, body }),
                     span,
                 });
@@ -3423,6 +3472,30 @@ fn project_expression_with_fragments(
                     return malformed(InternalReason::UnexpectedShape);
                 };
                 expression.span = span;
+            }
+            ExpressionTask::FinishDiagnostic {
+                cause,
+                capture,
+                token_cause,
+                frame,
+            } => {
+                let expression = projected.last_mut().ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                let span = expression.span;
+                let location = expression.diagnostic.get_or_insert_with(|| {
+                    let mut location = crate::syntax::DiagnosticLocation::new(if capture {
+                        span.into()
+                    } else {
+                        cause.clone().unwrap_or_else(|| span.into())
+                    });
+                    location.token_cause = token_cause;
+                    Box::new(location)
+                });
+                if capture && let Some(cause) = cause {
+                    location.related.push(cause);
+                }
+                location.add_frame(&frame);
             }
         }
     }
@@ -3436,6 +3509,12 @@ fn project_expression_with_fragments(
 
 enum ExpressionTask<'a> {
     Visit(&'a ConcreteNode),
+    FinishDiagnostic {
+        cause: Option<crate::syntax::MacroOrigin>,
+        capture: bool,
+        token_cause: bool,
+        frame: std::sync::Arc<crate::syntax::ExpansionFrame>,
+    },
     FinishSyntaxInvocation {
         name: SurfaceName,
         captures: Vec<Option<SurfaceName>>,
@@ -3750,6 +3829,7 @@ fn schedule_group<'a>(
         tasks.push(ExpressionTask::Visit(expression));
     } else {
         projected.push(SurfaceExpr {
+            diagnostic: None,
             kind: SurfaceExprKind::Unit,
             span,
         });
@@ -3773,6 +3853,7 @@ fn project_primitive(
             return malformed(InternalReason::UnexpectedShape);
         }
         return Ok(SurfaceExpr {
+            diagnostic: None,
             span: name.span,
             kind: SurfaceExprKind::TemplateSplice(name),
         });
@@ -3791,6 +3872,7 @@ fn project_primitive(
         _ => return malformed(InternalReason::UnexpectedShape),
     };
     Ok(SurfaceExpr {
+        diagnostic: None,
         kind,
         span: token.span,
     })
@@ -4885,6 +4967,7 @@ mod tests {
                 construction,
                 contents,
                 &contexts,
+                None,
             )
         };
 

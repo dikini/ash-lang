@@ -2599,6 +2599,7 @@ impl ResolvedModuleProgram {
 impl Drop for ResolvedModuleProgram {
     fn drop(&mut self) {
         let placeholder = ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Unit,
             span: self.result.span,
         };
@@ -19288,6 +19289,7 @@ pub struct ResolvedExpr {
     pub kind: ResolvedExprKind,
     /// Complete expression span.
     pub span: Span,
+    pub(crate) diagnostic: Option<Box<crate::syntax::DiagnosticLocation>>,
 }
 
 /// The closed resolved expression family.
@@ -20210,9 +20212,11 @@ pub(crate) fn discard_resolved_local_declaration_iteratively(
     };
     discard_resolved_body_work(
         vec![ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Block(ResolvedBlock {
                 declarations: vec![declaration],
                 result: Box::new(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Unit,
                     span,
                 }),
@@ -20794,6 +20798,7 @@ mod tests {
             .span(ByteRange::new(0, 9).expect("range"))
             .expect("span");
         let occurrence = |ordinal, spelling: &str, start| ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
                 term: ResolvedTermName::Global(BinderId::resolved(module, ordinal)),
                 spelling: spelling.to_owned(),
@@ -20809,6 +20814,7 @@ mod tests {
                 .expect("span"),
         };
         let add = |left, right| ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Add(ResolvedBinaryExpr {
                 left: Box::new(left),
                 right: Box::new(right),
@@ -20937,6 +20943,7 @@ mod tests {
         let module = ModuleId::new(42_005);
         let interface = InterfaceId::new(module, 1);
         let body = || ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
                 term: ResolvedTermName::Global(BinderId::resolved(module, 0)),
                 spelling: "x".to_owned(),
@@ -20979,6 +20986,7 @@ mod tests {
             })
             .collect();
         outer.equations[0].body = ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Block(ResolvedBlock {
                 declarations: vec![ResolvedLocalDeclaration::Evidence(Box::new(
                     ResolvedLexicalEvidence {
@@ -21008,6 +21016,7 @@ mod tests {
                     },
                 ))],
                 result: Box::new(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Unit,
                     span,
                 }),
@@ -30484,6 +30493,7 @@ mod tests {
                     },
                     patterns: Vec::new(),
                     body: ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Unit,
                         span,
                     },
@@ -30673,13 +30683,16 @@ mod tests {
             .spawn(|| {
                 fn deep_expression(span: Span) -> ResolvedExpr {
                     let mut body = ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Unit,
                         span,
                     };
                     for _ in 0..20_000 {
                         body = ResolvedExpr {
+                            diagnostic: None,
                             kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
                                 function: Box::new(ResolvedExpr {
+                                    diagnostic: None,
                                     kind: ResolvedExprKind::Unit,
                                     span,
                                 }),

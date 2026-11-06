@@ -2523,6 +2523,7 @@ struct Resolver<'state, 'inputs> {
     syntax_inputs: Option<SyntaxInputs<'inputs>>,
     syntax_expansion: Option<&'state mut crate::syntax::SyntaxExpansion<'inputs>>,
     active_expansions: usize,
+    diagnostic_frames: Vec<Arc<crate::syntax::ExpansionFrame>>,
     binder_introductions: HashMap<BinderId, usize>,
     syntax_terms: HashMap<(String, usize), ResolvedTermBinding>,
     syntax_qualified_terms: HashMap<(String, String, usize), ResolvedTermBinding>,
@@ -3009,6 +3010,7 @@ impl Resolver<'_, '_> {
             syntax_inputs: None,
             syntax_expansion: None,
             active_expansions: 0,
+            diagnostic_frames: Vec::new(),
             binder_introductions: HashMap::new(),
             syntax_terms: HashMap::new(),
             syntax_qualified_terms: HashMap::new(),
@@ -9600,6 +9602,7 @@ impl Resolver<'_, '_> {
                         self.push_binder_scope_many(&binders);
                         let resolved_body = self.resolve_block(&operational.body).map(|body| {
                             ResolvedExpressionOwner::new(ResolvedExpr {
+                                diagnostic: None,
                                 kind: ResolvedExprKind::Block(body),
                                 span: operational.body.span,
                             })
@@ -11610,9 +11613,11 @@ impl Resolver<'_, '_> {
                 span: target_span,
             },
             body: ResolvedExpr {
+                diagnostic: None,
                 kind: ResolvedExprKind::Resume(ResolvedResumeExpr {
                     owner: Some(resume),
                     value: Box::new(ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
                             term: ResolvedTermName::Global(contract.input),
                             spelling: String::new(),
@@ -11628,6 +11633,7 @@ impl Resolver<'_, '_> {
             span: target_span,
         });
         Ok(ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Handle(ResolvedHandleExpr {
                 hook_registration: None,
                 hook_root: Some(contract),
@@ -11671,8 +11677,10 @@ impl Resolver<'_, '_> {
             },
         )));
         let action = ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
                 function: Box::new(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
                         term: ResolvedTermName::Global(owner),
                         spelling: String::new(),
@@ -11683,6 +11691,7 @@ impl Resolver<'_, '_> {
                     span: action_span,
                 }),
                 argument: Box::new(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Unit,
                     span: action_span,
                 }),
@@ -11690,9 +11699,11 @@ impl Resolver<'_, '_> {
             span: action_span,
         };
         Ok(ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Block(ResolvedBlock {
                 declarations,
                 result: Box::new(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Cleanup(Box::new(
                         crate::resolved::ResolvedCleanupExpr {
                             callback: owner,
@@ -11762,6 +11773,7 @@ impl Resolver<'_, '_> {
             resume,
         };
         let occurrence = |binder| ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
                 term: ResolvedTermName::Global(binder),
                 spelling: String::new(),
@@ -11785,6 +11797,7 @@ impl Resolver<'_, '_> {
         steps.push(binding(
             previous,
             ResolvedExpr {
+                diagnostic: None,
                 kind: ResolvedExprKind::Perform(ResolvedPerformExpr {
                     effect: ResolvedEffectInstance {
                         instance: forwarded,
@@ -11803,6 +11816,7 @@ impl Resolver<'_, '_> {
         steps.push(binding(
             next,
             ResolvedExpr {
+                diagnostic: None,
                 kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
                     function: Box::new(occurrence(contract.callback)),
                     argument: Box::new(occurrence(contract.previous)),
@@ -11819,9 +11833,11 @@ impl Resolver<'_, '_> {
                 span: target_span,
             },
             body: ResolvedExpr {
+                diagnostic: None,
                 kind: ResolvedExprKind::Block(ResolvedBlock {
                     declarations: steps,
                     result: Box::new(ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Resume(ResolvedResumeExpr {
                             owner: Some(resume),
                             value: Box::new(occurrence(contract.next)),
@@ -11836,9 +11852,11 @@ impl Resolver<'_, '_> {
         });
         declarations.push(binding(callback, initializer.into_inner()));
         Ok(ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Block(ResolvedBlock {
                 declarations,
                 result: Box::new(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Handle(ResolvedHandleExpr {
                         hook_registration: Some(Box::new(contract)),
                         hook_root: None,
@@ -12832,6 +12850,7 @@ impl Resolver<'_, '_> {
             method_binders[ordinal] = binder.id;
             let parameter = self.allocate_binder("value", span)?;
             let operand = ResolvedExpr {
+                diagnostic: None,
                 kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
                     term: ResolvedTermName::Global(parameter.id),
                     spelling: parameter.spelling.clone(),
@@ -12849,6 +12868,7 @@ impl Resolver<'_, '_> {
                 )
             })?;
             let request = ResolvedExpr {
+                diagnostic: None,
                 kind: ResolvedExprKind::Perform(ResolvedPerformExpr {
                     effect: ResolvedEffectInstance {
                         argument_provenance: Box::new([]),
@@ -12943,6 +12963,7 @@ impl Resolver<'_, '_> {
             span,
         };
         let body = ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Block(ResolvedBlock {
                 declarations: vec![ResolvedLocalDeclaration::Evidence(Box::new(generated))],
                 result: Box::new(body.into_inner()),
@@ -12951,6 +12972,7 @@ impl Resolver<'_, '_> {
             span,
         };
         Ok(ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Resource(Box::new(ResolvedResourceExpr {
                 acquisition,
                 identity,
@@ -13043,7 +13065,16 @@ impl Resolver<'_, '_> {
         let syntax_type_scope_checkpoint = self.syntax_type_scopes.len();
         let nominal_scope_checkpoint = self.lexical_nominal_scopes.len();
         let constructor_scope_checkpoint = self.lexical_constructor_scopes.len();
-        let result = self.resolve_work_inner(initial);
+        let diagnostic_checkpoint = self.diagnostic_frames.len();
+        let mut result = self.resolve_work_inner(initial);
+        if let Err(error) = &mut result {
+            error
+                .0
+                .diagnostic
+                .primary
+                .inherit_frames(&self.diagnostic_frames);
+        }
+        self.diagnostic_frames.truncate(diagnostic_checkpoint);
         if result.is_err() {
             self.scopes.truncate(scope_checkpoint);
             self.type_scopes.truncate(type_scope_checkpoint);
@@ -13071,6 +13102,38 @@ impl Resolver<'_, '_> {
             ResolveTask::VisitExpr(_) => {
                 unreachable!("expression visits use the resolver driver's reentry path")
             }
+            ResolveTask::FinishDiagnostic {
+                expression,
+                checkpoint,
+            } => {
+                let resolved = expressions.0.last_mut().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        expression.span,
+                        "the resolver lost an expression",
+                    )
+                })?;
+                let location = resolved
+                    .diagnostic
+                    .take()
+                    .or_else(|| expression.diagnostic.clone());
+                if location.is_some() || !self.diagnostic_frames.is_empty() {
+                    let mut location = location.unwrap_or_else(|| {
+                        Box::new(crate::syntax::DiagnosticLocation::new(
+                            expression.span.into(),
+                        ))
+                    });
+                    let own_frames = std::mem::take(&mut location.frames);
+                    for frame in &self.diagnostic_frames {
+                        location.add_frame(frame);
+                    }
+                    for frame in &own_frames {
+                        location.add_frame(frame);
+                    }
+                    resolved.diagnostic = Some(location);
+                }
+                self.diagnostic_frames.truncate(checkpoint);
+            }
             ResolveTask::FinishPerform {
                 effect,
                 operation,
@@ -13096,6 +13159,7 @@ impl Resolver<'_, '_> {
                     )
                 })?;
                 expressions.push(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Resume(ResolvedResumeExpr {
                         owner: Some(owner),
                         value: Box::new(value.into_inner()),
@@ -13232,6 +13296,7 @@ impl Resolver<'_, '_> {
                 self.syntax_type_scopes
                     .truncate(syntax_type_scope_checkpoint);
                 expressions.push(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Region(Box::new(crate::resolved::ResolvedRegionExpr {
                         identity,
                         handle,
@@ -13257,6 +13322,7 @@ impl Resolver<'_, '_> {
                     )
                 })?;
                 expressions.push(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::RegionSelection(Box::new(
                         crate::resolved::ResolvedRegionSelectionExpr {
                             region: Box::new(region.into_inner()),
@@ -13421,6 +13487,7 @@ impl Resolver<'_, '_> {
                     span,
                 };
                 expressions.push(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Network(Box::new(
                         crate::resolved::ResolvedNetworkExpr {
                             acquisition,
@@ -13469,6 +13536,7 @@ impl Resolver<'_, '_> {
                     span,
                 };
                 expressions.push(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Store(Box::new(crate::resolved::ResolvedStoreExpr {
                         acquisition,
                         identity,
@@ -13570,6 +13638,7 @@ impl Resolver<'_, '_> {
             ResolveTask::FinishApplication { span } => {
                 let (function, argument) = take_expression_pair(expressions, span)?;
                 expressions.push(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
                         function: Box::new(function),
                         argument: Box::new(argument),
@@ -13589,6 +13658,7 @@ impl Resolver<'_, '_> {
                     operator_span,
                 };
                 expressions.push(ResolvedExpr {
+                    diagnostic: None,
                     kind: kind.finish(binary),
                     span,
                 });
@@ -13946,6 +14016,7 @@ impl Resolver<'_, '_> {
                 self.lexical_constructor_scopes
                     .truncate(constructor_scope_checkpoint);
                 expressions.push(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Block(ResolvedBlock {
                         declarations: block_declarations,
                         result: Box::new(result.into_inner()),
@@ -13986,6 +14057,7 @@ impl Resolver<'_, '_> {
                 };
                 self.scopes.truncate(scope_checkpoint);
                 expressions.push(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Function(ResolvedFunctionExpr {
                         pattern: pattern.into_inner(),
                         body,
@@ -14007,6 +14079,7 @@ impl Resolver<'_, '_> {
                 })?;
                 let elements = expressions.split_off(split).into_vec();
                 expressions.push(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Tuple(elements),
                     span,
                 });
@@ -14027,6 +14100,24 @@ impl Resolver<'_, '_> {
         while let Some(task) = tasks.pop() {
             match task {
                 ResolveTask::VisitExpr(expression) => {
+                    let checkpoint = self.diagnostic_frames.len();
+                    if let Some(location) = &expression.diagnostic {
+                        for frame in &location.frames {
+                            if !self
+                                .diagnostic_frames
+                                .iter()
+                                .any(|existing| Arc::ptr_eq(existing, frame))
+                            {
+                                self.diagnostic_frames.push(Arc::clone(frame));
+                            }
+                        }
+                    }
+                    if expression.diagnostic.is_some() || checkpoint != 0 {
+                        tasks.push(ResolveTask::FinishDiagnostic {
+                            expression,
+                            checkpoint,
+                        });
+                    }
                     if let SurfaceExprKind::Match(match_expression) = &expression.kind {
                         self.visit_match_expression(
                             match_expression,
@@ -14092,6 +14183,7 @@ impl Resolver<'_, '_> {
             })
         })?;
         expressions.push(ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Perform(ResolvedPerformExpr {
                 effect,
                 operation,
@@ -14144,6 +14236,7 @@ impl Resolver<'_, '_> {
             });
         }
         expressions.push(ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Match(ResolvedMatchExpr {
                 scrutinee: Box::new(scrutinee.into_inner()),
                 arms: arms.into_vec(),
@@ -14331,12 +14424,14 @@ impl Resolver<'_, '_> {
         }
         if deferred {
             expressions.push(ResolvedExpr {
+                diagnostic: None,
                 kind: ResolvedExprKind::Unit,
                 span,
             });
             return Ok(());
         }
         expressions.push(ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Handle(ResolvedHandleExpr {
                 hook_registration: None,
                 hook_root: None,
@@ -14359,6 +14454,7 @@ impl Resolver<'_, '_> {
         match &expression.kind {
             SurfaceExprKind::SyntaxInvocation { .. } if self.admitting_template.is_some() => {
                 expressions.push(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Unit,
                     span: expression.span,
                 });
@@ -14788,24 +14884,29 @@ impl Resolver<'_, '_> {
                 tasks.push(ResolveTask::VisitExpr(&source.initializer));
             }
             SurfaceExprKind::String(value) => expressions.push(ResolvedExpr {
+                diagnostic: None,
                 kind: ResolvedExprKind::String(value.clone()),
                 span: expression.span,
             }),
             SurfaceExprKind::Integer(value) => expressions.push(ResolvedExpr {
+                diagnostic: None,
                 kind: ResolvedExprKind::Integer(value.clone()),
                 span: expression.span,
             }),
             SurfaceExprKind::Boolean(value) => expressions.push(ResolvedExpr {
+                diagnostic: None,
                 kind: ResolvedExprKind::Boolean(*value),
                 span: expression.span,
             }),
             SurfaceExprKind::Unit => expressions.push(ResolvedExpr {
+                diagnostic: None,
                 kind: ResolvedExprKind::Unit,
                 span: expression.span,
             }),
             SurfaceExprKind::Name(name) => {
                 if self.deferred_template_qualified_name(name)? {
                     expressions.push(ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Unit,
                         span: expression.span,
                     });
@@ -14933,6 +15034,7 @@ impl Resolver<'_, '_> {
                     })?;
                     evidence.extend((0..evidence_count).map(|_| EvidenceSlot::empty()));
                     expressions.push(ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
                             term,
                             spelling: member.text.clone(),
@@ -14945,6 +15047,7 @@ impl Resolver<'_, '_> {
                 } else if let Some(constructor) = qualified_constructor.or(unqualified_constructor)
                 {
                     expressions.push(ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Constructor(ResolvedConstructorOccurrence {
                             constructor,
                             spelling: member.text.clone(),
@@ -15157,6 +15260,7 @@ impl Resolver<'_, '_> {
                 if self.admitting_template.is_some() =>
             {
                 expressions.push(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Unit,
                     span: expression.span,
                 });
@@ -15168,6 +15272,7 @@ impl Resolver<'_, '_> {
                     .copied()
                     .ok_or_else(|| continuation_outside_clause(expression.span, "discard"))?;
                 expressions.push(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Discard(crate::resolved::ResolvedDiscardExpr {
                         owner: Some(owner),
                     }),
@@ -15188,6 +15293,7 @@ impl Resolver<'_, '_> {
                         )
                     })?;
                 expressions.push(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Retain(crate::resolved::ResolvedRetainExpr { owner }),
                     span: expression.span,
                 });
@@ -15318,6 +15424,10 @@ enum ResolveTask<'a> {
         span: Span,
     },
     VisitExpr(&'a SurfaceExpr),
+    FinishDiagnostic {
+        expression: &'a SurfaceExpr,
+        checkpoint: usize,
+    },
     FinishRegistration {
         effect: ResolvedEffectInstance,
         span: Span,
@@ -15450,6 +15560,7 @@ impl ResolveTask<'_> {
     fn span(&self) -> crate::source::Span {
         match self {
             Self::VisitExpr(expression) => expression.span,
+            Self::FinishDiagnostic { expression, .. } => expression.span,
             Self::VisitBlock(block) => block.span,
             Self::VisitRecursiveGroup(group) => group.span,
             Self::FinishApplication { span, .. }
@@ -17281,11 +17392,13 @@ mod tests {
                         span,
                     };
                     let mut expression = ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Unit,
                         span,
                     };
                     for _ in 0..32_000 {
                         expression = ResolvedExpr {
+                            diagnostic: None,
                             kind: ResolvedExprKind::Tuple(vec![expression]),
                             span,
                         };
@@ -17345,16 +17458,19 @@ mod tests {
                         span,
                     };
                     let mut expression = ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Unit,
                         span,
                     };
                     for _ in 0..32_000 {
                         expression = ResolvedExpr {
+                            diagnostic: None,
                             kind: ResolvedExprKind::Tuple(vec![expression]),
                             span,
                         };
                     }
                     let initializer = ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Unit,
                         span,
                     };
@@ -21464,6 +21580,7 @@ mod tests {
                     span,
                 };
                 let deep_block = || SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Block(SurfaceBlock {
                         declarations: vec![SurfaceLocalDeclaration::Binding(Box::new(
                             SurfaceBinding {
@@ -21473,6 +21590,7 @@ mod tests {
                                 },
                                 annotation: Some(wide()),
                                 initializer: SurfaceExpr {
+                                    diagnostic: None,
                                     kind: SurfaceExprKind::Unit,
                                     span,
                                 },
@@ -21480,6 +21598,7 @@ mod tests {
                             },
                         ))],
                         result: Box::new(SurfaceExpr {
+                            diagnostic: None,
                             kind: SurfaceExprKind::Unit,
                             span,
                         }),
@@ -21488,6 +21607,7 @@ mod tests {
                     span,
                 };
                 let missing = || SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Name(name("missing")),
                     span,
                 };
@@ -21499,6 +21619,7 @@ mod tests {
                 };
 
                 let tuple = SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Tuple(vec![deep_block(), missing()]),
                     span,
                 };
@@ -21511,6 +21632,7 @@ mod tests {
                 );
 
                 let matched = SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Match(crate::surface::SurfaceMatchExpr {
                         scrutinee: Box::new(deep_block()),
                         arms: vec![
@@ -21543,6 +21665,7 @@ mod tests {
                 );
 
                 let late_annotation = SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Block(SurfaceBlock {
                         declarations: vec![SurfaceLocalDeclaration::Binding(Box::new(
                             SurfaceBinding {
@@ -21559,6 +21682,7 @@ mod tests {
                             },
                         ))],
                         result: Box::new(SurfaceExpr {
+                            diagnostic: None,
                             kind: SurfaceExprKind::Unit,
                             span,
                         }),
@@ -21859,6 +21983,7 @@ mod tests {
         assert_eq!(resolver.type_work.used(), DEPTH);
 
         let expression = SurfaceExpr {
+            diagnostic: None,
             kind: SurfaceExprKind::Name(reference),
             span,
         };
@@ -22703,6 +22828,7 @@ mod tests {
 
     fn deep_declaration_block(span: crate::source::Span) -> SurfaceExpr {
         SurfaceExpr {
+            diagnostic: None,
             kind: SurfaceExprKind::Block(SurfaceBlock {
                 declarations: vec![SurfaceLocalDeclaration::Binding(Box::new(SurfaceBinding {
                     pattern: SurfacePattern {
@@ -22711,12 +22837,14 @@ mod tests {
                     },
                     annotation: Some(deep_declaration_type(span)),
                     initializer: SurfaceExpr {
+                        diagnostic: None,
                         kind: SurfaceExprKind::Unit,
                         span,
                     },
                     span,
                 }))],
                 result: Box::new(SurfaceExpr {
+                    diagnostic: None,
                     kind: SurfaceExprKind::Unit,
                     span,
                 }),

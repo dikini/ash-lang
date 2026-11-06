@@ -1594,6 +1594,7 @@ where
                      caller: &crate::surface::SurfaceName,
                      introduction: usize,
                      owners: &[Option<usize>],
+                     frame: &std::sync::Arc<crate::syntax::ExpansionFrame>,
                      constraint_work: &mut crate::interface::InterfaceConstraintBudget| {
                         let contexts = std::sync::Arc::new(crate::syntax::SyntaxContexts::new(
                             &selected,
@@ -1616,12 +1617,11 @@ where
                             Ok(entry) => match crate::eval::evaluate_transformer(
                                 entry,
                                 captures,
-                                span,
                                 module.source(),
-                                selection.declaration.span,
                                 caller,
                                 introduction,
                                 std::sync::Arc::clone(&contexts),
+                                std::sync::Arc::clone(frame),
                             ) {
                                 Ok((
                                     crate::syntax::TransformerOutput::Expanded(output),
@@ -1629,9 +1629,9 @@ where
                                 )) => {
                                     match crate::syntax::admit_transformer_output(
                                         module.source(),
-                                        span,
                                         output,
                                         &contexts,
+                                        frame,
                                     ) {
                                         Ok(expression) => Ok((expression, fresh_count)),
                                         Err(crate::parser::MacroParseFailure::Syntax {

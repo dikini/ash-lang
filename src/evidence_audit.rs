@@ -359,6 +359,7 @@ mod tests {
 
     fn occurrence(term: ResolvedTermName, evidence: Vec<EvidenceSlot>, span: Span) -> ResolvedExpr {
         ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
                 term,
                 spelling: "value".into(),
@@ -555,6 +556,7 @@ mod tests {
         let method = MethodId::new(interface, 0);
         let scheme = constrained_scheme(interface, constrained, span);
         let body = ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Tuple(vec![
                 occurrence(
                     ResolvedTermName::Global(constrained),
@@ -671,8 +673,10 @@ mod tests {
                 let mut body = occurrence(ResolvedTermName::Global(binder), Vec::new(), span);
                 for _ in 0..20_000 {
                     body = ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
                             function: Box::new(ResolvedExpr {
+                                diagnostic: None,
                                 kind: ResolvedExprKind::Unit,
                                 span,
                             }),

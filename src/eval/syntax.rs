@@ -10,9 +10,12 @@ use crate::{
     core::{NodeId, validate::ValidatedMacroEntry},
     lexer::TokenKind,
     resolved::BinderId,
-    source::{SourceFile, Span},
+    source::SourceFile,
     surface::{SurfaceExpressionCapture, SurfaceName, SurfaceSyntaxCapture},
-    syntax::{MacroDelimiter, MacroOrigin, MacroOutputNode, SyntaxContexts, TransformerOutput},
+    syntax::{
+        ExpansionFrame, MacroDelimiter, MacroOrigin, MacroOutputNode, SyntaxContexts,
+        TransformerOutput,
+    },
     types::{ConstructorId, EffectId, OperationId, TypeWorkBudget},
 };
 
@@ -30,9 +33,8 @@ pub(super) struct SyntaxHost {
     pub(super) started: bool,
     pub(super) steps_left: usize,
     invocation: Arc<()>,
-    invocation_span: Span,
+    frame: Arc<ExpansionFrame>,
     source: SourceFile,
-    definition_span: Span,
     caller: SurfaceName,
     introduction: usize,
     contexts: Arc<SyntaxContexts>,
@@ -54,12 +56,11 @@ impl SyntaxHost {
     pub(super) fn new(
         entry: &ValidatedMacroEntry,
         captures: &[SurfaceSyntaxCapture],
-        invocation_span: Span,
         source: &SourceFile,
-        definition_span: Span,
         caller: &SurfaceName,
         introduction: usize,
         contexts: Arc<SyntaxContexts>,
+        frame: Arc<ExpansionFrame>,
     ) -> Result<Self, RuntimeFailure> {
         let registry = entry.program.registry();
         let mut constructors = HashMap::new();
@@ -92,9 +93,8 @@ impl SyntaxHost {
             started: false,
             steps_left: 1_000_000,
             invocation: Arc::new(()),
-            invocation_span,
+            frame,
             source: source.clone(),
-            definition_span,
             caller: caller.clone(),
             introduction,
             contexts,
@@ -221,9 +221,9 @@ impl SyntaxHost {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
                 let origin = if operation == "invocation_origin" {
-                    self.invocation_span
+                    self.frame.invocation
                 } else {
-                    self.definition_span
+                    self.frame.definition
                 };
                 Ok(self.issue_origin(origin.into()))
             }
@@ -325,10 +325,10 @@ impl SyntaxHost {
                             self.introduction
                                 .checked_add(self.fresh_count)
                                 .ok_or(RuntimeFailure::HeapCapacity)?,
-                            Some(self.invocation_span),
+                            Some(self.frame.invocation),
                         )
                     }
-                    "definition_identifier" => (self.introduction, Some(self.invocation_span)),
+                    "definition_identifier" => (self.introduction, Some(self.frame.invocation)),
                     _ => (self.caller.introduction, self.caller.introduced_at),
                 };
                 let index = self.identifiers.len();
@@ -356,9 +356,8 @@ impl SyntaxHost {
                 if inputs.is_empty() {
                     return self.construct(heap, "MissingOrigins", None);
                 }
-                let origin =
-                    MacroOrigin::combined(inputs, self.invocation_span, self.definition_span)
-                        .ok_or(RuntimeFailure::ResourceCapacity)?;
+                let origin = MacroOrigin::combined(inputs, Arc::clone(&self.frame))
+                    .ok_or(RuntimeFailure::ResourceCapacity)?;
                 let combined = self.issue_origin(origin);
                 self.construct(heap, "Combined", Some(combined))
             }
@@ -374,9 +373,9 @@ impl SyntaxHost {
                 let contents = output.clone().into();
                 match crate::syntax::admit_transformer_output(
                     &self.source,
-                    self.invocation_span,
                     output,
                     &self.contexts,
+                    &self.frame,
                 ) {
                     Ok(expression) => {
                         let index = self.expressions.len();
@@ -475,8 +474,8 @@ impl SyntaxHost {
                 crate::driver::SyntaxParseFailure {
                     diagnostics: diagnostics.clone(),
                     resource: *resource,
-                    invocation: self.invocation_span,
-                    definition: self.definition_span,
+                    invocation: self.frame.invocation,
+                    definition: self.frame.definition,
                     teardown: None,
                 },
             ));
@@ -506,8 +505,8 @@ impl SyntaxHost {
                 message,
                 primary,
                 related,
-                invocation: self.invocation_span,
-                definition: self.definition_span,
+                invocation: self.frame.invocation,
+                definition: self.frame.definition,
                 teardown: None,
             },
         ))

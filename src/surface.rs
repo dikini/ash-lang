@@ -423,6 +423,7 @@ pub struct SurfaceExpr {
     pub kind: SurfaceExprKind,
     /// The complete expression span.
     pub span: Span,
+    pub(crate) diagnostic: Option<Box<crate::syntax::DiagnosticLocation>>,
 }
 
 /// The closed Ash expression family.

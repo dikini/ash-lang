@@ -301,7 +301,7 @@ fn captured_pattern_constructors_keep_their_lookup_context() {
 }
 
 #[test]
-fn generated_token_diagnostics_point_to_the_invocation() {
+fn generated_token_diagnostics_preserve_definition_and_invocation() {
     use ash::{
         message::{Catalogue, Locale},
         presentation::{compile_file_diagnostics, write_human, write_json},
@@ -325,23 +325,199 @@ fn generated_token_diagnostics_point_to_the_invocation() {
         &Catalogue::new(Locale::English).unwrap(),
     )
     .unwrap();
-    assert!(String::from_utf8(human).unwrap().contains("add_boolean 40"));
+    let human = String::from_utf8(human).unwrap();
+    assert!(human.contains("add_boolean 40"), "{human}");
+    assert!(human.contains("true"), "{human}");
     let mut json = Vec::new();
     write_json(&mut json, diagnostic).unwrap();
     let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
     assert_eq!(json["reason"], "type.operator-operand");
     let source = include_str!("fixtures/surface-macros/template-diagnostic/invalid.ash");
+    let definition = include_str!("fixtures/surface-macros/template-diagnostic/forms.ash");
     let invocation = "add_boolean 40";
     let start = source.find(invocation).unwrap();
     let labels = json["labels"].as_array().unwrap();
-    assert_eq!(labels.len(), 2);
     assert_eq!(labels[0]["relationship"], "operator_operand");
     assert_eq!(labels[1]["relationship"], "operator_requirement");
-    for label in labels {
-        assert!(label["path"].as_str().unwrap().ends_with("invalid.ash"));
-        assert_eq!(label["byte_start"], start);
-        assert_eq!(label["byte_end"], start + invocation.len());
+    assert!(labels[0]["path"].as_str().unwrap().ends_with("forms.ash"));
+    let operand = definition.find("true").unwrap();
+    assert_eq!(labels[0]["byte_start"], operand);
+    assert_eq!(labels[0]["byte_end"], operand + "true".len());
+    assert!(labels[1]["path"].as_str().unwrap().ends_with("forms.ash"));
+    let operator = definition.find('+').unwrap();
+    assert_eq!(labels[1]["byte_start"], operator);
+    assert_eq!(labels[1]["byte_end"], operator + 1);
+    assert!(labels.iter().any(|label| {
+        label["relationship"] == "syntax_invocation"
+            && label["path"].as_str().unwrap().ends_with("invalid.ash")
+            && label["byte_start"] == start
+            && label["byte_end"] == start + invocation.len()
+    }));
+    assert!(labels.iter().any(|label| {
+        label["relationship"] == "syntax_definition"
+            && label["path"].as_str().unwrap().ends_with("forms.ash")
+    }));
+}
+
+#[test]
+fn captured_expression_diagnostics_preserve_source_and_invocation() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    let failure = compile_path(fixture("template-diagnostic/captured_invalid.ash"))
+        .expect_err("the captured Bool operand is not an Int");
+    assert_eq!(failure.reason_code(), "type.operator-operand");
+    let diagnostics = compile_file_diagnostics(&failure).unwrap();
+    let mut json = Vec::new();
+    write_json(&mut json, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    let labels = json["labels"].as_array().unwrap();
+    let source = include_str!("fixtures/surface-macros/template-diagnostic/captured_invalid.ash");
+    let operand = source.find("true").unwrap();
+    assert_eq!(labels[0]["relationship"], "operator_operand");
+    assert!(
+        labels[0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("captured_invalid.ash")
+    );
+    assert_eq!(labels[0]["byte_start"], operand);
+    assert_eq!(labels[0]["byte_end"], operand + "true".len());
+    let operator = source.find('+').unwrap();
+    let operator_label = labels
+        .iter()
+        .find(|label| label["relationship"] == "operator_requirement")
+        .unwrap();
+    assert_eq!(operator_label["byte_start"], operator);
+    assert_eq!(operator_label["byte_end"], operator + 1);
+    assert!(labels.iter().any(|label| {
+        label["relationship"] == "syntax_invocation"
+            && label["path"]
+                .as_str()
+                .unwrap()
+                .ends_with("captured_invalid.ash")
+    }));
+    assert!(labels.iter().any(|label| {
+        label["relationship"] == "syntax_definition"
+            && label["path"].as_str().unwrap().ends_with("forms.ash")
+    }));
+}
+
+#[test]
+fn captured_failures_before_completion_preserve_invocation() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    for (entry, reason) in [
+        ("captured_missing.ash", "resolve.unknown-name"),
+        ("captured_function.ash", "type.function-needs-context"),
+    ] {
+        let failure = compile_path(fixture(&format!("template-diagnostic/{entry}")))
+            .expect_err("the captured expression fails in the ordinary pipeline");
+        assert_eq!(failure.reason_code(), reason);
+        let diagnostics = compile_file_diagnostics(&failure).unwrap();
+        let mut json = Vec::new();
+        write_json(&mut json, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        let labels = json["labels"].as_array().unwrap();
+        assert!(
+            labels.iter().any(|label| {
+                label["relationship"] == "syntax_invocation"
+                    && label["path"].as_str().unwrap().ends_with(entry)
+            }),
+            "{entry}: {json}"
+        );
+        assert!(
+            labels.iter().any(|label| {
+                label["relationship"] == "syntax_definition"
+                    && label["path"].as_str().unwrap().ends_with("forms.ash")
+            }),
+            "{entry}: {json}"
+        );
     }
+}
+
+#[test]
+fn nested_expansions_keep_distinct_frames_with_equal_invocation_spans() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    let failure = compile_path(fixture("template-diagnostic/nested_invalid.ash"))
+        .expect_err("the inner syntax produces a Bool operand");
+    assert_eq!(failure.reason_code(), "type.operator-operand");
+    let diagnostics = compile_file_diagnostics(&failure).unwrap();
+    let mut json = Vec::new();
+    write_json(&mut json, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    let labels = json["labels"].as_array().unwrap();
+    let frames = labels
+        .iter()
+        .filter(|label| {
+            matches!(
+                label["relationship"].as_str(),
+                Some("syntax_invocation" | "syntax_definition")
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(frames.len(), 4, "{json}");
+    assert_eq!(frames[0]["relationship"], "syntax_invocation");
+    assert_eq!(frames[1]["relationship"], "syntax_definition");
+    assert!(
+        frames[1]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("nested_forms.ash")
+    );
+    assert_eq!(frames[2]["relationship"], "syntax_invocation");
+    assert_eq!(frames[0]["path"], frames[2]["path"]);
+    assert_eq!(frames[0]["byte_start"], frames[2]["byte_start"]);
+    assert_eq!(frames[0]["byte_end"], frames[2]["byte_end"]);
+    assert_eq!(frames[3]["relationship"], "syntax_definition");
+    assert!(frames[3]["path"].as_str().unwrap().ends_with("/forms.ash"));
+}
+
+#[test]
+fn generated_diagnostic_preserves_combined_causes_without_repeating_its_frame() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    let failure = compile_path(fixture("template-diagnostic/combined_invalid.ash"))
+        .expect_err("the generated Bool is not an Int");
+    assert_eq!(failure.reason_code(), "type.operator-operand");
+    let diagnostics = compile_file_diagnostics(&failure).unwrap();
+    let mut json = Vec::new();
+    write_json(&mut json, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    let labels = json["labels"].as_array().unwrap();
+    let causes = labels
+        .iter()
+        .filter(|label| label["relationship"] == "syntax_cause")
+        .collect::<Vec<_>>();
+    assert_eq!(causes.len(), 2, "{json}");
+    assert!(
+        causes[0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("combined_forms.ash")
+    );
+    assert!(
+        causes[1]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("combined_invalid.ash")
+    );
+    assert_eq!(
+        labels
+            .iter()
+            .filter(|label| label["relationship"] == "syntax_invocation")
+            .count(),
+        1,
+        "{json}"
+    );
+    assert_eq!(
+        labels
+            .iter()
+            .filter(|label| label["relationship"] == "syntax_definition")
+            .count(),
+        1,
+        "{json}"
+    );
 }
 
 #[test]

@@ -106,6 +106,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let (view, query) = self.saved_region_binding(api, span)?;
             let provenance = self.at_span_provenance(&Type::Unit, span)?;
             let action = TypedNodeOwner::new(TypedNode {
+                diagnostic: None,
                 node: action,
                 ty: Type::Unit,
                 effects,
@@ -446,6 +447,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             })),
         )?;
         Ok(TypedNode {
+            diagnostic: None,
             node,
             ty: self.clone_type(&body.ty)?,
             effects,
@@ -528,6 +530,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .builder
             .tuple(vec![allocate, release], core_type, Origin::Source(span))?;
         Ok(TypedNodeOwner::new(TypedNode {
+            diagnostic: None,
             node,
             ty,
             effects: EffectRow::empty(),
@@ -741,6 +744,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             EffectOperation::Handler(HandlerNode::new(handler, body.node, default, clauses)),
         )?;
         Ok(TypedNode {
+            diagnostic: None,
             node,
             ty: self.clone_type(&body.ty)?,
             effects: output,
@@ -784,6 +788,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Origin::Source(span),
         )?;
         let call = TypedNodeOwner::new(TypedNode {
+            diagnostic: None,
             node: call,
             ty: result,
             effects: row,
@@ -947,6 +952,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Origin::Source(progress.span),
         )?;
         values.push(TypedNode {
+            diagnostic: None,
             node,
             ty: self.clone_type(&body.ty)?,
             effects: rows,
@@ -1029,6 +1035,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Origin::Source(progress.span),
         )?;
         values.push(TypedNode {
+            diagnostic: None,
             node,
             ty: self.clone_type(&body.ty)?,
             effects,

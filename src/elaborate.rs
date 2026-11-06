@@ -634,19 +634,22 @@ impl fmt::Display for TypeReason {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypeMismatch {
     span: Span,
+    diagnostic: Option<Box<crate::syntax::DiagnosticLocation>>,
     expected: Box<Type>,
     found: Box<Type>,
-    expected_display: String,
-    found_display: String,
+    display: Box<(String, String)>,
 }
 
 impl TypeMismatch {
+    pub(crate) fn diagnostic_location(&self) -> Option<&crate::syntax::DiagnosticLocation> {
+        self.diagnostic.as_deref()
+    }
     pub(crate) fn display_types(&self) -> (&str, &str) {
-        (&self.expected_display, &self.found_display)
+        (&self.display.0, &self.display.1)
     }
 
     pub(crate) fn message(&self) -> crate::message::Message<'_> {
-        crate::message::Message::type_mismatch(&self.expected_display, &self.found_display)
+        crate::message::Message::type_mismatch(&self.display.0, &self.display.1)
     }
 
     /// Returns the expression that did not check.
@@ -1166,6 +1169,47 @@ pub enum TypeError {
 }
 
 impl TypeError {
+    fn inherit_frames(&mut self, frames: &[Arc<crate::syntax::ExpansionFrame>]) {
+        if frames.is_empty() {
+            return;
+        }
+        match self {
+            Self::Source(error) => error.primary.inherit_frames(frames),
+            Self::Interface(error) => error.primary.inherit_frames(frames),
+            Self::Mismatch(error) => {
+                let span = error.span;
+                let location = error.diagnostic.get_or_insert_with(|| {
+                    Box::new(crate::syntax::DiagnosticLocation::new(span.into()))
+                });
+                for frame in frames {
+                    location.add_frame(frame);
+                }
+            }
+            Self::Internal(_) => {}
+        }
+    }
+
+    fn with_diagnostic_location(
+        mut self,
+        location: Option<&crate::syntax::DiagnosticLocation>,
+    ) -> Self {
+        if let Some(location) = location {
+            match &mut self {
+                Self::Source(error) => {
+                    error.primary = error.primary.clone().with_location(Some(location))
+                }
+                Self::Interface(error) => {
+                    error.primary = error.primary.clone().with_location(Some(location))
+                }
+                Self::Mismatch(error) => {
+                    error.span = location.primary.primary();
+                    error.diagnostic = Some(Box::new(location.clone()));
+                }
+                Self::Internal(_) => {}
+            }
+        }
+        self
+    }
     fn source(diagnostic: Diagnostic<TypeReason>) -> Self {
         Self::Source(Box::new(diagnostic.into()))
     }
@@ -1195,7 +1239,7 @@ impl fmt::Display for TypeError {
             Self::Mismatch(mismatch) => write!(
                 formatter,
                 "type mismatch: expected {}, found {}",
-                mismatch.expected_display, mismatch.found_display
+                mismatch.display.0, mismatch.display.1
             ),
             Self::Internal(failure) => failure.fmt(formatter),
         }
@@ -2238,6 +2282,7 @@ pub struct TypedNode {
     /// Least effect row requested while evaluating this expression.
     pub effects: EffectRow,
     provenance: TypeProvenance,
+    diagnostic: Option<Box<crate::syntax::DiagnosticLocation>>,
 }
 
 impl TypedNode {
@@ -5564,6 +5609,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let (globals, mut context) = self.finish_prepared_definitions(globals)?;
         let globals = ElaboratedBindingBuffer(globals);
         let result = ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Unit,
             span: module.span(),
         };
@@ -7812,6 +7858,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             } = fact.into_inner();
             discard_type_iteratively(fact_ty);
             Ok(TypedNode {
+                diagnostic: None,
                 node,
                 ty: ty.into_inner(),
                 effects: self
@@ -7958,6 +8005,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let ty = IterativeTypeOwner::new(std::mem::replace(&mut selected.ty, Type::Unit));
         let provenance = self.at_span_provenance(&ty, declaration_span)?;
         Ok(TypedNode {
+            diagnostic: None,
             node: selected.node,
             effects: self
                 .builder
@@ -8426,6 +8474,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let core_scheme = IterativeTypeOwner::new(self.clone_type(&scheme.core_scheme)?);
         let variable_ty = self.clone_type(&core_scheme)?;
         let current = TypedNodeOwner::new(TypedNode {
+            diagnostic: None,
             node: self
                 .builder
                 .variable(binder, variable_ty, occurrence.origin.clone())?,
@@ -8946,6 +8995,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         let provenance = self.at_span_provenance(&ty, origin.primary_span())?;
         Ok(TypedNode {
+            diagnostic: None,
             node,
             ty: ty.into_inner(),
             effects: self
@@ -9281,6 +9331,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                 let provenance = self
                                     .at_span_provenance(&lowered.scheme.value_type, lowered.span)?;
                                 let mut current = TypedNodeOwner::new(TypedNode {
+                                    diagnostic: None,
                                     node: self.builder.variable(
                                         lowered.binder,
                                         variable_ty.into_inner(),
@@ -11274,6 +11325,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         operand: &TypedNode,
         operand_span: Span,
         operator_span: Span,
+        operator_diagnostic: Option<&crate::syntax::DiagnosticLocation>,
     ) -> Result<(), TypeError> {
         match self.unify(&operand.ty, &Type::Int) {
             Ok(()) => Ok(()),
@@ -11284,12 +11336,16 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 let found = IterativeTypeOwner::new(self.zonk(&operand.ty)?);
                 let mut diagnostic = Diagnostic::new(
                     TypeReason::OperatorOperand,
-                    SourceLabel::new(operand_span, "this operand is not an Int"),
+                    SourceLabel::new(operand_span, "this operand is not an Int")
+                        .with_location(operand.diagnostic.as_deref()),
                 );
-                diagnostic.related.push(SourceLabel::new(
-                    operator_span,
-                    "this primitive operator requires Int operands",
-                ));
+                diagnostic.related.push(
+                    SourceLabel::new(
+                        operator_span,
+                        "this primitive operator requires Int operands",
+                    )
+                    .with_location(operator_diagnostic),
+                );
                 diagnostic.expected = Some(Type::Int.to_string());
                 diagnostic.found = Some(self.registry.display_source_type(&found));
                 Err(TypeError::source(diagnostic))
@@ -12063,6 +12119,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let provenance = self.at_span_provenance(&ty, expression.origin.primary_span())?;
         let variable_ty = self.clone_type(&core_scheme)?;
         let current = TypedNodeOwner::new(TypedNode {
+            diagnostic: None,
             node: self
                 .builder
                 .variable(first.binder, variable_ty, expression.origin.clone())?,
@@ -12488,6 +12545,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .builder
             .clone_node_effects_with_budget(node, &mut self.type_work)?;
         Ok(TypedNode {
+            diagnostic: None,
             node,
             ty: ty.into_inner(),
             effects,
@@ -13381,6 +13439,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             let ty = self.clone_type(&function_type.ty)?;
                             let node = self.lower_store_advance(module, &ty, definition.span())?;
                             TypedNode {
+                                diagnostic: None,
                                 node,
                                 ty,
                                 effects: EffectRow::empty(),
@@ -13424,6 +13483,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                 definition.span(),
                             )?;
                             TypedNode {
+                                diagnostic: None,
                                 node,
                                 ty,
                                 effects: EffectRow::empty(),
@@ -13465,6 +13525,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                 )?
                             };
                             TypedNode {
+                                diagnostic: None,
                                 node,
                                 ty,
                                 effects: EffectRow::empty(),
@@ -14053,6 +14114,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         )?;
         let provenance = self.at_span_provenance(&ty, span)?;
         Ok(TypedNode {
+            diagnostic: None,
             node,
             ty,
             effects,
@@ -14099,6 +14161,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             self.push_effect_core(Type::Unit, core_effects, Origin::Source(span), operation)?;
         let provenance = self.at_span_provenance(&Type::Unit, span)?;
         Ok(TypedNode {
+            diagnostic: None,
             node,
             ty: Type::Unit,
             effects,
@@ -14152,6 +14215,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         )?;
         let provenance = self.at_span_provenance(&ty, span)?;
         Ok(TypedNode {
+            diagnostic: None,
             node,
             ty: ty.into_inner(),
             effects,
@@ -14223,6 +14287,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         )?;
         let provenance = self.at_span_provenance(&ty, span)?;
         Ok(TypedNode {
+            diagnostic: None,
             node,
             ty,
             effects,
@@ -14402,6 +14467,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ))),
         )?;
         Ok(TypedNode {
+            diagnostic: None,
             node,
             ty: ty.into_inner(),
             effects,
@@ -14800,6 +14866,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         };
         let provenance = self.at_span_provenance(&ty, span)?;
         Ok(TypedNode {
+            diagnostic: None,
             node,
             ty,
             effects,
@@ -15251,6 +15318,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let ty = IterativeTypeOwner::new(self.clone_type(&body.ty)?);
         let provenance = self.at_span_provenance(&ty, contract.span)?;
         Ok(TypedNode {
+            diagnostic: None,
             node,
             ty: ty.into_inner(),
             effects: output,
@@ -15347,6 +15415,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         )?;
         let provenance = self.at_span_provenance(&ty, root.span)?;
         Ok(TypedNode {
+            diagnostic: None,
             node,
             ty: ty.into_inner(),
             effects: output,
@@ -16282,6 +16351,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ))),
         )?;
         values.push(TypedNode {
+            diagnostic: None,
             node,
             ty: ty.into_inner(),
             effects,
@@ -16636,6 +16706,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ))),
         )?;
         values.push(TypedNode {
+            diagnostic: None,
             node,
             ty: ty.into_inner(),
             effects,
@@ -16878,6 +16949,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 let node =
                     self.construct_function(binder, body.node, core_ty, origin.into_inner())?;
                 values.push(TypedNode {
+                    diagnostic: None,
                     node,
                     ty: ty.into_inner(),
                     effects: self
@@ -16965,6 +17037,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .binding(view, query, node, result_type, Origin::Source(span))?;
         }
         values.push(TypedNode {
+            diagnostic: None,
             node,
             ty: self.clone_type(&body.ty)?,
             effects: self
@@ -17120,7 +17193,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     ) -> Result<TypedNode, TypeError> {
         let checkpoint = self.active_acquisitions.len();
         let store_checkpoint = self.active_stores.len();
-        let result = self.elaborate_expression_work(initial, context);
+        let mut diagnostic_stack = Vec::new();
+        let mut result = self.elaborate_expression_work(initial, context, &mut diagnostic_stack);
+        if let (Err(error), Some(location)) = (&mut result, diagnostic_stack.last()) {
+            error.inherit_frames(&location.frames);
+        }
         while self.active_acquisitions.len() > checkpoint {
             if let Some(acquisition) = self.active_acquisitions.pop() {
                 context.remove_and_discard(acquisition.handle);
@@ -17138,6 +17215,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         initial: ElaborationTask<'a>,
         context: &mut TypeContext,
+        diagnostic_stack: &mut Vec<Box<crate::syntax::DiagnosticLocation>>,
     ) -> Result<TypedNode, TypeError> {
         let mut tasks = ElaborationTaskBuffer(vec![initial]);
         let mut values = TypedNodeBuffer(Vec::new());
@@ -17150,6 +17228,17 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         });
         let mut declarations = ElaboratedDeclarationBuffer(Vec::new());
         while let Some(task) = tasks.pop() {
+            if let ElaborationTask::Synthesize { expression, .. }
+            | ElaborationTask::Check { expression, .. } = &task
+                && let Some(location) = &expression.diagnostic
+            {
+                let checkpoint = diagnostic_stack.len();
+                diagnostic_stack.push(location.clone());
+                tasks.push(ElaborationTask::FinishDiagnostic {
+                    expression,
+                    checkpoint,
+                });
+            }
             match task {
                 ElaborationTask::FinishHookBody {
                     handler,
@@ -17217,13 +17306,25 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     expression,
                     expected,
                     kind,
-                } => self.step_check_expression(
+                } => {
+                    self.step_check_expression(
+                        expression,
+                        expected,
+                        kind,
+                        &mut tasks,
+                        &declarations,
+                    )?;
+                }
+                ElaborationTask::FinishDiagnostic {
                     expression,
-                    expected,
-                    kind,
-                    &mut tasks,
-                    &declarations,
-                )?,
+                    checkpoint,
+                } => {
+                    let node = values.0.last_mut().ok_or_else(invalid_state)?;
+                    if node.diagnostic.is_none() {
+                        node.diagnostic = expression.diagnostic.clone();
+                    }
+                    diagnostic_stack.truncate(checkpoint);
+                }
                 // Application argument inference may traverse solved types and rows.
                 // Keep the generic task dispatcher off that call chain.
                 ElaborationTask::AfterApplicationFunction {
@@ -17275,6 +17376,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         crate::resolved::ResolvedExpr {
                             kind: ResolvedExprKind::Discard(discard),
                             span,
+                            ..
                         },
                     ..
                 } => {
@@ -17398,6 +17500,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             self.record_capture_global(binder, node, occurrence)?;
 
             Ok(TypedNode {
+                diagnostic: None,
                 node,
                 ty: ty.into_inner(),
                 effects: EffectRow::empty(),
@@ -17424,14 +17527,16 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         match self.unify(&synthesized.ty, &expected.ty) {
             Ok(()) => {}
             Err(UnificationFailure::RowExclusion) => {
-                return Err(row_exclusion_error(span, expected.provenance.span()));
+                return Err(row_exclusion_error(span, expected.provenance.span())
+                    .with_diagnostic_location(synthesized.diagnostic.as_deref()));
             }
             Err(UnificationFailure::Infinite) => {
                 return Err(inference_failure(
                     TypeReason::InfiniteType,
                     span,
                     "this expression would require an infinite type",
-                ));
+                )
+                .with_diagnostic_location(synthesized.diagnostic.as_deref()));
             }
             Err(UnificationFailure::Mismatch) => {
                 let expected_ty = IterativeTypeOwner::new(self.zonk(&expected.ty)?);
@@ -17443,7 +17548,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     synthesized_ty.into_inner(),
                     expected.provenance.span(),
                     &self.registry,
-                ));
+                )
+                .with_diagnostic_location(synthesized.diagnostic.as_deref()));
             }
             Err(UnificationFailure::Kind { context, span }) => {
                 return Err(TypeError::Internal(ElaborationFailure::Kind {
@@ -17463,6 +17569,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ty: synthesized_ty,
             effects,
             provenance,
+            diagnostic,
         } = synthesized.into_inner();
         let ty = IterativeTypeOwner::new(self.zonk_owned(synthesized_ty)?);
         // Checking can solve an inferred constructor payload to a structured
@@ -17483,6 +17590,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         self.builder
             .record_type_check(node, expected.provenance.span())?;
         values.push(TypedNode {
+            diagnostic,
             node,
             ty: ty.into_inner(),
             effects,
@@ -17549,8 +17657,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ty,
                 effects,
                 provenance,
+                diagnostic,
             } = initializer.into_inner();
             initializer = TypedNodeOwner::new(TypedNode {
+                diagnostic,
                 node,
                 ty: Type::Unit,
                 effects,
@@ -17726,6 +17836,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     )?
                 };
                 values.push(TypedNode {
+                    diagnostic: None,
                     node,
                     ty: Type::String,
                     effects,
@@ -17765,6 +17876,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     )?
                 };
                 values.push(TypedNode {
+                    diagnostic: None,
                     node,
                     ty,
                     effects,
@@ -17777,6 +17889,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     self.builder
                         .boolean(*value, Type::Bool, Origin::Source(current.span))?;
                 values.push(TypedNode {
+                    diagnostic: None,
                     node,
                     ty,
                     effects: EffectRow::empty(),
@@ -17789,21 +17902,34 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .builder
                     .unit(Type::Unit, Origin::Source(current.span))?;
                 values.push(TypedNode {
+                    diagnostic: None,
                     node,
                     ty,
                     effects: EffectRow::empty(),
                     provenance: TypeProvenance::atom(Some(current.span)),
                 });
             }
-            ResolvedExprKind::Add(binary) => {
-                schedule_left(Primitive::Add, current.span, binary, tasks)
-            }
-            ResolvedExprKind::Multiply(binary) => {
-                schedule_left(Primitive::Multiply, current.span, binary, tasks)
-            }
-            ResolvedExprKind::Equal(binary) => {
-                schedule_left(Primitive::Equal, current.span, binary, tasks)
-            }
+            ResolvedExprKind::Add(binary) => schedule_left(
+                Primitive::Add,
+                current.span,
+                binary,
+                current.diagnostic.as_deref(),
+                tasks,
+            ),
+            ResolvedExprKind::Multiply(binary) => schedule_left(
+                Primitive::Multiply,
+                current.span,
+                binary,
+                current.diagnostic.as_deref(),
+                tasks,
+            ),
+            ResolvedExprKind::Equal(binary) => schedule_left(
+                Primitive::Equal,
+                current.span,
+                binary,
+                current.diagnostic.as_deref(),
+                tasks,
+            ),
             ResolvedExprKind::Occurrence(occurrence) => match occurrence.term {
                 crate::resolved::ResolvedTermName::Global(binder) => {
                     values.push(self.synthesize_global_occurrence(
@@ -17981,6 +18107,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 }
                 let provenance = self.at_span_provenance(&ty, declaration_span)?;
                 values.push(TypedNode {
+                    diagnostic: None,
                     node,
                     effects: self
                         .builder
@@ -18255,6 +18382,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 declarations.push(ElaboratedDeclaration::Newtype(owner));
             }
             ElaborationTask::Synthesize { .. } => return Err(invalid_state()),
+            ElaborationTask::FinishDiagnostic { .. } => return Err(invalid_state()),
             ElaborationTask::Check { .. } => return Err(invalid_state()),
             ElaborationTask::CheckBlock { .. } => return Err(invalid_state()),
             ElaborationTask::FinishCheck { .. } => return Err(invalid_state()),
@@ -18316,15 +18444,22 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 primitive,
                 whole_span,
                 operator_span,
+                operator_diagnostic,
                 right,
                 left_span,
             } => {
                 let left = values.pop().ok_or_else(invalid_state)?;
-                self.require_integer(&left, left_span, operator_span)?;
+                self.require_integer(
+                    &left,
+                    left_span,
+                    operator_span,
+                    operator_diagnostic.as_deref(),
+                )?;
                 tasks.push(ElaborationTask::AfterRight {
                     primitive,
                     whole_span,
                     operator_span,
+                    operator_diagnostic,
                     left: left.into_inner(),
                     right_span: right.span,
                 });
@@ -18337,12 +18472,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 primitive,
                 whole_span,
                 operator_span,
+                operator_diagnostic,
                 left,
                 right_span,
             } => {
                 let left = TypedNodeOwner::new(left);
                 let right = values.pop().ok_or_else(invalid_state)?;
-                self.require_integer(&right, right_span, operator_span)?;
+                self.require_integer(
+                    &right,
+                    right_span,
+                    operator_span,
+                    operator_diagnostic.as_deref(),
+                )?;
                 let ty = match primitive {
                     Primitive::Add | Primitive::Multiply => Type::Int,
                     Primitive::Equal => Type::Bool,
@@ -18378,6 +18519,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         .primitive(primitive, left.node, right.node, ty.clone(), origin)?
                 };
                 values.push(TypedNode {
+                    diagnostic: None,
                     node,
                     ty,
                     effects,
@@ -18593,6 +18735,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 )?;
                 let ProvenancedType { ty, provenance } = result_type.into_inner();
                 values.push(TypedNode {
+                    diagnostic: None,
                     node,
                     ty,
                     effects,
@@ -19091,6 +19234,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             origin,
         )?;
         Ok(TypedNode {
+            diagnostic: None,
             node,
             ty: ty.into_inner(),
             effects,
@@ -19143,6 +19287,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             self.builder.tuple(nodes, core_ty, Origin::Source(span))?
         };
         Ok(TypedNode {
+            diagnostic: None,
             node,
             effects,
             provenance: TypeProvenance::atom(Some(span)),
@@ -21972,6 +22117,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             provenance,
         } = function_type.into_inner();
         Ok(TypedNode {
+            diagnostic: None,
             node: body_node,
             ty: original_function_type,
             effects: self
@@ -22159,6 +22305,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         )?;
         let function_type = function_type.into_inner();
         Ok(TypedNode {
+            diagnostic: None,
             node,
             ty: function_type.ty,
             effects: self
@@ -25394,6 +25541,7 @@ fn link_checked_modules<M: std::borrow::Borrow<CheckedModule>>(
     }
     let span = main.origin.primary_span();
     let function = ResolvedExpr {
+        diagnostic: None,
         kind: ResolvedExprKind::Occurrence(crate::resolved::ResolvedOccurrence {
             term: crate::resolved::ResolvedTermName::Global(main.binder),
             spelling: main.spelling.clone(),
@@ -25407,9 +25555,11 @@ fn link_checked_modules<M: std::borrow::Borrow<CheckedModule>>(
         function
     } else {
         ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Apply(crate::resolved::ResolvedApplicationExpr {
                 function: Box::new(function),
                 argument: Box::new(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Unit,
                     span,
                 }),
@@ -25586,6 +25736,10 @@ enum ElaborationTask<'a> {
         expression: &'a ResolvedExpr,
         cause: Option<SynthesisCause>,
     },
+    FinishDiagnostic {
+        expression: &'a ResolvedExpr,
+        checkpoint: usize,
+    },
     Check {
         expression: &'a ResolvedExpr,
         expected: ProvenancedType,
@@ -25644,6 +25798,7 @@ enum ElaborationTask<'a> {
         primitive: Primitive,
         whole_span: Span,
         operator_span: Span,
+        operator_diagnostic: Option<Box<crate::syntax::DiagnosticLocation>>,
         right: &'a ResolvedExpr,
         left_span: Span,
     },
@@ -25651,6 +25806,7 @@ enum ElaborationTask<'a> {
         primitive: Primitive,
         whole_span: Span,
         operator_span: Span,
+        operator_diagnostic: Option<Box<crate::syntax::DiagnosticLocation>>,
         left: TypedNode,
         right_span: Span,
     },
@@ -27199,6 +27355,7 @@ fn discard_elaboration_task(task: ElaborationTask<'_>) {
         | ElaborationTask::FinishPerform(_) => {}
         ElaborationTask::RetainLocalNewtype(_)
         | ElaborationTask::Synthesize { .. }
+        | ElaborationTask::FinishDiagnostic { .. }
         | ElaborationTask::BeginRegistrationBinding { .. }
         | ElaborationTask::AfterApplicationFunction { .. }
         | ElaborationTask::AfterLeft { .. }
@@ -27478,8 +27635,11 @@ fn check_mismatch(
     match kind {
         CheckKind::General | CheckKind::CleanupAction(_) => TypeError::Mismatch(TypeMismatch {
             span,
-            expected_display: registry.display_source_type(&expected),
-            found_display: registry.display_source_type(&found),
+            diagnostic: None,
+            display: Box::new((
+                registry.display_source_type(&expected),
+                registry.display_source_type(&found),
+            )),
             expected: Box::new(expected.into_inner()),
             found: Box::new(found.into_inner()),
         }),
@@ -27672,12 +27832,16 @@ fn schedule_left<'a>(
     primitive: Primitive,
     whole_span: Span,
     binary: &'a crate::resolved::ResolvedBinaryExpr,
+    operator_diagnostic: Option<&crate::syntax::DiagnosticLocation>,
     tasks: &mut ElaborationTaskBuffer<'a>,
 ) {
     tasks.push(ElaborationTask::AfterLeft {
         primitive,
         whole_span,
         operator_span: binary.operator_span,
+        operator_diagnostic: operator_diagnostic
+            .filter(|location| location.token_cause)
+            .map(|location| Box::new(location.clone())),
         right: &binary.right,
         left_span: binary.left.span,
     });
@@ -32732,6 +32896,7 @@ mod tests {
                 let source = SourceFile::new("discard-usage.ash", "discard").unwrap();
                 let span = source.span(ByteRange::new(0, 7).unwrap()).unwrap();
                 let mut expression = ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Discard(crate::resolved::ResolvedDiscardExpr {
                         owner: Some(owner),
                     }),
@@ -32739,6 +32904,7 @@ mod tests {
                 };
                 for _ in 0..DEPTH {
                     expression = ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Tuple(vec![expression]),
                         span,
                     };
@@ -32790,9 +32956,11 @@ mod tests {
                     .span(ByteRange::new(0, 6).expect("the resume range is ordered"))
                     .expect("the resume span should fit");
                 let mut expression = ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Resume(crate::resolved::ResolvedResumeExpr {
                         owner: Some(owner),
                         value: Box::new(ResolvedExpr {
+                            diagnostic: None,
                             kind: ResolvedExprKind::Unit,
                             span,
                         }),
@@ -32801,6 +32969,7 @@ mod tests {
                 };
                 for _ in 0..DEPTH {
                     expression = ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Tuple(vec![expression]),
                         span,
                     };
@@ -32956,11 +33125,13 @@ mod tests {
                     .expect("the actual entry remains linked")
                     .span();
                 let mut body = ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Unit,
                     span,
                 };
                 for _ in 0..DEPTH {
                     body = ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Block(ResolvedBlock {
                             declarations: Vec::new(),
                             result: Box::new(body),
@@ -34012,6 +34183,7 @@ mod tests {
                     operation,
                     spelling: "send".into(),
                     operand: Box::new(ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Unit,
                         span,
                     }),
@@ -34052,6 +34224,7 @@ mod tests {
                     assert_eq!(visits, complete_visits);
                 }
                 crate::resolved::discard_resolved_expression_iteratively(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Perform(request),
                     span,
                 });
@@ -34108,6 +34281,7 @@ mod tests {
                         .unwrap();
                     let provenance = elaborator.at_span_provenance(&ty, span).unwrap();
                     let body = TypedNodeOwner::new(TypedNode {
+                        diagnostic: None,
                         node,
                         ty: ty.into_inner(),
                         effects: EffectRow::empty(),
@@ -34470,6 +34644,7 @@ mod tests {
                 let mut progress = elaborator.prepare_lexical_evidence(source).expect("header");
                 assert_eq!(progress.methods[0].type_parameters.len(), 1);
                 let body = TypedNodeOwner::new(TypedNode {
+                    diagnostic: None,
                     node: elaborator.builder.unit(Type::Unit, Origin::Source(source.span))
                         .expect("body node"),
                     ty: deep_application_type(16_384),
@@ -34511,6 +34686,7 @@ mod tests {
                 let mut elaborator = lexical_resource_elaborator(&resolved, false);
                 let mut progress = elaborator.prepare_lexical_evidence(source).expect("header");
                 let body = TypedNodeOwner::new(TypedNode {
+                    diagnostic: None,
                     node: elaborator
                         .builder
                         .unit(Type::Unit, Origin::Source(source.span))
@@ -35087,6 +35263,7 @@ mod tests {
                     0,
                     &mut declarations,
                     TypedNodeOwner::new(TypedNode {
+                        diagnostic: None,
                         node: body,
                         ty: Type::Unit,
                         effects: EffectRow::empty(),
@@ -41977,10 +42154,10 @@ mod tests {
             .spawn(move || {
                 let mismatch = TypeMismatch {
                     span: resolved_module_fixture("mismatch-owner.ash", "", "Int", "42").span(),
+                    diagnostic: None,
                     expected: Box::new(deep()),
                     found: Box::new(Type::Unit),
-                    expected_display: "Wide<Unit>".to_owned(),
-                    found_display: "Unit".to_owned(),
+                    display: Box::new(("Wide<Unit>".to_owned(), "Unit".to_owned())),
                 };
                 drop(mismatch);
 
@@ -42234,6 +42411,7 @@ mod tests {
                 let span = fixture_result(&resolved).span;
                 let binder = BinderId::new(0);
                 let expression = ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Occurrence(crate::resolved::ResolvedOccurrence {
                         term: crate::resolved::ResolvedTermName::Global(binder),
                         spelling: "deep".to_owned(),
@@ -42366,6 +42544,7 @@ mod tests {
 
                 let expression = crate::resolved::ResolvedMatchExpr {
                     scrutinee: Box::new(ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Unit,
                         span,
                     }),
@@ -42618,6 +42797,7 @@ mod tests {
                     .expect("the shallow binder should fit");
                 TEST_INITIAL_TYPED_NODES.with(|initial| {
                     initial.borrow_mut().push(TypedNode {
+                        diagnostic: None,
                         node: body,
                         ty: Type::Unit,
                         effects: EffectRow::empty(),
@@ -42682,6 +42862,7 @@ mod tests {
                     .expect("the shallow binder should fit");
                 TEST_INITIAL_TYPED_NODES.with(|initial| {
                     initial.borrow_mut().push(TypedNode {
+                        diagnostic: None,
                         node: body,
                         ty: deep_application_type(DEPTH),
                         effects: EffectRow::empty(),
@@ -42748,6 +42929,7 @@ mod tests {
                     .expect("the shallow argument should fit");
                 TEST_INITIAL_TYPED_NODES.with(|initial| {
                     initial.borrow_mut().push(TypedNode {
+                        diagnostic: None,
                         node: argument_node,
                         ty: Type::Unit,
                         effects: EffectRow::empty(),
@@ -42772,6 +42954,7 @@ mod tests {
                             function_span: span,
                             argument_span: span,
                             function: TypedNode {
+                                diagnostic: None,
                                 node: function_node,
                                 ty: Type::Unit,
                                 effects: EffectRow::empty(),
@@ -43192,6 +43375,7 @@ mod tests {
                 let span = fixture_result(&resolved).span;
                 let binder = BinderId::new(0);
                 let expression = ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Occurrence(crate::resolved::ResolvedOccurrence {
                         term: crate::resolved::ResolvedTermName::Global(binder),
                         spelling: "ambiguous".to_owned(),
@@ -43361,6 +43545,7 @@ mod tests {
                 let binder = BinderId::new(0);
                 let nominal = crate::types::NominalTypeId::new(resolved.module(), 0);
                 let expression = ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Occurrence(crate::resolved::ResolvedOccurrence {
                         term: crate::resolved::ResolvedTermName::Global(binder),
                         spelling: "deep".to_owned(),
@@ -43438,6 +43623,7 @@ mod tests {
                 let span = fixture_result(&resolved).span;
                 let binder = BinderId::new(0);
                 let occurrence = || ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Occurrence(crate::resolved::ResolvedOccurrence {
                         term: crate::resolved::ResolvedTermName::Global(binder),
                         spelling: "deep".to_owned(),
@@ -43456,6 +43642,7 @@ mod tests {
                     span,
                 };
                 let expression = ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Match(crate::resolved::ResolvedMatchExpr {
                         scrutinee: Box::new(occurrence()),
                         arms: vec![arm(), arm()],
@@ -45456,6 +45643,7 @@ mod tests {
                         result_type = Type::Function(Box::new(Type::Unit), Box::new(result_type));
                     }
                     let body = TypedNodeOwner::new(TypedNode {
+                        diagnostic: None,
                         node,
                         ty: result_type,
                         effects: EffectRow::empty(),

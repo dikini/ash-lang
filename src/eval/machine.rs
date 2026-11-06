@@ -6897,12 +6897,11 @@ pub fn evaluate_effect(program: &ValidatedEffectProgram) -> Result<Evaluation, R
 pub(crate) fn evaluate_transformer(
     entry: &crate::core::validate::ValidatedMacroEntry,
     captures: &[crate::surface::SurfaceSyntaxCapture],
-    invocation: crate::source::Span,
     source: &crate::source::SourceFile,
-    definition: crate::source::Span,
     caller: &crate::surface::SurfaceName,
     introduction: usize,
     contexts: std::sync::Arc<crate::syntax::SyntaxContexts>,
+    frame: std::sync::Arc<crate::syntax::ExpansionFrame>,
 ) -> Result<(crate::syntax::TransformerOutput, usize), RuntimeFailure> {
     let scope = disposal::Scope::enter();
     let mut result = (|| {
@@ -6910,12 +6909,11 @@ pub(crate) fn evaluate_transformer(
         machine.syntax_host = Some(syntax::SyntaxHost::new(
             entry,
             captures,
-            invocation,
             source,
-            definition,
             caller,
             introduction,
             contexts,
+            frame,
         )?);
         #[cfg(test)]
         {

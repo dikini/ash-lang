@@ -623,8 +623,17 @@ pub(crate) fn parse_macro_expression(
     construction: Option<(Span, usize)>,
     output: Vec<crate::syntax::MacroOutputNode>,
     contexts: &crate::syntax::SyntaxContexts,
+    frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
 ) -> Result<crate::surface::SurfaceExpr, MacroParseFailure> {
-    parse_macro_expression_inner(source, invocation, construction, output, contexts, &[])
+    parse_macro_expression_inner(
+        source,
+        invocation,
+        construction,
+        output,
+        contexts,
+        &[],
+        frame,
+    )
 }
 
 pub(crate) fn parse_template_admission(
@@ -634,7 +643,15 @@ pub(crate) fn parse_template_admission(
     contexts: &crate::syntax::SyntaxContexts,
     placeholders: &[crate::surface::SurfaceName],
 ) -> Result<crate::surface::SurfaceExpr, MacroParseFailure> {
-    parse_macro_expression_inner(source, invocation, None, output, contexts, placeholders)
+    parse_macro_expression_inner(
+        source,
+        invocation,
+        None,
+        output,
+        contexts,
+        placeholders,
+        None,
+    )
 }
 
 fn parse_macro_expression_inner(
@@ -644,6 +661,7 @@ fn parse_macro_expression_inner(
     output: Vec<crate::syntax::MacroOutputNode>,
     contexts: &crate::syntax::SyntaxContexts,
     placeholders: &[crate::surface::SurfaceName],
+    frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
 ) -> Result<crate::surface::SurfaceExpr, MacroParseFailure> {
     use crate::source::ByteRange;
     use crate::syntax::MacroOutputNode;
@@ -806,6 +824,7 @@ fn parse_macro_expression_inner(
         &tree,
         &original_nodes,
         &admission_identifiers,
+        frame,
     )
     .map_err(|_| MacroParseFailure::Invalid)?;
     Ok(expression)

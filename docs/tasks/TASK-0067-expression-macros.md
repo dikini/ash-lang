@@ -642,7 +642,44 @@ The existing conversion uses an explicit group traversal while keeping the
 previous depth limit and node/origin order. Three affected suites pass 159 cases
 in `/tmp/ash-syntax-unwrapping-stack-suite.log` (SHA-256
 `0feee242981dd807748b511f52a1e89d47513a958ca6bf10d4b5df274ac4384b`).
-This repair awaits review and adds no ledger credit.
+Independent review cleared this repair at `f106bbe7`; it adds no ledger credit.
+
+The next diagnostic slice retains an expression occurrence's causes and its
+actual enclosing expansion frames through projection, resolution and checking.
+For `add_boolean 40`, the real CLI now identifies the template's `true` and
+`+`, and labels the caller invocation and syntax definition in human and JSON
+output. A failing descendant of a protected caller capture retains its caller
+location and enclosing frame. Nested expansions with equal invocation spans
+retain separate frames; combined origins retain their ordered causes without
+repeating one frame. The valid control returns 42. Before this change the
+generated labels pointed at the invocation and the captured error lacked its
+frame (`/tmp/ash-occurrence-origin-both-red.log`, SHA-256
+`3db9b6d540a6c979f827949ee9ef290d789c427fd3b6ecf55866e9ddeb737efb`).
+The captured expression's operator label now also identifies its written `+`;
+the prior whole-capture label is reproduced by
+`/tmp/ash-occurrence-origin-capture-operator-red.log` (SHA-256
+`eb6ffe8c694ac0e3e14b53bbbdae51d9f2264c1f7a70766e55af2fa03ec912f7`).
+The seven affected suites pass 255 cases in
+`/tmp/ash-occurrence-origin-suite-final2.log` (SHA-256
+`06c7c4e3c892cefe1c65add672dbe24a7e4fcae69a9ed7ff2adec2b8aa14eb01`).
+The CLI human and JSON receipts are `/tmp/ash-occurrence-origin-final2-human.log`
+(SHA-256 `ae594ee004246a4bdcf2a85a679ed6c0382621202c66d492e85d3d9a13362497`)
+and `/tmp/ash-occurrence-origin-final2-json.log` (SHA-256
+`0c801040ac15b1e77918a23cb196e9c84f9e59475ca987e7e944b9e0c03b0b5c`).
+The captured operator CLI receipt is `/tmp/ash-occurrence-origin-final2-capture.json`
+(SHA-256 `df570d149bbdd6e1b2fee57c8378cb86314211aaae4547f2e6f26e995c7a6d39`).
+This slice awaits independent review and adds no ledger credit. Multi-input
+checking diagnostics and complete origin preservation remain open.
+The private occurrence field also makes external Rust struct literals for
+`SurfaceExpr` and `ResolvedExpr` unavailable; their parsed results still expose
+their existing public kind and span fields.
+The unchanged 256 KiB local-newtype accept/escape test passes after storing
+optional locations and mismatch display strings compactly
+(`/tmp/ash-occurrence-origin-stack-final2.log`, SHA-256
+`b1e698e65f1fabd7142a56f22c648e6e58c956f151b366f821a4da9a13cfc068`).
+The existing small-stack mismatch and context disposal test also passes
+(`/tmp/ash-occurrence-origin-mismatch-final2.log`, SHA-256
+`e75fe50bcc91481a47422f40dbafba593be4f3a61748354f1aaea8c9fc0f7f66`).
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources
@@ -657,7 +694,7 @@ hygiene, causal diagnostics, M01–M14, C1 and C2 remain open.
 ## Progress
 
 The weighted ledger records **58.5/100 reviewed delivery points**. The latest
-reviewed implementation pin is `24c8d51c`. These are partial implementation
+reviewed implementation pin is `f106bbe7`. These are partial implementation
 observations, not acceptance of the whole feature.
 M01–M14 and C1/C2 remain pending.
 

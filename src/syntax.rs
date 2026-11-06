@@ -30,21 +30,62 @@ pub(crate) enum MacroOutputNode {
 
 pub(crate) const MAX_ORIGIN_SPANS: usize = 65_536;
 
+/// One actual expansion, shared by its output occurrences.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ExpansionFrame {
+    pub(crate) invocation: Span,
+    pub(crate) definition: Span,
+}
+
+/// Diagnostic causes and the enclosing expansion occurrences for one expression.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DiagnosticLocation {
+    pub(crate) primary: MacroOrigin,
+    pub(crate) related: Vec<MacroOrigin>,
+    pub(crate) frames: Vec<Arc<ExpansionFrame>>,
+    pub(crate) token_cause: bool,
+}
+
+impl DiagnosticLocation {
+    pub(crate) fn new(primary: MacroOrigin) -> Self {
+        Self {
+            primary,
+            related: Vec::new(),
+            frames: Vec::new(),
+            token_cause: false,
+        }
+    }
+
+    pub(crate) fn add_frame(&mut self, frame: &Arc<ExpansionFrame>) {
+        if !self
+            .frames
+            .iter()
+            .any(|existing| Arc::ptr_eq(existing, frame))
+        {
+            self.frames.push(Arc::clone(frame));
+        }
+    }
+}
+
 /// Ordered causal inputs retained by the invocation-owned syntax interface.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MacroOrigin {
     Source(Span),
     Combined {
         inputs: Arc<[MacroOrigin]>,
-        invocation: Span,
-        definition: Span,
+        frame: Arc<ExpansionFrame>,
         span_count: usize,
         depth: usize,
     },
 }
 
+pub(crate) enum MacroOriginPart {
+    Source(Span),
+    Frame(Arc<ExpansionFrame>),
+}
+
 impl MacroOrigin {
-    pub(crate) fn combined(inputs: Vec<Self>, invocation: Span, definition: Span) -> Option<Self> {
+    pub(crate) fn combined(inputs: Vec<Self>, frame: Arc<ExpansionFrame>) -> Option<Self> {
         let mut span_count = 2usize;
         let mut depth = 0usize;
         for input in &inputs {
@@ -59,8 +100,7 @@ impl MacroOrigin {
         }
         Some(Self::Combined {
             inputs: inputs.into(),
-            invocation,
-            definition,
+            frame,
             span_count,
             depth,
         })
@@ -91,29 +131,39 @@ impl MacroOrigin {
     }
 
     pub(crate) fn spans(&self) -> Vec<Span> {
-        enum Pending<'a> {
-            Origin(&'a MacroOrigin),
-            Span(Span),
-        }
         let mut spans = Vec::new();
-        let mut pending = vec![Pending::Origin(self)];
-        while let Some(item) = pending.pop() {
-            match item {
-                Pending::Span(span) => spans.push(span),
-                Pending::Origin(MacroOrigin::Source(span)) => spans.push(*span),
-                Pending::Origin(MacroOrigin::Combined {
-                    inputs,
-                    invocation,
-                    definition,
-                    ..
-                }) => {
-                    pending.push(Pending::Span(*definition));
-                    pending.push(Pending::Span(*invocation));
-                    pending.extend(inputs.iter().rev().map(Pending::Origin));
+        for part in self.parts() {
+            match part {
+                MacroOriginPart::Source(span) => spans.push(span),
+                MacroOriginPart::Frame(frame) => {
+                    spans.push(frame.invocation);
+                    spans.push(frame.definition);
                 }
             }
         }
         spans
+    }
+
+    pub(crate) fn parts(&self) -> Vec<MacroOriginPart> {
+        enum Pending<'a> {
+            Origin(&'a MacroOrigin),
+            Frame(&'a Arc<ExpansionFrame>),
+        }
+        let mut parts = Vec::new();
+        let mut pending = vec![Pending::Origin(self)];
+        while let Some(item) = pending.pop() {
+            match item {
+                Pending::Frame(frame) => parts.push(MacroOriginPart::Frame(Arc::clone(frame))),
+                Pending::Origin(MacroOrigin::Source(span)) => {
+                    parts.push(MacroOriginPart::Source(*span))
+                }
+                Pending::Origin(MacroOrigin::Combined { inputs, frame, .. }) => {
+                    pending.push(Pending::Frame(frame));
+                    pending.extend(inputs.iter().rev().map(Pending::Origin));
+                }
+            }
+        }
+        parts
     }
 }
 
@@ -214,6 +264,7 @@ pub(crate) struct SyntaxExpansion<'a> {
         &SurfaceName,
         usize,
         &[Option<usize>],
+        &Arc<ExpansionFrame>,
         &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<(SurfaceExpr, usize), Span>,
 }
@@ -230,6 +281,7 @@ impl<'a> SyntaxExpansion<'a> {
             &SurfaceName,
             usize,
             &[Option<usize>],
+            &Arc<ExpansionFrame>,
             &mut crate::interface::InterfaceConstraintBudget,
         ) -> Result<(SurfaceExpr, usize), Span>,
     ) -> Self {
@@ -279,6 +331,10 @@ impl<'a> SyntaxExpansion<'a> {
             import_span: selection.import_span,
         });
         let introduction = self.owners.len();
+        let frame = Arc::new(ExpansionFrame {
+            invocation: anchor,
+            definition: selection.declaration.span,
+        });
         let owners = self
             .owners
             .iter()
@@ -306,6 +362,7 @@ impl<'a> SyntaxExpansion<'a> {
                     Some((selection.declaration.span, introduction)),
                     contents,
                     &contexts,
+                    Some(&frame),
                 ) {
                     Ok(expression) => expression,
                     Err(crate::parser::MacroParseFailure::Syntax {
@@ -332,6 +389,7 @@ impl<'a> SyntaxExpansion<'a> {
                 name,
                 introduction,
                 &owners,
+                &frame,
                 constraint_work,
             )?,
         };
@@ -659,6 +717,7 @@ pub(crate) fn template_for_admission(
             SurfaceSyntaxCaptureKind::Expression => {
                 SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
                     expression: SurfaceExpr {
+                        diagnostic: None,
                         kind: SurfaceExprKind::Unit,
                         span: name.span,
                     },
@@ -719,12 +778,19 @@ fn capture_by_name<'a>(
 
 pub(crate) fn admit_transformer_output(
     source: &crate::source::SourceFile,
-    invocation: Span,
     output: Vec<MacroOutputNode>,
     contexts: &SyntaxContexts,
+    frame: &Arc<ExpansionFrame>,
 ) -> Result<SurfaceExpr, crate::parser::MacroParseFailure> {
-    let mut expression =
-        crate::parser::parse_macro_expression(source, invocation, None, output, contexts)?;
+    let invocation = frame.invocation;
+    let mut expression = crate::parser::parse_macro_expression(
+        source,
+        invocation,
+        None,
+        output,
+        contexts,
+        Some(frame),
+    )?;
     expression.span = invocation;
     Ok(expression)
 }

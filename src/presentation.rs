@@ -96,6 +96,15 @@ pub fn compile_type_mismatch_diagnostic<'a>(
     mismatch: &'a crate::elaborate::TypeMismatch,
     sources: &[&'a SourceFile],
 ) -> Result<CompileDiagnostic<'a>, PresentationError> {
+    let mut result = compile_type_mismatch_diagnostic_inner(mismatch, sources)?;
+    append_diagnostic_locations(&mut result, mismatch.diagnostic_location(), sources)?;
+    Ok(result)
+}
+
+fn compile_type_mismatch_diagnostic_inner<'a>(
+    mismatch: &'a crate::elaborate::TypeMismatch,
+    sources: &[&'a SourceFile],
+) -> Result<CompileDiagnostic<'a>, PresentationError> {
     let span = mismatch.span();
     let source = sources
         .iter()
@@ -139,6 +148,21 @@ pub fn compile_type_mismatch_diagnostic<'a>(
 /// # Errors
 /// Returns an unsupported family or a missing causal fact/source.
 pub fn compile_type_diagnostic<'a>(
+    diagnostic: &'a crate::elaborate::TypeDiagnostic,
+    sources: &[&'a SourceFile],
+) -> Result<CompileDiagnostic<'a>, PresentationError> {
+    let mut result = compile_type_diagnostic_inner(diagnostic, sources)?;
+    append_diagnostic_locations(
+        &mut result,
+        std::iter::once(&diagnostic.primary)
+            .chain(&diagnostic.related)
+            .filter_map(crate::diagnostic::SourceLabel::diagnostic_location),
+        sources,
+    )?;
+    Ok(result)
+}
+
+fn compile_type_diagnostic_inner<'a>(
     diagnostic: &'a crate::elaborate::TypeDiagnostic,
     sources: &[&'a SourceFile],
 ) -> Result<CompileDiagnostic<'a>, PresentationError> {
@@ -284,11 +308,114 @@ pub fn compile_type_diagnostic<'a>(
     })
 }
 
+fn append_diagnostic_locations<'a>(
+    diagnostic: &mut CompileDiagnostic<'a>,
+    locations: impl IntoIterator<Item = &'a crate::syntax::DiagnosticLocation>,
+    sources: &[&'a SourceFile],
+) -> Result<(), PresentationError> {
+    let mut frames: Vec<std::sync::Arc<crate::syntax::ExpansionFrame>> = Vec::new();
+    for location in locations {
+        for frame in &location.frames {
+            if !frames
+                .iter()
+                .any(|existing| std::sync::Arc::ptr_eq(existing, frame))
+            {
+                frames.push(std::sync::Arc::clone(frame));
+            }
+        }
+        let origins = std::iter::once((&location.primary, true))
+            .chain(location.related.iter().map(|origin| (origin, false)));
+        for (origin, skip_primary) in origins {
+            let mut first = true;
+            for part in origin.parts() {
+                match part {
+                    crate::syntax::MacroOriginPart::Source(span) => {
+                        if skip_primary && first {
+                            first = false;
+                            continue;
+                        }
+                        first = false;
+                        let source = sources
+                            .iter()
+                            .copied()
+                            .find(|source| source.id() == span.source())
+                            .ok_or(PresentationError::MissingSource)?;
+                        source
+                            .location(span)
+                            .map_err(|_| PresentationError::MissingSource)?;
+                        diagnostic.related.push(Label {
+                            source,
+                            span,
+                            message: Message::syntax_rejection_cause(),
+                            relationship: "syntax_cause",
+                            facts: Vec::new(),
+                        });
+                    }
+                    crate::syntax::MacroOriginPart::Frame(frame) => {
+                        if !frames
+                            .iter()
+                            .any(|existing| std::sync::Arc::ptr_eq(existing, &frame))
+                        {
+                            frames.push(frame);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for frame in frames {
+        for (span, relationship, message) in [
+            (
+                frame.invocation,
+                "syntax_invocation",
+                Message::syntax_invocation_frame(),
+            ),
+            (
+                frame.definition,
+                "syntax_definition",
+                Message::syntax_definition_frame(),
+            ),
+        ] {
+            let source = sources
+                .iter()
+                .copied()
+                .find(|source| source.id() == span.source())
+                .ok_or(PresentationError::MissingSource)?;
+            source
+                .location(span)
+                .map_err(|_| PresentationError::MissingSource)?;
+            diagnostic.related.push(Label {
+                source,
+                span,
+                message,
+                relationship,
+                facts: Vec::new(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Exposes phase-owned interface diagnostics without interpreting prose.
 ///
 /// # Errors
 /// Returns unsupported reasons, missing facts or missing source context.
 pub fn compile_interface_diagnostic<'a>(
+    error: &'a crate::interface::InterfaceDiagnostic,
+    sources: &[&'a SourceFile],
+) -> Result<CompileDiagnostic<'a>, PresentationError> {
+    let mut result = compile_interface_diagnostic_inner(error, sources)?;
+    append_diagnostic_locations(
+        &mut result,
+        std::iter::once(&error.primary)
+            .chain(&error.related)
+            .filter_map(crate::diagnostic::SourceLabel::diagnostic_location),
+        sources,
+    )?;
+    Ok(result)
+}
+
+fn compile_interface_diagnostic_inner<'a>(
     error: &'a crate::interface::InterfaceDiagnostic,
     sources: &[&'a SourceFile],
 ) -> Result<CompileDiagnostic<'a>, PresentationError> {
@@ -931,6 +1058,21 @@ fn resolve_facts(error: &crate::resolve::ResolveError) -> Vec<Fact<'_>> {
 /// # Errors
 /// Returns an unsupported family, missing facts or source context.
 pub fn compile_resolve_diagnostic<'a>(
+    error: &'a crate::resolve::ResolveError,
+    sources: &[&'a SourceFile],
+) -> Result<CompileDiagnostic<'a>, PresentationError> {
+    let mut result = compile_resolve_diagnostic_inner(error, sources)?;
+    append_diagnostic_locations(
+        &mut result,
+        std::iter::once(&error.primary)
+            .chain(&error.related)
+            .filter_map(crate::diagnostic::SourceLabel::diagnostic_location),
+        sources,
+    )?;
+    Ok(result)
+}
+
+fn compile_resolve_diagnostic_inner<'a>(
     error: &'a crate::resolve::ResolveError,
     sources: &[&'a SourceFile],
 ) -> Result<CompileDiagnostic<'a>, PresentationError> {
