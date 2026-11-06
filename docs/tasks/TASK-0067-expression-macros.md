@@ -1127,6 +1127,45 @@ The unchanged 256 KiB driver and pattern-disposal canaries also pass
 `2fd3c8536f1a1f99bdd62a8be54328d9c3bef1cd63e84eeb918381199e301c5f`).
 Independent review and broader causal/M01–M14 acceptance remain pending.
 
+### Combined graph and matcher evidence
+
+The new combined graph runs both the template and checked Ash transformer
+versions to 42. Each duplicated capture reads and increments a cell; the final
+cell value distinguishes two evaluations from one. A same-spelled caller DSL
+is present while the expanded form uses its owner's separately authored DSL,
+private helper, and opaque constructor. The existing `template-effects`
+entry, handwritten, and reversed cases distinguish effect order (42, 42, and
+33 respectively); the new symmetric sum alone does not.
+
+The original `copied_macro_fragments_have_distinct_checked_local_identities`
+test now also inspects each copied binder's body use, each local nominal's
+wrap and unwrap, each resource handle use, and both initializers' reference to
+the actual caller `outside` binder. Its receipt is
+`/tmp/ash-acceptance-copied-uses-final.log` (SHA-256
+`4f59ebe19675239fc7cef7a20ba6edac3c9eb84b42043a57b0851ec79066f539`).
+
+The imported `if` cases execute both nesting directions with LF and CRLF,
+check parenthesized application and final-capture precedence, reject missing
+captures or separators and unparenthesized application, and preserve the
+`Bool` cause for `if 42`. The five affected driver, host, module, and parser
+suites pass 233 cases in `/tmp/ash-acceptance-graph-suite.log` (SHA-256
+`21dd4e0bc88162d094413ab48931a57579e93ea628558bc76f423e7ff6e96364`).
+The test-target Clippy check also passes (`/tmp/ash-acceptance-graph-clippy.log`,
+SHA-256 `47b29dac0a3652d87fca542f99d2ec3b25b89abcc5702d6eeccb7fa7ddae0308`).
+
+The public build consumer built the computed, effectful graph; interpreter and
+executable both returned 42 after all five copied source files were deleted.
+The exact commands, source/compiler and executable hashes, and artifact path
+are in `/tmp/ash-acceptance-native-final.log` (SHA-256
+`b063481ac8751cf1597915cad7f73c57fca31cb9f2beb8c1cc91f0832ced74fb`); the
+retained script is `/tmp/ash-acceptance-native-run.sh` (SHA-256
+`cd014cd377853c3efdb185a2d87a9e91e8b3b0b2b5674b51d040adb6ea1ced2d`).
+The initial build attempt used a stale compiler binary and correctly rejected
+the runtime fingerprint; its log remains under
+`/tmp/ash-acceptance-native-uwqzFm/.ash-build/`. The successful run rebuilt
+the compiler from the matching source first. These are partial observations;
+review, the remaining M01–M14 evidence, and C1/C2 remain pending.
+
 ## Progress
 
 The weighted ledger records **61.5/100 reviewed delivery points**. The latest

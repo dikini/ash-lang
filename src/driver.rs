@@ -2711,6 +2711,35 @@ mod tests {
 
     #[test]
     fn copied_macro_fragments_have_distinct_checked_local_identities() {
+        fn reachable(
+            program: &ValidatedEffectProgram,
+            root: crate::core::NodeId,
+        ) -> Vec<&crate::core::EffectExpr> {
+            let mut pending = vec![root];
+            let mut seen = std::collections::HashSet::new();
+            let mut nodes = Vec::new();
+            while let Some(id) = pending.pop() {
+                if !seen.insert(id) {
+                    continue;
+                }
+                let node = program.node(id).expect("the validated child exists");
+                pending.extend(
+                    (0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)),
+                );
+                nodes.push(node);
+            }
+            nodes
+        }
+        fn uses(nodes: &[&crate::core::EffectExpr], binder: crate::resolved::BinderId) -> bool {
+            nodes.iter().any(|node| {
+                matches!(
+                    &node.kind,
+                    crate::core::EffectExprKind::Pure(crate::core::PureExprKind::Variable(variable))
+                        if variable.binder() == binder
+                )
+            })
+        }
+
         let fixture = |name: &str| RunConfiguration {
             entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures/surface-macros/copied-declarations")
@@ -2733,24 +2762,34 @@ mod tests {
             .expect("caller source")
             .1
             .id();
-        let binders = program
+        let bindings = program
             .nodes()
             .iter()
             .filter_map(|node| match &node.kind {
                 crate::core::EffectExprKind::Pure(crate::core::PureExprKind::Computation(
                     crate::core::PureComputation::Bind(binding),
-                )) if binding.binder().origin().primary_span().source() == source => {
-                    Some(binding.binder())
-                }
+                )) if binding.binder().origin().primary_span().source() == source => Some(binding),
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert!(binders.iter().enumerate().any(|(index, first)| {
-            binders[index + 1..].iter().any(|second| {
-                first.origin().primary_span() == second.origin().primary_span()
-                    && first.id() != second.id()
+        let pair = bindings
+            .iter()
+            .enumerate()
+            .find_map(|(index, first)| {
+                bindings[index + 1..].iter().find_map(|second| {
+                    (first.binder().origin().primary_span()
+                        == second.binder().origin().primary_span()
+                        && first.binder().id() != second.binder().id())
+                    .then_some((*first, *second))
+                })
             })
-        }));
+            .expect("copies of the same source binding receive distinct identities");
+        for binding in [pair.0, pair.1] {
+            assert!(uses(
+                &reachable(program, binding.body()),
+                binding.binder().id()
+            ));
+        }
         assert_eq!(execute(&compiled).unwrap().value_display(), "42");
 
         let compiled = compile_path(fixture("combined.ash"))
@@ -2767,6 +2806,30 @@ mod tests {
         assert_eq!(second.constructors.len(), 1);
         assert_eq!(first.constructors[0].owner(), first.id);
         assert_eq!(second.constructors[0].owner(), second.id);
+        for nominal in [first, second] {
+            let scope = program
+                .nodes()
+                .iter()
+                .find_map(|node| match &node.kind {
+                    crate::core::EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+                        crate::core::PureComputation::LocalNominalScope(scope),
+                    )) if scope.owner() == nominal.id => Some(scope),
+                    _ => None,
+                })
+                .expect("the copied nominal has its own scope");
+            let descendants = reachable(program, scope.body());
+            for direction in [
+                crate::core::NewtypeConversionDirection::Wrap,
+                crate::core::NewtypeConversionDirection::Unwrap,
+            ] {
+                assert!(descendants.iter().any(|node| matches!(
+                    &node.kind,
+                    crate::core::EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+                        crate::core::PureComputation::NewtypeConversion(conversion),
+                    )) if conversion.owner() == nominal.id && conversion.direction() == direction
+                )), "each copy uses its own nominal for {direction:?}");
+            }
+        }
         let resources = program
             .nodes()
             .iter()
@@ -2782,6 +2845,55 @@ mod tests {
         };
         assert_ne!(first.acquisition.identity, second.acquisition.identity);
         assert_ne!(first.handle().id(), second.handle().id());
+        for resource in [first, second] {
+            assert!(uses(
+                &reachable(program, resource.body()),
+                resource.handle().id()
+            ));
+        }
+        let initializer_use = |resource: &crate::core::effect::ResourceScopeNode| match &program
+            .node(resource.initializer())
+            .expect("resource initializer")
+            .kind
+        {
+            crate::core::EffectExprKind::Pure(crate::core::PureExprKind::Variable(variable)) => {
+                variable.binder()
+            }
+            other => panic!("expected caller variable in resource initializer: {other:?}"),
+        };
+        let caller_source = compiled
+            .provenance
+            .iter()
+            .find(|(_, source)| {
+                source
+                    .display_path()
+                    .ends_with("copied-declarations/combined.ash")
+            })
+            .expect("caller source")
+            .1
+            .id();
+        let outside = u32::try_from(
+            include_str!("../tests/fixtures/surface-macros/copied-declarations/combined.ash")
+                .find("outside = 20")
+                .expect("caller binding"),
+        )
+        .expect("the fixture offset fits a source span");
+        let caller_binder = program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                crate::core::EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+                    crate::core::PureComputation::Bind(binding),
+                )) if binding.binder().origin().primary_span().source() == caller_source
+                    && binding.binder().origin().primary_span().range().start() == outside =>
+                {
+                    Some(binding.binder().id())
+                }
+                _ => None,
+            })
+            .expect("the caller's outside binding remains in checked Core");
+        assert_eq!(initializer_use(first), caller_binder);
+        assert_eq!(initializer_use(second), caller_binder);
         let first_identity = program
             .registry()
             .type_variable(first.acquisition.identity)

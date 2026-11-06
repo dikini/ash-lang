@@ -1,0 +1,2 @@
+# Preserve the literal line endings tested by this source fixture.
+entry_acceptance_if_crlf.ash -text whitespace=cr-at-eol

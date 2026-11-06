@@ -33,6 +33,64 @@ fn imported_templates_and_ash_transformer_run_through_the_driver() {
 }
 
 #[test]
+fn acceptance_graph_preserves_context_and_effect_count_for_both_authoring_forms() {
+    for path in [
+        "entry_acceptance_computed.ash",
+        "entry_acceptance_template.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        let observation = execute(&compiled).expect(path);
+        assert_eq!(observation.value_display(), "42", "{path}");
+        assert_eq!(observation.type_display(), "Int", "{path}");
+    }
+}
+
+#[test]
+fn imported_if_preserves_boundaries_nesting_and_line_endings() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    let lf = include_str!("fixtures/surface-macros/entry_acceptance_if.ash");
+    let crlf = include_str!("fixtures/surface-macros/entry_acceptance_if_crlf.ash");
+    assert!(crlf.contains("\r\n"));
+    assert_eq!(crlf.replace("\r\n", "\n"), lf);
+    for path in [
+        "entry_acceptance_if.ash",
+        "entry_acceptance_if_crlf.ash",
+        "entry_acceptance_if_precedence.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    for path in [
+        "entry_acceptance_if_missing_separator.ash",
+        "entry_acceptance_if_missing_capture.ash",
+        "entry_acceptance_if_application.ash",
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), "parse.expected-form", "{path}");
+    }
+    let source = include_str!("fixtures/surface-macros/entry_acceptance_if_wrong_type.ash");
+    let failure = compile_path(fixture("entry_acceptance_if_wrong_type.ash"))
+        .expect_err("the generated match requires Bool");
+    assert_eq!(failure.reason_code(), "pattern.type-mismatch");
+    let diagnostics = compile_file_diagnostics(&failure).unwrap();
+    let mut json = Vec::new();
+    write_json(&mut json, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    let value = source.find("42").unwrap();
+    assert_eq!(json["labels"][0]["relationship"], "match_value");
+    assert_eq!(json["labels"][0]["byte_start"], value);
+    assert_eq!(json["labels"][0]["byte_end"], value + 2);
+    assert!(
+        json["facts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|fact| { fact["name"] == "pattern_requirement" && fact["value"] == "Bool" })
+    );
+}
+
+#[test]
 fn definition_context_keeps_private_helpers_and_types_through_linking() {
     for path in [
         "core-authority/entry.ash",
