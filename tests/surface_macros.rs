@@ -265,6 +265,42 @@ fn captured_row_tails_use_the_callers_contextual_parameter() {
 }
 
 #[test]
+fn captured_pattern_constructors_keep_their_lookup_context() {
+    for path in [
+        "captured-pattern/manual.ash",
+        "captured-pattern/entry.ash",
+        "captured-pattern/entry_caller.ash",
+        "captured-pattern/entry_name.ash",
+        "captured-pattern/manual_nullary.ash",
+        "captured-pattern/entry_nullary.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    for (path, reason) in [
+        ("captured-pattern/opaque.ash", "resolve.opaque-constructor"),
+        (
+            "captured-pattern/missing_alias.ash",
+            "resolve.unavailable-export",
+        ),
+        (
+            "captured-pattern/missing_payload.ash",
+            "resolve.unknown-constructor",
+        ),
+        ("captured-pattern/duplicate.ash", "pattern.duplicate-binder"),
+        ("captured-pattern/binder_escape.ash", "resolve.unknown-name"),
+        (
+            "captured-pattern/entry_duplicate.ash",
+            "pattern.duplicate-binder",
+        ),
+        ("captured-pattern/lowercase.ash", "parse.expected-form"),
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), reason, "{path}: {failure:?}");
+    }
+}
+
+#[test]
 fn generated_token_diagnostics_point_to_the_invocation() {
     use ash::{
         message::{Catalogue, Locale},

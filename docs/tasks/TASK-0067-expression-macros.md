@@ -606,8 +606,30 @@ The original capture failure is `/tmp/ash-captured-row-tail-red.log` (SHA-256
 `537aba59399463b11e7e17ce9e06304d06d62ccef5262179e62f0dffa375fb68`); seven
 affected suites pass 217 cases in `/tmp/ash-captured-row-tail-suite.log`
 (SHA-256 `e2f0b01d88b3545dfe9e9e92e62cc82b046e595ba4b4e98c7d45466cfdd40198`).
-This partial result awaits review and adds no ledger credit; broader row and
-scope hygiene remain open.
+Independent review cleared this partial result at `24c8d51c`; it adds no ledger
+credit. Broader row and scope hygiene remain open.
+
+Captured constructor names in patterns now pass name admission without a
+fabricated constructor identity; the ordinary resolver still visits the whole
+payload and checks its binders. Six real graphs, including handwritten controls,
+return 42 for owner-qualified, caller-qualified, unqualified and repeated
+nullary captures. Seven negative cases retain ordinary opacity, name, duplicate,
+scope and token-category failures, including an actual repeated lowercase
+binder. Before the repair the captured qualifier failed to parse
+(`/tmp/ash-captured-pattern-red.log`, SHA-256
+`832b5d78eedd85d0ebed99a49ee543eeea7108573ab63b2848e1250473ed1f97`) and
+the repeated nullary capture was mistaken for duplicate binders
+(`/tmp/ash-captured-nullary-red.log`, SHA-256
+`4ed1c596a097bca0586d58a74dc17064f83eee5c36667e34b668dfb699b5c3b9`).
+The exact-placeholder deferral is shared by the existing type, effect,
+interface and constructor admission paths. After that consolidation, eight
+affected suites pass 244 cases in `/tmp/ash-captured-pattern-refactor-suite.log`
+(SHA-256 `e24f5ffce0620b25e019971e4df3e2e213a0921b406dc2ea241576838eff0758`),
+nine existing pattern cases pass in `/tmp/ash-captured-pattern-refactor-patterns.log`
+(SHA-256 `f245ce550d53558ee54b5014a89e8c1ba2a301847e07b953576323eaa29e6b40`),
+and admission-state isolation passes in `/tmp/ash-captured-pattern-refactor-isolation.log`
+(SHA-256 `58e265a678db11ac1291900199784d336599eef78069de54245d62ddb0d8dcb8`).
+This partial result awaits review and adds no ledger credit.
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources
@@ -622,7 +644,7 @@ hygiene, causal diagnostics, M01–M14, C1 and C2 remain open.
 ## Progress
 
 The weighted ledger records **58.5/100 reviewed delivery points**. The latest
-reviewed implementation pin is `eeec9e7f`. These are partial implementation
+reviewed implementation pin is `24c8d51c`. These are partial implementation
 observations, not acceptance of the whole feature.
 M01–M14 and C1/C2 remain pending.
 

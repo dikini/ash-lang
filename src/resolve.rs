@@ -10698,52 +10698,16 @@ impl Resolver<'_, '_> {
         Ok(false)
     }
 
-    fn deferred_template_type(
+    fn deferred_template_name(
         &self,
         name: &SurfaceReference,
         failure: &ResolveError,
+        unknown: ResolveReason,
     ) -> Result<bool, ResolveError> {
-        if failure.reason == ResolveReason::UnknownType && self.is_template_placeholder(name) {
+        if failure.reason == unknown && self.is_template_placeholder(name) {
             return Ok(true);
         }
-        if matches!(
-            failure.reason,
-            ResolveReason::UnknownType | ResolveReason::UnavailableExport
-        ) {
-            return self.deferred_template_qualified_name(name);
-        }
-        Ok(false)
-    }
-
-    fn deferred_template_effect(
-        &self,
-        name: &SurfaceReference,
-        failure: &ResolveError,
-    ) -> Result<bool, ResolveError> {
-        if failure.reason == ResolveReason::UnknownEffect && self.is_template_placeholder(name) {
-            return Ok(true);
-        }
-        if matches!(
-            failure.reason,
-            ResolveReason::UnknownEffect | ResolveReason::UnavailableExport
-        ) {
-            return self.deferred_template_qualified_name(name);
-        }
-        Ok(false)
-    }
-
-    fn deferred_template_interface(
-        &self,
-        name: &SurfaceReference,
-        failure: &ResolveError,
-    ) -> Result<bool, ResolveError> {
-        if failure.reason == ResolveReason::UnknownInterface && self.is_template_placeholder(name) {
-            return Ok(true);
-        }
-        if matches!(
-            failure.reason,
-            ResolveReason::UnknownInterface | ResolveReason::UnavailableExport
-        ) {
+        if failure.reason == unknown || failure.reason == ResolveReason::UnavailableExport {
             return self.deferred_template_qualified_name(name);
         }
         Ok(false)
@@ -10852,7 +10816,13 @@ impl Resolver<'_, '_> {
                             }
                             let nominal = match self.nominal_reference(name) {
                                 Ok(nominal) => nominal,
-                                Err(failure) if self.deferred_template_type(name, &failure)? => {
+                                Err(failure)
+                                    if self.deferred_template_name(
+                                        name,
+                                        &failure,
+                                        ResolveReason::UnknownType,
+                                    )? =>
+                                {
                                     provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
                                     completed.push((Type::Unit, provenance.len() - 1));
                                     continue;
@@ -10898,8 +10868,11 @@ impl Resolver<'_, '_> {
                                         }
                                     }
                                     Err(failure)
-                                        if self
-                                            .deferred_template_type(constructor, &failure)? =>
+                                        if self.deferred_template_name(
+                                            constructor,
+                                            &failure,
+                                            ResolveReason::UnknownType,
+                                        )? =>
                                     {
                                         ApplicationHead::Deferred(provenance.len())
                                     }
@@ -11120,9 +11093,10 @@ impl Resolver<'_, '_> {
                             let effect = match self.effect_reference(&source_instance.effect) {
                                 Ok(effect) => effect,
                                 Err(failure)
-                                    if self.deferred_template_effect(
+                                    if self.deferred_template_name(
                                         &source_instance.effect,
                                         &failure,
+                                        ResolveReason::UnknownEffect,
                                     )? =>
                                 {
                                     // Arguments were resolved above; this placeholder has no
@@ -11299,7 +11273,11 @@ impl Resolver<'_, '_> {
                         let effect = match self.effect_reference(&member.effect) {
                             Ok(effect) => effect,
                             Err(failure)
-                                if self.deferred_template_effect(&member.effect, &failure)? =>
+                                if self.deferred_template_name(
+                                    &member.effect,
+                                    &failure,
+                                    ResolveReason::UnknownEffect,
+                                )? =>
                             {
                                 continue;
                             }
@@ -11485,10 +11463,12 @@ impl Resolver<'_, '_> {
                 ));
             }
             SurfacePatternKind::Binder(surface) => {
-                if let Some(first) = seen.insert(
-                    (surface.name.text.clone(), surface.name.introduction),
-                    surface.name.span,
-                ) {
+                if !self.is_template_identifier(&surface.name)
+                    && let Some(first) = seen.insert(
+                        (surface.name.text.clone(), surface.name.introduction),
+                        surface.name.span,
+                    )
+                {
                     let mut diagnostic = Diagnostic::new(
                         ResolveReason::DuplicatePatternBinder,
                         SourceLabel::new(
@@ -11516,7 +11496,25 @@ impl Resolver<'_, '_> {
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             SurfacePatternKind::Constructor { name, payload } => {
-                let constructor = self.constructor_reference(name)?;
+                let constructor = match self.constructor_reference(name) {
+                    Ok(constructor) => constructor,
+                    Err(failure)
+                        if self.deferred_template_name(
+                            name,
+                            &failure,
+                            ResolveReason::UnknownConstructor,
+                        )? =>
+                    {
+                        return match payload.as_deref() {
+                            Some(payload) => self.resolve_pattern(payload, seen, binders),
+                            None => Ok(ResolvedPattern {
+                                kind: ResolvedPatternKind::Wildcard,
+                                span: pattern.span,
+                            }),
+                        };
+                    }
+                    Err(failure) => return Err(failure),
+                };
                 ResolvedPatternKind::Constructor {
                     constructor,
                     occurrence: ResolvedConstructorOccurrence {
@@ -13688,9 +13686,10 @@ impl Resolver<'_, '_> {
                 let application = match self.resolve_interface_application(&source.application) {
                     Ok(application) => Some(application),
                     Err(failure)
-                        if self.deferred_template_interface(
+                        if self.deferred_template_name(
                             &source.application.interface,
                             &failure,
+                            ResolveReason::UnknownInterface,
                         )? =>
                     {
                         for argument in &source.application.arguments {
@@ -14168,7 +14167,13 @@ impl Resolver<'_, '_> {
             handler.effect.span,
         ) {
             Ok(effect) => Some(effect),
-            Err(failure) if self.deferred_template_effect(&handler.effect.effect, &failure)? => {
+            Err(failure)
+                if self.deferred_template_name(
+                    &handler.effect.effect,
+                    &failure,
+                    ResolveReason::UnknownEffect,
+                )? =>
+            {
                 for argument in &handler.effect.arguments {
                     self.resolve_owner_argument(argument)?.discard_iteratively();
                 }
@@ -15038,7 +15043,13 @@ impl Resolver<'_, '_> {
             SurfaceExprKind::Perform(request) => {
                 let identity = match self.effect_reference(&request.effect) {
                     Ok(identity) => identity,
-                    Err(failure) if self.deferred_template_effect(&request.effect, &failure)? => {
+                    Err(failure)
+                        if self.deferred_template_name(
+                            &request.effect,
+                            &failure,
+                            ResolveReason::UnknownEffect,
+                        )? =>
+                    {
                         for argument in &request.arguments {
                             self.resolve_owner_argument(argument)?.discard_iteratively();
                         }

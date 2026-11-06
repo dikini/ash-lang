@@ -2610,6 +2610,11 @@ fn pattern_inner(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
 }
 
 fn pattern_form(parser: &Parser<'_>) -> Option<PatternForm> {
+    if parser.is_admission_identifier()
+        && matches!(parser.nth(1), Some(TokenKind::Dot | TokenKind::LeftParen))
+    {
+        return Some(PatternForm::Constructor);
+    }
     selected_dialect()
         .pattern_forms
         .iter()
