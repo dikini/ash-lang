@@ -913,8 +913,6 @@ pub struct ResolvedOccurrence {
     pub origin: Origin,
     /// Exact direct import occurrence that introduced this term binding.
     pub(crate) import_span: Option<Span>,
-    /// Authorization retained only for an actual definition-context selection.
-    pub(crate) syntax_grant: Option<Arc<crate::resolve::SyntaxGrant>>,
     /// Atomic checked-goal and evidence positions owned by this exact occurrence.
     pub evidence: Box<[EvidenceSlot]>,
 }
@@ -1016,7 +1014,6 @@ pub struct ResolvedModule {
     definitions: Box<[ResolvedDefinition]>,
     export_candidate: ResolvedExportCandidate,
     resources: Box<[ResolvedResourceDefinition]>,
-    syntax_grants: Vec<Arc<crate::resolve::SyntaxGrant>>,
 
     span: Span,
     defining_sources: Vec<(ModuleId, Arc<crate::source::SourceFile>)>,
@@ -1121,7 +1118,6 @@ impl ResolvedModule {
             implementations: std::mem::take(&mut parts.implementations).into_boxed_slice(),
             definitions: std::mem::take(&mut parts.definitions).into_boxed_slice(),
             resources: std::mem::take(&mut parts.resources).into_boxed_slice(),
-            syntax_grants: Vec::new(),
 
             export_candidate: std::mem::take(&mut parts.export_candidate),
             span: parts.span,
@@ -1304,15 +1300,6 @@ impl ResolvedModule {
 
     fn take_effects(&mut self) -> Box<[ResolvedEffectDeclaration]> {
         std::mem::take(&mut self.effects)
-    }
-
-    pub(crate) fn retain_syntax_grants(&mut self, grants: Vec<Arc<crate::resolve::SyntaxGrant>>) {
-        debug_assert!(self.syntax_grants.is_empty());
-        self.syntax_grants = grants;
-    }
-
-    pub(crate) fn take_syntax_grants(&mut self) -> Vec<Arc<crate::resolve::SyntaxGrant>> {
-        std::mem::take(&mut self.syntax_grants)
     }
 
     /// Moves resolved globals across a successful checker-owned transition.
@@ -1823,9 +1810,6 @@ pub struct CheckedModule {
     implementation_facts: Box<[CheckedImplementationFact]>,
     exports: ExportSummary,
     typed_fragment: Option<crate::elaborate::CheckedTypedModule>,
-    syntax_exports: Box<[Arc<crate::surface::SurfaceSyntaxDeclaration>]>,
-    syntax_imports: Arc<[crate::syntax::SelectedSyntax]>,
-    syntax_grants: Box<[Arc<crate::resolve::SyntaxGrant>]>,
 
     span: Span,
 }
@@ -1841,7 +1825,6 @@ pub(crate) struct CheckedModuleParts {
     pub implementation_facts: Box<[CheckedImplementationFact]>,
     pub exports: ExportSummary,
     pub typed_fragment: Option<crate::elaborate::CheckedTypedModule>,
-    pub syntax_grants: Box<[Arc<crate::resolve::SyntaxGrant>]>,
 }
 
 impl CheckedModule {
@@ -1868,9 +1851,6 @@ impl CheckedModule {
             implementation_facts: parts.implementation_facts,
             exports: parts.exports,
             typed_fragment: parts.typed_fragment,
-            syntax_exports: Box::new([]),
-            syntax_imports: Arc::from([]),
-            syntax_grants: parts.syntax_grants,
 
             span: resolved.span,
         }
@@ -2029,61 +2009,6 @@ impl CheckedModule {
         &self.exports
     }
 
-    pub(crate) fn retain_syntax_exports(
-        &mut self,
-        declarations: &[crate::surface::SurfaceSyntaxDeclaration],
-    ) -> Result<(), ()> {
-        if !self.syntax_exports.is_empty()
-            || declarations
-                .iter()
-                .any(|declaration| declaration.span.source() != self.span.source())
-        {
-            return Err(());
-        }
-        let mut exports = Vec::new();
-        exports
-            .try_reserve_exact(declarations.len())
-            .map_err(|_| ())?;
-        exports.extend(declarations.iter().cloned().map(Arc::new));
-        self.syntax_exports = exports.into_boxed_slice();
-        Ok(())
-    }
-
-    pub(crate) fn syntax_exports(&self) -> &[Arc<crate::surface::SurfaceSyntaxDeclaration>] {
-        &self.syntax_exports
-    }
-
-    pub(crate) fn retain_syntax_imports(
-        &mut self,
-        imports: Arc<[crate::syntax::SelectedSyntax]>,
-    ) -> Result<(), ()> {
-        if !self.syntax_imports.is_empty()
-            || imports
-                .iter()
-                .any(|selection| selection.import_span.source() != self.span.source())
-        {
-            return Err(());
-        }
-        self.syntax_imports = imports;
-        Ok(())
-    }
-
-    pub(crate) fn syntax_imports(&self) -> &[crate::syntax::SelectedSyntax] {
-        &self.syntax_imports
-    }
-
-    pub(crate) fn syntax_grants(&self) -> &[Arc<crate::resolve::SyntaxGrant>] {
-        &self.syntax_grants
-    }
-
-    #[cfg(test)]
-    pub(crate) fn replace_syntax_grants_for_test(
-        &mut self,
-        grants: Vec<Arc<crate::resolve::SyntaxGrant>>,
-    ) {
-        self.syntax_grants = grants.into_boxed_slice();
-    }
-
     #[cfg(test)]
     pub(crate) fn typed_fragment_for_test(&self) -> Option<&crate::elaborate::CheckedTypedModule> {
         self.typed_fragment.as_ref()
@@ -2135,7 +2060,6 @@ impl CheckedModule {
             interface_facts: std::mem::take(&mut self.interface_facts),
             implementation_facts: std::mem::take(&mut self.implementation_facts),
             typed_fragment: self.typed_fragment.take(),
-            syntax_grants: std::mem::take(&mut self.syntax_grants),
             local_lowering,
             span: self.span,
             shared_owner: None,
@@ -2178,7 +2102,6 @@ pub struct ResolvedModuleGroup {
     interface_facts: Box<[SharedCheckedInterfaceFact]>,
     implementation_facts: Box<[CheckedImplementationFact]>,
     typed_fragment: Option<crate::elaborate::CheckedTypedModule>,
-    syntax_grants: Box<[Arc<crate::resolve::SyntaxGrant>]>,
     local_lowering: Option<crate::elaborate::SharedModuleLowering>,
     span: Span,
     // A compile-time link borrows the same checked owner needed by final linking.
@@ -2226,7 +2149,6 @@ impl ResolvedModuleGroup {
             interface_facts: Box::new([]),
             implementation_facts: Box::new([]),
             typed_fragment: None,
-            syntax_grants: Box::new([]),
             local_lowering,
             span: owner.span,
             shared_owner: Some(owner),
@@ -2241,12 +2163,6 @@ impl ResolvedModuleGroup {
             .as_ref()
             .and_then(|owner| owner.typed_fragment.as_ref())
             .or(self.typed_fragment.as_ref())
-    }
-
-    pub(crate) fn syntax_grants(&self) -> &[Arc<crate::resolve::SyntaxGrant>] {
-        self.shared_owner
-            .as_ref()
-            .map_or(&self.syntax_grants, |owner| owner.syntax_grants())
     }
 
     #[cfg(test)]
@@ -15044,15 +14960,14 @@ fn retain_checked_registries<M: Borrow<CheckedModule>>(
             if displaced.is_some() {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
-            if let Some(order) = registry.generated_parameter_orders.get(&nominal.id) {
-                if order.owner() != nominal.id
+            if let Some(order) = registry.generated_parameter_orders.get(&nominal.id)
+                && (order.owner() != nominal.id
                     || builder
                         .generated_parameter_orders
                         .insert(nominal.id, Arc::clone(order))
-                        .is_some()
-                {
-                    return Err(ResolvedBuildFailure::InvalidState);
-                }
+                        .is_some())
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
             }
             builder.lexical_nominals.0.push(retained);
 
@@ -18490,7 +18405,6 @@ impl ResolvedType {
 pub struct ResolvedTypeProvenance {
     nodes: Arc<[ResolvedTypeProvenanceNode]>,
     root: usize,
-    syntax_grants: Option<Arc<[(usize, Arc<crate::resolve::SyntaxGrant>)]>>,
 }
 
 /// One node in a resolved type-provenance arena.
@@ -18536,19 +18450,6 @@ impl ResolvedTypeProvenance {
         Self {
             nodes: nodes.into(),
             root,
-            syntax_grants: None,
-        }
-    }
-
-    pub(crate) fn with_syntax_grants(
-        nodes: Vec<ResolvedTypeProvenanceNode>,
-        root: usize,
-        grants: Vec<(usize, Arc<crate::resolve::SyntaxGrant>)>,
-    ) -> Self {
-        Self {
-            nodes: nodes.into(),
-            root,
-            syntax_grants: (!grants.is_empty()).then(|| grants.into()),
         }
     }
 
@@ -18589,9 +18490,7 @@ impl ResolvedTypeProvenance {
     /// Returns a paid shared construction-provenance view, without source authority.
     pub(crate) fn image_view(&self, root: usize, work: &mut TypeWorkBudget) -> Result<Self, ()> {
         work.charge(1)?;
-        let mut view = self.view(root).ok_or(())?;
-        view.syntax_grants = None;
-        Ok(view)
+        self.view(root).ok_or(())
     }
 
     fn view(&self, root: usize) -> Option<Self> {
@@ -18599,16 +18498,7 @@ impl ResolvedTypeProvenance {
         Some(Self {
             nodes: Arc::clone(&self.nodes),
             root,
-            syntax_grants: self.syntax_grants.clone(),
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn syntax_grant_at(&self, node: usize) -> Option<&Arc<crate::resolve::SyntaxGrant>> {
-        self.syntax_grants
-            .as_deref()?
-            .iter()
-            .find_map(|(index, grant)| (*index == node).then_some(grant))
     }
 
     pub(crate) fn nodes(&self) -> &[ResolvedTypeProvenanceNode] {
@@ -18872,8 +18762,6 @@ pub struct ResolvedInterfaceOccurrence {
     pub spelling: String,
     /// Causal source provenance.
     pub origin: Origin,
-    /// Authorization retained only for an actual definition-context selection.
-    pub(crate) syntax_grant: Option<Arc<crate::resolve::SyntaxGrant>>,
 }
 
 /// One ordered source argument for a resource, effect, or interface owner.
@@ -19814,8 +19702,6 @@ pub struct ResolvedEffectInstance {
     pub origin: Origin,
     /// Complete instance span.
     pub span: Span,
-    /// Authorization retained only for an actual definition-context selection.
-    pub(crate) syntax_grant: Option<Arc<crate::resolve::SyntaxGrant>>,
 }
 
 /// One resolved operation request.
@@ -19967,8 +19853,6 @@ pub struct ResolvedConstructorOccurrence {
     pub spelling: String,
     /// Causal source provenance.
     pub origin: Origin,
-    /// Authorization retained only for an actual definition-context selection.
-    pub(crate) syntax_grant: Option<Arc<crate::resolve::SyntaxGrant>>,
 }
 
 /// A resolved structured match.
@@ -20922,7 +20806,6 @@ mod tests {
                         .expect("span"),
                 ),
                 import_span: None,
-                syntax_grant: None,
                 evidence: Box::new([]),
             }),
             span: file
@@ -21065,7 +20948,6 @@ mod tests {
                 spelling: "x".to_owned(),
                 origin: Origin::Source(span),
                 import_span: None,
-                syntax_grant: None,
                 evidence: Box::new([]),
             }),
             span,
@@ -21115,7 +20997,6 @@ mod tests {
                                 id: interface,
                                 spelling: "Nested".to_owned(),
                                 origin: Origin::Source(span),
-                                syntax_grant: None,
                             },
                             arguments: Box::new([ResolvedType {
                                 ty: Type::Nominal(NominalTypeId::lexical(module, 0)),
@@ -21453,9 +21334,6 @@ mod tests {
             implementation_facts: Box::new([]),
             exports: summary,
             typed_fragment: None,
-            syntax_exports: Box::new([]),
-            syntax_imports: Arc::from([]),
-            syntax_grants: Box::new([]),
             span,
         };
         let checked = [checked];
@@ -24383,7 +24261,6 @@ mod tests {
                 interface_facts,
                 implementation_facts,
                 typed_fragment,
-                syntax_grants,
                 local_lowering,
                 span,
                 shared_owner,
@@ -24405,7 +24282,6 @@ mod tests {
                 interface_facts,
                 implementation_facts,
                 typed_fragment,
-                syntax_grants,
                 local_lowering,
                 span,
                 shared_owner,
@@ -24602,9 +24478,6 @@ mod tests {
             implementation_facts: Box::new([]),
             exports: ExportSummary::empty(module),
             typed_fragment: None,
-            syntax_exports: Box::new([]),
-            syntax_imports: Arc::from([]),
-            syntax_grants: Box::new([]),
             span,
         }]
     }
@@ -24924,9 +24797,6 @@ mod tests {
             implementation_facts: vec![implementation].into_boxed_slice(),
             exports: ExportSummary::empty(module),
             typed_fragment: None,
-            syntax_exports: Box::new([]),
-            syntax_imports: Arc::from([]),
-            syntax_grants: Box::new([]),
             span,
         }]
     }
@@ -25184,9 +25054,6 @@ mod tests {
             implementation_facts: Box::new([]),
             exports: ExportSummary::empty(module),
             typed_fragment: None,
-            syntax_exports: Box::new([]),
-            syntax_imports: Arc::from([]),
-            syntax_grants: Box::new([]),
             span,
         }
     }
@@ -30535,7 +30402,6 @@ mod tests {
                 implementation_facts: Box::new([]),
                 exports,
                 typed_fragment: None,
-                syntax_grants: Box::new([]),
             },
         )
     }
@@ -30645,7 +30511,6 @@ mod tests {
                     id: interface,
                     spelling: "Show".into(),
                     origin: Origin::Source(span),
-                    syntax_grant: None,
                 },
                 arguments: vec![
                     ResolvedType {
@@ -30752,7 +30617,6 @@ mod tests {
                 implementation_facts: Box::new([]),
                 exports,
                 typed_fragment: None,
-                syntax_grants: Box::new([]),
             },
         );
         let definition_kind_address =
@@ -30940,7 +30804,6 @@ mod tests {
                             id: InterfaceId::new(module, 0),
                             spelling: "Deep".into(),
                             origin: Origin::Source(span),
-                            syntax_grant: None,
                         },
                         arguments: vec![
                             ResolvedType {
@@ -31801,7 +31664,6 @@ mod tests {
                     id: InterfaceId::new(module, 0),
                     spelling: "Local".to_owned(),
                     origin: Origin::Source(span),
-                    syntax_grant: None,
                 },
                 arguments: vec![
                     ResolvedType {

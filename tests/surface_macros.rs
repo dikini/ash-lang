@@ -33,6 +33,18 @@ fn imported_templates_and_ash_transformer_run_through_the_driver() {
 }
 
 #[test]
+fn definition_context_keeps_private_helpers_and_types_through_linking() {
+    for path in [
+        "core-authority/entry.ash",
+        "definition-constructor/entry.ash",
+        "definition-nominal/entry.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+}
+
+#[test]
 fn template_macro_preserves_expression_capture_grouping() {
     let compiled = compile_path(fixture("template-only/entry.ash"))
         .expect("the imported template graph compiles");
@@ -50,22 +62,17 @@ fn qualified_names_follow_the_captured_or_defining_alias_context() {
         "qualified-capture/term_owner.ash",
         "qualified-capture/constructor_owner.ash",
         "qualified-capture/constructor_caller.ash",
+        "qualified-capture/unused_missing_alias.ash",
+        "qualified-capture/unused_missing_operand.ash",
+        "qualified-capture/unused_missing_argument.ash",
     ] {
         let compiled = compile_path(fixture(path)).expect(path);
         assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
     }
     for (path, reason) in [
         (
-            "qualified-capture/unused_missing_alias.ash",
+            "qualified-capture/invoked_missing_alias.ash",
             "resolve.unavailable-export",
-        ),
-        (
-            "qualified-capture/unused_missing_operand.ash",
-            "resolve.unknown-name",
-        ),
-        (
-            "qualified-capture/unused_missing_argument.ash",
-            "resolve.unknown-type",
         ),
         (
             "qualified-capture/withheld_member.ash",
@@ -108,32 +115,24 @@ fn qualified_effects_follow_their_alias_context() {
         "qualified-effect/facade.ash",
         "qualified-effect/both_captured.ash",
         "qualified-effect/parameterized.ash",
+        "qualified-effect/missing_operation.ash",
+        "qualified-effect/missing_alias.ash",
+        "qualified-effect/missing_operand.ash",
+        "qualified-effect/missing_argument.ash",
     ] {
         let compiled = compile_path(fixture(path)).expect(path);
         assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
     }
     for (path, reason) in [
+        (
+            "qualified-effect/invoked_missing_operation.ash",
+            "resolve.unknown-name",
+        ),
         ("qualified-effect/private.ash", "effect.unknown"),
         ("qualified-effect/wrong_kind.ash", "effect.kind"),
         (
             "qualified-effect/lowercase_effect.ash",
             "parse.expected-operand",
-        ),
-        (
-            "qualified-effect/missing_operation.ash",
-            "resolve.unknown-name",
-        ),
-        (
-            "qualified-effect/missing_alias.ash",
-            "resolve.unavailable-export",
-        ),
-        (
-            "qualified-effect/missing_operand.ash",
-            "resolve.unknown-name",
-        ),
-        (
-            "qualified-effect/missing_argument.ash",
-            "resolve.unknown-type",
         ),
     ] {
         let failure = compile_path(fixture(path)).expect_err(path);
@@ -185,30 +184,22 @@ fn captured_qualified_interfaces_use_the_alias_context() {
         "qualified-interface/manual.ash",
         "qualified-interface/caller.ash",
         "qualified-interface/owner.ash",
+        "qualified-interface/missing_alias.ash",
+        "qualified-interface/missing_argument.ash",
+        "qualified-interface/missing_body.ash",
+        "qualified-interface/pattern_escape.ash",
     ] {
         let compiled = compile_path(fixture(path)).expect(path);
         assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
     }
     for (path, reason) in [
         (
+            "qualified-interface/invoked_missing_body.ash",
+            "resolve.unknown-name",
+        ),
+        (
             "qualified-interface/wrong_kind.ash",
             "resolve.interface-kind",
-        ),
-        (
-            "qualified-interface/missing_alias.ash",
-            "resolve.unavailable-export",
-        ),
-        (
-            "qualified-interface/missing_argument.ash",
-            "resolve.unknown-type",
-        ),
-        (
-            "qualified-interface/missing_body.ash",
-            "resolve.unknown-name",
-        ),
-        (
-            "qualified-interface/pattern_escape.ash",
-            "resolve.unknown-name",
         ),
     ] {
         let failure = compile_path(fixture(path)).expect_err(path);
@@ -222,19 +213,16 @@ fn captured_effect_inside_an_owner_row_argument_uses_the_caller_effect() {
         "row-argument/manual.ash",
         "row-argument/entry.ash",
         "row-argument/owner_entry.ash",
+        "row-argument/missing_member.ash",
+        "row-argument/missing_member_first.ash",
+        "row-argument/missing_argument.ash",
     ] {
         let compiled = compile_path(fixture(path)).expect(path);
         assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
     }
-    for (path, reason) in [
-        ("row-argument/missing_member.ash", "effect.unknown"),
-        ("row-argument/missing_member_first.ash", "effect.unknown"),
-        ("row-argument/missing_argument.ash", "resolve.unknown-type"),
-        ("row-argument/wrong_kind.ash", "effect.kind"),
-    ] {
-        let failure = compile_path(fixture(path)).expect_err(path);
-        assert_eq!(failure.reason_code(), reason, "{path}: {failure:?}");
-    }
+    let path = "row-argument/wrong_kind.ash";
+    let failure = compile_path(fixture(path)).expect_err(path);
+    assert_eq!(failure.reason_code(), "effect.kind", "{path}: {failure:?}");
 }
 
 #[test]
@@ -245,12 +233,12 @@ fn captured_row_tails_use_the_callers_contextual_parameter() {
         "row-tail/manual_row.ash",
         "row-tail/entry_row.ash",
         "row-tail/entry_forwarded.ash",
+        "row-tail/missing_literal.ash",
     ] {
         let compiled = compile_path(fixture(path)).expect(path);
         assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
     }
     for path in [
-        "row-tail/missing_literal.ash",
         "row-tail/missing_actual.ash",
         "row-tail/entry_introduced_miss.ash",
     ] {
@@ -273,22 +261,20 @@ fn captured_pattern_constructors_keep_their_lookup_context() {
         "captured-pattern/entry_name.ash",
         "captured-pattern/manual_nullary.ash",
         "captured-pattern/entry_nullary.ash",
+        "captured-pattern/missing_alias.ash",
+        "captured-pattern/missing_payload.ash",
+        "captured-pattern/duplicate.ash",
+        "captured-pattern/binder_escape.ash",
     ] {
         let compiled = compile_path(fixture(path)).expect(path);
         assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
     }
     for (path, reason) in [
-        ("captured-pattern/opaque.ash", "resolve.opaque-constructor"),
         (
-            "captured-pattern/missing_alias.ash",
-            "resolve.unavailable-export",
-        ),
-        (
-            "captured-pattern/missing_payload.ash",
+            "captured-pattern/invoked_missing_payload.ash",
             "resolve.unknown-constructor",
         ),
-        ("captured-pattern/duplicate.ash", "pattern.duplicate-binder"),
-        ("captured-pattern/binder_escape.ash", "resolve.unknown-name"),
+        ("captured-pattern/opaque.ash", "resolve.opaque-constructor"),
         (
             "captured-pattern/entry_duplicate.ash",
             "pattern.duplicate-binder",
@@ -1053,19 +1039,17 @@ fn template_continuations_use_the_actual_handler_capability() {
 }
 
 #[test]
-fn unused_template_checks_direct_names_but_defers_nested_syntax() {
+fn template_names_are_checked_when_expanded() {
     for path in [
         "template-admission/missing/entry.ash",
         "template-admission/missing_nested/entry.ash",
     ] {
-        let failure = compile_path(fixture(path))
-            .expect_err("an unused template cannot name a missing defining-module helper");
-        assert_eq!(
-            failure.reason_code(),
-            "resolve.unknown-name",
-            "{path}: {failure:?}"
-        );
+        let compiled = compile_path(fixture(path)).expect("unused names need no lookup");
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
     }
+    let failure = compile_path(fixture("template-admission/missing/invoked.ash"))
+        .expect_err("expansion cannot resolve a missing helper through the caller");
+    assert_eq!(failure.reason_code(), "resolve.unknown-name");
     for path in [
         "template-admission/good/entry.ash",
         "template-admission/good/reuse.ash",
@@ -1387,19 +1371,16 @@ fn template_captured_identifier_applies_a_caller_type_constructor() {
     let compiled = compile_path(fixture("template-annotation/captured/applied.ash"))
         .expect("captured type constructors use caller syntax");
     assert_eq!(execute(&compiled).unwrap().value_display(), "42");
-    for (path, expected) in [
-        (
-            "template-annotation/captured/applied_wrong.ash",
-            "type.binding-initializer",
-        ),
-        (
-            "template-annotation/captured/applied_missing.ash",
-            "resolve.unknown-type",
-        ),
-    ] {
-        let failure = compile_path(fixture(path)).expect_err(path);
-        assert_eq!(failure.reason_code(), expected, "{path}: {failure:?}");
-    }
+    let unused = compile_path(fixture("template-annotation/captured/applied_missing.ash"))
+        .expect("an unused template does not resolve the missing type");
+    assert_eq!(execute(&unused).unwrap().value_display(), "42");
+    let path = "template-annotation/captured/applied_wrong.ash";
+    let failure = compile_path(fixture(path)).expect_err(path);
+    assert_eq!(
+        failure.reason_code(),
+        "type.binding-initializer",
+        "{path}: {failure:?}"
+    );
 }
 
 #[test]
@@ -1407,19 +1388,13 @@ fn template_captured_identifier_selects_a_caller_effect() {
     for path in [
         "template-perform/captured/entry.ash",
         "template-perform/captured/generic.ash",
+        "template-perform/captured/missing_operand.ash",
+        "template-perform/captured/missing_argument.ash",
     ] {
         let compiled = compile_path(fixture(path)).expect(path);
         assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
     }
     for (path, expected) in [
-        (
-            "template-perform/captured/missing_operand.ash",
-            "resolve.unknown-name",
-        ),
-        (
-            "template-perform/captured/missing_argument.ash",
-            "resolve.unknown-type",
-        ),
         (
             "template-perform/captured/wrong_handler.ash",
             "effect.handler-missing-input",
@@ -1440,21 +1415,18 @@ fn template_captured_identifier_selects_an_effect_operation() {
     for path in [
         "template-perform/captured/operation.ash",
         "template-perform/captured/private.ash",
+        "template-perform/captured/operation_missing_operand.ash",
     ] {
         let compiled = compile_path(fixture(path)).expect(path);
         assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
     }
-    for path in [
-        "template-perform/captured/operation_missing_operand.ash",
-        "template-perform/captured/operation_unknown.ash",
-    ] {
-        let failure = compile_path(fixture(path)).expect_err(path);
-        assert_eq!(
-            failure.reason_code(),
-            "resolve.unknown-name",
-            "{path}: {failure:?}"
-        );
-    }
+    let path = "template-perform/captured/operation_unknown.ash";
+    let failure = compile_path(fixture(path)).expect_err(path);
+    assert_eq!(
+        failure.reason_code(),
+        "resolve.unknown-name",
+        "{path}: {failure:?}"
+    );
     let failure = compile_path(fixture("template-perform/captured/private_direct.ash"))
         .expect_err("the syntax import does not expose its owner's private effect");
     assert_eq!(failure.reason_code(), "effect.unknown");
@@ -1465,39 +1437,22 @@ fn template_captured_identifier_selects_a_handler_effect_or_operation() {
     for path in [
         "template-handler-capture/entry.ash",
         "template-handler-capture/operation.ash",
+        "template-handler-capture/missing_body.ash",
+        "template-handler-capture/missing_handled.ash",
+        "template-handler-capture/missing_store.ash",
+        "template-handler-capture/missing_argument.ash",
+        "template-handler-capture/missing_operation.ash",
     ] {
         let compiled = compile_path(fixture(path)).expect(path);
         assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
     }
-    for (path, expected) in [
-        (
-            "template-handler-capture/operation_unknown.ash",
-            "resolve.unknown-name",
-        ),
-        (
-            "template-handler-capture/missing_body.ash",
-            "resolve.unknown-name",
-        ),
-        (
-            "template-handler-capture/missing_handled.ash",
-            "resolve.unknown-name",
-        ),
-        (
-            "template-handler-capture/missing_store.ash",
-            "resolve.unknown-name",
-        ),
-        (
-            "template-handler-capture/missing_argument.ash",
-            "resolve.unknown-type",
-        ),
-        (
-            "template-handler-capture/missing_operation.ash",
-            "resolve.unknown-name",
-        ),
-    ] {
-        let failure = compile_path(fixture(path)).expect_err(path);
-        assert_eq!(failure.reason_code(), expected, "{path}: {failure:?}");
-    }
+    let path = "template-handler-capture/operation_unknown.ash";
+    let failure = compile_path(fixture(path)).expect_err(path);
+    assert_eq!(
+        failure.reason_code(),
+        "resolve.unknown-name",
+        "{path}: {failure:?}"
+    );
 }
 
 #[test]
@@ -1506,16 +1461,17 @@ fn template_captured_identifier_selects_an_effect_row_member() {
         "template-row-capture/entry.ash",
         "template-row-capture/manual.ash",
         "template-row-capture/local_evidence_unused.ash",
+        "template-row-capture/missing_argument.ash",
+        "template-row-capture/missing_literal.ash",
     ] {
         let compiled = compile_path(fixture(path)).expect(path);
         assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
     }
     for (path, reason) in [
         (
-            "template-row-capture/missing_argument.ash",
-            "resolve.unknown-type",
+            "template-row-capture/invoked_missing_literal.ash",
+            "effect.unknown",
         ),
-        ("template-row-capture/missing_literal.ash", "effect.unknown"),
         ("template-row-capture/unknown_actual.ash", "effect.unknown"),
         (
             "template-row-capture/wrong_actual.ash",
@@ -1544,6 +1500,7 @@ fn template_local_evidence_uses_its_owners_private_interface() {
         "template-private-evidence/targeted_entry.ash",
         "template-private-evidence/targeted_shadow.ash",
         "template-private-evidence/alias_entry.ash",
+        "template-private-evidence/local_shadow.ash",
     ] {
         let compiled = compile_path(fixture(path)).expect(path);
         assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");

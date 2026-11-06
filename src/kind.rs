@@ -8057,7 +8057,6 @@ mod tests {
                 id: interface,
                 spelling: "Relation".into(),
                 origin: Origin::Source(span),
-                syntax_grant: None,
             },
             arguments: (0..argument_count)
                 .map(|_| fact_type(Type::Int, span).into())

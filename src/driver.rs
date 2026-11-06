@@ -699,7 +699,7 @@ impl Error for PipelineFailure {}
 /// attaches sources, by moving them after a compile-time failure.
 #[derive(Debug)]
 pub struct PipelineDiagnostic {
-    compilation_work: crate::compiler_work::CompilationWork,
+    compilation_work: Box<crate::compiler_work::CompilationWork>,
     failure: Box<PipelineFailure>,
     sources: Box<[SourceFile]>,
 }
@@ -758,7 +758,7 @@ impl FileFailure {
     #[must_use]
     pub fn compilation_work(&self) -> Option<&crate::compiler_work::CompilationWork> {
         match self {
-            Self::Pipeline(context) => Some(&context.compilation_work),
+            Self::Pipeline(context) => Some(context.compilation_work.as_ref()),
             Self::Graph(context) => context.compilation_work(),
             _ => None,
         }
@@ -1445,7 +1445,8 @@ where
     ) -> ModularEffectCoreResult,
 {
     let mut checked: Vec<Arc<crate::resolved::CheckedModule>> = Vec::with_capacity(input.len());
-    let mut checked_syntax_imports = Vec::<Arc<[crate::syntax::SelectedSyntax]>>::new();
+    let mut checked_syntax = Vec::<Vec<crate::surface::SurfaceSyntaxDeclaration>>::new();
+    let mut checked_syntax_imports = Vec::<Vec<crate::syntax::SelectedSyntax>>::new();
     let mut checked_syntax_terms = Vec::<crate::syntax::SyntaxOwnerBindings>::new();
     let mut checked_by_module: HashMap<ModuleId, usize> = HashMap::with_capacity(input.len());
     let mut transformer_entries = HashMap::<
@@ -1514,11 +1515,10 @@ where
                     {
                         return Err(internal_file_failure());
                     }
-                    let declaration = checked
+                    let declaration = checked_syntax
                         .get(index)
-                        .and_then(|owner| {
-                            owner
-                                .syntax_exports()
+                        .and_then(|exports| {
+                            exports
                                 .iter()
                                 .find(|declaration| declaration.name.text == name.text)
                         })
@@ -1561,12 +1561,13 @@ where
         check_loaded_module(|| -> Result<(), FileFailure> {
             let contexts =
                 crate::syntax::SyntaxContexts::new(&selected, &checked_syntax_imports, &[]);
-            let mut admissions = Vec::new();
             for declaration in &module.surface().syntax_declarations {
-                match crate::syntax::template_for_admission(declaration, module.source(), &contexts)
-                {
-                    Ok(Some(admission)) => admissions.push(admission),
-                    Ok(None) => {}
+                match crate::syntax::validate_template_syntax(
+                    declaration,
+                    module.source(),
+                    &contexts,
+                ) {
+                    Ok(()) => {}
                     Err(crate::parser::MacroParseFailure::Syntax {
                         diagnostics,
                         resource,
@@ -1697,17 +1698,15 @@ where
                     let dependency = checked_by_module
                         .get(&edge.target())
                         .and_then(|index| checked.get(*index))
-                        .ok_or(PipelineFailure::Typing(TypeError::Internal(
-                            crate::elaborate::ElaborationFailure::InvalidState,
-                        )))?;
-                    DependencyExports::new(edge, dependency.exports()).map_err(|_| {
-                        PipelineFailure::Typing(TypeError::Internal(
-                            crate::elaborate::ElaborationFailure::InvalidState,
-                        ))
-                    })
+                        .ok_or(())?;
+                    DependencyExports::new(edge, dependency.exports()).map_err(|_| ())
                 })
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(FileFailure::from)?;
+                .map_err(|()| {
+                    FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                        crate::elaborate::ElaborationFailure::InvalidState,
+                    )))
+                })?;
             let resolution_phase = crate::calibration::Phase::start("resolution");
             let resolved = crate::resolve::resolve_module_with_syntax(
                 module,
@@ -1717,12 +1716,10 @@ where
                 &[],
                 &checked,
                 &checked_syntax_terms,
-                &admissions,
                 Some(&mut syntax_expansion),
             );
             let template_parse_failure = syntax_expansion.take_parse_failure();
             drop(syntax_expansion);
-            drop(transformer);
             if let Some(failure) = template_parse_failure {
                 return Err(FileFailure::from(PipelineFailure::SyntaxParse(failure)));
             }
@@ -1764,7 +1761,7 @@ where
                 })?,
             ));
             let rewrite_work = Some(TypeWorkBudget::with_limit(rewrite_limit));
-            let mut checked_module = if select_effect_core {
+            let checked_module = if select_effect_core {
                 crate::elaborate::check_module_in_effect_profile_with_rewrite_work(
                     resolved,
                     &mut checking_type_work,
@@ -1803,9 +1800,6 @@ where
                     crate::resolve::invalid_syntax_transformer(span),
                 ))
             })?;
-            checked_module
-                .retain_syntax_exports(&module.surface().syntax_declarations)
-                .map_err(|()| internal_file_failure())?;
             let syntax_terms = if module.surface().syntax_declarations.is_empty() {
                 crate::syntax::SyntaxOwnerBindings::empty(checked_module.module())
             } else {
@@ -1821,11 +1815,8 @@ where
                     )))
                 })?
             };
-            let selected: Arc<[crate::syntax::SelectedSyntax]> = selected.into();
-            checked_module
-                .retain_syntax_imports(Arc::clone(&selected))
-                .map_err(|()| internal_file_failure())?;
             checked_by_module.insert(module.id(), checked.len());
+            checked_syntax.push(module.surface().syntax_declarations.clone());
             checked_syntax_imports.push(selected);
             checked_syntax_terms.push(syntax_terms);
             checked.push(Arc::new(checked_module));

@@ -31,7 +31,7 @@ The selected alternatives are:
 | Keyword-led syntax with explicit imports | Provides unmarked DSL notation. A reserved leading spelling and restricted matchers bound ambiguity; some ordinary names need import renaming. |
 | Context-bearing tokens, groups, and protected expression fragments | Preserves binding, origins, and grouping without publishing the compiler AST. Requires an Ash-defined interchange and host adapter. |
 | Templates and Ash procedures together | Supports substitutions and computed transformations under one contract. Requires a checked-Ash execution bridge in the first slice. |
-| Scope sets with authenticated definition references | Handles caller binders and definition-site helpers across namespaces. Requires an expansion-aware lexical walk and reference authorization. |
+| Scope sets with checked definition-context lookup | Handles caller binders and definition-site helpers across namespaces. Requires expansion-aware lexical resolution. |
 
 A mandatory punctuation-marked invocation would simplify parsing but would not
 meet the natural-syntax goal. Arbitrary grammar callbacks would admit more DSLs
@@ -307,13 +307,12 @@ from a nonempty ordered origin list and retains the current expansion frame.
 Every output node receives that frame even when it preserves an input's
 primary source origin.
 
-Handles are valid within their issuing compilation and carry their authority
-chain. Raw numbers, pointers, serializations, and source spans cannot recreate
-them. Output admission rejects stale or foreign-compilation handles. The first
-slice exposes no raw scope IDs, identity ordering, binding-equivalence query,
-or API for minting an authorization grant. These omissions keep procedures
-independent of allocation order and avoid pretending an unresolved fragment
-already has final binder identity.
+Handles are valid within their issuing invocation and compilation. Raw numbers,
+pointers, serializations, and source spans cannot recreate them. Output
+admission rejects stale or foreign-compilation handles. The first slice exposes no raw scope IDs,
+identity ordering, or binding-equivalence query. These omissions keep
+procedures independent of allocation order and avoid pretending an unresolved
+fragment already has final binder identity.
 
 The usual transformer signature is `Input -> MacroResult ! {Ops}`, including
 implicit default allocation. Admission requires an unconstrained, monomorphic
@@ -421,22 +420,22 @@ not choose an arbitrary capture's context or replace mixed contexts with one.
 
 ## Definition references, authority, and linking
 
-Templates are parsed at definition time using category-correct placeholders.
-Literal local binders and references can be classified there; literal free
-references must resolve in the defining module's checked environment. A missing
-free helper is a definition error even if a caller has a matching name.
-Captured identifier positions and bodies retain their own contexts and wait
-for expansion. Procedurally constructed definition-context names resolve after
-the generated binding structure is known; missing names then report the
-invocation and construction origin.
+Templates are parsed for syntactic validity at definition time using
+category-correct placeholders, without resolving free names. When expanded,
+literal free references resolve in the defining module's checked environment
+after generated binding structure is known; a missing or inaccessible name
+then fails ordinary resolution even if a caller has a matching name. Unused
+templates do not fail for unresolved names. Captured identifiers and
+expressions retain their contexts, and introduced local binders retain ordinary
+hygiene. Procedurally constructed definition-context names use the same
+expansion-time lookup; diagnostics retain invocation and construction causes.
 
-Publishing `pub syntax` authorizes that syntax declaration to use its defining
-module's lexical access. It does not make that whole environment an ordinary
-caller import. For every surviving definition-site reference, the compiler
-retains an authenticated grant tying the syntax export, original declaration,
-allowed namespace/access, and original import route to that occurrence. The
-caller cannot mint or retarget this grant through spelling or an origin handle.
-Nested macros retain the original issuer's grant chain.
+Publishing `pub syntax` permits its definition-context references to use the
+defining module's lexical access. Compiler-issued contexts select that checked
+environment; ordinary resolution checks each actual declaration, namespace,
+access, and import route, then records its identity. Spelling and origin handles
+cannot create definition context. Nested syntax preserves each identifier's
+context. The defining environment does not become an ordinary caller import.
 
 The owner may deliberately publish syntax using a same-module private helper,
 private type, or its own opaque constructor, just as it may publish a helper
@@ -455,8 +454,8 @@ same-spelled alias cannot redirect a definition-site reference.
 Syntax exports retain the checked declaration closure needed to typecheck
 authorized references and the completed executable fragments and dependencies
 needed when those references survive into runtime code. Linking follows the
-grants without placing private names in caller scope. It does not recheck
-dependency bodies, rebuild their evidence, or treat a checked module as
+checked dependencies and fragments without placing private names in caller scope.
+It does not recheck dependency bodies, rebuild their evidence, or treat a checked module as
 independently validated Core. The new linked representation still receives
 independent validation under
 [AD-0007](../../decisions/AD-0007-typed-core-dialects.md).
@@ -481,7 +480,7 @@ generic-cell API reference.
 A syntax-defining module completes ordinary parsing, expansion of its imported
 forms, resolution, typechecking, lowering, selected evidence, and metadata
 before publication. The compiler then publishes its syntax matcher, template
-or transformer identity, definition environment, grants, source origins, and
+or transformer identity, definition environment, source origins, and
 declared dependency closure. An imported module is checked once at that
 boundary, as required by
 [AD-0006](../../decisions/AD-0006-front-end-semantic-boundaries.md).
@@ -529,7 +528,7 @@ interface version, and semantic options, expansion is deterministic modulo
 renaming fresh compiler identities and possible resource exhaustion. Fresh
 identity numbers and host allocation order are not observable through the API.
 Source order fixes expansion and diagnostic order. Alpha-renaming must preserve
-every binder/use and authorization relationship; it cannot change visible
+every binder/use and checked access relationship; it cannot change visible
 spelling, chosen declaration, or source location. Repeat-compilation tests
 compare this equivalence rather than raw handle numbers.
 

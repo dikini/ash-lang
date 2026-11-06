@@ -6677,7 +6677,6 @@ mod tests {
                     id: interface,
                     spelling: "Wide".into(),
                     origin: Origin::Source(span),
-                    syntax_grant: None,
                 },
                 arguments: resolved_arguments,
                 span,
@@ -6907,7 +6906,6 @@ mod tests {
                     id: interface,
                     spelling: "I".into(),
                     origin: Origin::Source(span),
-                    syntax_grant: None,
                 },
                 arguments: vec![ResolvedOwnerArgument {
                     ty: KindedArgument::TypeArg(Type::Int),
@@ -7111,7 +7109,6 @@ mod tests {
                     id: interface,
                     spelling: "I".into(),
                     origin: Origin::Source(span),
-                    syntax_grant: None,
                 },
                 arguments: Box::new([ResolvedOwnerArgument {
                     ty: KindedArgument::TypeArg(argument.clone()),
@@ -7255,7 +7252,6 @@ mod tests {
                             id: interface,
                             spelling: format!("Local{index}"),
                             origin: Origin::Source(span),
-                            syntax_grant: None,
                         },
                         arguments: Box::new([resolved_type]),
                         span,
@@ -7419,7 +7415,6 @@ mod tests {
                     id: interface,
                     spelling: "Relation".into(),
                     origin: Origin::Source(span),
-                    syntax_grant: None,
                 },
                 arguments: vec![resolved_type(Type::Int), resolved_type(Type::Bool)]
                     .into_boxed_slice(),
@@ -7594,7 +7589,6 @@ mod tests {
                         id: interface,
                         spelling: "Relation".into(),
                         origin: Origin::Source(span),
-                        syntax_grant: None,
                     },
                     arguments: if index + 1 == WIDTH {
                         vec![resolved_type(Type::Int), resolved_type(Type::Bool)].into_boxed_slice()
@@ -7614,7 +7608,6 @@ mod tests {
                     id: interface,
                     spelling: "Relation".into(),
                     origin: Origin::Source(span),
-                    syntax_grant: None,
                 },
                 arguments: vec![resolved_type(Type::Int)].into_boxed_slice(),
                 span,
@@ -7800,7 +7793,6 @@ mod tests {
                         id: interface,
                         spelling: "Construct".into(),
                         origin: Origin::Source(span),
-                        syntax_grant: None,
                     },
                     arguments: vec![resolved_type(application(function, Type::Int))]
                         .into_boxed_slice(),
@@ -7815,7 +7807,6 @@ mod tests {
                             id: interface,
                             spelling: "Construct".into(),
                             origin: Origin::Source(span),
-                            syntax_grant: None,
                         },
                         arguments: vec![resolved_type(prerequisite_argument)].into_boxed_slice(),
                         span,

@@ -65,6 +65,7 @@ fn graph_at(entry: &Path, mode: BodyMode, limit: usize) -> Result<HeaderGraph, G
     )
 }
 
+#[allow(clippy::type_complexity)] // Mirrors the inspected graph's module and edge tuples.
 fn graph_shape(
     graph: &ModuleGraph,
 ) -> Vec<(

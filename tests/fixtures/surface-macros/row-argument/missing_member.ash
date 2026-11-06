@@ -1,5 +1,5 @@
 interface Run<Key : Type, Rows : EffectRow> {
-    run : Key -> Int
+    run : (Key, Unit -> Int ! {| Rows}) -> Int ! {| Rows}
 }
 
 pub syntax unused $eff:ident in $body:expr => {

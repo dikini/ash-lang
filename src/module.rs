@@ -1226,19 +1226,19 @@ impl Error for LoadGraphError {}
 pub struct GraphDiagnostic {
     failure: Box<LoadGraphError>,
     sources: Box<[SourceFile]>,
-    compilation_work: Option<crate::compiler_work::CompilationWork>,
+    compilation_work: Option<Box<crate::compiler_work::CompilationWork>>,
 }
 
 impl GraphDiagnostic {
     pub(crate) fn compilation_work(&self) -> Option<&crate::compiler_work::CompilationWork> {
-        self.compilation_work.as_ref()
+        self.compilation_work.as_deref()
     }
 
     pub(crate) fn with_compilation_work(
         mut self,
         work: crate::compiler_work::CompilationWork,
     ) -> Self {
-        self.compilation_work = Some(work);
+        self.compilation_work = Some(Box::new(work));
         self
     }
 

@@ -98,7 +98,8 @@ Ash-authored procedural transformers over a shared binding-aware syntax
 representation. It defines import, parsing, expansion, binding, bridge,
 diagnostic and admission boundaries and required acceptance cases. The slice is
 unimplemented; amended AD-0005 and TASK-0067 now record parser architecture and
-delivery ownership. Where
+delivery ownership. Template syntax is checked at definition; its free names
+resolve in the defining environment when expanded. Where
 an earlier exploratory alternative below differs, CP-0033 and the companion
 state the accepted first slice. The task's M01–M14 cases cover that slice;
 the broader corpus below includes later output categories and transformations.
@@ -405,15 +406,14 @@ a module alias in a distinct syntactic role; its member must be resolved through
 the correct module, not looked up independently by spelling.
 
 This is accepted future behavior, not a claim that Ash already permits exporting
-macros or using private helpers through them. The first slice selects
-authenticated definition-site references: publication authorizes the syntax
-declaration to use its module's lexical access, while each surviving reference
-retains the original declaration, grant and import route. The owner may expose
-its own private helper or opaque operation through syntax as through a public
-helper function. Neither the macro nor its caller gains access to another
-module's withheld members. Ordinary caller source gains no private name.
-Requiring public helpers would avoid this grant channel but would add names to
-the public API solely for expansion. Identity alone is not authorization.
+macros or using private helpers through them. The first slice retains
+compiler-issued definition contexts so ordinary resolution can select the
+defining module's checked environment and enforce its access and import rules.
+The owner may expose its own private helper or opaque operation through syntax
+as through a public helper function. Neither the macro nor its caller gains
+access to another module's withheld members. Ordinary caller source gains no
+private name. Requiring public helpers would add names to the public API solely
+for expansion. Spelling or a diagnostic origin cannot select an environment.
 
 The same concern applies to types, constructors, interfaces, methods, effects
 and operations. Definition-site identity for a method or function also does

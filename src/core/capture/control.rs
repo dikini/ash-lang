@@ -7353,53 +7353,8 @@ impl<'a> Analysis<'a> {
         }
         let last = selected.prefix.last_mut().ok_or(Failure::Invalid)?;
         *last = selected.boundary;
-        let continuation = if resume && selected.prefix.len() == 1 {
-            // Tail resume has no remaining clause computation. Its
-            // consumed owner is an empty return step, not an outside
-            // completion obligation. Keep the captured owners intact.
-            selected.boundary.next
-        } else if matches!(selected.boundary.address, Address::Slot { old: false, .. }) {
-            // A recent address denotes one occurrence. Consuming it is
-            // a move, not a fresh allocation of all its ordinary frames.
-            let address = Address::Slot {
-                region: Region::Active,
-                site: selected.boundary.frame.site(),
-                allocation_context: match selected.boundary.address {
-                    Address::Slot {
-                        allocation_context, ..
-                    } => allocation_context,
-                    _ => return Err(Failure::Invalid),
-                },
-                old: false,
-            };
-            let mut rename = HashMap::new();
-            rename.try_reserve(1).map_err(|_| Failure::Resource)?;
-            rename.insert(address, address.older());
-            next.rename(&rename, budget)?;
-            let mut rename_owner = HashMap::new();
-            rename_owner.try_reserve(1).map_err(|_| Failure::Resource)?;
-            rename_owner.insert(selected.boundary.address, address);
-            charge(budget, next.heap.len())?;
-            for edge in &mut next.heap {
-                if edge.address == selected.boundary.address {
-                    edge.frame = selected.boundary.frame;
-                }
-            }
-            next.rename(&rename_owner, budget)?;
-            next.stack
-        } else {
-            next.copy_segment(
-                state.stack,
-                &selected.prefix,
-                Some(selected.boundary),
-                selected.boundary.next,
-                // The rebound older prefix must not retain the live
-                // original prefix's tail. Repeated completions at this
-                // fixed site still join conservatively within a region.
-                Region::Completion(state.position.code, owner),
-                budget,
-            )?
-        };
+        let continuation =
+            Self::completion_continuation(state, &mut next, &selected, owner, resume, budget)?;
         next.stack = continuation;
         if resume {
             Self::resume_completed_capture(state, &mut next, capture, continuation, budget)?;
@@ -7455,6 +7410,65 @@ impl<'a> Analysis<'a> {
             Self::enqueue(inspection, pending, visited, budget)?;
         }
         Ok(())
+    }
+
+    // Continuation selection's workspace is not needed while closing a capture.
+    #[inline(never)]
+    fn completion_continuation(
+        state: &State,
+        next: &mut State,
+        selected: &Selection,
+        owner: usize,
+        resume: bool,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Address, Failure> {
+        if resume && selected.prefix.len() == 1 {
+            // Tail resume has no remaining clause computation. Its
+            // consumed owner is an empty return step, not an outside
+            // completion obligation. Keep the captured owners intact.
+            Ok(selected.boundary.next)
+        } else if matches!(selected.boundary.address, Address::Slot { old: false, .. }) {
+            // A recent address denotes one occurrence. Consuming it is
+            // a move, not a fresh allocation of all its ordinary frames.
+            let address = Address::Slot {
+                region: Region::Active,
+                site: selected.boundary.frame.site(),
+                allocation_context: match selected.boundary.address {
+                    Address::Slot {
+                        allocation_context, ..
+                    } => allocation_context,
+                    _ => return Err(Failure::Invalid),
+                },
+                old: false,
+            };
+            let mut rename = HashMap::new();
+            rename.try_reserve(1).map_err(|_| Failure::Resource)?;
+            rename.insert(address, address.older());
+            next.rename(&rename, budget)?;
+            let mut rename_owner = HashMap::new();
+            rename_owner.try_reserve(1).map_err(|_| Failure::Resource)?;
+            rename_owner.insert(selected.boundary.address, address);
+            charge(budget, next.heap.len())?;
+            for edge in &mut next.heap {
+                if edge.address == selected.boundary.address {
+                    edge.frame = selected.boundary.frame;
+                }
+            }
+            next.rename(&rename_owner, budget)?;
+            Ok(next.stack)
+        } else {
+            next.copy_segment(
+                state.stack,
+                &selected.prefix,
+                Some(selected.boundary),
+                selected.boundary.next,
+                // The rebound older prefix must not retain the live
+                // original prefix's tail. Repeated completions at this
+                // fixed site still join conservatively within a region.
+                Region::Completion(state.position.code, owner),
+                budget,
+            )
+        }
     }
 
     // Discard does not need the traversal workspace used to restore a resume.

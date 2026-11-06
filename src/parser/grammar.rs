@@ -512,10 +512,10 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
                 parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
             }
             let _ = parser.bump();
-            if let Some(TokenKind::Identifier(name)) = parser.current() {
-                if !names.insert(name.clone()) {
-                    parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
-                }
+            if let Some(TokenKind::Identifier(name)) = parser.current()
+                && !names.insert(name.clone())
+            {
+                parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
             }
             expect_lower_identifier(parser);
             let _ = parser.expect(&TokenKind::Colon, ExpectedForm::Colon);

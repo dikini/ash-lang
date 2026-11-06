@@ -3146,7 +3146,6 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     method_capture_binders: Vec<(crate::interface::LexicalEvidenceId, MethodId, BinderId)>,
     checked_lexical_sources: Vec<CheckedLexicalSource>,
     global_capture_uses: Vec<CheckedGlobalUse>,
-    syntax_grants: Vec<Arc<crate::resolve::SyntaxGrant>>,
 
     implementation_capture_roots: Vec<(BinderId, NodeId)>,
     expected_effect_rows: Vec<EffectRow>,
@@ -3765,7 +3764,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             method_capture_binders: Vec::new(),
             checked_lexical_sources: Vec::new(),
             global_capture_uses: Vec::new(),
-            syntax_grants: Vec::new(),
 
             implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
@@ -3918,7 +3916,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             method_capture_binders: Vec::new(),
             checked_lexical_sources: Vec::new(),
             global_capture_uses: Vec::new(),
-            syntax_grants: Vec::new(),
 
             implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
@@ -4284,7 +4281,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             method_capture_binders: Vec::new(),
             checked_lexical_sources: Vec::new(),
             global_capture_uses: Vec::new(),
-            syntax_grants: Vec::new(),
 
             implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
@@ -5193,7 +5189,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             method_capture_binders: Vec::new(),
             checked_lexical_sources: Vec::new(),
             global_capture_uses: Vec::new(),
-            syntax_grants: Vec::new(),
 
             implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
@@ -17239,6 +17234,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         result
     }
 
+    #[allow(clippy::vec_box)] // Keep diagnostic payloads boxed on small compiler stacks.
     fn elaborate_expression_work<'a>(
         &mut self,
         initial: ElaborationTask<'a>,
@@ -17446,25 +17442,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
     }
 
-    fn retain_syntax_reference_grant(
-        &mut self,
-        grant: Option<&Arc<crate::resolve::SyntaxGrant>>,
-        target: crate::resolve::SyntaxGrantTarget,
-    ) -> Result<(), TypeError> {
-        if let Some(grant) = grant {
-            if grant.target() != target {
-                return Err(invalid_state());
-            }
-            if self.purpose == ElaborationPurpose::ModuleCheck {
-                self.syntax_grants
-                    .try_reserve(1)
-                    .map_err(|_| type_resource())?;
-                self.syntax_grants.push(Arc::clone(grant));
-            }
-        }
-        Ok(())
-    }
-
     fn synthesize_global_occurrence(
         &mut self,
         binder: BinderId,
@@ -17472,10 +17449,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         span: Span,
         context: &TypeContext,
     ) -> Result<TypedNode, TypeError> {
-        self.retain_syntax_reference_grant(
-            occurrence.syntax_grant.as_ref(),
-            crate::resolve::SyntaxGrantTarget::Global(binder),
-        )?;
         let fact = context.fact(binder).ok_or_else(invalid_state)?;
         let rigid = self.monomorphic_recursive.contains(&binder);
         let (ty, arguments, row_arguments) = self.instantiate(fact, rigid, span)?;
@@ -18012,10 +17985,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     )?);
                 }
                 crate::resolved::ResolvedTermName::Method(method) => {
-                    self.retain_syntax_reference_grant(
-                        occurrence.syntax_grant.as_ref(),
-                        crate::resolve::SyntaxGrantTarget::Method(method),
-                    )?;
                     if self.purpose == ElaborationPurpose::FinalSynthesis {
                         values.push(self.synthesize_lowered_method_occurrence(method, occurrence)?);
                     } else {
@@ -18029,10 +17998,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 }
             },
             ResolvedExprKind::Constructor(occurrence) => {
-                self.retain_syntax_reference_grant(
-                    occurrence.syntax_grant.as_ref(),
-                    crate::resolve::SyntaxGrantTarget::Constructor(occurrence.constructor),
-                )?;
                 let constructor = self
                     .registry
                     .constructor(occurrence.constructor)
@@ -21195,21 +21160,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         binder_reason: GeneratedReason,
         mut inference_changed: bool,
     ) -> Result<CheckedPattern, TypeError> {
-        let ResolvedPatternKind::Constructor {
-            constructor: outer,
-            occurrence,
-            ..
-        } = &whole_pattern.kind
-        else {
-            return Err(invalid_state());
-        };
-        if *outer != constructor || occurrence.constructor != constructor {
-            return Err(invalid_state());
-        }
-        self.retain_syntax_reference_grant(
-            occurrence.syntax_grant.as_ref(),
-            crate::resolve::SyntaxGrantTarget::Constructor(constructor),
-        )?;
         let mut expected = IterativeTypeOwner::new(expected);
         let Some(info) = self.registry.constructor(constructor) else {
             return Err(invalid_state());
@@ -25048,7 +24998,6 @@ fn check_module_with_budget_family<
         primary_work,
         rewrite_work,
     )?;
-    elaborator.syntax_grants = resolved.take_syntax_grants();
     let result: Result<_, TypeError> = (|| {
         let interface_facts = checked_interface_facts(
             &resolved,
@@ -25301,7 +25250,6 @@ fn check_module_with_budget_family<
             implementation_facts,
             exports,
             typed_fragment: Some(typed_fragment),
-            syntax_grants: std::mem::take(&mut elaborator.syntax_grants).into_boxed_slice(),
         },
     ))
 }
@@ -25624,17 +25572,6 @@ fn link_checked_modules<M: std::borrow::Borrow<CheckedModule>>(
             return Err(invalid_state());
         }
     }
-    let mut issued_grants = HashSet::new();
-    for module in &modules {
-        let module = module.borrow();
-        for grant in module.syntax_grants() {
-            if !issued_grants.insert(Arc::as_ptr(grant))
-                || !grant.authenticate(module.module(), &modules)
-            {
-                return Err(invalid_state());
-            }
-        }
-    }
     let entry_index = *module_positions.get(&entry).ok_or_else(invalid_state)?;
     let mut reachable = Vec::new();
     reachable
@@ -25670,7 +25607,6 @@ fn link_checked_modules<M: std::borrow::Borrow<CheckedModule>>(
             spelling: main.spelling.clone(),
             origin: main.origin.clone(),
             import_span: None,
-            syntax_grant: None,
             evidence: Box::new([]),
         }),
         span,
@@ -25700,17 +25636,7 @@ fn link_checked_modules<M: std::borrow::Borrow<CheckedModule>>(
         .try_reserve(modules.len())
         .map_err(|_| constraint_resource())?;
     for module in modules {
-        let grants = module.borrow().syntax_grants().to_vec();
-        let group = make_group(module, constraint_work).map_err(|()| constraint_resource())?;
-        if grants.len() != group.syntax_grants().len()
-            || grants
-                .iter()
-                .zip(group.syntax_grants())
-                .any(|(original, retained)| !Arc::ptr_eq(original, retained))
-        {
-            return Err(invalid_state());
-        }
-        groups.push(group);
+        groups.push(make_group(module, constraint_work).map_err(|()| constraint_resource())?);
     }
     Ok(ResolvedModuleProgram::new(
         registry,
@@ -33356,7 +33282,6 @@ mod tests {
                         id: interface,
                         spelling: "Pair".to_owned(),
                         origin: Origin::Source(span),
-                        syntax_grant: None,
                     },
                     arguments: Box::new([
                         ResolvedType {
@@ -34329,7 +34254,6 @@ mod tests {
                         instance: EffectInstance::new(effect, Box::new([])),
                         origin: Origin::Source(span),
                         span,
-                        syntax_grant: None,
                     },
                     operation,
                     spelling: "send".into(),
@@ -42568,7 +42492,6 @@ mod tests {
                         spelling: "deep".to_owned(),
                         origin: Origin::Source(span),
                         import_span: None,
-                        syntax_grant: None,
                         evidence: Box::new([]),
                     }),
                     span,
@@ -43533,7 +43456,6 @@ mod tests {
                         spelling: "ambiguous".to_owned(),
                         origin: Origin::Source(span),
                         import_span: None,
-                        syntax_grant: None,
                         evidence: Box::new([]),
                     }),
                     span,
@@ -43704,7 +43626,6 @@ mod tests {
                         spelling: "deep".to_owned(),
                         origin: Origin::Source(span),
                         import_span: None,
-                        syntax_grant: None,
                         evidence: Box::new([]),
                     }),
                     span,
@@ -43783,7 +43704,6 @@ mod tests {
                         spelling: "deep".to_owned(),
                         origin: Origin::Source(span),
                         import_span: None,
-                        syntax_grant: None,
                         evidence: Box::new([]),
                     }),
                     span,

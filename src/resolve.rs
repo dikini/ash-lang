@@ -1611,6 +1611,7 @@ pub(crate) fn resolve_module_with_budget(
     resolve_module_with_foreign_catalog(loaded, dependencies, type_work, constraint_work, None)
 }
 
+#[allow(clippy::too_many_arguments)] // Checked owners and work ledgers have distinct borrows.
 pub(crate) fn resolve_module_with_syntax<'a>(
     loaded: &LoadedModule,
     dependencies: &[DependencyExports<'_>],
@@ -1619,7 +1620,6 @@ pub(crate) fn resolve_module_with_syntax<'a>(
     uses: &'a [crate::syntax::SyntaxNameUse],
     owners: &'a [Arc<crate::resolved::CheckedModule>],
     terms: &'a [crate::syntax::SyntaxOwnerBindings],
-    admissions: &'a [(SurfaceExpr, Vec<SurfaceName>)],
     expansion: Option<&mut crate::syntax::SyntaxExpansion<'a>>,
 ) -> Result<ResolvedModule, ResolveModuleError> {
     resolve_module_for_catalogue(
@@ -1632,7 +1632,6 @@ pub(crate) fn resolve_module_with_syntax<'a>(
             uses,
             owners,
             terms,
-            admissions,
         }),
         expansion,
     )
@@ -1643,195 +1642,6 @@ struct SyntaxInputs<'a> {
     uses: &'a [crate::syntax::SyntaxNameUse],
     owners: &'a [Arc<crate::resolved::CheckedModule>],
     terms: &'a [crate::syntax::SyntaxOwnerBindings],
-    admissions: &'a [(SurfaceExpr, Vec<SurfaceName>)],
-}
-
-#[derive(Debug, Eq, PartialEq)]
-enum SyntaxGrantRoute {
-    Owner {
-        spelling: String,
-        private: bool,
-    },
-    Imported {
-        route: DirectDependencyRoute,
-        spelling: String,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SyntaxGrantTarget {
-    Global(BinderId),
-    Method(MethodId),
-    Constructor(ConstructorId),
-    Nominal(NominalTypeId),
-    Interface(InterfaceId),
-    Effect(EffectId),
-}
-
-/// One definition-context selection, issued by resolution and checked at link.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct SyntaxGrant {
-    export: Arc<crate::surface::SurfaceSyntaxDeclaration>,
-    occurrence_module: ModuleId,
-    issuer: ModuleId,
-    syntax_import: DirectDependencyRoute,
-    target: SyntaxGrantTarget,
-    route: SyntaxGrantRoute,
-}
-
-impl SyntaxGrant {
-    pub(crate) const fn target(&self) -> SyntaxGrantTarget {
-        self.target
-    }
-
-    pub(crate) fn authenticate<M: std::borrow::Borrow<crate::resolved::CheckedModule>>(
-        &self,
-        occurrence_module: ModuleId,
-        modules: &[M],
-    ) -> bool {
-        let owner = modules
-            .iter()
-            .map(std::borrow::Borrow::borrow)
-            .find(|module| module.module() == self.issuer);
-        let Some(owner) = owner else { return false };
-        if self.occurrence_module != occurrence_module
-            || self.syntax_import.target() != self.issuer
-            || !owner
-                .syntax_exports()
-                .iter()
-                .any(|export| Arc::ptr_eq(export, &self.export))
-            || !modules
-                .iter()
-                .map(std::borrow::Borrow::borrow)
-                .any(|module| {
-                    module.span().source() == self.syntax_import.import_span().source()
-                        && module.direct_dependencies().contains(&self.syntax_import)
-                        && module.syntax_imports().iter().any(|selection| {
-                            selection.import_span == self.syntax_import.import_span()
-                                && Arc::ptr_eq(&selection.declaration, &self.export)
-                        })
-                })
-        {
-            return false;
-        }
-        match (&self.route, self.target) {
-            (SyntaxGrantRoute::Owner { spelling, private }, SyntaxGrantTarget::Global(binder)) => {
-                owner
-                    .schemes()
-                    .iter()
-                    .any(|scheme| scheme.binder == binder && scheme.spelling == *spelling)
-                    && (owner
-                        .exports()
-                        .term(spelling)
-                        .is_none_or(|term| term.binder != binder)
-                        == *private)
-            }
-            (SyntaxGrantRoute::Owner { spelling, private }, SyntaxGrantTarget::Method(method)) => {
-                method.interface().module() == owner.module()
-                    && owner.interface_facts().iter().any(|fact| {
-                        fact.id == method.interface()
-                            && fact
-                                .methods
-                                .iter()
-                                .any(|item| item.id == method && item.spelling == *spelling)
-                    })
-                    && ((owner.exports().method(spelling) != Some(method)) == *private)
-            }
-            (
-                SyntaxGrantRoute::Owner { spelling, private },
-                SyntaxGrantTarget::Constructor(constructor),
-            ) => {
-                !constructor.owner().is_lexical()
-                    && constructor.owner().module() == owner.module()
-                    && owner
-                        .registry()
-                        .constructor(constructor)
-                        .is_some_and(|fact| {
-                            fact.owner == constructor.owner() && fact.spelling == *spelling
-                        })
-                    && (owner
-                        .exports()
-                        .constructor(spelling)
-                        .is_none_or(|fact| fact.id != constructor)
-                        == *private)
-            }
-            (
-                SyntaxGrantRoute::Owner { spelling, private },
-                SyntaxGrantTarget::Nominal(nominal),
-            ) => {
-                !nominal.is_lexical()
-                    && nominal.module() == owner.module()
-                    && owner
-                        .registry()
-                        .nominal(nominal)
-                        .is_some_and(|fact| fact.spelling == *spelling)
-                    && (owner
-                        .exports()
-                        .nominal(spelling)
-                        .is_none_or(|fact| fact.id != nominal)
-                        == *private)
-            }
-            (
-                SyntaxGrantRoute::Owner { spelling, private },
-                SyntaxGrantTarget::Interface(interface),
-            ) => {
-                interface.module() == owner.module()
-                    && owner
-                        .interface_facts()
-                        .iter()
-                        .any(|fact| fact.id == interface && fact.spelling == *spelling)
-                    && (owner
-                        .exports()
-                        .interface(spelling)
-                        .is_none_or(|fact| fact.id != interface)
-                        == *private)
-            }
-            (SyntaxGrantRoute::Owner { spelling, private }, SyntaxGrantTarget::Effect(effect)) => {
-                effect.module() == owner.module()
-                    && owner
-                        .effects()
-                        .iter()
-                        .any(|fact| fact.id == effect && fact.spelling == *spelling)
-                    && (owner
-                        .exports()
-                        .effect(spelling)
-                        .is_none_or(|fact| fact.id != effect)
-                        == *private)
-            }
-            (SyntaxGrantRoute::Imported { route, spelling }, target) => {
-                owner.direct_dependencies().contains(route)
-                    && modules
-                        .iter()
-                        .map(std::borrow::Borrow::borrow)
-                        .find(|module| module.module() == route.target())
-                        .is_some_and(|module| match target {
-                            SyntaxGrantTarget::Global(binder) => module
-                                .exports()
-                                .term(spelling)
-                                .is_some_and(|term| term.binder == binder),
-                            SyntaxGrantTarget::Method(method) => {
-                                module.exports().method(spelling) == Some(method)
-                            }
-                            SyntaxGrantTarget::Constructor(constructor) => module
-                                .exports()
-                                .constructor(spelling)
-                                .is_some_and(|fact| fact.id == constructor),
-                            SyntaxGrantTarget::Nominal(nominal) => module
-                                .exports()
-                                .nominal(spelling)
-                                .is_some_and(|fact| fact.id == nominal),
-                            SyntaxGrantTarget::Interface(interface) => module
-                                .exports()
-                                .interface(spelling)
-                                .is_some_and(|fact| fact.id == interface),
-                            SyntaxGrantTarget::Effect(effect) => module
-                                .exports()
-                                .effect(spelling)
-                                .is_some_and(|fact| fact.id == effect),
-                        })
-            }
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -1931,7 +1741,6 @@ fn finish_module_resolution(
     crate::kind::check_remaining_module_kinds(&admission.parts, environments, type_work)
         .map_err(ResolveModuleError::Kind)?;
     let mut resolved = ResolvedModule::new(admission.parts);
-    resolved.retain_syntax_grants(admission.syntax_grants);
     resolved
         .retain_defining_sources(
             loaded.retained_source(),
@@ -1972,7 +1781,6 @@ struct ResolvedModuleAdmission {
     parts: ResolvedModuleParts,
     constructor_payload_provenance: Vec<Vec<ConstructorPayloadProvenance>>,
     written_effect_arities: Vec<WrittenEffectArity>,
-    syntax_grants: Vec<Arc<SyntaxGrant>>,
 }
 
 /// Admission-only origins for malformed written rows. These scalar diagnostics
@@ -2000,22 +1808,13 @@ fn resolve_module_names_with_budget<'a>(
 ) -> Result<ResolvedModuleAdmission, ResolveError> {
     let module = loaded.id();
     let surface = loaded.surface();
-    let local_admissions;
-    let admissions = if let Some(syntax) = syntax {
-        syntax.admissions
-    } else {
+    if syntax.is_none() {
         let contexts = crate::syntax::SyntaxContexts::new(&[], &[], &[]);
-        local_admissions = surface
-            .syntax_declarations
-            .iter()
-            .filter_map(|declaration| {
-                crate::syntax::template_for_admission(declaration, loaded.source(), &contexts)
-                    .transpose()
-                    .map(|result| result.map_err(|_| unsupported_syntax_template(declaration.span)))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        &local_admissions
-    };
+        for declaration in &surface.syntax_declarations {
+            crate::syntax::validate_template_syntax(declaration, loaded.source(), &contexts)
+                .map_err(|_| unsupported_syntax_template(declaration.span))?;
+        }
+    }
     // Reserved identities are observable coordinates. Authenticate the actual
     // source bytes before any role can be reconstructed from those coordinates.
     type_work.charge(dependencies.len()).map_err(|()| {
@@ -2193,8 +1992,6 @@ fn resolve_module_names_with_budget<'a>(
             &mut declarations,
             dependencies,
         )?;
-        resolver.admit_templates(admissions, &mut declarations.interfaces)?;
-
         let imported = std::mem::take(&mut resolver.imported);
         let export_candidate = build_export_candidate(
             resolver.module,
@@ -2261,7 +2058,6 @@ fn resolve_module_names_with_budget<'a>(
             },
             constructor_payload_provenance,
             written_effect_arities: std::mem::take(&mut resolver.written_effect_arities),
-            syntax_grants: std::mem::take(&mut resolver.syntax_resolved_grants),
         })
     })();
     *type_work = std::mem::take(&mut resolver.type_work);
@@ -2713,7 +2509,6 @@ struct Resolver<'state, 'inputs> {
     scopes: Vec<HashMap<(String, usize), ResolvedTermBinding>>,
     syntax_inputs: Option<SyntaxInputs<'inputs>>,
     syntax_expansion: Option<&'state mut crate::syntax::SyntaxExpansion<'inputs>>,
-    syntax_resolved_grants: Vec<Arc<SyntaxGrant>>,
     active_expansions: usize,
     diagnostic_frames: Vec<Arc<crate::syntax::ExpansionFrame>>,
     binder_introductions: HashMap<BinderId, usize>,
@@ -2754,7 +2549,6 @@ struct Resolver<'state, 'inputs> {
     nominal_parameter_counts: HashMap<NominalTypeId, usize>,
     active_resumes: Vec<ResumeId>,
     retained_clause: Option<ResumeId>,
-    admitting_template: Option<Vec<SurfaceName>>,
     next_resume: u32,
     type_work: TypeWorkBudget,
     constraint_work: InterfaceConstraintBudget,
@@ -3108,45 +2902,6 @@ struct WithheldImport {
 #[derive(Clone, Copy, Debug)]
 struct ImportedNominalName {
     id: NominalTypeId,
-    syntax_selected: bool,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ResolvedEffectName {
-    id: EffectId,
-    syntax_selected: bool,
-}
-
-impl ResolvedEffectName {
-    const fn ordinary(id: EffectId) -> Self {
-        Self {
-            id,
-            syntax_selected: false,
-        }
-    }
-
-    const fn syntax(id: EffectId) -> Self {
-        Self {
-            id,
-            syntax_selected: true,
-        }
-    }
-}
-
-impl ImportedNominalName {
-    const fn ordinary(id: NominalTypeId) -> Self {
-        Self {
-            id,
-            syntax_selected: false,
-        }
-    }
-
-    const fn syntax(id: NominalTypeId) -> Self {
-        Self {
-            id,
-            syntax_selected: true,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -3240,7 +2995,6 @@ impl Resolver<'_, '_> {
             scopes: vec![HashMap::new()],
             syntax_inputs: None,
             syntax_expansion: None,
-            syntax_resolved_grants: Vec::new(),
             active_expansions: 0,
             diagnostic_frames: Vec::new(),
             binder_introductions: HashMap::new(),
@@ -3281,7 +3035,6 @@ impl Resolver<'_, '_> {
             nominal_parameter_counts: HashMap::new(),
             active_resumes: Vec::new(),
             retained_clause: None,
-            admitting_template: None,
             next_resume: 0,
             type_work,
             constraint_work,
@@ -4952,10 +4705,9 @@ impl Resolver<'_, '_> {
         }
 
         for (spelling, exported) in summary.nominals() {
-            namespaces.nominals.insert(
-                spelling.to_owned(),
-                ImportedNominalName::ordinary(exported.id),
-            );
+            namespaces
+                .nominals
+                .insert(spelling.to_owned(), ImportedNominalName { id: exported.id });
             self.retain_imported_nominal(
                 exported,
                 summary,
@@ -4977,7 +4729,9 @@ impl Resolver<'_, '_> {
                 .nominals
                 .insert(
                     spelling.to_owned(),
-                    ImportedNominalName::ordinary(resource.family),
+                    ImportedNominalName {
+                        id: resource.family,
+                    },
                 )
                 .is_some()
             {
@@ -6077,215 +5831,6 @@ impl Resolver<'_, '_> {
         })
     }
 
-    fn syntax_reference_grant(
-        &self,
-        reference: &SurfaceReference,
-        target: SyntaxGrantTarget,
-    ) -> Result<Arc<SyntaxGrant>, ResolveError> {
-        let member = reference.member();
-        let context = reference.qualifier().unwrap_or(member);
-        let invalid = || {
-            error(
-                ResolveReason::InternalState,
-                member.span,
-                "the selected syntax term lost its checked owner or route",
-            )
-        };
-        let selected = self
-            .syntax_expansion
-            .as_ref()
-            .and_then(|expansion| expansion.owner(context.introduction))
-            .ok_or_else(invalid)?;
-        let owner_index = selected.owner.ok_or_else(invalid)?;
-        let inputs = self.syntax_inputs.ok_or_else(invalid)?;
-        let owner = inputs.owners.get(owner_index).ok_or_else(invalid)?;
-        let terms = inputs.terms.get(owner_index).ok_or_else(invalid)?;
-        let export = selected.export.ok_or_else(invalid)?;
-        if terms.module != owner.module()
-            || !owner
-                .syntax_exports()
-                .iter()
-                .any(|checked| Arc::ptr_eq(checked, &export))
-        {
-            return Err(invalid());
-        }
-        let imported = match reference {
-            SurfaceReference::Qualified(qualified) => Some((
-                terms
-                    .qualified(&qualified.qualifier.text)
-                    .ok_or_else(invalid)?,
-                member.text.as_str(),
-            )),
-            SurfaceReference::Unqualified(_) => {
-                let local = match target {
-                    SyntaxGrantTarget::Global(binder) => terms.get(&member.text).map(|fact| {
-                        fact.binder == binder && binder.module() == Some(owner.module())
-                    }),
-                    SyntaxGrantTarget::Method(method) => owner
-                        .interface_facts()
-                        .iter()
-                        .filter(|fact| fact.id.module() == owner.module())
-                        .flat_map(|fact| fact.methods.iter())
-                        .find(|fact| fact.spelling == member.text)
-                        .map(|fact| fact.id == method),
-                    SyntaxGrantTarget::Constructor(constructor) => {
-                        terms.constructor(&member.text).map(|fact| {
-                            fact.id == constructor
-                                && !constructor.owner().is_lexical()
-                                && constructor.owner().module() == owner.module()
-                        })
-                    }
-                    SyntaxGrantTarget::Nominal(nominal) => owner
-                        .registry()
-                        .nominals()
-                        .iter()
-                        .find(|fact| {
-                            fact.id.module() == owner.module()
-                                && !fact.id.is_lexical()
-                                && fact.spelling == member.text
-                        })
-                        .map(|fact| fact.id == nominal),
-                    SyntaxGrantTarget::Interface(interface) => owner
-                        .interface_facts()
-                        .iter()
-                        .find(|fact| {
-                            fact.id.module() == owner.module() && fact.spelling == member.text
-                        })
-                        .map(|fact| fact.id == interface),
-                    SyntaxGrantTarget::Effect(effect) => owner
-                        .effects()
-                        .iter()
-                        .find(|fact| {
-                            fact.id.module() == owner.module() && fact.spelling == member.text
-                        })
-                        .map(|fact| fact.id == effect),
-                };
-                if let Some(matches) = local {
-                    if !matches {
-                        return Err(invalid());
-                    }
-                    None
-                } else {
-                    let targeted = match target {
-                        SyntaxGrantTarget::Nominal(_) => terms.targeted_nominal(&member.text),
-                        SyntaxGrantTarget::Interface(_) => terms.targeted_interface(&member.text),
-                        SyntaxGrantTarget::Effect(_) => terms.targeted_effect(&member.text),
-                        _ => terms.targeted(&member.text),
-                    };
-                    let (route, original, _) = targeted.ok_or_else(invalid)?;
-                    Some((route, original))
-                }
-            }
-        };
-        let route = if let Some((route, spelling)) = imported {
-            let dependency = inputs
-                .owners
-                .iter()
-                .find(|dependency| dependency.module() == route.target())
-                .ok_or_else(invalid)?;
-            let exported = match target {
-                SyntaxGrantTarget::Global(binder) => dependency
-                    .exports()
-                    .term(spelling)
-                    .is_some_and(|fact| fact.binder == binder),
-                SyntaxGrantTarget::Method(method) => {
-                    dependency.exports().method(spelling) == Some(method)
-                }
-                SyntaxGrantTarget::Constructor(constructor) => dependency
-                    .exports()
-                    .constructor(spelling)
-                    .is_some_and(|fact| fact.id == constructor),
-                SyntaxGrantTarget::Nominal(nominal) => dependency
-                    .exports()
-                    .nominal(spelling)
-                    .is_some_and(|fact| fact.id == nominal),
-                SyntaxGrantTarget::Interface(interface) => dependency
-                    .exports()
-                    .interface(spelling)
-                    .is_some_and(|fact| fact.id == interface),
-                SyntaxGrantTarget::Effect(effect) => dependency
-                    .exports()
-                    .effect(spelling)
-                    .is_some_and(|fact| fact.id == effect),
-            };
-            if !owner.direct_dependencies().contains(&route) || !exported {
-                return Err(invalid());
-            }
-            SyntaxGrantRoute::Imported {
-                route,
-                spelling: spelling.to_owned(),
-            }
-        } else {
-            SyntaxGrantRoute::Owner {
-                spelling: member.text.clone(),
-                private: match target {
-                    SyntaxGrantTarget::Global(binder) => owner
-                        .exports()
-                        .term(&member.text)
-                        .is_none_or(|exported| exported.binder != binder),
-                    SyntaxGrantTarget::Method(method) => {
-                        owner.exports().method(&member.text) != Some(method)
-                    }
-                    SyntaxGrantTarget::Constructor(constructor) => owner
-                        .exports()
-                        .constructor(&member.text)
-                        .is_none_or(|exported| exported.id != constructor),
-                    SyntaxGrantTarget::Nominal(nominal) => owner
-                        .exports()
-                        .nominal(&member.text)
-                        .is_none_or(|exported| exported.id != nominal),
-                    SyntaxGrantTarget::Interface(interface) => owner
-                        .exports()
-                        .interface(&member.text)
-                        .is_none_or(|exported| exported.id != interface),
-                    SyntaxGrantTarget::Effect(effect) => owner
-                        .exports()
-                        .effect(&member.text)
-                        .is_none_or(|exported| exported.id != effect),
-                },
-            }
-        };
-        Ok(Arc::new(SyntaxGrant {
-            export,
-            occurrence_module: self.module,
-            issuer: owner.module(),
-            syntax_import: DirectDependencyRoute::new(owner.module(), selected.import_span),
-            target,
-            route,
-        }))
-    }
-
-    fn syntax_nominal_grant(
-        &mut self,
-        reference: &SurfaceReference,
-        nominal: ImportedNominalName,
-    ) -> Result<Option<Arc<SyntaxGrant>>, ResolveError> {
-        if !nominal.syntax_selected {
-            return Ok(None);
-        }
-        self.retain_resolved_syntax_grant(reference, SyntaxGrantTarget::Nominal(nominal.id))
-    }
-
-    fn retain_resolved_syntax_grant(
-        &mut self,
-        reference: &SurfaceReference,
-        target: SyntaxGrantTarget,
-    ) -> Result<Option<Arc<SyntaxGrant>>, ResolveError> {
-        if self.admitting_template.is_some() {
-            return Ok(None);
-        }
-        let grant = self.syntax_reference_grant(reference, target)?;
-        self.syntax_resolved_grants.try_reserve(1).map_err(|_| {
-            error(
-                ResolveReason::TypeResourceExhausted,
-                reference.span(),
-                "syntax reference grant storage could not be reserved",
-            )
-        })?;
-        self.syntax_resolved_grants.push(Arc::clone(&grant));
-        Ok(Some(grant))
-    }
-
     fn install_syntax_terms(&mut self, syntax: SyntaxInputs<'_>) -> Result<(), ResolveError> {
         let mut capture_graph_visits = CaptureGraphVisits::default();
         for usage in syntax.uses {
@@ -6578,7 +6123,7 @@ impl Resolver<'_, '_> {
                     let effect = dependency.exports().effect(original).ok_or_else(invalid)?;
                     (effect, dependency, selector)
                 } else {
-                    return Err(invalid());
+                    continue;
                 };
                 self.retain_imported_effect_from_owner(
                     effect,
@@ -8347,7 +7892,7 @@ impl Resolver<'_, '_> {
                     name.qualifier.introduction,
                 ))
                 .copied()
-                .map(ImportedNominalName::syntax)
+                .map(|id| ImportedNominalName { id })
                 .ok_or_else(|| {
                     error(
                         ResolveReason::UnknownType,
@@ -8385,7 +7930,7 @@ impl Resolver<'_, '_> {
             &mut self.type_work,
             "lexical nominal lookup exceeded its type-work budget",
         )? {
-            return Ok(ImportedNominalName::ordinary(id));
+            return Ok(ImportedNominalName { id });
         }
         if name.introduction != 0 {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Type)?;
@@ -8393,7 +7938,7 @@ impl Resolver<'_, '_> {
                 .syntax_nominals
                 .get(&(name.text.clone(), name.introduction))
                 .copied()
-                .map(ImportedNominalName::syntax)
+                .map(|id| ImportedNominalName { id })
                 .ok_or_else(|| {
                     error(
                         ResolveReason::UnknownType,
@@ -8420,7 +7965,7 @@ impl Resolver<'_, '_> {
             diagnostic.found = Some(name.text.clone());
             ResolveError::new(diagnostic, Some(ResolveContext::Type))
         })?;
-        Ok(ImportedNominalName::ordinary(id))
+        Ok(ImportedNominalName { id })
     }
 
     fn interface_reference(
@@ -8446,13 +7991,10 @@ impl Resolver<'_, '_> {
                     .copied(),
             }
             .ok_or_else(|| unknown_interface_error(member.span, &member.text))?;
-            let syntax_grant =
-                self.retain_resolved_syntax_grant(reference, SyntaxGrantTarget::Interface(id))?;
             return Ok(ResolvedInterfaceOccurrence {
                 id,
                 spelling: member.text.clone(),
                 origin: Origin::Source(reference.span()),
-                syntax_grant,
             });
         }
         if let Some(namespace) = self.imported_namespace(reference)? {
@@ -8461,7 +8003,6 @@ impl Resolver<'_, '_> {
                     id,
                     spelling: member.text.clone(),
                     origin: Origin::Source(reference.span()),
-                    syntax_grant: None,
                 });
             }
             if namespace.nominals.contains_key(&member.text)
@@ -8484,7 +8025,6 @@ impl Resolver<'_, '_> {
                 id,
                 spelling: member.text.clone(),
                 origin: Origin::Source(reference.span()),
-                syntax_grant: None,
             });
         }
         if self.file_name_is_bound(&member.text)
@@ -8510,10 +8050,7 @@ impl Resolver<'_, '_> {
         Err(unknown_interface_error(member.span, &member.text))
     }
 
-    fn effect_reference(
-        &mut self,
-        reference: &SurfaceReference,
-    ) -> Result<ResolvedEffectName, ResolveError> {
+    fn effect_reference(&mut self, reference: &SurfaceReference) -> Result<EffectId, ResolveError> {
         let member = reference.member();
         let context = reference.qualifier().unwrap_or(member);
         if context.introduction != 0 {
@@ -8532,7 +8069,6 @@ impl Resolver<'_, '_> {
                     ))
                     .copied(),
             }
-            .map(ResolvedEffectName::syntax)
             .ok_or_else(|| {
                 lookup_error(
                     ResolveContext::Effect,
@@ -8544,7 +8080,7 @@ impl Resolver<'_, '_> {
         }
         if let Some(namespace) = self.imported_namespace(reference)? {
             if let Some(id) = namespace.effects.get(&member.text).copied() {
-                return Ok(ResolvedEffectName::ordinary(id));
+                return Ok(id);
             }
             if namespace.nominals.contains_key(&member.text)
                 || namespace.interfaces.contains_key(&member.text)
@@ -8559,7 +8095,7 @@ impl Resolver<'_, '_> {
             ));
         }
         if let Some(id) = self.effect_names.get(&member.text).copied() {
-            return Ok(ResolvedEffectName::ordinary(id));
+            return Ok(id);
         }
         if self.type_names.contains_key(&member.text)
             || self.interface_names.contains_key(&member.text)
@@ -8681,7 +8217,7 @@ impl Resolver<'_, '_> {
                 )
             })?;
         for written in &row.effects {
-            let effect = self.effect_reference(&written.effect)?.id;
+            let effect = self.effect_reference(&written.effect)?;
             self.type_work
                 .charge(written.arguments.len().checked_mul(2).ok_or_else(|| {
                     error(
@@ -8817,7 +8353,7 @@ impl Resolver<'_, '_> {
 
     fn resolve_effect_instance_with_identity(
         &mut self,
-        selected: ResolvedEffectName,
+        identity: EffectId,
         effect: &SurfaceReference,
         arguments: &[SurfaceType],
         span: crate::source::Span,
@@ -8873,17 +8409,11 @@ impl Resolver<'_, '_> {
         for argument in resolved {
             retained.push(argument.into_inner());
         }
-        let syntax_grant = if selected.syntax_selected {
-            self.retain_resolved_syntax_grant(effect, SyntaxGrantTarget::Effect(selected.id))?
-        } else {
-            None
-        };
         Ok(ResolvedEffectInstance {
-            instance: EffectInstance::new_kinded(selected.id, retained.into_boxed_slice()),
+            instance: EffectInstance::new_kinded(identity, retained.into_boxed_slice()),
             argument_provenance: argument_provenance.into_boxed_slice(),
             origin: Origin::Source(effect.span()),
             span,
-            syntax_grant,
         })
     }
 
@@ -9075,7 +8605,7 @@ impl Resolver<'_, '_> {
     fn constructor_reference(
         &mut self,
         reference: &SurfaceReference,
-    ) -> Result<(ConstructorId, bool), ResolveError> {
+    ) -> Result<ConstructorId, ResolveError> {
         let member = reference.member();
         if let SurfaceReference::Qualified(name) = reference
             && name.qualifier.introduction != 0
@@ -9089,7 +8619,7 @@ impl Resolver<'_, '_> {
                     name.qualifier.introduction,
                 ))
                 .copied();
-            return selected.map(|id| (id, true)).ok_or_else(|| {
+            return selected.ok_or_else(|| {
                 error(
                     ResolveReason::UnknownConstructor,
                     member.span,
@@ -9104,14 +8634,13 @@ impl Resolver<'_, '_> {
                 &mut self.type_work,
                 "lexical constructor lookup exceeded its type-work budget",
             )? {
-                return Ok((id, false));
+                return Ok(id);
             }
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Term)?;
             return self
                 .syntax_constructors
                 .get(&(member.text.clone(), member.introduction))
                 .copied()
-                .map(|id| (id, true))
                 .ok_or_else(|| {
                     error(
                         ResolveReason::UnknownConstructor,
@@ -9125,7 +8654,6 @@ impl Resolver<'_, '_> {
                 .constructors
                 .get(&reference.member().text)
                 .copied()
-                .map(|id| (id, false))
                 .ok_or_else(|| {
                     withheld_export_error(
                         reference.member().span,
@@ -9151,7 +8679,7 @@ impl Resolver<'_, '_> {
                 .get(&reference.member().text)
                 .copied()
         }) {
-            return Ok((constructor, false));
+            return Ok(constructor);
         }
         if let Some(kind) = self
             .targeted_withheld
@@ -10713,9 +10241,7 @@ impl Resolver<'_, '_> {
             )
         })?;
 
-        if let Some(syntax) = &declaration.generated_parameters
-            && self.admitting_template.is_none()
-        {
+        if let Some(syntax) = &declaration.generated_parameters {
             let order = GeneratedParameterOrder::bind(Arc::clone(syntax), id, &parameters)
                 .map_err(|()| {
                     error(
@@ -11120,57 +10646,12 @@ impl Resolver<'_, '_> {
         if let Some(variable) = self.contextual_type_variable(tail) {
             return Ok(Some(EffectRowVariable::rigid(variable)));
         }
-        if self.is_template_identifier(tail) {
-            return Ok(None);
-        }
         Err(lookup_error(
             ResolveContext::EffectRowParameter,
             tail.span,
             &tail.text,
             message,
         ))
-    }
-
-    fn is_template_identifier(&self, name: &SurfaceName) -> bool {
-        self.admitting_template
-            .as_ref()
-            .is_some_and(|names| names.contains(name))
-    }
-
-    fn is_template_placeholder(&self, name: &SurfaceReference) -> bool {
-        matches!(name, SurfaceReference::Unqualified(member) if self.is_template_identifier(member))
-    }
-
-    fn deferred_template_qualified_name(
-        &self,
-        name: &SurfaceReference,
-    ) -> Result<bool, ResolveError> {
-        let SurfaceReference::Qualified(qualified) = name else {
-            return Ok(false);
-        };
-        if self.is_template_identifier(&qualified.qualifier) {
-            return Ok(true);
-        }
-        if self.is_template_identifier(&qualified.member) {
-            self.imported_namespace(name)?;
-            return Ok(true);
-        }
-        Ok(false)
-    }
-
-    fn deferred_template_name(
-        &self,
-        name: &SurfaceReference,
-        failure: &ResolveError,
-        unknown: ResolveReason,
-    ) -> Result<bool, ResolveError> {
-        if failure.reason == unknown && self.is_template_placeholder(name) {
-            return Ok(true);
-        }
-        if failure.reason == unknown || failure.reason == ResolveReason::UnavailableExport {
-            return self.deferred_template_qualified_name(name);
-        }
-        Ok(false)
     }
 
     fn resolve_owner_argument(
@@ -11186,13 +10667,9 @@ impl Resolver<'_, '_> {
         operation_outer: bool,
     ) -> Result<crate::resolved::ResolvedOwnerArgument, ResolveError> {
         enum ApplicationHead {
-            Nominal(NominalTypeId, Option<Arc<SyntaxGrant>>),
+            Nominal(NominalTypeId),
             Variable(TypeVariableId),
-            Resource(
-                crate::resolved::ResourceDefinitionId,
-                Option<Arc<SyntaxGrant>>,
-            ),
-            Deferred(usize),
+            Resource(crate::resolved::ResourceDefinitionId),
         }
         enum Task<'a> {
             Visit(&'a SurfaceType),
@@ -11217,7 +10694,6 @@ impl Resolver<'_, '_> {
         let mut tasks = vec![Task::Visit(surface)];
         let mut completed = ResolvedTypeBuffer(Vec::new());
         let mut provenance = Vec::new();
-        let mut syntax_grants = Vec::new();
         while let Some(task) = tasks.pop() {
             #[cfg(test)]
             {
@@ -11278,26 +10754,9 @@ impl Resolver<'_, '_> {
                                 completed.push((Type::Variable(variable), provenance.len() - 1));
                                 continue;
                             }
-                            let nominal = match self.nominal_reference(name) {
-                                Ok(nominal) => nominal,
-                                Err(failure)
-                                    if self.deferred_template_name(
-                                        name,
-                                        &failure,
-                                        ResolveReason::UnknownType,
-                                    )? =>
-                                {
-                                    provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                                    completed.push((Type::Unit, provenance.len() - 1));
-                                    continue;
-                                }
-                                Err(failure) => return Err(failure),
-                            };
+                            let nominal = self.nominal_reference(name)?;
                             let id = nominal.id;
                             provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                            if let Some(grant) = self.syntax_nominal_grant(name, nominal)? {
-                                syntax_grants.push((provenance.len() - 1, grant));
-                            }
                             completed.push((Type::Nominal(id), provenance.len() - 1));
                         }
                         SurfaceTypeKind::Application {
@@ -11310,42 +10769,23 @@ impl Resolver<'_, '_> {
                             {
                                 ApplicationHead::Variable(variable)
                             } else {
-                                match self.nominal_reference(constructor) {
-                                    Ok(nominal) => {
-                                        let family = nominal.id;
-                                        let grant =
-                                            self.syntax_nominal_grant(constructor, nominal)?;
-                                        self.type_work.charge(1).map_err(|_| {
-                                            error(
-                                                ResolveReason::TypeResourceExhausted,
-                                                current.span,
-                                                "source owner selection exceeded its budget",
-                                            )
-                                        })?;
-                                        match self.resource_families.get(&family).copied() {
-                                            Some(resource)
-                                                if arguments.iter().any(|argument| {
-                                                    matches!(
-                                                        argument.kind,
-                                                        SurfaceTypeKind::RowArgument(_)
-                                                    )
-                                                }) =>
-                                            {
-                                                ApplicationHead::Resource(resource, grant)
-                                            }
-                                            _ => ApplicationHead::Nominal(family, grant),
-                                        }
-                                    }
-                                    Err(failure)
-                                        if self.deferred_template_name(
-                                            constructor,
-                                            &failure,
-                                            ResolveReason::UnknownType,
-                                        )? =>
+                                let family = self.nominal_reference(constructor)?.id;
+                                self.type_work.charge(1).map_err(|_| {
+                                    error(
+                                        ResolveReason::TypeResourceExhausted,
+                                        current.span,
+                                        "source owner selection exceeded its budget",
+                                    )
+                                })?;
+                                match self.resource_families.get(&family).copied() {
+                                    Some(resource)
+                                        if arguments.iter().any(|argument| {
+                                            matches!(argument.kind, SurfaceTypeKind::RowArgument(_))
+                                        }) =>
                                     {
-                                        ApplicationHead::Deferred(provenance.len())
+                                        ApplicationHead::Resource(resource)
                                     }
-                                    Err(failure) => return Err(failure),
+                                    _ => ApplicationHead::Nominal(family),
                                 }
                             };
                             tasks.push(Task::Application(
@@ -11559,22 +10999,7 @@ impl Resolver<'_, '_> {
                             }
                             arguments.reverse();
                             roots.reverse();
-                            let effect = match self.effect_reference(&source_instance.effect) {
-                                Ok(effect) => effect,
-                                Err(failure)
-                                    if self.deferred_template_name(
-                                        &source_instance.effect,
-                                        &failure,
-                                        ResolveReason::UnknownEffect,
-                                    )? =>
-                                {
-                                    // Arguments were resolved above; this placeholder has no
-                                    // effect identity until the template is expanded.
-                                    continue;
-                                }
-                                Err(failure) => return Err(failure),
-                            }
-                            .id;
+                            let effect = self.effect_reference(&source_instance.effect)?;
                             self.retain_written_effect_arity(
                                 effect,
                                 span,
@@ -11740,20 +11165,7 @@ impl Resolver<'_, '_> {
                         }
                         args.reverse();
                         roots.reverse();
-                        let effect = match self.effect_reference(&member.effect) {
-                            Ok(effect) => effect,
-                            Err(failure)
-                                if self.deferred_template_name(
-                                    &member.effect,
-                                    &failure,
-                                    ResolveReason::UnknownEffect,
-                                )? =>
-                            {
-                                continue;
-                            }
-                            Err(failure) => return Err(failure),
-                        }
-                        .id;
+                        let effect = self.effect_reference(&member.effect)?;
                         self.retain_written_effect_arity(
                             effect,
                             row.span,
@@ -11813,50 +11225,37 @@ impl Resolver<'_, '_> {
                         })
                     })?;
                     let arguments = completed.split_off(split);
-                    let (mut function, head_grant) = match head {
-                        ApplicationHead::Deferred(provenance_start) => {
-                            drop(arguments);
-                            provenance.truncate(provenance_start);
-                            syntax_grants.retain(|(node, _)| *node < provenance_start);
-                            provenance.push(ResolvedTypeProvenanceNode::Fact(span));
-                            completed.push((Type::Unit, provenance.len() - 1));
-                            continue;
-                        }
-                        ApplicationHead::Resource(resource, grant) => {
-                            let roots = arguments
-                                .iter()
-                                .map(|(_, root)| *root)
-                                .collect::<Vec<_>>()
-                                .into_boxed_slice();
-                            provenance.push(ResolvedTypeProvenanceNode::Resource {
-                                span,
+                    if let ApplicationHead::Resource(resource) = head {
+                        let roots = arguments
+                            .iter()
+                            .map(|(_, root)| *root)
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice();
+                        provenance.push(ResolvedTypeProvenanceNode::Resource {
+                            span,
+                            resource,
+                            arguments: roots,
+                        });
+                        completed.push((
+                            Type::ResourceApply(
                                 resource,
-                                arguments: roots,
-                            });
-                            if let Some(grant) = grant {
-                                syntax_grants.push((provenance.len() - 1, grant));
-                            }
-                            completed.push((
-                                Type::ResourceApply(
-                                    resource,
-                                    arguments
-                                        .into_vec()
-                                        .into_iter()
-                                        .map(|(argument, _)| argument)
-                                        .collect(),
-                                ),
-                                provenance.len() - 1,
-                            ));
-                            continue;
-                        }
-                        ApplicationHead::Nominal(owner, grant) => (Type::Nominal(owner), grant),
-                        ApplicationHead::Variable(variable) => (Type::Variable(variable), None),
-                    };
-                    provenance.push(ResolvedTypeProvenanceNode::Fact(constructor_span));
-                    let mut function_root = provenance.len() - 1;
-                    if let Some(grant) = head_grant {
-                        syntax_grants.push((function_root, grant));
+                                arguments
+                                    .into_vec()
+                                    .into_iter()
+                                    .map(|(argument, _)| argument)
+                                    .collect(),
+                            ),
+                            provenance.len() - 1,
+                        ));
+                        continue;
                     }
+                    provenance.push(ResolvedTypeProvenanceNode::Fact(constructor_span));
+                    let mut function = match head {
+                        ApplicationHead::Nominal(owner) => Type::Nominal(owner),
+                        ApplicationHead::Variable(variable) => Type::Variable(variable),
+                        ApplicationHead::Resource(_) => unreachable!(),
+                    };
+                    let mut function_root = provenance.len() - 1;
                     for ((argument, argument_root), source_argument) in
                         arguments.into_vec().into_iter().zip(source_arguments)
                     {
@@ -11904,7 +11303,7 @@ impl Resolver<'_, '_> {
         })?;
         Ok(crate::resolved::ResolvedOwnerArgument {
             ty: ty.into_inner(),
-            provenance: ResolvedTypeProvenance::with_syntax_grants(provenance, root, syntax_grants),
+            provenance: ResolvedTypeProvenance::new(provenance, root),
             origin: Origin::Source(surface.span),
             span: surface.span,
         })
@@ -11938,12 +11337,10 @@ impl Resolver<'_, '_> {
                 ));
             }
             SurfacePatternKind::Binder(surface) => {
-                if !self.is_template_identifier(&surface.name)
-                    && let Some(first) = seen.insert(
-                        (surface.name.text.clone(), surface.name.introduction),
-                        surface.name.span,
-                    )
-                {
+                if let Some(first) = seen.insert(
+                    (surface.name.text.clone(), surface.name.introduction),
+                    surface.name.span,
+                ) {
                     let mut diagnostic = Diagnostic::new(
                         ResolveReason::DuplicatePatternBinder,
                         SourceLabel::new(
@@ -11971,39 +11368,13 @@ impl Resolver<'_, '_> {
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             SurfacePatternKind::Constructor { name, payload } => {
-                let (constructor, syntax_selected) = match self.constructor_reference(name) {
-                    Ok(constructor) => constructor,
-                    Err(failure)
-                        if self.deferred_template_name(
-                            name,
-                            &failure,
-                            ResolveReason::UnknownConstructor,
-                        )? =>
-                    {
-                        return match payload.as_deref() {
-                            Some(payload) => self.resolve_pattern(payload, seen, binders),
-                            None => Ok(ResolvedPattern {
-                                kind: ResolvedPatternKind::Wildcard,
-                                span: pattern.span,
-                            }),
-                        };
-                    }
-                    Err(failure) => return Err(failure),
-                };
+                let constructor = self.constructor_reference(name)?;
                 ResolvedPatternKind::Constructor {
                     constructor,
                     occurrence: ResolvedConstructorOccurrence {
                         constructor,
                         spelling: name.member().text.clone(),
                         origin: Origin::Source(name.span()),
-                        syntax_grant: syntax_selected
-                            .then(|| {
-                                self.syntax_reference_grant(
-                                    name,
-                                    SyntaxGrantTarget::Constructor(constructor),
-                                )
-                            })
-                            .transpose()?,
                     },
                     payload: payload
                         .as_deref()
@@ -12103,7 +11474,6 @@ impl Resolver<'_, '_> {
                             spelling: String::new(),
                             origin: Origin::Source(target_span),
                             import_span: None,
-                            syntax_grant: None,
                             evidence: Box::new([]),
                         }),
                         span: target_span,
@@ -12167,7 +11537,6 @@ impl Resolver<'_, '_> {
                         spelling: String::new(),
                         origin: Origin::Source(action_span),
                         import_span: None,
-                        syntax_grant: None,
                         evidence: Box::new([]),
                     }),
                     span: action_span,
@@ -12261,7 +11630,6 @@ impl Resolver<'_, '_> {
                 spelling: String::new(),
                 origin: Origin::Source(target_span),
                 import_span: None,
-                syntax_grant: None,
                 evidence: Box::new([]),
             }),
             span: target_span,
@@ -12287,7 +11655,6 @@ impl Resolver<'_, '_> {
                         argument_provenance: Box::new([]),
                         origin: Origin::Source(target_span),
                         span: target_span,
-                        syntax_grant: None,
                     },
                     operation,
                     spelling: "publish".into(),
@@ -13340,7 +12707,6 @@ impl Resolver<'_, '_> {
                     spelling: parameter.spelling.clone(),
                     origin: Origin::Source(span),
                     import_span: None,
-                    syntax_grant: None,
                     evidence: Box::new([]),
                 }),
                 span,
@@ -13376,7 +12742,6 @@ impl Resolver<'_, '_> {
                         })?,
                         origin: Origin::Source(span),
                         span,
-                        syntax_grant: None,
                     },
                     operation: crate::types::OperationId::new(api.ops(), ordinal as u32),
                     spelling: spelling.to_owned(),
@@ -13426,7 +12791,6 @@ impl Resolver<'_, '_> {
                     id: api.provider(),
                     spelling: "Provider".to_owned(),
                     origin: Origin::Source(span),
-                    syntax_grant: None,
                 },
                 arguments: {
                     let mut arguments = Vec::with_capacity(api.argument_count());
@@ -13472,75 +12836,6 @@ impl Resolver<'_, '_> {
     }
 
     // Keep window-only lookup temporaries off ordinary expression frames.
-
-    fn admit_templates(
-        &mut self,
-        admissions: &[(SurfaceExpr, Vec<SurfaceName>)],
-        interfaces: &mut Vec<ResolvedInterfaceDeclaration>,
-    ) -> Result<(), ResolveError> {
-        // The ordinary lexical-evidence resolver needs these original facts.
-        std::mem::swap(&mut self.resolved_interfaces.0, interfaces);
-        let result = self.admit_templates_inner(admissions);
-        std::mem::swap(&mut self.resolved_interfaces.0, interfaces);
-        result
-    }
-
-    fn admit_templates_inner(
-        &mut self,
-        admissions: &[(SurfaceExpr, Vec<SurfaceName>)],
-    ) -> Result<(), ResolveError> {
-        for (template, identifiers) in admissions {
-            let binder_checkpoint = self.next_binder;
-            let type_checkpoint = self.next_type_variable;
-            let nominal_checkpoint = self.next_lexical_nominal;
-            let evidence_checkpoint = self.next_lexical_evidence;
-            let resume_checkpoint = self.next_resume;
-            let nominal_len = self.lexical_nominals.0.len();
-            let constructor_len = self.lexical_constructors.0.len();
-            let parameter_len = self.lexical_nominal_parameters.0.len();
-            let method_parameter_len = self.lexical_method_parameters.0.len();
-            let scope_checkpoint = self.scopes.len();
-            let effect_arity_checkpoint = self.written_effect_arities.len();
-            let result = (|| {
-                let mut captures = HashMap::new();
-                for name in identifiers {
-                    let binder = self.allocate_contextual_binder(name)?;
-                    captures.insert(
-                        (name.text.clone(), name.introduction),
-                        ResolvedTermBinding::local(ResolvedTermName::Global(binder.id)),
-                    );
-                }
-                self.scopes.push(captures);
-                self.admitting_template = Some(identifiers.clone());
-                self.resolve_expr(template)
-                    .map(discard_resolved_expression_iteratively)
-            })();
-            self.admitting_template = None;
-            self.scopes.truncate(scope_checkpoint);
-            self.written_effect_arities
-                .truncate(effect_arity_checkpoint);
-            self.lexical_nominals.0.truncate(nominal_len);
-            self.lexical_constructors.0.truncate(constructor_len);
-            self.lexical_nominal_parameters.0.truncate(parameter_len);
-            self.lexical_method_parameters
-                .0
-                .truncate(method_parameter_len);
-            self.binder_introductions
-                .retain(|id, _| id.module() != Some(self.module) || id.local() < binder_checkpoint);
-            self.nominal_parameter_counts.retain(|id, _| {
-                id.module() != self.module
-                    || !id.is_lexical()
-                    || id.declaration() < nominal_checkpoint
-            });
-            self.next_binder = binder_checkpoint;
-            self.next_type_variable = type_checkpoint;
-            self.next_lexical_nominal = nominal_checkpoint;
-            self.next_lexical_evidence = evidence_checkpoint;
-            self.next_resume = resume_checkpoint;
-            result?;
-        }
-        Ok(())
-    }
 
     fn resolve_expr(&mut self, expression: &SurfaceExpr) -> Result<ResolvedExpr, ResolveError> {
         self.resolve_work(ResolveTask::VisitExpr(expression))
@@ -14240,25 +13535,8 @@ impl Resolver<'_, '_> {
                         "lexical evidence storage exceeded its budget",
                     )
                 })?;
-                let application = match self.resolve_interface_application(&source.application) {
-                    Ok(application) => Some(application),
-                    Err(failure)
-                        if self.deferred_template_name(
-                            &source.application.interface,
-                            &failure,
-                            ResolveReason::UnknownInterface,
-                        )? =>
-                    {
-                        for argument in &source.application.arguments {
-                            self.resolve_owner_argument(argument)?.discard_iteratively();
-                        }
-                        None
-                    }
-                    Err(failure) => return Err(failure),
-                };
-                if application.as_ref().is_some_and(|application| {
-                    application.interface.id.module().is_builtin_resource()
-                }) {
+                let application = self.resolve_interface_application(&source.application)?;
+                if application.interface.id.module().is_builtin_resource() {
                     return Err(error(
                         ResolveReason::SealedProvider,
                         source.span,
@@ -14268,7 +13546,7 @@ impl Resolver<'_, '_> {
                 let mut state = Box::new(PendingLexicalResolution {
                     source,
                     id,
-                    application,
+                    application: Some(application),
                     groups: ResolvedImplementationMethodGroupBuffer(Vec::new()),
                     equations: ResolvedEquationBuffer(Vec::new()),
                     next: 0,
@@ -14306,9 +13584,6 @@ impl Resolver<'_, '_> {
                         .into_boxed_slice();
                     }
                     if state.next == state.source.equations.len() {
-                        if state.application.is_none() && self.admitting_template.is_some() {
-                            return Ok(());
-                        }
                         let evidence = crate::resolved::ResolvedLexicalEvidence {
                             acquisition: None,
                             checked: crate::interface::LexicalEvidenceSlot::default(),
@@ -14741,53 +14016,29 @@ impl Resolver<'_, '_> {
         span: Span,
         expressions: &mut ResolvedExpressionBuffer,
     ) -> Result<(), ResolveError> {
-        let effect = match self.resolve_effect_instance_parts(
+        let effect = self.resolve_effect_instance_parts(
             &handler.effect.effect,
             &handler.effect.arguments,
             handler.effect.span,
-        ) {
-            Ok(effect) => Some(effect),
-            Err(failure)
-                if self.deferred_template_name(
-                    &handler.effect.effect,
-                    &failure,
-                    ResolveReason::UnknownEffect,
-                )? =>
-            {
-                for argument in &handler.effect.arguments {
-                    self.resolve_owner_argument(argument)?.discard_iteratively();
-                }
-                None
-            }
-            Err(failure) => return Err(failure),
-        };
-        if let Some(effect) = &effect {
-            if crate::resolved::StoreApi::for_module(effect.instance.effect().module())
-                .is_some_and(|api| effect.instance.effect() == api.drive())
-            {
-                return Err(error(
-                    ResolveReason::SealedDrive,
-                    handler.effect.span,
-                    "the store drive cannot be handled directly",
-                ));
-            }
-            if crate::resolved::NetworkApi::for_module(effect.instance.effect().module())
-                .is_some_and(|api| {
-                    effect.instance.effect() == api.io() || effect.instance.effect() == api.join()
-                })
-            {
-                return Err(error(
-                    ResolveReason::SealedNetwork,
-                    handler.effect.span,
-                    "network service effects cannot be used directly",
-                ));
-            }
+        )?;
+        if crate::resolved::StoreApi::for_module(effect.instance.effect().module())
+            .is_some_and(|api| effect.instance.effect() == api.drive())
+        {
+            return Err(error(
+                ResolveReason::SealedDrive,
+                handler.effect.span,
+                "the store drive cannot be handled directly",
+            ));
         }
-        let deferred = effect.is_none()
-            || handler
-                .clauses
-                .iter()
-                .any(|clause| self.is_template_identifier(&clause.operation));
+        if crate::resolved::NetworkApi::for_module(effect.instance.effect().module()).is_some_and(
+            |api| effect.instance.effect() == api.io() || effect.instance.effect() == api.join(),
+        ) {
+            return Err(error(
+                ResolveReason::SealedNetwork,
+                handler.effect.span,
+                "network service effects cannot be used directly",
+            ));
+        }
 
         let store = handler
             .store
@@ -14829,21 +14080,7 @@ impl Resolver<'_, '_> {
             )
         })?;
         for clause in &handler.clauses {
-            let operation = match &effect {
-                Some(effect) => {
-                    match self.resolved_operation(effect.instance.effect(), &clause.operation) {
-                        Ok(operation) => Some(operation),
-                        Err(failure)
-                            if failure.reason == ResolveReason::UnknownName
-                                && self.is_template_identifier(&clause.operation) =>
-                        {
-                            None
-                        }
-                        Err(failure) => return Err(failure),
-                    }
-                }
-                None => None,
-            };
+            let operation = self.resolved_operation(effect.instance.effect(), &clause.operation)?;
             let resume = ResumeId::new(self.next_resume);
             self.next_resume = self.next_resume.checked_add(1).ok_or_else(|| {
                 identity_error(
@@ -14895,27 +14132,14 @@ impl Resolver<'_, '_> {
             self.active_resumes.truncate(resume_checkpoint);
             self.scopes.truncate(scope_checkpoint);
             let resolved_body = resolved_body?;
-            if deferred {
-                drop(pattern);
-                drop(resolved_body);
-            } else {
-                clauses.push(ResolvedHandlerClause {
-                    operation: operation.expect("a resolved handler has resolved operations"),
-                    spelling: clause.operation.text.clone(),
-                    resume,
-                    pattern: pattern.into_inner(),
-                    body: resolved_body.into_inner(),
-                    span: clause.span,
-                });
-            }
-        }
-        if deferred {
-            expressions.push(ResolvedExpr {
-                diagnostic: None,
-                kind: ResolvedExprKind::Unit,
-                span,
+            clauses.push(ResolvedHandlerClause {
+                operation,
+                spelling: clause.operation.text.clone(),
+                resume,
+                pattern: pattern.into_inner(),
+                body: resolved_body.into_inner(),
+                span: clause.span,
             });
-            return Ok(());
         }
         expressions.push(ResolvedExpr {
             diagnostic: None,
@@ -14924,7 +14148,7 @@ impl Resolver<'_, '_> {
                 hook_root: None,
                 store: store.map(|store| Box::new(store.into_inner())),
                 body: Box::new(body.into_inner()),
-                effect: effect.expect("a resolved handler has a resolved effect"),
+                effect,
                 clauses,
             }),
             span,
@@ -14939,13 +14163,6 @@ impl Resolver<'_, '_> {
         expressions: &mut ResolvedExpressionBuffer,
     ) -> Result<(), ResolveError> {
         match &expression.kind {
-            SurfaceExprKind::SyntaxInvocation { .. } if self.admitting_template.is_some() => {
-                expressions.push(ResolvedExpr {
-                    diagnostic: None,
-                    kind: ResolvedExprKind::Unit,
-                    span: expression.span,
-                });
-            }
             SurfaceExprKind::SyntaxInvocation { name, captures } => {
                 if self.active_expansions >= crate::parser::STRUCTURAL_DEPTH_LIMIT {
                     let definition = self
@@ -15391,14 +14608,6 @@ impl Resolver<'_, '_> {
                 span: expression.span,
             }),
             SurfaceExprKind::Name(name) => {
-                if self.deferred_template_qualified_name(name)? {
-                    expressions.push(ResolvedExpr {
-                        diagnostic: None,
-                        kind: ResolvedExprKind::Unit,
-                        span: expression.span,
-                    });
-                    return Ok(());
-                }
                 let member = name.member();
                 let is_qualified = matches!(name, SurfaceReference::Qualified(_));
                 let context = name.qualifier().unwrap_or(member);
@@ -15456,53 +14665,44 @@ impl Resolver<'_, '_> {
                     } else {
                         (None, None, None)
                     };
-                let (binding, syntax_selected) = if is_qualified {
-                    (qualified_binding, context.introduction != 0)
-                } else if let Some(binding) = self
-                    .scopes
-                    .iter()
-                    .rev()
-                    .find_map(|scope| scope.get(&(member.text.clone(), member.introduction)))
-                    .copied()
-                {
-                    (Some(binding), false)
-                } else if let Some(binding) = self
-                    .syntax_terms
-                    .get(&(member.text.clone(), member.introduction))
-                    .copied()
-                {
-                    (Some(binding), true)
+                let binding = if is_qualified {
+                    qualified_binding
                 } else {
-                    (
-                        (member.introduction == 0)
-                            .then(|| self.method_names.get(&member.text).copied())
-                            .flatten(),
-                        false,
-                    )
+                    self.scopes
+                        .iter()
+                        .rev()
+                        .find_map(|scope| scope.get(&(member.text.clone(), member.introduction)))
+                        .copied()
+                        .or_else(|| {
+                            self.syntax_terms
+                                .get(&(member.text.clone(), member.introduction))
+                                .copied()
+                        })
+                        .or_else(|| {
+                            (member.introduction == 0)
+                                .then(|| self.method_names.get(&member.text).copied())
+                                .flatten()
+                        })
                 };
-                let (unqualified_constructor, unqualified_constructor_from_syntax) =
-                    if binding.is_none() && !is_qualified {
-                        let lexical = charged_lexical_scope_lookup(
-                            &self.lexical_constructor_scopes,
-                            member,
-                            &mut self.type_work,
-                            "inline lexical constructor lookup exceeded its type-work budget",
-                        )?;
-                        if let Some(constructor) = lexical {
-                            (Some(constructor), false)
-                        } else if member.introduction != 0 {
-                            (
-                                self.syntax_constructors
-                                    .get(&(member.text.clone(), member.introduction))
-                                    .copied(),
-                                true,
-                            )
+                let unqualified_constructor = if binding.is_none() && !is_qualified {
+                    charged_lexical_scope_lookup(
+                        &self.lexical_constructor_scopes,
+                        member,
+                        &mut self.type_work,
+                        "inline lexical constructor lookup exceeded its type-work budget",
+                    )?
+                    .or_else(|| {
+                        if member.introduction != 0 {
+                            self.syntax_constructors
+                                .get(&(member.text.clone(), member.introduction))
+                                .copied()
                         } else {
-                            (self.constructor_names.get(&member.text).copied(), false)
+                            self.constructor_names.get(&member.text).copied()
                         }
-                    } else {
-                        (None, false)
-                    };
+                    })
+                } else {
+                    None
+                };
                 if let Some(binding) = binding {
                     let term = binding.term;
                     let evidence_count = match term {
@@ -15529,15 +14729,6 @@ impl Resolver<'_, '_> {
                         )
                     })?;
                     evidence.extend((0..evidence_count).map(|_| EvidenceSlot::empty()));
-                    let syntax_grant = match (syntax_selected, term) {
-                        (true, ResolvedTermName::Global(binder)) => Some(
-                            self.syntax_reference_grant(name, SyntaxGrantTarget::Global(binder))?,
-                        ),
-                        (true, ResolvedTermName::Method(method)) => Some(
-                            self.syntax_reference_grant(name, SyntaxGrantTarget::Method(method))?,
-                        ),
-                        _ => None,
-                    };
                     expressions.push(ResolvedExpr {
                         diagnostic: None,
                         kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
@@ -15545,32 +14736,18 @@ impl Resolver<'_, '_> {
                             spelling: member.text.clone(),
                             origin: Origin::Source(name.span()),
                             import_span: binding.import_span,
-                            syntax_grant,
                             evidence: evidence.into_boxed_slice(),
                         }),
                         span: expression.span,
                     });
                 } else if let Some(constructor) = qualified_constructor.or(unqualified_constructor)
                 {
-                    let syntax_selected = if qualified_constructor.is_some() {
-                        context.introduction != 0
-                    } else {
-                        unqualified_constructor_from_syntax
-                    };
                     expressions.push(ResolvedExpr {
                         diagnostic: None,
                         kind: ResolvedExprKind::Constructor(ResolvedConstructorOccurrence {
                             constructor,
                             spelling: member.text.clone(),
                             origin: Origin::Source(name.span()),
-                            syntax_grant: syntax_selected
-                                .then(|| {
-                                    self.syntax_reference_grant(
-                                        name,
-                                        SyntaxGrantTarget::Constructor(constructor),
-                                    )
-                                })
-                                .transpose()?,
                         }),
                         span: expression.span,
                     });
@@ -15663,23 +14840,7 @@ impl Resolver<'_, '_> {
                 self.visit_match_expression(match_expression, expression.span, expressions)?;
             }
             SurfaceExprKind::Perform(request) => {
-                let identity = match self.effect_reference(&request.effect) {
-                    Ok(identity) => identity,
-                    Err(failure)
-                        if self.deferred_template_name(
-                            &request.effect,
-                            &failure,
-                            ResolveReason::UnknownEffect,
-                        )? =>
-                    {
-                        for argument in &request.arguments {
-                            self.resolve_owner_argument(argument)?.discard_iteratively();
-                        }
-                        tasks.push(ResolveTask::VisitExpr(&request.operand));
-                        return Ok(());
-                    }
-                    Err(failure) => return Err(failure),
-                };
+                let identity = self.effect_reference(&request.effect)?;
                 let effect = self.resolve_effect_instance_with_identity(
                     identity,
                     &request.effect,
@@ -15710,18 +14871,7 @@ impl Resolver<'_, '_> {
                 }
 
                 let operation =
-                    match self.resolved_operation(effect.instance.effect(), &request.operation) {
-                        Ok(operation) => operation,
-                        Err(failure)
-                            if failure.reason == ResolveReason::UnknownName
-                                && self.is_template_identifier(&request.operation) =>
-                        {
-                            drop(effect);
-                            tasks.push(ResolveTask::VisitExpr(&request.operand));
-                            return Ok(());
-                        }
-                        Err(failure) => return Err(failure),
-                    };
+                    self.resolved_operation(effect.instance.effect(), &request.operation)?;
                 self.type_work.charge(2).map_err(|()| {
                     error(
                         ResolveReason::TypeResourceExhausted,
@@ -15746,9 +14896,6 @@ impl Resolver<'_, '_> {
                 tasks.push(ResolveTask::VisitExpr(&request.operand));
             }
             SurfaceExprKind::Handle(_) => unreachable!("handlers use their separate reentry path"),
-            SurfaceExprKind::Resume(value) if self.admitting_template.is_some() => {
-                tasks.push(ResolveTask::VisitExpr(value));
-            }
             SurfaceExprKind::Resume(value) => {
                 let owner = self
                     .active_resumes
@@ -15774,15 +14921,6 @@ impl Resolver<'_, '_> {
                     span: expression.span,
                 });
                 tasks.push(ResolveTask::VisitExpr(value));
-            }
-            SurfaceExprKind::Discard | SurfaceExprKind::Retain
-                if self.admitting_template.is_some() =>
-            {
-                expressions.push(ResolvedExpr {
-                    diagnostic: None,
-                    kind: ResolvedExprKind::Unit,
-                    span: expression.span,
-                });
             }
             SurfaceExprKind::Discard => {
                 let owner = self
@@ -17909,7 +17047,6 @@ mod tests {
                         argument_provenance: Box::new([]),
                         origin: Origin::Source(span),
                         span,
-                        syntax_grant: None,
                     };
                     let mut expression = ResolvedExpr {
                         diagnostic: None,
@@ -17976,7 +17113,6 @@ mod tests {
                         argument_provenance: Box::new([]),
                         origin: Origin::Source(span),
                         span,
-                        syntax_grant: None,
                     };
                     let mut expression = ResolvedExpr {
                         diagnostic: None,
@@ -19626,401 +18762,6 @@ mod tests {
             );
         }
         checked
-    }
-
-    #[test]
-    fn linked_syntax_grants_require_the_original_export_target_and_route() {
-        let fixture = ImportBudgetFixture::create(
-            "import dependency as Dependency\nmain : Unit -> Int\nmain () = 42\n",
-            "type Secret = Hidden(Int)\ntype Other = Other(Int)\ninterface Check<Key> {\ncheck : Key -> Int\ninspect : Key -> Int\n}\ninterface OtherCheck<Key> {\nother_check : Key -> Int\n}\neffect Ask {\nask : Int -> Int\n}\neffect OtherAsk {\nother_ask : Int -> Int\n}\nprivate : Int -> Int\nprivate value = value + 1\nother : Int -> Int\nother value = value + 2\npub syntax inc $value:expr => {\nprivate $value\n}\n",
-        );
-        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
-            .expect("the syntax import graph loads");
-        let entry = graph.module(graph.entry()).unwrap();
-        let issuer = graph
-            .modules()
-            .iter()
-            .find(|module| !module.surface().syntax_declarations.is_empty())
-            .expect("syntax owner");
-
-        for case in 0..54 {
-            let namespace = case / 9;
-            let mutation = case % 9;
-            let mut checked = checked_import_dependencies(&graph);
-            let owner_index = checked
-                .iter()
-                .position(|module| module.module() == issuer.id())
-                .unwrap();
-            checked[owner_index]
-                .retain_syntax_exports(&issuer.surface().syntax_declarations)
-                .unwrap();
-            let dependencies = entry
-                .dependencies()
-                .iter()
-                .map(|edge| {
-                    let owner = checked
-                        .iter()
-                        .find(|module| module.module() == edge.target())
-                        .unwrap();
-                    DependencyExports::new(edge, owner.exports()).unwrap()
-                })
-                .collect::<Vec<_>>();
-            let mut consumer = check_module(resolve_module(entry, &dependencies).unwrap()).unwrap();
-            let owner = &checked[owner_index];
-            let (target, other, spelling) = match namespace {
-                0 => {
-                    let binder = |name: &str| {
-                        owner
-                            .schemes()
-                            .iter()
-                            .find(|scheme| scheme.spelling == name)
-                            .unwrap()
-                            .binder
-                    };
-                    (
-                        SyntaxGrantTarget::Global(binder("private")),
-                        SyntaxGrantTarget::Global(binder("other")),
-                        "private",
-                    )
-                }
-                1 => {
-                    let constructor = |name: &str| {
-                        owner
-                            .registry()
-                            .constructors()
-                            .iter()
-                            .find(|constructor| constructor.spelling == name)
-                            .unwrap()
-                            .id
-                    };
-                    (
-                        SyntaxGrantTarget::Constructor(constructor("Hidden")),
-                        SyntaxGrantTarget::Constructor(constructor("Other")),
-                        "Hidden",
-                    )
-                }
-                2 => {
-                    let nominal = |name: &str| {
-                        owner
-                            .registry()
-                            .nominals()
-                            .iter()
-                            .find(|nominal| nominal.spelling == name)
-                            .unwrap()
-                            .id
-                    };
-                    (
-                        SyntaxGrantTarget::Nominal(nominal("Secret")),
-                        SyntaxGrantTarget::Nominal(nominal("Other")),
-                        "Secret",
-                    )
-                }
-                3 => {
-                    let interface = owner
-                        .interface_facts()
-                        .iter()
-                        .find(|fact| fact.spelling == "Check")
-                        .unwrap();
-                    let method = |name: &str| {
-                        interface
-                            .methods
-                            .iter()
-                            .find(|method| method.spelling == name)
-                            .unwrap()
-                            .id
-                    };
-                    (
-                        SyntaxGrantTarget::Method(method("check")),
-                        SyntaxGrantTarget::Method(method("inspect")),
-                        "check",
-                    )
-                }
-                4 => {
-                    let interface = |name: &str| {
-                        owner
-                            .interface_facts()
-                            .iter()
-                            .find(|fact| fact.spelling == name)
-                            .unwrap()
-                            .id
-                    };
-                    (
-                        SyntaxGrantTarget::Interface(interface("Check")),
-                        SyntaxGrantTarget::Interface(interface("OtherCheck")),
-                        "Check",
-                    )
-                }
-                5 => {
-                    let effect = |name: &str| {
-                        owner
-                            .effects()
-                            .iter()
-                            .find(|effect| effect.spelling == name)
-                            .unwrap()
-                            .id
-                    };
-                    (
-                        SyntaxGrantTarget::Effect(effect("Ask")),
-                        SyntaxGrantTarget::Effect(effect("OtherAsk")),
-                        "Ask",
-                    )
-                }
-                _ => unreachable!(),
-            };
-            let syntax_import = *consumer
-                .direct_dependencies()
-                .iter()
-                .find(|route| route.target() == issuer.id())
-                .unwrap();
-            let export = Arc::clone(&owner.syntax_exports()[0]);
-            if mutation != 8 {
-                consumer
-                    .retain_syntax_imports(Arc::from([crate::syntax::SelectedSyntax {
-                        name: "inc".to_owned(),
-                        declaration: Arc::clone(&export),
-                        owner: owner_index,
-                        import_span: syntax_import.import_span(),
-                    }]))
-                    .unwrap();
-            }
-            let mut grant = SyntaxGrant {
-                export,
-                occurrence_module: entry.id(),
-                issuer: issuer.id(),
-                syntax_import,
-                target,
-                route: SyntaxGrantRoute::Owner {
-                    spelling: spelling.to_owned(),
-                    private: true,
-                },
-            };
-            match mutation {
-                0 | 7 | 8 => {}
-                1 => grant.target = other,
-                2 => grant.issuer = entry.id(),
-                3 => {
-                    grant.syntax_import =
-                        DirectDependencyRoute::new(issuer.id(), entry.surface().span)
-                }
-                4 => grant.export = Arc::new((*grant.export).clone()),
-                5 => {
-                    grant.route = SyntaxGrantRoute::Owner {
-                        spelling: spelling.to_owned(),
-                        private: false,
-                    }
-                }
-                6 => grant.occurrence_module = issuer.id(),
-                _ => unreachable!(),
-            }
-            let grant = Arc::new(grant);
-            let grants = if mutation == 7 {
-                vec![Arc::clone(&grant), grant]
-            } else {
-                vec![grant]
-            };
-            consumer.replace_syntax_grants_for_test(grants);
-            checked.push(consumer);
-            let result = crate::elaborate::link_modules(checked, graph.entry());
-            assert_eq!(
-                result.is_ok(),
-                mutation == 0,
-                "namespace={namespace}, grant mutation {mutation}"
-            );
-        }
-    }
-
-    #[test]
-    fn syntax_grants_authenticate_the_public_facade_route() {
-        let fixture = ImportBudgetFixture::create(
-            "import dependency as Dependency\nmain : Unit -> Int\nmain () = 42\n",
-            "import facade as View\npub syntax inc $value:expr => {\nView.Boxed($value)\n}\n",
-        );
-        fs::write(
-            fixture.0.join("facade.ash"),
-            "pub import actual (Capsule, Boxed, Relation)\n",
-        )
-        .unwrap();
-        fs::write(
-            fixture.0.join("actual.ash"),
-            "pub type Capsule = Boxed(Int)\npub opaque type Secret = Hidden(Int)\ntype Private = Private(Int)\npub interface Relation<Key> {\nrelate : Key -> Int\n}\ninterface HiddenRelation<Key> {\nhidden_relate : Key -> Int\n}\n",
-        )
-        .unwrap();
-        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
-            .expect("the constructor facade graph loads");
-        let entry = graph.module(graph.entry()).unwrap();
-        let issuer = graph
-            .modules()
-            .iter()
-            .find(|module| !module.surface().syntax_declarations.is_empty())
-            .unwrap();
-        let facade = graph
-            .modules()
-            .iter()
-            .find(|module| module.source().display_path().ends_with("facade.ash"))
-            .unwrap();
-        let actual = graph
-            .modules()
-            .iter()
-            .find(|module| module.source().display_path().ends_with("actual.ash"))
-            .unwrap();
-
-        let mut checked = checked_import_dependencies(&graph);
-        let owner_index = checked
-            .iter()
-            .position(|module| module.module() == issuer.id())
-            .unwrap();
-        checked[owner_index]
-            .retain_syntax_exports(&issuer.surface().syntax_declarations)
-            .unwrap();
-        let dependencies = entry
-            .dependencies()
-            .iter()
-            .map(|edge| {
-                let owner = checked
-                    .iter()
-                    .find(|module| module.module() == edge.target())
-                    .unwrap();
-                DependencyExports::new(edge, owner.exports()).unwrap()
-            })
-            .collect::<Vec<_>>();
-        let mut consumer = check_module(resolve_module(entry, &dependencies).unwrap()).unwrap();
-        let owner = &checked[owner_index];
-        let facade_module = checked
-            .iter()
-            .find(|module| module.module() == facade.id())
-            .unwrap();
-        let actual_module = checked
-            .iter()
-            .find(|module| module.module() == actual.id())
-            .unwrap();
-        let target = facade_module.exports().constructor("Boxed").unwrap().id;
-        assert_eq!(target.owner().module(), actual.id());
-        let nominal = facade_module.exports().nominal("Capsule").unwrap().id;
-        assert_eq!(nominal.module(), actual.id());
-        let interface = facade_module.exports().interface("Relation").unwrap().id;
-        assert_eq!(interface.module(), actual.id());
-        let private_interface = actual_module
-            .interface_facts()
-            .iter()
-            .find(|fact| fact.spelling == "HiddenRelation")
-            .unwrap()
-            .id;
-        let private_nominal = actual_module
-            .registry()
-            .nominals()
-            .iter()
-            .find(|nominal| nominal.spelling == "Private")
-            .unwrap()
-            .id;
-        let hidden = actual_module
-            .registry()
-            .constructors()
-            .iter()
-            .find(|constructor| constructor.spelling == "Hidden")
-            .unwrap()
-            .id;
-        let target = SyntaxGrantTarget::Constructor(target);
-        let hidden = SyntaxGrantTarget::Constructor(hidden);
-        let route = *owner
-            .direct_dependencies()
-            .iter()
-            .find(|route| route.target() == facade.id())
-            .unwrap();
-        let syntax_import = *consumer
-            .direct_dependencies()
-            .iter()
-            .find(|route| route.target() == issuer.id())
-            .unwrap();
-        let export = Arc::clone(&owner.syntax_exports()[0]);
-        consumer
-            .retain_syntax_imports(Arc::from([crate::syntax::SelectedSyntax {
-                name: "inc".to_owned(),
-                declaration: Arc::clone(&export),
-                owner: owner_index,
-                import_span: syntax_import.import_span(),
-            }]))
-            .unwrap();
-        checked.push(consumer);
-        let imported = |route, spelling: &str| SyntaxGrantRoute::Imported {
-            route,
-            spelling: spelling.to_owned(),
-        };
-        let cases = [
-            (target, imported(route, "Boxed"), true),
-            (hidden, imported(route, "Hidden"), false),
-            (
-                target,
-                imported(
-                    DirectDependencyRoute::new(facade.id(), entry.surface().span),
-                    "Boxed",
-                ),
-                false,
-            ),
-            (
-                target,
-                SyntaxGrantRoute::Owner {
-                    spelling: "Boxed".to_owned(),
-                    private: true,
-                },
-                false,
-            ),
-            (
-                target,
-                imported(
-                    DirectDependencyRoute::new(actual.id(), route.import_span()),
-                    "Boxed",
-                ),
-                false,
-            ),
-            (target, imported(route, "Hidden"), false),
-            (
-                SyntaxGrantTarget::Nominal(nominal),
-                imported(route, "Capsule"),
-                true,
-            ),
-            (
-                SyntaxGrantTarget::Nominal(private_nominal),
-                imported(route, "Private"),
-                false,
-            ),
-            (
-                SyntaxGrantTarget::Nominal(nominal),
-                imported(
-                    DirectDependencyRoute::new(actual.id(), route.import_span()),
-                    "Capsule",
-                ),
-                false,
-            ),
-            (
-                SyntaxGrantTarget::Interface(interface),
-                imported(route, "Relation"),
-                true,
-            ),
-            (
-                SyntaxGrantTarget::Interface(private_interface),
-                imported(route, "HiddenRelation"),
-                false,
-            ),
-            (
-                SyntaxGrantTarget::Interface(interface),
-                imported(
-                    DirectDependencyRoute::new(actual.id(), route.import_span()),
-                    "Relation",
-                ),
-                false,
-            ),
-        ];
-        for (target, route, expected) in cases {
-            let grant = SyntaxGrant {
-                export: Arc::clone(&export),
-                occurrence_module: entry.id(),
-                issuer: issuer.id(),
-                syntax_import,
-                target,
-                route,
-            };
-            assert_eq!(grant.authenticate(entry.id(), &checked), expected);
-        }
     }
 
     fn resolve_import_fixture_with_dependency_and_limit(
@@ -22378,90 +21119,6 @@ mod tests {
     }
 
     #[test]
-    fn template_name_admission_discards_temporary_resolver_state() {
-        for (evidence_body, tail, succeeds) in [
-            ("42", "value", true),
-            ("missing", "value", false),
-            ("42", "missing", false),
-        ] {
-            let text = format!(
-                "effect Ask {{\nask : Int -> Int\n}}\ninterface Check<Key> {{\ncheck : Key -> Int\n}}\nmain : Unit -> Int\nmain () = {{\nnewtype Existing = Existing(Int)\n42\n}}\npub syntax scratch $name:ident from $eff:ident then $ignored:expr => {{\nnewtype Token = Token(Int)\nwith Check<Token> {{\ncheck token = 42\n}}\nwith $name<Token> {{\ncheck token = {evidence_body}\n}}\nlet placeholder : $name<Int> = 1\nlet action : Unit -> Int ! {{$eff}} = fn(ignored) {{\n1\n}}\nlet $name = 1\nhandle (perform Ask.ask $name) with $eff using $name {{\nask value => resume {tail}\n}}\n}}\n"
-            );
-            let source = SourceFile::new("admission-scratch.ash", text).unwrap();
-            let tree = parse(lex(&source).unwrap());
-            let module = project_module(&source, &tree).unwrap();
-            assert_eq!(module.syntax_declarations.len(), 1);
-            let mut resolver = Resolver::new(ModuleId::new(0));
-            resolver.validate_local_namespaces(&module).unwrap();
-            let mut declarations = resolver.resolve_declarations(&module).unwrap();
-            let interface_count = declarations.interfaces.len();
-            let interface_pointer = declarations.interfaces.as_ptr();
-            assert_eq!(interface_count, 1);
-            let registry_counts = (
-                declarations.registry.nominals().len(),
-                declarations.registry.constructors().len(),
-            );
-            let counters = (
-                resolver.next_binder,
-                resolver.next_type_variable,
-                resolver.next_lexical_nominal,
-                resolver.next_lexical_evidence,
-                resolver.next_resume,
-            );
-            let introductions = resolver.binder_introductions.clone();
-            let nominal_counts = resolver.nominal_parameter_counts.clone();
-            let scope_count = resolver.scopes.len();
-            let effect_arity_count = resolver.written_effect_arities.len();
-            let syntax_grant_count = resolver.syntax_resolved_grants.len();
-            let active_resumes = resolver.active_resumes.clone();
-            let retained_clause = resolver.retained_clause;
-
-            let contexts = crate::syntax::SyntaxContexts::new(&[], &[], &[]);
-            let admissions = module
-                .syntax_declarations
-                .iter()
-                .filter_map(|declaration| {
-                    crate::syntax::template_for_admission(declaration, &source, &contexts).unwrap()
-                })
-                .collect::<Vec<_>>();
-            let result = resolver.admit_templates(&admissions, &mut declarations.interfaces);
-            assert_eq!(result.is_ok(), succeeds, "{tail}: {result:?}");
-            assert_eq!(declarations.interfaces.len(), interface_count);
-            assert_eq!(declarations.interfaces.as_ptr(), interface_pointer);
-            assert!(resolver.resolved_interfaces.0.is_empty());
-            assert_eq!(
-                counters,
-                (
-                    resolver.next_binder,
-                    resolver.next_type_variable,
-                    resolver.next_lexical_nominal,
-                    resolver.next_lexical_evidence,
-                    resolver.next_resume,
-                )
-            );
-            assert_eq!(resolver.binder_introductions, introductions);
-            assert_eq!(resolver.nominal_parameter_counts, nominal_counts);
-            assert!(resolver.lexical_nominals.0.is_empty());
-            assert!(resolver.lexical_constructors.0.is_empty());
-            assert!(resolver.lexical_nominal_parameters.0.is_empty());
-            assert!(resolver.lexical_method_parameters.0.is_empty());
-            assert_eq!(resolver.scopes.len(), scope_count);
-            assert_eq!(resolver.written_effect_arities.len(), effect_arity_count);
-            assert_eq!(resolver.syntax_resolved_grants.len(), syntax_grant_count);
-            assert_eq!(resolver.active_resumes, active_resumes);
-            assert_eq!(resolver.retained_clause, retained_clause);
-            assert!(resolver.admitting_template.is_none());
-            assert_eq!(
-                registry_counts,
-                (
-                    declarations.registry.nominals().len(),
-                    declarations.registry.constructors().len(),
-                )
-            );
-        }
-    }
-
-    #[test]
     fn late_expression_resolution_errors_discard_deep_completed_work_on_a_small_stack() {
         const WIDTH: usize = 32_768;
 
@@ -22895,8 +21552,7 @@ mod tests {
         assert_eq!(
             resolver
                 .constructor_reference(&reference)
-                .expect("the exact retry should reach the outer constructor")
-                .0,
+                .expect("the exact retry should reach the outer constructor"),
             constructor,
         );
         assert_eq!(resolver.type_work.used(), DEPTH);

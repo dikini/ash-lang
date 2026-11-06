@@ -240,7 +240,7 @@ pub fn project_module(
     let module = project_module_retaining_templates(source, tree)?;
     let contexts = crate::syntax::SyntaxContexts::new(&[], &[], &[]);
     for declaration in &module.syntax_declarations {
-        crate::syntax::template_for_admission(declaration, source, &contexts).map_err(
+        crate::syntax::validate_template_syntax(declaration, source, &contexts).map_err(
             |failure| match failure {
                 super::MacroParseFailure::Syntax {
                     resource: Some(failure),

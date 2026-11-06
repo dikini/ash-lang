@@ -5,4 +5,4 @@ effect Ask {
 }
 
 main : Unit -> Int
-main () = 42
+main () = bad 42

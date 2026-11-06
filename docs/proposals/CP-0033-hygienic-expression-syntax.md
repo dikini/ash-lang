@@ -138,24 +138,32 @@ its leading identifier, not inferred from an arbitrary argument.
 
 ### Definition-site authority
 
-Literal free template references are checked in the defining module; an
-unresolved free helper fails there. Definition-context names built by a
-procedure are resolved after the generated binding structure is known. A
-caller's local, targeted import, or alias cannot redirect these references.
-Qualified references resolve the alias first, then its actual exported member.
+Templates are checked for syntactic validity at definition time using
+category-correct capture placeholders; this does not resolve their free names.
+When a template is expanded, its literal free references resolve in the
+defining module's checked lexical environment after generated binding structure
+is known. An unresolved or inaccessible name then fails ordinary resolution;
+an unused template does not fail for that name. A caller's locals, imports, or
+aliases cannot redirect these references. Captured identifiers and expressions
+retain their contexts, and introduced local binders retain ordinary hygiene.
+Qualified references resolve the alias in its retained context, then its actual
+exported member. Procedurally constructed definition-context names use the same
+expansion-time lookup.
 
-Publishing syntax authorizes its use of the defining module's lexical access.
-Each surviving reference retains a compiler-authenticated grant tied to that
-syntax export, the original declaration, access/namespace, and import route.
-Its checked declaration and executable dependency closure survive linking.
-This is a new syntax-specific authorization channel; identity or spelling alone
-is insufficient. It does not add an ordinary import to the caller.
+Publishing syntax permits references to resolve with the defining module's
+lexical access. Compiler-issued identifier contexts select that checked
+environment; spelling and diagnostic origins cannot select it. Ordinary
+resolution checks the declaration and applicable access and import rules, then
+records its stable identity. The checked declaration facts and executable
+dependency closure needed by ordinary checking and linking survive. This does
+not add an ordinary import to the caller or require a separate per-reference
+authorization object.
 
 A macro owner can publish syntax using its private helper, private nominal, or
 own opaque constructor, as it can publish a helper function doing the same.
 Neither that owner nor its macro gains access to a dependency's unexported
 member or withheld constructor. Caller source cannot directly name the private
-declaration, and spliced/caller-context identifiers cannot acquire its grant.
+declaration, and spliced/caller-context identifiers cannot acquire its access.
 
 A definition-site method name retains its `MethodId` but does not capture the
 definition's implementation imports. Its generated use satisfies ordinary
@@ -200,7 +208,7 @@ returns to validation; each input/output crosses its own checked host boundary.
 The host supplies default allocation and syntax services, with no native,
 network, filesystem, clock, target query, or ambient compiler mutation service.
 Opaque handles cannot be forged from numbers, spellings, pointers, or origins.
-Output decoding authenticates nominal shape, handles, grants, and origins.
+Output decoding authenticates nominal shape, handles, and origins.
 The host transfers the complete result to compiler storage before releasing
 its evaluation root. Failure closes the invocation and publishes no partial
 expansion, preserving primary and teardown failures.
@@ -241,8 +249,8 @@ The compiler need not infer a DSL-specific role description from a source span.
 - Add hygienic lexical and syntax contexts, distinct generated declaration
   occurrences, explicit caller-context construction, and context-aware
   duplicate/ambiguity checking across existing namespaces.
-- Add authenticated definition-site reference grants, including deliberately
-  delegated same-module private/opaque operations, without exposing their names
+- Resolve definition-context references using the checked defining environment,
+  including its private and opaque declarations, without exposing their names
   or capturing interface implementation availability in caller scope.
 - Add an Ash-defined canonical syntax service, compile-time entry and checked
   bridge, bounded execution, output admission, and expansion provenance.
@@ -264,8 +272,8 @@ The compiler need not infer a DSL-specific role description from a source span.
   [type/constructor scope](../../spec/name-resolution.md#type-and-constructor-scope),
   [visibility/opacity](../../spec/name-resolution.md#public-private-and-opaque-declarations),
   and [local scope](../../spec/name-resolution.md#local-scope): syntax contexts,
-  import staging, definition grants, generated declaration occurrences, and
-  retained current scope/capability policies.
+  import staging, definition-context resolution, generated declaration
+  occurrences, and retained current scope/capability policies.
 - [Static semantics](../../spec/static-semantics.md#globals-and-modules):
   syntax publication, transformer admission and canonical syntax-service types;
   existing typing and evidence rules check expansions.
@@ -290,9 +298,9 @@ unimplemented under TASK-0067.
 After the complete product transition is integrated into `main`, the
 specification defines expression syntax and the Ash compiler-service interface
 above as supported language/compiler behavior. It states that expansion
-preserves lexical and syntax context, records explicit authority and causal
-origins, and leaves generated programs subject to normal checking. It describes
-only the implemented first-slice categories and imports; the broader DN-0062
+preserves lexical and syntax context, records checked declaration identities
+and causal origins, and leaves generated programs subject to normal checking.
+It describes only the implemented first-slice categories and imports; the broader DN-0062
 alternatives remain informative. No existing convenience is claimed to have
 moved into a library or ceased to require its current checks.
 

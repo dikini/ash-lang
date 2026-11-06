@@ -365,7 +365,6 @@ mod tests {
                 spelling: "value".into(),
                 origin: Origin::Source(span),
                 import_span: None,
-                syntax_grant: None,
                 evidence: evidence.into_boxed_slice(),
             }),
             span,
@@ -440,7 +439,6 @@ mod tests {
                     id: interface,
                     spelling: "Show".into(),
                     origin: Origin::Source(span),
-                    syntax_grant: None,
                 },
                 arguments: vec![crate::resolved::ResolvedOwnerArgument {
                     ty: crate::types::KindedArgument::TypeArg(Type::Unit),

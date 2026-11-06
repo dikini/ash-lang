@@ -1,4 +1,6 @@
 import forms (syntax bad)
 
+type Missing = Other(Int)
+
 main : Unit -> Int
-main () = 42
+main () = bad 42

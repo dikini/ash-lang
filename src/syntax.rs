@@ -197,7 +197,7 @@ pub(crate) enum MacroDelimiter {
 #[derive(Clone, Debug)]
 pub(crate) struct SelectedSyntax {
     pub(crate) name: String,
-    pub(crate) declaration: Arc<SurfaceSyntaxDeclaration>,
+    pub(crate) declaration: SurfaceSyntaxDeclaration,
     pub(crate) owner: usize,
     pub(crate) import_span: Span,
 }
@@ -206,14 +206,14 @@ pub(crate) struct SelectedSyntax {
 #[derive(Clone, Debug)]
 pub(crate) struct SyntaxContexts {
     caller: Vec<SelectedSyntax>,
-    owner_imports: Vec<Arc<[SelectedSyntax]>>,
+    owner_imports: Vec<Vec<SelectedSyntax>>,
     owners: Vec<Option<usize>>,
 }
 
 impl SyntaxContexts {
     pub(crate) fn new(
         caller: &[SelectedSyntax],
-        owner_imports: &[Arc<[SelectedSyntax]>],
+        owner_imports: &[Vec<SelectedSyntax>],
         owners: &[Option<usize>],
     ) -> Self {
         Self {
@@ -224,11 +224,11 @@ impl SyntaxContexts {
     }
 
     pub(crate) fn select(&self, name: &SurfaceName) -> Option<&SelectedSyntax> {
-        let imports: &[SelectedSyntax] = if name.introduction == 0 {
+        let imports = if name.introduction == 0 {
             &self.caller
         } else {
             let owner = self.owners.get(name.introduction - 1)?.as_ref()?;
-            self.owner_imports.get(*owner)?.as_ref()
+            self.owner_imports.get(*owner)?
         };
         imports.iter().find(|syntax| syntax.name == name.text)
     }
@@ -252,22 +252,14 @@ pub(crate) struct SyntaxNameUse {
     pub(crate) import_span: Span,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub(crate) struct SyntaxOwner {
     pub(crate) owner: Option<usize>,
     pub(crate) declaration: Span,
     pub(crate) import_span: Span,
-    pub(crate) export: Option<Arc<SurfaceSyntaxDeclaration>>,
 }
 
-/// Expands one invocation while the ordinary resolver owns its lexical scope.
-pub(crate) struct SyntaxExpansion<'a> {
-    source: &'a crate::source::SourceFile,
-    selected: &'a [SelectedSyntax],
-    owner_imports: &'a [Arc<[SelectedSyntax]>],
-    owners: Vec<SyntaxOwner>,
-    parse_failure: Option<crate::driver::SyntaxParseFailure>,
-    transformer: &'a mut dyn FnMut(
+type SyntaxTransformer<'a> = dyn FnMut(
         &SelectedSyntax,
         &[SurfaceSyntaxCapture],
         Span,
@@ -276,24 +268,25 @@ pub(crate) struct SyntaxExpansion<'a> {
         &[Option<usize>],
         &Arc<ExpansionFrame>,
         &mut crate::interface::InterfaceConstraintBudget,
-    ) -> Result<(SurfaceExpr, usize), Span>,
+    ) -> Result<(SurfaceExpr, usize), Span>
+    + 'a;
+
+/// Expands one invocation while the ordinary resolver owns its lexical scope.
+pub(crate) struct SyntaxExpansion<'a> {
+    source: &'a crate::source::SourceFile,
+    selected: &'a [SelectedSyntax],
+    owner_imports: &'a [Vec<SelectedSyntax>],
+    owners: Vec<SyntaxOwner>,
+    parse_failure: Option<crate::driver::SyntaxParseFailure>,
+    transformer: &'a mut SyntaxTransformer<'a>,
 }
 
 impl<'a> SyntaxExpansion<'a> {
     pub(crate) fn new(
         source: &'a crate::source::SourceFile,
         selected: &'a [SelectedSyntax],
-        owner_imports: &'a [Arc<[SelectedSyntax]>],
-        transformer: &'a mut dyn FnMut(
-            &SelectedSyntax,
-            &[SurfaceSyntaxCapture],
-            Span,
-            &SurfaceName,
-            usize,
-            &[Option<usize>],
-            &Arc<ExpansionFrame>,
-            &mut crate::interface::InterfaceConstraintBudget,
-        ) -> Result<(SurfaceExpr, usize), Span>,
+        owner_imports: &'a [Vec<SelectedSyntax>],
+        transformer: &'a mut SyntaxTransformer<'a>,
     ) -> Self {
         Self {
             source,
@@ -313,7 +306,7 @@ impl<'a> SyntaxExpansion<'a> {
         introduction
             .checked_sub(1)
             .and_then(|index| self.owners.get(index))
-            .cloned()
+            .copied()
     }
 
     pub(crate) fn selected(&self, name: &SurfaceName) -> Option<&SelectedSyntax> {
@@ -321,7 +314,7 @@ impl<'a> SyntaxExpansion<'a> {
             self.selected
         } else {
             let owner = self.owner(name.introduction)?;
-            self.owner_imports.get(owner.owner?)?.as_ref()
+            self.owner_imports.get(owner.owner?)?
         };
         imports.iter().find(|syntax| syntax.name == name.text)
     }
@@ -339,7 +332,6 @@ impl<'a> SyntaxExpansion<'a> {
             owner: Some(selection.owner),
             declaration: selection.declaration.span,
             import_span: selection.import_span,
-            export: Some(Arc::clone(&selection.declaration)),
         });
         let introduction = self.owners.len();
         let frame = Arc::new(ExpansionFrame {
@@ -408,7 +400,6 @@ impl<'a> SyntaxExpansion<'a> {
             owner: None,
             declaration: selection.declaration.span,
             import_span: selection.import_span,
-            export: None,
         }));
         expression.span = invocation;
         Ok(expression)
@@ -709,15 +700,14 @@ pub(crate) fn validate_transformers(
     Ok(())
 }
 
-/// Instantiate placeholders for definition-site name admission. Nested syntax
-/// remains opaque to the resolver until an invocation actually expands it.
-pub(crate) fn template_for_admission(
+/// Check template grammar with category-correct placeholders, without resolving names.
+pub(crate) fn validate_template_syntax(
     declaration: &SurfaceSyntaxDeclaration,
     source: &crate::source::SourceFile,
     contexts: &SyntaxContexts,
-) -> Result<Option<(SurfaceExpr, Vec<SurfaceName>)>, crate::parser::MacroParseFailure> {
+) -> Result<(), crate::parser::MacroParseFailure> {
     let SurfaceSyntaxImplementation::Template = &declaration.implementation else {
-        return Ok(None);
+        return Ok(());
     };
     let mut captures = Vec::new();
     let mut identifiers = Vec::new();
@@ -765,14 +755,14 @@ pub(crate) fn template_for_admission(
         declaration.span,
     )
     .map_err(|_| crate::parser::MacroParseFailure::Invalid)?;
-    let template = crate::parser::parse_template_admission(
+    crate::parser::parse_template_admission(
         source,
         declaration.span,
         contents,
         contexts,
         &identifiers,
     )?;
-    Ok(Some((template, identifiers)))
+    Ok(())
 }
 
 fn capture_by_name<'a>(

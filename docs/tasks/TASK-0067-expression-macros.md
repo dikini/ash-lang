@@ -75,11 +75,11 @@ fragments preserve grouping without becoming lexical scopes.
 
 The [checked-module boundary](../../spec/elaboration.md#module-linking-and-entry-generation)
 already retains lowered fragments, selected evidence, and hidden declaration
-facts. Those facts do not themselves authorize a syntax expansion to reference
-private declarations. Add the proposal's authenticated syntax-specific grants,
-retain their original routes and executable closure, and independently validate
-each newly linked compile-time or final program. Do not add private names or
-definition-site implementation imports to caller scope.
+facts. Compiler-issued definition contexts select the checked owner environment;
+ordinary resolution checks its access and import routes. Retain the checked
+executable closure and independently validate each newly linked compile-time or
+final program. Do not add private names or definition-site implementation
+imports to caller scope.
 
 `Evaluation` retains an `ObservedHeap` whose final drop closes its root. A macro
 host needs an explicit output/diagnostic decode, compiler-storage transfer, and
@@ -136,7 +136,7 @@ The current candidate changes the handoff:
    `MacroOutputNode` sequence from `capture_contents`. After dependency syntax
    selection, definition admission instantiates it with category-marked dummy
    captures and parses it through the ordinary output parser before resolving
-   module bodies. The existing name-only resolver reuses that parsed value.
+   module bodies. That syntax check does not resolve free names.
    The checked export retains the sequence and owner without re-lexing source
    or rerunning a dependency body.
 2. One instantiator maps template `Splice` nodes to the selected immutable
@@ -164,10 +164,10 @@ The current candidate changes the handoff:
    only its compiler-issued checked syntax owner and exact checked import route;
    fresh contexts have no owner fallback. It retains the existing original facts,
    private closure, opacity and caller-selected evidence. Origins describe
-   causes and never grant access. The current resolver's name-only template
-   admission rejects unused direct missing names and wrong splice kinds, defers
-   nested syntax captures without running transformers, and admits unused valid
-   cleanup and private owner references.
+   causes and never grant access. Unused templates may contain unresolved names;
+   expansion resolves them in the checked defining environment. Syntax admission
+   still rejects malformed templates and wrong splice kinds without running
+   nested transformers.
 
 The candidate runs both invoked and unused cleanup templates, a checked
 transformer's fresh-identifier region, an active caller-scope lookup and a
@@ -412,8 +412,9 @@ worklist refusal (`/tmp/ash-transformer-active-forest-probe.log`, SHA-256
 A captured identifier now selects a caller effect in a generated function's
 effect-row annotation. The real template and handwritten graphs both execute
 to 42; a missing actual effect and an effect outside the declared row retain
-ordinary failures. Unused templates still reject missing literal effects and
-missing type arguments. Previously the valid template failed admission on the
+ordinary failures. The earlier name-admission implementation rejected missing
+literal effects and type arguments even in unused templates; that timing is
+superseded. Previously the valid template failed admission on the
 temporary identifier (`/tmp/ash-template-row-capture-red.log`, SHA-256
 `f249d04b50e567d0578b4646dec0781c819c72b5bb90ae4b52f1b1101dce7786`).
 The existing name resolver defers only that issued placeholder after resolving
@@ -748,156 +749,101 @@ broader all-use Core correspondence prototype was parked at
 `/tmp/ash-expression-authority-all-use-wip.patch` (SHA-256
 `88e2be4b4044c21bca827f193bb9f60c7221e8d0988975704b1b64945f995b6c`).
 
-Definition-context global term selections now retain an occurrence-specific
-grant through the existing checked-module and linked-summary boundary. The
-linker checks the original syntax selection and import edge, checked owner,
-target, access and route. Caller and fresh names receive no such grant. One real
-private-helper occurrence retains the same grant into the linked group, passes
-ordinary Core validation and returns 42. Separate linked-boundary controls
-refuse mutations of a grant's target, issuer, export, route, access, occurrence
-owner and selection, including a duplicate grant
-(`/tmp/ash-syntax-term-grant-unit-final.log`,
-SHA-256 `7a882ff5b90dc8cd6d36b978a6dc0470cf1af2c6b930f2317dd343a1d5f452b9`).
-The 78-case driver suite passes with nested syntax, facade routes, privacy and
-the combined-origin capture controls (`/tmp/ash-syntax-term-grant-driver-final.log`,
-SHA-256 `7b990b3c47b373504d7a215fe855e33986d68b78fc66b14368b7ecaa5fac5e86`);
-the unchanged 256 KiB stack case also passes
-(`/tmp/ash-syntax-term-grant-small-stack.log`, SHA-256
-`7c3a2a76a38b0c0f37039ecfbbd19ce199bca053a27998f9b5831d9602dd0dbd`).
-Independent review passed at `ffe80802`; non-term grants and broader private
-closure remain open.
+The earlier implementation added per-reference grant objects and link rechecks
+for globals, constructors, nominals, methods, interfaces and effects. The user
+approved an amendment to CP-0033 removing that extra representation: issued
+contexts select a checked owner environment, ordinary resolution enforces its
+access and import rules, and existing linking retains the checked closure. The
+reviewer found no additional source-level protection from the grant objects.
+The previous grant-count and grant-mutation receipts therefore describe a
+superseded contract; they do not establish current acceptance. Preserve the
+independent identifier-origin repair below and verify private/opaque access,
+caller isolation, dependency visibility, handle authentication and ordinary
+checking through the actual driver after removal. The pre-amendment uncommitted
+work was saved at `/tmp/ash-grant-amendment-wip-20261106/tracked.patch`
+(SHA-256 `6bc1331aa4115b9a5c56d1449fde9a69973bea8df8d4ed9dc58e3ea251439f17`),
+including an unfinished, separate pattern-diagnostic attempt.
 
-The combined template and computed graph still interprets to 42 and its
-native executable returns 42 after the four copied source files are removed
-(`/tmp/ash-syntax-term-grant-native.log`, SHA-256
-`7c34cb88866897f9b1b4537838734ea0acb92c12ea4a59122fd230514dd4e8c0`).
-The executable is `/tmp/ash-grant-native-CYM561/program`, SHA-256
-`261a04a3c9aaede0c63031b04bc8dc278180360a68bc2228ba9c1ded05050088`;
-the exact probe is `/tmp/ash-grant-native-probe.sh`, SHA-256
-`5c17b43f7744d1c39150958d1961961a2ca151e51557c75b32195f1ec61262b4`.
+The user also clarified that template definitions receive syntax checks only:
+free names resolve in the defining environment when an invocation expands.
+Earlier receipts below for rejecting unknown names in unused templates document
+the superseded timing, not current acceptance. Transformer `using` targets and
+ordinary imports remain checked at definition as before.
+The earlier implementation rejected the unused missing-helper control
+(`/tmp/ash-template-deferred-names-red.log`, SHA-256
+`b13661b3c818e86f08b4a12dc8e6ffe98ed47a7fe2679184d0bf8b576447001b`). With
+syntax-only definition checks, it runs to 42; invoking that template still
+rejects its unresolved definition-context helper, even when the caller defines
+the same spelling. The shared driver, host, module and JSON suites pass 164
+tests (`/tmp/ash-template-amendment-regressions.log`, SHA-256
+`a881f0945442931b2c2898343c281982bdd302909bc1563f5ec377b30967963b`).
 
-The same combined graph exposed a missing constructor handoff: its two copies
-retained only two helper grants rather than the six helper and constructor
-grants (`/tmp/ash-syntax-constructor-grant-red.log`, SHA-256
-`58286c1f96cd7df030c8ad7c24ac79f7e973ce7448bfa3e046225c4fe7bc1fa7`).
-The working-tree change retains the four constructor grants through the same
-checked occurrence and linked boundary. A nested constructor graph retains four
-distinct expression and pattern grants and returns 42; caller and generated
-lexical constructors receive none. The focused checks also verify the public
-facade route and refuse a withheld constructor or changed route
-(`/tmp/ash-syntax-constructor-grants-final.log`, SHA-256
-`417056a8ae800bf892b67f76c2b0039e037f7baac9dce66530dc9bcdb50b8d3a`).
-Linked grant mutations cover both global and constructor targets
-(`/tmp/ash-syntax-constructor-grants-mutations.log`, SHA-256
-`34c290ea2f2235fa573dc37cc0999889b11947e827bb8f47c61545f1494d5029`).
-All 78 driver cases pass (`/tmp/ash-syntax-constructor-grants-driver.log`,
-SHA-256 `ad894790bb0bb98c342f99f25d6f42d809e30cdc23d92fa9a8a015f8a2a822ff`),
-as does the unchanged 256 KiB case
-(`/tmp/ash-syntax-constructor-grants-small-stack.log`, SHA-256
-`8edf6fac405833a14c5b2687f3b25a18b3b1de45a4d1c90f379501a65160e2ee`).
-The combined graph also interprets and builds to 42 after deleting its copied
-sources (`/tmp/ash-syntax-constructor-grants-native.log`, SHA-256
-`a749664380cb69e6191ed2dc963f5d8748bbff5057ab98ea12e1879d19495163`;
-executable SHA-256
-`7ac2ed2291ba5a1a642ab7338a9a88fdb3dcf6dea2dd7e364cfbec7c115470f9`).
-Independent review passed at `7c50916c`; grants for the other namespaces
-remain open.
+The amendment uses one connected checkpoint:
 
-A private owner type in a generated annotation resolved correctly but its
-nominal occurrence was missing from the linked grant list: the real graph
-retained two constructor grants instead of those two plus the type grant
-(`/tmp/ash-syntax-nominal-grant-red.log`, SHA-256
-`36bcde2adc433d5bbe16e0255882af7a8cc6b667b04ba21518e1afad90104d76`). The
-current change retains each selected nominal grant with its resolved type
-occurrence and passes the same grant to the checked module. The graph returns
-42; two written occurrences have distinct grants, while views retain their
-original grant. Public facade and private-access controls and 27 linked grant
-mutations pass (`/tmp/ash-syntax-nominal-grants-final-check.log`, SHA-256
-`49dfb8f879175386b9f297753f13afd2eb8a8c56491da72afa791c78f11c6266`). All 78
-driver cases pass (`/tmp/ash-syntax-nominal-grants-driver-review.log`, SHA-256
-`4a5fd040811b785aa323d54e29316f118dd059311f4c4a8ecc719761fb9b6688`), as does
-the unchanged 256 KiB case (`/tmp/ash-syntax-nominal-grants-small-stack-review.log`,
-SHA-256 `a2c34fae7bff64f65cc2aa9b0e3c4f0ddd3555a9ee69557ca9bc71d1fd828ee5`).
-The existing combined graph still returns 42 in the interpreter and in a native
-executable after its four copied sources are removed
-(`/tmp/ash-syntax-nominal-grants-native-review.log`, SHA-256
-`bc809630f2ed56b95a6780f4aac8b5b8375d8d741e1ab87a61da0b478624e715`;
-executable SHA-256
-`03e4080073a854f28fde2f0348951a023bbef28fdcbb94b4a2b5f96022598bfe`).
-Independent review passed at `8af9a896`; other nominal lookup sites and other
-grant namespaces remain open.
-
-The private-interface example returned 42 but its definition-site `check`
-method occurrence retained no grant (`/tmp/ash-syntax-method-grant-red.log`,
-SHA-256 `da8ded84c07b8110672b8a7924b493efc8a9513edae65f88bd690f60988af000`).
-The current change retains the selected method on the existing resolved
-occurrence and checked link path. Private, renamed and qualified methods keep
-the exact occurrence grant; a generated lexical shadow keeps none. The eight
-focused grant checks, including 36 target and route mutations, pass
-(`/tmp/ash-syntax-method-grant-final.log`, SHA-256
-`b32029c84d95830c3f7451b4c4e511a33a0cf6975beceb8c7ba9002b78fbbc61`). All 78
-driver cases pass (`/tmp/ash-syntax-method-grant-driver.log`, SHA-256
-`ca7c8003bb7bb6d617cadee30bd7ee4972bfcb1da738f2741e4e816a22423d06`), as does
-the unchanged 256 KiB case (`/tmp/ash-syntax-method-grant-small-stack.log`,
-SHA-256 `2781e8f3ebe20213a3e992755d2800b751e4670f66653d26ae79751a93984926`).
-A targeted public method with an explicitly imported implementation returns 42
-both through the interpreter and from its native executable after the three
-copied sources are removed (`/tmp/ash-syntax-method-grant-native-supported-final.log`,
-SHA-256 `0963135b7408f22f04a1cf4286ba12ddab330bd30ca4b750ab122c0d822a18c1`;
-probe `/tmp/ash-syntax-method-native-probe.sh`, SHA-256
-`6d55d3eb19779442f274b666cc45809dffe7f4593ecbc2a02bd4ad563ad8056f`;
-executable SHA-256
-`9bf86fef87f0a9b5c9f2139fb8d87beb4d2cedb8034682f6a2de20284f3fb5dd`).
-Independent review passed at `b19e160b`; interface/equation selector grants,
-other namespaces and full acceptance remain open.
-
-The same private-evidence graph retained its method grant but missed the
-definition-site `Check` interface occurrence
-(`/tmp/ash-syntax-interface-grant-red.log`, SHA-256
-`e4db474b6e035de29557b606f517b55ec401a435b6ca6f007ea365ad016f1a1a`). The
-current change retains the interface grant on its resolved occurrence and in
-the existing checked link list. Private, renamed, qualified and owner-decoy
-graphs return 42 and retain both exact interface and method grants; a captured
-caller interface and generated lexical shadow retain none. Public-facade and
-dependency-private controls and 45 grant mutations pass
-(`/tmp/ash-syntax-interface-grant-review.log`, SHA-256
-`6326e37c906fa626dd24df5ce8b9983d282cde8d26be23088492de393609a633`). The
-name-only admission state check passes on success and errors
-(`/tmp/ash-syntax-interface-grant-admission.log`, SHA-256
-`e3cd1045ad59dd2a0cc6978774c4a86d52cbac0e20c08e8e2220ef0ffa187ef2`). All 78
-driver cases pass (`/tmp/ash-syntax-interface-grant-driver.log`, SHA-256
-`83c0e9113ba9d343474f363e53a1f2d1ff98ce266b860a657346306fd9d94652`), as does
-the unchanged 256 KiB case (`/tmp/ash-syntax-interface-grant-small-stack.log`,
-SHA-256 `ca92f5542cacb7f7f89310811cecb77faff161426ee3cc0fe050a10b7971e0fb`).
-Independent review passed at `49575c1d`; other interface sites, other grant
-namespaces and full acceptance remain open. The previously recorded
-local-nominal image limitation still applies to the private-evidence graph.
-
-The private-effect graph returned 42 but retained neither the generated
-`perform` nor handler reference to its owner's `Ask`
-(`/tmp/ash-syntax-effect-grant-red.log`, SHA-256
-`557eee1bd5d900b5b84f1c1218004e3e809d2ca25c7416a40fc009b68a30b736`). The
-current change retains separate grants on the two existing resolved effect
-instances. Owner, caller-captured, renamed and facade graphs pass with their
-expected grants, as do 54 linked grant mutations
-(`/tmp/ash-syntax-effect-grant-focused.log`, SHA-256
-`2009a4928b74d96fdf2ff5250aa8d263e48c2371f5e2bdb9251c4d7c6b07444d`). All 78
-driver cases pass (`/tmp/ash-syntax-effect-grant-driver.log`, SHA-256
-`d85a7ae6d802f6c65108fe1955b740c80e3bf523af6d397d4cccbdb9c8647495`), as do
-the admission-state check (`/tmp/ash-syntax-effect-grant-admission.log`,
-SHA-256 `b43ef2010bff46ed67b9d7b165a0787a3278c69ba5748c1fc10923bac6829dc5`)
-and unchanged 256 KiB case (`/tmp/ash-syntax-effect-grant-small-stack.log`,
-SHA-256 `43adc6236df94f74d7b0a3589365ada5ff8aeb60d1f6d5fd0323d861830f3839`).
-A qualified handled-effect graph returns 42 in the interpreter and from its
-native executable after its four copied sources are removed
-(`/tmp/ash-syntax-effect-grant-native.log`, SHA-256
-`428fa3f64cbd59d5b67671290132c9a5931fae4e85e26de47f9fdf3188c39483`;
-probe `/tmp/ash-syntax-effect-native-probe.sh`, SHA-256
-`0964b508190aeecc87933823a5960b4c242f2334c9225d1b59bef2aedf4abab8`;
-executable SHA-256
-`164a7151d6b27f368f23053807fcf13107d68d865312a15426df441ef4a93233`).
-Independent review, effect-row occurrences, other grant sites and full
-acceptance remain open.
+1. **Resolution and behavior — demonstrated.** Remove grant-only records and
+   rechecks, retain checked syntax selection and dependency linking, and run the
+   real private-helper, opaque-constructor, private-type, context and visibility
+   controls. The surface, host, module resolution/visibility and JSON suites
+   pass 137 tests in `/tmp/ash-context-amendment-regressions.log` (SHA-256
+   `9d1cb2c0c626782e404da8ca421bc60d982f45175dcc8aebdf5d383f187827eb`).
+2. **Compiler consumers — in progress.** The unchanged 256 KiB local-nominal
+   scope check passes (`/tmp/ash-context-amendment-stack.log`, SHA-256
+   `243e744c67e270243ab15a700bbd989580f5b607cede47aaf8859ad09836ea53`).
+   The combined graph returns 42 in the interpreter and its native executable
+   returns 42 after the four copied Ash sources are removed
+   (`/tmp/ash-context-amendment-native.log`, SHA-256
+   `cfa9ebc883c6b5b49c366170aebb02deedad038d0c559eed3c842e1af4e1d9ff`;
+   executable SHA-256
+   `db6d7c3ba2d1ec4df329821d1c5079c638cceb3e06a306f36fb04c8605549deb`).
+   The first fresh full gate stopped at `check`: a pre-existing polymorphism
+   test's exhaustive value classifier omitted the macro host's syntax-handle
+   variant (`/tmp/ash-context-amendment-full-gate.log`, SHA-256
+   `848a91af229fd3e3186c2dae4db2f095033acbea796453f1ac3f9e7885ac00f7`).
+   The classifier now names that variant, and the all-target workspace check
+   passes (`/tmp/ash-context-amendment-all-targets.log`, SHA-256
+   `05c239142bcc007f2d3cc2764b3baae64987fe01be26eb979df3f28e180054f1`).
+   A second gate passed the all-target check and build, then stopped on
+   Clippy findings (`/tmp/ash-context-amendment-full-gate-rerun.log`, SHA-256
+   `6fbce2aff1d5164bef6b6e675e0ecff96505955e768c309720ce1c177682e5b7`).
+   The repair keeps the public error types and work-reporting accessors while
+   reducing private diagnostic storage, and resolves the other local lint
+   findings. All-target, all-feature Clippy now passes with denied warnings
+   (`/tmp/ash-context-amendment-clippy-final.log`, SHA-256
+   `04f5dc9a1f43ff8af2fc8b4803f241304ee6adeb866f8320744a80da32dafbda`).
+   Focused source and graph failures retain their work reports, the
+   pre-census graph failure retains no report, and the unchanged 256 KiB
+   canary passes after the repair. The next full gate passed those stages but
+   exposed a stack overflow in the existing 64 KiB deep-abandonment query
+   (`/tmp/ash-context-amendment-final-gate.log`, SHA-256
+   `a6b399fd8130c913ec0e2bcb385a1815ac85b49ecdf380a58b761345f27439c1`).
+   Moving continuation selection's temporary workspace out of the later
+   discard path preserves its work and behavior; the unchanged test now passes
+   (`/tmp/ash-context-amendment-deep-abandonment-green.log`, SHA-256
+   `ddb0c6ffcca7dfb09567f21b4760dab060c99a82d7a699d7d6c7f49133c69493`),
+   along with adjacent resume, discard and retained controls. The following
+   gate passed all 1,729 library tests and stopped on stale architecture
+   inventories (`/tmp/ash-context-amendment-final-gate-rerun.log`, SHA-256
+   `523db7f382c06f1d90b7e67e9bf674c3899d7af2ab44ca40cc01be39772abe09`).
+   The refreshed inventory retains its ownership and evaluator boundaries;
+   its 47 tests pass (`/tmp/ash-template-amendment-architecture-final.log`,
+   SHA-256 `3f3cd2ed50cc9596f13df537fd9fa955cdc3526461cbfb746acbdf5521190db8`).
+   After the timing change, the combined graph again returns 42 through both
+   interpreter and native executable, with all four copied sources removed
+   before native execution (`/tmp/ash-template-amendment-native.log`, SHA-256
+   `e6f33e4ef6eb84e00f60977d610357c69a1de370a6ce94d0bfd9ecb31070e0de`;
+   executable SHA-256
+   `18d12a0588cb32fbf216c28ac31f62dd3818e7c0331e94e5947868a8611c309c`).
+   The next gate stopped at a Clippy finding left by the timing cleanup
+   (`/tmp/ash-template-amendment-full-gate.log`, SHA-256
+   `bd48f60c46d0cdd617d4ae92450515568370e3dd56f34fcb8e635af13602f90f`).
+   The equivalent lookup and test-assertion cleanups pass all-target,
+   all-feature Clippy (`/tmp/ash-template-amendment-clippy-final.log`, SHA-256
+   `1cc5da17371f74347594366b9116b2da2baca08ee5f2b2c2c4058e0f63ff8b83`).
+   Run the full gate on the final frozen candidate; its receipt and review
+   belong to this checkpoint.
+3. **Review and retention — pending.** Obtain independent review of the exact
+   amended proposal, implementation and receipts; retain no acceptance claim
+   until that review and the owning integration checks succeed.
 
 A nested identifier-capture probe lost a combined origin: the outer transformer
 supplied the caller invocation and outer definition, but the inner rejection
@@ -914,8 +860,8 @@ remains open.
 ## Progress
 
 The weighted ledger records **61.5/100 reviewed delivery points**. The latest
-reviewed implementation pin is `49575c1d`. These are partial implementation
-observations, not acceptance of the whole feature.
+reviewed implementation pin before the amendment is `6a143845`. These are
+partial implementation observations, not acceptance of the whole feature.
 M01–M14 and C1/C2 remain pending.
 
 ### Weighted delivery progress
@@ -944,8 +890,8 @@ reviewer owns `Rev`, and the orchestrator owns `PM`.
 | P07 | 5.5 | Dev / R5.5 | Restricted combined template graph to 42, supplied/introduced binders, private helper/opaque owner and nested DSL; `4a4c01b0`, reviewed through `26b43869`. |
 | P08 | 1 | Dev+Rev / R1 | Operator-stop and annotation-admission review repair; `26b43869`. Full annotation support remains P10. |
 | P09 | 4 | Dev / R3.75 | Procedural captured binder with preceding initializer scope (0.5), `/tmp/ash-syntax-captured-binder-driver.log`. An introduced function parameter avoids a same-spelled caller binding (0.5), and a captured parameter binds its captured body without escaping its scope (0.5); review cleared these function cases at `abd2e26f`. An introduced mutually recursive group retains a same-spelled caller binding (0.5), reviewed at `bc431118`. A captured recursive binder scopes over its initializer and body without escaping (0.5); template and procedural variants, fresh binders, and same-spelled distinct recursive members run to 42. A later sequential initializer sees the preceding captured binder (0.5), `/tmp/ash-syntax-recursive-capture-regressions.log` (SHA-256 `55937b612d95a37d110402814301820f0832c0113f5e1a6aed54337c0c541810`). Four ordinary recursive-resolution cases pass, `/tmp/ash-syntax-recursive-capture-ordinary.log` (SHA-256 `ea829a715c07691b22d1c07c85977e911398f57d0836ebf9685785edfd9974a0`). These cases and the R12 repair were reviewed at `a1135e26`. Captured `resume` expressions use the actual inner or outer clause selected by their expanded position (0.5, reviewed at `89b21a51`). Both execute to 42; duplicate/missing handler clauses and nested-function capture retain their ordinary refusals. A further graph captures caller `value = 40` inside a clause with its own `value = 2` and returns 42. Captured constructor and nullary pattern contexts preserve actual duplicate checks (0.25, reviewed at `81eefcc9`; `/tmp/ash-captured-pattern-refactor-suite.log`, SHA-256 `e24f5ffce0620b25e019971e4df3e2e213a0921b406dc2ea241576838eff0758`). Broader patterns and sequential scopes remain pending (0.25). |
-| P10 | 5 | Dev / R4.25 | Duplicated captures retain distinct local binder IDs (0.5), local newtype and constructor IDs (0.5), and resource identity and handle IDs (0.5); the combined graph preserves nested syntax and a caller free reference and executes to 42. The independently validated Core is inspected in `/tmp/ash-syntax-copy-identities-batch.log` (SHA-256 `98dac1c11adf058b33a84ec3a6efb1fe95b3662a93796aacc8ea6163112b3afd`); review cleared these cases at `82d2f219`. A template-introduced local newtype and its constructor remain distinct from the caller’s same-spelled nominal and constructor; the captured caller annotation retains its own type and the real graph executes to 42 (0.5, reviewed at `9b1cb854`), `/tmp/ash-syntax-generated-newtype-origin.log` (SHA-256 `88b3373f0c8cfac57aa157f315748da7e55e56effa3d4cca981a7be1cdd131a4`). Independent Core rejects ten construction-origin and representation mutations and continues to reject wrapped source-only origins; five local-newtype checks pass in `/tmp/ash-syntax-newtype-lib-batch.log` (SHA-256 `2ae8d4a8ea3f5808eceed197f1515fcac1bd28ccde4fc357d0123a3b22afed7c`). An unqualified annotation selects the owner’s private nominal or an introduced local nominal instead of a same-spelled caller nominal or type parameter (0.5, reviewed at `47524835`). Both valid graphs return 42; distinct caller types, direct caller private access, and an unused unknown annotation are refused. A unique template-local nominal now resolves in its lexical scope even without a same-named owner nominal. Renamed targeted and qualified imported nominal annotations follow the checked owner route, including through a facade and under caller shadowing (0.5, reviewed at `d2d377bf`); wrong caller types, owner-only aliases, and an unused dependency-private qualified type are refused. Applied targeted and qualified types, including nested type arguments, use the defining context; one- and two-parameter template-local newtypes also execute to 42, while a parameter cannot escape its representation (0.5, reviewed at `ac1561e5`). Introduced cell and region scopes preserve caller bindings, initializer/provider order, generated type identities and ordinary escape checks; real graphs execute to 42 (0.5, reviewed at `57ce1f1f`). Captured effect-row members and tails retain caller context and avoid introduced-name capture (0.25, reviewed at `eeec9e7f` and `24c8d51c`; `/tmp/ash-captured-row-tail-suite.log`, SHA-256 `e2f0b01d88b3545dfe9e9e92e62cc82b046e595ba4b4e98c7d45466cfdd40198`). Other copied binder/use cases (0.5), and copied nominal/region cases and broader type scopes (0.25) remain pending. |
-| P11 | 5 | Dev / R3 | A template's direct and facade-qualified public term retains the owner's route despite a conflicting caller alias; unused dependency-private references and ordinary caller use of the owner's alias are refused (0.5), `/tmp/ash-syntax-owner-qualified-regressions.log` (SHA-256 `c7c147b247ef8307a18adf5e65bfcbd719b14eade02b09ee2684f135cd6ebab9`), reviewed at `98613915`. A renamed targeted public import works in template and procedural output, through a facade and under caller shadowing; captured caller references retain caller access and ordinary caller access to the owner-only name is refused (0.5), `/tmp/ash-syntax-owner-targeted-regressions.log` (SHA-256 `625b357e3890ca7a2c59b11bd19c0266afd6e164e8fb83a51273c080c212f996`), reviewed at `1bd1a08e`. Owner-qualified public constructor expressions, match and function-parameter patterns work with caller shadowing; dependency opaque constructors remain refused and ordinary access/re-export coexists (0.5), `/tmp/ash-syntax-copy-constructor-final.log` (SHA-256 `6546d7ff826e169e5e32b31983fd3362e6381b8c07b6e50bdc86d56cb0bce5b2`), reviewed at `82d2f219`. A renamed targeted constructor works in template expressions and patterns, procedural output, a facade, and caller shadowing while ordinary caller access is refused (0.5, reviewed at `9b1cb854`), `/tmp/ash-syntax-targeted-constructor-current.log` (SHA-256 `90534ec49a44823be92f9f09f5bb6a36307558106c753fe98b0389959925b707`); the current batch is based on `0cd326dc`, with combined SHA-256 `7091e75c5d1b1e51aed543614a9be923f34bc38c1de1c69d92997fd6b011a1cb` for the six changed Rust files and generated-newtype and targeted-constructor fixtures. A generated local-evidence graph retains its owner’s checked private interface and a private signature type, and validates its generated method binder through Core (0.5, reviewed at `4a79dcf9`); its checked routes, caller shadowing and privacy controls are described above. Checked public effect routes and contextual interface routes retain their original identities and privacy boundaries (0.5, reviewed at `2ad6e6be`, `ee521864`, and `e9d873c5`; `/tmp/ash-qualified-interface-suite.log`, SHA-256 `5a31d975c1d1a8fba852a7802e2605f25fa58deb196af93864ca8b3e415012eb`). Remaining full authenticated grants/access (0.5), broader retained private closure and Core consumers (1), and route mutation refusals (0.5) remain pending, beyond P07. |
+| P10 | 5 | Dev / R4.25 | Duplicated captures retain distinct local binder IDs (0.5), local newtype and constructor IDs (0.5), and resource identity and handle IDs (0.5); the combined graph preserves nested syntax and a caller free reference and executes to 42. The independently validated Core is inspected in `/tmp/ash-syntax-copy-identities-batch.log` (SHA-256 `98dac1c11adf058b33a84ec3a6efb1fe95b3662a93796aacc8ea6163112b3afd`); review cleared these cases at `82d2f219`. A template-introduced local newtype and its constructor remain distinct from the caller’s same-spelled nominal and constructor; the captured caller annotation retains its own type and the real graph executes to 42 (0.5, reviewed at `9b1cb854`), `/tmp/ash-syntax-generated-newtype-origin.log` (SHA-256 `88b3373f0c8cfac57aa157f315748da7e55e56effa3d4cca981a7be1cdd131a4`). Independent Core rejects ten construction-origin and representation mutations and continues to reject wrapped source-only origins; five local-newtype checks pass in `/tmp/ash-syntax-newtype-lib-batch.log` (SHA-256 `2ae8d4a8ea3f5808eceed197f1515fcac1bd28ccde4fc357d0123a3b22afed7c`). An unqualified annotation selects the owner’s private nominal or an introduced local nominal instead of a same-spelled caller nominal or type parameter (0.5, reviewed at `47524835`). Both valid graphs return 42; distinct caller types, direct caller private access, and an unknown annotation is refused when expanded. A unique template-local nominal now resolves in its lexical scope even without a same-named owner nominal. Renamed targeted and qualified imported nominal annotations follow the checked owner route, including through a facade and under caller shadowing (0.5, reviewed at `d2d377bf`); wrong caller types, owner-only aliases, and an expanded dependency-private qualified type are refused. Applied targeted and qualified types, including nested type arguments, use the defining context; one- and two-parameter template-local newtypes also execute to 42, while a parameter cannot escape its representation (0.5, reviewed at `ac1561e5`). Introduced cell and region scopes preserve caller bindings, initializer/provider order, generated type identities and ordinary escape checks; real graphs execute to 42 (0.5, reviewed at `57ce1f1f`). Captured effect-row members and tails retain caller context and avoid introduced-name capture (0.25, reviewed at `eeec9e7f` and `24c8d51c`; `/tmp/ash-captured-row-tail-suite.log`, SHA-256 `e2f0b01d88b3545dfe9e9e92e62cc82b046e595ba4b4e98c7d45466cfdd40198`). Other copied binder/use cases (0.5), and copied nominal/region cases and broader type scopes (0.25) remain pending. |
+| P11 | 5 | Dev / R3 | A template's direct and facade-qualified public term retains the owner's route despite a conflicting caller alias; expanded dependency-private references and ordinary caller use of the owner's alias are refused (0.5), `/tmp/ash-syntax-owner-qualified-regressions.log` (SHA-256 `c7c147b247ef8307a18adf5e65bfcbd719b14eade02b09ee2684f135cd6ebab9`), reviewed at `98613915`. A renamed targeted public import works in template and procedural output, through a facade and under caller shadowing; captured caller references retain caller access and ordinary caller access to the owner-only name is refused (0.5), `/tmp/ash-syntax-owner-targeted-regressions.log` (SHA-256 `625b357e3890ca7a2c59b11bd19c0266afd6e164e8fb83a51273c080c212f996`), reviewed at `1bd1a08e`. Owner-qualified public constructor expressions, match and function-parameter patterns work with caller shadowing; dependency opaque constructors remain refused and ordinary access/re-export coexists (0.5), `/tmp/ash-syntax-copy-constructor-final.log` (SHA-256 `6546d7ff826e169e5e32b31983fd3362e6381b8c07b6e50bdc86d56cb0bce5b2`), reviewed at `82d2f219`. A renamed targeted constructor works in template expressions and patterns, procedural output, a facade, and caller shadowing while ordinary caller access is refused (0.5, reviewed at `9b1cb854`), `/tmp/ash-syntax-targeted-constructor-current.log` (SHA-256 `90534ec49a44823be92f9f09f5bb6a36307558106c753fe98b0389959925b707`); the current batch is based on `0cd326dc`, with combined SHA-256 `7091e75c5d1b1e51aed543614a9be923f34bc38c1de1c69d92997fd6b011a1cb` for the six changed Rust files and generated-newtype and targeted-constructor fixtures. A generated local-evidence graph retains its owner’s checked private interface and a private signature type, and validates its generated method binder through Core (0.5, reviewed at `4a79dcf9`); its checked routes, caller shadowing and privacy controls are described above. Checked public effect routes and contextual interface routes retain their original identities and privacy boundaries (0.5, reviewed at `2ad6e6be`, `ee521864`, and `e9d873c5`; `/tmp/ash-qualified-interface-suite.log`, SHA-256 `5a31d975c1d1a8fba852a7802e2605f25fa58deb196af93864ca8b3e415012eb`). Remaining definition-context access and privacy behavior (0.5), broader retained private closure and Core consumers (1), and source-level route refusals (0.5) remain pending, beyond P07. |
 | P12 | 3 | Dev / R3 | A template or checked transformer selects a definition-site method, renamed targeted import, qualified import or public facade using caller-local evidence and executes to 42 under caller shadowing. Without caller evidence each fails `constraint.unsatisfied`; a syntax import does not introduce an ordinary caller method (1, reviewed at `b70c6bb3`), `/tmp/ash-macro-method-procedural.log` (SHA-256 `24cf1c1979cc1f0329109b71a2aca577b54e8c0cedf598f96e9ad6765830b84a`). Broader private-method cases remain pending. Six affected suites pass 167 cases in `/tmp/ash-macro-method-regressions.log` (SHA-256 `28baa45f8ca63a7b3b371c36f6398bcadb324b548fb3856af352ec6435e3363d`); the combined hash for the four changed Rust files and method fixtures is `0df274f24e1f2b92cb4f8d4f50abc2b71cb3273aced54ef728521b86c2af5a59`. Template-generated `resume`, `discard` and `retain`, plus a checked transformer producing `resume`, execute to 42 in their valid handler contexts; outside-clause, nested-function capture and outside-retained-root forms keep their ordinary refusals (1, reviewed at `d1e16df4`), `/tmp/ash-macro-continuations-procedural.log` (SHA-256 `160da5e3367be104cedfb308f77c13f4d588310569e9c6c0138c14091544f505`). Six affected suites pass 180 cases in `/tmp/ash-macro-continuations-regressions.log` (SHA-256 `243105483287c22e3ae8fe1d79b4b1c8acf79a708eef96ebf536a700ab4ec5a7`); the combined hash for the two changed Rust files and continuation fixtures is `46b508ae457b2574e94159fed18fc652744ce07499cc24f3bd338d0a92d53a42`. A copied effectful capture runs twice; two captured requests produce 42 in written order and 33 when reversed, with the handwritten control also producing 42. A captured resource read returns 42, and a captured closure escaping its resource is refused with the same `type.resource-escape` reason as handwritten source (1, reviewed at `47524835`), `/tmp/ash-macro-effects-resources.log` (SHA-256 `0fcd09a863e99691ed433f3061d2256c95dd8d527695f491ab2d0c5ba55eb31a`). The named-type and effect/resource batch passes 236 tests across seven affected suites in `/tmp/ash-macro-type-context-regressions.log` (SHA-256 `9fe3960da0c7118aa6c93713a91af245312d01f80f9c550fe91524c77027167c`); its combined Rust and fixture hash is `dfd5400b8d9f902dcf8072a259b6f6f6336d9b7b99029c853e0688286bd04483`. |
 | P13 | 3 | Dev / R1.5 | Generated definition context selects its owner's imported syntax, caller context selects a different caller import, and fresh context selects neither caller syntax nor binding (1), `/tmp/ash-syntax-generated-context-driver.log` (SHA-256 `3f3815fdaedc6ee7a41ff6053c64a75aa832ef96d10d2a5ca36f09cef955833a`). An outer template's literal identifier retains its context as the binder and body of a separately imported nested syntax; its local 32 and the caller's same-spelled 10 produce 42 (0.5, reviewed at `c5bf51f3`), `/tmp/ash-macro-definition-admission-regressions.log`. Broader leading-context, import, reservation and conflict cases remain pending. |
 | P14 | 3 | Dev / R2 | Reviewed canonical module load/check/link (0.5); complete vocabulary (1) and lexer/declaration conformance (0.5), `/tmp/ash-syntax-token-vocabulary.log`; API identity and interface-version conformance remain pending. |
@@ -962,7 +908,7 @@ reviewer owns `Rev`, and the orchestrator owns `PM`.
 | P25 | 1 | Dev / R1 | A real non-requesting recursive transformer terminates as an expansion failure under the existing execution limit, `/tmp/ash-syntax-diverge-after.log` (SHA-256 `4be2d989431d7da8b0844bb3af9dfe0a6e21afde7ba15f897f2dcda7ffbfd1a9`). |
 | P26 | 0.5 | Dev / 0 | Required service, output, and expansion limits produce ordinary closed-invocation failures. |
 | P27 | 2.5 | Dev / R1 | Frozen computed graph to 42 (1), `/tmp/ash-transformer-combined-driver.log`; template/procedure equivalence (0.5), discarded and repeated nested invocation behavior (1) pending. |
-| P28 | 2.5 | Dev / 0 | Independent declaration-coordinate/grant/type/provenance mutation checks (1), distinct compile-time/final validation (1), completed dependency reuse (0.5). |
+| P28 | 2.5 | Dev / 0 | Independent declaration-coordinate/scope/type/provenance mutation checks (1), distinct compile-time/final validation (1), completed dependency reuse (0.5). |
 | P29 | 2 | Dev / 0 | Repeat compilation modulo fresh identities (1), changed semantic inputs update/reject output (1). |
 | P30 | 2.5 | Dev / R1.5 | Ordered occurrence causes and distinct expansion-frame representation (1), reviewed at `621f801c` and `79d3aad7`; demonstrated ordinary operator, match and application locations (0.5), reviewed through `a1fec7d7`. Other ordinary semantic causes/locations (0.5) and bounded copying/relocation preservation (0.5) remain pending. |
 | P31 | 2.5 | Dev / R1.5 | Authored rejection (0.5) and retained parser failure (0.5) render their messages and caller/definition causes in human and JSON output, `/tmp/ash-syntax-rejection-driver.log` and `/tmp/ash-syntax-parser-diagnostic-driver.log`. Distinct ordinary type errors render occurrence and frame labels in both formats (0.5), reviewed at `621f801c`, `79d3aad7`, and `a1fec7d7`; the latest receipts are `/tmp/ash-origin-argument-human-final.log` and `/tmp/ash-origin-argument-final.json`. Remaining diagnostic variants, complete frame structure, and locale/catalog conformance remain pending (1). |
@@ -975,11 +921,11 @@ reviewer owns `Rev`, and the orchestrator owns `PM`.
 | P38 | 1.5 | Dev+Rev / 0 | Fresh C2 full gate (1), retained-input/evidence equality and affected refresh (0.5). |
 | P39 | 1.5 | PM+Dev+Rev / 0 | Milestone merge and retained verification (1), acceptance readback and owned cleanup (0.5). |
 
-Weights total 100: reviewed foundation/template 20; remaining scope/grants 20;
+Weights total 100: reviewed foundation/template 20; remaining scope/context 20;
 API/entry 10; Ops/interchange 14; transfer/failure/limits 8; graph/Core/repeatability
 7; diagnostics 5; image/build 5; spec/tool docs 4; review/QA/gates/integration 7.
 The independent review assigns more weight to the unresolved contextual,
-non-term, copied-identity, grant, and Core-coordinate consumers than the first
+non-term, copied-identity, context, and Core-coordinate consumers than the first
 draft. The 20-point reviewed baseline is frozen; a changed ETA does not reweight it.
 Reviewed effort is 61.5, demonstrated provisional effort is 0, and 38.5 points
 have no credit. Review upgrades D to R without awarding implementation points
@@ -1023,7 +969,7 @@ The batch was reviewed at `57ce1f1f`; full resource/region acceptance remains op
 
 Applied imported types now retain the defining context in both the constructor
 and nested arguments; direct and qualified graphs execute to 42 despite caller
-shadowing, while wrong caller types and an unused unknown application are
+shadowing, while wrong caller types and an expanded unknown application are
 refused. Generated local newtypes with one or two type parameters execute to 42;
 their parameters do not escape the representation. Eight affected suites pass
 194 cases (`/tmp/ash-template-generic-regressions.log`, SHA-256
@@ -1039,17 +985,17 @@ A local newtype annotation, previously refused unless its name also appeared
 as an owner-level type, now resolves through its actual lexical declaration.
 Renamed targeted and qualified type imports retain their checked owner routes;
 direct and facade graphs return 42 despite caller shadowing. Wrong caller types,
-ordinary access to owner-only aliases, and an unused private dependency type
+ordinary access to owner-only aliases, and an expanded private dependency type
 are refused. Eight affected suites pass 194 cases
 (`/tmp/ash-template-type-routes-regressions.log`, SHA-256
 `6d869227b43e686575533bcd04cbcd0490e3868c663a35653e99af2089227a5f`).
 This batch was reviewed at `d2d377bf`.
 
-An unused template with a direct missing helper, including inside a literal
-function, is now refused at definition admission; the prior driver accepted it
+An earlier candidate refused an unused template with a direct missing helper,
+including inside a literal function; the prior driver accepted it
 (`/tmp/ash-macro-definition-admission-before.log`, SHA-256
 `0da303995f01843038e7d6c57c9465f3e2887f1b4d96e3b289e66d674733766a`). The
-existing resolver checks direct names with temporary capture placeholders, while
+then-current resolver checked direct names with temporary capture placeholders, while
 nested syntax remains deferred and is not executed during admission. A valid
 private helper and captured identifier compile, a nested binder executes to 42,
 and a surviving nested free name cannot use a caller helper. The resolver state
@@ -1065,7 +1011,8 @@ under a same-spelled caller effect. A private handler works when its operation
 signature uses a private nominal, including a newtype wrapping another private
 nominal; all three graphs return 42. Caller access to the private effect, types,
 and constructors remains refused. Qualified/imported/parameterized effect
-references and general private-closure and grant acceptance remain open. Six
+references and general private-closure acceptance remained open at that
+checkpoint. Six
 affected suites pass 156 tests in `/tmp/ash-macro-private-effect-final.log`
 (SHA-256 `8b9dc54b0d4c133e2d6eb908b43d24b5b0db48558c0e5cdf72e5a8323836cc49`);
 the additional same-owner constructor-privacy check passes in
@@ -1214,7 +1161,7 @@ owner-qualified graph previously failed at template admission
 `e50d73122e40cc146a4f4747f4a4f75773c2265e06a95ef5d5023c7626cb0334`).
 The direct and facade graphs now return 42; the captured/fresh, ordinary import,
 and visibility suites also pass, 77 tests in total. Qualified constructors,
-methods, complete grants, and route mutation checks remain open.
+methods, complete context and source-level route checks remain open.
 
 The targeted renamed import graph initially failed with an unknown owner name
 (`/tmp/ash-syntax-owner-targeted-before.log`, SHA-256
@@ -1237,7 +1184,7 @@ The focused host, template, module resolution, visibility and newtype suites
 pass 108 tests (`/tmp/ash-syntax-copy-constructor-final.log`, SHA-256
 `6546d7ff826e169e5e32b31983fd3362e6381b8c07b6e50bdc86d56cb0bce5b2`).
 The same reviewer cleared these two points at `82d2f219`; this does not
-establish complete copy, context, grant or M01–M14 coverage.
+establish complete copy, context or M01–M14 coverage.
 
 1. **Template grouping — demonstrated.** `cargo test -j 1 -p ash --test
    surface_macros template_macro_preserves_expression_capture_grouping --
@@ -1296,7 +1243,7 @@ in the plan; historical engineer-day estimates below are superseded forecasts.
 The independent reviewer has cleared staged parsing, syntax selectors, and the
 restricted template through `26b43869`, and the narrow procedural vertical
 through `ad8ca9cc`. Further procedural work remains open. Core declaration-coordinate handling, copied declarations, complete
-contextual resolution, grants, the transformer host, diagnostics and build
+contextual resolution, the transformer host, diagnostics and build
 remain open. Historical D0 receipts follow; they describe earlier candidates.
 
 ### D0 baseline receipt
@@ -1423,14 +1370,14 @@ branch, including the applicable checkpoint and integration verification.
 | Pending | M03: procedural path | An Ash transformer reads captures, computes an output tree, and executes through the real host. A discarded nested rejection does not run. Compare a template result; reject wrong signature/row, malformed output, authored rejection, and evaluator failure. |
 | Pending | M04: term hygiene | Caller/introduced temporary collision, reused and distinct fresh identifiers, supplied binder/body with preceding initializer, repeated splices, and nested expansion. Positively demonstrate deliberate `caller_identifier` capture; contrast definition/fresh contexts and ordinary hygienic non-capture. Assert exact binder/use relationships. |
 | Pending | M05: non-term scope | Local `newtype` and constructor, parameters, annotation types, recursive groups, and resource/region type and value scopes. Duplicate a fragment containing local binders, local nominal/region identities, and nested syntax; assert distinct output declarations with connected internal uses and unchanged caller free references. Include invalid scope and duplicate cases. |
-| Pending | M06: definition authority | Private helper and own opaque construction; targeted/qualified/facade imports with caller shadowing. Reject ordinary caller private access, another module's withheld constructor, forged/retargeted grants, and missing definition helpers. |
+| Pending | M06: definition authority | Private helper and own opaque construction; targeted/qualified/facade imports with caller shadowing. Reject ordinary caller private access, another module's withheld constructor, fabricated definition contexts, and missing definition helpers when expanded. |
 | Pending | M07: imports and staging | Renamed and duplicate syntax imports, term-name conflicts, no activation through complete import, missing exports, unsupported re-exports/local definitions, and canonical dependency cycles. Unused imports cannot run transformers. |
 | Pending | M08: DSL composition | Two separately authored forms nest and embed Ash. A template invokes a syntax dependency absent from caller imports. A same-spelled caller syntax import cannot redirect a generated identifier. |
 | Pending | M09: current checks | Generated method obligations require ordinary evidence; wrappers preserve current handler selection and observable effect count/order. Test valid/invalid `resume` and resource escape/use, including a nested function and required direct builtin import. |
-| Pending | M10: bridge and origins | Identity transformer round-trips token/group/fragment structure, contexts, grants, and origins. Check total negative/out-of-range capture indices, empty origin combination, invalid identifier/token construction, and `parse_expression` without name resolution or expansion; returning `SyntaxDiagnostic` preserves parse causes/origins. Reject wrong nominal constructors, malformed data, stale/foreign handles, and authority gained from strings/origins/caller syntax. Assert multiple input origins and nested frames in human/JSON diagnostics. |
+| Pending | M10: bridge and origins | Identity transformer round-trips token/group/fragment structure, contexts, and origins. Check total negative/out-of-range capture indices, empty origin combination, invalid identifier/token construction, and `parse_expression` without name resolution or expansion; returning `SyntaxDiagnostic` preserves parse causes/origins. Reject wrong nominal constructors, malformed data, stale/foreign handles, and authority gained from strings/origins/caller syntax. Assert multiple input origins and nested frames in human/JSON diagnostics. |
 | Pending | M11: completion and limits | Successful output survives evaluation-root teardown; authored failure, malformed output, evaluator/transfer failure, and exhausted budgets publish no partial result and retain teardown information. Bound self-producing recursive expansion. |
 | Pending | M12: reproducibility | Repeat equal compilations modulo fresh identity renaming; change caller binding, matcher, helper, imported syntax, and interface/semantic inputs and show updated output or rejection. No persistent cache is required. |
-| Pending | M13: module/Core boundary | Reuse a completed dependency without repeating its source proof; validate new compile-time and final linked Core independently. Reject mutations of declaration grants, scope, type, and provenance at their owning boundaries. |
+| Pending | M13: module/Core boundary | Reuse a completed dependency without repeating its source proof; validate new compile-time and final linked Core independently. Reject scope, type, and provenance mutations at their owning boundaries. |
 | Pending | M14: compatibility | Existing valid no-syntax programs keep their behavior; retain unaffected diagnostic regression cases and test the specified new syntax error for out-of-place `$`. Compile generated output through the current interpreted and supported program-image/build paths; generated runtime code needs no syntax-service interpretation. |
 
 The required production graph has a helper dependency, a syntax module with a
@@ -1500,9 +1447,9 @@ the feature current Ash before Main integration.
 - Full-body parsing currently precedes dependency checking; the loader and real
   driver must share a staged source/header carrier rather than two disconnected
   graph paths.
-- Existing hidden declaration summaries are reusable checked facts, not syntax
-  authorization. Grants and private executable dependencies need their own
-  authenticated path through resolution, checking, linking, and validation.
+- Existing hidden declaration summaries are reusable checked facts. Issued
+  contexts select the checked owner for ordinary resolution; linking must retain
+  the checked private executable dependencies without importing their names.
 - Existing spelling-keyed scope maps and structural continuation scopes require
   a single scope-policy account; a term-only expansion adapter is incomplete.
 - Ordinary observation lifetime is not the macro host's transfer/close contract.
