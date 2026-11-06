@@ -701,8 +701,30 @@ SHA-256 `ca15572ceb072895ebabcc65219f9a8a53319f916867a8aaa3a5e463a1c918da`),
 and the unchanged 256 KiB accept/escape case passes
 (`/tmp/ash-origin-match-stack-final.log`, SHA-256
 `3285fc840093992e0705c588c040f4aa927aa77d7a1fcd7cd7660b4f3f9214b5`).
-This result awaits independent review; broader causal diagnostics and M/C
-acceptance remain open.
+Independent review cleared this partial result at `79d3aad7`; broader causal
+diagnostics and M/C acceptance remain open.
+
+Application errors now retain the actual callee occurrence. A non-function
+written in a template is identified at that token; a captured non-function is
+identified in the caller. For an argument type mismatch, both the argument and
+the generated or captured callee are retained alongside the existing function
+domain relation. The valid callable graph returns 42. Earlier omissions are
+recorded in `/tmp/ash-origin-application-regression-red.log` (SHA-256
+`6d5e8e665ee32e0f9e537dd4bbfbef522b613d0f96e78911e893ba5f3caac7f7`)
+and `/tmp/ash-origin-argument-regression-red.log` (SHA-256
+`34776e9af02467d8df9223121b47eb661f17baac2c37564aec75dae2d6bbca28`).
+The actual argument-error human and JSON receipts are
+`/tmp/ash-origin-argument-human-final.log` (SHA-256
+`50aaaa4df42c03eb821d40fe6031068bac22c464f025be7acc03103c17ee23df`)
+and `/tmp/ash-origin-argument-final.json` (SHA-256
+`ece397c395acf2c82197171052bbcbd1d83bad778c96f97a405fcd9582443d96`).
+Seven affected suites pass 262 cases (`/tmp/ash-origin-application-suite.log`,
+SHA-256 `e6335f355e37e86f66879486344e42be66372605a1a730d441e71d1173e8db60`),
+and the unchanged 256 KiB accept/escape test passes
+(`/tmp/ash-origin-application-stack.log`, SHA-256
+`24145bf52b0dbea12f81a7e44ccb36f61d90ee46e6aa289eae3413df5d3320d9`).
+This partial result awaits independent review and does not close broader
+diagnostics or M/C acceptance.
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources
@@ -717,7 +739,7 @@ hygiene, causal diagnostics, M01–M14, C1 and C2 remain open.
 ## Progress
 
 The weighted ledger records **58.5/100 reviewed delivery points**. The latest
-reviewed implementation pin is `621f801c`. These are partial implementation
+reviewed implementation pin is `79d3aad7`. These are partial implementation
 observations, not acceptance of the whole feature.
 M01–M14 and C1/C2 remain pending.
 

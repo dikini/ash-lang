@@ -17542,6 +17542,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     ) -> Result<(), TypeError> {
         let (kind, expected_cause) = match kind {
             CheckKind::GeneralWithCause(cause) => (CheckKind::General, Some(cause)),
+            CheckKind::Argument {
+                function_span,
+                whole_span,
+                recursive_call,
+                function_cause,
+            } => (
+                CheckKind::Argument {
+                    function_span,
+                    whole_span,
+                    recursive_call,
+                    function_cause: None,
+                },
+                function_cause,
+            ),
             other => (other, None),
         };
         let expected = ProvenancedTypeOwner::new(expected);
@@ -19159,8 +19173,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let effects = self.fresh_effect_row(function_span)?;
             let exposed =
                 Type::function_computation(domain, ComputationType::new(codomain, effects));
-            self.unify(&function_ty, &exposed)
-                .map_err(|failure| match failure {
+            self.unify(&function_ty, &exposed).map_err(|failure| {
+                let error = match failure {
                     UnificationFailure::RowExclusion => row_exclusion_error(function_span, None),
                     UnificationFailure::Infinite => inference_failure(
                         TypeReason::InfiniteType,
@@ -19177,17 +19191,17 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     }
                     UnificationFailure::Invariant => invalid_state(),
-                })?;
+                };
+                error.with_diagnostic_location(function.diagnostic.as_deref())
+            })?;
             let zonked = self.zonk(&exposed)?;
             function_ty.replace(zonked);
         }
         if function_ty.function_view().is_none() {
-            return Err(not_applicable(
-                function_span,
-                whole_span,
-                &function_ty,
-                &self.registry,
-            ));
+            return Err(
+                not_applicable(function_span, whole_span, &function_ty, &self.registry)
+                    .with_diagnostic_location(function.diagnostic.as_deref()),
+            );
         }
         let provenance = if function.provenance.aligns(&function_ty) {
             function.provenance.clone()
@@ -19215,6 +19229,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ty: codomain_ty,
             provenance: codomain_provenance,
         });
+        let function_cause = function.diagnostic.clone();
         tasks.push(ElaborationTask::FinishApplication {
             whole_span,
             function_span,
@@ -19230,6 +19245,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 function_span,
                 whole_span,
                 recursive_call,
+                function_cause,
             },
         });
         Ok(())
@@ -26039,6 +26055,7 @@ enum CheckKind {
         function_span: Span,
         whole_span: Span,
         recursive_call: bool,
+        function_cause: Option<Box<crate::syntax::DiagnosticLocation>>,
     },
     Definition {
         result_cause: Span,
@@ -26053,6 +26070,7 @@ impl CheckKind {
     fn expected_cause(&self) -> Option<&crate::syntax::DiagnosticLocation> {
         match self {
             Self::GeneralWithCause(cause) => Some(cause),
+            Self::Argument { function_cause, .. } => function_cause.as_deref(),
             _ => None,
         }
     }
@@ -27702,6 +27720,7 @@ fn check_mismatch(
             function_span,
             whole_span,
             recursive_call,
+            ..
         } => {
             if recursive_call {
                 let mut diagnostic = Diagnostic::new(

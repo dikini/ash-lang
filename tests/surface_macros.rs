@@ -360,6 +360,106 @@ fn generated_token_diagnostics_preserve_definition_and_invocation() {
 }
 
 #[test]
+fn application_failure_preserves_function_occurrence() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    let forms = include_str!("fixtures/surface-macros/template-diagnostic/application_forms.ash");
+    let capture =
+        include_str!("fixtures/surface-macros/template-diagnostic/application_capture.ash");
+    for (entry, source, source_file, marker) in [
+        (
+            "application_invalid.ash",
+            forms,
+            "application_forms.ash",
+            "1 $value",
+        ),
+        (
+            "application_capture.ash",
+            capture,
+            "application_capture.ash",
+            "1 with 42",
+        ),
+    ] {
+        let failure = compile_path(fixture(&format!("template-diagnostic/{entry}")))
+            .expect_err("an Int is not a function");
+        assert_eq!(failure.reason_code(), "type.not-applicable");
+        let diagnostics = compile_file_diagnostics(&failure).unwrap();
+        let mut json = Vec::new();
+        write_json(&mut json, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        let labels = json["labels"].as_array().unwrap();
+        let position = source.find(marker).unwrap();
+        assert_eq!(labels[0]["relationship"], "application_function");
+        assert!(labels[0]["path"].as_str().unwrap().ends_with(source_file));
+        assert_eq!(labels[0]["byte_start"], position);
+        assert_eq!(labels[0]["byte_end"], position + 1);
+        for relationship in ["syntax_invocation", "syntax_definition"] {
+            assert_eq!(
+                labels
+                    .iter()
+                    .filter(|label| label["relationship"] == relationship)
+                    .count(),
+                1,
+                "{entry}: {json}"
+            );
+        }
+    }
+    let valid = compile_path(fixture("template-diagnostic/application_valid.ash")).unwrap();
+    assert_eq!(execute(&valid).unwrap().value_display(), "42");
+}
+
+#[test]
+fn application_argument_failure_preserves_function_and_argument_causes() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    let forms = include_str!("fixtures/surface-macros/template-diagnostic/application_forms.ash");
+    let capture = include_str!(
+        "fixtures/surface-macros/template-diagnostic/application_argument_capture.ash"
+    );
+    for (entry, function_source, function_file, function_marker) in [
+        (
+            "application_argument.ash",
+            forms,
+            "application_forms.ash",
+            "helper $value",
+        ),
+        (
+            "application_argument_capture.ash",
+            capture,
+            "application_argument_capture.ash",
+            "increment with true",
+        ),
+    ] {
+        let failure = compile_path(fixture(&format!("template-diagnostic/{entry}")))
+            .expect_err("the Bool argument does not match Int");
+        assert_eq!(failure.reason_code(), "type.argument");
+        let diagnostics = compile_file_diagnostics(&failure).unwrap();
+        let mut json = Vec::new();
+        write_json(&mut json, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        let labels = json["labels"].as_array().unwrap();
+        let start = function_source.find(function_marker).unwrap();
+        let end = start + function_marker.split_whitespace().next().unwrap().len();
+        assert_eq!(labels[0]["relationship"], "argument");
+        assert!(labels[0]["path"].as_str().unwrap().ends_with(entry));
+        assert!(
+            labels
+                .iter()
+                .any(|label| label["relationship"] == "function_domain")
+        );
+        assert!(
+            labels.iter().any(|label| {
+                label["relationship"] == "syntax_cause"
+                    && label["path"].as_str().unwrap().ends_with(function_file)
+                    && label["byte_start"] == start
+                    && label["byte_end"] == end
+            }),
+            "{entry}: {json}"
+        );
+    }
+}
+
+#[test]
 fn captured_expression_diagnostics_preserve_source_and_invocation() {
     use ash::presentation::{compile_file_diagnostics, write_json};
 
