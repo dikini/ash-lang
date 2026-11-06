@@ -19814,6 +19814,8 @@ pub struct ResolvedEffectInstance {
     pub origin: Origin,
     /// Complete instance span.
     pub span: Span,
+    /// Authorization retained only for an actual definition-context selection.
+    pub(crate) syntax_grant: Option<Arc<crate::resolve::SyntaxGrant>>,
 }
 
 /// One resolved operation request.

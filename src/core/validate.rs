@@ -30965,6 +30965,140 @@ mod tests {
     }
 
     #[test]
+    fn definition_site_effect_grants_reach_checked_occurrences() {
+        let compiled = crate::driver::compile_path_with_effect_validation_for_test(
+            crate::driver::RunConfiguration {
+                entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/surface-macros/template-perform/private.ash"),
+                roots: ModuleRoots::empty(),
+            },
+            |core, sources, modules, linked| {
+                let group = linked
+                    .groups()
+                    .iter()
+                    .find(|group| group.module() == linked.entry())
+                    .unwrap();
+                assert_eq!(group.syntax_grants().len(), 2);
+                let definition = group
+                    .definitions()
+                    .iter()
+                    .find_map(|definition| {
+                        let crate::resolved::ResolvedDefinitionKind::Equational(global) =
+                            definition.kind()
+                        else {
+                            return None;
+                        };
+                        (global.interface.name.spelling == "main").then_some(global)
+                    })
+                    .unwrap();
+                let mut body = &definition.equations[0].body;
+                while let crate::resolved::ResolvedExprKind::Block(block) = &body.kind {
+                    body = &block.result;
+                }
+                let crate::resolved::ResolvedExprKind::Add(binary) = &body.kind else {
+                    panic!("the caller addition is retained")
+                };
+                let mut expansion = binary.left.as_ref();
+                while let crate::resolved::ResolvedExprKind::Block(block) = &expansion.kind {
+                    expansion = &block.result;
+                }
+                let crate::resolved::ResolvedExprKind::Handle(handler) = &expansion.kind else {
+                    panic!("the generated handler is retained")
+                };
+                let mut handled = handler.body.as_ref();
+                while let crate::resolved::ResolvedExprKind::Block(block) = &handled.kind {
+                    handled = &block.result;
+                }
+                let crate::resolved::ResolvedExprKind::Perform(perform) = &handled.kind else {
+                    panic!("the generated request is retained")
+                };
+                let handler_grant = handler.effect.syntax_grant.as_ref().unwrap();
+                let perform_grant = perform.effect.syntax_grant.as_ref().unwrap();
+                assert!(!Arc::ptr_eq(handler_grant, perform_grant));
+                for (instance, grant) in [
+                    (&handler.effect, handler_grant),
+                    (&perform.effect, perform_grant),
+                ] {
+                    assert_eq!(
+                        grant.target(),
+                        crate::resolve::SyntaxGrantTarget::Effect(instance.instance.effect())
+                    );
+                    assert!(
+                        group
+                            .syntax_grants()
+                            .iter()
+                            .any(|retained| Arc::ptr_eq(grant, retained))
+                    );
+                }
+                assert_eq!(
+                    handler.effect.instance.effect(),
+                    perform.effect.instance.effect()
+                );
+                validate_effect_modules_linked_with_work(
+                    core,
+                    sources,
+                    modules,
+                    linked,
+                    &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                )
+            },
+        )
+        .expect("the generated private-effect graph validates");
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+    }
+
+    #[test]
+    fn effect_grants_follow_owner_and_caller_routes() {
+        for (entry, expected_grants) in [
+            ("wrapped.ash", 2),
+            ("owner.ash", 1),
+            ("owner_capture.ash", 1),
+            ("caller_capture.ash", 0),
+            ("targeted_entry.ash", 1),
+            ("targeted_facade.ash", 1),
+            ("handler_caller.ash", 0),
+            ("handler_owner.ash", 1),
+        ] {
+            let compiled = crate::driver::compile_path_with_effect_validation_for_test(
+                crate::driver::RunConfiguration {
+                    entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/fixtures/surface-macros/qualified-effect")
+                        .join(entry),
+                    roots: ModuleRoots::empty(),
+                },
+                |core, sources, modules, linked| {
+                    let group = linked
+                        .groups()
+                        .iter()
+                        .find(|group| group.module() == linked.entry())
+                        .unwrap();
+                    assert_eq!(group.syntax_grants().len(), expected_grants, "{entry}");
+                    assert!(group.syntax_grants().iter().all(|grant| matches!(
+                        grant.target(),
+                        crate::resolve::SyntaxGrantTarget::Effect(_)
+                    )));
+                    validate_effect_modules_linked_with_work(
+                        core,
+                        sources,
+                        modules,
+                        linked,
+                        &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                    )
+                },
+            )
+            .expect("the effect route graph validates");
+            assert_eq!(
+                crate::driver::execute(&compiled).unwrap().value_display(),
+                "42",
+                "{entry}"
+            );
+        }
+    }
+
+    #[test]
     fn definition_site_constructor_grants_reach_the_checked_linked_group() {
         for (entry, expected_grants) in [
             // Two copies each use one helper and two owner constructors.

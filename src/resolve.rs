@@ -1665,6 +1665,7 @@ pub(crate) enum SyntaxGrantTarget {
     Constructor(ConstructorId),
     Nominal(NominalTypeId),
     Interface(InterfaceId),
+    Effect(EffectId),
 }
 
 /// One definition-context selection, issued by resolution and checked at link.
@@ -1785,6 +1786,18 @@ impl SyntaxGrant {
                         .is_none_or(|fact| fact.id != interface)
                         == *private)
             }
+            (SyntaxGrantRoute::Owner { spelling, private }, SyntaxGrantTarget::Effect(effect)) => {
+                effect.module() == owner.module()
+                    && owner
+                        .effects()
+                        .iter()
+                        .any(|fact| fact.id == effect && fact.spelling == *spelling)
+                    && (owner
+                        .exports()
+                        .effect(spelling)
+                        .is_none_or(|fact| fact.id != effect)
+                        == *private)
+            }
             (SyntaxGrantRoute::Imported { route, spelling }, target) => {
                 owner.direct_dependencies().contains(route)
                     && modules
@@ -1811,6 +1824,10 @@ impl SyntaxGrant {
                                 .exports()
                                 .interface(spelling)
                                 .is_some_and(|fact| fact.id == interface),
+                            SyntaxGrantTarget::Effect(effect) => module
+                                .exports()
+                                .effect(spelling)
+                                .is_some_and(|fact| fact.id == effect),
                         })
             }
         }
@@ -3092,6 +3109,28 @@ struct WithheldImport {
 struct ImportedNominalName {
     id: NominalTypeId,
     syntax_selected: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ResolvedEffectName {
+    id: EffectId,
+    syntax_selected: bool,
+}
+
+impl ResolvedEffectName {
+    const fn ordinary(id: EffectId) -> Self {
+        Self {
+            id,
+            syntax_selected: false,
+        }
+    }
+
+    const fn syntax(id: EffectId) -> Self {
+        Self {
+            id,
+            syntax_selected: true,
+        }
+    }
 }
 
 impl ImportedNominalName {
@@ -6113,6 +6152,13 @@ impl Resolver<'_, '_> {
                             fact.id.module() == owner.module() && fact.spelling == member.text
                         })
                         .map(|fact| fact.id == interface),
+                    SyntaxGrantTarget::Effect(effect) => owner
+                        .effects()
+                        .iter()
+                        .find(|fact| {
+                            fact.id.module() == owner.module() && fact.spelling == member.text
+                        })
+                        .map(|fact| fact.id == effect),
                 };
                 if let Some(matches) = local {
                     if !matches {
@@ -6123,6 +6169,7 @@ impl Resolver<'_, '_> {
                     let targeted = match target {
                         SyntaxGrantTarget::Nominal(_) => terms.targeted_nominal(&member.text),
                         SyntaxGrantTarget::Interface(_) => terms.targeted_interface(&member.text),
+                        SyntaxGrantTarget::Effect(_) => terms.targeted_effect(&member.text),
                         _ => terms.targeted(&member.text),
                     };
                     let (route, original, _) = targeted.ok_or_else(invalid)?;
@@ -6156,6 +6203,10 @@ impl Resolver<'_, '_> {
                     .exports()
                     .interface(spelling)
                     .is_some_and(|fact| fact.id == interface),
+                SyntaxGrantTarget::Effect(effect) => dependency
+                    .exports()
+                    .effect(spelling)
+                    .is_some_and(|fact| fact.id == effect),
             };
             if !owner.direct_dependencies().contains(&route) || !exported {
                 return Err(invalid());
@@ -6187,6 +6238,10 @@ impl Resolver<'_, '_> {
                         .exports()
                         .interface(&member.text)
                         .is_none_or(|exported| exported.id != interface),
+                    SyntaxGrantTarget::Effect(effect) => owner
+                        .exports()
+                        .effect(&member.text)
+                        .is_none_or(|exported| exported.id != effect),
                 },
             }
         };
@@ -8455,7 +8510,10 @@ impl Resolver<'_, '_> {
         Err(unknown_interface_error(member.span, &member.text))
     }
 
-    fn effect_reference(&mut self, reference: &SurfaceReference) -> Result<EffectId, ResolveError> {
+    fn effect_reference(
+        &mut self,
+        reference: &SurfaceReference,
+    ) -> Result<ResolvedEffectName, ResolveError> {
         let member = reference.member();
         let context = reference.qualifier().unwrap_or(member);
         if context.introduction != 0 {
@@ -8474,6 +8532,7 @@ impl Resolver<'_, '_> {
                     ))
                     .copied(),
             }
+            .map(ResolvedEffectName::syntax)
             .ok_or_else(|| {
                 lookup_error(
                     ResolveContext::Effect,
@@ -8485,7 +8544,7 @@ impl Resolver<'_, '_> {
         }
         if let Some(namespace) = self.imported_namespace(reference)? {
             if let Some(id) = namespace.effects.get(&member.text).copied() {
-                return Ok(id);
+                return Ok(ResolvedEffectName::ordinary(id));
             }
             if namespace.nominals.contains_key(&member.text)
                 || namespace.interfaces.contains_key(&member.text)
@@ -8500,7 +8559,7 @@ impl Resolver<'_, '_> {
             ));
         }
         if let Some(id) = self.effect_names.get(&member.text).copied() {
-            return Ok(id);
+            return Ok(ResolvedEffectName::ordinary(id));
         }
         if self.type_names.contains_key(&member.text)
             || self.interface_names.contains_key(&member.text)
@@ -8622,7 +8681,7 @@ impl Resolver<'_, '_> {
                 )
             })?;
         for written in &row.effects {
-            let effect = self.effect_reference(&written.effect)?;
+            let effect = self.effect_reference(&written.effect)?.id;
             self.type_work
                 .charge(written.arguments.len().checked_mul(2).ok_or_else(|| {
                     error(
@@ -8758,7 +8817,7 @@ impl Resolver<'_, '_> {
 
     fn resolve_effect_instance_with_identity(
         &mut self,
-        identity: EffectId,
+        selected: ResolvedEffectName,
         effect: &SurfaceReference,
         arguments: &[SurfaceType],
         span: crate::source::Span,
@@ -8814,11 +8873,17 @@ impl Resolver<'_, '_> {
         for argument in resolved {
             retained.push(argument.into_inner());
         }
+        let syntax_grant = if selected.syntax_selected {
+            self.retain_resolved_syntax_grant(effect, SyntaxGrantTarget::Effect(selected.id))?
+        } else {
+            None
+        };
         Ok(ResolvedEffectInstance {
-            instance: EffectInstance::new_kinded(identity, retained.into_boxed_slice()),
+            instance: EffectInstance::new_kinded(selected.id, retained.into_boxed_slice()),
             argument_provenance: argument_provenance.into_boxed_slice(),
             origin: Origin::Source(effect.span()),
             span,
+            syntax_grant,
         })
     }
 
@@ -11508,7 +11573,8 @@ impl Resolver<'_, '_> {
                                     continue;
                                 }
                                 Err(failure) => return Err(failure),
-                            };
+                            }
+                            .id;
                             self.retain_written_effect_arity(
                                 effect,
                                 span,
@@ -11686,7 +11752,8 @@ impl Resolver<'_, '_> {
                                 continue;
                             }
                             Err(failure) => return Err(failure),
-                        };
+                        }
+                        .id;
                         self.retain_written_effect_arity(
                             effect,
                             row.span,
@@ -12220,6 +12287,7 @@ impl Resolver<'_, '_> {
                         argument_provenance: Box::new([]),
                         origin: Origin::Source(target_span),
                         span: target_span,
+                        syntax_grant: None,
                     },
                     operation,
                     spelling: "publish".into(),
@@ -13308,6 +13376,7 @@ impl Resolver<'_, '_> {
                         })?,
                         origin: Origin::Source(span),
                         span,
+                        syntax_grant: None,
                     },
                     operation: crate::types::OperationId::new(api.ops(), ordinal as u32),
                     spelling: spelling.to_owned(),
@@ -17840,6 +17909,7 @@ mod tests {
                         argument_provenance: Box::new([]),
                         origin: Origin::Source(span),
                         span,
+                        syntax_grant: None,
                     };
                     let mut expression = ResolvedExpr {
                         diagnostic: None,
@@ -17906,6 +17976,7 @@ mod tests {
                         argument_provenance: Box::new([]),
                         origin: Origin::Source(span),
                         span,
+                        syntax_grant: None,
                     };
                     let mut expression = ResolvedExpr {
                         diagnostic: None,
@@ -19561,7 +19632,7 @@ mod tests {
     fn linked_syntax_grants_require_the_original_export_target_and_route() {
         let fixture = ImportBudgetFixture::create(
             "import dependency as Dependency\nmain : Unit -> Int\nmain () = 42\n",
-            "type Secret = Hidden(Int)\ntype Other = Other(Int)\ninterface Check<Key> {\ncheck : Key -> Int\ninspect : Key -> Int\n}\ninterface OtherCheck<Key> {\nother_check : Key -> Int\n}\nprivate : Int -> Int\nprivate value = value + 1\nother : Int -> Int\nother value = value + 2\npub syntax inc $value:expr => {\nprivate $value\n}\n",
+            "type Secret = Hidden(Int)\ntype Other = Other(Int)\ninterface Check<Key> {\ncheck : Key -> Int\ninspect : Key -> Int\n}\ninterface OtherCheck<Key> {\nother_check : Key -> Int\n}\neffect Ask {\nask : Int -> Int\n}\neffect OtherAsk {\nother_ask : Int -> Int\n}\nprivate : Int -> Int\nprivate value = value + 1\nother : Int -> Int\nother value = value + 2\npub syntax inc $value:expr => {\nprivate $value\n}\n",
         );
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
             .expect("the syntax import graph loads");
@@ -19572,7 +19643,7 @@ mod tests {
             .find(|module| !module.surface().syntax_declarations.is_empty())
             .expect("syntax owner");
 
-        for case in 0..45 {
+        for case in 0..54 {
             let namespace = case / 9;
             let mutation = case % 9;
             let mut checked = checked_import_dependencies(&graph);
@@ -19677,6 +19748,21 @@ mod tests {
                         SyntaxGrantTarget::Interface(interface("Check")),
                         SyntaxGrantTarget::Interface(interface("OtherCheck")),
                         "Check",
+                    )
+                }
+                5 => {
+                    let effect = |name: &str| {
+                        owner
+                            .effects()
+                            .iter()
+                            .find(|effect| effect.spelling == name)
+                            .unwrap()
+                            .id
+                    };
+                    (
+                        SyntaxGrantTarget::Effect(effect("Ask")),
+                        SyntaxGrantTarget::Effect(effect("OtherAsk")),
+                        "Ask",
                     )
                 }
                 _ => unreachable!(),

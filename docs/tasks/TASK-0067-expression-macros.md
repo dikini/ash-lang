@@ -869,9 +869,35 @@ driver cases pass (`/tmp/ash-syntax-interface-grant-driver.log`, SHA-256
 `83c0e9113ba9d343474f363e53a1f2d1ff98ce266b860a657346306fd9d94652`), as does
 the unchanged 256 KiB case (`/tmp/ash-syntax-interface-grant-small-stack.log`,
 SHA-256 `ca92f5542cacb7f7f89310811cecb77faff161426ee3cc0fe050a10b7971e0fb`).
-Independent review, other interface sites, other grant namespaces and full
-acceptance remain open. The previously recorded local-nominal image limitation
-still applies to the private-evidence graph.
+Independent review passed at `49575c1d`; other interface sites, other grant
+namespaces and full acceptance remain open. The previously recorded
+local-nominal image limitation still applies to the private-evidence graph.
+
+The private-effect graph returned 42 but retained neither the generated
+`perform` nor handler reference to its owner's `Ask`
+(`/tmp/ash-syntax-effect-grant-red.log`, SHA-256
+`557eee1bd5d900b5b84f1c1218004e3e809d2ca25c7416a40fc009b68a30b736`). The
+current change retains separate grants on the two existing resolved effect
+instances. Owner, caller-captured, renamed and facade graphs pass with their
+expected grants, as do 54 linked grant mutations
+(`/tmp/ash-syntax-effect-grant-focused.log`, SHA-256
+`2009a4928b74d96fdf2ff5250aa8d263e48c2371f5e2bdb9251c4d7c6b07444d`). All 78
+driver cases pass (`/tmp/ash-syntax-effect-grant-driver.log`, SHA-256
+`d85a7ae6d802f6c65108fe1955b740c80e3bf523af6d397d4cccbdb9c8647495`), as do
+the admission-state check (`/tmp/ash-syntax-effect-grant-admission.log`,
+SHA-256 `b43ef2010bff46ed67b9d7b165a0787a3278c69ba5748c1fc10923bac6829dc5`)
+and unchanged 256 KiB case (`/tmp/ash-syntax-effect-grant-small-stack.log`,
+SHA-256 `43adc6236df94f74d7b0a3589365ada5ff8aeb60d1f6d5fd0323d861830f3839`).
+A qualified handled-effect graph returns 42 in the interpreter and from its
+native executable after its four copied sources are removed
+(`/tmp/ash-syntax-effect-grant-native.log`, SHA-256
+`428fa3f64cbd59d5b67671290132c9a5931fae4e85e26de47f9fdf3188c39483`;
+probe `/tmp/ash-syntax-effect-native-probe.sh`, SHA-256
+`0964b508190aeecc87933823a5960b4c242f2334c9225d1b59bef2aedf4abab8`;
+executable SHA-256
+`164a7151d6b27f368f23053807fcf13107d68d865312a15426df441ef4a93233`).
+Independent review, effect-row occurrences, other grant sites and full
+acceptance remain open.
 
 A nested identifier-capture probe lost a combined origin: the outer transformer
 supplied the caller invocation and outer definition, but the inner rejection
@@ -888,7 +914,7 @@ remains open.
 ## Progress
 
 The weighted ledger records **61.5/100 reviewed delivery points**. The latest
-reviewed implementation pin is `b19e160b`. These are partial implementation
+reviewed implementation pin is `49575c1d`. These are partial implementation
 observations, not acceptance of the whole feature.
 M01–M14 and C1/C2 remain pending.
 

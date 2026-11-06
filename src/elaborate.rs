@@ -34329,6 +34329,7 @@ mod tests {
                         instance: EffectInstance::new(effect, Box::new([])),
                         origin: Origin::Source(span),
                         span,
+                        syntax_grant: None,
                     },
                     operation,
                     spelling: "send".into(),
