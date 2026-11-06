@@ -278,8 +278,8 @@ the admission-state isolation test also passes
 (`/tmp/ash-template-captured-categories-pin-isolation.log`, SHA-256
 `9db7242c45f341b4fe61785ccd7c4298a368d368b6251d5daaf301bef94cad14`).
 Independent review cleared this candidate at `9f142555`. Qualified captured
-names, handler and row positions, generated multi-parameter ordering, and
-complete expansion provenance remain open.
+names, other handler and row positions, generated multi-parameter ordering,
+and complete expansion provenance remain open.
 
 A lowercase identifier supplied for a template-generated newtype now retains
 the ordinary parser's `parse.expected-form` rejection instead of reporting an
@@ -298,8 +298,26 @@ and without `--message-format json` produced
 and `/tmp/ash-template-output-cause-pin-human.log` (SHA-256
 `cc8d8649729763f8ba148e88a831e0bf9756f26d469e3b15e793795c8ab061ce`).
 Projector-invalid output and complete causal expansion diagnostics remain
-open. This diagnostic change awaits independent review; it adds no ledger
-credit.
+open. Independent review cleared this diagnostic change at `7f9abc16`; it adds
+no ledger credit.
+
+A caller-captured identifier can also select the effect handled by generated
+syntax, or an operation clause of the syntax owner's private effect. Both real
+driver programs execute to 42. The original admissions rejected their temporary
+identifiers (`/tmp/ash-macro-captured-handler-before.log`, SHA-256
+`b341e1b77fdc69b493ad46b9059cbfba4968672bbf13377adc12507d44398bb1`, and
+`/tmp/ash-macro-captured-handler-operation-before.log`, SHA-256
+`a3309929b0072dd240288ac61d122ef045dd7f2a854ce10b0db8d5a48503c455`).
+Missing literal names in the handled expression, store, clause, type arguments,
+and known-effect operations still fail; an unknown actual selector also fails.
+The macro, effect, and cleanup suites pass 160 cases
+(`/tmp/ash-macro-captured-handler-pin-regressions.log`, SHA-256
+`ee8eae6e5b378c7faa3188835e8e7d76a211adf42a7f7e2f6e84594830bb4936`), and
+the temporary resolver-state isolation test passes on success and failure,
+including active and retained continuation state
+(`/tmp/ash-macro-captured-handler-pin-isolation.log`, SHA-256
+`4cd41b4e4644a4762063cc73ab2ab73abec0cfb989665159b8e3c8efaaae63c7`).
+This handler change awaits independent review; it adds no ledger credit.
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources

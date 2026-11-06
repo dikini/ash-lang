@@ -13601,29 +13601,50 @@ impl Resolver<'_, '_> {
         span: Span,
         expressions: &mut ResolvedExpressionBuffer,
     ) -> Result<(), ResolveError> {
-        let effect = self.resolve_effect_instance_parts(
+        let effect = match self.resolve_effect_instance_parts(
             &handler.effect.effect,
             &handler.effect.arguments,
             handler.effect.span,
-        )?;
-        if crate::resolved::StoreApi::for_module(effect.instance.effect().module())
-            .is_some_and(|api| effect.instance.effect() == api.drive())
-        {
-            return Err(error(
-                ResolveReason::SealedDrive,
-                handler.effect.span,
-                "the store drive cannot be handled directly",
-            ));
-        }
-        if crate::resolved::NetworkApi::for_module(effect.instance.effect().module()).is_some_and(
-            |api| effect.instance.effect() == api.io() || effect.instance.effect() == api.join(),
         ) {
-            return Err(error(
-                ResolveReason::SealedNetwork,
-                handler.effect.span,
-                "network service effects cannot be used directly",
-            ));
+            Ok(effect) => Some(effect),
+            Err(failure)
+                if failure.reason == ResolveReason::UnknownEffect
+                    && self.is_template_placeholder(&handler.effect.effect) =>
+            {
+                for argument in &handler.effect.arguments {
+                    self.resolve_owner_argument(argument)?.discard_iteratively();
+                }
+                None
+            }
+            Err(failure) => return Err(failure),
+        };
+        if let Some(effect) = &effect {
+            if crate::resolved::StoreApi::for_module(effect.instance.effect().module())
+                .is_some_and(|api| effect.instance.effect() == api.drive())
+            {
+                return Err(error(
+                    ResolveReason::SealedDrive,
+                    handler.effect.span,
+                    "the store drive cannot be handled directly",
+                ));
+            }
+            if crate::resolved::NetworkApi::for_module(effect.instance.effect().module())
+                .is_some_and(|api| {
+                    effect.instance.effect() == api.io() || effect.instance.effect() == api.join()
+                })
+            {
+                return Err(error(
+                    ResolveReason::SealedNetwork,
+                    handler.effect.span,
+                    "network service effects cannot be used directly",
+                ));
+            }
         }
+        let deferred = effect.is_none()
+            || handler
+                .clauses
+                .iter()
+                .any(|clause| self.is_template_identifier(&clause.operation));
 
         let store = handler
             .store
@@ -13665,7 +13686,21 @@ impl Resolver<'_, '_> {
             )
         })?;
         for clause in &handler.clauses {
-            let operation = self.resolved_operation(effect.instance.effect(), &clause.operation)?;
+            let operation = match &effect {
+                Some(effect) => {
+                    match self.resolved_operation(effect.instance.effect(), &clause.operation) {
+                        Ok(operation) => Some(operation),
+                        Err(failure)
+                            if failure.reason == ResolveReason::UnknownName
+                                && self.is_template_identifier(&clause.operation) =>
+                        {
+                            None
+                        }
+                        Err(failure) => return Err(failure),
+                    }
+                }
+                None => None,
+            };
             let resume = ResumeId::new(self.next_resume);
             self.next_resume = self.next_resume.checked_add(1).ok_or_else(|| {
                 identity_error(
@@ -13716,14 +13751,27 @@ impl Resolver<'_, '_> {
             self.retained_clause = prior_retained_clause;
             self.active_resumes.truncate(resume_checkpoint);
             self.scopes.truncate(scope_checkpoint);
-            clauses.push(ResolvedHandlerClause {
-                operation,
-                spelling: clause.operation.text.clone(),
-                resume,
-                pattern: pattern.into_inner(),
-                body: resolved_body?.into_inner(),
-                span: clause.span,
+            let resolved_body = resolved_body?;
+            if deferred {
+                drop(pattern);
+                drop(resolved_body);
+            } else {
+                clauses.push(ResolvedHandlerClause {
+                    operation: operation.expect("a resolved handler has resolved operations"),
+                    spelling: clause.operation.text.clone(),
+                    resume,
+                    pattern: pattern.into_inner(),
+                    body: resolved_body.into_inner(),
+                    span: clause.span,
+                });
+            }
+        }
+        if deferred {
+            expressions.push(ResolvedExpr {
+                kind: ResolvedExprKind::Unit,
+                span,
             });
+            return Ok(());
         }
         expressions.push(ResolvedExpr {
             kind: ResolvedExprKind::Handle(ResolvedHandleExpr {
@@ -13731,7 +13779,7 @@ impl Resolver<'_, '_> {
                 hook_root: None,
                 store: store.map(|store| Box::new(store.into_inner())),
                 body: Box::new(body.into_inner()),
-                effect,
+                effect: effect.expect("a resolved handler has a resolved effect"),
                 clauses,
             }),
             span,
@@ -20716,7 +20764,7 @@ mod tests {
     fn template_name_admission_discards_temporary_resolver_state() {
         for (tail, succeeds) in [("value", true), ("missing", false)] {
             let text = format!(
-                "effect Ask {{\nask : Int -> Int\n}}\nmain : Unit -> Int\nmain () = {{\nnewtype Existing = Existing(Int)\n42\n}}\npub syntax scratch $name:ident then $ignored:expr => {{\nnewtype Token = Token(Int)\nlet placeholder : $name<Int> = 1\nlet $name = 1\nhandle (perform Ask.ask $name) with Ask {{\nask value => resume {tail}\n}}\n}}\n"
+                "effect Ask {{\nask : Int -> Int\n}}\nmain : Unit -> Int\nmain () = {{\nnewtype Existing = Existing(Int)\n42\n}}\npub syntax scratch $name:ident from $eff:ident then $ignored:expr => {{\nnewtype Token = Token(Int)\nlet placeholder : $name<Int> = 1\nlet $name = 1\nhandle (perform Ask.ask $name) with $eff using $name {{\nask value => resume {tail}\n}}\n}}\n"
             );
             let source = SourceFile::new("admission-scratch.ash", text).unwrap();
             let tree = parse(lex(&source).unwrap());
@@ -20740,6 +20788,8 @@ mod tests {
             let nominal_counts = resolver.nominal_parameter_counts.clone();
             let scope_count = resolver.scopes.len();
             let effect_arity_count = resolver.written_effect_arities.len();
+            let active_resumes = resolver.active_resumes.clone();
+            let retained_clause = resolver.retained_clause;
 
             let contexts = crate::syntax::SyntaxContexts::new(&[], &[], &[]);
             let admissions = module
@@ -20769,6 +20819,8 @@ mod tests {
             assert!(resolver.lexical_method_parameters.0.is_empty());
             assert_eq!(resolver.scopes.len(), scope_count);
             assert_eq!(resolver.written_effect_arities.len(), effect_arity_count);
+            assert_eq!(resolver.active_resumes, active_resumes);
+            assert_eq!(resolver.retained_clause, retained_clause);
             assert!(resolver.admitting_template.is_none());
             assert_eq!(
                 registry_counts,

@@ -616,6 +616,46 @@ fn template_captured_identifier_selects_an_effect_operation() {
 }
 
 #[test]
+fn template_captured_identifier_selects_a_handler_effect_or_operation() {
+    for path in [
+        "template-handler-capture/entry.ash",
+        "template-handler-capture/operation.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    for (path, expected) in [
+        (
+            "template-handler-capture/operation_unknown.ash",
+            "resolve.unknown-name",
+        ),
+        (
+            "template-handler-capture/missing_body.ash",
+            "resolve.unknown-name",
+        ),
+        (
+            "template-handler-capture/missing_handled.ash",
+            "resolve.unknown-name",
+        ),
+        (
+            "template-handler-capture/missing_store.ash",
+            "resolve.unknown-name",
+        ),
+        (
+            "template-handler-capture/missing_argument.ash",
+            "resolve.unknown-type",
+        ),
+        (
+            "template-handler-capture/missing_operation.ash",
+            "resolve.unknown-name",
+        ),
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), expected, "{path}: {failure:?}");
+    }
+}
+
+#[test]
 fn same_spelled_recursive_binders_keep_distinct_contexts() {
     let compiled = compile_path(fixture("template-recursive/mixed.ash"))
         .expect("introduced and captured recursive names remain distinct");
