@@ -591,8 +591,23 @@ capture. The original failure is `/tmp/ash-captured-row-argument-red.log`
 (SHA-256 `8e8ca4e44c9f41f769de52c876a72139ba070b178dde685942e8b10dbca692ca`);
 seven affected suites pass 216 cases in `/tmp/ash-captured-row-argument-suite.log`
 (SHA-256 `8af99e77eeb16373b36ea94331c6ac36ee0b03d88496512156a42a39594d0d72`).
-Row-tail captures and broader row hygiene remain open. This partial result awaits
-review and adds no ledger credit.
+Independent review cleared this partial result at `eeec9e7f`; it adds no ledger
+credit.
+
+Captured row tails now use the caller's contextual type parameter in function
+annotations and interface row arguments. Five real graphs, including two
+handwritten controls and a forwarded nested capture, return 42. A template's
+introduced `R` does not capture the caller's same-spelled row parameter, and
+missing literal or captured tails remain `resolve.unknown-type` failures. A captured
+ordinary `Type` parameter used as a row tail has the same `kind.internal-state`
+failure as handwritten Ash; an existing handwritten local newtype with an
+effect-row parameter also reaches `kind.internal-state` (`owner-effect-row`).
+The original capture failure is `/tmp/ash-captured-row-tail-red.log` (SHA-256
+`537aba59399463b11e7e17ce9e06304d06d62ccef5262179e62f0dffa375fb68`); seven
+affected suites pass 217 cases in `/tmp/ash-captured-row-tail-suite.log`
+(SHA-256 `e2f0b01d88b3545dfe9e9e92e62cc82b046e595ba4b4e98c7d45466cfdd40198`).
+This partial result awaits review and adds no ledger credit; broader row and
+scope hygiene remain open.
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources
@@ -607,7 +622,7 @@ hygiene, causal diagnostics, M01–M14, C1 and C2 remain open.
 ## Progress
 
 The weighted ledger records **58.5/100 reviewed delivery points**. The latest
-reviewed implementation pin is `e9d873c5`. These are partial implementation
+reviewed implementation pin is `eeec9e7f`. These are partial implementation
 observations, not acceptance of the whole feature.
 M01–M14 and C1/C2 remain pending.
 

@@ -238,6 +238,33 @@ fn captured_effect_inside_an_owner_row_argument_uses_the_caller_effect() {
 }
 
 #[test]
+fn captured_row_tails_use_the_callers_contextual_parameter() {
+    for path in [
+        "row-tail/manual.ash",
+        "row-tail/entry.ash",
+        "row-tail/manual_row.ash",
+        "row-tail/entry_row.ash",
+        "row-tail/entry_forwarded.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    for path in [
+        "row-tail/missing_literal.ash",
+        "row-tail/missing_actual.ash",
+        "row-tail/entry_introduced_miss.ash",
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), "resolve.unknown-type", "{path}");
+    }
+    let manual = compile_path(fixture("row-tail/wrong_kind_manual.ash"))
+        .expect_err("a Type parameter cannot be an effect-row tail");
+    let generated = compile_path(fixture("row-tail/wrong_kind.ash"))
+        .expect_err("the generated tail must keep the same kind check");
+    assert_eq!(generated.reason_code(), manual.reason_code());
+}
+
+#[test]
 fn generated_token_diagnostics_point_to_the_invocation() {
     use ash::{
         message::{Catalogue, Locale},

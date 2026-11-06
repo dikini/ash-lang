@@ -10649,6 +10649,28 @@ impl Resolver<'_, '_> {
         }
     }
 
+    fn resolve_effect_row_tail(
+        &self,
+        tail: Option<&SurfaceName>,
+        message: &str,
+    ) -> Result<Option<EffectRowVariable>, ResolveError> {
+        let Some(tail) = tail else {
+            return Ok(None);
+        };
+        if let Some(variable) = self.contextual_type_variable(tail) {
+            return Ok(Some(EffectRowVariable::rigid(variable)));
+        }
+        if self.is_template_identifier(tail) {
+            return Ok(None);
+        }
+        Err(lookup_error(
+            ResolveContext::EffectRowParameter,
+            tail.span,
+            &tail.text,
+            message,
+        ))
+    }
+
     fn is_template_identifier(&self, name: &SurfaceName) -> bool {
         self.admitting_template
             .as_ref()
@@ -11178,26 +11200,10 @@ impl Resolver<'_, '_> {
                                 problem: "extra",
                             }));
                         }
-                        let tail = effects
-                            .tail
-                            .as_ref()
-                            .map(|tail| {
-                                self.type_scopes
-                                    .iter()
-                                    .rev()
-                                    .find_map(|scope| scope.get(&tail.text))
-                                    .copied()
-                                    .map(EffectRowVariable::rigid)
-                                    .ok_or_else(|| {
-                                        lookup_error(
-                                            ResolveContext::EffectRowParameter,
-                                            tail.span,
-                                            &tail.text,
-                                            "this effect-row tail parameter is not declared",
-                                        )
-                                    })
-                            })
-                            .transpose()?;
+                        let tail = self.resolve_effect_row_tail(
+                            effects.tail.as_ref(),
+                            "this effect-row tail parameter is not declared",
+                        )?;
                         let (row, roots) = build_source_effect_row_with_provenance(
                             written,
                             tail,
@@ -11318,26 +11324,10 @@ impl Resolver<'_, '_> {
                         ));
                     }
                     written.reverse();
-                    let tail = row
-                        .tail
-                        .as_ref()
-                        .map(|tail| {
-                            self.type_scopes
-                                .iter()
-                                .rev()
-                                .find_map(|scope| scope.get(&tail.text))
-                                .copied()
-                                .map(EffectRowVariable::rigid)
-                                .ok_or_else(|| {
-                                    lookup_error(
-                                        ResolveContext::EffectRowParameter,
-                                        tail.span,
-                                        &tail.text,
-                                        "this row tail parameter is not declared",
-                                    )
-                                })
-                        })
-                        .transpose()?;
+                    let tail = self.resolve_effect_row_tail(
+                        row.tail.as_ref(),
+                        "this row tail parameter is not declared",
+                    )?;
                     let (effects, argument_roots) = build_source_effect_row_with_provenance(
                         written,
                         tail,
