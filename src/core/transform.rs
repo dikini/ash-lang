@@ -1442,7 +1442,9 @@ fn rebuild_with_initial_type_work<F: TransformFamily>(
             anchor.occurrence,
         )?;
     }
-    builder.finish(root).map_err(TransformError::from)
+    let mut rebuilt = builder.finish(root).map_err(TransformError::from)?;
+    rebuilt.generated_parameter_anchors = Arc::clone(program.generated_parameter_anchors());
+    Ok(rebuilt)
 }
 
 fn rebuild_node<F: TransformFamily>(

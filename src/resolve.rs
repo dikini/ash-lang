@@ -2546,6 +2546,7 @@ struct Resolver<'state, 'inputs> {
     lexical_nominals: ResolvedNominalOwnerBuffer,
     lexical_constructors: ResolvedConstructorOwnerBuffer,
     lexical_nominal_parameters: ResolvedNominalParameterOwnerBuffer,
+    generated_parameter_orders: Vec<Arc<GeneratedParameterOrder>>,
     module_aliases: HashMap<String, ImportedNamespaces>,
     targeted_withheld: HashMap<(String, WithheldNamespace), WithheldImport>,
     public_import_candidate: ResolvedExportCandidate,
@@ -2602,6 +2603,54 @@ struct PendingImplementation {
 struct NominalDeclarationIdentity {
     id: NominalTypeId,
     constructors: Vec<ConstructorId>,
+}
+
+/// Parser order bound once to the identities allocated for this occurrence.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct GeneratedParameterOrder {
+    syntax: Arc<crate::parser::ParsedParameterOrder>,
+    owner: NominalTypeId,
+    parameters: Box<[TypeVariableId]>,
+}
+
+impl GeneratedParameterOrder {
+    fn bind(
+        syntax: Arc<crate::parser::ParsedParameterOrder>,
+        owner: NominalTypeId,
+        parameters: &[ResolvedTypeVariable],
+    ) -> Result<Arc<Self>, ()> {
+        if syntax.parameters().len() != parameters.len()
+            || syntax
+                .parameters()
+                .iter()
+                .zip(parameters)
+                .any(|(original, parameter)| original.name().text != parameter.spelling)
+        {
+            return Err(());
+        }
+        let mut identities = Vec::new();
+        identities
+            .try_reserve_exact(parameters.len())
+            .map_err(|_| ())?;
+        identities.extend(parameters.iter().map(|parameter| parameter.id));
+        Ok(Arc::new(Self {
+            syntax,
+            owner,
+            parameters: identities.into_boxed_slice(),
+        }))
+    }
+
+    pub(crate) fn syntax(&self) -> &crate::parser::ParsedParameterOrder {
+        &self.syntax
+    }
+
+    pub(crate) fn owner(&self) -> NominalTypeId {
+        self.owner
+    }
+
+    pub(crate) fn parameters(&self) -> &[TypeVariableId] {
+        &self.parameters
+    }
 }
 
 fn validate_newtype_shape(
@@ -2980,6 +3029,7 @@ impl Resolver<'_, '_> {
             lexical_nominals: ResolvedNominalOwnerBuffer(Vec::new()),
             lexical_constructors: ResolvedConstructorOwnerBuffer(Vec::new()),
             lexical_nominal_parameters: ResolvedNominalParameterOwnerBuffer(Vec::new()),
+            generated_parameter_orders: Vec::new(),
             module_aliases: HashMap::new(),
             targeted_withheld: HashMap::new(),
             public_import_candidate: ResolvedExportCandidate::default(),
@@ -9394,6 +9444,11 @@ impl Resolver<'_, '_> {
                     lexical_parameters.into_vec(),
                     &mut self.type_work,
                 )
+                .and_then(|registry| {
+                    registry.with_generated_parameter_orders(std::mem::take(
+                        &mut self.generated_parameter_orders,
+                    ))
+                })
                 .map_err(|()| {
                     error(
                         ResolveReason::TypeResourceExhausted,
@@ -9866,6 +9921,29 @@ impl Resolver<'_, '_> {
                 "the program contains too many lexical nominal declarations",
             )
         })?;
+
+        if let Some(syntax) = &declaration.generated_parameters
+            && self.admitting_template.is_none()
+        {
+            let order = GeneratedParameterOrder::bind(Arc::clone(syntax), id, &parameters)
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        declaration.span,
+                        "generated parameter-order storage could not be retained",
+                    )
+                })?;
+            self.generated_parameter_orders
+                .try_reserve(1)
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        declaration.span,
+                        "generated parameter-order storage could not be reserved",
+                    )
+                })?;
+            self.generated_parameter_orders.push(order);
+        }
 
         let (nominal, constructor_fact) = resolved_newtype_fact_pair(
             declaration,
@@ -15363,7 +15441,10 @@ fn validate_explicit_type_parameters(
     let mut declared = HashSet::with_capacity(parameters.len());
     let mut first = HashMap::with_capacity(parameters.len());
     for parameter in parameters {
-        if let Some(first_span) = first.insert(parameter.name.text.as_str(), parameter.name.span) {
+        if let Some(first_span) = first.insert(
+            (parameter.name.text.as_str(), parameter.name.introduction),
+            parameter.name.span,
+        ) {
             let mut diagnostic = Diagnostic::new(
                 ResolveReason::DuplicateTypeParameter,
                 SourceLabel::new(

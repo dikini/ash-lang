@@ -2177,13 +2177,43 @@ fn project_nominal_declaration(
         return malformed(InternalReason::UnexpectedShape);
     }
     let parameters = project_optional_type_parameters(source, node, tokens)?.unwrap_or_default();
+    let name = surface_name(name_token)?;
+    let span = node_span(source, node, tokens)?;
+    let generated_parameters = if let Some(invocation) = tokens.occurrence
+        && !parameters.is_empty()
+    {
+        let parameter_node = only_child_of_kind(node, NodeKind::TypeParameters)?;
+        let occurrences = child_nodes(parameter_node)
+            .filter(|child| child.kind == NodeKind::TypeParameter)
+            .zip(&parameters)
+            .map(|(node, parameter)| {
+                Ok(super::ParsedParameterOccurrence {
+                    name: parameter.name.clone(),
+                    tokens: descendant_edge_index(node, false)?
+                        ..descendant_edge_index(node, true)? + 1,
+                })
+            })
+            .collect::<Result<Vec<_>, ProjectionError>>()?;
+        Some(std::sync::Arc::new(super::ParsedParameterOrder {
+            invocation,
+            occurrence_extent: tokens.construction.is_none(),
+            declaration: descendant_edge_index(node, false)?
+                ..descendant_edge_index(node, true)? + 1,
+            name: name.clone(),
+            span,
+            parameters: occurrences.into_boxed_slice(),
+        }))
+    } else {
+        None
+    };
     Ok(SurfaceTypeDeclaration {
         declaration_kind,
         visibility,
-        name: surface_name(name_token)?,
+        name,
         parameters,
         constructors,
-        span: node_span(source, node, tokens)?,
+        span,
+        generated_parameters,
     })
 }
 

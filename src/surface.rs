@@ -209,6 +209,7 @@ pub struct SurfaceTypeDeclaration {
     pub constructors: Vec<SurfaceConstructorDeclaration>,
     /// The complete declaration span.
     pub span: Span,
+    pub(crate) generated_parameters: Option<Arc<crate::parser::ParsedParameterOrder>>,
 }
 
 /// One source constructor declaration.

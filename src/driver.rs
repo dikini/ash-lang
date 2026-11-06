@@ -924,6 +924,30 @@ pub fn compile_path(configuration: RunConfiguration) -> Result<CompiledProgram, 
     )
 }
 
+#[cfg(test)]
+pub(crate) fn compile_path_with_effect_validation_for_test(
+    configuration: RunConfiguration,
+    validator: impl FnOnce(
+        UnvalidatedEffectProgram,
+        &[&SourceFile],
+        &[(ModuleId, SourceId)],
+        &ValidatedInterfaceProgram,
+    ) -> Result<ValidatedEffectProgram, ValidationError>,
+) -> Result<CompiledProgram, FileFailure> {
+    compile_path_with_consumers_internal(
+        configuration,
+        &mut InterfaceConstraintBudget::default(),
+        validate_interface_evidence_with_budget,
+        |program, sources, modules, linked| {
+            validator(program, sources, modules, linked)
+                .map(|program| (program, None))
+                .map_err(|error| (error, None))
+        },
+        true,
+        ProvenanceRetention::Retain,
+    )
+}
+
 fn compile_path_for_execution(
     configuration: RunConfiguration,
 ) -> Result<CompiledProgram, FileFailure> {

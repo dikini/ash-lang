@@ -226,10 +226,10 @@ The four affected suites pass 114 cases
 `4b9680c8a8f57b6d3928f1a6b7781819d742d9d90f0f15dff26256f95876aeec`),
 and the existing generated/local Core mutation checks pass
 (`/tmp/ash-procedural-newtype/mutations.log`, `source-origin.log`, `scope.log`).
-Independent review cleared this candidate at `e1780327`. A real procedural newtype with two
-type parameters still fails the existing parameter-order check because both
-parameter causes are the same invocation span; parsed occurrence order is still
-needed. A generated declaration whose name is captured currently carries a
+Independent review cleared this candidate at `e1780327`. At that pin, a real
+procedural newtype with two type parameters still fails the ordering check
+because both parameter causes are the same invocation span; parsed occurrence
+order is still needed. A generated declaration whose name is captured carries a
 `Source` invocation anchor rather than complete expansion provenance. At that
 pin, template splices in local nominal and constructor name positions were still
 rejected by the definition parser.
@@ -317,7 +317,39 @@ the temporary resolver-state isolation test passes on success and failure,
 including active and retained continuation state
 (`/tmp/ash-macro-captured-handler-pin-isolation.log`, SHA-256
 `4cd41b4e4644a4762063cc73ab2ab73abec0cfb989665159b8e3c8efaaae63c7`).
-This handler change awaits independent review; it adds no ledger credit.
+Independent review cleared this handler change at `1a6149d5`; it adds no ledger
+credit.
+
+A checked procedural transformer now emits and uses a two-parameter local
+newtype. The real driver returns 42 for the generated declaration, for two
+copies of the same captured invocation, and for two separately fresh
+parameters both spelled `A`. Reusing one identifier for both parameters and a
+handwritten `A, A` remain duplicate-parameter errors. The original generated
+graph failed Core's source-span ordering check
+(`/tmp/ash-procedural-pair-before.log`, SHA-256
+`05f6bf121e75cd01d1f9742032e1a8d5f9b65d7ac327d58904063d29ac6fa009`).
+
+The ordinary projector now retains the actual parameter occurrence order;
+the existing resolver binds it to the generated owner and parameter IDs.
+Independent Core compares that record with the original checked module group,
+then retains the same immutable authority through identity and fold rebuilds.
+The focused test checks the copied identities, donor and row mutations, a
+fresh builder without authority, and a coordinated removal plus source-origin
+downgrade at both initial linked and public unlinked validation. The previously
+unprotected downgrade was accepted
+(`/tmp/ash-procedural-pair-downgrade-actual.log`, SHA-256
+`396c712f9af46a9a2ba6e4e231ed3eda94ada6db2bcdd77cf556bfe0ea91c0ac`).
+It is now refused in
+`/tmp/ash-procedural-pair-linked-final.log` (SHA-256
+`0024adfdf2270e96bb40c379b326b92f12b15de4ac227767fe8bd930ebdd39ae`).
+The four affected driver and language suites pass 122 cases
+(`/tmp/ash-procedural-pair-regressions-final.log`, SHA-256
+`4dcd5fa8914ff192cebb9b4a83bb4d7dde29001f617cf4ef829902087cdebeab`);
+three existing generated-local checks also pass
+(`/tmp/ash-procedural-pair-original-mutations.log`, SHA-256
+`9664b0964f22ad1d858cd61a978b507f303d9010a1d3bb1122487c58b4b920c0`).
+This batch awaits independent review and adds no ledger credit. Captured-name
+expansion provenance and the native local-newtype image boundary remain open.
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources
@@ -331,10 +363,10 @@ hygiene, causal diagnostics, M01–M14, C1 and C2 remain open.
 
 ## Progress
 
-The current reviewed pin `57ce1f1f` records **56/100 weighted delivery
-points**. These are partial implementation observations, not acceptance of the
-whole feature. The shared syntax path above is a candidate correction; its
-remaining work and changed evidence must be reassessed after review.
+The weighted ledger records **56/100 reviewed delivery points**, last
+reconciled at `57ce1f1f`. Subsequent shared-path changes were reviewed through
+`1a6149d5`; the parameter-order batch above awaits review. These are partial
+implementation observations, not acceptance of the whole feature.
 Observed root-close evidence, M01–M14 and C1/C2 remain pending.
 
 ### Weighted delivery progress

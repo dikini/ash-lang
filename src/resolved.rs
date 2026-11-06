@@ -27,6 +27,7 @@ use crate::{
     },
     kind::{BodyFreeInterfaceMethodSeed, KindEnvironments, KindFailure},
     module::ModuleId,
+    resolve::GeneratedParameterOrder,
     source::{Origin, Span, discard_origin_iteratively},
     types::{
         ConstructorId, EffectId, EffectRow, EffectRowVariable, IterativeTypeOwner, Kind,
@@ -35,6 +36,8 @@ use crate::{
         clone_type_with_budget, discard_type_iteratively, same_kind_with_charge,
     },
 };
+
+pub(crate) type GeneratedParameterOrders = HashMap<NominalTypeId, Arc<GeneratedParameterOrder>>;
 
 /// Fixed private facts supplied by the authenticated compiler region module.
 /// These coordinates never establish source authority without its source pin.
@@ -2043,6 +2046,7 @@ impl CheckedModule {
             .take_public_implementation_authorizations(constraint_work)?;
         Ok(ResolvedModuleGroup {
             module: self.module,
+            generated_parameter_orders: self.registry.generated_parameter_orders().clone(),
             direct_dependencies: std::mem::take(&mut self.direct_dependencies),
             declaration_order: std::mem::take(&mut self.declaration_order),
             interfaces: std::mem::take(&mut self.interfaces),
@@ -2084,6 +2088,7 @@ impl Drop for CheckedModule {
 #[derive(Debug)]
 pub struct ResolvedModuleGroup {
     module: ModuleId,
+    generated_parameter_orders: HashMap<NominalTypeId, Arc<GeneratedParameterOrder>>,
     direct_dependencies: Box<[DirectDependencyRoute]>,
     declaration_order: Box<[ResolvedDeclarationIndex]>,
     interfaces: Box<[ResolvedInterfaceDeclaration]>,
@@ -2130,6 +2135,7 @@ impl ResolvedModuleGroup {
         }
         Ok(Self {
             module: owner.module,
+            generated_parameter_orders: HashMap::new(),
             direct_dependencies: Box::new([]),
             declaration_order: Box::new([]),
             interfaces: Box::new([]),
@@ -2171,6 +2177,16 @@ impl ResolvedModuleGroup {
     #[must_use]
     pub const fn module(&self) -> ModuleId {
         self.module
+    }
+
+    pub(crate) fn generated_parameter_orders(
+        &self,
+    ) -> &HashMap<NominalTypeId, Arc<GeneratedParameterOrder>> {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.generated_parameter_orders, |owner| {
+                owner.registry.generated_parameter_orders()
+            })
     }
 
     /// Returns the resolver-authenticated direct dependency edges in source order.
@@ -13929,6 +13945,7 @@ pub struct ResolvedRegistry {
     lexical_constructors: Box<[ResolvedConstructor]>,
     lexical_nominal_positions: HashMap<NominalTypeId, usize>,
     lexical_constructor_positions: HashMap<ConstructorId, usize>,
+    generated_parameter_orders: HashMap<NominalTypeId, Arc<GeneratedParameterOrder>>,
     effects: Box<[ResolvedEffectDeclaration]>,
     owner_signatures: OwnerSignatures,
     owner_definitions: Vec<OwnerDefinition>,
@@ -14302,6 +14319,7 @@ struct CombinedRegistryBuilder {
     lexical_constructors: ResolvedConstructorBuffer,
     lexical_nominal_positions: HashMap<NominalTypeId, usize>,
     lexical_constructor_positions: HashMap<ConstructorId, usize>,
+    generated_parameter_orders: HashMap<NominalTypeId, Arc<GeneratedParameterOrder>>,
     effects: Vec<ResolvedEffectDeclaration>,
     effect_positions: HashMap<EffectId, usize>,
     parameter_rows: ResolvedNominalParameterBuffer,
@@ -14323,6 +14341,7 @@ impl CombinedRegistryBuilder {
             lexical_constructors: ResolvedConstructorBuffer(Vec::new()),
             lexical_nominal_positions: HashMap::new(),
             lexical_constructor_positions: HashMap::new(),
+            generated_parameter_orders: HashMap::new(),
             effects: Vec::new(),
             effect_positions: HashMap::new(),
             parameter_rows: ResolvedNominalParameterBuffer(Vec::new()),
@@ -14367,6 +14386,10 @@ impl CombinedRegistryBuilder {
         builder
             .lexical_constructor_positions
             .try_reserve(counts.lexical_constructors)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        builder
+            .generated_parameter_orders
+            .try_reserve(counts.lexical_nominals)
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         builder
             .effects
@@ -14499,6 +14522,7 @@ impl CombinedRegistryBuilder {
             lexical_constructors: lexical_constructors.into_boxed_slice(),
             lexical_nominal_positions: std::mem::take(&mut self.lexical_nominal_positions),
             lexical_constructor_positions: std::mem::take(&mut self.lexical_constructor_positions),
+            generated_parameter_orders: std::mem::take(&mut self.generated_parameter_orders),
             effects: std::mem::take(&mut self.effects).into_boxed_slice(),
             owner_signatures: OwnerSignatures::default(),
             owner_definitions: Vec::new(),
@@ -14934,6 +14958,16 @@ fn retain_checked_registries<M: Borrow<CheckedModule>>(
                 .insert(nominal.id, position);
             if displaced.is_some() {
                 return Err(ResolvedBuildFailure::InvalidState);
+            }
+            if let Some(order) = registry.generated_parameter_orders.get(&nominal.id) {
+                if order.owner() != nominal.id
+                    || builder
+                        .generated_parameter_orders
+                        .insert(nominal.id, Arc::clone(order))
+                        .is_some()
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
             }
             builder.lexical_nominals.0.push(retained);
 
@@ -16157,6 +16191,7 @@ impl ResolvedRegistry {
             lexical_constructors: Box::new([]),
             lexical_nominal_positions: HashMap::new(),
             lexical_constructor_positions: HashMap::new(),
+            generated_parameter_orders: HashMap::new(),
             effects: Box::new([]),
             owner_signatures: OwnerSignatures::default(),
             owner_definitions: Vec::new(),
@@ -16602,6 +16637,18 @@ impl ResolvedRegistry {
             )
             .map_err(|()| ResolvedBuildFailure::TypeResource)?
             .with_abstract_nominal_facts(abstract_nominal_names, abstract_nominal_kinds);
+        registry
+            .generated_parameter_orders
+            .try_reserve(self.generated_parameter_orders.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for (owner, order) in &self.generated_parameter_orders {
+            if *owner != order.owner() || registry.nominal(*owner).is_none() {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            registry
+                .generated_parameter_orders
+                .insert(*owner, Arc::clone(order));
+        }
         if let Some(syntax) = imported.syntax_facts.as_deref() {
             registry.syntax_only_families.extend(
                 syntax
@@ -16876,6 +16923,68 @@ impl ResolvedRegistry {
                 .ok_or(())?,
         )?;
         self.with_precharged_lexical_nominals(nominals, constructors, parameters, budget)
+    }
+
+    pub(crate) fn with_generated_parameter_orders(
+        mut self,
+        orders: Vec<Arc<GeneratedParameterOrder>>,
+    ) -> Result<Self, ()> {
+        self.generated_parameter_orders
+            .try_reserve(orders.len())
+            .map_err(|_| ())?;
+        for order in orders {
+            if !order.owner().is_lexical()
+                || self.nominal(order.owner()).is_none()
+                || self
+                    .generated_parameter_orders
+                    .insert(order.owner(), order)
+                    .is_some()
+            {
+                return Err(());
+            }
+        }
+        Ok(self)
+    }
+
+    pub(crate) fn generated_parameter_orders(
+        &self,
+    ) -> &HashMap<NominalTypeId, Arc<GeneratedParameterOrder>> {
+        &self.generated_parameter_orders
+    }
+
+    #[cfg(test)]
+    pub(crate) fn generated_parameter_orders_for_core_test(
+        &mut self,
+    ) -> &mut HashMap<NominalTypeId, Arc<GeneratedParameterOrder>> {
+        &mut self.generated_parameter_orders
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lexical_parameter_row_for_core_test(
+        &mut self,
+        owner: NominalTypeId,
+    ) -> Option<&mut Box<[ResolvedTypeVariable]>> {
+        self.nominal_parameters.get_mut(&owner)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn edit_lexical_parameter_for_core_test(
+        &mut self,
+        owner: NominalTypeId,
+        index: usize,
+        edit: impl FnOnce(&mut ResolvedTypeVariable),
+    ) -> bool {
+        let Some(parameter) = self
+            .nominal_parameters
+            .get_mut(&owner)
+            .and_then(|parameters| parameters.get_mut(index))
+        else {
+            return false;
+        };
+        edit(parameter);
+        let parameter = parameter.clone();
+        self.type_variables.insert(parameter.id, parameter.into());
+        true
     }
 
     fn with_precharged_lexical_nominals(
@@ -24130,6 +24239,7 @@ mod tests {
         fn group_fields(group: &ResolvedModuleGroup) {
             let ResolvedModuleGroup {
                 module,
+                generated_parameter_orders,
                 direct_dependencies,
                 declaration_order,
                 interfaces,
@@ -24150,6 +24260,7 @@ mod tests {
             let _: &Option<crate::elaborate::SharedModuleLowering> = local_lowering;
             let _ = (
                 module,
+                generated_parameter_orders,
                 direct_dependencies,
                 declaration_order,
                 interfaces,
@@ -24206,6 +24317,7 @@ mod tests {
                 lexical_constructors,
                 lexical_nominal_positions,
                 lexical_constructor_positions,
+                generated_parameter_orders,
                 effects,
                 effect_positions,
                 owner_signatures,
@@ -24225,6 +24337,7 @@ mod tests {
                 lexical_constructors,
                 lexical_nominal_positions,
                 lexical_constructor_positions,
+                generated_parameter_orders,
             );
             let global_parameter_rows: &Box<[ResolvedGlobalParameterRow]> = global_parameter_rows;
             for row in global_parameter_rows {
@@ -30881,6 +30994,7 @@ mod tests {
                     lexical_constructors: Box::new([]),
                     lexical_nominal_positions: HashMap::new(),
                     lexical_constructor_positions: HashMap::new(),
+                    generated_parameter_orders: HashMap::new(),
                     effects: Box::new([]),
                     effect_positions: HashMap::new(),
                     nominal_parameters: HashMap::from([(

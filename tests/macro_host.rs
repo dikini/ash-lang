@@ -156,6 +156,27 @@ fn checked_transformer_emits_a_local_newtype_with_a_fresh_identity() {
 }
 
 #[test]
+fn checked_transformer_emits_a_generic_local_newtype() {
+    for entry in [
+        "procedural-newtype/pair.ash",
+        "procedural-newtype/pair_copied.ash",
+        "procedural-newtype/pair_same.ash",
+    ] {
+        let compiled = compile_path(macro_fixture(entry))
+            .expect("generated type parameters retain their written order");
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{entry}");
+    }
+    for entry in [
+        "procedural-newtype/pair_repeated.ash",
+        "procedural-newtype/pair_source_duplicate.ash",
+    ] {
+        let failure = compile_path(macro_fixture(entry))
+            .expect_err("equal-context type parameters remain duplicates");
+        assert_eq!(failure.reason_code(), "resolve.duplicate-type-parameter");
+    }
+}
+
+#[test]
 fn checked_transformer_caller_identifier_can_bind_caller_syntax() {
     let compiled = compile_path(macro_fixture("entry_constructed_caller.ash"))
         .expect("a caller-context binder captures the caller expression");

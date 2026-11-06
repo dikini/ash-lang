@@ -17,19 +17,17 @@ use std::{
     collections::{HashMap, HashSet},
     error::Error,
     fmt,
+    sync::Arc,
 };
-
-#[cfg(test)]
-use std::sync::Arc;
 
 use super::{
     dialect::{
         CORE_PATTERN_DEPTH_LIMIT, CoreOperationFamily, CoreProgram, CoreTypedExpr, DialectId,
-        MethodEvidenceAnchor, MethodEvidenceAnchorRole, MethodEvidenceExpectedRole,
-        MethodEvidenceOwner, MethodEvidenceProducer, NodeId, PureComputation, PureExprKind,
-        PureOperationFamily, PureProgram, PureValue, StoredNode, TypedExpr, UnvalidatedCoreProgram,
-        UnvalidatedProgram, ValidatedCoreProgram, ValidatedProgram,
-        method_evidence_producer_matches, origin_depth_within_limit,
+        GeneratedParameterAnchors, MethodEvidenceAnchor, MethodEvidenceAnchorRole,
+        MethodEvidenceExpectedRole, MethodEvidenceOwner, MethodEvidenceProducer, NodeId,
+        PureComputation, PureExprKind, PureOperationFamily, PureProgram, PureValue, StoredNode,
+        TypedExpr, UnvalidatedCoreProgram, UnvalidatedProgram, ValidatedCoreProgram,
+        ValidatedProgram, method_evidence_producer_matches, origin_depth_within_limit,
     },
     variable::TypedBinder,
 };
@@ -3008,8 +3006,15 @@ pub(super) fn validate_family<F: CoreOperationFamily + ScopeFamily>(
         return Err(error);
     }
 
-    let (registry, method_evidence, method_evidence_anchors, arena, stored_nodes, root) =
-        program.into_parts();
+    let (
+        registry,
+        method_evidence,
+        method_evidence_anchors,
+        parameter_anchors,
+        arena,
+        stored_nodes,
+        root,
+    ) = program.into_parts();
     let mut nodes = Vec::with_capacity(stored_nodes.len());
     for (index, stored) in stored_nodes.into_iter().enumerate() {
         let node = node_id(arena, index)?;
@@ -3031,6 +3036,7 @@ pub(super) fn validate_family<F: CoreOperationFamily + ScopeFamily>(
         registry,
         method_evidence,
         method_evidence_anchors,
+        parameter_anchors,
         arena,
         nodes,
         root,
@@ -3046,7 +3052,8 @@ pub(super) fn validate_effect_family(
         program.discard_iteratively();
         return Err(error);
     }
-    let (registry, method_evidence, anchors, arena, stored, root) = program.into_parts();
+    let (registry, method_evidence, anchors, parameter_anchors, arena, stored, root) =
+        program.into_parts();
     let mut nodes = Vec::with_capacity(stored.len());
     for (index, stored) in stored.into_iter().enumerate() {
         let id = node_id(arena, index)?;
@@ -3067,6 +3074,7 @@ pub(super) fn validate_effect_family(
         registry,
         method_evidence,
         anchors,
+        parameter_anchors,
         arena,
         nodes,
         root,
@@ -3214,7 +3222,11 @@ fn validate_effect_modules_internal(
     };
     let admissions = std::mem::take(validator.network_admissions.get_mut());
     drop(validator);
-    let (registry, method_evidence, anchors, arena, stored, root) = program.into_parts();
+    let (registry, method_evidence, anchors, parameter_anchors, arena, stored, root) =
+        program.into_parts();
+    let parameter_anchors = linked.map_or(parameter_anchors, |linked| {
+        Arc::new(GeneratedParameterAnchors::from_linked(linked))
+    });
     let mut nodes = Vec::with_capacity(stored.len());
     for (index, stored) in stored.into_iter().enumerate() {
         let id = node_id(arena, index)?;
@@ -3231,7 +3243,15 @@ fn validate_effect_modules_internal(
             kind: stored.kind,
         });
     }
-    let mut core = CoreProgram::new(registry, method_evidence, anchors, arena, nodes, root);
+    let mut core = CoreProgram::new(
+        registry,
+        method_evidence,
+        anchors,
+        parameter_anchors,
+        arena,
+        nodes,
+        root,
+    );
     core.set_network_admissions(admissions);
     Ok((ValidatedCoreProgram::new(core), macro_admission))
 }
@@ -3284,8 +3304,15 @@ pub(crate) fn validate_modules_with_work(
         return Err(error);
     }
 
-    let (registry, method_evidence, method_evidence_anchors, arena, stored_nodes, root) =
-        program.into_parts();
+    let (
+        registry,
+        method_evidence,
+        method_evidence_anchors,
+        parameter_anchors,
+        arena,
+        stored_nodes,
+        root,
+    ) = program.into_parts();
     let mut nodes = Vec::with_capacity(stored_nodes.len());
     for (index, stored) in stored_nodes.into_iter().enumerate() {
         let node = node_id(arena, index)?;
@@ -3307,6 +3334,7 @@ pub(crate) fn validate_modules_with_work(
         registry,
         method_evidence,
         method_evidence_anchors,
+        parameter_anchors,
         arena,
         nodes,
         root,
@@ -5476,6 +5504,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         &self,
         id: crate::types::TypeVariableId,
     ) -> Result<bool, ValidationError> {
+        for order in self.program.registry.generated_parameter_orders().values() {
+            if order.parameters().contains(&id) {
+                return Ok(true);
+            }
+        }
         if self
             .program
             .registry
@@ -7259,8 +7292,43 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         &self,
         original: Option<&source_declarations::OriginalDeclarationProvenance>,
     ) -> Result<RegistryParameterOwners, ValidationError> {
+        self.authenticate_generated_parameter_orders()?;
         self.validate_reserved_builtin_sources()?;
         self.validate_registry_contents(original)
+    }
+
+    fn authenticate_generated_parameter_orders(&self) -> Result<(), ValidationError> {
+        let actual = self.program.registry.generated_parameter_orders();
+        if let Some(linked) = self.linked {
+            let mut owners = HashSet::new();
+            for group in linked.groups() {
+                for (owner, original) in group.generated_parameter_orders() {
+                    if owner.module() != group.module()
+                        || !owners.insert(*owner)
+                        || !actual
+                            .get(owner)
+                            .is_some_and(|candidate| Arc::ptr_eq(original, candidate))
+                    {
+                        return Err(ValidationError::new(ValidationReason::Registry, None));
+                    }
+                }
+            }
+            if owners.len() != actual.len() {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+        } else {
+            let expected = self.program.generated_parameter_anchors.orders();
+            if expected.len() != actual.len()
+                || expected.iter().any(|(owner, original)| {
+                    !actual
+                        .get(owner)
+                        .is_some_and(|candidate| Arc::ptr_eq(original, candidate))
+                })
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+        }
+        Ok(())
     }
 
     fn validate_registry_contents(
@@ -7993,6 +8061,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     ) -> Result<(), ValidationError> {
         let registry = &self.program.registry;
         let relation = self.module_sources.as_ref();
+        for (owner, order) in registry.generated_parameter_orders() {
+            if *owner != order.owner() || !owner.is_lexical() || registry.nominal(*owner).is_none()
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+        }
         self.charge_type_work(registry.lexical_nominals().len())?;
         let mut identities = HashSet::new();
         identities
@@ -8017,6 +8091,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let parameters = registry
                 .nominal_parameters(nominal.id)
                 .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            let generated = registry.generated_parameter_orders().get(&nominal.id);
+            if let Some(order) = generated {
+                self.validate_generated_parameter_order(nominal, parameters, source, order)?;
+            } else if !parameters.is_empty() && matches!(nominal.origin, Origin::Expansion { .. }) {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
             self.charge_type_work(
                 parameters
                     .len()
@@ -8031,21 +8111,27 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 .try_reserve(parameters.len())
                 .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
             let mut previous_definition_end = None;
-            for parameter in parameters {
+            for (index, parameter) in parameters.iter().enumerate() {
                 let parameter_range = parameter.origin.primary_span().range();
                 let canonical = registry
                     .type_variable(parameter.id)
                     .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+                let introduction = generated.map_or(0, |order| {
+                    order.syntax().parameters()[index].name().introduction
+                });
                 if parameter.id.module() != Some(nominal.id.module())
                     || parameter_owners
                         .insert(parameter.id, RegistryParameterOwner::Nominal(nominal.id))
                         .is_some()
-                    || !names.insert(parameter.spelling.as_str())
+                    || !names.insert((parameter.spelling.as_str(), introduction))
                     || !self.same_registry_type_variable(canonical, parameter)?
                     || parameter_range.start() < nominal_range.start()
                     || parameter_range.end() > nominal_range.end()
                 {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                if generated.is_some_and(|order| order.syntax().occurrence_extent()) {
+                    continue;
                 }
                 if let Origin::Expansion {
                     invocation,
@@ -8107,6 +8193,63 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
             self.validate_origin(&constructor.origin, self.program.root)?;
+        }
+        Ok(())
+    }
+
+    fn validate_generated_parameter_order(
+        &self,
+        nominal: &crate::resolved::ResolvedNominalType,
+        parameters: &[crate::resolved::ResolvedTypeVariable],
+        source: SourceId,
+        order: &crate::resolve::GeneratedParameterOrder,
+    ) -> Result<(), ValidationError> {
+        let syntax = order.syntax();
+        let declaration_origin = match syntax.name().introduced_at {
+            Some(invocation) => Origin::Expansion {
+                invocation,
+                definition: syntax.span(),
+            },
+            None => Origin::Source(syntax.span()),
+        };
+        if order.owner() != nominal.id
+            || syntax.invocation().source() != source
+            || syntax.invocation() != nominal.origin.primary_span()
+            || syntax.name().text != nominal.spelling
+            || nominal.origin != declaration_origin
+            || syntax.declaration().start >= syntax.declaration().end
+            || parameters.len() != syntax.parameters().len()
+            || parameters.len() != order.parameters().len()
+        {
+            return Err(ValidationError::new(ValidationReason::Registry, None));
+        }
+        let mut previous = syntax.declaration().start;
+        for ((parameter, original), identity) in parameters
+            .iter()
+            .zip(syntax.parameters())
+            .zip(order.parameters())
+        {
+            let origin = if original.name().introduction == 0 {
+                Origin::Source(original.name().span)
+            } else {
+                Origin::Expansion {
+                    invocation: original
+                        .name()
+                        .introduced_at
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?,
+                    definition: original.name().span,
+                }
+            };
+            if parameter.id != *identity
+                || parameter.spelling != original.name().text
+                || parameter.origin != origin
+                || original.tokens().start < previous
+                || original.tokens().start >= original.tokens().end
+                || original.tokens().end > syntax.declaration().end
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            previous = original.tokens().end;
         }
         Ok(())
     }
@@ -29523,6 +29666,7 @@ mod tests {
                 registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
                 method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
                 method_evidence_anchors: Box::new([]),
+                generated_parameter_anchors: Arc::default(),
                 arena,
                 nodes: vec![StoredNode {
                     dialect: DialectId::PURE,
@@ -30758,6 +30902,252 @@ mod tests {
                 "independent Core accepted construction-origin mutation {mutation}"
             );
         }
+    }
+
+    #[test]
+    fn procedural_local_type_parameters_retain_parser_order_for_revalidation() {
+        let downgrade = |registry: &mut crate::resolved::ResolvedRegistry,
+                         sources: &[&SourceFile]| {
+            let nominal = registry.lexical_nominals().first().unwrap();
+            let owner = nominal.id;
+            let invocation = nominal.origin.primary_span();
+            let source = sources
+                .iter()
+                .find(|source| source.id() == invocation.source())
+                .unwrap();
+            let start = invocation.range().start();
+            let first = source
+                .span(ByteRange::new(start, start + 1).unwrap())
+                .unwrap();
+            let second = source
+                .span(ByteRange::new(start + 1, start + 2).unwrap())
+                .unwrap();
+            registry
+                .generated_parameter_orders_for_core_test()
+                .remove(&owner);
+            let (nominal, constructor) = registry.first_lexical_newtype_for_core_test().unwrap();
+            nominal.origin = Origin::Source(invocation);
+            constructor.origin = Origin::Source(invocation);
+            assert!(
+                registry.edit_lexical_parameter_for_core_test(owner, 0, |parameter| {
+                    parameter.origin = Origin::Source(first);
+                })
+            );
+            assert!(
+                registry.edit_lexical_parameter_for_core_test(owner, 1, |parameter| {
+                    parameter.origin = Origin::Source(second);
+                })
+            );
+        };
+        let compile = |name: &str| {
+            crate::driver::compile_path(crate::driver::RunConfiguration {
+                entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/surface-macros/procedural-newtype")
+                    .join(name),
+                roots: ModuleRoots::empty(),
+            })
+            .expect("the procedural pair graph must compile")
+        };
+        let compiled = compile("pair.ash");
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let [nominal] = program.registry().lexical_nominals() else {
+            panic!("one generated local newtype")
+        };
+        let owner = nominal.id;
+        let original = program
+            .registry()
+            .generated_parameter_orders()
+            .get(&owner)
+            .unwrap();
+        let checker = program
+            .registry()
+            .checker_view(
+                &crate::resolved::ImportedFacts::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the checker view retains generated parser order");
+        assert!(Arc::ptr_eq(
+            original,
+            checker.generated_parameter_orders().get(&owner).unwrap()
+        ));
+        let copied = identity_effect_traversal(program).unwrap();
+        assert!(Arc::ptr_eq(
+            program.generated_parameter_anchors(),
+            &copied.generated_parameter_anchors
+        ));
+        assert!(Arc::ptr_eq(
+            original,
+            copied
+                .registry
+                .generated_parameter_orders()
+                .get(&owner)
+                .unwrap()
+        ));
+        validate_effect_modules(copied, &sources, &modules)
+            .expect("public unlinked validation accepts the original parser order");
+        let folded = fold_effect_literal_primitives(program).unwrap();
+        assert!(Arc::ptr_eq(
+            program.generated_parameter_anchors(),
+            &folded.generated_parameter_anchors
+        ));
+        validate_effect_modules(folded, &sources, &modules)
+            .expect("literal folding preserves the original parser order");
+
+        let mut fresh_builder = super::super::EffectCoreBuilder::with_registry_and_method_evidence(
+            Arc::clone(program.registry()),
+            Arc::clone(program.method_evidence()),
+        )
+        .unwrap();
+        let root = fresh_builder
+            .unit(Type::Unit, Origin::Source(nominal.origin.primary_span()))
+            .unwrap();
+        let fresh = fresh_builder.finish(root).unwrap();
+        assert_eq!(
+            validate_effect_modules(fresh, &sources, &modules)
+                .expect_err("a fresh builder has no original parser-order authority")
+                .reason(),
+            ValidationReason::Registry
+        );
+
+        let donor = compile("pair.ash");
+        let donor_program = donor.effect_build_input().unwrap().0;
+        let donor_order = Arc::clone(
+            donor_program
+                .registry()
+                .generated_parameter_orders()
+                .values()
+                .next()
+                .unwrap(),
+        );
+        for mutation in 0..8 {
+            let mut forged = identity_effect_traversal(program).unwrap();
+            let mut registry = (*forged.registry).clone();
+            match mutation {
+                0 => registry
+                    .lexical_parameter_row_for_core_test(owner)
+                    .unwrap()
+                    .swap(0, 1),
+                1 => {
+                    let row = registry.lexical_parameter_row_for_core_test(owner).unwrap();
+                    row[1] = row[0].clone();
+                }
+                2 => {
+                    let row = registry.lexical_parameter_row_for_core_test(owner).unwrap();
+                    *row = vec![row[0].clone()].into_boxed_slice();
+                }
+                3 => {
+                    registry
+                        .generated_parameter_orders_for_core_test()
+                        .remove(&owner);
+                }
+                4 => {
+                    assert!(
+                        registry.edit_lexical_parameter_for_core_test(owner, 0, |parameter| {
+                            parameter.spelling = "Changed".to_owned();
+                        })
+                    )
+                }
+                5 => {
+                    assert!(
+                        registry.edit_lexical_parameter_for_core_test(owner, 0, |parameter| {
+                            parameter.origin = Origin::Source(nominal.origin.primary_span());
+                        })
+                    )
+                }
+                6 => {
+                    registry
+                        .generated_parameter_orders_for_core_test()
+                        .insert(owner, Arc::clone(&donor_order));
+                }
+                7 => downgrade(&mut registry, &sources),
+                _ => unreachable!(),
+            }
+            forged.registry = Arc::new(registry);
+            assert!(
+                validate_effect_modules(forged, &sources, &modules).is_err(),
+                "independent Core accepted parser-order mutation {mutation}"
+            );
+        }
+
+        let duplicated = compile("pair_copied.ash");
+        let (program, provenance) = duplicated.effect_build_input().unwrap();
+        let [first, second] = program.registry().lexical_nominals() else {
+            panic!("two separately expanded local newtypes")
+        };
+        assert_ne!(first.id, second.id);
+        let first_parameters = program.registry().nominal_parameters(first.id).unwrap();
+        let second_parameters = program.registry().nominal_parameters(second.id).unwrap();
+        assert!(
+            first_parameters
+                .iter()
+                .all(|first| { second_parameters.iter().all(|second| first.id != second.id) })
+        );
+        let donor_order = Arc::clone(
+            program
+                .registry()
+                .generated_parameter_orders()
+                .get(&second.id)
+                .unwrap(),
+        );
+        let mut forged = identity_effect_traversal(program).unwrap();
+        let mut registry = (*forged.registry).clone();
+        registry
+            .generated_parameter_orders_for_core_test()
+            .insert(first.id, donor_order);
+        forged.registry = Arc::new(registry);
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        assert!(validate_effect_modules(forged, &sources, &modules).is_err());
+
+        let mut reached_linked_validation = false;
+        let result = crate::driver::compile_path_with_effect_validation_for_test(
+            crate::driver::RunConfiguration {
+                entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/surface-macros/procedural-newtype/pair.ash"),
+                roots: ModuleRoots::empty(),
+            },
+            |mut forged, sources, modules, linked| {
+                reached_linked_validation = true;
+                assert!(forged.generated_parameter_anchors.orders().is_empty());
+                assert!(
+                    linked
+                        .groups()
+                        .iter()
+                        .any(|group| !group.generated_parameter_orders().is_empty())
+                );
+                let mut registry = (*forged.registry).clone();
+                downgrade(&mut registry, sources);
+                forged.registry = Arc::new(registry);
+                let result = validate_effect_modules_linked_with_work(
+                    forged,
+                    sources,
+                    modules,
+                    linked,
+                    &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                );
+                assert_eq!(
+                    result.as_ref().unwrap_err().reason(),
+                    ValidationReason::Registry
+                );
+                result
+            },
+        );
+        assert!(reached_linked_validation);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -37230,6 +37620,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![
                 StoredNode {
@@ -37295,6 +37686,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![
                 StoredNode {
@@ -37370,6 +37762,7 @@ mod tests {
                 registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
                 method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
                 method_evidence_anchors: Box::new([]),
+                generated_parameter_anchors: Arc::default(),
                 arena,
                 nodes: vec![StoredNode {
                     dialect: DialectId::PURE,
@@ -37415,6 +37808,7 @@ mod tests {
                         super::super::dialect::MethodEvidenceCatalog::default(),
                     ),
                     method_evidence_anchors: Box::new([]),
+                    generated_parameter_anchors: Arc::default(),
                     arena,
                     nodes: vec![StoredNode {
                         dialect: DialectId::PURE,
@@ -37442,6 +37836,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
@@ -37466,6 +37861,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena: super::super::dialect::ArenaId::new(195),
             nodes: Vec::new(),
             root: NodeId::new(super::super::dialect::ArenaId::new(195), 0),
@@ -37496,6 +37892,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena: super::super::dialect::ArenaId::new(196),
             nodes: Vec::new(),
             root: NodeId::new(super::super::dialect::ArenaId::new(196), 0),
@@ -37535,6 +37932,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
@@ -37588,6 +37986,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
@@ -37639,6 +38038,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
@@ -37663,6 +38063,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![
                 StoredNode {
@@ -37757,6 +38158,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes,
             root,
@@ -37798,6 +38200,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![
                 StoredNode {
@@ -37877,6 +38280,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
@@ -37916,6 +38320,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![
                 StoredNode {
@@ -38030,6 +38435,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![
                 StoredNode {
@@ -38183,6 +38589,7 @@ mod tests {
             registry: Arc::new(registry),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
@@ -38245,6 +38652,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![
                 StoredNode {
@@ -38745,6 +39153,7 @@ mod tests {
             registry: Arc::new(registry),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: Vec::new(),
             root: NodeId::new(arena, 0),
@@ -38838,6 +39247,7 @@ mod tests {
             registry: Arc::new(registry),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: Vec::new(),
             root: NodeId::new(arena, 0),
@@ -38899,6 +39309,7 @@ mod tests {
             registry: Arc::new(registry),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: Vec::new(),
             root: NodeId::new(arena, 0),
@@ -39127,6 +39538,7 @@ mod tests {
             registry: Arc::new(registry),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![
                 StoredNode {
@@ -39345,6 +39757,7 @@ mod tests {
             registry: Arc::new(registry),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes,
             root: NodeId::new(arena, 0),
@@ -39417,6 +39830,7 @@ mod tests {
                         super::super::dialect::MethodEvidenceCatalog::default(),
                     ),
                     method_evidence_anchors: Box::new([]),
+                    generated_parameter_anchors: Arc::default(),
                     arena,
                     nodes: vec![
                         StoredNode {
@@ -39511,6 +39925,7 @@ mod tests {
                         super::super::dialect::MethodEvidenceCatalog::default(),
                     ),
                     method_evidence_anchors: Box::new([]),
+                    generated_parameter_anchors: Arc::default(),
                     arena,
                     nodes: vec![
                         StoredNode {
@@ -39589,6 +40004,7 @@ mod tests {
                         super::super::dialect::MethodEvidenceCatalog::default(),
                     ),
                     method_evidence_anchors: Box::new([]),
+                    generated_parameter_anchors: Arc::default(),
                     arena,
                     nodes: vec![
                         StoredNode {
@@ -39695,6 +40111,7 @@ mod tests {
                         super::super::dialect::MethodEvidenceCatalog::default(),
                     ),
                     method_evidence_anchors: Box::new([]),
+                    generated_parameter_anchors: Arc::default(),
                     arena,
                     nodes: vec![
                         StoredNode {
@@ -39822,6 +40239,7 @@ mod tests {
                         super::super::dialect::MethodEvidenceCatalog::default(),
                     ),
                     method_evidence_anchors: Box::new([]),
+                    generated_parameter_anchors: Arc::default(),
                     arena,
                     nodes: vec![StoredNode {
                         dialect: DialectId::PURE,
@@ -39914,6 +40332,7 @@ mod tests {
                         super::super::dialect::MethodEvidenceCatalog::default(),
                     ),
                     method_evidence_anchors: Box::new([]),
+                    generated_parameter_anchors: Arc::default(),
                     arena,
                     nodes: vec![StoredNode {
                         dialect: DialectId::PURE,
@@ -40532,6 +40951,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: Vec::new(),
             root: NodeId::new(arena, 0),
@@ -40570,6 +40990,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![unit, function],
             root: NodeId::new(arena, 1),
@@ -40608,6 +41029,7 @@ mod tests {
                 registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
                 method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
                 method_evidence_anchors: Box::new([]),
+                generated_parameter_anchors: Arc::default(),
                 arena,
                 nodes: vec![stored],
                 root: NodeId::new(arena, 0),
@@ -40635,6 +41057,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![cyclic],
             root: NodeId::new(arena, 0),
@@ -40691,6 +41114,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![group, function, unit],
             root: NodeId::new(arena, 0),

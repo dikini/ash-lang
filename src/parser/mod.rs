@@ -559,8 +559,55 @@ pub(crate) fn parse_with_budget_and_header(
     (tree, imports)
 }
 
-/// Parses a transformer result with protected fragments as expression atoms.
-/// The token stream is constructed directly; no generated text is lexed.
+/// Parser-issued token order for one generated declaration. These coordinates
+/// are separate from the diagnostic origins supplied for generated syntax.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ParsedParameterOrder {
+    invocation: Span,
+    occurrence_extent: bool,
+    declaration: std::ops::Range<usize>,
+    name: crate::surface::SurfaceName,
+    span: Span,
+    parameters: Box<[ParsedParameterOccurrence]>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ParsedParameterOccurrence {
+    name: crate::surface::SurfaceName,
+    tokens: std::ops::Range<usize>,
+}
+
+impl ParsedParameterOrder {
+    pub(crate) fn invocation(&self) -> Span {
+        self.invocation
+    }
+    pub(crate) fn occurrence_extent(&self) -> bool {
+        self.occurrence_extent
+    }
+    pub(crate) fn declaration(&self) -> &std::ops::Range<usize> {
+        &self.declaration
+    }
+    pub(crate) fn name(&self) -> &crate::surface::SurfaceName {
+        &self.name
+    }
+    pub(crate) fn span(&self) -> Span {
+        self.span
+    }
+    pub(crate) fn parameters(&self) -> &[ParsedParameterOccurrence] {
+        &self.parameters
+    }
+}
+
+impl ParsedParameterOccurrence {
+    pub(crate) fn name(&self) -> &crate::surface::SurfaceName {
+        &self.name
+    }
+    pub(crate) fn tokens(&self) -> &std::ops::Range<usize> {
+        &self.tokens
+    }
+}
+
+/// A failure while parsing a transformer result with protected fragments.
 #[derive(Clone, Debug)]
 pub(crate) enum MacroParseFailure {
     Syntax {
