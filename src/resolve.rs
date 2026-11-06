@@ -1647,7 +1647,7 @@ struct SyntaxInputs<'a> {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-enum SyntaxTermRoute {
+enum SyntaxGrantRoute {
     Owner {
         spelling: String,
         private: bool,
@@ -1659,24 +1659,25 @@ enum SyntaxTermRoute {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SyntaxTermTarget {
+pub(crate) enum SyntaxGrantTarget {
     Global(BinderId),
     Constructor(ConstructorId),
+    Nominal(NominalTypeId),
 }
 
 /// One definition-context selection, issued by resolution and checked at link.
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct SyntaxTermGrant {
+pub(crate) struct SyntaxGrant {
     export: Arc<crate::surface::SurfaceSyntaxDeclaration>,
     occurrence_module: ModuleId,
     issuer: ModuleId,
     syntax_import: DirectDependencyRoute,
-    target: SyntaxTermTarget,
-    route: SyntaxTermRoute,
+    target: SyntaxGrantTarget,
+    route: SyntaxGrantRoute,
 }
 
-impl SyntaxTermGrant {
-    pub(crate) const fn target(&self) -> SyntaxTermTarget {
+impl SyntaxGrant {
+    pub(crate) const fn target(&self) -> SyntaxGrantTarget {
         self.target
     }
 
@@ -1711,7 +1712,7 @@ impl SyntaxTermGrant {
             return false;
         }
         match (&self.route, self.target) {
-            (SyntaxTermRoute::Owner { spelling, private }, SyntaxTermTarget::Global(binder)) => {
+            (SyntaxGrantRoute::Owner { spelling, private }, SyntaxGrantTarget::Global(binder)) => {
                 owner
                     .schemes()
                     .iter()
@@ -1723,8 +1724,8 @@ impl SyntaxTermGrant {
                         == *private)
             }
             (
-                SyntaxTermRoute::Owner { spelling, private },
-                SyntaxTermTarget::Constructor(constructor),
+                SyntaxGrantRoute::Owner { spelling, private },
+                SyntaxGrantTarget::Constructor(constructor),
             ) => {
                 !constructor.owner().is_lexical()
                     && constructor.owner().module() == owner.module()
@@ -1740,21 +1741,41 @@ impl SyntaxTermGrant {
                         .is_none_or(|fact| fact.id != constructor)
                         == *private)
             }
-            (SyntaxTermRoute::Imported { route, spelling }, target) => {
+            (
+                SyntaxGrantRoute::Owner { spelling, private },
+                SyntaxGrantTarget::Nominal(nominal),
+            ) => {
+                !nominal.is_lexical()
+                    && nominal.module() == owner.module()
+                    && owner
+                        .registry()
+                        .nominal(nominal)
+                        .is_some_and(|fact| fact.spelling == *spelling)
+                    && (owner
+                        .exports()
+                        .nominal(spelling)
+                        .is_none_or(|fact| fact.id != nominal)
+                        == *private)
+            }
+            (SyntaxGrantRoute::Imported { route, spelling }, target) => {
                 owner.direct_dependencies().contains(route)
                     && modules
                         .iter()
                         .map(std::borrow::Borrow::borrow)
                         .find(|module| module.module() == route.target())
                         .is_some_and(|module| match target {
-                            SyntaxTermTarget::Global(binder) => module
+                            SyntaxGrantTarget::Global(binder) => module
                                 .exports()
                                 .term(spelling)
                                 .is_some_and(|term| term.binder == binder),
-                            SyntaxTermTarget::Constructor(constructor) => module
+                            SyntaxGrantTarget::Constructor(constructor) => module
                                 .exports()
                                 .constructor(spelling)
                                 .is_some_and(|fact| fact.id == constructor),
+                            SyntaxGrantTarget::Nominal(nominal) => module
+                                .exports()
+                                .nominal(spelling)
+                                .is_some_and(|fact| fact.id == nominal),
                         })
             }
         }
@@ -1858,6 +1879,7 @@ fn finish_module_resolution(
     crate::kind::check_remaining_module_kinds(&admission.parts, environments, type_work)
         .map_err(ResolveModuleError::Kind)?;
     let mut resolved = ResolvedModule::new(admission.parts);
+    resolved.retain_syntax_grants(admission.syntax_grants);
     resolved
         .retain_defining_sources(
             loaded.retained_source(),
@@ -1898,6 +1920,7 @@ struct ResolvedModuleAdmission {
     parts: ResolvedModuleParts,
     constructor_payload_provenance: Vec<Vec<ConstructorPayloadProvenance>>,
     written_effect_arities: Vec<WrittenEffectArity>,
+    syntax_grants: Vec<Arc<SyntaxGrant>>,
 }
 
 /// Admission-only origins for malformed written rows. These scalar diagnostics
@@ -2186,6 +2209,7 @@ fn resolve_module_names_with_budget<'a>(
             },
             constructor_payload_provenance,
             written_effect_arities: std::mem::take(&mut resolver.written_effect_arities),
+            syntax_grants: std::mem::take(&mut resolver.syntax_nominal_grants),
         })
     })();
     *type_work = std::mem::take(&mut resolver.type_work);
@@ -2637,6 +2661,7 @@ struct Resolver<'state, 'inputs> {
     scopes: Vec<HashMap<(String, usize), ResolvedTermBinding>>,
     syntax_inputs: Option<SyntaxInputs<'inputs>>,
     syntax_expansion: Option<&'state mut crate::syntax::SyntaxExpansion<'inputs>>,
+    syntax_nominal_grants: Vec<Arc<SyntaxGrant>>,
     active_expansions: usize,
     diagnostic_frames: Vec<Arc<crate::syntax::ExpansionFrame>>,
     binder_introductions: HashMap<BinderId, usize>,
@@ -3031,6 +3056,23 @@ struct WithheldImport {
 #[derive(Clone, Copy, Debug)]
 struct ImportedNominalName {
     id: NominalTypeId,
+    syntax_selected: bool,
+}
+
+impl ImportedNominalName {
+    const fn ordinary(id: NominalTypeId) -> Self {
+        Self {
+            id,
+            syntax_selected: false,
+        }
+    }
+
+    const fn syntax(id: NominalTypeId) -> Self {
+        Self {
+            id,
+            syntax_selected: true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -3124,6 +3166,7 @@ impl Resolver<'_, '_> {
             scopes: vec![HashMap::new()],
             syntax_inputs: None,
             syntax_expansion: None,
+            syntax_nominal_grants: Vec::new(),
             active_expansions: 0,
             diagnostic_frames: Vec::new(),
             binder_introductions: HashMap::new(),
@@ -4835,9 +4878,10 @@ impl Resolver<'_, '_> {
         }
 
         for (spelling, exported) in summary.nominals() {
-            namespaces
-                .nominals
-                .insert(spelling.to_owned(), ImportedNominalName { id: exported.id });
+            namespaces.nominals.insert(
+                spelling.to_owned(),
+                ImportedNominalName::ordinary(exported.id),
+            );
             self.retain_imported_nominal(
                 exported,
                 summary,
@@ -4859,9 +4903,7 @@ impl Resolver<'_, '_> {
                 .nominals
                 .insert(
                     spelling.to_owned(),
-                    ImportedNominalName {
-                        id: resource.family,
-                    },
+                    ImportedNominalName::ordinary(resource.family),
                 )
                 .is_some()
             {
@@ -5961,11 +6003,11 @@ impl Resolver<'_, '_> {
         })
     }
 
-    fn syntax_term_grant(
+    fn syntax_reference_grant(
         &self,
         reference: &SurfaceReference,
-        target: SyntaxTermTarget,
-    ) -> Result<Arc<SyntaxTermGrant>, ResolveError> {
+        target: SyntaxGrantTarget,
+    ) -> Result<Arc<SyntaxGrant>, ResolveError> {
         let member = reference.member();
         let context = reference.qualifier().unwrap_or(member);
         let invalid = || {
@@ -6002,16 +6044,26 @@ impl Resolver<'_, '_> {
             )),
             SurfaceReference::Unqualified(_) => {
                 let local = match target {
-                    SyntaxTermTarget::Global(binder) => terms.get(&member.text).map(|fact| {
+                    SyntaxGrantTarget::Global(binder) => terms.get(&member.text).map(|fact| {
                         fact.binder == binder && binder.module() == Some(owner.module())
                     }),
-                    SyntaxTermTarget::Constructor(constructor) => {
+                    SyntaxGrantTarget::Constructor(constructor) => {
                         terms.constructor(&member.text).map(|fact| {
                             fact.id == constructor
                                 && !constructor.owner().is_lexical()
                                 && constructor.owner().module() == owner.module()
                         })
                     }
+                    SyntaxGrantTarget::Nominal(nominal) => owner
+                        .registry()
+                        .nominals()
+                        .iter()
+                        .find(|fact| {
+                            fact.id.module() == owner.module()
+                                && !fact.id.is_lexical()
+                                && fact.spelling == member.text
+                        })
+                        .map(|fact| fact.id == nominal),
                 };
                 if let Some(matches) = local {
                     if !matches {
@@ -6019,7 +6071,11 @@ impl Resolver<'_, '_> {
                     }
                     None
                 } else {
-                    let (route, original, _) = terms.targeted(&member.text).ok_or_else(invalid)?;
+                    let targeted = match target {
+                        SyntaxGrantTarget::Nominal(_) => terms.targeted_nominal(&member.text),
+                        _ => terms.targeted(&member.text),
+                    };
+                    let (route, original, _) = targeted.ok_or_else(invalid)?;
                     Some((route, original))
                 }
             }
@@ -6031,38 +6087,46 @@ impl Resolver<'_, '_> {
                 .find(|dependency| dependency.module() == route.target())
                 .ok_or_else(invalid)?;
             let exported = match target {
-                SyntaxTermTarget::Global(binder) => dependency
+                SyntaxGrantTarget::Global(binder) => dependency
                     .exports()
                     .term(spelling)
                     .is_some_and(|fact| fact.binder == binder),
-                SyntaxTermTarget::Constructor(constructor) => dependency
+                SyntaxGrantTarget::Constructor(constructor) => dependency
                     .exports()
                     .constructor(spelling)
                     .is_some_and(|fact| fact.id == constructor),
+                SyntaxGrantTarget::Nominal(nominal) => dependency
+                    .exports()
+                    .nominal(spelling)
+                    .is_some_and(|fact| fact.id == nominal),
             };
             if !owner.direct_dependencies().contains(&route) || !exported {
                 return Err(invalid());
             }
-            SyntaxTermRoute::Imported {
+            SyntaxGrantRoute::Imported {
                 route,
                 spelling: spelling.to_owned(),
             }
         } else {
-            SyntaxTermRoute::Owner {
+            SyntaxGrantRoute::Owner {
                 spelling: member.text.clone(),
                 private: match target {
-                    SyntaxTermTarget::Global(binder) => owner
+                    SyntaxGrantTarget::Global(binder) => owner
                         .exports()
                         .term(&member.text)
                         .is_none_or(|exported| exported.binder != binder),
-                    SyntaxTermTarget::Constructor(constructor) => owner
+                    SyntaxGrantTarget::Constructor(constructor) => owner
                         .exports()
                         .constructor(&member.text)
                         .is_none_or(|exported| exported.id != constructor),
+                    SyntaxGrantTarget::Nominal(nominal) => owner
+                        .exports()
+                        .nominal(&member.text)
+                        .is_none_or(|exported| exported.id != nominal),
                 },
             }
         };
-        Ok(Arc::new(SyntaxTermGrant {
+        Ok(Arc::new(SyntaxGrant {
             export,
             occurrence_module: self.module,
             issuer: owner.module(),
@@ -6070,6 +6134,27 @@ impl Resolver<'_, '_> {
             target,
             route,
         }))
+    }
+
+    fn syntax_nominal_grant(
+        &mut self,
+        reference: &SurfaceReference,
+        nominal: ImportedNominalName,
+    ) -> Result<Option<Arc<SyntaxGrant>>, ResolveError> {
+        if !nominal.syntax_selected || self.admitting_template.is_some() {
+            return Ok(None);
+        }
+        let grant =
+            self.syntax_reference_grant(reference, SyntaxGrantTarget::Nominal(nominal.id))?;
+        self.syntax_nominal_grants.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                reference.span(),
+                "syntax nominal grant storage could not be reserved",
+            )
+        })?;
+        self.syntax_nominal_grants.push(Arc::clone(&grant));
+        Ok(Some(grant))
     }
 
     fn install_syntax_terms(&mut self, syntax: SyntaxInputs<'_>) -> Result<(), ResolveError> {
@@ -8133,7 +8218,7 @@ impl Resolver<'_, '_> {
                     name.qualifier.introduction,
                 ))
                 .copied()
-                .map(|id| ImportedNominalName { id })
+                .map(ImportedNominalName::syntax)
                 .ok_or_else(|| {
                     error(
                         ResolveReason::UnknownType,
@@ -8171,7 +8256,7 @@ impl Resolver<'_, '_> {
             &mut self.type_work,
             "lexical nominal lookup exceeded its type-work budget",
         )? {
-            return Ok(ImportedNominalName { id });
+            return Ok(ImportedNominalName::ordinary(id));
         }
         if name.introduction != 0 {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Type)?;
@@ -8179,7 +8264,7 @@ impl Resolver<'_, '_> {
                 .syntax_nominals
                 .get(&(name.text.clone(), name.introduction))
                 .copied()
-                .map(|id| ImportedNominalName { id })
+                .map(ImportedNominalName::syntax)
                 .ok_or_else(|| {
                     error(
                         ResolveReason::UnknownType,
@@ -8206,7 +8291,7 @@ impl Resolver<'_, '_> {
             diagnostic.found = Some(name.text.clone());
             ResolveError::new(diagnostic, Some(ResolveContext::Type))
         })?;
-        Ok(ImportedNominalName { id })
+        Ok(ImportedNominalName::ordinary(id))
     }
 
     fn interface_reference(
@@ -10957,9 +11042,12 @@ impl Resolver<'_, '_> {
         operation_outer: bool,
     ) -> Result<crate::resolved::ResolvedOwnerArgument, ResolveError> {
         enum ApplicationHead {
-            Nominal(NominalTypeId),
+            Nominal(NominalTypeId, Option<Arc<SyntaxGrant>>),
             Variable(TypeVariableId),
-            Resource(crate::resolved::ResourceDefinitionId),
+            Resource(
+                crate::resolved::ResourceDefinitionId,
+                Option<Arc<SyntaxGrant>>,
+            ),
             Deferred(usize),
         }
         enum Task<'a> {
@@ -10985,6 +11073,7 @@ impl Resolver<'_, '_> {
         let mut tasks = vec![Task::Visit(surface)];
         let mut completed = ResolvedTypeBuffer(Vec::new());
         let mut provenance = Vec::new();
+        let mut syntax_grants = Vec::new();
         while let Some(task) = tasks.pop() {
             #[cfg(test)]
             {
@@ -11062,6 +11151,9 @@ impl Resolver<'_, '_> {
                             };
                             let id = nominal.id;
                             provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
+                            if let Some(grant) = self.syntax_nominal_grant(name, nominal)? {
+                                syntax_grants.push((provenance.len() - 1, grant));
+                            }
                             completed.push((Type::Nominal(id), provenance.len() - 1));
                         }
                         SurfaceTypeKind::Application {
@@ -11077,6 +11169,8 @@ impl Resolver<'_, '_> {
                                 match self.nominal_reference(constructor) {
                                     Ok(nominal) => {
                                         let family = nominal.id;
+                                        let grant =
+                                            self.syntax_nominal_grant(constructor, nominal)?;
                                         self.type_work.charge(1).map_err(|_| {
                                             error(
                                                 ResolveReason::TypeResourceExhausted,
@@ -11093,9 +11187,9 @@ impl Resolver<'_, '_> {
                                                     )
                                                 }) =>
                                             {
-                                                ApplicationHead::Resource(resource)
+                                                ApplicationHead::Resource(resource, grant)
                                             }
-                                            _ => ApplicationHead::Nominal(family),
+                                            _ => ApplicationHead::Nominal(family, grant),
                                         }
                                     }
                                     Err(failure)
@@ -11573,46 +11667,50 @@ impl Resolver<'_, '_> {
                         })
                     })?;
                     let arguments = completed.split_off(split);
-                    if let ApplicationHead::Deferred(provenance_start) = head {
-                        drop(arguments);
-                        provenance.truncate(provenance_start);
-                        provenance.push(ResolvedTypeProvenanceNode::Fact(span));
-                        completed.push((Type::Unit, provenance.len() - 1));
-                        continue;
-                    }
-                    if let ApplicationHead::Resource(resource) = head {
-                        let roots = arguments
-                            .iter()
-                            .map(|(_, root)| *root)
-                            .collect::<Vec<_>>()
-                            .into_boxed_slice();
-                        provenance.push(ResolvedTypeProvenanceNode::Resource {
-                            span,
-                            resource,
-                            arguments: roots,
-                        });
-                        completed.push((
-                            Type::ResourceApply(
-                                resource,
-                                arguments
-                                    .into_vec()
-                                    .into_iter()
-                                    .map(|(argument, _)| argument)
-                                    .collect(),
-                            ),
-                            provenance.len() - 1,
-                        ));
-                        continue;
-                    }
-                    provenance.push(ResolvedTypeProvenanceNode::Fact(constructor_span));
-                    let mut function = match head {
-                        ApplicationHead::Nominal(owner) => Type::Nominal(owner),
-                        ApplicationHead::Variable(variable) => Type::Variable(variable),
-                        ApplicationHead::Resource(_) | ApplicationHead::Deferred(_) => {
-                            unreachable!()
+                    let (mut function, head_grant) = match head {
+                        ApplicationHead::Deferred(provenance_start) => {
+                            drop(arguments);
+                            provenance.truncate(provenance_start);
+                            syntax_grants.retain(|(node, _)| *node < provenance_start);
+                            provenance.push(ResolvedTypeProvenanceNode::Fact(span));
+                            completed.push((Type::Unit, provenance.len() - 1));
+                            continue;
                         }
+                        ApplicationHead::Resource(resource, grant) => {
+                            let roots = arguments
+                                .iter()
+                                .map(|(_, root)| *root)
+                                .collect::<Vec<_>>()
+                                .into_boxed_slice();
+                            provenance.push(ResolvedTypeProvenanceNode::Resource {
+                                span,
+                                resource,
+                                arguments: roots,
+                            });
+                            if let Some(grant) = grant {
+                                syntax_grants.push((provenance.len() - 1, grant));
+                            }
+                            completed.push((
+                                Type::ResourceApply(
+                                    resource,
+                                    arguments
+                                        .into_vec()
+                                        .into_iter()
+                                        .map(|(argument, _)| argument)
+                                        .collect(),
+                                ),
+                                provenance.len() - 1,
+                            ));
+                            continue;
+                        }
+                        ApplicationHead::Nominal(owner, grant) => (Type::Nominal(owner), grant),
+                        ApplicationHead::Variable(variable) => (Type::Variable(variable), None),
                     };
+                    provenance.push(ResolvedTypeProvenanceNode::Fact(constructor_span));
                     let mut function_root = provenance.len() - 1;
+                    if let Some(grant) = head_grant {
+                        syntax_grants.push((function_root, grant));
+                    }
                     for ((argument, argument_root), source_argument) in
                         arguments.into_vec().into_iter().zip(source_arguments)
                     {
@@ -11660,7 +11758,7 @@ impl Resolver<'_, '_> {
         })?;
         Ok(crate::resolved::ResolvedOwnerArgument {
             ty: ty.into_inner(),
-            provenance: ResolvedTypeProvenance::new(provenance, root),
+            provenance: ResolvedTypeProvenance::with_syntax_grants(provenance, root, syntax_grants),
             origin: Origin::Source(surface.span),
             span: surface.span,
         })
@@ -11754,9 +11852,9 @@ impl Resolver<'_, '_> {
                         origin: Origin::Source(name.span()),
                         syntax_grant: syntax_selected
                             .then(|| {
-                                self.syntax_term_grant(
+                                self.syntax_reference_grant(
                                     name,
-                                    SyntaxTermTarget::Constructor(constructor),
+                                    SyntaxGrantTarget::Constructor(constructor),
                                 )
                             })
                             .transpose()?,
@@ -15283,9 +15381,9 @@ impl Resolver<'_, '_> {
                     })?;
                     evidence.extend((0..evidence_count).map(|_| EvidenceSlot::empty()));
                     let syntax_grant = match (syntax_selected, term) {
-                        (true, ResolvedTermName::Global(binder)) => {
-                            Some(self.syntax_term_grant(name, SyntaxTermTarget::Global(binder))?)
-                        }
+                        (true, ResolvedTermName::Global(binder)) => Some(
+                            self.syntax_reference_grant(name, SyntaxGrantTarget::Global(binder))?,
+                        ),
                         _ => None,
                     };
                     expressions.push(ResolvedExpr {
@@ -15315,9 +15413,9 @@ impl Resolver<'_, '_> {
                             origin: Origin::Source(name.span()),
                             syntax_grant: syntax_selected
                                 .then(|| {
-                                    self.syntax_term_grant(
+                                    self.syntax_reference_grant(
                                         name,
-                                        SyntaxTermTarget::Constructor(constructor),
+                                        SyntaxGrantTarget::Constructor(constructor),
                                     )
                                 })
                                 .transpose()?,
@@ -19377,7 +19475,7 @@ mod tests {
     }
 
     #[test]
-    fn linked_syntax_term_grants_require_the_original_export_target_and_route() {
+    fn linked_syntax_grants_require_the_original_export_target_and_route() {
         let fixture = ImportBudgetFixture::create(
             "import dependency as Dependency\nmain : Unit -> Int\nmain () = 42\n",
             "type Secret = Hidden(Int)\ntype Other = Other(Int)\nprivate : Int -> Int\nprivate value = value + 1\nother : Int -> Int\nother value = value + 2\npub syntax inc $value:expr => {\nprivate $value\n}\n",
@@ -19391,8 +19489,8 @@ mod tests {
             .find(|module| !module.surface().syntax_declarations.is_empty())
             .expect("syntax owner");
 
-        for case in 0..18 {
-            let is_constructor = case >= 9;
+        for case in 0..27 {
+            let namespace = case / 9;
             let mutation = case % 9;
             let mut checked = checked_import_dependencies(&graph);
             let owner_index = checked
@@ -19415,35 +19513,55 @@ mod tests {
                 .collect::<Vec<_>>();
             let mut consumer = check_module(resolve_module(entry, &dependencies).unwrap()).unwrap();
             let owner = &checked[owner_index];
-            let (target, other, spelling) = if is_constructor {
-                let constructor = |name: &str| {
-                    owner
-                        .registry()
-                        .constructors()
-                        .iter()
-                        .find(|constructor| constructor.spelling == name)
-                        .unwrap()
-                        .id
-                };
-                (
-                    SyntaxTermTarget::Constructor(constructor("Hidden")),
-                    SyntaxTermTarget::Constructor(constructor("Other")),
-                    "Hidden",
-                )
-            } else {
-                let binder = |name: &str| {
-                    owner
-                        .schemes()
-                        .iter()
-                        .find(|scheme| scheme.spelling == name)
-                        .unwrap()
-                        .binder
-                };
-                (
-                    SyntaxTermTarget::Global(binder("private")),
-                    SyntaxTermTarget::Global(binder("other")),
-                    "private",
-                )
+            let (target, other, spelling) = match namespace {
+                0 => {
+                    let binder = |name: &str| {
+                        owner
+                            .schemes()
+                            .iter()
+                            .find(|scheme| scheme.spelling == name)
+                            .unwrap()
+                            .binder
+                    };
+                    (
+                        SyntaxGrantTarget::Global(binder("private")),
+                        SyntaxGrantTarget::Global(binder("other")),
+                        "private",
+                    )
+                }
+                1 => {
+                    let constructor = |name: &str| {
+                        owner
+                            .registry()
+                            .constructors()
+                            .iter()
+                            .find(|constructor| constructor.spelling == name)
+                            .unwrap()
+                            .id
+                    };
+                    (
+                        SyntaxGrantTarget::Constructor(constructor("Hidden")),
+                        SyntaxGrantTarget::Constructor(constructor("Other")),
+                        "Hidden",
+                    )
+                }
+                2 => {
+                    let nominal = |name: &str| {
+                        owner
+                            .registry()
+                            .nominals()
+                            .iter()
+                            .find(|nominal| nominal.spelling == name)
+                            .unwrap()
+                            .id
+                    };
+                    (
+                        SyntaxGrantTarget::Nominal(nominal("Secret")),
+                        SyntaxGrantTarget::Nominal(nominal("Other")),
+                        "Secret",
+                    )
+                }
+                _ => unreachable!(),
             };
             let syntax_import = *consumer
                 .direct_dependencies()
@@ -19461,13 +19579,13 @@ mod tests {
                     }]))
                     .unwrap();
             }
-            let mut grant = SyntaxTermGrant {
+            let mut grant = SyntaxGrant {
                 export,
                 occurrence_module: entry.id(),
                 issuer: issuer.id(),
                 syntax_import,
                 target,
-                route: SyntaxTermRoute::Owner {
+                route: SyntaxGrantRoute::Owner {
                     spelling: spelling.to_owned(),
                     private: true,
                 },
@@ -19482,7 +19600,7 @@ mod tests {
                 }
                 4 => grant.export = Arc::new((*grant.export).clone()),
                 5 => {
-                    grant.route = SyntaxTermRoute::Owner {
+                    grant.route = SyntaxGrantRoute::Owner {
                         spelling: spelling.to_owned(),
                         private: false,
                     }
@@ -19502,21 +19620,25 @@ mod tests {
             assert_eq!(
                 result.is_ok(),
                 mutation == 0,
-                "constructor={is_constructor}, grant mutation {mutation}"
+                "namespace={namespace}, grant mutation {mutation}"
             );
         }
     }
 
     #[test]
-    fn constructor_grants_authenticate_the_public_facade_route() {
+    fn syntax_grants_authenticate_the_public_facade_route() {
         let fixture = ImportBudgetFixture::create(
             "import dependency as Dependency\nmain : Unit -> Int\nmain () = 42\n",
             "import facade as View\npub syntax inc $value:expr => {\nView.Boxed($value)\n}\n",
         );
-        fs::write(fixture.0.join("facade.ash"), "pub import actual (Boxed)\n").unwrap();
+        fs::write(
+            fixture.0.join("facade.ash"),
+            "pub import actual (Capsule, Boxed)\n",
+        )
+        .unwrap();
         fs::write(
             fixture.0.join("actual.ash"),
-            "pub type Capsule = Boxed(Int)\npub opaque type Secret = Hidden(Int)\n",
+            "pub type Capsule = Boxed(Int)\npub opaque type Secret = Hidden(Int)\ntype Private = Private(Int)\n",
         )
         .unwrap();
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
@@ -19569,6 +19691,15 @@ mod tests {
             .unwrap();
         let target = facade_module.exports().constructor("Boxed").unwrap().id;
         assert_eq!(target.owner().module(), actual.id());
+        let nominal = facade_module.exports().nominal("Capsule").unwrap().id;
+        assert_eq!(nominal.module(), actual.id());
+        let private_nominal = actual_module
+            .registry()
+            .nominals()
+            .iter()
+            .find(|nominal| nominal.spelling == "Private")
+            .unwrap()
+            .id;
         let hidden = actual_module
             .registry()
             .constructors()
@@ -19576,6 +19707,8 @@ mod tests {
             .find(|constructor| constructor.spelling == "Hidden")
             .unwrap()
             .id;
+        let target = SyntaxGrantTarget::Constructor(target);
+        let hidden = SyntaxGrantTarget::Constructor(hidden);
         let route = *owner
             .direct_dependencies()
             .iter()
@@ -19596,7 +19729,7 @@ mod tests {
             }]))
             .unwrap();
         checked.push(consumer);
-        let imported = |route, spelling: &str| SyntaxTermRoute::Imported {
+        let imported = |route, spelling: &str| SyntaxGrantRoute::Imported {
             route,
             spelling: spelling.to_owned(),
         };
@@ -19613,7 +19746,7 @@ mod tests {
             ),
             (
                 target,
-                SyntaxTermRoute::Owner {
+                SyntaxGrantRoute::Owner {
                     spelling: "Boxed".to_owned(),
                     private: true,
                 },
@@ -19628,14 +19761,32 @@ mod tests {
                 false,
             ),
             (target, imported(route, "Hidden"), false),
+            (
+                SyntaxGrantTarget::Nominal(nominal),
+                imported(route, "Capsule"),
+                true,
+            ),
+            (
+                SyntaxGrantTarget::Nominal(private_nominal),
+                imported(route, "Private"),
+                false,
+            ),
+            (
+                SyntaxGrantTarget::Nominal(nominal),
+                imported(
+                    DirectDependencyRoute::new(actual.id(), route.import_span()),
+                    "Capsule",
+                ),
+                false,
+            ),
         ];
         for (target, route, expected) in cases {
-            let grant = SyntaxTermGrant {
+            let grant = SyntaxGrant {
                 export: Arc::clone(&export),
                 occurrence_module: entry.id(),
                 issuer: issuer.id(),
                 syntax_import,
-                target: SyntaxTermTarget::Constructor(target),
+                target,
                 route,
             };
             assert_eq!(grant.authenticate(entry.id(), &checked), expected);

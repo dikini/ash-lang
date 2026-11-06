@@ -914,7 +914,7 @@ pub struct ResolvedOccurrence {
     /// Exact direct import occurrence that introduced this term binding.
     pub(crate) import_span: Option<Span>,
     /// Authorization retained only for an actual definition-context selection.
-    pub(crate) syntax_grant: Option<Arc<crate::resolve::SyntaxTermGrant>>,
+    pub(crate) syntax_grant: Option<Arc<crate::resolve::SyntaxGrant>>,
     /// Atomic checked-goal and evidence positions owned by this exact occurrence.
     pub evidence: Box<[EvidenceSlot]>,
 }
@@ -1016,6 +1016,7 @@ pub struct ResolvedModule {
     definitions: Box<[ResolvedDefinition]>,
     export_candidate: ResolvedExportCandidate,
     resources: Box<[ResolvedResourceDefinition]>,
+    syntax_grants: Vec<Arc<crate::resolve::SyntaxGrant>>,
 
     span: Span,
     defining_sources: Vec<(ModuleId, Arc<crate::source::SourceFile>)>,
@@ -1120,6 +1121,7 @@ impl ResolvedModule {
             implementations: std::mem::take(&mut parts.implementations).into_boxed_slice(),
             definitions: std::mem::take(&mut parts.definitions).into_boxed_slice(),
             resources: std::mem::take(&mut parts.resources).into_boxed_slice(),
+            syntax_grants: Vec::new(),
 
             export_candidate: std::mem::take(&mut parts.export_candidate),
             span: parts.span,
@@ -1302,6 +1304,15 @@ impl ResolvedModule {
 
     fn take_effects(&mut self) -> Box<[ResolvedEffectDeclaration]> {
         std::mem::take(&mut self.effects)
+    }
+
+    pub(crate) fn retain_syntax_grants(&mut self, grants: Vec<Arc<crate::resolve::SyntaxGrant>>) {
+        debug_assert!(self.syntax_grants.is_empty());
+        self.syntax_grants = grants;
+    }
+
+    pub(crate) fn take_syntax_grants(&mut self) -> Vec<Arc<crate::resolve::SyntaxGrant>> {
+        std::mem::take(&mut self.syntax_grants)
     }
 
     /// Moves resolved globals across a successful checker-owned transition.
@@ -1814,7 +1825,7 @@ pub struct CheckedModule {
     typed_fragment: Option<crate::elaborate::CheckedTypedModule>,
     syntax_exports: Box<[Arc<crate::surface::SurfaceSyntaxDeclaration>]>,
     syntax_imports: Arc<[crate::syntax::SelectedSyntax]>,
-    syntax_grants: Box<[Arc<crate::resolve::SyntaxTermGrant>]>,
+    syntax_grants: Box<[Arc<crate::resolve::SyntaxGrant>]>,
 
     span: Span,
 }
@@ -1830,7 +1841,7 @@ pub(crate) struct CheckedModuleParts {
     pub implementation_facts: Box<[CheckedImplementationFact]>,
     pub exports: ExportSummary,
     pub typed_fragment: Option<crate::elaborate::CheckedTypedModule>,
-    pub syntax_grants: Box<[Arc<crate::resolve::SyntaxTermGrant>]>,
+    pub syntax_grants: Box<[Arc<crate::resolve::SyntaxGrant>]>,
 }
 
 impl CheckedModule {
@@ -2061,14 +2072,14 @@ impl CheckedModule {
         &self.syntax_imports
     }
 
-    pub(crate) fn syntax_grants(&self) -> &[Arc<crate::resolve::SyntaxTermGrant>] {
+    pub(crate) fn syntax_grants(&self) -> &[Arc<crate::resolve::SyntaxGrant>] {
         &self.syntax_grants
     }
 
     #[cfg(test)]
     pub(crate) fn replace_syntax_grants_for_test(
         &mut self,
-        grants: Vec<Arc<crate::resolve::SyntaxTermGrant>>,
+        grants: Vec<Arc<crate::resolve::SyntaxGrant>>,
     ) {
         self.syntax_grants = grants.into_boxed_slice();
     }
@@ -2167,7 +2178,7 @@ pub struct ResolvedModuleGroup {
     interface_facts: Box<[SharedCheckedInterfaceFact]>,
     implementation_facts: Box<[CheckedImplementationFact]>,
     typed_fragment: Option<crate::elaborate::CheckedTypedModule>,
-    syntax_grants: Box<[Arc<crate::resolve::SyntaxTermGrant>]>,
+    syntax_grants: Box<[Arc<crate::resolve::SyntaxGrant>]>,
     local_lowering: Option<crate::elaborate::SharedModuleLowering>,
     span: Span,
     // A compile-time link borrows the same checked owner needed by final linking.
@@ -2232,7 +2243,7 @@ impl ResolvedModuleGroup {
             .or(self.typed_fragment.as_ref())
     }
 
-    pub(crate) fn syntax_grants(&self) -> &[Arc<crate::resolve::SyntaxTermGrant>] {
+    pub(crate) fn syntax_grants(&self) -> &[Arc<crate::resolve::SyntaxGrant>] {
         self.shared_owner
             .as_ref()
             .map_or(&self.syntax_grants, |owner| owner.syntax_grants())
@@ -18479,6 +18490,7 @@ impl ResolvedType {
 pub struct ResolvedTypeProvenance {
     nodes: Arc<[ResolvedTypeProvenanceNode]>,
     root: usize,
+    syntax_grants: Option<Arc<[(usize, Arc<crate::resolve::SyntaxGrant>)]>>,
 }
 
 /// One node in a resolved type-provenance arena.
@@ -18524,6 +18536,19 @@ impl ResolvedTypeProvenance {
         Self {
             nodes: nodes.into(),
             root,
+            syntax_grants: None,
+        }
+    }
+
+    pub(crate) fn with_syntax_grants(
+        nodes: Vec<ResolvedTypeProvenanceNode>,
+        root: usize,
+        grants: Vec<(usize, Arc<crate::resolve::SyntaxGrant>)>,
+    ) -> Self {
+        Self {
+            nodes: nodes.into(),
+            root,
+            syntax_grants: (!grants.is_empty()).then(|| grants.into()),
         }
     }
 
@@ -18564,7 +18589,9 @@ impl ResolvedTypeProvenance {
     /// Returns a paid shared construction-provenance view, without source authority.
     pub(crate) fn image_view(&self, root: usize, work: &mut TypeWorkBudget) -> Result<Self, ()> {
         work.charge(1)?;
-        self.view(root).ok_or(())
+        let mut view = self.view(root).ok_or(())?;
+        view.syntax_grants = None;
+        Ok(view)
     }
 
     fn view(&self, root: usize) -> Option<Self> {
@@ -18572,7 +18599,16 @@ impl ResolvedTypeProvenance {
         Some(Self {
             nodes: Arc::clone(&self.nodes),
             root,
+            syntax_grants: self.syntax_grants.clone(),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn syntax_grant_at(&self, node: usize) -> Option<&Arc<crate::resolve::SyntaxGrant>> {
+        self.syntax_grants
+            .as_deref()?
+            .iter()
+            .find_map(|(index, grant)| (*index == node).then_some(grant))
     }
 
     pub(crate) fn nodes(&self) -> &[ResolvedTypeProvenanceNode] {
@@ -19928,7 +19964,7 @@ pub struct ResolvedConstructorOccurrence {
     /// Causal source provenance.
     pub origin: Origin,
     /// Authorization retained only for an actual definition-context selection.
-    pub(crate) syntax_grant: Option<Arc<crate::resolve::SyntaxTermGrant>>,
+    pub(crate) syntax_grant: Option<Arc<crate::resolve::SyntaxGrant>>,
 }
 
 /// A resolved structured match.

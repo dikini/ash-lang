@@ -3146,7 +3146,7 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     method_capture_binders: Vec<(crate::interface::LexicalEvidenceId, MethodId, BinderId)>,
     checked_lexical_sources: Vec<CheckedLexicalSource>,
     global_capture_uses: Vec<CheckedGlobalUse>,
-    syntax_grants: Vec<Arc<crate::resolve::SyntaxTermGrant>>,
+    syntax_grants: Vec<Arc<crate::resolve::SyntaxGrant>>,
 
     implementation_capture_roots: Vec<(BinderId, NodeId)>,
     expected_effect_rows: Vec<EffectRow>,
@@ -17446,10 +17446,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
     }
 
-    fn retain_syntax_term_grant(
+    fn retain_syntax_reference_grant(
         &mut self,
-        grant: Option<&Arc<crate::resolve::SyntaxTermGrant>>,
-        target: crate::resolve::SyntaxTermTarget,
+        grant: Option<&Arc<crate::resolve::SyntaxGrant>>,
+        target: crate::resolve::SyntaxGrantTarget,
     ) -> Result<(), TypeError> {
         if let Some(grant) = grant {
             if grant.target() != target {
@@ -17472,9 +17472,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         span: Span,
         context: &TypeContext,
     ) -> Result<TypedNode, TypeError> {
-        self.retain_syntax_term_grant(
+        self.retain_syntax_reference_grant(
             occurrence.syntax_grant.as_ref(),
-            crate::resolve::SyntaxTermTarget::Global(binder),
+            crate::resolve::SyntaxGrantTarget::Global(binder),
         )?;
         let fact = context.fact(binder).ok_or_else(invalid_state)?;
         let rigid = self.monomorphic_recursive.contains(&binder);
@@ -18025,9 +18025,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 }
             },
             ResolvedExprKind::Constructor(occurrence) => {
-                self.retain_syntax_term_grant(
+                self.retain_syntax_reference_grant(
                     occurrence.syntax_grant.as_ref(),
-                    crate::resolve::SyntaxTermTarget::Constructor(occurrence.constructor),
+                    crate::resolve::SyntaxGrantTarget::Constructor(occurrence.constructor),
                 )?;
                 let constructor = self
                     .registry
@@ -21202,9 +21202,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         if *outer != constructor || occurrence.constructor != constructor {
             return Err(invalid_state());
         }
-        self.retain_syntax_term_grant(
+        self.retain_syntax_reference_grant(
             occurrence.syntax_grant.as_ref(),
-            crate::resolve::SyntaxTermTarget::Constructor(constructor),
+            crate::resolve::SyntaxGrantTarget::Constructor(constructor),
         )?;
         let mut expected = IterativeTypeOwner::new(expected);
         let Some(info) = self.registry.constructor(constructor) else {
@@ -25044,6 +25044,7 @@ fn check_module_with_budget_family<
         primary_work,
         rewrite_work,
     )?;
+    elaborator.syntax_grants = resolved.take_syntax_grants();
     let result: Result<_, TypeError> = (|| {
         let interface_facts = checked_interface_facts(
             &resolved,

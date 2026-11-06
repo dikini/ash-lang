@@ -800,7 +800,32 @@ sources (`/tmp/ash-syntax-constructor-grants-native.log`, SHA-256
 `a749664380cb69e6191ed2dc963f5d8748bbff5057ab98ea12e1879d19495163`;
 executable SHA-256
 `7ac2ed2291ba5a1a642ab7338a9a88fdb3dcf6dea2dd7e364cfbec7c115470f9`).
-Independent review and grants for the other namespaces remain open.
+Independent review passed at `7c50916c`; grants for the other namespaces
+remain open.
+
+A private owner type in a generated annotation resolved correctly but its
+nominal occurrence was missing from the linked grant list: the real graph
+retained two constructor grants instead of those two plus the type grant
+(`/tmp/ash-syntax-nominal-grant-red.log`, SHA-256
+`36bcde2adc433d5bbe16e0255882af7a8cc6b667b04ba21518e1afad90104d76`). The
+current change retains each selected nominal grant with its resolved type
+occurrence and passes the same grant to the checked module. The graph returns
+42; two written occurrences have distinct grants, while views retain their
+original grant. Public facade and private-access controls and 27 linked grant
+mutations pass (`/tmp/ash-syntax-nominal-grants-final-check.log`, SHA-256
+`49dfb8f879175386b9f297753f13afd2eb8a8c56491da72afa791c78f11c6266`). All 78
+driver cases pass (`/tmp/ash-syntax-nominal-grants-driver-review.log`, SHA-256
+`4a5fd040811b785aa323d54e29316f118dd059311f4c4a8ecc719761fb9b6688`), as does
+the unchanged 256 KiB case (`/tmp/ash-syntax-nominal-grants-small-stack-review.log`,
+SHA-256 `a2c34fae7bff64f65cc2aa9b0e3c4f0ddd3555a9ee69557ca9bc71d1fd828ee5`).
+The existing combined graph still returns 42 in the interpreter and in a native
+executable after its four copied sources are removed
+(`/tmp/ash-syntax-nominal-grants-native-review.log`, SHA-256
+`bc809630f2ed56b95a6780f4aac8b5b8375d8d741e1ab87a61da0b478624e715`;
+executable SHA-256
+`03e4080073a854f28fde2f0348951a023bbef28fdcbb94b4a2b5f96022598bfe`).
+Independent review, other nominal lookup sites and other grant namespaces
+remain open.
 
 A nested identifier-capture probe lost a combined origin: the outer transformer
 supplied the caller invocation and outer definition, but the inner rejection

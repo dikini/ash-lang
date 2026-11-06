@@ -30792,7 +30792,7 @@ mod tests {
                     .binder;
                 assert_eq!(
                     grant.target(),
-                    crate::resolve::SyntaxTermTarget::Global(target)
+                    crate::resolve::SyntaxGrantTarget::Global(target)
                 );
                 let definition = group
                     .definitions()
@@ -30845,6 +30845,8 @@ mod tests {
             ("entry.ash", 6),
             // Caller and generated lexical constructors need no grant.
             ("generated-newtype/entry.ash", 0),
+            // Generated lexical nominal and type-parameter uses need no grant.
+            ("template-annotation/generic_local.ash", 0),
         ] {
             let compiled = crate::driver::compile_path_with_effect_validation_for_test(
                 crate::driver::RunConfiguration {
@@ -30945,7 +30947,7 @@ mod tests {
                     let grant = occurrence.syntax_grant.as_ref().unwrap();
                     assert_eq!(
                         grant.target(),
-                        crate::resolve::SyntaxTermTarget::Constructor(occurrence.constructor)
+                        crate::resolve::SyntaxGrantTarget::Constructor(occurrence.constructor)
                     );
                     assert!(
                         group
@@ -30966,6 +30968,162 @@ mod tests {
             },
         )
         .expect("the nested private-constructor graph validates");
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+    }
+
+    fn generated_main_annotation(
+        group: &crate::resolved::ResolvedModuleGroup,
+    ) -> &crate::resolved::ResolvedType {
+        let definition = group
+            .definitions()
+            .iter()
+            .find_map(|definition| {
+                let crate::resolved::ResolvedDefinitionKind::Equational(global) = definition.kind()
+                else {
+                    return None;
+                };
+                (global.interface.name.spelling == "main").then_some(global)
+            })
+            .unwrap();
+        let mut body = &definition.equations[0].body;
+        loop {
+            let crate::resolved::ResolvedExprKind::Block(block) = &body.kind else {
+                panic!("the generated annotation is retained in a block")
+            };
+            if let Some(annotation) = block.declarations.iter().find_map(|declaration| {
+                let crate::resolved::ResolvedLocalDeclaration::Binding(binding) = declaration
+                else {
+                    return None;
+                };
+                binding.annotation.as_ref()
+            }) {
+                return annotation;
+            }
+            body = &block.result;
+        }
+    }
+
+    #[test]
+    fn definition_site_nominal_grant_reaches_the_checked_linked_group() {
+        let compiled = crate::driver::compile_path_with_effect_validation_for_test(
+            crate::driver::RunConfiguration {
+                entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/surface-macros/template-annotation/valid.ash"),
+                roots: ModuleRoots::empty(),
+            },
+            |core, sources, modules, linked| {
+                let group = linked
+                    .groups()
+                    .iter()
+                    .find(|group| group.module() == linked.entry())
+                    .unwrap();
+                // The owner's private nominal annotation and its constructor
+                // expression and pattern are three distinct references.
+                assert_eq!(group.syntax_grants().len(), 3);
+                let annotation = generated_main_annotation(group);
+                let Type::Nominal(nominal) = &annotation.ty else {
+                    panic!("the annotation retains the selected nominal")
+                };
+                let grant = annotation
+                    .provenance
+                    .syntax_grant_at(annotation.provenance.root())
+                    .unwrap();
+                assert_eq!(
+                    grant.target(),
+                    crate::resolve::SyntaxGrantTarget::Nominal(*nominal)
+                );
+                assert!(
+                    group
+                        .syntax_grants()
+                        .iter()
+                        .any(|retained| Arc::ptr_eq(grant, retained))
+                );
+                let image_view = annotation
+                    .provenance
+                    .image_view(
+                        annotation.provenance.root(),
+                        &mut TypeWorkBudget::unbounded(),
+                    )
+                    .unwrap();
+                assert!(image_view.syntax_grant_at(image_view.root()).is_none());
+                validate_effect_modules_linked_with_work(
+                    core,
+                    sources,
+                    modules,
+                    linked,
+                    &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                )
+            },
+        )
+        .expect("the generated private-nominal graph validates");
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+    }
+
+    #[test]
+    fn nominal_grants_distinguish_written_type_occurrences_and_shared_views() {
+        let compiled = crate::driver::compile_path_with_effect_validation_for_test(
+            crate::driver::RunConfiguration {
+                entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/surface-macros/nominal-grants/entry.ash"),
+                roots: ModuleRoots::empty(),
+            },
+            |core, sources, modules, linked| {
+                let group = linked
+                    .groups()
+                    .iter()
+                    .find(|group| group.module() == linked.entry())
+                    .unwrap();
+                let annotation = generated_main_annotation(group);
+                let function = annotation.ty.function_view().unwrap_or_else(|| {
+                    panic!(
+                        "the annotation retains its function type: {:?}",
+                        annotation.ty
+                    )
+                });
+                let (Type::Nominal(domain), Type::Nominal(codomain)) =
+                    (function.domain(), function.value())
+                else {
+                    panic!("both written positions select the owner's nominal")
+                };
+                assert_eq!(domain, codomain);
+                let (domain_view, codomain_view) = annotation.provenance.function_parts().unwrap();
+                let domain_grant = domain_view.syntax_grant_at(domain_view.root()).unwrap();
+                let codomain_grant = codomain_view.syntax_grant_at(codomain_view.root()).unwrap();
+                assert!(!Arc::ptr_eq(domain_grant, codomain_grant));
+                for grant in [domain_grant, codomain_grant] {
+                    assert_eq!(
+                        grant.target(),
+                        crate::resolve::SyntaxGrantTarget::Nominal(*domain)
+                    );
+                    assert!(
+                        group
+                            .syntax_grants()
+                            .iter()
+                            .any(|retained| Arc::ptr_eq(grant, retained))
+                    );
+                }
+                let (same_view, _) = annotation.provenance.function_parts().unwrap();
+                assert!(Arc::ptr_eq(
+                    domain_grant,
+                    same_view.syntax_grant_at(same_view.root()).unwrap()
+                ));
+                assert_eq!(group.syntax_grants().len(), 4);
+                validate_effect_modules_linked_with_work(
+                    core,
+                    sources,
+                    modules,
+                    linked,
+                    &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                )
+            },
+        )
+        .expect("the repeated private-nominal graph validates");
         assert_eq!(
             crate::driver::execute(&compiled).unwrap().value_display(),
             "42"
