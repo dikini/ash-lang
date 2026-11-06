@@ -2557,7 +2557,7 @@ struct Resolver<'state, 'inputs> {
     nominal_parameter_counts: HashMap<NominalTypeId, usize>,
     active_resumes: Vec<ResumeId>,
     retained_clause: Option<ResumeId>,
-    admitting_template: bool,
+    admitting_template: Option<Vec<SurfaceName>>,
     next_resume: u32,
     type_work: TypeWorkBudget,
     constraint_work: InterfaceConstraintBudget,
@@ -2991,7 +2991,7 @@ impl Resolver<'_, '_> {
             nominal_parameter_counts: HashMap::new(),
             active_resumes: Vec::new(),
             retained_clause: None,
-            admitting_template: false,
+            admitting_template: None,
             next_resume: 0,
             type_work,
             constraint_work,
@@ -7977,6 +7977,16 @@ impl Resolver<'_, '_> {
         span: crate::source::Span,
     ) -> Result<ResolvedEffectInstance, ResolveError> {
         let identity = self.effect_reference(effect)?;
+        self.resolve_effect_instance_with_identity(identity, effect, arguments, span)
+    }
+
+    fn resolve_effect_instance_with_identity(
+        &mut self,
+        identity: EffectId,
+        effect: &SurfaceReference,
+        arguments: &[SurfaceType],
+        span: crate::source::Span,
+    ) -> Result<ResolvedEffectInstance, ResolveError> {
         self.type_work
             .charge(arguments.len().saturating_mul(2))
             .map_err(|()| {
@@ -10230,6 +10240,20 @@ impl Resolver<'_, '_> {
         }
     }
 
+    fn is_template_identifier(&self, name: &SurfaceName) -> bool {
+        self.admitting_template
+            .as_ref()
+            .is_some_and(|names| names.contains(name))
+    }
+
+    fn is_template_placeholder(&self, name: &SurfaceReference) -> bool {
+        matches!(name, SurfaceReference::Unqualified(member) if self.is_template_identifier(member))
+    }
+
+    fn deferred_template_type(&self, name: &SurfaceReference, failure: &ResolveError) -> bool {
+        failure.reason == ResolveReason::UnknownType && self.is_template_placeholder(name)
+    }
+
     fn resolve_owner_argument(
         &mut self,
         surface: &SurfaceType,
@@ -10246,6 +10270,7 @@ impl Resolver<'_, '_> {
             Nominal(NominalTypeId),
             Variable(TypeVariableId),
             Resource(crate::resolved::ResourceDefinitionId),
+            Deferred(usize),
         }
         enum Task<'a> {
             Visit(&'a SurfaceType),
@@ -10330,7 +10355,15 @@ impl Resolver<'_, '_> {
                                 completed.push((Type::Variable(variable), provenance.len() - 1));
                                 continue;
                             }
-                            let nominal = self.nominal_reference(name)?;
+                            let nominal = match self.nominal_reference(name) {
+                                Ok(nominal) => nominal,
+                                Err(failure) if self.deferred_template_type(name, &failure) => {
+                                    provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
+                                    completed.push((Type::Unit, provenance.len() - 1));
+                                    continue;
+                                }
+                                Err(failure) => return Err(failure),
+                            };
                             let id = nominal.id;
                             provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
                             completed.push((Type::Nominal(id), provenance.len() - 1));
@@ -10345,23 +10378,36 @@ impl Resolver<'_, '_> {
                             {
                                 ApplicationHead::Variable(variable)
                             } else {
-                                let family = self.nominal_reference(constructor)?.id;
-                                self.type_work.charge(1).map_err(|_| {
-                                    error(
-                                        ResolveReason::TypeResourceExhausted,
-                                        current.span,
-                                        "source owner selection exceeded its budget",
-                                    )
-                                })?;
-                                match self.resource_families.get(&family).copied() {
-                                    Some(resource)
-                                        if arguments.iter().any(|argument| {
-                                            matches!(argument.kind, SurfaceTypeKind::RowArgument(_))
-                                        }) =>
-                                    {
-                                        ApplicationHead::Resource(resource)
+                                match self.nominal_reference(constructor) {
+                                    Ok(nominal) => {
+                                        let family = nominal.id;
+                                        self.type_work.charge(1).map_err(|_| {
+                                            error(
+                                                ResolveReason::TypeResourceExhausted,
+                                                current.span,
+                                                "source owner selection exceeded its budget",
+                                            )
+                                        })?;
+                                        match self.resource_families.get(&family).copied() {
+                                            Some(resource)
+                                                if arguments.iter().any(|argument| {
+                                                    matches!(
+                                                        argument.kind,
+                                                        SurfaceTypeKind::RowArgument(_)
+                                                    )
+                                                }) =>
+                                            {
+                                                ApplicationHead::Resource(resource)
+                                            }
+                                            _ => ApplicationHead::Nominal(family),
+                                        }
                                     }
-                                    _ => ApplicationHead::Nominal(family),
+                                    Err(failure)
+                                        if self.deferred_template_type(constructor, &failure) =>
+                                    {
+                                        ApplicationHead::Deferred(provenance.len())
+                                    }
+                                    Err(failure) => return Err(failure),
                                 }
                             };
                             tasks.push(Task::Application(
@@ -10828,6 +10874,13 @@ impl Resolver<'_, '_> {
                         })
                     })?;
                     let arguments = completed.split_off(split);
+                    if let ApplicationHead::Deferred(provenance_start) = head {
+                        drop(arguments);
+                        provenance.truncate(provenance_start);
+                        provenance.push(ResolvedTypeProvenanceNode::Fact(span));
+                        completed.push((Type::Unit, provenance.len() - 1));
+                        continue;
+                    }
                     if let ApplicationHead::Resource(resource) = head {
                         let roots = arguments
                             .iter()
@@ -10856,7 +10909,7 @@ impl Resolver<'_, '_> {
                     let mut function = match head {
                         ApplicationHead::Nominal(owner) => Type::Nominal(owner),
                         ApplicationHead::Variable(variable) => Type::Variable(variable),
-                        ApplicationHead::Resource(_) => {
+                        ApplicationHead::Resource(_) | ApplicationHead::Deferred(_) => {
                             unreachable!()
                         }
                     };
@@ -12413,11 +12466,11 @@ impl Resolver<'_, '_> {
                     );
                 }
                 self.scopes.push(captures);
-                self.admitting_template = true;
+                self.admitting_template = Some(identifiers.clone());
                 self.resolve_expr(template)
                     .map(discard_resolved_expression_iteratively)
             })();
-            self.admitting_template = false;
+            self.admitting_template = None;
             self.scopes.truncate(scope_checkpoint);
             self.written_effect_arities
                 .truncate(effect_arity_checkpoint);
@@ -13693,7 +13746,7 @@ impl Resolver<'_, '_> {
         expressions: &mut ResolvedExpressionBuffer,
     ) -> Result<(), ResolveError> {
         match &expression.kind {
-            SurfaceExprKind::SyntaxInvocation { .. } if self.admitting_template => {
+            SurfaceExprKind::SyntaxInvocation { .. } if self.admitting_template.is_some() => {
                 expressions.push(ResolvedExpr {
                     kind: ResolvedExprKind::Unit,
                     span: expression.span,
@@ -14377,7 +14430,22 @@ impl Resolver<'_, '_> {
                 self.visit_match_expression(match_expression, expression.span, expressions)?;
             }
             SurfaceExprKind::Perform(request) => {
-                let effect = self.resolve_effect_instance_parts(
+                let identity = match self.effect_reference(&request.effect) {
+                    Ok(identity) => identity,
+                    Err(failure)
+                        if failure.reason == ResolveReason::UnknownEffect
+                            && self.is_template_placeholder(&request.effect) =>
+                    {
+                        for argument in &request.arguments {
+                            self.resolve_owner_argument(argument)?.discard_iteratively();
+                        }
+                        tasks.push(ResolveTask::VisitExpr(&request.operand));
+                        return Ok(());
+                    }
+                    Err(failure) => return Err(failure),
+                };
+                let effect = self.resolve_effect_instance_with_identity(
+                    identity,
                     &request.effect,
                     &request.arguments,
                     request.effect.span(),
@@ -14406,7 +14474,18 @@ impl Resolver<'_, '_> {
                 }
 
                 let operation =
-                    self.resolved_operation(effect.instance.effect(), &request.operation)?;
+                    match self.resolved_operation(effect.instance.effect(), &request.operation) {
+                        Ok(operation) => operation,
+                        Err(failure)
+                            if failure.reason == ResolveReason::UnknownName
+                                && self.is_template_identifier(&request.operation) =>
+                        {
+                            drop(effect);
+                            tasks.push(ResolveTask::VisitExpr(&request.operand));
+                            return Ok(());
+                        }
+                        Err(failure) => return Err(failure),
+                    };
                 self.type_work.charge(2).map_err(|()| {
                     error(
                         ResolveReason::TypeResourceExhausted,
@@ -14431,7 +14510,7 @@ impl Resolver<'_, '_> {
                 tasks.push(ResolveTask::VisitExpr(&request.operand));
             }
             SurfaceExprKind::Handle(_) => unreachable!("handlers use their separate reentry path"),
-            SurfaceExprKind::Resume(value) if self.admitting_template => {
+            SurfaceExprKind::Resume(value) if self.admitting_template.is_some() => {
                 tasks.push(ResolveTask::VisitExpr(value));
             }
             SurfaceExprKind::Resume(value) => {
@@ -14460,7 +14539,9 @@ impl Resolver<'_, '_> {
                 });
                 tasks.push(ResolveTask::VisitExpr(value));
             }
-            SurfaceExprKind::Discard | SurfaceExprKind::Retain if self.admitting_template => {
+            SurfaceExprKind::Discard | SurfaceExprKind::Retain
+                if self.admitting_template.is_some() =>
+            {
                 expressions.push(ResolvedExpr {
                     kind: ResolvedExprKind::Unit,
                     span: expression.span,
@@ -20635,7 +20716,7 @@ mod tests {
     fn template_name_admission_discards_temporary_resolver_state() {
         for (tail, succeeds) in [("value", true), ("missing", false)] {
             let text = format!(
-                "effect Ask {{\nask : Int -> Int\n}}\nmain : Unit -> Int\nmain () = {{\nnewtype Existing = Existing(Int)\n42\n}}\npub syntax scratch $name:ident then $ignored:expr => {{\nnewtype Token = Token(Int)\nlet $name = 1\nhandle (perform Ask.ask $name) with Ask {{\nask value => resume {tail}\n}}\n}}\n"
+                "effect Ask {{\nask : Int -> Int\n}}\nmain : Unit -> Int\nmain () = {{\nnewtype Existing = Existing(Int)\n42\n}}\npub syntax scratch $name:ident then $ignored:expr => {{\nnewtype Token = Token(Int)\nlet placeholder : $name<Int> = 1\nlet $name = 1\nhandle (perform Ask.ask $name) with Ask {{\nask value => resume {tail}\n}}\n}}\n"
             );
             let source = SourceFile::new("admission-scratch.ash", text).unwrap();
             let tree = parse(lex(&source).unwrap());
@@ -20688,7 +20769,7 @@ mod tests {
             assert!(resolver.lexical_method_parameters.0.is_empty());
             assert_eq!(resolver.scopes.len(), scope_count);
             assert_eq!(resolver.written_effect_arities.len(), effect_arity_count);
-            assert!(!resolver.admitting_template);
+            assert!(resolver.admitting_template.is_none());
             assert_eq!(
                 registry_counts,
                 (

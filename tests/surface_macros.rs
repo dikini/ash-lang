@@ -470,6 +470,112 @@ fn template_captured_identifier_can_name_a_local_newtype() {
 }
 
 #[test]
+fn template_captured_identifier_resolves_a_caller_local_type() {
+    for path in [
+        "template-annotation/captured/entry.ash",
+        "template-annotation/captured/local.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    for (path, expected) in [
+        (
+            "template-annotation/captured/wrong_type.ash",
+            "type.binding-initializer",
+        ),
+        (
+            "template-annotation/captured/unknown.ash",
+            "resolve.unknown-type",
+        ),
+        (
+            "template-annotation/unknown/entry.ash",
+            "resolve.unknown-type",
+        ),
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), expected, "{path}: {failure:?}");
+    }
+}
+
+#[test]
+fn template_captured_identifier_applies_a_caller_type_constructor() {
+    let compiled = compile_path(fixture("template-annotation/captured/applied.ash"))
+        .expect("captured type constructors use caller syntax");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+    for (path, expected) in [
+        (
+            "template-annotation/captured/applied_wrong.ash",
+            "type.binding-initializer",
+        ),
+        (
+            "template-annotation/captured/applied_missing.ash",
+            "resolve.unknown-type",
+        ),
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), expected, "{path}: {failure:?}");
+    }
+}
+
+#[test]
+fn template_captured_identifier_selects_a_caller_effect() {
+    for path in [
+        "template-perform/captured/entry.ash",
+        "template-perform/captured/generic.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    for (path, expected) in [
+        (
+            "template-perform/captured/missing_operand.ash",
+            "resolve.unknown-name",
+        ),
+        (
+            "template-perform/captured/missing_argument.ash",
+            "resolve.unknown-type",
+        ),
+        (
+            "template-perform/captured/wrong_handler.ash",
+            "effect.handler-missing-input",
+        ),
+        (
+            "template-perform/captured/unknown_operation.ash",
+            "resolve.unknown-name",
+        ),
+        ("template-perform/unknown/entry.ash", "resolve.unknown-name"),
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), expected, "{path}: {failure:?}");
+    }
+}
+
+#[test]
+fn template_captured_identifier_selects_an_effect_operation() {
+    for path in [
+        "template-perform/captured/operation.ash",
+        "template-perform/captured/private.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    for path in [
+        "template-perform/captured/operation_missing_operand.ash",
+        "template-perform/captured/operation_unknown.ash",
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(
+            failure.reason_code(),
+            "resolve.unknown-name",
+            "{path}: {failure:?}"
+        );
+    }
+    let failure = compile_path(fixture("template-perform/captured/private_direct.ash"))
+        .expect_err("the syntax import does not expose its owner's private effect");
+    assert_eq!(failure.reason_code(), "effect.unknown");
+}
+
+#[test]
 fn same_spelled_recursive_binders_keep_distinct_contexts() {
     let compiled = compile_path(fixture("template-recursive/mixed.ash"))
         .expect("introduced and captured recursive names remain distinct");

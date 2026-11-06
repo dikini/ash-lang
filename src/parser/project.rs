@@ -4343,7 +4343,8 @@ fn project_operation_reference(
         .map(|argument| project_type(source, argument, tokens))
         .collect::<Result<Vec<_>, _>>()?;
     let operation = direct_tokens(node, tokens)
-        .find(|token| matches!(token.kind, TokenKind::Identifier(_)))
+        .filter(|token| matches!(token.kind, TokenKind::Identifier(_)))
+        .last()
         .ok_or(ProjectionError::MalformedTree(
             InternalReason::UnexpectedShape,
         ))?;

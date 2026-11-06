@@ -258,9 +258,28 @@ Focused generated-Core mutations, construction and admission checks, plus
 local-newtype and cleanup suites pass 33 cases
 (`/tmp/ash-template-shared-pin-core.log`, SHA-256
 `3129ae8812b35dbad5064475a04c01a1d2f158b992df4a7a955f17c29bf8dbb7`).
-This candidate awaits independent review. Captured names used only as type or
-effect references, parameter ordering, and full expansion provenance remain
-open; the newtype result does not establish all identifier positions.
+Independent review cleared this candidate at `e9c42975`. At that pin, captured
+names used only as type or effect references remained open.
+
+The next candidate admits an issued identifier capture as a plain or applied
+type name, an effect name, or an operation selector. Actual expansion uses the
+ordinary caller or checked-owner lookup. Real driver graphs using a caller-local
+`Token`, caller `Box<Int>`, caller effects, and a private owner effect under a
+same-spelled caller effect all return 42. Definition admission still rejects
+unresolved literal type arguments and operands. Actual output still rejects
+wrong initializer types, missing operations, wrong handlers and direct caller
+access to the private effect. Admission's temporary identifiers are cleared on
+both success and failure.
+
+The six affected driver, host, module, local-newtype and effect suites pass 198
+cases (`/tmp/ash-template-captured-categories-pin.log`, SHA-256
+`9ca1d7288aa33cd2543ab0f1383112d6d8b2aa2c839c2146c2a4364337253bf3`);
+the admission-state isolation test also passes
+(`/tmp/ash-template-captured-categories-pin-isolation.log`, SHA-256
+`9db7242c45f341b4fe61785ccd7c4298a368d368b6251d5daaf301bef94cad14`).
+This candidate awaits independent review. Qualified captured names, generated
+multi-parameter ordering, complete expansion provenance, and structured
+template-output parse failures remain open.
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources
