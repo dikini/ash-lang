@@ -824,8 +824,32 @@ executable after its four copied sources are removed
 `bc809630f2ed56b95a6780f4aac8b5b8375d8d741e1ab87a61da0b478624e715`;
 executable SHA-256
 `03e4080073a854f28fde2f0348951a023bbef28fdcbb94b4a2b5f96022598bfe`).
-Independent review, other nominal lookup sites and other grant namespaces
-remain open.
+Independent review passed at `8af9a896`; other nominal lookup sites and other
+grant namespaces remain open.
+
+The private-interface example returned 42 but its definition-site `check`
+method occurrence retained no grant (`/tmp/ash-syntax-method-grant-red.log`,
+SHA-256 `da8ded84c07b8110672b8a7924b493efc8a9513edae65f88bd690f60988af000`).
+The current change retains the selected method on the existing resolved
+occurrence and checked link path. Private, renamed and qualified methods keep
+the exact occurrence grant; a generated lexical shadow keeps none. The eight
+focused grant checks, including 36 target and route mutations, pass
+(`/tmp/ash-syntax-method-grant-final.log`, SHA-256
+`b32029c84d95830c3f7451b4c4e511a33a0cf6975beceb8c7ba9002b78fbbc61`). All 78
+driver cases pass (`/tmp/ash-syntax-method-grant-driver.log`, SHA-256
+`ca7c8003bb7bb6d617cadee30bd7ee4972bfcb1da738f2741e4e816a22423d06`), as does
+the unchanged 256 KiB case (`/tmp/ash-syntax-method-grant-small-stack.log`,
+SHA-256 `2781e8f3ebe20213a3e992755d2800b751e4670f66653d26ae79751a93984926`).
+A targeted public method with an explicitly imported implementation returns 42
+both through the interpreter and from its native executable after the three
+copied sources are removed (`/tmp/ash-syntax-method-grant-native-supported-final.log`,
+SHA-256 `0963135b7408f22f04a1cf4286ba12ddab330bd30ca4b750ab122c0d822a18c1`;
+probe `/tmp/ash-syntax-method-native-probe.sh`, SHA-256
+`6d55d3eb19779442f274b666cc45809dffe7f4593ecbc2a02bd4ad563ad8056f`;
+executable SHA-256
+`9bf86fef87f0a9b5c9f2139fb8d87beb4d2cedb8034682f6a2de20284f3fb5dd`).
+Independent review, interface/equation selector grants, other namespaces and
+full acceptance remain open.
 
 A nested identifier-capture probe lost a combined origin: the outer transformer
 supplied the caller invocation and outer definition, but the inner rejection
@@ -842,7 +866,7 @@ remains open.
 ## Progress
 
 The weighted ledger records **61.5/100 reviewed delivery points**. The latest
-reviewed implementation pin is `ffe80802`. These are partial implementation
+reviewed implementation pin is `8af9a896`. These are partial implementation
 observations, not acceptance of the whole feature.
 M01–M14 and C1/C2 remain pending.
 

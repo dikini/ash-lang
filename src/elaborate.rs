@@ -18012,6 +18012,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     )?);
                 }
                 crate::resolved::ResolvedTermName::Method(method) => {
+                    self.retain_syntax_reference_grant(
+                        occurrence.syntax_grant.as_ref(),
+                        crate::resolve::SyntaxGrantTarget::Method(method),
+                    )?;
                     if self.purpose == ElaborationPurpose::FinalSynthesis {
                         values.push(self.synthesize_lowered_method_occurrence(method, occurrence)?);
                     } else {

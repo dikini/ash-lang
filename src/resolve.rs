@@ -1661,6 +1661,7 @@ enum SyntaxGrantRoute {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SyntaxGrantTarget {
     Global(BinderId),
+    Method(MethodId),
     Constructor(ConstructorId),
     Nominal(NominalTypeId),
 }
@@ -1723,6 +1724,17 @@ impl SyntaxGrant {
                         .is_none_or(|term| term.binder != binder)
                         == *private)
             }
+            (SyntaxGrantRoute::Owner { spelling, private }, SyntaxGrantTarget::Method(method)) => {
+                method.interface().module() == owner.module()
+                    && owner.interface_facts().iter().any(|fact| {
+                        fact.id == method.interface()
+                            && fact
+                                .methods
+                                .iter()
+                                .any(|item| item.id == method && item.spelling == *spelling)
+                    })
+                    && ((owner.exports().method(spelling) != Some(method)) == *private)
+            }
             (
                 SyntaxGrantRoute::Owner { spelling, private },
                 SyntaxGrantTarget::Constructor(constructor),
@@ -1768,6 +1780,9 @@ impl SyntaxGrant {
                                 .exports()
                                 .term(spelling)
                                 .is_some_and(|term| term.binder == binder),
+                            SyntaxGrantTarget::Method(method) => {
+                                module.exports().method(spelling) == Some(method)
+                            }
                             SyntaxGrantTarget::Constructor(constructor) => module
                                 .exports()
                                 .constructor(spelling)
@@ -6047,6 +6062,13 @@ impl Resolver<'_, '_> {
                     SyntaxGrantTarget::Global(binder) => terms.get(&member.text).map(|fact| {
                         fact.binder == binder && binder.module() == Some(owner.module())
                     }),
+                    SyntaxGrantTarget::Method(method) => owner
+                        .interface_facts()
+                        .iter()
+                        .filter(|fact| fact.id.module() == owner.module())
+                        .flat_map(|fact| fact.methods.iter())
+                        .find(|fact| fact.spelling == member.text)
+                        .map(|fact| fact.id == method),
                     SyntaxGrantTarget::Constructor(constructor) => {
                         terms.constructor(&member.text).map(|fact| {
                             fact.id == constructor
@@ -6091,6 +6113,9 @@ impl Resolver<'_, '_> {
                     .exports()
                     .term(spelling)
                     .is_some_and(|fact| fact.binder == binder),
+                SyntaxGrantTarget::Method(method) => {
+                    dependency.exports().method(spelling) == Some(method)
+                }
                 SyntaxGrantTarget::Constructor(constructor) => dependency
                     .exports()
                     .constructor(spelling)
@@ -6115,6 +6140,9 @@ impl Resolver<'_, '_> {
                         .exports()
                         .term(&member.text)
                         .is_none_or(|exported| exported.binder != binder),
+                    SyntaxGrantTarget::Method(method) => {
+                        owner.exports().method(&member.text) != Some(method)
+                    }
                     SyntaxGrantTarget::Constructor(constructor) => owner
                         .exports()
                         .constructor(&member.text)
@@ -15384,6 +15412,9 @@ impl Resolver<'_, '_> {
                         (true, ResolvedTermName::Global(binder)) => Some(
                             self.syntax_reference_grant(name, SyntaxGrantTarget::Global(binder))?,
                         ),
+                        (true, ResolvedTermName::Method(method)) => Some(
+                            self.syntax_reference_grant(name, SyntaxGrantTarget::Method(method))?,
+                        ),
                         _ => None,
                     };
                     expressions.push(ResolvedExpr {
@@ -19478,7 +19509,7 @@ mod tests {
     fn linked_syntax_grants_require_the_original_export_target_and_route() {
         let fixture = ImportBudgetFixture::create(
             "import dependency as Dependency\nmain : Unit -> Int\nmain () = 42\n",
-            "type Secret = Hidden(Int)\ntype Other = Other(Int)\nprivate : Int -> Int\nprivate value = value + 1\nother : Int -> Int\nother value = value + 2\npub syntax inc $value:expr => {\nprivate $value\n}\n",
+            "type Secret = Hidden(Int)\ntype Other = Other(Int)\ninterface Check<Key> {\ncheck : Key -> Int\ninspect : Key -> Int\n}\nprivate : Int -> Int\nprivate value = value + 1\nother : Int -> Int\nother value = value + 2\npub syntax inc $value:expr => {\nprivate $value\n}\n",
         );
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
             .expect("the syntax import graph loads");
@@ -19489,7 +19520,7 @@ mod tests {
             .find(|module| !module.surface().syntax_declarations.is_empty())
             .expect("syntax owner");
 
-        for case in 0..27 {
+        for case in 0..36 {
             let namespace = case / 9;
             let mutation = case % 9;
             let mut checked = checked_import_dependencies(&graph);
@@ -19559,6 +19590,26 @@ mod tests {
                         SyntaxGrantTarget::Nominal(nominal("Secret")),
                         SyntaxGrantTarget::Nominal(nominal("Other")),
                         "Secret",
+                    )
+                }
+                3 => {
+                    let interface = owner
+                        .interface_facts()
+                        .iter()
+                        .find(|fact| fact.spelling == "Check")
+                        .unwrap();
+                    let method = |name: &str| {
+                        interface
+                            .methods
+                            .iter()
+                            .find(|method| method.spelling == name)
+                            .unwrap()
+                            .id
+                    };
+                    (
+                        SyntaxGrantTarget::Method(method("check")),
+                        SyntaxGrantTarget::Method(method("inspect")),
+                        "check",
                     )
                 }
                 _ => unreachable!(),

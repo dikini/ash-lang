@@ -30839,6 +30839,96 @@ mod tests {
     }
 
     #[test]
+    fn definition_site_method_grant_reaches_the_checked_linked_occurrence() {
+        for (entry, selects_method) in [
+            ("entry.ash", true),
+            ("targeted_entry.ash", true),
+            ("qualified_entry.ash", true),
+            ("local_shadow.ash", false),
+        ] {
+            let compiled = crate::driver::compile_path_with_effect_validation_for_test(
+                crate::driver::RunConfiguration {
+                    entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/fixtures/surface-macros/template-private-evidence")
+                        .join(entry),
+                    roots: ModuleRoots::empty(),
+                },
+                |core, sources, modules, linked| {
+                    let group = linked
+                        .groups()
+                        .iter()
+                        .find(|group| group.module() == linked.entry())
+                        .unwrap();
+                    let definition = group
+                        .definitions()
+                        .iter()
+                        .find_map(|definition| {
+                            let crate::resolved::ResolvedDefinitionKind::Equational(global) =
+                                definition.kind()
+                            else {
+                                return None;
+                            };
+                            (global.interface.name.spelling == "main").then_some(global)
+                        })
+                        .unwrap();
+                    let mut body = &definition.equations[0].body;
+                    while let crate::resolved::ResolvedExprKind::Block(block) = &body.kind {
+                        body = &block.result;
+                    }
+                    if let crate::resolved::ResolvedExprKind::Add(binary) = &body.kind {
+                        body = &binary.left;
+                    }
+                    let crate::resolved::ResolvedExprKind::Apply(application) = &body.kind else {
+                        panic!("the generated method application is retained")
+                    };
+                    let crate::resolved::ResolvedExprKind::Occurrence(occurrence) =
+                        &application.function.kind
+                    else {
+                        panic!("the generated method occurrence is retained")
+                    };
+                    if selects_method {
+                        let crate::resolved::ResolvedTermName::Method(method) = occurrence.term
+                        else {
+                            panic!("the owner method must be selected")
+                        };
+                        let [grant] = group.syntax_grants() else {
+                            panic!("the checked caller retains one method grant")
+                        };
+                        assert_eq!(
+                            grant.target(),
+                            crate::resolve::SyntaxGrantTarget::Method(method)
+                        );
+                        assert!(Arc::ptr_eq(
+                            occurrence.syntax_grant.as_ref().unwrap(),
+                            grant
+                        ));
+                    } else {
+                        assert!(matches!(
+                            occurrence.term,
+                            crate::resolved::ResolvedTermName::Global(_)
+                        ));
+                        assert!(occurrence.syntax_grant.is_none());
+                        assert!(group.syntax_grants().is_empty());
+                    }
+                    validate_effect_modules_linked_with_work(
+                        core,
+                        sources,
+                        modules,
+                        linked,
+                        &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                    )
+                },
+            )
+            .expect("the generated method graph validates");
+            assert_eq!(
+                crate::driver::execute(&compiled).unwrap().value_display(),
+                "42",
+                "{entry}"
+            );
+        }
+    }
+
+    #[test]
     fn definition_site_constructor_grants_reach_the_checked_linked_group() {
         for (entry, expected_grants) in [
             // Two copies each use one helper and two owner constructors.

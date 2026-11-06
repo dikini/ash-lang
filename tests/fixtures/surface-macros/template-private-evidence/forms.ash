@@ -14,6 +14,13 @@ pub syntax require_evidence $value:expr => {
     check($value)
 }
 
+pub syntax local_check $value:expr => {
+    let check = fn(value) {
+        value + 2
+    }
+    check($value)
+}
+
 pub syntax verify_as $method:ident from $value:expr => {
     newtype Token = Token(Unit)
     with Check<Token> {
