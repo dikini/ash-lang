@@ -2857,7 +2857,8 @@ pub(super) fn qualified_name(parser: &mut Parser<'_>, uppercase_member: bool) {
 }
 
 pub(super) fn starts_lowercase_qualification(parser: &Parser<'_>) -> bool {
-    matches!(parser.current(), Some(TokenKind::Identifier(_)))
+    !parser.is_admission_identifier()
+        && matches!(parser.current(), Some(TokenKind::Identifier(_)))
         && parser
             .nth(1)
             .is_some_and(|kind| matches!(kind, TokenKind::Dot))

@@ -42,6 +42,58 @@ fn template_macro_preserves_expression_capture_grouping() {
 }
 
 #[test]
+fn qualified_names_follow_the_captured_or_defining_alias_context() {
+    for path in [
+        "qualified-capture/type_caller.ash",
+        "qualified-capture/type_owner.ash",
+        "qualified-capture/term_caller.ash",
+        "qualified-capture/term_owner.ash",
+        "qualified-capture/constructor_owner.ash",
+        "qualified-capture/constructor_caller.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    for (path, reason) in [
+        (
+            "qualified-capture/unused_missing_alias.ash",
+            "resolve.unavailable-export",
+        ),
+        (
+            "qualified-capture/unused_missing_operand.ash",
+            "resolve.unknown-name",
+        ),
+        (
+            "qualified-capture/unused_missing_argument.ash",
+            "resolve.unknown-type",
+        ),
+        (
+            "qualified-capture/withheld_member.ash",
+            "resolve.unavailable-export",
+        ),
+        (
+            "qualified-capture/withheld_type.ash",
+            "resolve.unavailable-export",
+        ),
+        (
+            "qualified-capture/opaque_constructor.ash",
+            "resolve.opaque-constructor",
+        ),
+        (
+            "qualified-capture/fresh_alias.ash",
+            "resolve.unavailable-export",
+        ),
+        (
+            "qualified-capture/lowercase_alias.ash",
+            "parse.unexpected-token",
+        ),
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), reason, "{path}: {failure:?}");
+    }
+}
+
+#[test]
 fn generated_token_diagnostics_point_to_the_invocation() {
     use ash::{
         message::{Catalogue, Locale},

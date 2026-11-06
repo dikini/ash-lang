@@ -216,6 +216,12 @@ fn starts_primary_in(parser: &Parser<'_>, forms: &[PrimaryForm]) -> bool {
 }
 
 fn primary_form(parser: &Parser<'_>, forms: &[PrimaryForm]) -> Option<PrimaryForm> {
+    if parser.is_admission_identifier()
+        && parser.nth(1) == Some(&TokenKind::Dot)
+        && forms.contains(&PrimaryForm::Qualified)
+    {
+        return Some(PrimaryForm::Qualified);
+    }
     forms
         .iter()
         .copied()

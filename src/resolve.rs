@@ -5808,7 +5808,8 @@ impl Resolver<'_, '_> {
         namespace: crate::syntax::SyntaxNameNamespace,
     ) -> Result<(), ResolveError> {
         let name = reference.member();
-        if name.introduction == 0 {
+        let context = reference.qualifier().unwrap_or(name);
+        if context.introduction == 0 {
             return Ok(());
         }
         let Some(inputs) = self.syntax_inputs else {
@@ -5817,7 +5818,7 @@ impl Resolver<'_, '_> {
         let Some(owner) = self
             .syntax_expansion
             .as_ref()
-            .and_then(|expansion| expansion.owner(name.introduction))
+            .and_then(|expansion| expansion.owner(context.introduction))
         else {
             return Ok(());
         };
@@ -5853,7 +5854,8 @@ impl Resolver<'_, '_> {
             };
             let owner = syntax.owners.get(usage.owner).ok_or_else(invalid)?;
             let terms = syntax.terms.get(usage.owner).ok_or_else(invalid)?;
-            if usage.name.introduction == 0
+            let introduction = usage.qualifier.as_ref().unwrap_or(&usage.name).introduction;
+            if introduction == 0
                 || terms.module != owner.module()
                 || usage.declaration.source() != owner.span().source()
             {
@@ -5861,10 +5863,14 @@ impl Resolver<'_, '_> {
             }
             if usage.namespace == crate::syntax::SyntaxNameNamespace::Type {
                 if let Some(qualifier) = &usage.qualifier {
-                    if qualifier.introduction != usage.name.introduction {
-                        return Err(invalid());
-                    }
-                    let route = terms.qualified(&qualifier.text).ok_or_else(invalid)?;
+                    let route = terms.qualified(&qualifier.text).ok_or_else(|| {
+                        lookup_error(
+                            ResolveContext::MissingModuleAlias,
+                            qualifier.span,
+                            &qualifier.text,
+                            "this module alias is not bound in the syntax owner",
+                        )
+                    })?;
                     if !owner.direct_dependencies().contains(&route) {
                         return Err(invalid());
                     }
@@ -5873,10 +5879,24 @@ impl Resolver<'_, '_> {
                         .iter()
                         .find(|candidate| candidate.module() == route.target())
                         .ok_or_else(invalid)?;
-                    let exported = dependency
-                        .exports()
-                        .nominal(&usage.name.text)
-                        .ok_or_else(invalid)?;
+                    let exported =
+                        dependency
+                            .exports()
+                            .nominal(&usage.name.text)
+                            .ok_or_else(|| {
+                                if dependency.exports().interface(&usage.name.text).is_some() {
+                                    return type_kind_error(usage.name.span, &usage.name.text);
+                                }
+                                withheld_export_error(
+                                    usage.name.span,
+                                    &usage.name.text,
+                                    summary_withheld_import(
+                                        dependency.exports(),
+                                        WithheldNamespace::Nominal,
+                                        &usage.name.text,
+                                    ),
+                                )
+                            })?;
                     let nominal = dependency
                         .exports()
                         .nominal_fact(exported.id)
@@ -5886,7 +5906,7 @@ impl Resolver<'_, '_> {
                         (
                             qualifier.text.clone(),
                             usage.name.text.clone(),
-                            usage.name.introduction,
+                            introduction,
                         ),
                         nominal.id,
                     );
@@ -5939,10 +5959,14 @@ impl Resolver<'_, '_> {
             }
             if usage.namespace == crate::syntax::SyntaxNameNamespace::Interface {
                 if let Some(qualifier) = &usage.qualifier {
-                    if qualifier.introduction != usage.name.introduction {
-                        return Err(invalid());
-                    }
-                    let route = terms.qualified(&qualifier.text).ok_or_else(invalid)?;
+                    let route = terms.qualified(&qualifier.text).ok_or_else(|| {
+                        lookup_error(
+                            ResolveContext::MissingModuleAlias,
+                            qualifier.span,
+                            &qualifier.text,
+                            "this module alias is not bound in the syntax owner",
+                        )
+                    })?;
                     if !owner.direct_dependencies().contains(&route) {
                         return Err(invalid());
                     }
@@ -5954,7 +5978,24 @@ impl Resolver<'_, '_> {
                     let interface = dependency
                         .exports()
                         .interface(&usage.name.text)
-                        .ok_or_else(invalid)?;
+                        .ok_or_else(|| {
+                            if dependency.exports().nominal(&usage.name.text).is_some()
+                                || dependency.exports().constructor(&usage.name.text).is_some()
+                                || dependency.exports().term(&usage.name.text).is_some()
+                                || dependency.exports().method(&usage.name.text).is_some()
+                            {
+                                return interface_kind_error(usage.name.span, &usage.name.text);
+                            }
+                            withheld_export_error(
+                                usage.name.span,
+                                &usage.name.text,
+                                summary_withheld_import(
+                                    dependency.exports(),
+                                    WithheldNamespace::Nominal,
+                                    &usage.name.text,
+                                ),
+                            )
+                        })?;
                     self.retain_imported_interface_fact(
                         interface,
                         dependency.exports(),
@@ -5966,7 +6007,7 @@ impl Resolver<'_, '_> {
                         (
                             qualifier.text.clone(),
                             usage.name.text.clone(),
-                            usage.name.introduction,
+                            introduction,
                         ),
                         interface.id,
                     );
@@ -6049,9 +6090,6 @@ impl Resolver<'_, '_> {
                 continue;
             }
             if let Some(qualifier) = &usage.qualifier {
-                if qualifier.introduction != usage.name.introduction {
-                    return Err(invalid());
-                }
                 let route = terms.qualified(&qualifier.text).ok_or_else(|| {
                     lookup_error(
                         ResolveContext::MissingModuleAlias,
@@ -6071,7 +6109,7 @@ impl Resolver<'_, '_> {
                 let key = (
                     qualifier.text.clone(),
                     usage.name.text.clone(),
-                    usage.name.introduction,
+                    introduction,
                 );
                 if let Some(exported) = dependency.exports().term(&usage.name.text) {
                     if !self.syntax_qualified_terms.contains_key(&key) {
@@ -6124,7 +6162,18 @@ impl Resolver<'_, '_> {
                     return Err(withheld_export_error(
                         usage.name.span,
                         &usage.name.text,
-                        None,
+                        summary_withheld_import(
+                            dependency.exports(),
+                            WithheldNamespace::Term,
+                            &usage.name.text,
+                        )
+                        .or_else(|| {
+                            summary_withheld_import(
+                                dependency.exports(),
+                                WithheldNamespace::Constructor,
+                                &usage.name.text,
+                            )
+                        }),
                     ));
                 }
                 continue;
@@ -7781,7 +7830,7 @@ impl Resolver<'_, '_> {
         reference: &SurfaceReference,
     ) -> Result<ImportedNominalName, ResolveError> {
         if let SurfaceReference::Qualified(name) = reference
-            && (name.qualifier.introduction != 0 || name.member.introduction != 0)
+            && name.qualifier.introduction != 0
         {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Type)?;
             return self
@@ -7789,9 +7838,8 @@ impl Resolver<'_, '_> {
                 .get(&(
                     name.qualifier.text.clone(),
                     name.member.text.clone(),
-                    name.member.introduction,
+                    name.qualifier.introduction,
                 ))
-                .filter(|_| name.qualifier.introduction == name.member.introduction)
                 .copied()
                 .map(|id| ImportedNominalName { id })
                 .ok_or_else(|| {
@@ -7874,25 +7922,22 @@ impl Resolver<'_, '_> {
         reference: &SurfaceReference,
     ) -> Result<ResolvedInterfaceOccurrence, ResolveError> {
         let member = reference.member();
-        if member.introduction != 0 {
+        let context = reference.qualifier().unwrap_or(member);
+        if context.introduction != 0 {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Interface)?;
             let id = match reference {
                 SurfaceReference::Unqualified(_) => self
                     .syntax_interfaces
                     .get(&(member.text.clone(), member.introduction))
                     .copied(),
-                SurfaceReference::Qualified(qualified)
-                    if qualified.qualifier.introduction == member.introduction =>
-                {
-                    self.syntax_qualified_interfaces
-                        .get(&(
-                            qualified.qualifier.text.clone(),
-                            member.text.clone(),
-                            member.introduction,
-                        ))
-                        .copied()
-                }
-                SurfaceReference::Qualified(_) => None,
+                SurfaceReference::Qualified(qualified) => self
+                    .syntax_qualified_interfaces
+                    .get(&(
+                        qualified.qualifier.text.clone(),
+                        member.text.clone(),
+                        qualified.qualifier.introduction,
+                    ))
+                    .copied(),
             }
             .ok_or_else(|| unknown_interface_error(member.span, &member.text))?;
             return Ok(ResolvedInterfaceOccurrence {
@@ -7956,7 +8001,8 @@ impl Resolver<'_, '_> {
 
     fn effect_reference(&mut self, reference: &SurfaceReference) -> Result<EffectId, ResolveError> {
         let member = reference.member();
-        if member.introduction != 0 {
+        let context = reference.qualifier().unwrap_or(member);
+        if context.introduction != 0 {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Effect)?;
             return if matches!(reference, SurfaceReference::Unqualified(_)) {
                 self.syntax_effects
@@ -8504,20 +8550,17 @@ impl Resolver<'_, '_> {
     ) -> Result<ConstructorId, ResolveError> {
         let member = reference.member();
         if let SurfaceReference::Qualified(name) = reference
-            && (name.qualifier.introduction != 0 || member.introduction != 0)
+            && name.qualifier.introduction != 0
         {
             self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Term)?;
-            let selected = (name.qualifier.introduction == member.introduction)
-                .then(|| {
-                    self.syntax_qualified_constructors
-                        .get(&(
-                            name.qualifier.text.clone(),
-                            member.text.clone(),
-                            member.introduction,
-                        ))
-                        .copied()
-                })
-                .flatten();
+            let selected = self
+                .syntax_qualified_constructors
+                .get(&(
+                    name.qualifier.text.clone(),
+                    member.text.clone(),
+                    name.qualifier.introduction,
+                ))
+                .copied();
             return selected.ok_or_else(|| {
                 error(
                     ResolveReason::UnknownConstructor,
@@ -8526,7 +8569,7 @@ impl Resolver<'_, '_> {
                 )
             });
         }
-        if member.introduction != 0 {
+        if matches!(reference, SurfaceReference::Unqualified(_)) && member.introduction != 0 {
             if let Some(id) = charged_lexical_scope_lookup(
                 &self.lexical_constructor_scopes,
                 member,
@@ -10545,8 +10588,38 @@ impl Resolver<'_, '_> {
         matches!(name, SurfaceReference::Unqualified(member) if self.is_template_identifier(member))
     }
 
-    fn deferred_template_type(&self, name: &SurfaceReference, failure: &ResolveError) -> bool {
-        failure.reason == ResolveReason::UnknownType && self.is_template_placeholder(name)
+    fn deferred_template_qualified_name(
+        &self,
+        name: &SurfaceReference,
+    ) -> Result<bool, ResolveError> {
+        let SurfaceReference::Qualified(qualified) = name else {
+            return Ok(false);
+        };
+        if self.is_template_identifier(&qualified.qualifier) {
+            return Ok(true);
+        }
+        if self.is_template_identifier(&qualified.member) {
+            self.imported_namespace(name)?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn deferred_template_type(
+        &self,
+        name: &SurfaceReference,
+        failure: &ResolveError,
+    ) -> Result<bool, ResolveError> {
+        if failure.reason == ResolveReason::UnknownType && self.is_template_placeholder(name) {
+            return Ok(true);
+        }
+        if matches!(
+            failure.reason,
+            ResolveReason::UnknownType | ResolveReason::UnavailableExport
+        ) {
+            return self.deferred_template_qualified_name(name);
+        }
+        Ok(false)
     }
 
     fn resolve_owner_argument(
@@ -10652,7 +10725,7 @@ impl Resolver<'_, '_> {
                             }
                             let nominal = match self.nominal_reference(name) {
                                 Ok(nominal) => nominal,
-                                Err(failure) if self.deferred_template_type(name, &failure) => {
+                                Err(failure) if self.deferred_template_type(name, &failure)? => {
                                     provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
                                     completed.push((Type::Unit, provenance.len() - 1));
                                     continue;
@@ -10698,7 +10771,8 @@ impl Resolver<'_, '_> {
                                         }
                                     }
                                     Err(failure)
-                                        if self.deferred_template_type(constructor, &failure) =>
+                                        if self
+                                            .deferred_template_type(constructor, &failure)? =>
                                     {
                                         ApplicationHead::Deferred(provenance.len())
                                     }
@@ -14600,10 +14674,18 @@ impl Resolver<'_, '_> {
                 span: expression.span,
             }),
             SurfaceExprKind::Name(name) => {
+                if self.deferred_template_qualified_name(name)? {
+                    expressions.push(ResolvedExpr {
+                        kind: ResolvedExprKind::Unit,
+                        span: expression.span,
+                    });
+                    return Ok(());
+                }
                 let member = name.member();
                 let is_qualified = matches!(name, SurfaceReference::Qualified(_));
+                let context = name.qualifier().unwrap_or(member);
                 let lexical_key = (member.text.clone(), member.introduction);
-                if member.introduction != 0
+                if context.introduction != 0
                     && (is_qualified
                         || (!self
                             .scopes
@@ -14620,31 +14702,23 @@ impl Resolver<'_, '_> {
                 }
                 let (qualified_binding, qualified_constructor, qualified_withheld) =
                     if let SurfaceReference::Qualified(qualified) = name
-                        && (qualified.qualifier.introduction != 0 || member.introduction != 0)
+                        && qualified.qualifier.introduction != 0
                     {
                         (
-                            if qualified.qualifier.introduction == member.introduction {
-                                self.syntax_qualified_terms
-                                    .get(&(
-                                        qualified.qualifier.text.clone(),
-                                        member.text.clone(),
-                                        member.introduction,
-                                    ))
-                                    .copied()
-                            } else {
-                                None
-                            },
-                            if qualified.qualifier.introduction == member.introduction {
-                                self.syntax_qualified_constructors
-                                    .get(&(
-                                        qualified.qualifier.text.clone(),
-                                        member.text.clone(),
-                                        member.introduction,
-                                    ))
-                                    .copied()
-                            } else {
-                                None
-                            },
+                            self.syntax_qualified_terms
+                                .get(&(
+                                    qualified.qualifier.text.clone(),
+                                    member.text.clone(),
+                                    qualified.qualifier.introduction,
+                                ))
+                                .copied(),
+                            self.syntax_qualified_constructors
+                                .get(&(
+                                    qualified.qualifier.text.clone(),
+                                    member.text.clone(),
+                                    qualified.qualifier.introduction,
+                                ))
+                                .copied(),
                             None,
                         )
                     } else if let Some(namespace) = self.imported_namespace(name)? {
@@ -15545,6 +15619,22 @@ fn import_conflict(span: crate::source::Span, spelling: &str) -> ResolveError {
     );
     diagnostic.found = Some(spelling.to_owned());
     diagnostic.into()
+}
+
+fn summary_withheld_import(
+    summary: &ExportSummary,
+    namespace: WithheldNamespace,
+    spelling: &str,
+) -> Option<WithheldImport> {
+    summary
+        .withheld_export(namespace, spelling)
+        .map(|withheld| WithheldImport {
+            kind: withheld.kind,
+            declaration: withheld
+                .origin
+                .as_ref()
+                .map(crate::source::Origin::primary_span),
+        })
 }
 
 fn withheld_export_error(

@@ -514,8 +514,23 @@ the existing literal-construction proof and five local-newtype checks pass
 `97fb32f9d2da260758df67d0e2627b43bd01a3e7980fae7a054c7997c125c228`, and
 `/tmp/ash-generated-token-location-core.log`, SHA-256
 `a653336fe52ee946c81d700967654037b4dd4e9cc5eaa1858d905639504d7fc5`).
-This partial repair awaits review; exact definition causes, combined inputs and
-nested expansion frames remain open and it earns no additional ledger credit.
+Independent review cleared this partial repair at `b2367131`; exact definition
+causes, combined inputs and nested expansion frames remain open and it earns no
+additional ledger credit.
+
+Qualified type, term and constructor expressions now select an alias in its
+own context before selecting its public member. Six real graphs cover both
+captured caller aliases and defining-module aliases, including conflicting
+caller aliases, and return 42. Fresh aliases cannot borrow the caller's
+import; private and opaque members, a lowercase alias, and missing literal
+aliases, operands and type arguments are refused. The original captured-alias
+case failed before this change (`/tmp/ash-qualified-capture-red.log`, SHA-256
+`7ee850da792bbdbc5a497c513ff21f02df31c04d77e20616a6c0d783281513b9`);
+five affected integration suites now pass 151 cases
+(`/tmp/ash-qualified-context-suite.log`, SHA-256
+`1d50658e0ae2c1dbd58b51400274779ba69ce00a0583422b4e7eb7cabae2e91f`).
+This partial result awaits review and adds no ledger credit. Qualified effects,
+captured interface and pattern positions, and broader scope hygiene remain open.
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources
@@ -530,7 +545,7 @@ hygiene, causal diagnostics, M01–M14, C1 and C2 remain open.
 ## Progress
 
 The weighted ledger records **58.5/100 reviewed delivery points**. The latest
-reviewed implementation pin is `f19b1ab2`. These are partial implementation
+reviewed implementation pin is `b2367131`. These are partial implementation
 observations, not acceptance of the whole feature.
 M01–M14 and C1/C2 remain pending.
 
