@@ -11383,7 +11383,21 @@ impl Resolver<'_, '_> {
                 }
             }
         };
+        let mut diagnostic = pattern.diagnostic.clone();
+        if !self.diagnostic_frames.is_empty() {
+            let location = diagnostic.get_or_insert_with(|| {
+                Box::new(crate::syntax::DiagnosticLocation::new(pattern.span.into()))
+            });
+            let own_frames = std::mem::take(&mut location.frames);
+            for frame in &self.diagnostic_frames {
+                location.add_frame(frame);
+            }
+            for frame in &own_frames {
+                location.add_frame(frame);
+            }
+        }
         Ok(ResolvedPattern {
+            diagnostic,
             kind,
             span: pattern.span,
         })
@@ -11460,6 +11474,7 @@ impl Resolver<'_, '_> {
             spelling: "publish".into(),
             resume,
             pattern: ResolvedPattern {
+                diagnostic: None,
                 kind: ResolvedPatternKind::Binder(input),
                 span: target_span,
             },
@@ -11519,6 +11534,7 @@ impl Resolver<'_, '_> {
         declarations.push(ResolvedLocalDeclaration::Binding(Box::new(
             ResolvedBinding {
                 pattern: ResolvedPattern {
+                    diagnostic: None,
                     kind: ResolvedPatternKind::Binder(callback),
                     span: action_span,
                 },
@@ -11637,6 +11653,7 @@ impl Resolver<'_, '_> {
         let binding = |binder, initializer| {
             ResolvedLocalDeclaration::Binding(Box::new(ResolvedBinding {
                 pattern: ResolvedPattern {
+                    diagnostic: None,
                     kind: ResolvedPatternKind::Binder(binder),
                     span: target_span,
                 },
@@ -11680,6 +11697,7 @@ impl Resolver<'_, '_> {
             spelling: "publish".into(),
             resume,
             pattern: ResolvedPattern {
+                diagnostic: None,
                 kind: ResolvedPatternKind::Binder(input),
                 span: target_span,
             },
@@ -12764,6 +12782,7 @@ impl Resolver<'_, '_> {
                         origin: Origin::Source(span),
                     },
                     patterns: vec![ResolvedPattern {
+                        diagnostic: None,
                         kind: ResolvedPatternKind::Binder(parameter),
                         span,
                     }],
@@ -21160,6 +21179,7 @@ mod tests {
                         declarations: vec![SurfaceLocalDeclaration::Binding(Box::new(
                             SurfaceBinding {
                                 pattern: SurfacePattern {
+                                    diagnostic: None,
                                     kind: SurfacePatternKind::Wildcard,
                                     span,
                                 },
@@ -21213,6 +21233,7 @@ mod tests {
                         arms: vec![
                             crate::surface::SurfaceMatchArm {
                                 pattern: SurfacePattern {
+                                    diagnostic: None,
                                     kind: SurfacePatternKind::Wildcard,
                                     span,
                                 },
@@ -21221,6 +21242,7 @@ mod tests {
                             },
                             crate::surface::SurfaceMatchArm {
                                 pattern: SurfacePattern {
+                                    diagnostic: None,
                                     kind: SurfacePatternKind::Wildcard,
                                     span,
                                 },
@@ -21245,6 +21267,7 @@ mod tests {
                         declarations: vec![SurfaceLocalDeclaration::Binding(Box::new(
                             SurfaceBinding {
                                 pattern: SurfacePattern {
+                                    diagnostic: None,
                                     kind: SurfacePatternKind::Wildcard,
                                     span,
                                 },
@@ -22407,6 +22430,7 @@ mod tests {
             kind: SurfaceExprKind::Block(SurfaceBlock {
                 declarations: vec![SurfaceLocalDeclaration::Binding(Box::new(SurfaceBinding {
                     pattern: SurfacePattern {
+                        diagnostic: None,
                         kind: SurfacePatternKind::Wildcard,
                         span,
                     },

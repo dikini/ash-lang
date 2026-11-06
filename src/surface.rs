@@ -888,6 +888,7 @@ pub struct SurfacePattern {
     pub kind: SurfacePatternKind,
     /// The complete pattern span.
     pub span: Span,
+    pub(crate) diagnostic: Option<Box<crate::syntax::DiagnosticLocation>>,
 }
 
 /// The closed source pattern family.

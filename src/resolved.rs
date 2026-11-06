@@ -18952,6 +18952,7 @@ pub struct ResolvedPattern {
     pub kind: ResolvedPatternKind,
     /// Complete pattern span.
     pub span: Span,
+    pub(crate) diagnostic: Option<Box<crate::syntax::DiagnosticLocation>>,
 }
 
 /// The closed resolved pattern family.
@@ -20838,6 +20839,7 @@ mod tests {
                     origin: binder.origin,
                 },
                 patterns: vec![ResolvedPattern {
+                    diagnostic: None,
                     kind: ResolvedPatternKind::Binder(Binder {
                         id: BinderId::resolved(module, 2),
                         spelling: "ignored".to_owned(),
@@ -20973,6 +20975,7 @@ mod tests {
                                 origin: binder.origin.clone(),
                             },
                             patterns: vec![ResolvedPattern {
+                                diagnostic: None,
                                 kind: ResolvedPatternKind::Boolean(value),
                                 span,
                             }],

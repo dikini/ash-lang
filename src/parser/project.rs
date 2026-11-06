@@ -2676,6 +2676,7 @@ fn project_expression_with_fragments(
                             InternalReason::UnexpectedShape,
                         ))?;
                         SurfacePattern {
+                            diagnostic: None,
                             span: join_spans(source, first.span, last.span)?,
                             kind: SurfacePatternKind::Tuple(parameters),
                         }
@@ -3506,6 +3507,7 @@ fn project_expression_with_fragments(
                 if capture && let Some(cause) = cause {
                     location.related.push(cause);
                 }
+                location.captured_expression |= capture;
                 location.add_frame(&frame);
             }
         }
@@ -4016,6 +4018,7 @@ fn project_pattern(
 ) -> Result<SurfacePattern, ProjectionError> {
     require_kind(node, NodeKind::Pattern)?;
     let span = node_span(source, node, tokens)?;
+    let diagnostic = project_pattern_diagnostic(node, tokens, span)?;
     let kind = if direct_tokens(node, tokens)
         .next()
         .is_some_and(|token| token.kind == TokenKind::Dollar)
@@ -4054,6 +4057,11 @@ fn project_pattern(
             optional_child_of_kind(constructor, NodeKind::TuplePattern)?
         {
             Some(Box::new(SurfacePattern {
+                diagnostic: project_pattern_diagnostic(
+                    tuple,
+                    tokens,
+                    node_span(source, tuple, tokens)?,
+                )?,
                 kind: SurfacePatternKind::Tuple(project_pattern_children(source, tuple, tokens)?),
                 span: node_span(source, tuple, tokens)?,
             }))
@@ -4070,7 +4078,31 @@ fn project_pattern(
     } else {
         return malformed(InternalReason::UnexpectedShape);
     };
-    Ok(SurfacePattern { kind, span })
+    Ok(SurfacePattern {
+        kind,
+        span,
+        diagnostic,
+    })
+}
+
+fn project_pattern_diagnostic(
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    span: Span,
+) -> Result<Option<Box<crate::syntax::DiagnosticLocation>>, ProjectionError> {
+    let Some(frame) = tokens.frame else {
+        return Ok(None);
+    };
+    let index = descendant_edge_index(node, false)?;
+    let origin = match tokens.originals.and_then(|originals| originals.get(&index)) {
+        Some(crate::syntax::MacroOutputNode::Token(_, _, origin))
+        | Some(crate::syntax::MacroOutputNode::Identifier(_, origin))
+        | Some(crate::syntax::MacroOutputNode::Group(_, _, origin)) => origin.clone(),
+        _ => span.into(),
+    };
+    let mut location = crate::syntax::DiagnosticLocation::new(origin);
+    location.add_frame(frame);
+    Ok(Some(Box::new(location)))
 }
 
 fn project_pattern_children(

@@ -188,7 +188,7 @@ fn compile_type_diagnostic_inner<'a>(
         source
             .location(span)
             .map_err(|_| PresentationError::MissingSource)?;
-        let facts: Vec<_> = fact
+        let mut facts: Vec<_> = fact
             .into_iter()
             .map(|(name, value)| Fact {
                 name,
@@ -196,6 +196,14 @@ fn compile_type_diagnostic_inner<'a>(
                 value: FactValue::Text(value),
             })
             .collect();
+        if let Some((name, value)) = diagnostic.source_additional_fact() {
+            facts.push(Fact {
+                name,
+                kind: "code",
+                value: FactValue::Text(value),
+            });
+        }
+        let primary_message = diagnostic.source_primary_message();
         let mut related = Vec::with_capacity(diagnostic.related.len());
         for (index, original) in diagnostic.related.iter().enumerate() {
             let (message, relationship) = diagnostic
@@ -215,7 +223,11 @@ fn compile_type_diagnostic_inner<'a>(
                 span,
                 message,
                 relationship,
-                facts: Vec::new(),
+                facts: if primary_message.is_some() && index == 0 {
+                    facts.clone()
+                } else {
+                    Vec::new()
+                },
             });
         }
         return Ok(CompileDiagnostic {
@@ -224,9 +236,13 @@ fn compile_type_diagnostic_inner<'a>(
             primary: Some(Label {
                 source,
                 span,
-                message: message.clone(),
+                message: primary_message.clone().unwrap_or_else(|| message.clone()),
                 relationship,
-                facts: facts.clone(),
+                facts: if primary_message.is_some() {
+                    Vec::new()
+                } else {
+                    facts.clone()
+                },
             }),
             message,
             related,

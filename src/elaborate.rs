@@ -825,7 +825,14 @@ pub struct TypeDiagnostic {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TypeDiagnosticContext {
     Plain,
-    ResourceDependency { capture: bool, call: bool },
+    PatternMismatch {
+        requirement: Option<&'static str>,
+        match_value: bool,
+    },
+    ResourceDependency {
+        capture: bool,
+        call: bool,
+    },
     FunctionNeedsContext(Option<SynthesisCause>),
     EquationArity(EquationArityCause),
     HandlerCoverage(HandlerCoverageCause),
@@ -928,6 +935,20 @@ impl TypeDiagnostic {
     }
 
     pub(crate) fn source_message(&self) -> Option<TypeSourceMessage<'_>> {
+        if let TypeDiagnosticContext::PatternMismatch {
+            match_value: true, ..
+        } = self.context
+        {
+            if self.reason != TypeReason::PatternMismatch {
+                return None;
+            }
+            let mut message = self
+                .reason
+                .source_message(self.expected.as_deref(), self.found.as_deref())?;
+            message.relationship = "match_value";
+            message.minimum_related = 1;
+            return Some(message);
+        }
         if let TypeDiagnosticContext::ResourceDependency { capture, call } = self.context {
             if self.reason != TypeReason::ResourceEscape {
                 return None;
@@ -1095,10 +1116,46 @@ impl TypeDiagnostic {
         })
     }
 
+    pub(crate) fn source_primary_message(&self) -> Option<crate::message::Message<'static>> {
+        match self.context {
+            TypeDiagnosticContext::PatternMismatch {
+                match_value: true, ..
+            } => Some(crate::message::Message::pattern_match_value()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn source_additional_fact(&self) -> Option<(&'static str, &'static str)> {
+        match self.context {
+            TypeDiagnosticContext::PatternMismatch {
+                requirement: Some(requirement),
+                match_value: true,
+            } => Some(("pattern_requirement", requirement)),
+            _ => None,
+        }
+    }
+
     pub(crate) fn source_related_message(
         &self,
         index: usize,
-    ) -> Option<(crate::message::Message<'static>, &'static str)> {
+    ) -> Option<(crate::message::Message<'_>, &'static str)> {
+        if let TypeDiagnosticContext::PatternMismatch {
+            requirement,
+            match_value: true,
+        } = self.context
+        {
+            if index != 0 {
+                return None;
+            }
+            let actual = self.expected.as_deref()?;
+            let message = match requirement {
+                Some(required) => {
+                    crate::message::Message::pattern_type_requirement(required, actual)
+                }
+                None => crate::message::Message::pattern_type_mismatch(actual),
+            };
+            return Some((message, "pattern"));
+        }
         if let TypeDiagnosticContext::ResourceDependency { capture, call } = self.context {
             if self.reason != TypeReason::ResourceEscape {
                 return None;
@@ -1207,6 +1264,46 @@ impl TypeError {
                 }
                 Self::Internal(_) => {}
             }
+        }
+        self
+    }
+
+    fn with_fallback_diagnostic(
+        self,
+        location: Option<&crate::syntax::DiagnosticLocation>,
+    ) -> Self {
+        let has_location = match &self {
+            Self::Source(error) => error.primary.diagnostic_location().is_some(),
+            Self::Interface(error) => error.primary.diagnostic_location().is_some(),
+            Self::Mismatch(error) => error.diagnostic.is_some(),
+            Self::Internal(_) => true,
+        };
+        if has_location {
+            self
+        } else {
+            self.with_diagnostic_location(location)
+        }
+    }
+
+    fn with_matched_value(mut self, location: Option<&crate::syntax::DiagnosticLocation>) -> Self {
+        let Some(location) = location.filter(|location| location.captured_expression) else {
+            return self;
+        };
+        if let Self::Source(error) = &mut self
+            && let TypeDiagnosticContext::PatternMismatch {
+                requirement,
+                match_value: false,
+            } = error.context
+            && error.reason == TypeReason::PatternMismatch
+        {
+            let value = SourceLabel::new(location.primary.primary(), "this value is matched here")
+                .with_location(Some(location));
+            let pattern = std::mem::replace(&mut error.diagnostic.primary, value);
+            error.diagnostic.related.push(pattern);
+            error.context = TypeDiagnosticContext::PatternMismatch {
+                requirement,
+                match_value: true,
+            };
         }
         self
     }
@@ -11402,7 +11499,17 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Err(UnificationFailure::RowExclusion) => Err(row_exclusion_error(span, None)),
             Err(UnificationFailure::Mismatch) => {
                 let expected = IterativeTypeOwner::new(self.zonk(expected)?);
-                Err(pattern_mismatch(span, &expected, &self.registry))
+                let requirement = match required {
+                    Type::Bool => Some("Bool"),
+                    Type::Unit => Some("Unit"),
+                    _ => None,
+                };
+                Err(pattern_mismatch(
+                    span,
+                    &expected,
+                    requirement,
+                    &self.registry,
+                ))
             }
             Err(UnificationFailure::Infinite) => Err(inference_failure(
                 TypeReason::InfiniteType,
@@ -19385,13 +19492,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         row.try_reserve(1)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let mut binders = Vec::new();
-        let checked = self.check_core_pattern(
-            &arm.pattern,
-            &progress.scrutinee.ty,
-            context,
-            &mut binders,
-            GeneratedReason::BindingLowering,
-        )?;
+        let checked = self
+            .check_core_pattern(
+                &arm.pattern,
+                &progress.scrutinee.ty,
+                context,
+                &mut binders,
+                GeneratedReason::BindingLowering,
+            )
+            .map_err(|error| error.with_matched_value(progress.scrutinee.diagnostic.as_deref()))?;
         progress.record_pattern_decision(checked.contains_newtype, checked.pattern_count)?;
         let mut pattern = CorePatternOwner::new(Some(checked.pattern));
         if checked.inference_changed {
@@ -21004,6 +21113,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         binders: &mut Vec<BinderId>,
         binder_reason: GeneratedReason,
     ) -> Result<CheckedPattern, TypeError> {
+        self.check_core_pattern_inner(pattern, expected, context, binders, binder_reason)
+            .map_err(|error| error.with_fallback_diagnostic(pattern.diagnostic.as_deref()))
+    }
+
+    fn check_core_pattern_inner(
+        &mut self,
+        pattern: &ResolvedPattern,
+        expected: &Type,
+        context: &mut TypeContext,
+        binders: &mut Vec<BinderId>,
+        binder_reason: GeneratedReason,
+    ) -> Result<CheckedPattern, TypeError> {
         let (expected, mut inference_changed) = if let Type::Inference(identity) = expected {
             let zonked = self.zonk(expected)?;
             let changed = !matches!(&zonked, Type::Inference(zonked) if *zonked == *identity);
@@ -21056,7 +21177,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     expected.replace(refined);
                     inference_changed = true;
                 } else if !matches!(&*expected, Type::Bool) {
-                    return Err(pattern_mismatch(pattern.span, &expected, &self.registry));
+                    return Err(pattern_mismatch(
+                        pattern.span,
+                        &expected,
+                        Some("Bool"),
+                        &self.registry,
+                    ));
                 }
                 CorePatternKind::Boolean(*value)
             }
@@ -21067,7 +21193,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     expected.replace(refined);
                     inference_changed = true;
                 } else if !matches!(&*expected, Type::Unit) {
-                    return Err(pattern_mismatch(pattern.span, &expected, &self.registry));
+                    return Err(pattern_mismatch(
+                        pattern.span,
+                        &expected,
+                        Some("Unit"),
+                        &self.registry,
+                    ));
                 }
                 CorePatternKind::Unit
             }
@@ -21092,10 +21223,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     inference_changed = true;
                 }
                 let Type::Tuple(types) = &*expected else {
-                    return Err(pattern_mismatch(pattern.span, &expected, &self.registry));
+                    return Err(pattern_mismatch(
+                        pattern.span,
+                        &expected,
+                        None,
+                        &self.registry,
+                    ));
                 };
                 if patterns.len() != types.len() {
-                    return Err(pattern_mismatch(pattern.span, &expected, &self.registry));
+                    return Err(pattern_mismatch(
+                        pattern.span,
+                        &expected,
+                        None,
+                        &self.registry,
+                    ));
                 }
                 let mut checked = CorePatternBuffer(Vec::new());
                 checked
@@ -21232,6 +21373,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Err(pattern_mismatch(
                 whole_pattern.span,
                 &expected,
+                None,
                 &self.registry,
             ));
         };
@@ -21300,7 +21442,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         binders,
                         binder_reason,
                         false,
-                    )?
+                    )
+                    .map_err(|error| {
+                        error.with_fallback_diagnostic(pattern.diagnostic.as_deref())
+                    })?
                 } else {
                     self.check_core_pattern(pattern, ty, context, binders, binder_reason)?
                 };
@@ -28401,13 +28546,24 @@ fn resolved_build_error(error: ResolvedBuildFailure) -> TypeError {
     }
 }
 
-fn pattern_mismatch(span: Span, expected: &Type, registry: &ResolvedRegistry) -> TypeError {
+fn pattern_mismatch(
+    span: Span,
+    expected: &Type,
+    requirement: Option<&'static str>,
+    registry: &ResolvedRegistry,
+) -> TypeError {
     let mut diagnostic = Diagnostic::new(
         TypeReason::PatternMismatch,
         SourceLabel::new(span, "this pattern does not match its expected type"),
     );
     diagnostic.expected = Some(registry.display_source_type(expected));
-    TypeError::source(diagnostic)
+    TypeError::Source(Box::new(TypeDiagnostic {
+        diagnostic,
+        context: TypeDiagnosticContext::PatternMismatch {
+            requirement,
+            match_value: false,
+        },
+    }))
 }
 
 fn constructor_mismatch(span: Span) -> TypeError {
@@ -42276,6 +42432,7 @@ mod tests {
                     .span(ByteRange::new(0, 1).expect("the range should be ordered"))
                     .expect("the range should fit");
                 let pattern = ResolvedPattern {
+                    diagnostic: None,
                     kind: ResolvedPatternKind::Wildcard,
                     span,
                 };
@@ -42316,6 +42473,7 @@ mod tests {
                     .span(ByteRange::new(0, 4).expect("the range should be ordered"))
                     .expect("the range should fit");
                 let pattern = ResolvedPattern {
+                    diagnostic: None,
                     kind: ResolvedPatternKind::Boolean(true),
                     span,
                 };
@@ -42358,6 +42516,7 @@ mod tests {
                     .span(ByteRange::new(0, 5).expect("the range should be ordered"))
                     .expect("the range should fit");
                 let pattern = ResolvedPattern {
+                    diagnostic: None,
                     kind: ResolvedPatternKind::Binder(crate::resolved::Binder {
                         id: BinderId::new(0),
                         spelling: "value".to_owned(),
@@ -42404,12 +42563,15 @@ mod tests {
                     .span(ByteRange::new(0, 7).expect("the range should be ordered"))
                     .expect("the range should fit");
                 let pattern = ResolvedPattern {
+                    diagnostic: None,
                     kind: ResolvedPatternKind::Tuple(vec![
                         ResolvedPattern {
+                            diagnostic: None,
                             kind: ResolvedPatternKind::Wildcard,
                             span,
                         },
                         ResolvedPattern {
+                            diagnostic: None,
                             kind: ResolvedPatternKind::Unit,
                             span,
                         },
@@ -43515,12 +43677,15 @@ mod tests {
                     panic!("the fixture result should be a function");
                 };
                 let parameter = ResolvedPattern {
+                    diagnostic: None,
                     kind: ResolvedPatternKind::Tuple(vec![
                         ResolvedPattern {
+                            diagnostic: None,
                             kind: ResolvedPatternKind::Wildcard,
                             span: expression.span,
                         },
                         ResolvedPattern {
+                            diagnostic: None,
                             kind: ResolvedPatternKind::Boolean(true),
                             span: expression.span,
                         },
@@ -43710,6 +43875,7 @@ mod tests {
                 };
                 let arm = || crate::resolved::ResolvedMatchArm {
                     pattern: ResolvedPattern {
+                        diagnostic: None,
                         kind: ResolvedPatternKind::Wildcard,
                         span,
                     },

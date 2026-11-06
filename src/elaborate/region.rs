@@ -547,17 +547,17 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     ) -> Result<EffectRow, TypeError> {
         let pair = IterativeTypeOwner::new(self.zonk(pair)?);
         let Type::Tuple(members) = &*pair else {
-            return Err(pattern_mismatch(span, &pair, &self.registry));
+            return Err(pattern_mismatch(span, &pair, None, &self.registry));
         };
         let [allocate, release] = members.as_ref() else {
-            return Err(pattern_mismatch(span, &pair, &self.registry));
+            return Err(pattern_mismatch(span, &pair, None, &self.registry));
         };
         let allocate = allocate
             .function_view()
-            .ok_or_else(|| pattern_mismatch(span, &pair, &self.registry))?;
+            .ok_or_else(|| pattern_mismatch(span, &pair, None, &self.registry))?;
         let release = release
             .function_view()
-            .ok_or_else(|| pattern_mismatch(span, &pair, &self.registry))?;
+            .ok_or_else(|| pattern_mismatch(span, &pair, None, &self.registry))?;
         self.refine_pattern_expected(allocate.domain(), &Type::Nominal(api.request()), span)?;
         self.refine_pattern_expected(
             allocate.value(),

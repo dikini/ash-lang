@@ -1338,6 +1338,10 @@ messages! {
     retained_interpretation => "retained-interpretation" {},
     /// A pattern disagrees with the type of the value being matched.
     pattern_type_mismatch => "pattern-type-mismatch" { expected: &'a str = "Bool" },
+    /// The value being matched cannot satisfy the pattern.
+    pattern_match_value => "pattern-match-value" {},
+    /// A pattern's known type differs from the corresponding value's type.
+    pattern_type_requirement => "pattern-type-requirement" { required: &'a str = "Bool", actual: &'a str = "Int" },
     /// A constructor occurrence has the wrong payload shape.
     pattern_constructor_payload => "pattern-constructor-payload" {},
     /// A constructor pattern names another nominal type.

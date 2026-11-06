@@ -1091,6 +1091,42 @@ and template-forwarded capture. Both driver cases pass in
 Independent review passed at `ffe80802`; broader P30/P31 causal-origin work
 remains open.
 
+### Pattern and matched-value diagnostic checkpoint
+
+A generated Boolean pattern now reports a mismatched captured value as the
+primary location, with the failing pattern and its `Bool` requirement as a
+related cause. The original `pattern.type-mismatch` reason and `Int` fact are
+retained. A nested tuple control keeps the leaf's type facts on that pattern,
+not on the whole captured tuple. A caller-written pattern inside a captured
+block remains primary at its own source and retains its enclosing frame.
+Handwritten diagnostics remain unchanged, and valid controls run to 42.
+Both human locales and JSON are covered. The private diagnostic field also
+makes external Rust struct literals for `SurfacePattern` and `ResolvedPattern`
+unavailable; their existing public kind and span access remains.
+
+The original failure is `/tmp/ash-match-pattern-scrutinee-red.log` (SHA-256
+`e1a9dc092d61814740b810662cd8886e64eb4b54dd89cc2ca4dedd34d5e43e94`). The
+final macro and presentation suites pass 96 cases in
+`/tmp/ash-match-pattern-presentation-final.log` (SHA-256
+`e57f24a98170883e75815c846be726f6ae1b85d5de2ac29957d1cce101a71ff4`). The
+earlier broader run passed 194 cases, including architecture and ordinary
+pattern checks, before the final message-only change
+(`/tmp/ash-match-pattern-affected-suite.log`, SHA-256
+`2d846624dcec4aa9ed2b0d16acba2f4bf0a89329e0f7dc4d05bf3f6d5d31a54e`).
+The final CLI human and JSON observations are
+`/tmp/ash-match-pattern-human-final.log` (SHA-256
+`155b99238ca1dd5a6c5cb586bb886a3d1b7644f6b7696fcaa729dd1cdf9115e3`) and
+`/tmp/ash-match-pattern-json-final.log` (SHA-256
+`49163605141ccfec8b3b1ac7723d585d9b401df8cd318c701e43d265d3e06db5`).
+The all-target Clippy check passed (`/tmp/ash-match-pattern-clippy-final.log`,
+SHA-256 `66c0cc6e47059f64c02672d7bd76ee00befcd485321e8e9d3f845190a4ad9ff6`).
+The unchanged 256 KiB driver and pattern-disposal canaries also pass
+(`/tmp/ash-match-pattern-stack-driver-final.log`, SHA-256
+`427a7472fcd6ba67eed08afff479586e5c33c2af380839dd2ceae09fb382fca5`, and
+`/tmp/ash-match-pattern-stack-mismatch-final.log`, SHA-256
+`2fd3c8536f1a1f99bdd62a8be54328d9c3bef1cd63e84eeb918381199e301c5f`).
+Independent review and broader causal/M01–M14 acceptance remain pending.
+
 ## Progress
 
 The weighted ledger records **61.5/100 reviewed delivery points**. The latest

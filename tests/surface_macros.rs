@@ -535,6 +535,195 @@ fn captured_expression_diagnostics_preserve_source_and_invocation() {
 }
 
 #[test]
+fn match_pattern_failure_preserves_the_captured_value_and_pattern() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_file_diagnostics, write_human, write_json},
+    };
+
+    let valid = compile_path(fixture("template-diagnostic/match_value_valid.ash")).unwrap();
+    assert_eq!(execute(&valid).unwrap().value_display(), "42");
+
+    let path = "template-diagnostic/match_value_invalid.ash";
+    let caller =
+        include_str!("fixtures/surface-macros/template-diagnostic/match_value_invalid.ash");
+    let forms = include_str!("fixtures/surface-macros/template-diagnostic/match_value_forms.ash");
+    let failure = compile_path(fixture(path)).expect_err("an Int cannot match a Bool pattern");
+    assert_eq!(failure.reason_code(), "pattern.type-mismatch");
+    let diagnostics = compile_file_diagnostics(&failure).unwrap();
+    let mut json = Vec::new();
+    write_json(&mut json, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    let labels = json["labels"].as_array().unwrap();
+    let value = caller.find("check 42").unwrap() + "check ".len();
+    assert_eq!(labels[0]["relationship"], "match_value");
+    assert_eq!(labels[0]["byte_start"], value, "{json}");
+    assert_eq!(labels[0]["byte_end"], value + 2, "{json}");
+    let pattern = forms.find("true").unwrap();
+    assert!(
+        labels.iter().any(|label| {
+            label["relationship"] == "pattern"
+                && label["path"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("match_value_forms.ash")
+                && label["byte_start"] == pattern
+                && label["byte_end"] == pattern + 4
+        }),
+        "{json}"
+    );
+    for relationship in ["syntax_invocation", "syntax_definition"] {
+        assert!(
+            labels
+                .iter()
+                .any(|label| label["relationship"] == relationship),
+            "{json}"
+        );
+    }
+    for (name, value) in [("expected_type", "Int"), ("pattern_requirement", "Bool")] {
+        assert!(
+            json["facts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|fact| fact["name"] == name && fact["value"] == value),
+            "{json}"
+        );
+    }
+    let mut human = Vec::new();
+    write_human(
+        &mut human,
+        &diagnostics[0],
+        &Catalogue::new(Locale::English).unwrap(),
+    )
+    .unwrap();
+    let human = String::from_utf8(human).unwrap();
+    assert!(human.contains("This value cannot be matched by the pattern."));
+    assert!(human.contains("This pattern requires a value of type `Bool`"));
+    assert!(human.contains("true => 42"));
+
+    let manual = compile_path(fixture("template-diagnostic/match_value_manual.ash"))
+        .expect_err("the ordinary match also rejects this pattern");
+    assert_eq!(manual.reason_code(), "pattern.type-mismatch");
+    let diagnostics = compile_file_diagnostics(&manual).unwrap();
+    let mut json = Vec::new();
+    write_json(&mut json, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    let source = include_str!("fixtures/surface-macros/template-diagnostic/match_value_manual.ash");
+    assert_eq!(
+        json["labels"][0]["byte_start"],
+        source.find("true").unwrap()
+    );
+    assert_eq!(json["labels"][0]["relationship"], "pattern");
+}
+
+#[test]
+fn nested_match_pattern_failure_labels_the_leaf_without_mistyping_the_captured_tuple() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_file_diagnostics, write_human, write_json},
+    };
+
+    let valid = compile_path(fixture("template-diagnostic/match_value_tuple_valid.ash")).unwrap();
+    assert_eq!(execute(&valid).unwrap().value_display(), "42");
+
+    let caller =
+        include_str!("fixtures/surface-macros/template-diagnostic/match_value_tuple_invalid.ash");
+    let forms = include_str!("fixtures/surface-macros/template-diagnostic/match_value_forms.ash");
+    let failure = compile_path(fixture("template-diagnostic/match_value_tuple_invalid.ash"))
+        .expect_err("the tuple's Int member cannot match a Bool pattern");
+    assert_eq!(failure.reason_code(), "pattern.type-mismatch");
+    let diagnostics = compile_file_diagnostics(&failure).unwrap();
+    let mut json = Vec::new();
+    write_json(&mut json, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    let labels = json["labels"].as_array().unwrap();
+    let value = caller.find("(42, true)").unwrap();
+    assert_eq!(labels[0]["relationship"], "match_value");
+    assert_eq!(labels[0]["byte_start"], value, "{json}");
+    assert_eq!(labels[0]["byte_end"], value + "(42, true)".len(), "{json}");
+    assert_eq!(labels[0]["facts"].as_array().unwrap().len(), 0, "{json}");
+    let pattern = forms.find("(true, _)").unwrap() + 1;
+    let leaf = labels
+        .iter()
+        .find(|label| {
+            label["relationship"] == "pattern"
+                && label["byte_start"] == pattern
+                && label["byte_end"] == pattern + 4
+        })
+        .unwrap_or_else(|| panic!("missing leaf pattern: {json}"));
+    for (name, value) in [("expected_type", "Int"), ("pattern_requirement", "Bool")] {
+        assert!(
+            leaf["facts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|fact| { fact["name"] == name && fact["value"] == value }),
+            "{json}"
+        );
+    }
+    for (locale, message, requirement) in [
+        (
+            Locale::English,
+            "This value cannot be matched by the pattern.",
+            "This pattern requires a value of type `Bool`",
+        ),
+        (
+            Locale::Bulgarian,
+            "Тази стойност не може да бъде съпоставена с шаблона.",
+            "Този шаблон изисква стойност от тип `Bool`",
+        ),
+    ] {
+        let mut human = Vec::new();
+        write_human(
+            &mut human,
+            &diagnostics[0],
+            &Catalogue::new(locale).unwrap(),
+        )
+        .unwrap();
+        let human = String::from_utf8(human).unwrap();
+        assert!(human.contains(message));
+        assert!(human.contains(requirement));
+    }
+}
+
+#[test]
+fn captured_match_pattern_keeps_its_own_source_and_inherited_frame() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    let source =
+        include_str!("fixtures/surface-macros/template-diagnostic/captured_match_pattern.ash");
+    let failure = compile_path(fixture("template-diagnostic/captured_match_pattern.ash"))
+        .expect_err("the caller's Boolean pattern does not match Int");
+    assert_eq!(failure.reason_code(), "pattern.type-mismatch");
+    let diagnostics = compile_file_diagnostics(&failure).unwrap();
+    let mut json = Vec::new();
+    write_json(&mut json, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    let labels = json["labels"].as_array().unwrap();
+    let pattern = source.find("true").unwrap();
+    assert_eq!(labels[0]["relationship"], "pattern");
+    assert!(
+        labels[0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("captured_match_pattern.ash")
+    );
+    assert_eq!(labels[0]["byte_start"], pattern, "{json}");
+    assert_eq!(labels[0]["byte_end"], pattern + 4, "{json}");
+    for relationship in ["syntax_invocation", "syntax_definition"] {
+        assert_eq!(
+            labels
+                .iter()
+                .filter(|label| label["relationship"] == relationship)
+                .count(),
+            1,
+            "{json}"
+        );
+    }
+}
+
+#[test]
 fn match_mismatch_preserves_both_captured_causes() {
     use ash::presentation::{compile_file_diagnostics, write_json};
 

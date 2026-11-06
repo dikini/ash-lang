@@ -45,6 +45,7 @@ pub(crate) struct DiagnosticLocation {
     pub(crate) related: Vec<MacroOrigin>,
     pub(crate) frames: Vec<Arc<ExpansionFrame>>,
     pub(crate) token_cause: bool,
+    pub(crate) captured_expression: bool,
 }
 
 impl DiagnosticLocation {
@@ -54,6 +55,7 @@ impl DiagnosticLocation {
             related: Vec::new(),
             frames: Vec::new(),
             token_cause: false,
+            captured_expression: false,
         }
     }
 
