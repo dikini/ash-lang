@@ -139,6 +139,23 @@ fn checked_transformer_emits_a_region_with_fresh_identifiers() {
 }
 
 #[test]
+fn checked_transformer_emits_a_local_newtype_with_a_fresh_identity() {
+    for entry in [
+        "procedural-newtype/entry.ash",
+        "procedural-newtype/captured.ash",
+    ] {
+        let compiled = compile_path(macro_fixture(entry))
+            .expect("a generated local newtype keeps its constructor and caller context");
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+    }
+
+    let failure = compile_path(macro_fixture("procedural-newtype/escape.ash"))
+        .expect_err("the fresh constructor does not escape into caller source");
+    assert!(failure.is_source_rejection(), "{failure:?}");
+    assert_eq!(failure.reason_code(), "resolve.unknown-constructor");
+}
+
+#[test]
 fn checked_transformer_caller_identifier_can_bind_caller_syntax() {
     let compiled = compile_path(macro_fixture("entry_constructed_caller.ash"))
         .expect("a caller-context binder captures the caller expression");

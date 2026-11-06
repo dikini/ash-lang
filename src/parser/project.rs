@@ -4257,12 +4257,12 @@ fn project_atomic_primitive(
     };
     Ok(SurfaceType {
         kind,
-        span: if tokens.construction_extents && tokens.occurrence.is_some() {
+        span: if tokens.construction_extents && tokens.construction.is_some() {
             tokens
                 .original_span(token)
                 .ok_or(ProjectionError::MalformedTree(InternalReason::InvalidSpan))?
         } else {
-            token.span
+            tokens.occurrence.unwrap_or(token.span)
         },
     })
 }
@@ -4402,7 +4402,7 @@ fn node_span(
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
 ) -> Result<Span, ProjectionError> {
-    if tokens.construction_extents && tokens.occurrence.is_some() {
+    if tokens.construction_extents && tokens.construction.is_some() {
         let mut pending = node.children.iter().rev().collect::<Vec<_>>();
         let mut extent: Option<Span> = None;
         while let Some(element) = pending.pop() {
@@ -4659,7 +4659,7 @@ mod tests {
     }
 
     #[test]
-    fn construction_extents_require_literal_template_tokens_and_context() {
+    fn generated_construction_extents_preserve_occurrence_and_literal_proof() {
         use crate::syntax::{MacroOutputNode, SyntaxContexts};
 
         fn introduce(nodes: &mut [MacroOutputNode], invocation: Span) {
@@ -4717,7 +4717,17 @@ mod tests {
         };
 
         assert!(parse(Some((declaration.span, 3)), contents.clone()).is_ok());
-        assert!(parse(None, contents.clone()).is_err());
+        let procedural = parse(None, contents.clone()).expect("procedural construction projects");
+        let SurfaceExprKind::Block(block) = &procedural.kind else {
+            panic!("the output is a block");
+        };
+        let [SurfaceLocalDeclaration::Newtype(nominal)] = block.declarations.as_slice() else {
+            panic!("the block has one newtype");
+        };
+        assert_eq!(nominal.span, invocation);
+        assert_eq!(nominal.constructors[0].span, invocation);
+        assert_eq!(nominal.constructors[0].fields[0].span, invocation);
+        assert_eq!(nominal.name.span.source(), owner.id());
         assert!(capture_name(&mut contents));
         assert!(parse(Some((declaration.span, 3)), contents).is_err());
     }

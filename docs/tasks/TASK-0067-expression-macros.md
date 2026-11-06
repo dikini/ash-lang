@@ -207,11 +207,41 @@ Direct CLI receipts are `/tmp/ash-depth-location-human.log` (SHA-256
 `c86c4d296605eb7e74bf14a8eba9f9b029e25c53021cce62bc71d75c466561d6`)
 and `/tmp/ash-depth-location-json.log` (SHA-256
 `b4ffd8515c6bd8ce5c2acc16a0d69fd1249a9bd37a21d489e59c8aff6cba767c`).
-The repair awaits independent re-review. The reviewed
+The repair was independently re-reviewed at `98ecab03`. The reviewed
 `57ce1f1f` observations remain evidence for that pin, not automatic credit for
-the changed path. Fully procedural local nominal declarations still fail closed;
-they require an independent declaration walk over the admitted expansion.
-Full scope hygiene, causal diagnostics, M01–M14, C1 and C2 remain open.
+the changed path.
+
+The next candidate gives generated type occurrences their actual invocation
+extent when no literal-template construction extent exists. A real transformer
+now constructs and matches a fresh local `Token(Int)` while its captured caller
+expression uses a distinct caller `Token(Bool)`; a caller-supplied nominal name
+also binds its captured body. Both graphs return 42, and the fresh constructor
+does not escape to caller source. The revised projection check verifies the
+occurrence extent and still rejects a captured identifier when literal-template
+construction proof is requested (`/tmp/ash-procedural-newtype/projection-proof.log`,
+SHA-256 `ab1acc0ea0c0cd7f419a638285780d32e10488e7731edbaff68f56b106c5565a`).
+The four affected suites pass 114 cases
+(`/tmp/ash-procedural-newtype/regressions-final.log`, SHA-256
+`4b9680c8a8f57b6d3928f1a6b7781819d742d9d90f0f15dff26256f95876aeec`),
+and the existing generated/local Core mutation checks pass
+(`/tmp/ash-procedural-newtype/mutations.log`, `source-origin.log`, `scope.log`).
+This candidate awaits independent review. A real procedural newtype with two
+type parameters still fails the existing parameter-order check because both
+parameter causes are the same invocation span; parsed occurrence order is still
+needed. A generated declaration whose name is captured currently carries a
+`Source` invocation anchor rather than complete expansion provenance. Template
+splices in local nominal and constructor name positions are also still rejected
+by the definition parser. These cases remain pending.
+
+The previously supported combined macro graph still builds with public
+`ash build` after this rewrite and returns 42 after its four copied Ash sources
+are removed (`/tmp/ash-macro-common-native/build.log`, SHA-256
+`06da86579f973c802a59d0d8afd00f67902fa4272e92622eea098952f05fbab6`;
+executable SHA-256
+`9f5d0ca10c7736e7b187fb9e35ee3466ec7f6297f9c753508a4794d579fd762b`).
+The procedural local-newtype graph and its handwritten control both hit the
+existing unsupported `RegistryMetadata` native-image boundary. Full scope
+hygiene, causal diagnostics, M01–M14, C1 and C2 remain open.
 
 ## Progress
 
