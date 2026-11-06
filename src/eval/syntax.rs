@@ -202,6 +202,11 @@ impl SyntaxHost {
         heap: &mut Vec<HeapCell>,
         work: &mut TypeWorkBudget,
     ) -> Result<Value, RuntimeFailure> {
+        #[cfg(test)]
+        {
+            let requests = super::machine_test_hooks::SYNTAX_REQUESTS.get();
+            super::machine_test_hooks::SYNTAX_REQUESTS.set(requests + 1);
+        }
         let operation = self
             .operations
             .get(&operation)
@@ -523,13 +528,26 @@ impl SyntaxHost {
         }
         let mut nodes = nodes.ok_or(RuntimeFailure::InvalidControlState)?;
         let mut output = Vec::new();
+        let mut groups: Vec<(&Value, Vec<MacroOutputNode>, MacroDelimiter, MacroOrigin)> =
+            Vec::new();
         loop {
             if output.len() >= 65_536 {
                 return Err(RuntimeFailure::HeapCapacity);
             }
             let (tag, payload) = constructor_fields(nodes, heap)?;
             if tag == self.constructor("NoNodes")? && payload.is_none() {
-                return Ok(output);
+                let Some((rest, mut parent, delimiter, origin)) = groups.pop() else {
+                    return Ok(output);
+                };
+                #[cfg(test)]
+                {
+                    let completed = super::machine_test_hooks::TRANSFER_GROUPS_COMPLETED.get();
+                    super::machine_test_hooks::TRANSFER_GROUPS_COMPLETED.set(completed + 1);
+                }
+                parent.push(MacroOutputNode::Group(delimiter, output, origin));
+                output = parent;
+                nodes = rest;
+                continue;
             }
             if tag != self.constructor("MoreNodes")? {
                 return Err(RuntimeFailure::InvalidControlState);
@@ -551,8 +569,21 @@ impl SyntaxHost {
                     return Err(RuntimeFailure::InvalidControlState);
                 };
                 let origin = self.admitted_origin(origin)?.clone();
-                let children = self.transfer_syntax(syntax, heap, depth + 1)?;
-                output.push(MacroOutputNode::Group(delimiter, children, origin));
+                if depth + groups.len() >= crate::parser::STRUCTURAL_DEPTH_LIMIT {
+                    return Err(RuntimeFailure::ResourceCapacity);
+                }
+                let (tag, children) = constructor_fields(syntax, heap)?;
+                if tag != self.constructor("Syntax")? {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let children = children.ok_or(RuntimeFailure::InvalidControlState)?;
+                groups
+                    .try_reserve(1)
+                    .map_err(|_| RuntimeFailure::HeapCapacity)?;
+                groups.push((rest, output, delimiter, origin));
+                output = Vec::new();
+                nodes = children;
+                continue;
             } else {
                 let (value, origin) = pair(payload, heap)?;
                 let origin = self.admitted_origin(origin)?.clone();

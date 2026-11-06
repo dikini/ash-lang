@@ -48,6 +48,35 @@ expand_constant input = {
 }
 
 pub syntax grouped $value:expr => using expand_grouped
+pub syntax nested_groups $value:expr => using expand_nested_groups
+
+expand_nested_groups : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
+expand_nested_groups input = {
+    let origin = Syntax.invocation_origin(input)
+    match (Syntax.capture(input, 0), Syntax.make_token(Syntax.Plus, "+"), Syntax.make_token(Syntax.Star, "*")) {
+        (Syntax.Captured(Syntax.ExpressionCapture(value)), Syntax.MadeToken(plus), Syntax.MadeToken(star)) => nested_groups_output(input, value, plus, star, origin)
+        _ => Syntax.Rejected(Syntax.MacroDiagnostic("missing nested group input", origin, Syntax.NoOrigins))
+    }
+}
+
+nested_groups_output : (Syntax.Input, Syntax.ExpressionFragment, Syntax.Token, Syntax.Token, Syntax.Origin) -> Syntax.MacroResult ! {Syntax.Ops}
+nested_groups_output (input, value, plus, star, origin) = {
+    let inner_tail = Syntax.MoreNodes(Syntax.ExpressionNode(value, origin), Syntax.NoNodes)
+    let inner_middle = Syntax.MoreNodes(Syntax.TokenNode(plus, origin), inner_tail)
+    let inner_nodes = Syntax.MoreNodes(Syntax.ExpressionNode(value, origin), inner_middle)
+    let inner = Syntax.GroupNode(Syntax.Parentheses, Syntax.Syntax(inner_nodes), origin)
+    let middle_tail = Syntax.MoreNodes(inner, Syntax.NoNodes)
+    let middle_operator = Syntax.MoreNodes(Syntax.TokenNode(star, origin), middle_tail)
+    let middle_nodes = Syntax.MoreNodes(Syntax.ExpressionNode(value, origin), middle_operator)
+    let middle = Syntax.GroupNode(Syntax.Parentheses, Syntax.Syntax(middle_nodes), origin)
+    let outer_tail = Syntax.MoreNodes(Syntax.ExpressionNode(value, origin), Syntax.NoNodes)
+    let outer_operator = Syntax.MoreNodes(Syntax.TokenNode(plus, origin), outer_tail)
+    let output = Syntax.Syntax(Syntax.MoreNodes(middle, outer_operator))
+    match Syntax.parse_expression(input, output) {
+        Syntax.Parsed(_) => Syntax.Expanded(output)
+        _ => Syntax.Rejected(Syntax.MacroDiagnostic("nested group parse failed", origin, Syntax.NoOrigins))
+    }
+}
 
 expand_grouped : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
 expand_grouped input = {

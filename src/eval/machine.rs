@@ -1132,6 +1132,18 @@ impl Transition {
 #[cfg(test)]
 type WorkTrace = Arc<std::sync::Mutex<Vec<(NodeId, usize)>>>;
 
+#[cfg(test)]
+#[derive(Debug)]
+struct TransformerDropObserver;
+
+#[cfg(test)]
+impl Drop for TransformerDropObserver {
+    fn drop(&mut self) {
+        let drops = machine_test_hooks::TRANSFORMER_DROPS.get();
+        machine_test_hooks::TRANSFORMER_DROPS.set(drops + 1);
+    }
+}
+
 /// The retained explicit evaluator machine shared by pure and effect Core.
 #[derive(Debug)]
 pub struct Machine<'runtime> {
@@ -1162,6 +1174,9 @@ pub struct Machine<'runtime> {
     work_trace: Option<WorkTrace>,
     #[cfg(test)]
     allocation_frames: AllocationFrameObservations,
+    // Last so the test observes completion after frames and heap are dropped.
+    #[cfg(test)]
+    transformer_drop_observer: Option<TransformerDropObserver>,
 }
 
 struct WorkerStartup {
@@ -1702,6 +1717,18 @@ fn run_network_carrier(input: CarrierInput, gate: triomphe::Arc<CarrierGate>) {
 
 impl Drop for Machine<'_> {
     fn drop(&mut self) {
+        #[cfg(test)]
+        if self.transformer_drop_observer.is_some() {
+            for frame in &self.frames {
+                if let Frame::RegionBoundary { node, records, .. } = frame
+                    && self.region_scope(*node).is_some_and(|scope| scope.entry)
+                {
+                    let roots = machine_test_hooks::ACTIVE_ROOT_DROPS.get();
+                    machine_test_hooks::ACTIVE_ROOT_DROPS.set(roots + 1);
+                    machine_test_hooks::ACTIVE_ROOT_RECORDS.set(records.len());
+                }
+            }
+        }
         if let Some(root) = &mut self.root_completion {
             root.close(&mut self.heap);
         }
@@ -1738,6 +1765,8 @@ impl<'runtime> Machine<'runtime> {
             work_trace: None,
             #[cfg(test)]
             allocation_frames: AllocationFrameObservations::default(),
+            #[cfg(test)]
+            transformer_drop_observer: None,
         }
     }
 
@@ -1785,6 +1814,8 @@ impl<'runtime> Machine<'runtime> {
             work_trace: None,
             #[cfg(test)]
             allocation_frames: AllocationFrameObservations::default(),
+            #[cfg(test)]
+            transformer_drop_observer: None,
         }
     }
 
@@ -6886,15 +6917,29 @@ pub(crate) fn evaluate_transformer(
             introduction,
             contexts,
         )?);
+        #[cfg(test)]
+        {
+            machine.transformer_drop_observer = Some(TransformerDropObserver);
+        }
         let evaluation = machine.run_loop()?;
         let (value, heap) = evaluation.into_observation_parts();
         let host = machine
             .syntax_host
             .as_ref()
             .ok_or(RuntimeFailure::InvalidControlState)?;
+        #[cfg(test)]
+        {
+            let attempts = machine_test_hooks::TRANSFER_ATTEMPTS.get();
+            machine_test_hooks::TRANSFER_ATTEMPTS.set(attempts + 1);
+        }
         let transferred = host
             .transfer(&value, heap.cells(), &mut machine.instantiation_work)
             .map(|output| (output, host.fresh_count()));
+        #[cfg(test)]
+        if transferred.is_err() {
+            let failures = machine_test_hooks::TRANSFER_FAILURES.get();
+            machine_test_hooks::TRANSFER_FAILURES.set(failures + 1);
+        }
         drop(value);
         drop(heap);
         drop(machine);
@@ -6948,6 +6993,106 @@ fn apply_primitive(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn transformer_failures_dispose_the_real_invocation_root() {
+        use crate::{
+            driver::{PipelineFailure, RunConfiguration, compile_path},
+            module::ModuleRoots,
+        };
+        let configuration = |entry: &str| RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros")
+                .join(entry),
+            roots: ModuleRoots::empty(),
+        };
+        for (entry, has_requests, transfer) in [
+            ("entry_diverge.ash", false, false),
+            ("entry_origin_doubling.ash", true, false),
+            ("entry_transfer_failure.ash", true, true),
+        ] {
+            super::machine_test_hooks::reset();
+            let failure = compile_path(configuration(entry)).expect_err("no output is published");
+            assert_eq!(
+                failure.reason_code(),
+                "syntax.transformer-failed",
+                "{entry}"
+            );
+            let Some(PipelineFailure::SyntaxRuntime(error)) = failure.pipeline_failure() else {
+                panic!("{entry}: the original evaluator or transfer failure is retained");
+            };
+            assert_eq!(
+                error.cause().reason_code(),
+                "runtime.resource-capacity",
+                "{entry}"
+            );
+            assert_eq!(
+                super::machine_test_hooks::TRANSFORMER_DROPS.get(),
+                1,
+                "{entry}"
+            );
+            assert_eq!(
+                super::machine_test_hooks::SYNTAX_REQUESTS.get() > 0,
+                has_requests,
+                "{entry}"
+            );
+            assert_eq!(
+                super::machine_test_hooks::TRANSFER_ATTEMPTS.get(),
+                usize::from(transfer),
+                "{entry}"
+            );
+            assert_eq!(
+                super::machine_test_hooks::TRANSFER_FAILURES.get(),
+                usize::from(transfer),
+                "{entry}"
+            );
+            if transfer {
+                assert_eq!(
+                    super::machine_test_hooks::TRANSFER_GROUPS_COMPLETED.get(),
+                    crate::parser::STRUCTURAL_DEPTH_LIMIT,
+                    "the completed depth-128 sibling is discarded on refusal"
+                );
+            }
+            assert_eq!(
+                super::machine_test_hooks::ROOT_CLOSES.get(),
+                usize::from(transfer),
+                "{entry}"
+            );
+            assert_eq!(
+                super::machine_test_hooks::ACTIVE_ROOT_DROPS.get(),
+                usize::from(!transfer),
+                "{entry}"
+            );
+            if !transfer {
+                assert!(
+                    super::machine_test_hooks::ACTIVE_ROOT_RECORDS.get() > 0,
+                    "{entry}"
+                );
+            }
+        }
+
+        super::machine_test_hooks::reset();
+        super::machine_test_hooks::FAIL_ROOT_CLOSE.set(true);
+        let failure = compile_path(configuration("entry_transfer_failure.ash")).unwrap_err();
+        let Some(PipelineFailure::SyntaxRuntime(error)) = failure.pipeline_failure() else {
+            panic!("transfer and teardown failures remain a transformer failure");
+        };
+        let super::RuntimeFailure::Report(report) = error.cause() else {
+            panic!("both failures must remain structured");
+        };
+        assert_eq!(report.primary.reason_code(), "runtime.resource-capacity");
+        let teardown = report.teardown.expect("root-close refusal is retained");
+        assert_eq!(teardown.phase, super::RuntimePhase::Teardown);
+        assert_eq!(
+            teardown.cause,
+            super::ResourceFailureCause::ConfiguredCapacity
+        );
+        assert_eq!(report.cleanup, crate::eval::CleanupStatus::Incomplete);
+        assert_eq!(super::machine_test_hooks::ROOT_CLOSES.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFER_FAILURES.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFORMER_DROPS.get(), 1);
+        super::machine_test_hooks::reset();
+    }
+
     #[test]
     fn transformer_closes_root_and_preserves_rejection_on_teardown_failure() {
         use crate::{

@@ -376,8 +376,34 @@ transformer_closes_root_and_preserves_rejection_on_teardown_failure --
 root-completion checks
 (`/tmp/ash-transformer-teardown-root-regressions.log`, SHA-256
 `2c8ff24eae37b8ebaf5722c3ba466ce60588dc92bc7cac8674ba62713a6e4866`).
-This batch awaits independent review. The failure injection is test-only;
-observing root closure for all other failure paths remains open.
+Independent review cleared this batch at `93c0aa04`. The failure injection is
+test-only; observing root closure for all other failure paths remains open.
+
+A real transformer returning nested groups overflowed a normal test thread
+during output transfer (`/tmp/ash-transformer-failure-roots-isolate.log`,
+SHA-256 `84fb4a22b2dbd4e23372b18f5eddbdc992ba8cf74eba8a51f69d738d2e0ebbd2`).
+Transfer now walks those groups with an explicit stack. A driver fixture
+completes a depth-128 sibling, then refuses a deeper sibling, disposing the
+partial output; another transfers nested groups and siblings through both
+`parse_expression` and final output, then evaluates to 36. The existing
+no-service divergence and an Ops failure leave active root records whose
+machine-owned storage is dropped before the driver returns. A transfer failure
+reaches the completed-root close; an injected refusal there retains both the
+transfer cause and teardown failure. These observations pass with `cargo test
+-j 1 --lib transformer_ -- --nocapture` (two tests,
+`/tmp/ash-transformer-lifecycle-stack-final.log`, SHA-256
+`87f5355cea627428e8b838406249161d018cd767035dcd9cc45f1ae80a1aa970`)
+and `cargo test -j 1 --test macro_host --test surface_macros` (96 tests,
+`/tmp/ash-transformer-transfer-regressions.log`, SHA-256
+`c47b9abb7de7e2d9e2d87c349a46fe3bf8f5d93b435a258a0bf671f93aad4c97`).
+This batch awaits review. An attempted completion-root injection on an active
+failure did not reach that completion-only hook; a separate active-disposal
+worklist injection did not encounter a worklist allocation. Neither establishes
+paired active failure and teardown preservation, which remains open (respectively
+`/tmp/ash-transformer-active-root-paired-red.log`, SHA-256
+`73e41daa7e69fb469fe4b8b03151a1d1a4cc620915d413cf0797a218d8872c6f`, and
+`/tmp/ash-transformer-active-closure-forest-probe2.log`, SHA-256
+`e38972e47b54dbc7213cd50cbee35f5e67b9ad8b12ebad72fd91388ba11a32f6`).
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources
@@ -391,10 +417,10 @@ hygiene, causal diagnostics, M01–M14, C1 and C2 remain open.
 
 ## Progress
 
-The weighted ledger records **56/100 reviewed delivery points** and **0.5
+The weighted ledger records **56.5/100 reviewed delivery points** and **0.5
 demonstrated pending review**. The latest reviewed implementation pin is
-`96fa725e`; the lifecycle batch above awaits review. These are partial
-implementation observations, not acceptance of the whole feature.
+`93c0aa04`. These are partial implementation observations, not acceptance of the
+whole feature.
 M01–M14 and C1/C2 remain pending.
 
 ### Weighted delivery progress
@@ -437,7 +463,7 @@ reviewer owns `Rev`, and the orchestrator owns `PM`.
 | P21 | 3.5 | Dev / R1.5 | Fresh binder avoids caller `temp` (0.5), definition identifier selects a private helper under caller shadowing (0.5), and caller identifier binds a caller body (0.5), `/tmp/ash-syntax-constructed-ident-driver.log` (SHA-256 `19f2462c862910b90739cfb207b2cdbf286bbe85ac0c1207714f5e5a287d29fa`); distinct fresh allocations and broader authority/context cases remain pending. |
 | P22 | 1 | Dev / R1 | Empty origins return `MissingOrigins`; nonempty and nested combinations cross parse and unwrap before the graph executes to 42 (0.5), `/tmp/ash-syntax-combine-origins-driver.log` (SHA-256 `ca483c2b063c55e27a151adf79e1644a0b8e6f7f6e380c6fe11943688aa8dedd`). A transformer-authored rejection preserves its message and ordered caller/definition causes (0.5), `/tmp/ash-syntax-rejection-driver.log` (SHA-256 `dd3b9eea67d1ef9ac6191fdfa6b15df46fc270e969ab70018b23d6a0077ecccb`); final generated-program causal-origin propagation remains pending. |
 | P23 | 4 | Dev / R2 | Reviewed expression/token decoding, transfer and protected-fragment parsing (1.5); parenthesis/brace group decoding and parsing (0.5), `/tmp/ash-syntax-vocabulary-groups-regressions.log`; complete output, failure and observed root-close behavior pending. |
-| P24 | 2.5 | Dev / R1 + D0.5 | Malformed direct output reports `parse.expected-operand` (0.5), `/tmp/ash-syntax-invalid-output-driver.log` (SHA-256 `7d4df37046fea2bae1e0b14ac144bcd232809730f05ccd0df94be4edd455ef05`). Evaluator failure retains its underlying cause and invocation/definition locations (0.5), `/tmp/ash-syntax-diverge-after.log` (SHA-256 `4be2d989431d7da8b0844bb3af9dfe0a6e21afde7ba15f897f2dcda7ffbfd1a9`). A normal transformer closes its root before its output executes; an injected close failure retains authored or parser rejection plus teardown, and prevents successful output publication (0.5 pending review), `/tmp/ash-transformer-teardown-final.log` (SHA-256 `69eec7daac5be0f7f9cc4d7f76477ae5a24ebcb6f8f6c4580b67675ff0707d41`). Other service failures and observed closure on failing execution remain pending (1). |
+| P24 | 2.5 | Dev / R1.5 + D0.5 | Malformed direct output reports `parse.expected-operand` (0.5), `/tmp/ash-syntax-invalid-output-driver.log` (SHA-256 `7d4df37046fea2bae1e0b14ac144bcd232809730f05ccd0df94be4edd455ef05`). Evaluator failure retains its underlying cause and invocation/definition locations (0.5), `/tmp/ash-syntax-diverge-after.log` (SHA-256 `4be2d989431d7da8b0844bb3af9dfe0a6e21afde7ba15f897f2dcda7ffbfd1a9`). A normal transformer closes its root before its output executes; an injected close failure retains authored or parser rejection plus teardown, and prevents successful output publication (0.5, reviewed at `93c0aa04`), `/tmp/ash-transformer-teardown-final.log` (SHA-256 `69eec7daac5be0f7f9cc4d7f76477ae5a24ebcb6f8f6c4580b67675ff0707d41`). Active-machine destruction on real evaluator and service failures, plus transfer failure and paired completed-root refusal, add 0.5 pending review (`/tmp/ash-transformer-lifecycle-stack-final.log`); paired active-disposal refusal and remaining failure paths are pending (0.5). |
 | P25 | 1 | Dev / R1 | A real non-requesting recursive transformer terminates as an expansion failure under the existing execution limit, `/tmp/ash-syntax-diverge-after.log` (SHA-256 `4be2d989431d7da8b0844bb3af9dfe0a6e21afde7ba15f897f2dcda7ffbfd1a9`). |
 | P26 | 0.5 | Dev / 0 | Required service, output, and expansion limits produce ordinary closed-invocation failures. |
 | P27 | 2.5 | Dev / R1 | Frozen computed graph to 42 (1), `/tmp/ash-transformer-combined-driver.log`; template/procedure equivalence (0.5), discarded and repeated nested invocation behavior (1) pending. |
@@ -460,7 +486,7 @@ API/entry 10; Ops/interchange 14; transfer/failure/limits 8; graph/Core/repeatab
 The independent review assigns more weight to the unresolved contextual,
 non-term, copied-identity, grant, and Core-coordinate consumers than the first
 draft. The 20-point reviewed baseline is frozen; a changed ETA does not reweight it.
-Reviewed effort is 56, demonstrated provisional effort is 0.5, and 43.5 points
+Reviewed effort is 56.5, demonstrated provisional effort is 0.5, and 43 points
 have no credit. Review upgrades D to R without awarding implementation points
 again. Explicit review/gate rows cover their own work, not a second implementation
 credit. Record the exact commit or source hash, real consumer observation/test

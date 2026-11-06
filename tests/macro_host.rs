@@ -104,6 +104,13 @@ fn checked_transformer_emits_structured_parentheses() {
 }
 
 #[test]
+fn checked_transformer_transfers_nested_groups_with_siblings() {
+    let compiled = compile_path(macro_fixture("entry_nested_group_output.ash"))
+        .expect("nested groups survive parse service and final transfer");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "36");
+}
+
+#[test]
 fn checked_transformer_emits_structured_braces_and_logical_lines() {
     let compiled = compile_path(macro_fixture("entry_brace_output.ash"))
         .expect("transformer can emit a structured block group");
