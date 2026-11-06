@@ -247,6 +247,16 @@ impl<'a> SyntaxExpansion<'a> {
             .copied()
     }
 
+    pub(crate) fn selected(&self, name: &SurfaceName) -> Option<&SelectedSyntax> {
+        let imports = if name.introduction == 0 {
+            self.selected
+        } else {
+            let owner = self.owner(name.introduction)?;
+            self.owner_imports.get(owner.owner?)?
+        };
+        imports.iter().find(|syntax| syntax.name == name.text)
+    }
+
     pub(crate) fn expand(
         &mut self,
         name: &SurfaceName,
@@ -255,19 +265,7 @@ impl<'a> SyntaxExpansion<'a> {
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<SurfaceExpr, Span> {
         let anchor = name.introduced_at.unwrap_or(invocation);
-        let imports = if name.introduction == 0 {
-            self.selected
-        } else {
-            let owner = self.owner(name.introduction).ok_or(invocation)?;
-            self.owner_imports
-                .get(owner.owner.ok_or(invocation)?)
-                .ok_or(invocation)?
-        };
-        let selection = imports
-            .iter()
-            .find(|syntax| syntax.name == name.text)
-            .cloned()
-            .ok_or(invocation)?;
+        let selection = self.selected(name).cloned().ok_or(invocation)?;
         self.owners.push(SyntaxOwner {
             owner: Some(selection.owner),
             declaration: selection.declaration.span,

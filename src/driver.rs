@@ -1646,14 +1646,19 @@ where
             }
             let resolved = resolved
                 .map_err(|error| match error {
-                    ResolveModuleError::Resolution(error) if error.is_syntax_depth() => {
-                        PipelineFailure::Projection(ProjectionError::ResourceLimit(
-                            ResourceFailure::StructuralDepth {
-                                limit: crate::parser::STRUCTURAL_DEPTH_LIMIT,
-                            },
-                        ))
-                    }
-                    ResolveModuleError::Resolution(error) => PipelineFailure::Resolution(error),
+                    ResolveModuleError::Resolution(error) => match error.syntax_depth() {
+                        Some((invocation, definition)) => {
+                            PipelineFailure::SyntaxParse(SyntaxParseFailure {
+                                diagnostics: Vec::new(),
+                                resource: Some(ResourceFailure::StructuralDepth {
+                                    limit: crate::parser::STRUCTURAL_DEPTH_LIMIT,
+                                }),
+                                invocation,
+                                definition,
+                            })
+                        }
+                        None => PipelineFailure::Resolution(error),
+                    },
                     ResolveModuleError::Kind(error) => PipelineFailure::Kind(error),
                     ResolveModuleError::Representation(error) => PipelineFailure::Typing(error),
                 })

@@ -1217,13 +1217,18 @@ pub fn compile_file_diagnostics(
                         source
                             .location(span)
                             .map_err(|_| PresentationError::MissingSource)?;
-                        diagnostic.related.push(Label {
+                        let label = Label {
                             source,
                             span,
                             message,
                             relationship,
                             facts: Vec::new(),
-                        });
+                        };
+                        if diagnostic.primary.is_none() && relationship == "syntax_invocation" {
+                            diagnostic.primary = Some(label);
+                        } else {
+                            diagnostic.related.push(label);
+                        }
                     }
                 }
                 return Ok(diagnostics);

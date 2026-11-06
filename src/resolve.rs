@@ -961,12 +961,16 @@ impl ResolveIdentitySpace {
 }
 
 impl ResolveError {
-    pub(crate) fn is_syntax_depth(&self) -> bool {
-        self.0.context
-            == Some(ResolveContext::WorkState {
+    pub(crate) fn syntax_depth(&self) -> Option<(Span, Span)> {
+        if self.0.context
+            != Some(ResolveContext::WorkState {
                 part: "syntax-expansion",
                 problem: "structural-depth",
             })
+        {
+            return None;
+        }
+        Some((self.primary.span(), self.related.first()?.span()))
     }
     fn new(diagnostic: Diagnostic<ResolveReason>, context: Option<ResolveContext>) -> Self {
         Self(Box::new(ResolveErrorData {
@@ -13698,15 +13702,37 @@ impl Resolver<'_, '_> {
             }
             SurfaceExprKind::SyntaxInvocation { name, captures } => {
                 if self.active_expansions >= crate::parser::STRUCTURAL_DEPTH_LIMIT {
-                    return Err(error(
+                    let definition = self
+                        .syntax_expansion
+                        .as_ref()
+                        .and_then(|expansion| expansion.selected(name))
+                        .ok_or_else(|| {
+                            error(
+                                ResolveReason::InternalState,
+                                expression.span,
+                                "the syntax expansion lost its selected definition",
+                            )
+                        })?
+                        .declaration
+                        .span;
+                    let invocation = name.introduced_at.unwrap_or(expression.span);
+                    let mut diagnostic = Diagnostic::new(
                         ResolveReason::InternalState,
-                        expression.span,
-                        "syntax expansion exceeded the structural depth limit",
-                    )
-                    .with_context(ResolveContext::WorkState {
-                        part: "syntax-expansion",
-                        problem: "structural-depth",
-                    }));
+                        SourceLabel::new(
+                            invocation,
+                            "syntax expansion exceeded the structural depth limit",
+                        ),
+                    );
+                    diagnostic.related.push(SourceLabel::new(
+                        definition,
+                        "the selected syntax definition",
+                    ));
+                    return Err(ResolveError::from(diagnostic).with_context(
+                        ResolveContext::WorkState {
+                            part: "syntax-expansion",
+                            problem: "structural-depth",
+                        },
+                    ));
                 }
                 let expansion = self.syntax_expansion.take().ok_or_else(|| {
                     error(

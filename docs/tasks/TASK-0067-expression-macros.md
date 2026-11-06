@@ -192,7 +192,22 @@ of literal template construction (`/tmp/ash-common-proof-final.log`, SHA-256
 Existing source-origin and local-scope mutation checks also pass
 (`/tmp/ash-common-source-origin-final.log`, `/tmp/ash-common-scope-final.log`).
 
-Independent review of this candidate remains pending. The reviewed
+Independent review of `df1cbeb5` found that the expansion-depth failure discarded
+its invocation and definition locations. The repair uses the existing syntax
+resource failure and retains both locations in human and JSON output. The real
+self-reproducing transformer test failed before the repair with no labels
+(`/tmp/ash-depth-location-before.log`, SHA-256
+`354e28183847cc433a51bbef9ce83bcab69bc7e521a97f386231c16c48d5a75d`)
+and passes after it (`/tmp/ash-depth-location-after.log`, SHA-256
+`5eb287a3834eefa80b34ef237e690671b85ee7c7801ea4fef7201abc644e05d7`).
+The affected driver suites pass 86 cases
+(`/tmp/ash-depth-location-regressions.log`, SHA-256
+`12edfa036a63cef0ad03abebbf29ed39d22e2932d94266466b6b735740539cea`).
+Direct CLI receipts are `/tmp/ash-depth-location-human.log` (SHA-256
+`c86c4d296605eb7e74bf14a8eba9f9b029e25c53021cce62bc71d75c466561d6`)
+and `/tmp/ash-depth-location-json.log` (SHA-256
+`b4ffd8515c6bd8ce5c2acc16a0d69fd1249a9bd37a21d489e59c8aff6cba767c`).
+The repair awaits independent re-review. The reviewed
 `57ce1f1f` observations remain evidence for that pin, not automatic credit for
 the changed path. Fully procedural local nominal declarations still fail closed;
 they require an independent declaration walk over the admitted expansion.

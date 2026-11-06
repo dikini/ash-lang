@@ -154,17 +154,48 @@ fn checked_transformer_caller_identifier_uses_the_active_lexical_scope() {
 
 #[test]
 fn self_reproducing_syntax_stops_at_the_structural_depth_limit() {
+    let entry = macro_fixture("expansion-depth/infinite.ash").entry;
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_ash"))
         .args(["--message-format", "json"])
-        .arg(macro_fixture("expansion-depth/infinite.ash").entry)
+        .arg(&entry)
         .output()
         .expect("the compiler process starts");
     assert!(!output.status.success());
-    let diagnostic = String::from_utf8(output.stderr).unwrap();
+    let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(diagnostic["reason"], "internal.resource.structural-depth");
+    let labels = diagnostic["labels"].as_array().unwrap();
+    assert_eq!(labels.len(), 2, "{diagnostic}");
+    assert_eq!(labels[0]["relationship"], "syntax_invocation");
     assert!(
-        diagnostic.contains("internal.resource.structural-depth"),
-        "{diagnostic}"
+        labels[0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("infinite.ash")
     );
+    let entry_text = std::fs::read_to_string(&entry).unwrap();
+    let invocation_start = entry_text.find("again 42").unwrap();
+    assert_eq!(labels[0]["byte_start"], invocation_start);
+    assert_eq!(labels[0]["byte_end"], invocation_start + "again 42".len());
+    assert_eq!(labels[1]["relationship"], "syntax_definition");
+    assert!(labels[1]["path"].as_str().unwrap().ends_with("forms.ash"));
+    let forms = std::fs::read_to_string(entry.with_file_name("forms.ash")).unwrap();
+    let definition_start = forms.find("pub syntax again").unwrap();
+    assert_eq!(labels[1]["byte_start"], definition_start);
+    assert_eq!(
+        labels[1]["byte_end"],
+        definition_start + "pub syntax again $value:expr => using expand".len()
+    );
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ash"))
+        .arg(entry)
+        .output()
+        .expect("the compiler process starts");
+    assert!(!output.status.success());
+    let human = String::from_utf8(output.stderr).unwrap();
+    assert!(human.contains("infinite.ash"), "{human}");
+    assert!(human.contains("forms.ash"), "{human}");
+    assert!(human.contains("The syntax was invoked here"), "{human}");
+    assert!(human.contains("The syntax was defined here"), "{human}");
 }
 
 #[test]
