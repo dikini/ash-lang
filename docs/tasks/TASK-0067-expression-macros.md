@@ -1460,7 +1460,7 @@ canaries pass: `/tmp/ash-syntax-reservation-stack.log` (SHA-256
 `/tmp/ash-syntax-reservation-stack-pattern.log` (SHA-256
 `9c9a815525e50e0655f12f455d4577dadfbd11a83946c7e735068fea4f8542e2`).
 All-target Clippy passed (`/tmp/ash-syntax-reservation-clippy.log`, SHA-256
-`49bcde4d192cea339a13b2d8a0186ac16ca3f4f7f42e040ca8f8388d83b4fd44`), as
+`49bcde4d192cea339a13b2d8a0186ac16ca3f4f7f42e040ca3f8388d83b4fd44`), as
 did targeted Clippy after the last test-only addition
 (`/tmp/ash-syntax-reservation-clippy-test-final.log`, SHA-256
 `b2849856fc755bf5444d0b8ff6cbea86b3147ab343aa8bff1f2e691c1ab44607`).
