@@ -1646,6 +1646,89 @@ struct SyntaxInputs<'a> {
     admissions: &'a [(SurfaceExpr, Vec<SurfaceName>)],
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum SyntaxTermRoute {
+    Owner {
+        spelling: String,
+        private: bool,
+    },
+    Imported {
+        route: DirectDependencyRoute,
+        spelling: String,
+    },
+}
+
+/// One definition-context selection, issued by resolution and checked at link.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct SyntaxTermGrant {
+    export: Arc<crate::surface::SurfaceSyntaxDeclaration>,
+    occurrence_module: ModuleId,
+    issuer: ModuleId,
+    syntax_import: DirectDependencyRoute,
+    target: BinderId,
+    route: SyntaxTermRoute,
+}
+
+impl SyntaxTermGrant {
+    pub(crate) const fn target(&self) -> BinderId {
+        self.target
+    }
+
+    pub(crate) fn authenticate<M: std::borrow::Borrow<crate::resolved::CheckedModule>>(
+        &self,
+        occurrence_module: ModuleId,
+        modules: &[M],
+    ) -> bool {
+        let owner = modules
+            .iter()
+            .map(std::borrow::Borrow::borrow)
+            .find(|module| module.module() == self.issuer);
+        let Some(owner) = owner else { return false };
+        if self.occurrence_module != occurrence_module
+            || self.syntax_import.target() != self.issuer
+            || !owner
+                .syntax_exports()
+                .iter()
+                .any(|export| Arc::ptr_eq(export, &self.export))
+            || !modules
+                .iter()
+                .map(std::borrow::Borrow::borrow)
+                .any(|module| {
+                    module.span().source() == self.syntax_import.import_span().source()
+                        && module.direct_dependencies().contains(&self.syntax_import)
+                        && module.syntax_imports().iter().any(|selection| {
+                            selection.import_span == self.syntax_import.import_span()
+                                && Arc::ptr_eq(&selection.declaration, &self.export)
+                        })
+                })
+        {
+            return false;
+        }
+        match &self.route {
+            SyntaxTermRoute::Owner { spelling, private } => {
+                owner
+                    .schemes()
+                    .iter()
+                    .any(|scheme| scheme.binder == self.target && scheme.spelling == *spelling)
+                    && (owner
+                        .exports()
+                        .term(spelling)
+                        .is_none_or(|term| term.binder != self.target)
+                        == *private)
+            }
+            SyntaxTermRoute::Imported { route, spelling } => {
+                owner.direct_dependencies().contains(route)
+                    && modules
+                        .iter()
+                        .map(std::borrow::Borrow::borrow)
+                        .find(|module| module.module() == route.target())
+                        .and_then(|module| module.exports().term(spelling))
+                        .is_some_and(|term| term.binder == self.target)
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct SyntaxOwnerLookup<'a> {
     owner: &'a crate::resolved::CheckedModule,
@@ -5844,6 +5927,94 @@ impl Resolver<'_, '_> {
             uses: std::slice::from_ref(&usage),
             ..inputs
         })
+    }
+
+    fn syntax_global_grant(
+        &self,
+        reference: &SurfaceReference,
+        binder: BinderId,
+    ) -> Result<Arc<SyntaxTermGrant>, ResolveError> {
+        let member = reference.member();
+        let context = reference.qualifier().unwrap_or(member);
+        let invalid = || {
+            error(
+                ResolveReason::InternalState,
+                member.span,
+                "the selected syntax term lost its checked owner or route",
+            )
+        };
+        let selected = self
+            .syntax_expansion
+            .as_ref()
+            .and_then(|expansion| expansion.owner(context.introduction))
+            .ok_or_else(invalid)?;
+        let owner_index = selected.owner.ok_or_else(invalid)?;
+        let inputs = self.syntax_inputs.ok_or_else(invalid)?;
+        let owner = inputs.owners.get(owner_index).ok_or_else(invalid)?;
+        let terms = inputs.terms.get(owner_index).ok_or_else(invalid)?;
+        let export = selected.export.ok_or_else(invalid)?;
+        if terms.module != owner.module()
+            || !owner
+                .syntax_exports()
+                .iter()
+                .any(|checked| Arc::ptr_eq(checked, &export))
+        {
+            return Err(invalid());
+        }
+        let imported = match reference {
+            SurfaceReference::Qualified(qualified) => Some((
+                terms
+                    .qualified(&qualified.qualifier.text)
+                    .ok_or_else(invalid)?,
+                member.text.as_str(),
+            )),
+            SurfaceReference::Unqualified(_) => {
+                if let Some(local) = terms.get(&member.text) {
+                    if local.binder != binder || binder.module() != Some(owner.module()) {
+                        return Err(invalid());
+                    }
+                    None
+                } else {
+                    let (route, original, _) = terms.targeted(&member.text).ok_or_else(invalid)?;
+                    Some((route, original))
+                }
+            }
+        };
+        let route = if let Some((route, spelling)) = imported {
+            let dependency = inputs
+                .owners
+                .iter()
+                .find(|dependency| dependency.module() == route.target())
+                .ok_or_else(invalid)?;
+            if !owner.direct_dependencies().contains(&route)
+                || dependency
+                    .exports()
+                    .term(spelling)
+                    .is_none_or(|exported| exported.binder != binder)
+            {
+                return Err(invalid());
+            }
+            SyntaxTermRoute::Imported {
+                route,
+                spelling: spelling.to_owned(),
+            }
+        } else {
+            SyntaxTermRoute::Owner {
+                spelling: member.text.clone(),
+                private: owner
+                    .exports()
+                    .term(&member.text)
+                    .is_none_or(|exported| exported.binder != binder),
+            }
+        };
+        Ok(Arc::new(SyntaxTermGrant {
+            export,
+            occurrence_module: self.module,
+            issuer: owner.module(),
+            syntax_import: DirectDependencyRoute::new(owner.module(), selected.import_span),
+            target: binder,
+            route,
+        }))
     }
 
     fn install_syntax_terms(&mut self, syntax: SyntaxInputs<'_>) -> Result<(), ResolveError> {
@@ -11623,6 +11794,7 @@ impl Resolver<'_, '_> {
                             spelling: String::new(),
                             origin: Origin::Source(target_span),
                             import_span: None,
+                            syntax_grant: None,
                             evidence: Box::new([]),
                         }),
                         span: target_span,
@@ -11686,6 +11858,7 @@ impl Resolver<'_, '_> {
                         spelling: String::new(),
                         origin: Origin::Source(action_span),
                         import_span: None,
+                        syntax_grant: None,
                         evidence: Box::new([]),
                     }),
                     span: action_span,
@@ -11779,6 +11952,7 @@ impl Resolver<'_, '_> {
                 spelling: String::new(),
                 origin: Origin::Source(target_span),
                 import_span: None,
+                syntax_grant: None,
                 evidence: Box::new([]),
             }),
             span: target_span,
@@ -12856,6 +13030,7 @@ impl Resolver<'_, '_> {
                     spelling: parameter.spelling.clone(),
                     origin: Origin::Source(span),
                     import_span: None,
+                    syntax_grant: None,
                     evidence: Box::new([]),
                 }),
                 span,
@@ -14969,24 +15144,29 @@ impl Resolver<'_, '_> {
                     } else {
                         (None, None, None)
                     };
-                let binding = if is_qualified {
-                    qualified_binding
+                let (binding, syntax_selected) = if is_qualified {
+                    (qualified_binding, context.introduction != 0)
+                } else if let Some(binding) = self
+                    .scopes
+                    .iter()
+                    .rev()
+                    .find_map(|scope| scope.get(&(member.text.clone(), member.introduction)))
+                    .copied()
+                {
+                    (Some(binding), false)
+                } else if let Some(binding) = self
+                    .syntax_terms
+                    .get(&(member.text.clone(), member.introduction))
+                    .copied()
+                {
+                    (Some(binding), true)
                 } else {
-                    self.scopes
-                        .iter()
-                        .rev()
-                        .find_map(|scope| scope.get(&(member.text.clone(), member.introduction)))
-                        .copied()
-                        .or_else(|| {
-                            self.syntax_terms
-                                .get(&(member.text.clone(), member.introduction))
-                                .copied()
-                        })
-                        .or_else(|| {
-                            (member.introduction == 0)
-                                .then(|| self.method_names.get(&member.text).copied())
-                                .flatten()
-                        })
+                    (
+                        (member.introduction == 0)
+                            .then(|| self.method_names.get(&member.text).copied())
+                            .flatten(),
+                        false,
+                    )
                 };
                 let unqualified_constructor = if binding.is_none() && !is_qualified {
                     charged_lexical_scope_lookup(
@@ -15033,6 +15213,12 @@ impl Resolver<'_, '_> {
                         )
                     })?;
                     evidence.extend((0..evidence_count).map(|_| EvidenceSlot::empty()));
+                    let syntax_grant = match (syntax_selected, term) {
+                        (true, ResolvedTermName::Global(binder)) => {
+                            Some(self.syntax_global_grant(name, binder)?)
+                        }
+                        _ => None,
+                    };
                     expressions.push(ResolvedExpr {
                         diagnostic: None,
                         kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
@@ -15040,6 +15226,7 @@ impl Resolver<'_, '_> {
                             spelling: member.text.clone(),
                             origin: Origin::Source(name.span()),
                             import_span: binding.import_span,
+                            syntax_grant,
                             evidence: evidence.into_boxed_slice(),
                         }),
                         span: expression.span,
@@ -19105,6 +19292,113 @@ mod tests {
             );
         }
         checked
+    }
+
+    #[test]
+    fn linked_syntax_term_grants_require_the_original_export_target_and_route() {
+        let fixture = ImportBudgetFixture::create(
+            "import dependency as Dependency\nmain : Unit -> Int\nmain () = 42\n",
+            "private : Int -> Int\nprivate value = value + 1\nother : Int -> Int\nother value = value + 2\npub syntax inc $value:expr => {\nprivate $value\n}\n",
+        );
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
+            .expect("the syntax import graph loads");
+        let entry = graph.module(graph.entry()).unwrap();
+        let issuer = graph
+            .modules()
+            .iter()
+            .find(|module| !module.surface().syntax_declarations.is_empty())
+            .expect("syntax owner");
+
+        for mutation in 0..9 {
+            let mut checked = checked_import_dependencies(&graph);
+            let owner_index = checked
+                .iter()
+                .position(|module| module.module() == issuer.id())
+                .unwrap();
+            checked[owner_index]
+                .retain_syntax_exports(&issuer.surface().syntax_declarations)
+                .unwrap();
+            let dependencies = entry
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    let owner = checked
+                        .iter()
+                        .find(|module| module.module() == edge.target())
+                        .unwrap();
+                    DependencyExports::new(edge, owner.exports()).unwrap()
+                })
+                .collect::<Vec<_>>();
+            let mut consumer = check_module(resolve_module(entry, &dependencies).unwrap()).unwrap();
+            let owner = &checked[owner_index];
+            let target = owner
+                .schemes()
+                .iter()
+                .find(|scheme| scheme.spelling == "private")
+                .unwrap()
+                .binder;
+            let other = owner
+                .schemes()
+                .iter()
+                .find(|scheme| scheme.spelling == "other")
+                .unwrap()
+                .binder;
+            let syntax_import = *consumer
+                .direct_dependencies()
+                .iter()
+                .find(|route| route.target() == issuer.id())
+                .unwrap();
+            let export = Arc::clone(&owner.syntax_exports()[0]);
+            if mutation != 8 {
+                consumer
+                    .retain_syntax_imports(Arc::from([crate::syntax::SelectedSyntax {
+                        name: "inc".to_owned(),
+                        declaration: Arc::clone(&export),
+                        owner: owner_index,
+                        import_span: syntax_import.import_span(),
+                    }]))
+                    .unwrap();
+            }
+            let mut grant = SyntaxTermGrant {
+                export,
+                occurrence_module: entry.id(),
+                issuer: issuer.id(),
+                syntax_import,
+                target,
+                route: SyntaxTermRoute::Owner {
+                    spelling: "private".to_owned(),
+                    private: true,
+                },
+            };
+            match mutation {
+                0 | 7 | 8 => {}
+                1 => grant.target = other,
+                2 => grant.issuer = entry.id(),
+                3 => {
+                    grant.syntax_import =
+                        DirectDependencyRoute::new(issuer.id(), entry.surface().span)
+                }
+                4 => grant.export = Arc::new((*grant.export).clone()),
+                5 => {
+                    grant.route = SyntaxTermRoute::Owner {
+                        spelling: "private".to_owned(),
+                        private: false,
+                    }
+                }
+                6 => grant.occurrence_module = issuer.id(),
+                _ => unreachable!(),
+            }
+            let grant = Arc::new(grant);
+            let grants = if mutation == 7 {
+                vec![Arc::clone(&grant), grant]
+            } else {
+                vec![grant]
+            };
+            consumer.replace_syntax_grants_for_test(grants);
+            checked.push(consumer);
+            let result = crate::elaborate::link_modules(checked, graph.entry());
+            assert_eq!(result.is_ok(), mutation == 0, "grant mutation {mutation}");
+        }
     }
 
     fn resolve_import_fixture_with_dependency_and_limit(

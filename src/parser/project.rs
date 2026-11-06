@@ -13,8 +13,8 @@ use crate::{
         SurfaceDefinitionKind, SurfaceDeterminationSide, SurfaceEffectDeclaration,
         SurfaceEffectInstance, SurfaceEffectOperation, SurfaceEffectRow, SurfaceEquation,
         SurfaceExpr, SurfaceExprKind, SurfaceExpressionCapture, SurfaceExternalInterface,
-        SurfaceHandleExpr, SurfaceHandlerClause, SurfaceImplementation, SurfaceImport,
-        SurfaceImportItem, SurfaceImportSelection, SurfaceInlineOperationalHeader,
+        SurfaceHandleExpr, SurfaceHandlerClause, SurfaceIdentifierCapture, SurfaceImplementation,
+        SurfaceImport, SurfaceImportItem, SurfaceImportSelection, SurfaceInlineOperationalHeader,
         SurfaceInterfaceDeclaration, SurfaceInterfaceDetermination, SurfaceInterfaceMethod,
         SurfaceKind, SurfaceKindKind, SurfaceLocalDeclaration, SurfaceMatchArm, SurfaceMatchExpr,
         SurfaceModule, SurfaceModulePath, SurfaceName, SurfaceNominalDeclarationKind,
@@ -2630,13 +2630,22 @@ fn project_expression_with_fragments(
                                 .ok_or(ProjectionError::MalformedTree(
                                     InternalReason::UnexpectedShape,
                                 ))?;
-                            let name = match original_nodes.get(&index) {
-                                Some(crate::syntax::MacroOutputNode::Identifier(name, _)) => {
-                                    name.clone()
+                            let capture = match original_nodes.get(&index) {
+                                Some(crate::syntax::MacroOutputNode::Identifier(name, origin)) => {
+                                    SurfaceIdentifierCapture {
+                                        name: name.clone(),
+                                        origin: origin.clone(),
+                                    }
                                 }
-                                _ => surface_name(only_direct_token(argument, tokens)?)?,
+                                _ => {
+                                    let name = surface_name(only_direct_token(argument, tokens)?)?;
+                                    SurfaceIdentifierCapture {
+                                        origin: name.span.into(),
+                                        name,
+                                    }
+                                }
                             };
-                            captures.push(Some(name));
+                            captures.push(Some(capture));
                         }
                     }
                     tasks.push(ExpressionTask::FinishSyntaxInvocation {
@@ -3519,7 +3528,7 @@ enum ExpressionTask<'a> {
     },
     FinishSyntaxInvocation {
         name: SurfaceName,
-        captures: Vec<Option<SurfaceName>>,
+        captures: Vec<Option<SurfaceIdentifierCapture>>,
         contents: Vec<Vec<crate::syntax::MacroOutputNode>>,
         span: Span,
     },

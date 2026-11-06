@@ -498,8 +498,15 @@ pub enum SurfaceExprKind {
 pub enum SurfaceSyntaxCapture {
     /// A protected, unexpanded expression.
     Expression(SurfaceExpressionCapture),
-    /// An identifier with its caller spelling and source.
-    Identifier(SurfaceName),
+    /// An identifier with its caller spelling, context and origin.
+    Identifier(SurfaceIdentifierCapture),
+}
+
+/// An identifier and its retained syntax origin.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceIdentifierCapture {
+    pub(crate) name: SurfaceName,
+    pub(crate) origin: crate::syntax::MacroOrigin,
 }
 
 /// An expression and its immutable, protected syntax contents.

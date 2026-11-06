@@ -360,6 +360,52 @@ fn generated_token_diagnostics_preserve_definition_and_invocation() {
 }
 
 #[test]
+fn nested_identifier_capture_preserves_combined_origin() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_file_diagnostics, write_human, write_json},
+    };
+
+    for entry in ["entry.ash", "forwarded.ash"] {
+        let failure = compile_path(fixture(&format!("identifier-origin/{entry}")))
+            .expect_err("the nested transformer rejects its identifier");
+        assert_eq!(failure.reason_code(), "syntax.rejected");
+        let diagnostics = compile_file_diagnostics(&failure).unwrap();
+        let mut json = Vec::new();
+        write_json(&mut json, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        let labels = json["labels"].as_array().unwrap();
+        assert!(labels[0]["path"].as_str().unwrap().ends_with(entry));
+        assert!(
+            labels.iter().any(|label| {
+                label["relationship"] == "syntax_cause"
+                    && label["path"].as_str().unwrap().ends_with("outer.ash")
+            }),
+            "{entry}: {json}"
+        );
+        assert!(
+            labels.iter().any(|label| {
+                label["relationship"] == "syntax_definition"
+                    && label["path"].as_str().unwrap().ends_with("inner.ash")
+            }),
+            "{entry}: {json}"
+        );
+        let mut human = Vec::new();
+        write_human(
+            &mut human,
+            &diagnostics[0],
+            &Catalogue::new(Locale::English).unwrap(),
+        )
+        .unwrap();
+        let human = String::from_utf8(human).unwrap();
+        assert!(
+            human.contains("outer.ash") && human.contains("inner.ash"),
+            "{human}"
+        );
+    }
+}
+
+#[test]
 fn application_failure_preserves_function_occurrence() {
     use ash::presentation::{compile_file_diagnostics, write_json};
 

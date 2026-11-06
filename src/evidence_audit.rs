@@ -365,6 +365,7 @@ mod tests {
                 spelling: "value".into(),
                 origin: Origin::Source(span),
                 import_span: None,
+                syntax_grant: None,
                 evidence: evidence.into_boxed_slice(),
             }),
             span,

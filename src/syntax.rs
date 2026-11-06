@@ -10,9 +10,10 @@ use crate::{
     },
     source::Span,
     surface::{
-        SurfaceExpr, SurfaceExprKind, SurfaceExpressionCapture, SurfaceImportItem,
-        SurfaceImportSelection, SurfaceName, SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind,
-        SurfaceSyntaxDeclaration, SurfaceSyntaxImplementation, SurfaceSyntaxMatcherPart,
+        SurfaceExpr, SurfaceExprKind, SurfaceExpressionCapture, SurfaceIdentifierCapture,
+        SurfaceImportItem, SurfaceImportSelection, SurfaceName, SurfaceSyntaxCapture,
+        SurfaceSyntaxCaptureKind, SurfaceSyntaxDeclaration, SurfaceSyntaxImplementation,
+        SurfaceSyntaxMatcherPart,
     },
     types::TypeWorkBudget,
 };
@@ -196,7 +197,7 @@ pub(crate) enum MacroDelimiter {
 #[derive(Clone, Debug)]
 pub(crate) struct SelectedSyntax {
     pub(crate) name: String,
-    pub(crate) declaration: SurfaceSyntaxDeclaration,
+    pub(crate) declaration: Arc<SurfaceSyntaxDeclaration>,
     pub(crate) owner: usize,
     pub(crate) import_span: Span,
 }
@@ -205,14 +206,14 @@ pub(crate) struct SelectedSyntax {
 #[derive(Clone, Debug)]
 pub(crate) struct SyntaxContexts {
     caller: Vec<SelectedSyntax>,
-    owner_imports: Vec<Vec<SelectedSyntax>>,
+    owner_imports: Vec<Arc<[SelectedSyntax]>>,
     owners: Vec<Option<usize>>,
 }
 
 impl SyntaxContexts {
     pub(crate) fn new(
         caller: &[SelectedSyntax],
-        owner_imports: &[Vec<SelectedSyntax>],
+        owner_imports: &[Arc<[SelectedSyntax]>],
         owners: &[Option<usize>],
     ) -> Self {
         Self {
@@ -223,11 +224,11 @@ impl SyntaxContexts {
     }
 
     pub(crate) fn select(&self, name: &SurfaceName) -> Option<&SelectedSyntax> {
-        let imports = if name.introduction == 0 {
+        let imports: &[SelectedSyntax] = if name.introduction == 0 {
             &self.caller
         } else {
             let owner = self.owners.get(name.introduction - 1)?.as_ref()?;
-            self.owner_imports.get(*owner)?
+            self.owner_imports.get(*owner)?.as_ref()
         };
         imports.iter().find(|syntax| syntax.name == name.text)
     }
@@ -251,18 +252,19 @@ pub(crate) struct SyntaxNameUse {
     pub(crate) import_span: Span,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct SyntaxOwner {
     pub(crate) owner: Option<usize>,
     pub(crate) declaration: Span,
     pub(crate) import_span: Span,
+    pub(crate) export: Option<Arc<SurfaceSyntaxDeclaration>>,
 }
 
 /// Expands one invocation while the ordinary resolver owns its lexical scope.
 pub(crate) struct SyntaxExpansion<'a> {
     source: &'a crate::source::SourceFile,
     selected: &'a [SelectedSyntax],
-    owner_imports: &'a [Vec<SelectedSyntax>],
+    owner_imports: &'a [Arc<[SelectedSyntax]>],
     owners: Vec<SyntaxOwner>,
     parse_failure: Option<crate::driver::SyntaxParseFailure>,
     transformer: &'a mut dyn FnMut(
@@ -281,7 +283,7 @@ impl<'a> SyntaxExpansion<'a> {
     pub(crate) fn new(
         source: &'a crate::source::SourceFile,
         selected: &'a [SelectedSyntax],
-        owner_imports: &'a [Vec<SelectedSyntax>],
+        owner_imports: &'a [Arc<[SelectedSyntax]>],
         transformer: &'a mut dyn FnMut(
             &SelectedSyntax,
             &[SurfaceSyntaxCapture],
@@ -311,7 +313,7 @@ impl<'a> SyntaxExpansion<'a> {
         introduction
             .checked_sub(1)
             .and_then(|index| self.owners.get(index))
-            .copied()
+            .cloned()
     }
 
     pub(crate) fn selected(&self, name: &SurfaceName) -> Option<&SelectedSyntax> {
@@ -319,7 +321,7 @@ impl<'a> SyntaxExpansion<'a> {
             self.selected
         } else {
             let owner = self.owner(name.introduction)?;
-            self.owner_imports.get(owner.owner?)?
+            self.owner_imports.get(owner.owner?)?.as_ref()
         };
         imports.iter().find(|syntax| syntax.name == name.text)
     }
@@ -337,6 +339,7 @@ impl<'a> SyntaxExpansion<'a> {
             owner: Some(selection.owner),
             declaration: selection.declaration.span,
             import_span: selection.import_span,
+            export: Some(Arc::clone(&selection.declaration)),
         });
         let introduction = self.owners.len();
         let frame = Arc::new(ExpansionFrame {
@@ -405,6 +408,7 @@ impl<'a> SyntaxExpansion<'a> {
             owner: None,
             declaration: selection.declaration.span,
             import_span: selection.import_span,
+            export: None,
         }));
         expression.span = invocation;
         Ok(expression)
@@ -740,7 +744,10 @@ pub(crate) fn template_for_admission(
                     introduced_at: Some(name.span),
                 };
                 identifiers.push(placeholder.clone());
-                SurfaceSyntaxCapture::Identifier(placeholder)
+                SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+                    origin: placeholder.span.into(),
+                    name: placeholder,
+                })
             }
         };
         captures.push(capture);
@@ -817,8 +824,8 @@ fn substitute_contents(
                     SurfaceSyntaxCapture::Expression(capture) => {
                         MacroOutputNode::ForwardedExpression(capture.clone(), invocation.into())
                     }
-                    SurfaceSyntaxCapture::Identifier(name) => {
-                        MacroOutputNode::Identifier(name.clone(), name.span.into())
+                    SurfaceSyntaxCapture::Identifier(capture) => {
+                        MacroOutputNode::Identifier(capture.name.clone(), capture.origin.clone())
                     }
                 };
             }

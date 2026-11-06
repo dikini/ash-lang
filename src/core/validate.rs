@@ -30767,6 +30767,75 @@ mod tests {
     }
 
     #[test]
+    fn definition_site_term_grant_reaches_the_checked_linked_occurrence() {
+        let compiled = crate::driver::compile_path_with_effect_validation_for_test(
+            crate::driver::RunConfiguration {
+                entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/surface-macros/core-authority/entry.ash"),
+                roots: ModuleRoots::empty(),
+            },
+            |core, sources, modules, linked| {
+                let group = linked
+                    .groups()
+                    .iter()
+                    .find(|group| group.module() == linked.entry())
+                    .unwrap();
+                let [grant] = group.syntax_grants() else {
+                    panic!("the checked caller retains one definition-site grant")
+                };
+                let target = linked
+                    .groups()
+                    .iter()
+                    .flat_map(|group| group.schemes())
+                    .find(|scheme| scheme.spelling == "private_increment")
+                    .unwrap()
+                    .binder;
+                assert_eq!(grant.target(), target);
+                let definition = group
+                    .definitions()
+                    .iter()
+                    .find_map(|definition| {
+                        let crate::resolved::ResolvedDefinitionKind::Equational(global) =
+                            definition.kind()
+                        else {
+                            return None;
+                        };
+                        (global.interface.name.spelling == "use_generated").then_some(global)
+                    })
+                    .unwrap();
+                let mut body = &definition.equations[0].body;
+                while let crate::resolved::ResolvedExprKind::Block(block) = &body.kind {
+                    body = &block.result;
+                }
+                let crate::resolved::ResolvedExprKind::Apply(application) = &body.kind else {
+                    panic!("the generated helper application is retained")
+                };
+                let crate::resolved::ResolvedExprKind::Occurrence(occurrence) =
+                    &application.function.kind
+                else {
+                    panic!("the generated helper occurrence is retained")
+                };
+                assert!(Arc::ptr_eq(
+                    occurrence.syntax_grant.as_ref().unwrap(),
+                    grant
+                ));
+                validate_effect_modules_linked_with_work(
+                    core,
+                    sources,
+                    modules,
+                    linked,
+                    &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                )
+            },
+        )
+        .expect("the generated private-helper graph validates");
+        assert_eq!(
+            crate::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+    }
+
+    #[test]
     fn generated_local_newtype_rejects_tampered_construction_origins() {
         use crate::resolved::{ResolvedTypeProvenance, ResolvedTypeProvenanceNode};
 

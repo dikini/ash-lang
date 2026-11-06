@@ -3146,6 +3146,7 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     method_capture_binders: Vec<(crate::interface::LexicalEvidenceId, MethodId, BinderId)>,
     checked_lexical_sources: Vec<CheckedLexicalSource>,
     global_capture_uses: Vec<CheckedGlobalUse>,
+    syntax_grants: Vec<Arc<crate::resolve::SyntaxTermGrant>>,
 
     implementation_capture_roots: Vec<(BinderId, NodeId)>,
     expected_effect_rows: Vec<EffectRow>,
@@ -3764,6 +3765,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             method_capture_binders: Vec::new(),
             checked_lexical_sources: Vec::new(),
             global_capture_uses: Vec::new(),
+            syntax_grants: Vec::new(),
 
             implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
@@ -3916,6 +3918,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             method_capture_binders: Vec::new(),
             checked_lexical_sources: Vec::new(),
             global_capture_uses: Vec::new(),
+            syntax_grants: Vec::new(),
 
             implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
@@ -4281,6 +4284,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             method_capture_binders: Vec::new(),
             checked_lexical_sources: Vec::new(),
             global_capture_uses: Vec::new(),
+            syntax_grants: Vec::new(),
 
             implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
@@ -5189,6 +5193,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             method_capture_binders: Vec::new(),
             checked_lexical_sources: Vec::new(),
             global_capture_uses: Vec::new(),
+            syntax_grants: Vec::new(),
 
             implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
@@ -17448,6 +17453,17 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         span: Span,
         context: &TypeContext,
     ) -> Result<TypedNode, TypeError> {
+        if let Some(grant) = &occurrence.syntax_grant {
+            if grant.target() != binder {
+                return Err(invalid_state());
+            }
+            if self.purpose == ElaborationPurpose::ModuleCheck {
+                self.syntax_grants
+                    .try_reserve(1)
+                    .map_err(|_| type_resource())?;
+                self.syntax_grants.push(Arc::clone(grant));
+            }
+        }
         let fact = context.fact(binder).ok_or_else(invalid_state)?;
         let rigid = self.monomorphic_recursive.contains(&binder);
         let (ty, arguments, row_arguments) = self.instantiate(fact, rigid, span)?;
@@ -25249,6 +25265,7 @@ fn check_module_with_budget_family<
             implementation_facts,
             exports,
             typed_fragment: Some(typed_fragment),
+            syntax_grants: std::mem::take(&mut elaborator.syntax_grants).into_boxed_slice(),
         },
     ))
 }
@@ -25571,6 +25588,17 @@ fn link_checked_modules<M: std::borrow::Borrow<CheckedModule>>(
             return Err(invalid_state());
         }
     }
+    let mut issued_grants = HashSet::new();
+    for module in &modules {
+        let module = module.borrow();
+        for grant in module.syntax_grants() {
+            if !issued_grants.insert(Arc::as_ptr(grant))
+                || !grant.authenticate(module.module(), &modules)
+            {
+                return Err(invalid_state());
+            }
+        }
+    }
     let entry_index = *module_positions.get(&entry).ok_or_else(invalid_state)?;
     let mut reachable = Vec::new();
     reachable
@@ -25606,6 +25634,7 @@ fn link_checked_modules<M: std::borrow::Borrow<CheckedModule>>(
             spelling: main.spelling.clone(),
             origin: main.origin.clone(),
             import_span: None,
+            syntax_grant: None,
             evidence: Box::new([]),
         }),
         span,
@@ -25635,7 +25664,17 @@ fn link_checked_modules<M: std::borrow::Borrow<CheckedModule>>(
         .try_reserve(modules.len())
         .map_err(|_| constraint_resource())?;
     for module in modules {
-        groups.push(make_group(module, constraint_work).map_err(|()| constraint_resource())?);
+        let grants = module.borrow().syntax_grants().to_vec();
+        let group = make_group(module, constraint_work).map_err(|()| constraint_resource())?;
+        if grants.len() != group.syntax_grants().len()
+            || grants
+                .iter()
+                .zip(group.syntax_grants())
+                .any(|(original, retained)| !Arc::ptr_eq(original, retained))
+        {
+            return Err(invalid_state());
+        }
+        groups.push(group);
     }
     Ok(ResolvedModuleProgram::new(
         registry,
@@ -42491,6 +42530,7 @@ mod tests {
                         spelling: "deep".to_owned(),
                         origin: Origin::Source(span),
                         import_span: None,
+                        syntax_grant: None,
                         evidence: Box::new([]),
                     }),
                     span,
@@ -43455,6 +43495,7 @@ mod tests {
                         spelling: "ambiguous".to_owned(),
                         origin: Origin::Source(span),
                         import_span: None,
+                        syntax_grant: None,
                         evidence: Box::new([]),
                     }),
                     span,
@@ -43625,6 +43666,7 @@ mod tests {
                         spelling: "deep".to_owned(),
                         origin: Origin::Source(span),
                         import_span: None,
+                        syntax_grant: None,
                         evidence: Box::new([]),
                     }),
                     span,
@@ -43703,6 +43745,7 @@ mod tests {
                         spelling: "deep".to_owned(),
                         origin: Origin::Source(span),
                         import_span: None,
+                        syntax_grant: None,
                         evidence: Box::new([]),
                     }),
                     span,

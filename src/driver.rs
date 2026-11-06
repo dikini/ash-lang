@@ -1445,8 +1445,7 @@ where
     ) -> ModularEffectCoreResult,
 {
     let mut checked: Vec<Arc<crate::resolved::CheckedModule>> = Vec::with_capacity(input.len());
-    let mut checked_syntax = Vec::<Vec<crate::surface::SurfaceSyntaxDeclaration>>::new();
-    let mut checked_syntax_imports = Vec::<Vec<crate::syntax::SelectedSyntax>>::new();
+    let mut checked_syntax_imports = Vec::<Arc<[crate::syntax::SelectedSyntax]>>::new();
     let mut checked_syntax_terms = Vec::<crate::syntax::SyntaxOwnerBindings>::new();
     let mut checked_by_module: HashMap<ModuleId, usize> = HashMap::with_capacity(input.len());
     let mut transformer_entries = HashMap::<
@@ -1515,10 +1514,11 @@ where
                     {
                         return Err(internal_file_failure());
                     }
-                    let declaration = checked_syntax
+                    let declaration = checked
                         .get(index)
-                        .and_then(|exports| {
-                            exports
+                        .and_then(|owner| {
+                            owner
+                                .syntax_exports()
                                 .iter()
                                 .find(|declaration| declaration.name.text == name.text)
                         })
@@ -1764,7 +1764,7 @@ where
                 })?,
             ));
             let rewrite_work = Some(TypeWorkBudget::with_limit(rewrite_limit));
-            let checked_module = if select_effect_core {
+            let mut checked_module = if select_effect_core {
                 crate::elaborate::check_module_in_effect_profile_with_rewrite_work(
                     resolved,
                     &mut checking_type_work,
@@ -1803,6 +1803,9 @@ where
                     crate::resolve::invalid_syntax_transformer(span),
                 ))
             })?;
+            checked_module
+                .retain_syntax_exports(&module.surface().syntax_declarations)
+                .map_err(|()| internal_file_failure())?;
             let syntax_terms = if module.surface().syntax_declarations.is_empty() {
                 crate::syntax::SyntaxOwnerBindings::empty(checked_module.module())
             } else {
@@ -1818,8 +1821,11 @@ where
                     )))
                 })?
             };
+            let selected: Arc<[crate::syntax::SelectedSyntax]> = selected.into();
+            checked_module
+                .retain_syntax_imports(Arc::clone(&selected))
+                .map_err(|()| internal_file_failure())?;
             checked_by_module.insert(module.id(), checked.len());
-            checked_syntax.push(module.surface().syntax_declarations.clone());
             checked_syntax_imports.push(selected);
             checked_syntax_terms.push(syntax_terms);
             checked.push(Arc::new(checked_module));

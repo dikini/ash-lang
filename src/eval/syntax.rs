@@ -244,10 +244,10 @@ impl SyntaxHost {
                         let capture = self.construct(heap, "ExpressionCapture", Some(fragment))?;
                         self.construct(heap, "Captured", Some(capture))
                     }
-                    Some(SurfaceSyntaxCapture::Identifier(name)) => {
-                        let origin = self.issue_origin(name.span.into());
+                    Some(SurfaceSyntaxCapture::Identifier(capture)) => {
+                        let origin = self.issue_origin(capture.origin);
                         let index = self.identifiers.len();
-                        self.identifiers.push(name);
+                        self.identifiers.push(capture.name);
                         let identifier = self.handle(CompilerSyntaxHandleKind::Identifier(index));
                         let fields = vec![identifier, origin].into_boxed_slice();
                         let fields = Value::Location(allocate_heap(heap, HeapCell::Tuple(fields))?);
