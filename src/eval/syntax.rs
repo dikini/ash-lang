@@ -472,6 +472,7 @@ impl SyntaxHost {
                     resource: *resource,
                     invocation: self.invocation_span,
                     definition: self.definition_span,
+                    teardown: None,
                 },
             ));
         }
@@ -502,6 +503,7 @@ impl SyntaxHost {
                 related,
                 invocation: self.invocation_span,
                 definition: self.definition_span,
+                teardown: None,
             },
         ))
     }

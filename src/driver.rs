@@ -495,9 +495,16 @@ pub struct SyntaxExpansionFailure {
     pub(crate) related: Vec<crate::syntax::MacroOrigin>,
     pub(crate) invocation: Span,
     pub(crate) definition: Span,
+    pub(crate) teardown: Option<crate::eval::ResourceFailure>,
 }
 
 impl SyntaxExpansionFailure {
+    /// Returns the first host teardown failure, if cleanup was incomplete.
+    #[must_use]
+    pub const fn teardown(&self) -> Option<crate::eval::ResourceFailure> {
+        self.teardown
+    }
+
     /// Returns the transformer's message.
     #[must_use]
     pub fn message(&self) -> &str {
@@ -543,6 +550,7 @@ pub struct SyntaxParseFailure {
     pub(crate) resource: Option<ResourceFailure>,
     pub(crate) invocation: Span,
     pub(crate) definition: Span,
+    pub(crate) teardown: Option<crate::eval::ResourceFailure>,
 }
 
 /// A transformer evaluator failure with its expansion context.
@@ -562,6 +570,12 @@ impl SyntaxRuntimeFailure {
 }
 
 impl SyntaxParseFailure {
+    /// Returns the first host teardown failure, if cleanup was incomplete.
+    #[must_use]
+    pub const fn teardown(&self) -> Option<crate::eval::ResourceFailure> {
+        self.teardown
+    }
+
     /// Returns the original parser diagnostics in order.
     #[must_use]
     pub fn diagnostics(&self) -> &[ParseDiagnostic] {
@@ -1614,6 +1628,7 @@ where
                                                     resource,
                                                     invocation: span,
                                                     definition: selection.declaration.span,
+                                                    teardown: None,
                                                 }),
                                             ));
                                             Err(span)
@@ -1709,6 +1724,7 @@ where
                                 }),
                                 invocation,
                                 definition,
+                                teardown: None,
                             })
                         }
                         None => PipelineFailure::Resolution(error),

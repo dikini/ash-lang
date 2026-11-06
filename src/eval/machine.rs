@@ -6874,7 +6874,7 @@ pub(crate) fn evaluate_transformer(
     contexts: std::sync::Arc<crate::syntax::SyntaxContexts>,
 ) -> Result<(crate::syntax::TransformerOutput, usize), RuntimeFailure> {
     let scope = disposal::Scope::enter();
-    let result = (|| {
+    let mut result = (|| {
         let mut machine = Machine::new_effect(&entry.program);
         machine.syntax_host = Some(syntax::SyntaxHost::new(
             entry,
@@ -6900,6 +6900,19 @@ pub(crate) fn evaluate_transformer(
         drop(machine);
         transferred
     })();
+    if let Some(teardown) = disposal::failure() {
+        match &mut result {
+            Ok((crate::syntax::TransformerOutput::Rejected(failure), _)) => {
+                failure.teardown = Some(teardown);
+                return result;
+            }
+            Ok((crate::syntax::TransformerOutput::SyntaxRejected(failure), _)) => {
+                failure.teardown = Some(teardown);
+                return result;
+            }
+            _ => {}
+        }
+    }
     scope.finish(result)
 }
 
@@ -6935,6 +6948,135 @@ fn apply_primitive(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn transformer_closes_root_and_preserves_rejection_on_teardown_failure() {
+        use crate::{
+            driver::{RunConfiguration, compile_path, execute},
+            message::{Catalogue, Locale},
+            module::ModuleRoots,
+            presentation::{compile_file_diagnostics, write_human, write_json, write_short},
+        };
+        let configuration = |entry: &str| RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros")
+                .join(entry),
+            roots: ModuleRoots::empty(),
+        };
+        let assert_presented = |failure: &crate::driver::FileFailure, expected: &str| {
+            let diagnostics = compile_file_diagnostics(failure).unwrap();
+            let [diagnostic] = diagnostics.as_slice() else {
+                panic!("one primary diagnostic and its teardown cause");
+            };
+            let mut json = Vec::new();
+            write_json(&mut json, diagnostic).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+            assert_eq!(json["reason"], expected);
+            let facts = json["facts"].as_array().unwrap();
+            for (name, value) in [
+                ("teardown_cause", "runtime.capacity-exhausted"),
+                ("teardown_phase", "teardown"),
+                ("teardown_resource", "environment disposal entries"),
+                ("cleanup", "incomplete"),
+            ] {
+                assert!(
+                    facts
+                        .iter()
+                        .any(|fact| fact["name"] == name && fact["value"] == value)
+                );
+            }
+            assert!(
+                facts
+                    .iter()
+                    .any(|fact| { fact["name"] == "teardown_requested" && fact["value"] == 1 })
+            );
+            assert!(
+                facts
+                    .iter()
+                    .any(|fact| { fact["name"] == "teardown_available" && fact["value"] == 0 })
+            );
+            assert!(
+                json["labels"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|label| label["relationship"] == "syntax_teardown")
+            );
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let catalogue = Catalogue::new(locale).unwrap();
+                let mut human = Vec::new();
+                write_human(&mut human, diagnostic, &catalogue).unwrap();
+                assert!(
+                    String::from_utf8(human)
+                        .unwrap()
+                        .contains("runtime.capacity-exhausted")
+                );
+                let mut short = Vec::new();
+                write_short(&mut short, diagnostic, &catalogue).unwrap();
+                assert!(
+                    String::from_utf8(short)
+                        .unwrap()
+                        .contains("runtime.capacity-exhausted")
+                );
+            }
+        };
+
+        super::machine_test_hooks::reset();
+        let compiled = compile_path(configuration("entry_host.ash")).unwrap();
+        assert_eq!(super::machine_test_hooks::ROOT_CLOSES.get(), 1);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+
+        for (entry, expected) in [
+            ("entry_reject_ops.ash", "syntax.rejected"),
+            ("entry_parse_failure.ash", "parse.expected-operand"),
+        ] {
+            super::machine_test_hooks::reset();
+            super::machine_test_hooks::FAIL_ROOT_CLOSE.set(true);
+            let failure = compile_path(configuration(entry)).unwrap_err();
+            assert_eq!(super::machine_test_hooks::ROOT_CLOSES.get(), 1, "{entry}");
+            assert!(!super::machine_test_hooks::FAIL_ROOT_CLOSE.get(), "{entry}");
+            assert_eq!(failure.reason_code(), expected, "{entry}");
+            let teardown = match failure.pipeline_failure() {
+                Some(crate::driver::PipelineFailure::SyntaxExpansion(error)) => {
+                    assert_eq!(error.message(), "expected a positive value");
+                    error.teardown()
+                }
+                Some(crate::driver::PipelineFailure::SyntaxParse(error)) => error.teardown(),
+                _ => panic!("the original rejection must be retained"),
+            }
+            .expect("the first teardown failure is retained with the rejection");
+            assert_eq!(teardown.phase, super::RuntimePhase::Teardown);
+            assert_eq!(
+                teardown.resource,
+                super::RuntimeResource::EnvironmentDisposal
+            );
+            assert_eq!(
+                teardown.cause,
+                super::ResourceFailureCause::ConfiguredCapacity
+            );
+            assert_presented(&failure, expected);
+        }
+
+        super::machine_test_hooks::reset();
+        super::machine_test_hooks::FAIL_ROOT_CLOSE.set(true);
+        let failure = compile_path(configuration("entry_host.ash"))
+            .expect_err("successful output is not published when root closure fails");
+        assert_eq!(super::machine_test_hooks::ROOT_CLOSES.get(), 1);
+        let Some(crate::driver::PipelineFailure::SyntaxRuntime(error)) = failure.pipeline_failure()
+        else {
+            panic!("root-close refusal must be a transformer failure");
+        };
+        let super::RuntimeFailure::Report(report) = error.cause() else {
+            panic!("root-close refusal retains structured resource details");
+        };
+        assert_eq!(
+            report.primary.resource().unwrap().phase,
+            super::RuntimePhase::Teardown
+        );
+        assert_eq!(report.cleanup, crate::eval::CleanupStatus::Incomplete);
+        assert_presented(&failure, "syntax.transformer-failed");
+        super::machine_test_hooks::reset();
+    }
+
     #[test]
     fn integer_region_reader_is_paid_and_preserves_digit_aliases() {
         use super::*;

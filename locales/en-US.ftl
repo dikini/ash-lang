@@ -273,6 +273,7 @@ resolve-retain-outside-root = `retain` is only available in the nearest clause o
 syntax-invalid-transformer = The syntax transformer must be a local monomorphic Input -> MacroResult function with only permitted effects.
 syntax-expansion-rejected = Syntax transformer rejected the invocation: { $detail }
 syntax-transformer-failed = The syntax transformer failed: { $cause }
+syntax-teardown-failed = Host teardown failed: { $cause }
 syntax-rejection-site = The transformer reported this location.
 syntax-rejection-cause = This location contributed to the rejection.
 syntax-invocation-frame = The syntax was invoked here.

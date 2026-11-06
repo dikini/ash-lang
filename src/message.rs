@@ -1377,6 +1377,7 @@ messages! {
     /// A transformer explicitly rejected its input.
     syntax_expansion_rejected => "syntax-expansion-rejected" { detail: &'a str = "invalid input" },
     syntax_transformer_failed => "syntax-transformer-failed" { cause: &'a str = "runtime.resource-capacity" },
+    syntax_teardown_failed => "syntax-teardown-failed" { cause: &'a str = "runtime.capacity-exhausted" },
     syntax_rejection_site => "syntax-rejection-site" {},
     syntax_rejection_cause => "syntax-rejection-cause" {},
     syntax_invocation_frame => "syntax-invocation-frame" {},

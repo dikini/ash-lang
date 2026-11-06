@@ -1231,6 +1231,9 @@ pub fn compile_file_diagnostics(
                         }
                     }
                 }
+                if let Some(diagnostic) = diagnostics.first_mut() {
+                    add_syntax_teardown(diagnostic, error.teardown(), error.invocation, &sources)?;
+                }
                 return Ok(diagnostics);
             }
             PipelineFailure::Resolution(error) => compile_resolve_diagnostic(error, &sources)?,
@@ -1274,6 +1277,61 @@ pub fn compile_file_diagnostics(
     Ok(vec![diagnostic])
 }
 
+fn add_syntax_teardown<'a>(
+    diagnostic: &mut CompileDiagnostic<'a>,
+    teardown: Option<crate::eval::ResourceFailure>,
+    invocation: Span,
+    sources: &[&'a SourceFile],
+) -> Result<(), PresentationError> {
+    let Some(teardown) = teardown else {
+        return Ok(());
+    };
+    let source = sources
+        .iter()
+        .copied()
+        .find(|source| source.id() == invocation.source())
+        .ok_or(PresentationError::MissingSource)?;
+    source
+        .location(invocation)
+        .map_err(|_| PresentationError::MissingSource)?;
+    diagnostic.related.push(Label {
+        source,
+        span: invocation,
+        message: Message::syntax_teardown_failed(teardown.cause.reason_code()),
+        relationship: "syntax_teardown",
+        facts: Vec::new(),
+    });
+    for (name, kind, value) in [
+        ("teardown_cause", "reason", teardown.cause.reason_code()),
+        ("teardown_phase", "runtime-phase", teardown.phase.label()),
+        (
+            "teardown_resource",
+            "runtime-resource",
+            teardown.resource.label(),
+        ),
+        ("cleanup", "cleanup-status", "incomplete"),
+    ] {
+        diagnostic.facts.push(Fact {
+            name,
+            kind,
+            value: FactValue::Text(value),
+        });
+    }
+    for (name, value) in [
+        ("teardown_requested", teardown.requested),
+        ("teardown_available", teardown.available),
+    ] {
+        if let Some(value) = value {
+            diagnostic.facts.push(Fact {
+                name,
+                kind: "integer",
+                value: FactValue::Integer(value),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn compile_syntax_expansion_failure<'a>(
     failure: &'a crate::driver::SyntaxExpansionFailure,
     sources: &[&'a SourceFile],
@@ -1309,7 +1367,7 @@ fn compile_syntax_expansion_failure<'a>(
         };
         related.push(label(span, relationship, message)?);
     }
-    Ok(CompileDiagnostic {
+    let mut diagnostic = CompileDiagnostic {
         reason: "syntax.rejected".into(),
         responsibility: "source",
         message: Message::syntax_expansion_rejected(failure.message()),
@@ -1320,7 +1378,14 @@ fn compile_syntax_expansion_failure<'a>(
             kind: "text",
             value: FactValue::Text(failure.message()),
         }],
-    })
+    };
+    add_syntax_teardown(
+        &mut diagnostic,
+        failure.teardown(),
+        failure.invocation,
+        sources,
+    )?;
+    Ok(diagnostic)
 }
 
 fn compile_syntax_runtime_failure<'a>(
@@ -1345,7 +1410,7 @@ fn compile_syntax_runtime_failure<'a>(
         })
     };
     let cause = failure.cause().reason_code();
-    Ok(CompileDiagnostic {
+    let mut diagnostic = CompileDiagnostic {
         reason: "syntax.transformer-failed".into(),
         responsibility: "compiler",
         message: Message::syntax_transformer_failed(cause),
@@ -1364,7 +1429,18 @@ fn compile_syntax_runtime_failure<'a>(
             kind: "runtime-reason",
             value: FactValue::Text(cause),
         }],
-    })
+    };
+    let teardown = match failure.cause() {
+        crate::eval::RuntimeFailure::Report(report) => report.teardown.or_else(|| {
+            report
+                .primary
+                .resource()
+                .filter(|resource| resource.phase == crate::eval::RuntimePhase::Teardown)
+        }),
+        _ => None,
+    };
+    add_syntax_teardown(&mut diagnostic, teardown, failure.invocation, sources)?;
+    Ok(diagnostic)
 }
 
 fn compile_projection_error<'a>(
@@ -1953,6 +2029,12 @@ pub fn write_short(
     catalogue: &Catalogue,
 ) -> Result<(), RenderError> {
     let message = catalogue.format(&diagnostic.message)?;
+    let teardown = diagnostic
+        .related
+        .iter()
+        .find(|label| label.relationship == "syntax_teardown")
+        .map(|label| catalogue.format(&label.message))
+        .transpose()?;
     let writer = &mut crate::render::DiagnosticWriter(writer);
     if let Some(label) = &diagnostic.primary {
         let location = label
@@ -1967,7 +2049,11 @@ pub fn write_short(
             location.start().column()
         )?;
     }
-    writeln!(writer, "{} [{}]", message, diagnostic.reason)?;
+    if let Some(teardown) = teardown {
+        writeln!(writer, "{} [{}]; {teardown}", message, diagnostic.reason)?;
+    } else {
+        writeln!(writer, "{} [{}]", message, diagnostic.reason)?;
+    }
     Ok(())
 }
 

@@ -316,6 +316,7 @@ impl<'a> SyntaxExpansion<'a> {
                             resource,
                             invocation: anchor,
                             definition: selection.declaration.span,
+                            teardown: None,
                         });
                         return Err(invocation);
                     }

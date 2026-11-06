@@ -274,6 +274,7 @@ resolve-retain-outside-root = `retain` е достъпно само в най-б
 syntax-invalid-transformer = Преобразувателят на синтаксис трябва да е локална мономорфна функция Input -> MacroResult само с допустими ефекти.
 syntax-expansion-rejected = Преобразувателят на синтаксис отхвърли извикването: { $detail }
 syntax-transformer-failed = Преобразувателят на синтаксис не успя: { $cause }
+syntax-teardown-failed = Освобождаването на средата не успя: { $cause }
 syntax-rejection-site = Преобразувателят посочи това място.
 syntax-rejection-cause = Това място допринесе за отхвърлянето.
 syntax-invocation-frame = Синтаксисът е извикан тук.
