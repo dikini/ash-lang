@@ -440,6 +440,7 @@ mod tests {
                     id: interface,
                     spelling: "Show".into(),
                     origin: Origin::Source(span),
+                    syntax_grant: None,
                 },
                 arguments: vec![crate::resolved::ResolvedOwnerArgument {
                     ty: crate::types::KindedArgument::TypeArg(Type::Unit),

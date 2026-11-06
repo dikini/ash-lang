@@ -33356,6 +33356,7 @@ mod tests {
                         id: interface,
                         spelling: "Pair".to_owned(),
                         origin: Origin::Source(span),
+                        syntax_grant: None,
                     },
                     arguments: Box::new([
                         ResolvedType {

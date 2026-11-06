@@ -18872,6 +18872,8 @@ pub struct ResolvedInterfaceOccurrence {
     pub spelling: String,
     /// Causal source provenance.
     pub origin: Origin,
+    /// Authorization retained only for an actual definition-context selection.
+    pub(crate) syntax_grant: Option<Arc<crate::resolve::SyntaxGrant>>,
 }
 
 /// One ordered source argument for a resource, effect, or interface owner.
@@ -21111,6 +21113,7 @@ mod tests {
                                 id: interface,
                                 spelling: "Nested".to_owned(),
                                 origin: Origin::Source(span),
+                                syntax_grant: None,
                             },
                             arguments: Box::new([ResolvedType {
                                 ty: Type::Nominal(NominalTypeId::lexical(module, 0)),
@@ -30640,6 +30643,7 @@ mod tests {
                     id: interface,
                     spelling: "Show".into(),
                     origin: Origin::Source(span),
+                    syntax_grant: None,
                 },
                 arguments: vec![
                     ResolvedType {
@@ -30934,6 +30938,7 @@ mod tests {
                             id: InterfaceId::new(module, 0),
                             spelling: "Deep".into(),
                             origin: Origin::Source(span),
+                            syntax_grant: None,
                         },
                         arguments: vec![
                             ResolvedType {
@@ -31794,6 +31799,7 @@ mod tests {
                     id: InterfaceId::new(module, 0),
                     spelling: "Local".to_owned(),
                     origin: Origin::Source(span),
+                    syntax_grant: None,
                 },
                 arguments: vec![
                     ResolvedType {

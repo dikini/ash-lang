@@ -848,8 +848,30 @@ probe `/tmp/ash-syntax-method-native-probe.sh`, SHA-256
 `6d55d3eb19779442f274b666cc45809dffe7f4593ecbc2a02bd4ad563ad8056f`;
 executable SHA-256
 `9bf86fef87f0a9b5c9f2139fb8d87beb4d2cedb8034682f6a2de20284f3fb5dd`).
-Independent review, interface/equation selector grants, other namespaces and
-full acceptance remain open.
+Independent review passed at `b19e160b`; interface/equation selector grants,
+other namespaces and full acceptance remain open.
+
+The same private-evidence graph retained its method grant but missed the
+definition-site `Check` interface occurrence
+(`/tmp/ash-syntax-interface-grant-red.log`, SHA-256
+`e4db474b6e035de29557b606f517b55ec401a435b6ca6f007ea365ad016f1a1a`). The
+current change retains the interface grant on its resolved occurrence and in
+the existing checked link list. Private, renamed, qualified and owner-decoy
+graphs return 42 and retain both exact interface and method grants; a captured
+caller interface and generated lexical shadow retain none. Public-facade and
+dependency-private controls and 45 grant mutations pass
+(`/tmp/ash-syntax-interface-grant-review.log`, SHA-256
+`6326e37c906fa626dd24df5ce8b9983d282cde8d26be23088492de393609a633`). The
+name-only admission state check passes on success and errors
+(`/tmp/ash-syntax-interface-grant-admission.log`, SHA-256
+`e3cd1045ad59dd2a0cc6978774c4a86d52cbac0e20c08e8e2220ef0ffa187ef2`). All 78
+driver cases pass (`/tmp/ash-syntax-interface-grant-driver.log`, SHA-256
+`83c0e9113ba9d343474f363e53a1f2d1ff98ce266b860a657346306fd9d94652`), as does
+the unchanged 256 KiB case (`/tmp/ash-syntax-interface-grant-small-stack.log`,
+SHA-256 `ca92f5542cacb7f7f89310811cecb77faff161426ee3cc0fe050a10b7971e0fb`).
+Independent review, other interface sites, other grant namespaces and full
+acceptance remain open. The previously recorded local-nominal image limitation
+still applies to the private-evidence graph.
 
 A nested identifier-capture probe lost a combined origin: the outer transformer
 supplied the caller invocation and outer definition, but the inner rejection
@@ -866,7 +888,7 @@ remains open.
 ## Progress
 
 The weighted ledger records **61.5/100 reviewed delivery points**. The latest
-reviewed implementation pin is `8af9a896`. These are partial implementation
+reviewed implementation pin is `b19e160b`. These are partial implementation
 observations, not acceptance of the whole feature.
 M01–M14 and C1/C2 remain pending.
 

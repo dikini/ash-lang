@@ -1664,6 +1664,7 @@ pub(crate) enum SyntaxGrantTarget {
     Method(MethodId),
     Constructor(ConstructorId),
     Nominal(NominalTypeId),
+    Interface(InterfaceId),
 }
 
 /// One definition-context selection, issued by resolution and checked at link.
@@ -1769,6 +1770,21 @@ impl SyntaxGrant {
                         .is_none_or(|fact| fact.id != nominal)
                         == *private)
             }
+            (
+                SyntaxGrantRoute::Owner { spelling, private },
+                SyntaxGrantTarget::Interface(interface),
+            ) => {
+                interface.module() == owner.module()
+                    && owner
+                        .interface_facts()
+                        .iter()
+                        .any(|fact| fact.id == interface && fact.spelling == *spelling)
+                    && (owner
+                        .exports()
+                        .interface(spelling)
+                        .is_none_or(|fact| fact.id != interface)
+                        == *private)
+            }
             (SyntaxGrantRoute::Imported { route, spelling }, target) => {
                 owner.direct_dependencies().contains(route)
                     && modules
@@ -1791,6 +1807,10 @@ impl SyntaxGrant {
                                 .exports()
                                 .nominal(spelling)
                                 .is_some_and(|fact| fact.id == nominal),
+                            SyntaxGrantTarget::Interface(interface) => module
+                                .exports()
+                                .interface(spelling)
+                                .is_some_and(|fact| fact.id == interface),
                         })
             }
         }
@@ -2224,7 +2244,7 @@ fn resolve_module_names_with_budget<'a>(
             },
             constructor_payload_provenance,
             written_effect_arities: std::mem::take(&mut resolver.written_effect_arities),
-            syntax_grants: std::mem::take(&mut resolver.syntax_nominal_grants),
+            syntax_grants: std::mem::take(&mut resolver.syntax_resolved_grants),
         })
     })();
     *type_work = std::mem::take(&mut resolver.type_work);
@@ -2676,7 +2696,7 @@ struct Resolver<'state, 'inputs> {
     scopes: Vec<HashMap<(String, usize), ResolvedTermBinding>>,
     syntax_inputs: Option<SyntaxInputs<'inputs>>,
     syntax_expansion: Option<&'state mut crate::syntax::SyntaxExpansion<'inputs>>,
-    syntax_nominal_grants: Vec<Arc<SyntaxGrant>>,
+    syntax_resolved_grants: Vec<Arc<SyntaxGrant>>,
     active_expansions: usize,
     diagnostic_frames: Vec<Arc<crate::syntax::ExpansionFrame>>,
     binder_introductions: HashMap<BinderId, usize>,
@@ -3181,7 +3201,7 @@ impl Resolver<'_, '_> {
             scopes: vec![HashMap::new()],
             syntax_inputs: None,
             syntax_expansion: None,
-            syntax_nominal_grants: Vec::new(),
+            syntax_resolved_grants: Vec::new(),
             active_expansions: 0,
             diagnostic_frames: Vec::new(),
             binder_introductions: HashMap::new(),
@@ -6086,6 +6106,13 @@ impl Resolver<'_, '_> {
                                 && fact.spelling == member.text
                         })
                         .map(|fact| fact.id == nominal),
+                    SyntaxGrantTarget::Interface(interface) => owner
+                        .interface_facts()
+                        .iter()
+                        .find(|fact| {
+                            fact.id.module() == owner.module() && fact.spelling == member.text
+                        })
+                        .map(|fact| fact.id == interface),
                 };
                 if let Some(matches) = local {
                     if !matches {
@@ -6095,6 +6122,7 @@ impl Resolver<'_, '_> {
                 } else {
                     let targeted = match target {
                         SyntaxGrantTarget::Nominal(_) => terms.targeted_nominal(&member.text),
+                        SyntaxGrantTarget::Interface(_) => terms.targeted_interface(&member.text),
                         _ => terms.targeted(&member.text),
                     };
                     let (route, original, _) = targeted.ok_or_else(invalid)?;
@@ -6124,6 +6152,10 @@ impl Resolver<'_, '_> {
                     .exports()
                     .nominal(spelling)
                     .is_some_and(|fact| fact.id == nominal),
+                SyntaxGrantTarget::Interface(interface) => dependency
+                    .exports()
+                    .interface(spelling)
+                    .is_some_and(|fact| fact.id == interface),
             };
             if !owner.direct_dependencies().contains(&route) || !exported {
                 return Err(invalid());
@@ -6151,6 +6183,10 @@ impl Resolver<'_, '_> {
                         .exports()
                         .nominal(&member.text)
                         .is_none_or(|exported| exported.id != nominal),
+                    SyntaxGrantTarget::Interface(interface) => owner
+                        .exports()
+                        .interface(&member.text)
+                        .is_none_or(|exported| exported.id != interface),
                 },
             }
         };
@@ -6169,19 +6205,29 @@ impl Resolver<'_, '_> {
         reference: &SurfaceReference,
         nominal: ImportedNominalName,
     ) -> Result<Option<Arc<SyntaxGrant>>, ResolveError> {
-        if !nominal.syntax_selected || self.admitting_template.is_some() {
+        if !nominal.syntax_selected {
             return Ok(None);
         }
-        let grant =
-            self.syntax_reference_grant(reference, SyntaxGrantTarget::Nominal(nominal.id))?;
-        self.syntax_nominal_grants.try_reserve(1).map_err(|_| {
+        self.retain_resolved_syntax_grant(reference, SyntaxGrantTarget::Nominal(nominal.id))
+    }
+
+    fn retain_resolved_syntax_grant(
+        &mut self,
+        reference: &SurfaceReference,
+        target: SyntaxGrantTarget,
+    ) -> Result<Option<Arc<SyntaxGrant>>, ResolveError> {
+        if self.admitting_template.is_some() {
+            return Ok(None);
+        }
+        let grant = self.syntax_reference_grant(reference, target)?;
+        self.syntax_resolved_grants.try_reserve(1).map_err(|_| {
             error(
                 ResolveReason::TypeResourceExhausted,
                 reference.span(),
-                "syntax nominal grant storage could not be reserved",
+                "syntax reference grant storage could not be reserved",
             )
         })?;
-        self.syntax_nominal_grants.push(Arc::clone(&grant));
+        self.syntax_resolved_grants.push(Arc::clone(&grant));
         Ok(Some(grant))
     }
 
@@ -8345,10 +8391,13 @@ impl Resolver<'_, '_> {
                     .copied(),
             }
             .ok_or_else(|| unknown_interface_error(member.span, &member.text))?;
+            let syntax_grant =
+                self.retain_resolved_syntax_grant(reference, SyntaxGrantTarget::Interface(id))?;
             return Ok(ResolvedInterfaceOccurrence {
                 id,
                 spelling: member.text.clone(),
                 origin: Origin::Source(reference.span()),
+                syntax_grant,
             });
         }
         if let Some(namespace) = self.imported_namespace(reference)? {
@@ -8357,6 +8406,7 @@ impl Resolver<'_, '_> {
                     id,
                     spelling: member.text.clone(),
                     origin: Origin::Source(reference.span()),
+                    syntax_grant: None,
                 });
             }
             if namespace.nominals.contains_key(&member.text)
@@ -8379,6 +8429,7 @@ impl Resolver<'_, '_> {
                 id,
                 spelling: member.text.clone(),
                 origin: Origin::Source(reference.span()),
+                syntax_grant: None,
             });
         }
         if self.file_name_is_bound(&member.text)
@@ -13306,6 +13357,7 @@ impl Resolver<'_, '_> {
                     id: api.provider(),
                     spelling: "Provider".to_owned(),
                     origin: Origin::Source(span),
+                    syntax_grant: None,
                 },
                 arguments: {
                     let mut arguments = Vec::with_capacity(api.argument_count());
@@ -19509,7 +19561,7 @@ mod tests {
     fn linked_syntax_grants_require_the_original_export_target_and_route() {
         let fixture = ImportBudgetFixture::create(
             "import dependency as Dependency\nmain : Unit -> Int\nmain () = 42\n",
-            "type Secret = Hidden(Int)\ntype Other = Other(Int)\ninterface Check<Key> {\ncheck : Key -> Int\ninspect : Key -> Int\n}\nprivate : Int -> Int\nprivate value = value + 1\nother : Int -> Int\nother value = value + 2\npub syntax inc $value:expr => {\nprivate $value\n}\n",
+            "type Secret = Hidden(Int)\ntype Other = Other(Int)\ninterface Check<Key> {\ncheck : Key -> Int\ninspect : Key -> Int\n}\ninterface OtherCheck<Key> {\nother_check : Key -> Int\n}\nprivate : Int -> Int\nprivate value = value + 1\nother : Int -> Int\nother value = value + 2\npub syntax inc $value:expr => {\nprivate $value\n}\n",
         );
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
             .expect("the syntax import graph loads");
@@ -19520,7 +19572,7 @@ mod tests {
             .find(|module| !module.surface().syntax_declarations.is_empty())
             .expect("syntax owner");
 
-        for case in 0..36 {
+        for case in 0..45 {
             let namespace = case / 9;
             let mutation = case % 9;
             let mut checked = checked_import_dependencies(&graph);
@@ -19612,6 +19664,21 @@ mod tests {
                         "check",
                     )
                 }
+                4 => {
+                    let interface = |name: &str| {
+                        owner
+                            .interface_facts()
+                            .iter()
+                            .find(|fact| fact.spelling == name)
+                            .unwrap()
+                            .id
+                    };
+                    (
+                        SyntaxGrantTarget::Interface(interface("Check")),
+                        SyntaxGrantTarget::Interface(interface("OtherCheck")),
+                        "Check",
+                    )
+                }
                 _ => unreachable!(),
             };
             let syntax_import = *consumer
@@ -19684,12 +19751,12 @@ mod tests {
         );
         fs::write(
             fixture.0.join("facade.ash"),
-            "pub import actual (Capsule, Boxed)\n",
+            "pub import actual (Capsule, Boxed, Relation)\n",
         )
         .unwrap();
         fs::write(
             fixture.0.join("actual.ash"),
-            "pub type Capsule = Boxed(Int)\npub opaque type Secret = Hidden(Int)\ntype Private = Private(Int)\n",
+            "pub type Capsule = Boxed(Int)\npub opaque type Secret = Hidden(Int)\ntype Private = Private(Int)\npub interface Relation<Key> {\nrelate : Key -> Int\n}\ninterface HiddenRelation<Key> {\nhidden_relate : Key -> Int\n}\n",
         )
         .unwrap();
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
@@ -19744,6 +19811,14 @@ mod tests {
         assert_eq!(target.owner().module(), actual.id());
         let nominal = facade_module.exports().nominal("Capsule").unwrap().id;
         assert_eq!(nominal.module(), actual.id());
+        let interface = facade_module.exports().interface("Relation").unwrap().id;
+        assert_eq!(interface.module(), actual.id());
+        let private_interface = actual_module
+            .interface_facts()
+            .iter()
+            .find(|fact| fact.spelling == "HiddenRelation")
+            .unwrap()
+            .id;
         let private_nominal = actual_module
             .registry()
             .nominals()
@@ -19827,6 +19902,24 @@ mod tests {
                 imported(
                     DirectDependencyRoute::new(actual.id(), route.import_span()),
                     "Capsule",
+                ),
+                false,
+            ),
+            (
+                SyntaxGrantTarget::Interface(interface),
+                imported(route, "Relation"),
+                true,
+            ),
+            (
+                SyntaxGrantTarget::Interface(private_interface),
+                imported(route, "HiddenRelation"),
+                false,
+            ),
+            (
+                SyntaxGrantTarget::Interface(interface),
+                imported(
+                    DirectDependencyRoute::new(actual.id(), route.import_span()),
+                    "Relation",
                 ),
                 false,
             ),
@@ -22233,6 +22326,7 @@ mod tests {
             let nominal_counts = resolver.nominal_parameter_counts.clone();
             let scope_count = resolver.scopes.len();
             let effect_arity_count = resolver.written_effect_arities.len();
+            let syntax_grant_count = resolver.syntax_resolved_grants.len();
             let active_resumes = resolver.active_resumes.clone();
             let retained_clause = resolver.retained_clause;
 
@@ -22267,6 +22361,7 @@ mod tests {
             assert!(resolver.lexical_method_parameters.0.is_empty());
             assert_eq!(resolver.scopes.len(), scope_count);
             assert_eq!(resolver.written_effect_arities.len(), effect_arity_count);
+            assert_eq!(resolver.syntax_resolved_grants.len(), syntax_grant_count);
             assert_eq!(resolver.active_resumes, active_resumes);
             assert_eq!(resolver.retained_clause, retained_clause);
             assert!(resolver.admitting_template.is_none());

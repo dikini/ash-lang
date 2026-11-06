@@ -30839,17 +30839,19 @@ mod tests {
     }
 
     #[test]
-    fn definition_site_method_grant_reaches_the_checked_linked_occurrence() {
-        for (entry, selects_method) in [
-            ("entry.ash", true),
-            ("targeted_entry.ash", true),
-            ("qualified_entry.ash", true),
-            ("local_shadow.ash", false),
+    fn definition_site_interface_and_method_grants_reach_checked_occurrences() {
+        for (entry, method_term, owner_context) in [
+            ("template-private-evidence/entry.ash", true, true),
+            ("template-private-evidence/targeted_entry.ash", true, true),
+            ("template-private-evidence/qualified_entry.ash", true, true),
+            ("template-private-evidence/local_shadow.ash", false, false),
+            ("qualified-interface/caller.ash", true, false),
+            ("qualified-interface/owner.ash", true, true),
         ] {
             let compiled = crate::driver::compile_path_with_effect_validation_for_test(
                 crate::driver::RunConfiguration {
                     entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                        .join("tests/fixtures/surface-macros/template-private-evidence")
+                        .join("tests/fixtures/surface-macros")
                         .join(entry),
                     roots: ModuleRoots::empty(),
                 },
@@ -30872,7 +30874,18 @@ mod tests {
                         })
                         .unwrap();
                     let mut body = &definition.equations[0].body;
+                    let mut interface_occurrence = None;
                     while let crate::resolved::ResolvedExprKind::Block(block) = &body.kind {
+                        if let Some(interface) = block.declarations.iter().find_map(|declaration| {
+                            let crate::resolved::ResolvedLocalDeclaration::Evidence(evidence) =
+                                declaration
+                            else {
+                                return None;
+                            };
+                            Some(&evidence.application.interface)
+                        }) {
+                            interface_occurrence = Some(interface);
+                        }
                         body = &block.result;
                     }
                     if let crate::resolved::ResolvedExprKind::Add(binary) = &body.kind {
@@ -30886,14 +30899,19 @@ mod tests {
                     else {
                         panic!("the generated method occurrence is retained")
                     };
-                    if selects_method {
+                    if owner_context {
                         let crate::resolved::ResolvedTermName::Method(method) = occurrence.term
                         else {
                             panic!("the owner method must be selected")
                         };
-                        let [grant] = group.syntax_grants() else {
-                            panic!("the checked caller retains one method grant")
-                        };
+                        assert_eq!(group.syntax_grants().len(), 2);
+                        let grant = group
+                            .syntax_grants()
+                            .iter()
+                            .find(|grant| {
+                                grant.target() == crate::resolve::SyntaxGrantTarget::Method(method)
+                            })
+                            .unwrap();
                         assert_eq!(
                             grant.target(),
                             crate::resolve::SyntaxGrantTarget::Method(method)
@@ -30902,12 +30920,30 @@ mod tests {
                             occurrence.syntax_grant.as_ref().unwrap(),
                             grant
                         ));
+                        let interface = interface_occurrence.unwrap();
+                        let interface_grant = interface.syntax_grant.as_ref().unwrap();
+                        assert_eq!(
+                            interface_grant.target(),
+                            crate::resolve::SyntaxGrantTarget::Interface(interface.id)
+                        );
+                        assert!(
+                            group
+                                .syntax_grants()
+                                .iter()
+                                .any(|grant| Arc::ptr_eq(grant, interface_grant))
+                        );
                     } else {
-                        assert!(matches!(
-                            occurrence.term,
-                            crate::resolved::ResolvedTermName::Global(_)
-                        ));
+                        assert_eq!(
+                            matches!(
+                                occurrence.term,
+                                crate::resolved::ResolvedTermName::Method(_)
+                            ),
+                            method_term
+                        );
                         assert!(occurrence.syntax_grant.is_none());
+                        if let Some(interface) = interface_occurrence {
+                            assert!(interface.syntax_grant.is_none());
+                        }
                         assert!(group.syntax_grants().is_empty());
                     }
                     validate_effect_modules_linked_with_work(
