@@ -1215,3 +1215,24 @@ same-spelled handles against one reused handle, with checked binder/use
 associations. That observation awaits review. Remaining evidence
 reconciliation, whole-path review, final gate and retained readback remain
 open.
+
+### Reviewed fresh terms and remaining boundaries
+
+Independent review passed `e0aa54ec`; the task records P21 +0.5 and the
+separately estimated X7 corrective-work proxy. Reconcile the existing
+source/hygiene, checked-entry/host and diagnostic/image evidence by owning
+boundary before adding tests. The task groups all 26.25 unearned points and
+keeps unlocated observations distinct from known defects. Then reconcile
+examples and artifact status, obtain whole-path review, run one fresh
+complete gate on the agreed candidate, and complete the authorized retained
+readback and milestone integration. No current completion forecast is
+established by the earlier conditional scenarios.
+
+### Combined-origin resolution finding
+
+An actual nested transformer can return a captured identifier with a combined
+origin. When ordinary resolution rejects it, the current diagnostic retains
+the expansion frames but loses the combined input causes. The task records
+the disposable human/JSON red receipt; the generic existing location handoff
+needs review and repair before the final gate. No additional tracing framework
+or per-form semantic path is assumed.

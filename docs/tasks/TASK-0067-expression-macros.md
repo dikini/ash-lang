@@ -21,16 +21,16 @@
 
 ## Current delivery status, 6 November
 
-The latest reviewed product checkpoint is `a56d4f54`: **72.25/99 original-scope
-points are reviewed and 26.75 remain**. The separately estimated 30 points of
-additional performed work give an effort index of **102.25/129**, not an
+The latest reviewed product checkpoint is `e0aa54ec`: **72.75/99 original-scope
+points are reviewed and 26.25 remain**. The separately estimated 30.25 points of
+additional performed work give an effort index of **103/129.25**, not an
 acceptance percentage. M01–M14 and C1/C2 remain open.
 
 The [operational plan](../plans/2026-11-05-expression-macros.md#2130-source-binder-reservation-finding)
-records the reviewed source-binder reservation and copied-region repairs. The
-preceding 141-minute scenario did not include these repairs and is not a
-current complete forecast. Actual event windows and remaining estimates are
-recorded separately. The historical
+records the reviewed source-binder reservation and copied-region repairs and
+an open combined-origin resolution failure. The preceding 141-minute scenario
+is not a current complete forecast. Actual event windows and remaining
+estimates are recorded separately. The historical
 checkpoints below are preserved as written.
 
 ## Dependencies
@@ -1580,6 +1580,55 @@ binders in the addition's left and right operands
 All-target Clippy also passes (`/tmp/ash-syntax-fresh-term-clippy.log`, SHA-256
 `342d2943b458fb6b71d1582de4f4e556e58be9fc1621af26f223e55d026a8ff9`). This
 fresh-term observation awaits independent review.
+
+### Reviewed fresh terms and corrective-work record
+
+Independent review passed `e0aa54ec`. P21 gains 0.5 point for the distinct
+and reused fresh term-handle association, reaching 2/3.5. This does not repeat
+the earlier single-handle or type-parameter evidence or close M04. The current
+original scope is **72.75/99 reviewed, with 26.25 remaining**.
+
+X7 records approximately 0.25 additional performed-work points for the
+identifiable copied-region diagnosis and production correction. The recorded
+tool intervals were 22:09:25.643–22:11:51.878 and
+22:23:12.869–22:23:23.267 on 6 November: 2 minutes 36.633 seconds combined,
+or approximately 0.24 points at the previously recorded 5.55 points per
+elapsed hour, rounded to a quarter point. These are visible elapsed tool
+intervals, not measured active time, a complete repair cost or a formal lower
+bound. The session's developer records at lines 68540, 68593, 68819 and
+68824 supply the interval endpoints. The mixed fixture/own-use observations,
+review, documentation, waits and gaps are excluded. The original X30 history
+remains unchanged; X7 makes the current additional-work estimate **30.25
+points** and the effort index **103/129.25**. This index is not feature
+acceptance.
+
+### Current remaining evidence and delivery
+
+The 21:12 inventory remains historical. The grouped amounts below account for
+the current 26.25 unearned original-scope points; existing observations need
+their owning audit, and an unlocated observation is not a proven defect.
+
+| Boundary | Remaining points | Next evidence or action |
+| --- | ---: | --- |
+| Source and hygiene: P09, P11, P13, P20, P21, P27 | 5.25 | Reconcile captured and introduced names, privacy/routes, parsing and nested expansion against existing tests. Establish the recovery-bearing fragment boundary if existing parser evidence does not already do so. |
+| Checked entry and host: P14, P16–P18, P23, P24, P26, P28 | 7.75 | Audit canonical input, checked helper closure, output, limits, teardown and independent Core against the existing driver, host and machine observations. |
+| Diagnostics and image: P30–P33 | 4.25 | Repair the reproduced combined-origin resolution failure below; reconcile other causal copy/relocation, catalog variants and supported image/native evidence. |
+| Documentation: P34–P35 | 2 | Reconcile executable examples, status, links and artifact authority at the retaining checkpoint. |
+| Delivery: P36–P39 | 7 | Complete whole-path review, the fresh gate, retained verification and authorized milestone integration. |
+| **Total** | **26.25** | **M01–M14 and C1/C2 remain open until their owning evidence and handoffs are accepted.** |
+
+### Combined-origin resolution failure
+
+A disposable variant of the existing nested identifier-origin graph returns
+the captured identifier instead of issuing an authored rejection. Ordinary
+resolution correctly rejects the unknown name and presents both invocation
+frames, but drops the ordered inputs of the identifier's combined origin as
+causes. The inputs happen to recur as frame locations, so frame presence alone
+does not establish their causal roles. The human and JSON red observation is
+`/tmp/ash-syntax-identifier-resolution-probe.log` (SHA-256
+`7b817a5b13ef5b51cb2219ab99e6f5fe46714008a3ea103248401c3b67fc2c1e`). The
+ordinary source-origin missing-helper case retains its exact definition token
+and frames. Repair of the combined-origin handoff remains open.
 
 ## Progress
 
