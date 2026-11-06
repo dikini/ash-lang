@@ -833,6 +833,7 @@ fn validate_shallow_shape(
                         InternalReason::UnexpectedShape,
                     ))?,
                     tokens,
+                    admission,
                 )?;
                 shape.node(NodeKind::QualifiedName)?;
             } else {
@@ -1505,9 +1506,10 @@ fn validate_determination_side(shape: &mut ShapeCursor<'_>) -> Result<(), Projec
 fn validate_qualified_interface_name(
     node: &ConcreteNode,
     tokens: &[Token],
+    admission: Option<&std::collections::HashSet<usize>>,
 ) -> Result<(), ProjectionError> {
     require_kind(node, NodeKind::QualifiedName)?;
-    let mut shape = ShapeCursor::new(node, tokens);
+    let mut shape = ShapeCursor::with_admission(node, tokens, admission);
     shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
     shape.token(&TokenKind::Dot)?;
     shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;

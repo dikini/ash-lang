@@ -10710,6 +10710,23 @@ impl Resolver<'_, '_> {
         Ok(false)
     }
 
+    fn deferred_template_interface(
+        &self,
+        name: &SurfaceReference,
+        failure: &ResolveError,
+    ) -> Result<bool, ResolveError> {
+        if failure.reason == ResolveReason::UnknownInterface && self.is_template_placeholder(name) {
+            return Ok(true);
+        }
+        if matches!(
+            failure.reason,
+            ResolveReason::UnknownInterface | ResolveReason::UnavailableExport
+        ) {
+            return self.deferred_template_qualified_name(name);
+        }
+        Ok(false)
+    }
+
     fn resolve_owner_argument(
         &mut self,
         surface: &SurfaceType,
@@ -13665,8 +13682,24 @@ impl Resolver<'_, '_> {
                         "lexical evidence storage exceeded its budget",
                     )
                 })?;
-                let application = self.resolve_interface_application(&source.application)?;
-                if application.interface.id.module().is_builtin_resource() {
+                let application = match self.resolve_interface_application(&source.application) {
+                    Ok(application) => Some(application),
+                    Err(failure)
+                        if self.deferred_template_interface(
+                            &source.application.interface,
+                            &failure,
+                        )? =>
+                    {
+                        for argument in &source.application.arguments {
+                            self.resolve_owner_argument(argument)?.discard_iteratively();
+                        }
+                        None
+                    }
+                    Err(failure) => return Err(failure),
+                };
+                if application.as_ref().is_some_and(|application| {
+                    application.interface.id.module().is_builtin_resource()
+                }) {
                     return Err(error(
                         ResolveReason::SealedProvider,
                         source.span,
@@ -13676,7 +13709,7 @@ impl Resolver<'_, '_> {
                 let mut state = Box::new(PendingLexicalResolution {
                     source,
                     id,
-                    application: Some(application),
+                    application,
                     groups: ResolvedImplementationMethodGroupBuffer(Vec::new()),
                     equations: ResolvedEquationBuffer(Vec::new()),
                     next: 0,
@@ -13714,6 +13747,9 @@ impl Resolver<'_, '_> {
                         .into_boxed_slice();
                     }
                     if state.next == state.source.equations.len() {
+                        if state.application.is_none() && self.admitting_template.is_some() {
+                            return Ok(());
+                        }
                         let evidence = crate::resolved::ResolvedLexicalEvidence {
                             acquisition: None,
                             checked: crate::interface::LexicalEvidenceSlot::default(),
@@ -21297,9 +21333,13 @@ mod tests {
 
     #[test]
     fn template_name_admission_discards_temporary_resolver_state() {
-        for (tail, succeeds) in [("value", true), ("missing", false)] {
+        for (evidence_body, tail, succeeds) in [
+            ("42", "value", true),
+            ("missing", "value", false),
+            ("42", "missing", false),
+        ] {
             let text = format!(
-                "effect Ask {{\nask : Int -> Int\n}}\ninterface Check<Key> {{\ncheck : Key -> Int\n}}\nmain : Unit -> Int\nmain () = {{\nnewtype Existing = Existing(Int)\n42\n}}\npub syntax scratch $name:ident from $eff:ident then $ignored:expr => {{\nnewtype Token = Token(Int)\nwith Check<Token> {{\ncheck token = 42\n}}\nlet placeholder : $name<Int> = 1\nlet action : Unit -> Int ! {{$eff}} = fn(ignored) {{\n1\n}}\nlet $name = 1\nhandle (perform Ask.ask $name) with $eff using $name {{\nask value => resume {tail}\n}}\n}}\n"
+                "effect Ask {{\nask : Int -> Int\n}}\ninterface Check<Key> {{\ncheck : Key -> Int\n}}\nmain : Unit -> Int\nmain () = {{\nnewtype Existing = Existing(Int)\n42\n}}\npub syntax scratch $name:ident from $eff:ident then $ignored:expr => {{\nnewtype Token = Token(Int)\nwith Check<Token> {{\ncheck token = 42\n}}\nwith $name<Token> {{\ncheck token = {evidence_body}\n}}\nlet placeholder : $name<Int> = 1\nlet action : Unit -> Int ! {{$eff}} = fn(ignored) {{\n1\n}}\nlet $name = 1\nhandle (perform Ask.ask $name) with $eff using $name {{\nask value => resume {tail}\n}}\n}}\n"
             );
             let source = SourceFile::new("admission-scratch.ash", text).unwrap();
             let tree = parse(lex(&source).unwrap());

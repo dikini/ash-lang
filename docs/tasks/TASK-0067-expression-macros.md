@@ -530,8 +530,8 @@ five affected integration suites now pass 151 cases
 (`/tmp/ash-qualified-context-suite.log`, SHA-256
 `1d50658e0ae2c1dbd58b51400274779ba69ce00a0583422b4e7eb7cabae2e91f`).
 Independent review cleared this partial result at `24bd8410`; it adds no ledger
-credit. Captured interface and pattern positions and broader scope hygiene remain
-open.
+credit. Other captured interface and pattern positions and broader scope hygiene
+remain open.
 
 An owner-qualified public effect previously produced an internal error even
 though the handwritten equivalent ran to 42. The checked public-effect route
@@ -561,7 +561,24 @@ original targeted-import failure is `/tmp/ash-targeted-generic-effect-red.log`
 six affected suites pass 180 cases in
 `/tmp/ash-targeted-generic-effect-suite.log` (SHA-256
 `7c7fa3b9683d53317e0784ae25d16c4335551174ce021027978a172be69d2900`).
-This partial result awaits review and adds no ledger credit.
+Independent review cleared this partial result at `ee521864`; it adds no ledger
+credit.
+
+A captured qualifier or member in a local-evidence interface application now
+passes through the ordinary parser and resolver. Caller-context and owner-context
+graphs each return 42, including a conflicting caller alias; the handwritten
+control also returns 42. Wrong kind, missing literal alias, argument or method
+body, and a method-pattern binding used outside its scope are refused. The
+name-only admission path keeps no fabricated interface or evidence and restores
+temporary resolver state on success and failure. The original failure is
+`/tmp/ash-qualified-interface-red.log` (SHA-256
+`e3dad1b56adac712b4a41d317eb820c21a10e99b1cb14b8cf16786f8aad89f7e`); seven
+affected suites pass 215 cases in `/tmp/ash-qualified-interface-suite.log`
+(SHA-256 `5a31d975c1d1a8fba852a7802e2605f25fa58deb196af93864ca8b3e415012eb`),
+and the admission-isolation check passes in
+`/tmp/ash-qualified-interface-isolation.log` (SHA-256
+`48fbcc943750a091a493a5713c07e7e78e6017c38386ac4eb25469f7950f1ba2`). This
+partial result awaits review and adds no ledger credit.
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources
@@ -576,7 +593,7 @@ hygiene, causal diagnostics, M01–M14, C1 and C2 remain open.
 ## Progress
 
 The weighted ledger records **58.5/100 reviewed delivery points**. The latest
-reviewed implementation pin is `2ad6e6be`. These are partial implementation
+reviewed implementation pin is `ee521864`. These are partial implementation
 observations, not acceptance of the whole feature.
 M01–M14 and C1/C2 remain pending.
 

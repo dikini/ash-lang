@@ -180,6 +180,43 @@ fn targeted_and_generic_owner_effects_keep_their_checked_identity() {
 }
 
 #[test]
+fn captured_qualified_interfaces_use_the_alias_context() {
+    for path in [
+        "qualified-interface/manual.ash",
+        "qualified-interface/caller.ash",
+        "qualified-interface/owner.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    for (path, reason) in [
+        (
+            "qualified-interface/wrong_kind.ash",
+            "resolve.interface-kind",
+        ),
+        (
+            "qualified-interface/missing_alias.ash",
+            "resolve.unavailable-export",
+        ),
+        (
+            "qualified-interface/missing_argument.ash",
+            "resolve.unknown-type",
+        ),
+        (
+            "qualified-interface/missing_body.ash",
+            "resolve.unknown-name",
+        ),
+        (
+            "qualified-interface/pattern_escape.ash",
+            "resolve.unknown-name",
+        ),
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), reason, "{path}: {failure:?}");
+    }
+}
+
+#[test]
 fn generated_token_diagnostics_point_to_the_invocation() {
     use ash::{
         message::{Catalogue, Locale},
