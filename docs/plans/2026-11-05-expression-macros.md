@@ -1082,3 +1082,20 @@ event windows above are kept separate from these remaining estimates.
 Clippy also identified a complex tuple in the repeat test; flattening the
 test observation to a fixed array resolved it, and the focused tests and
 Clippy now pass. That correction is within O09's existing review allowance.
+
+### 21:09 reviewed reproducibility and measured windows
+
+Independent review cleared `787f5ef5` at 21:09:00 and accepted the two P29
+increments recorded in the task. O06 changes from demonstrated to reviewed;
+its implementation allowance was already removed, so the 101-minute
+known-work scenario is not reduced again. O07 must inventory the remaining
+obligations before that scenario can be treated as a complete forecast.
+
+The observed session windows were O01, 19:12:28–19:48:04 (about 35 minutes
+37 seconds); O02, 19:48:04–20:21:02 (about 32 minutes 57 seconds); the
+combined O03/O04/O05 work, 20:21:02–20:55:33 (about 34 minutes 31 seconds);
+and O06, 20:52:46–21:02:51 (about 10 minutes 4 seconds). O06 overlaps the
+previous window. These elapsed windows include tool and review time and are
+not added together as exclusive active work. Only the 16-minute O10 gate
+estimate comes directly from a comparable complete gate; the other remaining
+minutes are planning judgments.

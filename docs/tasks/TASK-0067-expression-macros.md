@@ -21,11 +21,11 @@
 
 ## Current delivery status, 6 November
 
-The latest reviewed product checkpoint is `7ae26e76`: **67/99 original-scope
-points are reviewed and 32 remain**. The separately estimated 30 points of
-additional performed work give an effort index of **97/129**, not an
+The latest reviewed product checkpoint is `787f5ef5`: **69/99 original-scope
+points are reviewed and 30 remain**. The separately estimated 30 points of
+additional performed work give an effort index of **99/129**, not an
 acceptance percentage. The repeated-compilation and changed-input tests are
-demonstrated and await review. M01–M14 and C1/C2 remain open.
+reviewed. M01–M14 and C1/C2 remain open.
 
 The [operational plan](../plans/2026-11-05-expression-macros.md#2026-11-06-operational-update-2034)
 records a 101-minute known-work scenario after that demonstrated batch. It is
@@ -1335,6 +1335,60 @@ removed the warning. The refreshed all-target test check passes in
 The canonical interface is fixed by this compiler and no public version or
 semantic-option switch was invented for this test. This evidence awaits review
 and does not alone close M12.
+
+### Reviewed reproducibility update, 21:09
+
+Independent review cleared `787f5ef5`. P29 gains 1 point for the repeated
+source-relative copy/use observations and 1 for the changed-input results,
+completing its 2-point cap. This does not repeat P10 identity or P17 cache
+credit. The current original scope is **69/99 reviewed, with 30 remaining**;
+including the unchanged 30 estimated additional-effort points gives **99/129,
+approximately 77%**, as an effort index only. M12 and C1/C2 remain open.
+
+### Remaining point inventory, 21:12
+
+This inventory accounts for all **30 unearned original-scope points** after
+`787f5ef5`. “Evidence exists” means the named tests or receipts cover part of
+the row and still need their complete scope reconciled. “Evidence gap” means
+an observation has not been established; it is not a finding that the
+feature is broken. Delivery actions remain gated on the complete candidate.
+
+| Item | Remaining | Current evidence and next boundary |
+| --- | ---: | --- |
+| P09 | 0.25 | Evidence exists for captured patterns and sequential scopes in `surface_macros`; reconcile the broader contextual cases. |
+| P10 | 0.25 | Evidence exists for copied nominals and resources. A copied lexical-region identity/use observation is not established. |
+| P11 | 1 | Evidence exists for private helper, opaque and nested effect-signature closure graphs; reconcile the retained checked closure and ordinary privacy boundaries. |
+| P13 | 1.5 | Evidence exists for definition/caller/fresh syntax contexts and selector parsing; reconcile leading-context, import, reservation and conflict cases. |
+| P14 | 1 | The canonical module and token vocabulary are exercised. Reconcile identity and same-interface conformance; there is no selectable public version number. |
+| P15 | 0.5 | Wrong type and effect are refused. Explicit polymorphic and constrained transformer refusal evidence remains to be checked. |
+| P16 | 0.5 | The transformer-reuse test executes and changes a transitive helper; reconcile that checked helper closure with the entry handoff. |
+| P17 | 1 | Real transformer requests and invocation-handle authentication are tested; reconcile the complete issued `Input` and its captures at the checked entry. |
+| P18 | 1.5 | Identifier origins and foreign/stale handle refusal are tested. A complete mixed token/group/fragment/context/origin round trip is not yet established. |
+| P20 | 1 | Protected and explicit unwrapped parsing are tested. Reconcile broader parse contexts and an explicit trailing-output refusal. |
+| P21 | 2 | Fresh, definition and caller identifiers work in separate graphs. Exact reuse of one fresh identifier versus distinct same-spelled fresh identifiers remains to be checked. |
+| P23 | 1.75 | Output decoding, group transfer, malformed output and one wrong-owner constructor are tested; reconcile the remaining output and failure cases. |
+| P24 | 0.25 | Active destruction and first-teardown preservation have reviewed compositional evidence. Complete the remaining failure-path audit without claiming a direct paired injection. |
+| P26 | 0.5 | Service, transfer and recursive-expansion limit cases exist; reconcile their exact closed-invocation results. |
+| P27 | 1 | Discarded nested syntax is tested. A discriminating observation that duplicated nested transformer occurrences each expand remains to be checked. |
+| P28 | 2.5 | Checked dependency reuse, compile-time entry validation and Core mutation tests exist; reconcile them through the actual macro graph and its owning boundaries. |
+| P30 | 0.75 | Operator, match, application and pattern causes are reviewed. Other semantic causes and bounded copy/relocation preservation remain unverified. |
+| P31 | 0.75 | English/Bulgarian and JSON cases exist for selected failures; complete the remaining variant, frame and catalog audit. |
+| P32 | 2.5 | The supported combined graph builds and runs after source removal; reconcile image reconstruction and corruption controls. Handwritten and generated local newtypes both hit the existing unsupported `RegistryMetadata` image boundary. |
+| P33 | 0.5 | Source-removal native execution is observed. Reconcile cleanup and the absence of runtime syntax-service requests. |
+| P34 | 1 | The syntax and API text is reviewed. Finish executable positive/negative example reconciliation. |
+| P35 | 1 | API and tool text is reviewed. Finish status, links, authority and transition cleanup at the owning checkpoint. |
+| P36 | 1.5 | Connected C1 review and a fresh full gate remain delivery actions. |
+| P37 | 2.5 | Whole-path independent review and M01–M14/consumer evidence audit remain delivery actions. |
+| P38 | 1.5 | C2 gate and retained-input/evidence readback remain delivery actions; identical-input verification may be reused only under its owning gate rules. |
+| P39 | 1.5 | Milestone integration, retained verification and acceptance readback remain delivery actions. |
+| **Total** | **30** | |
+
+The approved amendment removed one unearned P11 point for grant objects and
+grant-only mutation checks. It did not remove source privacy, checked routes,
+ordinary Core checks or their remaining evidence. The old unused-template
+name-admission work had no separately weighted pending point; its removal is
+not counted as completion. Grant-only image data is likewise superseded,
+while the mixed P32 cap remains above.
 
 ## Progress
 
