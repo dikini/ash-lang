@@ -1179,3 +1179,14 @@ pass, while duplicating the same captured region fails. A debugger identifies
 the existing source-order rejection. The repair estimate is pending its
 reviewed boundary. Neither the earlier 141-minute scenario nor an unreviewed
 131-minute draft is a complete forecast of the remaining chain.
+
+### Copied-region repair candidate
+
+The debugger identified the existing Core registry source-order rejection.
+The candidate extends that ordinary fallback to an actual matching lexical
+region owner, leaving the subsequent independent type and scope checks in
+place. The copied-region fixture, its handwritten and single-expansion
+controls, independent Core mutation checks and affected suites pass as
+recorded in the task. The candidate awaits review; O07c and the final
+delivery chain remain open. The earlier conditional scenarios did not
+include this repair and are not current completion forecasts.

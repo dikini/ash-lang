@@ -2941,6 +2941,81 @@ mod tests {
             }
             previous = Some(observation);
         }
+
+        for control in ["region_handwritten.ash", "region_once.ash"] {
+            let compiled = compile_path(fixture(control)).expect(control);
+            assert_eq!(
+                execute(&compiled).unwrap().value_display(),
+                "42",
+                "{control}"
+            );
+        }
+        let compiled = compile_path(fixture("region.ash")).expect("copied regions compile");
+        let (program, _) = compiled
+            .effect_build_input()
+            .expect("validated effect Core");
+        let source = compiled
+            .provenance
+            .iter()
+            .find(|(_, source)| {
+                source
+                    .display_path()
+                    .ends_with("copied-declarations/region.ash")
+            })
+            .expect("caller source")
+            .1
+            .id();
+        let fixture_source =
+            include_str!("../tests/fixtures/surface-macros/copied-declarations/region.ash");
+        let source_offset = |needle: &str| {
+            u32::try_from(fixture_source.find(needle).expect("fixture binding"))
+                .expect("the fixture offset fits a source span")
+        };
+        let outside = source_offset("outside = 20");
+        let caller_binder = program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                crate::core::EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+                    crate::core::PureComputation::Bind(binding),
+                )) if binding.binder().origin().primary_span().source() == source
+                    && binding.binder().origin().primary_span().range().start() == outside =>
+                {
+                    Some(binding.binder().id())
+                }
+                _ => None,
+            })
+            .expect("the caller's outside binding remains in checked Core");
+        let owner = source_offset("owner {");
+        let regions = program
+            .nodes()
+            .iter()
+            .filter_map(|node| match &node.kind {
+                crate::core::EffectExprKind::Operation(crate::core::EffectOperation::Region(
+                    scope,
+                )) if scope.access().origin().primary_span().source() == source
+                    && scope.access().origin().primary_span().range().start() == owner =>
+                {
+                    Some(scope)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [first, second] = regions.as_slice() else {
+            panic!("the two copies retain two lexical region scopes");
+        };
+        assert_eq!(
+            first.access().origin().primary_span(),
+            second.access().origin().primary_span()
+        );
+        assert_ne!(first.identity(), second.identity());
+        assert_ne!(first.access().id(), second.access().id());
+        for region in [first, second] {
+            let body = reachable(program, region.body());
+            assert!(uses(&body, region.access().id()));
+            assert!(uses(&body, caller_binder));
+        }
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
     }
 
     #[test]

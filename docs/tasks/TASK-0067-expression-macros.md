@@ -1494,6 +1494,36 @@ The failing control is `/tmp/ash-syntax-copied-region-controls.log` (SHA-256
 debugger stopped at the source-order rejection for the second region's
 retained source coordinate. The repair and its estimate remain open.
 
+### Copied-region repair candidate
+
+The ordinary Core registry now recognizes a lexical region identity in its
+source-order fallback only when the actual non-entry region owner matches its
+identity, access type, module and containing origins. Existing Core region,
+type, scope and uniqueness validation remains in force. The real copied
+fixture compiles and returns 42; checked Core has distinct identities and
+access binders, with each copy using its own binder and the caller's original
+`outside` binder. Handwritten and single-expansion controls also return 42
+(`/tmp/ash-syntax-copied-region-driver-final.log`, SHA-256
+`81767123a04ec00aa2320555cf70f4b472e5ead7293ac06f6283f43f427b653c`).
+
+Identity traversal independently revalidates the result. Missing or
+mismatched owner, access type and origin mutations are refused, as is a
+same-typed sibling-access retarget (`/tmp/ash-syntax-copied-region-core.log`,
+SHA-256 `22ce45a638dd686222200dc1935c063abc76a47bc85f61d85a7376b77c56f55d`).
+The existing source-order set passes seven cases, including reversed headers
+and the resource-carrier negative (`/tmp/ash-syntax-region-source-order.log`,
+SHA-256 `110f0b12971b4f869bfa60ee62d3a90133f745e45c56f3fdf244b4ec60b5a5a7`).
+The affected macro-host, region-runtime and surface-macro suites pass 179
+tests (`/tmp/ash-syntax-copied-region-suites.log`, SHA-256
+`fd23db0e242b2f65bbdb41e7012e38695e3d6f432c7ced42d54eb3a35f3cbc2d`).
+The unchanged 256 KiB local-nominal canary passes
+(`/tmp/ash-syntax-copied-region-stack.log`, SHA-256
+`5e5932a816727ea2cbb864b856bc1b5cec70ea186fe6ff7dc4b55bb87492de60`), as
+does all-target Clippy (`/tmp/ash-syntax-copied-region-clippy.log`, SHA-256
+`644d905475073b19ec7d260c8e3fc60c71e2a5a7ea921805f7b16da4097c851e`).
+This candidate awaits independent review; no additional point or M row is
+closed here.
+
 ## Progress
 
 The weighted ledger records **61.5/100 reviewed delivery points**. The latest

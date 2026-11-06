@@ -5610,6 +5610,46 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         Ok(false)
     }
 
+    // Region identities, like Store identities, are allocated while resolving
+    // bodies. A copied lexical owner can retain the same source coordinate;
+    // require its actual carrier before excluding it from header ordering.
+    fn is_structural_region_identity(
+        &self,
+        id: crate::types::TypeVariableId,
+    ) -> Result<bool, ValidationError> {
+        let Some(module) = id.module() else {
+            return Ok(false);
+        };
+        let Some(canonical) = self.program.registry.type_variable(id) else {
+            return Ok(false);
+        };
+        if canonical.kind != Kind::Type {
+            return Ok(false);
+        }
+        for node in &self.program.nodes {
+            self.charge_type_work(1)?;
+            let Some(scope) = F::region_scope(&node.kind) else {
+                continue;
+            };
+            if scope.entry || scope.identity != id || scope.access.id().module() != Some(module) {
+                continue;
+            }
+            let Some(api) = crate::resolved::RegionApi::for_module(scope.api) else {
+                continue;
+            };
+            let Some(span) = node.origin.as_ref().map(Origin::primary_span) else {
+                continue;
+            };
+            if span.cover(canonical.origin.primary_span()) == Some(span)
+                && span.cover(scope.access.origin().primary_span()) == Some(span)
+                && self.same_type_charged(scope.access.ty(), &Type::Nominal(api.region_view()))?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn lexical_method_scheme_matches(
         &self,
         anchor: &MethodEvidenceAnchor,
@@ -7444,7 +7484,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 && previous_type_variable_start
                     .is_some_and(|previous| parameter_range.start() <= previous)
             {
-                contextual = self.is_structural_store_identity(parameter.id)?;
+                contextual = self.is_structural_store_identity(parameter.id)?
+                    || self.is_structural_region_identity(parameter.id)?;
             }
             if identity != parameter.id
                 || Some(parameter_span.source()) != registry_source
@@ -7861,7 +7902,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         .get(&module)
                         .is_some_and(|previous| parameter_range.start() <= *previous)
                 {
-                    contextual = self.is_structural_store_identity(parameter.id)?;
+                    contextual = self.is_structural_store_identity(parameter.id)?
+                        || self.is_structural_region_identity(parameter.id)?;
                     if !contextual {
                         return Err(ValidationError::new(ValidationReason::Registry, None));
                     }
@@ -21856,6 +21898,129 @@ mod tests {
         assert_eq!(
             validator.validate_registry().unwrap_err().reason(),
             ValidationReason::Registry
+        );
+    }
+
+    #[test]
+    fn copied_region_order_requires_its_actual_owner_and_scope() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/copied-declarations/region.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the copied regions pass linked validation");
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let mut regions = program
+            .nodes()
+            .iter()
+            .filter_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Region(scope)) if !scope.entry => {
+                    Some((scope.identity, scope.access.id()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        regions.sort_unstable_by_key(|(identity, _)| identity.local());
+        let [
+            (first_identity, first_access),
+            (second_identity, second_access),
+        ] = regions[..]
+        else {
+            panic!("the two copied lexical regions remain distinct")
+        };
+        assert_ne!(first_identity, second_identity);
+        assert_ne!(first_access, second_access);
+        let clean = identity_effect_traversal(program).unwrap();
+        let validator = Validator::new_modules(&clean, &sources, &modules).unwrap();
+        assert!(
+            validator
+                .is_structural_region_identity(first_identity)
+                .unwrap()
+        );
+        assert!(
+            validator
+                .is_structural_region_identity(second_identity)
+                .unwrap()
+        );
+        drop(validator);
+        validate_effect_modules(clean, &sources, &modules)
+            .expect("identity traversal retains the valid independent Core");
+
+        for mutation in 0..4 {
+            let mut altered = identity_effect_traversal(program).unwrap();
+            let arena = altered.arena;
+            let node = altered
+                .nodes
+                .iter_mut()
+                .find(|node| {
+                    matches!(&node.kind, EffectExprKind::Operation(EffectOperation::Region(scope))
+                        if scope.identity == second_identity)
+                })
+                .expect("the second region has its own carrier");
+            if mutation == 0 {
+                node.kind = EffectExprKind::Pure(PureExprKind::Value(PureValue::Unit(
+                    super::super::literal::UnitNode,
+                )));
+            } else {
+                let EffectExprKind::Operation(EffectOperation::Region(scope)) = &mut node.kind
+                else {
+                    unreachable!()
+                };
+                match mutation {
+                    1 => scope.identity = first_identity,
+                    2 => {
+                        scope.access = TypedBinder::new(
+                            arena,
+                            scope.access.id(),
+                            Type::Unit,
+                            scope.access.origin().clone(),
+                        );
+                    }
+                    3 => node.origin = Some(scope.access.origin().clone()),
+                    _ => unreachable!(),
+                }
+            }
+            let validator = Validator::new_modules(&altered, &sources, &modules).unwrap();
+            assert!(
+                !validator
+                    .is_structural_region_identity(second_identity)
+                    .unwrap(),
+                "a missing or mismatched region carrier cannot justify source order: {mutation}"
+            );
+            drop(validator);
+            assert!(
+                validate_effect_modules(altered, &sources, &modules).is_err(),
+                "independent validation must reject carrier mutation {mutation}"
+            );
+        }
+
+        let mut retargeted = identity_effect_traversal(program).unwrap();
+        let variable = retargeted
+            .nodes
+            .iter_mut()
+            .find_map(|node| match &mut node.kind {
+                EffectExprKind::Pure(PureExprKind::Variable(variable))
+                    if variable.binder() == second_access =>
+                {
+                    Some(variable)
+                }
+                _ => None,
+            })
+            .expect("the second region uses its own access binder");
+        *variable = super::super::variable::VariableNode::new(first_access);
+        assert!(
+            validate_effect_modules(retargeted, &sources, &modules).is_err(),
+            "a region access cannot be retargeted to its sibling"
         );
     }
 
