@@ -640,11 +640,13 @@ impl SyntaxHost {
         if depth > crate::parser::STRUCTURAL_DEPTH_LIMIT {
             return Err(RuntimeFailure::ResourceCapacity);
         }
+        let mut groups = Vec::new();
+        let mut nodes = nodes.iter().rev();
         let mut rest = self.construct(heap, "NoNodes", None)?;
-        for node in nodes.iter().rev() {
-            let (constructor, fields) = match node {
-                MacroOutputNode::Expression(expression, origin)
-                | MacroOutputNode::ForwardedExpression(expression, origin) => {
+        loop {
+            let (constructor, fields) = match nodes.next() {
+                Some(MacroOutputNode::Expression(expression, origin))
+                | Some(MacroOutputNode::ForwardedExpression(expression, origin)) => {
                     let index = self.expressions.len();
                     self.expressions.push(expression.clone());
                     (
@@ -655,7 +657,7 @@ impl SyntaxHost {
                         ],
                     )
                 }
-                MacroOutputNode::Identifier(name, origin) => {
+                Some(MacroOutputNode::Identifier(name, origin)) => {
                     let index = self.identifiers.len();
                     self.identifiers.push(name.clone());
                     (
@@ -666,7 +668,7 @@ impl SyntaxHost {
                         ],
                     )
                 }
-                MacroOutputNode::Token(kind, spelling, origin) => {
+                Some(MacroOutputNode::Token(kind, spelling, origin)) => {
                     let index = self.tokens.len();
                     self.tokens.push(SyntaxToken {
                         kind: kind.clone(),
@@ -680,19 +682,38 @@ impl SyntaxHost {
                         ],
                     )
                 }
-                MacroOutputNode::Group(delimiter, children, origin) => {
+                Some(MacroOutputNode::Group(delimiter, children, origin)) => {
                     let delimiter = match delimiter {
                         MacroDelimiter::Parentheses => "Parentheses",
                         MacroDelimiter::Braces => "Braces",
                     };
                     let delimiter = self.construct(heap, delimiter, None)?;
-                    let children = self.syntax_value(children, heap, depth + 1)?;
+                    if depth + groups.len() >= crate::parser::STRUCTURAL_DEPTH_LIMIT {
+                        return Err(RuntimeFailure::ResourceCapacity);
+                    }
+                    groups
+                        .try_reserve(1)
+                        .map_err(|_| RuntimeFailure::HeapCapacity)?;
+                    groups.push((nodes, rest, delimiter, origin));
+                    nodes = children.iter().rev();
+                    rest = self.construct(heap, "NoNodes", None)?;
+                    continue;
+                }
+                Some(MacroOutputNode::Splice(_)) => {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                None => {
+                    let children = self.construct(heap, "Syntax", Some(rest))?;
+                    let Some((parent, parent_rest, delimiter, origin)) = groups.pop() else {
+                        return Ok(children);
+                    };
+                    nodes = parent;
+                    rest = parent_rest;
                     (
                         "GroupNode",
                         vec![delimiter, children, self.issue_origin(origin.clone())],
                     )
                 }
-                MacroOutputNode::Splice(_) => return Err(RuntimeFailure::InvalidControlState),
             };
             let fields = Value::Location(allocate_heap(
                 heap,
@@ -705,7 +726,6 @@ impl SyntaxHost {
             )?);
             rest = self.construct(heap, "MoreNodes", Some(pair))?;
         }
-        self.construct(heap, "Syntax", Some(rest))
     }
 }
 

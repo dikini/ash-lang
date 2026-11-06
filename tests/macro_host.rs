@@ -286,6 +286,20 @@ fn expression_unwrapping_preserves_groups_and_nested_fragments() {
 }
 
 #[test]
+fn deeply_grouped_expression_unwraps_on_a_small_stack() {
+    std::thread::Builder::new()
+        .stack_size(1024 * 1024)
+        .spawn(|| {
+            let compiled = compile_path(macro_fixture("entry_unwrap_deep.ash"))
+                .expect("the captured expression can be unwrapped");
+            assert_eq!(execute(&compiled).unwrap().value_display(), "70");
+        })
+        .expect("the compiler thread starts")
+        .join()
+        .expect("group conversion fits the stack");
+}
+
+#[test]
 fn generated_nested_unwrap_keeps_the_protected_fragment() {
     let compiled = compile_path(macro_fixture("entry_unwrap_generated_protected.ash"))
         .expect("a generated nested invocation keeps its protected argument");

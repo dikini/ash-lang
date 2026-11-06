@@ -629,7 +629,20 @@ nine existing pattern cases pass in `/tmp/ash-captured-pattern-refactor-patterns
 (SHA-256 `f245ce550d53558ee54b5014a89e8c1ba2a301847e07b953576323eaa29e6b40`),
 and admission-state isolation passes in `/tmp/ash-captured-pattern-refactor-isolation.log`
 (SHA-256 `58e265a678db11ac1291900199784d336599eef78069de54245d62ddb0d8dcb8`).
-This partial result awaits review and adds no ledger credit.
+Independent review cleared this partial result at `81eefcc9`; it adds no ledger
+credit.
+
+A real transformer unwrapping 100 nested groups now returns 70 on a 1 MiB
+compiler thread stack, including its inner sibling tokens. The previous code
+aborted with stack overflow (`/tmp/ash-syntax-unwrapping-small-stack-red.log`,
+SHA-256 `d2fbab0d774e04d9bb648c5c4ea1e70a339c00aff82ef47c1806b110c24df1e3`);
+the focused test now passes (`/tmp/ash-syntax-unwrapping-small-stack-green.log`,
+SHA-256 `b290708384b51058c60b287b4b5dba31d76f3cf4f98f3eb6a80d70e0c657e09f`).
+The existing conversion uses an explicit group traversal while keeping the
+previous depth limit and node/origin order. Three affected suites pass 159 cases
+in `/tmp/ash-syntax-unwrapping-stack-suite.log` (SHA-256
+`0feee242981dd807748b511f52a1e89d47513a958ca6bf10d4b5df274ac4384b`).
+This repair awaits review and adds no ledger credit.
 
 The previously supported combined macro graph still builds with public
 `ash build` after this rewrite and returns 42 after its four copied Ash sources
