@@ -734,6 +734,7 @@ pub(crate) fn validate_template_syntax(
                     span: name.span,
                     introduction: usize::MAX - captures.len(),
                     introduced_at: Some(name.span),
+                    written: false,
                 };
                 identifiers.push(placeholder.clone());
                 SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
@@ -825,6 +826,7 @@ fn substitute_contents(
                 if introduction != 0 {
                     name.introduction = introduction;
                     name.introduced_at = Some(invocation);
+                    name.written = false;
                 }
             }
             MacroOutputNode::Group(_, children, _) => {

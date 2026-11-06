@@ -763,6 +763,8 @@ pub struct SurfaceName {
     pub(crate) introduction: usize,
     /// The invocation that introduced this template name, if any.
     pub(crate) introduced_at: Option<Span>,
+    /// Whether this identifier was written in source, including when captured.
+    pub(crate) written: bool,
 }
 
 /// One declaration-level source type parameter.

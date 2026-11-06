@@ -2,6 +2,7 @@ import @builtin.compiler.syntax as Syntax
 
 pub syntax invalid_parse $value:expr => using expand_invalid
 pub syntax invalid_output $value:expr => using expand_output
+pub syntax trailing_output $value:expr => using expand_trailing
 
 expand_invalid : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
 expand_invalid input = {
@@ -31,6 +32,26 @@ output_plus (invocation, definition, one) = match Syntax.make_token(Syntax.Plus,
         Syntax.Expanded(Syntax.Syntax(nodes))
     }
     _ => Syntax.Rejected(Syntax.MacroDiagnostic("invalid plus", invocation, Syntax.NoOrigins))
+}
+
+expand_trailing : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
+expand_trailing input = {
+    let origin = Syntax.invocation_origin(input)
+    match Syntax.make_token(Syntax.IntegerLiteral, "1") {
+        Syntax.MadeToken(one) => trailing_line(origin, one)
+        _ => Syntax.Rejected(Syntax.MacroDiagnostic("invalid integer", origin, Syntax.NoOrigins))
+    }
+}
+
+trailing_line : (Syntax.Origin, Syntax.Token) -> Syntax.MacroResult ! {Syntax.Ops}
+trailing_line (origin, one) = match Syntax.make_token(Syntax.LineEnd, "\n") {
+    Syntax.MadeToken(line) => {
+        let second = Syntax.MoreNodes(Syntax.TokenNode(one, origin), Syntax.NoNodes)
+        let separator = Syntax.MoreNodes(Syntax.TokenNode(line, origin), second)
+        let nodes = Syntax.MoreNodes(Syntax.TokenNode(one, origin), separator)
+        Syntax.Expanded(Syntax.Syntax(nodes))
+    }
+    _ => Syntax.Rejected(Syntax.MacroDiagnostic("invalid line", origin, Syntax.NoOrigins))
 }
 
 make_plus : (Syntax.Input, Syntax.Origin, Syntax.Origin, Syntax.Token) -> Syntax.MacroResult ! {Syntax.Ops}

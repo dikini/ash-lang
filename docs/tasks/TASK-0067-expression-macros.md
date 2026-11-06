@@ -27,12 +27,12 @@ additional performed work give an effort index of **99/129**, not an
 acceptance percentage. The repeated-compilation and changed-input tests are
 reviewed. M01–M14 and C1/C2 remain open.
 
-The [operational plan](../plans/2026-11-05-expression-macros.md#2026-11-06-operational-update-2034)
-records a 101-minute known-work scenario after that demonstrated batch. It is
-not a calibrated completion forecast: O07 must inventory all unearned
-obligations and any missing work before the remaining chain can be estimated
-as complete. Actual event windows and remaining estimates are recorded
-separately. The historical checkpoints below are preserved as written.
+The [operational plan](../plans/2026-11-05-expression-macros.md#2130-source-binder-reservation-finding)
+records a newly demonstrated source-binder reservation defect. The preceding
+141-minute scenario did not include that repair and is not a current complete
+forecast; the revised chain depends on the repair's confirmed boundary. Actual
+event windows and remaining estimates are recorded separately. The historical
+checkpoints below are preserved as written.
 
 ## Dependencies
 
@@ -1425,6 +1425,56 @@ that path. `checked_transformer_emits_a_generic_local_newtype` also runs the
 are accepted as distinct type parameters, while the same handle repeated is
 rejected. The remaining association question is in term-binder positions.
 This refinement does not award the prior positive evidence again.
+
+### Syntax-name reservation repair in progress, 21:56
+
+The M07 driver check found that a selected syntax spelling was still accepted
+as a source global, parameter, local or pattern binder, as an ordinary term
+import, and as a captured identifier subsequently used as a binder. The
+six-case red receipt is `/tmp/ash-syntax-name-reservation-red2.log` (SHA-256
+`05855a0513486b712cff789fbd182f7d245dc31e97fb25278891ad43b33cfe74`). The
+current candidate retains whether a name was written through the ordinary
+syntax path and enforces the existing reservation at term admission. It does
+not infer authorship from a diagnostic origin or change lexical identity.
+
+The focused check now rejects those six cases and also checks recursive,
+interface-method, resource and region binders; each rejection names the
+written occurrence and its syntax import in JSON. Renaming, complete imports,
+qualified terms, effect operations and lexical evidence method selectors
+remain usable (`/tmp/ash-syntax-name-reservation-final5.log`, SHA-256
+`70ebc00080eaf0fcba42683eb73ac0bb154081d5b715a9184e0fa9f52911dd78`). An
+unused generated caller-context binder with the same spelling remains valid
+and executes to 42 (`/tmp/ash-syntax-created-binder-after.log`, SHA-256
+`1c92050efde9145cc1290ccc06266250dbec1111122dba159fa1a54d4171b76e`).
+An older fresh-context fixture combined a selected syntax name and a
+same-spelled source global; it is split into separate caller-syntax and
+caller-global negatives, both retaining `resolve.unknown-name`.
+
+The affected six-suite run passes 297 tests before the final addition of the
+qualified-member and evidence-selector assertions
+(`/tmp/ash-syntax-reservation-suites-final2.log`,
+SHA-256 `2ed9134670ed3dfa6e281a942edb92adf29a6079d8109d44f94f100ee8a7a767`);
+the focused receipt above includes that assertion. Both unchanged 256 KiB
+canaries pass: `/tmp/ash-syntax-reservation-stack.log` (SHA-256
+`c500cee6286ebf2dce751d20c8527548371f2c262a44349e2d3f506da5ba6fb8`) and
+`/tmp/ash-syntax-reservation-stack-pattern.log` (SHA-256
+`9c9a815525e50e0655f12f455d4577dadfbd11a83946c7e735068fea4f8542e2`).
+All-target Clippy passed (`/tmp/ash-syntax-reservation-clippy.log`, SHA-256
+`49bcde4d192cea339a13b2d8a0186ac16ca3f4f7f42e040ca8f8388d83b4fd44`), as
+did targeted Clippy after the last test-only addition
+(`/tmp/ash-syntax-reservation-clippy-test-final.log`, SHA-256
+`b2849856fc755bf5444d0b8ff6cbea86b3147ab343aa8bff1f2e691c1ab44607`).
+
+Two independent remaining observations also pass: a transformer returning a
+second expression is rejected with `parse.unexpected-token`
+(`/tmp/ash-syntax-trailing-output.log`, SHA-256
+`d90c552fe8029ff9258f919f0f1b5c8d31a15762d890cba39b6ff30afcdd280e`), and
+`(twice (twice 10)) + 2` runs three transformer machines, returns 42 and
+issues no further syntax requests during ordinary execution
+(`/tmp/ash-syntax-copied-transformers-after.log`, SHA-256
+`1247880929fdb706fce8e950eb00492c67b9d2bc6335a4305399957539817768`).
+These results and the repair await the retaining pin and independent review;
+no point or acceptance row is closed here.
 
 ## Progress
 

@@ -316,6 +316,157 @@ fn ordinary_global_named_syntax_remains_importable() {
 }
 
 #[test]
+fn syntax_import_selection_reserves_only_the_selected_name() {
+    let tree = TempTree::create();
+    tree.write(
+        "forms.ash",
+        "pub syntax twice $value:expr => {\n$value + $value\n}\npub syntax bind $name:ident in $body:expr => {\nlet $name = 0\n$body\n}\n",
+    );
+    tree.write(
+        "values.ash",
+        "pub twice : Int -> Int\ntwice value = value\n",
+    );
+    tree.write("api.ash", "pub interface Check<T> {\ntwice : T -> Int\n}\n");
+
+    let entry = tree.write(
+        "entry.ash",
+        "import forms (syntax twice, syntax twice)\nmain : Unit -> Int\nmain () = 42\n",
+    );
+    let configuration = || RunConfiguration {
+        entry: entry.clone(),
+        roots: ModuleRoots::empty(),
+    };
+    let failure = compile_path(configuration()).expect_err("duplicate syntax selections reject");
+    assert_eq!(failure.reason_code(), "resolve.import-conflict");
+
+    tree.write(
+        "entry.ash",
+        "import forms (syntax twice as double)\ntwice : Int -> Int\ntwice value = value\nmain : Unit -> Int\nmain () = (double 1) + twice 40\n",
+    );
+    let compiled = compile_path(configuration()).expect("renaming leaves the old term name free");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+
+    tree.write(
+        "entry.ash",
+        "import forms as Forms\ntwice : Int -> Int\ntwice value = value + value\nmain : Unit -> Int\nmain () = twice 21\n",
+    );
+    let compiled =
+        compile_path(configuration()).expect("a complete import does not activate syntax");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+
+    tree.write(
+        "entry.ash",
+        "import forms (syntax twice)\nimport values as Values\neffect Ask {\n  twice : Unit -> Unit\n}\nf : Unit -> Unit ! {Ask}\nf () = perform Ask.twice ()\nmain : Unit -> Int\nmain () = Values.twice 42\n",
+    );
+    let compiled = compile_path(configuration()).expect("qualified members remain free");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+
+    tree.write(
+        "entry.ash",
+        "import forms (syntax twice)\nimport api as Api\nmain : Unit -> Int\nmain () = {\nnewtype Token = Token(Unit)\nwith Api.Check<Token> {\ntwice ignored = 42\n}\nApi.twice(Token(()))\n}\n",
+    );
+    let compiled = compile_path(configuration()).expect("evidence method selectors remain free");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+
+    let mut accepted = Vec::new();
+    for (case, source) in [
+        (
+            "global",
+            "import forms (syntax twice)\ntwice : Int -> Int\ntwice value = value\nmain : Unit -> Int\nmain () = 42\n",
+        ),
+        (
+            "parameter",
+            "import forms (syntax twice)\nf : Int -> Int\nf twice = 42\nmain : Unit -> Int\nmain () = f 0\n",
+        ),
+        (
+            "local",
+            "import forms (syntax twice)\nmain : Unit -> Int\nmain () = {\nlet twice = 0\n42\n}\n",
+        ),
+        (
+            "pattern",
+            "import forms (syntax twice)\nmain : Unit -> Int\nmain () = match 0 {\ntwice => 42\n}\n",
+        ),
+        (
+            "recursive binder",
+            "import forms (syntax twice)\nmain : Unit -> Int\nmain () = {\nlet rec twice : Int -> Int = fn(value) {\nvalue\n}\n42\n}\n",
+        ),
+        (
+            "interface method",
+            "import forms (syntax twice)\ninterface Check<T> {\ntwice : T -> T\n}\nmain : Unit -> Int\nmain () = 42\n",
+        ),
+        (
+            "resource handle",
+            "import forms (syntax twice)\nimport @builtin.cell as Cell\nmain : Unit -> Int\nmain () = resource cell<R> twice = 0 {\n42\n}\n",
+        ),
+        (
+            "region handle",
+            "import forms (syntax twice)\nmain : Unit -> Int\nmain () = region<R> twice {\n42\n}\n",
+        ),
+        (
+            "term import",
+            "import forms (syntax twice)\nimport values (twice)\nmain : Unit -> Int\nmain () = 42\n",
+        ),
+        (
+            "captured binder",
+            "import forms (syntax twice, syntax bind)\nmain : Unit -> Int\nmain () = bind twice in 42\n",
+        ),
+    ] {
+        tree.write("entry.ash", source);
+        match compile_path(configuration()) {
+            Ok(_) => accepted.push(case),
+            Err(failure) => {
+                assert_eq!(failure.reason_code(), "resolve.import-conflict", "{case}");
+                let diagnostics = ash::presentation::compile_file_diagnostics(&failure).unwrap();
+                let mut output = Vec::new();
+                ash::presentation::write_json(&mut output, &diagnostics[0]).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                let labels = json["labels"].as_array().unwrap();
+                assert_eq!(labels[1]["relationship"], "syntax_import", "{case}");
+                let start = labels[0]["byte_start"].as_u64().unwrap() as usize;
+                let end = labels[0]["byte_end"].as_u64().unwrap() as usize;
+                assert_eq!(&source[start..end], "twice", "{case}");
+                let start = labels[1]["byte_start"].as_u64().unwrap() as usize;
+                let end = labels[1]["byte_end"].as_u64().unwrap() as usize;
+                assert!(source[start..end].contains("syntax twice"), "{case}");
+            }
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "selected syntax spelling was accepted as a source term binder: {accepted:?}"
+    );
+}
+
+#[test]
+fn generated_caller_binder_may_share_syntax_spelling() {
+    let tree = TempTree::create();
+    tree.write(
+        "forms.ash",
+        "pub syntax twice $value:expr => {\n$value + $value\n}\n",
+    );
+    let source = include_str!("fixtures/surface-macros/syntax_constructed_ops.ash");
+    let constructed = source.replace(
+        "let name_ref = Syntax.MoreNodes(Syntax.IdentifierNode(name, origin), tail)\n        let add = Syntax.MoreNodes(Syntax.TokenNode(plus, origin), name_ref)\n        let body_nodes = Syntax.MoreNodes(Syntax.ExpressionNode(body, origin), add)",
+        "let body_nodes = Syntax.MoreNodes(Syntax.ExpressionNode(body, origin), tail)",
+    );
+    assert_ne!(
+        constructed, source,
+        "the fixture must omit the generated reference"
+    );
+    tree.write("construct.ash", &constructed);
+    let entry = tree.write(
+        "entry.ash",
+        "import forms (syntax twice as item)\nimport construct (syntax bind_caller)\nmain : Unit -> Int\nmain () = (bind_caller 1 in 40) + 2\n",
+    );
+    let compiled = compile_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .expect("an unused generated caller-context binder is not source-authored");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
 fn separate_compilation_graphs_do_not_reuse_module_identity() {
     let tree = TempTree::create();
     let entry = tree.write("entry.ash", "");

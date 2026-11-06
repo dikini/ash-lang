@@ -905,6 +905,7 @@ enum ResolveContext {
     PrivateExport,
     MissingExport,
     MissingModuleAlias,
+    SyntaxNameReservation,
     MixedTypeRowRoles,
     IdentityExhaustion(ResolveIdentitySpace),
 }
@@ -1177,6 +1178,9 @@ impl ResolveError {
         &self,
         index: usize,
     ) -> Option<(crate::message::Message<'_>, &'static str)> {
+        if index == 0 && self.0.context == Some(ResolveContext::SyntaxNameReservation) {
+            return Some((crate::message::Message::selection_import(), "syntax_import"));
+        }
         if index == 0 {
             match self.reason {
                 ResolveReason::DuplicateEffect => {
@@ -1232,6 +1236,7 @@ impl ResolveError {
                 ResolveContext::PrivateExport
                 | ResolveContext::MissingExport
                 | ResolveContext::MissingModuleAlias
+                | ResolveContext::SyntaxNameReservation
                 | ResolveContext::MixedTypeRowRoles
                 | ResolveContext::Kind(_)
                 | ResolveContext::DependencySummaryMismatch
@@ -1478,6 +1483,7 @@ impl ResolveError {
                 crate::message::Message::resolve_mixed_type_row_roles(name)
             }
             ResolveContext::IdentityExhaustion(_)
+            | ResolveContext::SyntaxNameReservation
             | ResolveContext::Kind(_)
             | ResolveContext::DependencySummaryMismatch
             | ResolveContext::DeclarationOrder { .. }
@@ -3227,12 +3233,36 @@ impl Resolver<'_, '_> {
         Ok(())
     }
 
+    fn check_written_term_name(&self, name: &SurfaceName) -> Result<(), ResolveError> {
+        if !name.written {
+            return Ok(());
+        }
+        let Some(selection) = self
+            .syntax_expansion
+            .as_ref()
+            .and_then(|expansion| expansion.selected(name))
+        else {
+            return Ok(());
+        };
+        let mut diagnostic = Diagnostic::new(
+            ResolveReason::ImportConflict,
+            SourceLabel::new(name.span, "this term name is reserved by imported syntax"),
+        );
+        diagnostic.related.push(SourceLabel::new(
+            selection.import_span,
+            "the syntax is imported here",
+        ));
+        diagnostic.found = Some(name.text.clone());
+        Err(ResolveError::from(diagnostic).with_context(ResolveContext::SyntaxNameReservation))
+    }
+
     fn validate_local_term_name<'a>(
         &self,
         name: &'a crate::surface::SurfaceName,
         complete_definition: Option<crate::source::Span>,
         names: &mut HashMap<&'a str, (crate::source::Span, Option<crate::source::Span>)>,
     ) -> Result<(), ResolveError> {
+        self.check_written_term_name(name)?;
         if self.module_aliases.contains_key(&name.text)
             || self.constructor_names.contains_key(&name.text)
             || self.method_names.contains_key(&name.text)
@@ -4200,6 +4230,7 @@ impl Resolver<'_, '_> {
                         }
                         if let Some(exported) = dependency.summary.term(&name.text) {
                             selected = true;
+                            self.check_written_term_name(local)?;
                             if self.constructor_names.contains_key(&local.text)
                                 || self.method_names.contains_key(&local.text)
                             {
@@ -4246,6 +4277,7 @@ impl Resolver<'_, '_> {
                         }
                         if let Some(method) = dependency.summary.method(&name.text) {
                             selected = true;
+                            self.check_written_term_name(local)?;
                             if self.constructor_names.contains_key(&local.text)
                                 || self.method_names.contains_key(&local.text)
                                 || self.scopes.first().is_some_and(|scope| {
@@ -11337,6 +11369,7 @@ impl Resolver<'_, '_> {
                 ));
             }
             SurfacePatternKind::Binder(surface) => {
+                self.check_written_term_name(&surface.name)?;
                 if let Some(first) = seen.insert(
                     (surface.name.text.clone(), surface.name.introduction),
                     surface.name.span,
@@ -12246,6 +12279,7 @@ impl Resolver<'_, '_> {
             })
         })?;
         let identity = self.allocate_type_variable(identity_source, None, Kind::Type)?;
+        self.check_written_term_name(handle_source)?;
         let handle = self.allocate_contextual_binder(handle_source)?;
         self.type_work.charge(4).map_err(|()| {
             error(
@@ -12394,6 +12428,7 @@ impl Resolver<'_, '_> {
             )
         })?;
         let identity = self.allocate_type_variable(identity_source, None, Kind::Type)?;
+        self.check_written_term_name(&source.handle)?;
         let handle = self.allocate_binder(&source.handle.text, source.handle.span)?;
         self.type_work.charge(6).map_err(|()| {
             error(
@@ -12567,6 +12602,7 @@ impl Resolver<'_, '_> {
             }
         }
         let identity = self.allocate_type_variable(identity_source, None, Kind::Type)?;
+        self.check_written_term_name(&source.handle)?;
         let handle = self.allocate_binder(&source.handle.text, source.handle.span)?;
         self.type_work.charge(6).map_err(|()| {
             error(
@@ -13389,6 +13425,7 @@ impl Resolver<'_, '_> {
                 let mut first_members = HashMap::with_capacity(group.members.len());
                 let mut binders = ResolvedBinderBuffer(Vec::with_capacity(group.members.len()));
                 for member in &group.members {
+                    self.check_written_term_name(&member.binder.name)?;
                     let key = (
                         member.binder.name.text.as_str(),
                         member.binder.name.introduction,
@@ -14462,6 +14499,7 @@ impl Resolver<'_, '_> {
             SurfaceExprKind::Region(source) => {
                 let span = expression.span;
                 let identity = self.allocate_type_variable(&source.identity, None, Kind::Type)?;
+                self.check_written_term_name(&source.handle)?;
                 let handle = self.allocate_contextual_binder(&source.handle)?;
                 self.type_work.charge(8).map_err(|()| {
                     error(
@@ -14627,6 +14665,9 @@ impl Resolver<'_, '_> {
                 span: expression.span,
             }),
             SurfaceExprKind::Name(name) => {
+                if let SurfaceReference::Unqualified(name) = name {
+                    self.check_written_term_name(name)?;
+                }
                 let member = name.member();
                 let is_qualified = matches!(name, SurfaceReference::Qualified(_));
                 let context = name.qualifier().unwrap_or(member);
@@ -15399,6 +15440,7 @@ fn lookup_error(
         ResolveContext::Interface => ResolveReason::UnknownInterface,
         ResolveContext::Effect | ResolveContext::ExportedEffect => ResolveReason::UnknownEffect,
         ResolveContext::MixedTypeRowRoles => ResolveReason::TypeKind,
+        ResolveContext::SyntaxNameReservation => ResolveReason::ImportConflict,
         ResolveContext::IdentityExhaustion(_) => ResolveReason::BinderIdExhausted,
         ResolveContext::Kind(_)
         | ResolveContext::DependencySummaryMismatch
@@ -16176,6 +16218,7 @@ impl Resolver<'_, '_> {
                     self.resolve_resource_clause(&source.acquire_binder, &source.acquire)?;
                 let (finish_binder, finish) =
                     self.resolve_resource_clause(&source.finish_binder, &source.finish)?;
+                self.check_written_term_name(&source.handlers_binder)?;
                 let handlers_binder = self
                     .allocate_binder(&source.handlers_binder.text, source.handlers_binder.span)?;
                 let scope = self.scopes.len();
@@ -16382,6 +16425,7 @@ impl Resolver<'_, '_> {
                     "resource family payload registry storage could not be reserved",
                 )
             })?;
+            self.check_written_term_name(&source.handlers_binder)?;
             let handlers_binder =
                 self.allocate_binder(&source.handlers_binder.text, source.handlers_binder.span)?;
             let scope = self.scopes.len();
@@ -16424,6 +16468,7 @@ impl Resolver<'_, '_> {
         name: &crate::surface::SurfaceName,
         body: &crate::surface::SurfaceExpr,
     ) -> Result<(crate::resolved::Binder, ResolvedExpr), ResolveError> {
+        self.check_written_term_name(name)?;
         let binder = self.allocate_binder(&name.text, name.span)?;
         let scope = self.scopes.len();
         self.push_binder_scope_many(std::slice::from_ref(&binder));
@@ -21158,6 +21203,7 @@ mod tests {
                         span,
                         introduction: 0,
                         introduced_at: None,
+                        written: true,
                     })
                 };
                 let wide = || SurfaceType {
@@ -21520,6 +21566,7 @@ mod tests {
             span,
             introduction: 0,
             introduced_at: None,
+            written: true,
         });
         let owner = NominalTypeId::lexical(ModuleId::new(7_014), 0);
         let constructor = ConstructorId::new(owner, 0);
@@ -22398,6 +22445,7 @@ mod tests {
             span,
             introduction: 0,
             introduced_at: None,
+            written: true,
         })
     }
 
@@ -22778,6 +22826,7 @@ mod tests {
                     span,
                     introduction: 0,
                     introduced_at: None,
+                    written: true,
                 })),
                 span,
             }
@@ -23016,6 +23065,7 @@ mod tests {
                     span: constructor_span,
                     introduction: 0,
                     introduced_at: None,
+                    written: true,
                 }),
                 arguments: vec![argument; WIDTH],
             },
@@ -23063,6 +23113,7 @@ mod tests {
                     span: constructor_span,
                     introduction: 0,
                     introduced_at: None,
+                    written: true,
                 }),
                 arguments: vec![
                     SurfaceType {
@@ -23145,6 +23196,7 @@ mod tests {
                     span: constructor_span,
                     introduction: 0,
                     introduced_at: None,
+                    written: true,
                 }),
                 arguments: vec![
                     SurfaceType {
@@ -23230,6 +23282,7 @@ mod tests {
                                     span: constructor_span,
                                     introduction: 0,
                                     introduced_at: None,
+                                    written: true,
                                 }),
                                 arguments: vec![
                                     SurfaceType {
@@ -23248,6 +23301,7 @@ mod tests {
                                     span: missing_span,
                                     introduction: 0,
                                     introduced_at: None,
+                                    written: true,
                                 },
                             )),
                             span: missing_span,

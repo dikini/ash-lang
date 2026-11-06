@@ -6992,6 +6992,30 @@ fn apply_primitive(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn copied_nested_transformers_each_execute_before_the_runtime_program() {
+        use crate::{
+            driver::{RunConfiguration, compile_path, execute},
+            module::ModuleRoots,
+        };
+
+        super::machine_test_hooks::reset();
+        let configuration = RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/entry_nested_copied_transformers.ash"),
+            roots: ModuleRoots::empty(),
+        };
+        let compiled = compile_path(configuration).expect("copied nested syntax compiles");
+        assert_eq!(super::machine_test_hooks::TRANSFORMER_DROPS.get(), 3);
+        assert_eq!(super::machine_test_hooks::TRANSFER_ATTEMPTS.get(), 3);
+        assert_eq!(super::machine_test_hooks::TRANSFER_FAILURES.get(), 0);
+        let requests = super::machine_test_hooks::SYNTAX_REQUESTS.get();
+        assert!(requests > 0);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+        assert_eq!(super::machine_test_hooks::SYNTAX_REQUESTS.get(), requests);
+        super::machine_test_hooks::reset();
+    }
+
+    #[test]
     fn transformer_failures_dispose_the_real_invocation_root() {
         use crate::{
             driver::{PipelineFailure, RunConfiguration, compile_path},

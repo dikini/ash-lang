@@ -501,6 +501,13 @@ fn invalid_transformer_output_reports_its_parser_reason() {
 }
 
 #[test]
+fn transformer_output_rejects_a_second_expression() {
+    let failure = compile_path(macro_fixture("entry_trailing_output.ash")).unwrap_err();
+    assert!(failure.is_source_rejection(), "{failure:?}");
+    assert_eq!(failure.reason_code(), "parse.unexpected-token");
+}
+
+#[test]
 fn non_requesting_infinite_transformer_fails_with_expansion_context() {
     let failure = compile_path(macro_fixture("entry_diverge.ash")).unwrap_err();
     assert_eq!(failure.reason_code(), "syntax.transformer-failed");
@@ -533,9 +540,14 @@ fn generated_caller_context_selects_the_callers_syntax() {
 
 #[test]
 fn generated_fresh_context_does_not_select_syntax_or_caller_binding() {
-    let failure = compile_path(macro_fixture("entry_generated_fresh.ash")).unwrap_err();
-    assert!(failure.is_source_rejection(), "{failure:?}");
-    assert_eq!(failure.reason_code(), "resolve.unknown-name");
+    for entry in [
+        "entry_generated_fresh.ash",
+        "entry_generated_fresh_term.ash",
+    ] {
+        let failure = compile_path(macro_fixture(entry)).unwrap_err();
+        assert!(failure.is_source_rejection(), "{entry}: {failure:?}");
+        assert_eq!(failure.reason_code(), "resolve.unknown-name", "{entry}");
+    }
 }
 
 #[test]

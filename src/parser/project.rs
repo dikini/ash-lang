@@ -2024,6 +2024,7 @@ fn project_import(
                 span: token.span,
                 introduction: 0,
                 introduced_at: None,
+                written: true,
             }),
             _ => None,
         })
@@ -3965,6 +3966,7 @@ fn surface_name(token: ProjectionToken<'_>) -> Result<SurfaceName, ProjectionErr
         span: token.span,
         introduction: 0,
         introduced_at: None,
+        written: true,
     })
 }
 

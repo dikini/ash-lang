@@ -1099,3 +1099,63 @@ previous window. These elapsed windows include tool and review time and are
 not added together as exclusive active work. Only the 16-minute O10 gate
 estimate comes directly from a comparable complete gate; the other remaining
 minutes are planning judgments.
+
+### 21:24 remaining chain after the inventory
+
+The task now inventories all 26 unearned point rows and maps M01–M14 to
+existing evidence and the next boundary. Replace O07's earlier blanket
+25-minute allowance with these separately named outcomes. The cases below
+identify required observations to reconcile, not a presumption that every
+case needs a new test or that a feature is broken.
+
+| Outcome | Remaining minutes | Work |
+| --- | ---: | --- |
+| O07a | 15 | Reconcile the complete point and acceptance inventory with the existing import, context, privacy, entry, lifecycle, Core, image and diagnostic receipts; identify any exact missing assertion. |
+| O07b | 25 | Check the narrow source/host contrasts that remain after that audit, including imports, admission, output boundaries, term-binder contexts and duplicated nested transformer occurrences. |
+| O07c | 25 | Reconcile copied lexical-region owner/use and the mixed syntax/context/origin round trip. |
+| O08 | 15 | Reconcile executable positive/negative examples, status, links and artifact authority at the owning checkpoint. |
+| O09 | 25 | Independently review the whole retaining path and address the known review findings. |
+| O10 | 16 | Run one fresh complete workspace gate on the frozen candidate. |
+| O11 | 20 | Complete the authorized milestone integration, retained-input and acceptance readback. |
+| **Serial scenario** | **141** | **About 2 hours 20 minutes, conditional on the audit finding no additional repair.** |
+
+Only O10 is directly based on a comparable measured complete gate. The other
+figures are planning judgments informed in scale by the recorded 33-minute
+mixed-graph and 10-minute repeat-input checkpoints, not measured task
+durations or confidence bounds. The earlier 101-minute snapshot omitted the
+expanded O07 outcomes and remains historical. If the independent audit
+actually overlaps writer work, record that overlap rather than summing it
+twice. A newly demonstrated missing feature or repair changes this scenario;
+no speculative repair allowance is included.
+
+### 21:30 source-binder reservation finding
+
+The new M07 driver control accepts four source term binders whose spelling is
+already selected as syntax: a global, function parameter, local `let` and
+match-pattern binder. The specification reserves that source spelling. The
+same test observes the intended duplicate-import rejection and successful
+rename, complete-import and qualified-operation controls. O07b's test
+allowance did not include the now-demonstrated repair; the 141-minute scenario
+above is therefore not the current complete chain. Its replacement estimate
+is pending identification and review of the smallest correct repair boundary.
+
+The trailing-output and copied nested-transformer controls pass: the former
+retains `parse.unexpected-token`; the latter observes three actual transformer
+machines, a result of 42 and no additional syntax-service requests during
+ordinary execution. These observations await their retained test receipt and
+review. A proposed generated-caller-name positive was discarded: its caller
+context intentionally selects the caller's syntax, so it did not establish a
+reservation exception.
+
+### 21:56 reservation repair checkpoint
+
+O07b-R1 is the additional source-reservation repair, with an initial
+20-minute planning estimate through focused controls and bounded review. The
+six-case red was observed at 21:32:57, the repair boundary was selected at
+21:40:03, and the original six-case check passed at 21:44:14. These are elapsed
+session events, not exclusive active time. The expanded focused check,
+297-test affected run, both unchanged 256 KiB canaries and Clippy now pass;
+independent review is pending. The prior 141-minute scenario excludes R1,
+and its remaining estimate must be reconsidered after this checkpoint rather
+than adding the original 20-minute estimate to it unchanged. P13 already owns
+the reservation work, so no additional effort points are assigned here.
