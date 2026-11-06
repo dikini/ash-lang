@@ -21,17 +21,16 @@
 
 ## Current delivery status, 6 November
 
-The latest reviewed product checkpoint is `787f5ef5`: **69/99 original-scope
-points are reviewed and 30 remain**. The separately estimated 30 points of
-additional performed work give an effort index of **99/129**, not an
-acceptance percentage. The repeated-compilation and changed-input tests are
-reviewed. M01–M14 and C1/C2 remain open.
+The latest reviewed product checkpoint is `8c99b226`: **70.5/99 original-scope
+points are reviewed and 28.5 remain**. The separately estimated 30 points of
+additional performed work give an effort index of **100.5/129**, not an
+acceptance percentage. M01–M14 and C1/C2 remain open.
 
 The [operational plan](../plans/2026-11-05-expression-macros.md#2130-source-binder-reservation-finding)
-records a newly demonstrated source-binder reservation defect. The preceding
-141-minute scenario did not include that repair and is not a current complete
-forecast; the revised chain depends on the repair's confirmed boundary. Actual
-event windows and remaining estimates are recorded separately. The historical
+records the reviewed source-binder reservation repair and a newly demonstrated
+copied-region validation failure. The preceding 141-minute scenario did not
+include these repairs and is not a current complete forecast. Actual event
+windows and remaining estimates are recorded separately. The historical
 checkpoints below are preserved as written.
 
 ## Dependencies
@@ -1475,6 +1474,25 @@ issues no further syntax requests during ordinary execution
 `1247880929fdb706fce8e950eb00492c67b9d2bc6335a4305399957539817768`).
 These results and the repair await the retaining pin and independent review;
 no point or acceptance row is closed here.
+
+### Reviewed reservation repair and copied-region finding, 22:05
+
+Independent review passed `8c99b226` at 22:05:29 on 6 November. The reviewed
+increment is 1.5 existing-scope points: P13 +0.5 for source-name reservation
+(2/3), P23 +0.25 for rejecting a second output expression (2.5/4), P27 +0.5
+for three actual nested copied transformer executions (2/2.5), and P33 +0.25
+for ordinary execution issuing no syntax requests (2.25/2.5). The output
+test does not call `parse_expression` and adds no P20 credit. No M or C row is
+closed. Historical reviewed points and the separately estimated 30 points of
+performed corrective work remain unchanged.
+
+The next copied-region control exposes a distinct Core registry failure:
+two copies of one captured `region<R>` fail independent validation, while
+handwritten regions and a single captured region both compile and return 42.
+The failing control is `/tmp/ash-syntax-copied-region-controls.log` (SHA-256
+`750239783b80f95a68ea991580622c71a1954b33c4b5238f76748c15c870d31c`). A
+debugger stopped at the source-order rejection for the second region's
+retained source coordinate. The repair and its estimate remain open.
 
 ## Progress
 

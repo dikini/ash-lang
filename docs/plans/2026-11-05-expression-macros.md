@@ -1159,3 +1159,23 @@ independent review is pending. The prior 141-minute scenario excludes R1,
 and its remaining estimate must be reconsidered after this checkpoint rather
 than adding the original 20-minute estimate to it unchanged. P13 already owns
 the reservation work, so no additional effort points are assigned here.
+
+### 22:05 reviewed reservation and copied-region investigation
+
+Independent review passed `8c99b226` at 22:05:29.601. O07b-R1 is reviewed
+with no remaining repair allowance. Its six-case red at 21:32:57.097 to the
+review was 32 minutes 32.504 seconds elapsed; the selected repair boundary
+at 21:40:03.659 to review was 25 minutes 25.942 seconds. Both include tool and
+review time rather than measuring exclusive active time. The initial
+20-minute estimate is historical and is not added again. The task records
+the approved 1.5-point increment; no additional corrective-work points are
+assigned.
+
+Remaining O07b work includes auditing the existing polymorphic and constrained
+transformer refusals and the term fresh-identifier association. O07c still
+includes the mixed round trip. Its copied-region check has exposed a Core
+registry failure: the handwritten two-region and single-expansion controls
+pass, while duplicating the same captured region fails. A debugger identifies
+the existing source-order rejection. The repair estimate is pending its
+reviewed boundary. Neither the earlier 141-minute scenario nor an unreviewed
+131-minute draft is a complete forecast of the remaining chain.
