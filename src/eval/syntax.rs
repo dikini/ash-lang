@@ -883,12 +883,20 @@ mod tests {
         };
         use crate::{
             core::CoreBuilder,
+            eval::value::CompilerSyntaxHandleKind,
             integer::Integer,
+            lexer::TokenKind,
             module::ModuleId,
             resolved::BinderId,
             source::{ByteRange, Origin, SourceFile},
-            surface::{SurfaceIdentifierCapture, SurfaceName, SurfaceSyntaxCapture},
-            syntax::{ExpansionFrame, SyntaxContexts},
+            surface::{
+                SurfaceExpr, SurfaceExprKind, SurfaceExpressionCapture, SurfaceIdentifierCapture,
+                SurfaceName, SurfaceReference, SurfaceSyntaxCapture,
+            },
+            syntax::{
+                ExpansionFrame, MacroDelimiter, MacroOrigin, MacroOutputNode, SyntaxContexts,
+                TransformerOutput,
+            },
             types::{ConstructorId, EffectId, NominalTypeId, OperationId, Type, TypeWorkBudget},
         };
         use std::{collections::HashMap, sync::Arc};
@@ -901,6 +909,8 @@ mod tests {
         let module = ModuleId::new(0);
         let ops = EffectId::new(module, 0);
         let capture = OperationId::new(ops, 0);
+        let fresh_identifier = OperationId::new(ops, 1);
+        let expression_syntax = OperationId::new(ops, 2);
         let owner = NominalTypeId::new(module, 0);
         let constructors: HashMap<String, ConstructorId> = [
             ("Captured".into(), ConstructorId::new(owner, 0)),
@@ -910,6 +920,14 @@ mod tests {
             ("Rejected".into(), ConstructorId::new(owner, 4)),
             ("Syntax".into(), ConstructorId::new(owner, 5)),
             ("NoNodes".into(), ConstructorId::new(owner, 6)),
+            ("ExpressionCapture".into(), ConstructorId::new(owner, 7)),
+            ("MadeIdentifier".into(), ConstructorId::new(owner, 8)),
+            ("MoreNodes".into(), ConstructorId::new(owner, 9)),
+            ("GroupNode".into(), ConstructorId::new(owner, 10)),
+            ("IdentifierNode".into(), ConstructorId::new(owner, 11)),
+            ("TokenNode".into(), ConstructorId::new(owner, 12)),
+            ("ExpressionNode".into(), ConstructorId::new(owner, 13)),
+            ("Parentheses".into(), ConstructorId::new(owner, 14)),
         ]
         .into_iter()
         .collect();
@@ -946,7 +964,13 @@ mod tests {
             parse_failures: Vec::new(),
             tokens: Vec::new(),
             constructors: constructors.clone(),
-            operations: [(capture, "capture".into())].into_iter().collect(),
+            operations: [
+                (capture, "capture".into()),
+                (fresh_identifier, "fresh_identifier".into()),
+                (expression_syntax, "expression_syntax".into()),
+            ]
+            .into_iter()
+            .collect(),
         };
         let mut host = make_host();
         let foreign = make_host();
@@ -1002,6 +1026,121 @@ mod tests {
             host.transfer(&foreign_result, &heap, &mut TypeWorkBudget::unbounded()),
             Err(RuntimeFailure::InvalidControlState)
         ));
+
+        // Unwrapping exposes the captured outer contents, while preserving
+        // nested fragments, their contexts and their complete origin trees.
+        let first = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let second = source.span(ByteRange::new(1, 4).unwrap()).unwrap();
+        let combined =
+            MacroOrigin::combined(vec![first.into(), second.into()], Arc::clone(&host.frame))
+                .unwrap();
+        let origin = host.issue_origin(combined.clone());
+        let fields = Value::Location(
+            allocate_heap(
+                &mut heap,
+                HeapCell::Tuple(
+                    vec![host.input(), Value::String(Arc::from("name")), origin].into(),
+                ),
+            )
+            .unwrap(),
+        );
+        let made = host
+            .request(
+                fresh_identifier,
+                fields,
+                &mut heap,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        let (tag, identifier) = constructor_fields(&made, &heap).unwrap();
+        assert_eq!(tag, constructors["MadeIdentifier"]);
+        let CompilerSyntaxHandleKind::Identifier(index) =
+            host.admitted_handle(identifier.unwrap()).unwrap()
+        else {
+            panic!("fresh identifier handle")
+        };
+        let introduced = host.identifiers[index].clone();
+        assert_eq!(introduced.text, name.text);
+        assert_ne!(introduced.introduction, name.introduction);
+        assert!(!introduced.written && name.written);
+
+        let expression = SurfaceExpr {
+            kind: SurfaceExprKind::Name(SurfaceReference::Unqualified(name.clone())),
+            span,
+            diagnostic: None,
+        };
+        let protected = SurfaceExpressionCapture {
+            expression,
+            contents: vec![MacroOutputNode::Identifier(name.clone(), combined.clone())].into(),
+        };
+        let protected_contents = Arc::clone(&protected.contents);
+        let contents = vec![MacroOutputNode::Group(
+            MacroDelimiter::Parentheses,
+            vec![
+                MacroOutputNode::Identifier(introduced, combined.clone()),
+                MacroOutputNode::Token(TokenKind::Plus, Arc::from("+"), first.into()),
+                MacroOutputNode::Expression(protected, combined.clone()),
+            ],
+            combined,
+        )];
+        let expression = crate::syntax::admit_transformer_output(
+            &source,
+            contents.clone(),
+            &host.contexts,
+            &host.frame,
+        )
+        .expect("the mixed captured syntax is an expression");
+        let original = SurfaceExpressionCapture {
+            expression,
+            contents: contents.into(),
+        };
+        host.captures
+            .push(SurfaceSyntaxCapture::Expression(original.clone()));
+        let input = host.input();
+        let capture = request(&mut host, input, 1, &mut heap).unwrap();
+        let (tag, capture) = constructor_fields(&capture, &heap).unwrap();
+        assert_eq!(tag, constructors["Captured"]);
+        let (tag, fragment) = constructor_fields(capture.unwrap(), &heap).unwrap();
+        assert_eq!(tag, constructors["ExpressionCapture"]);
+        let fragment = fragment.unwrap().clone();
+        let CompilerSyntaxHandleKind::Expression(index) = host.admitted_handle(&fragment).unwrap()
+        else {
+            panic!("captured expression handle")
+        };
+        assert!(Arc::ptr_eq(
+            &host.expressions[index].contents,
+            &original.contents
+        ));
+        let syntax = host
+            .request(
+                expression_syntax,
+                fragment,
+                &mut heap,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        let result = host.construct(&mut heap, "Expanded", Some(syntax)).unwrap();
+        let TransformerOutput::Expanded(output) = host
+            .transfer(&result, &heap, &mut TypeWorkBudget::unbounded())
+            .unwrap()
+        else {
+            panic!("expanded syntax")
+        };
+        assert_eq!(output.as_slice(), original.contents.as_ref());
+        let [MacroOutputNode::Group(_, children, MacroOrigin::Combined { frame, .. })] =
+            output.as_slice()
+        else {
+            panic!("the group and combined origin survive")
+        };
+        assert!(Arc::ptr_eq(frame, &host.frame));
+        let MacroOutputNode::Expression(nested, _) = &children[2] else {
+            panic!("the nested expression stays protected")
+        };
+        assert!(Arc::ptr_eq(&nested.contents, &protected_contents));
+        let SurfaceSyntaxCapture::Expression(retained) = &host.captures[1] else {
+            panic!("the original capture is retained")
+        };
+        assert!(Arc::ptr_eq(&retained.contents, &original.contents));
     }
 
     #[test]

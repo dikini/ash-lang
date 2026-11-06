@@ -1190,3 +1190,19 @@ controls, independent Core mutation checks and affected suites pass as
 recorded in the task. The candidate awaits review; O07c and the final
 delivery chain remain open. The earlier conditional scenarios did not
 include this repair and are not current completion forecasts.
+
+### Reviewed copied-region repair
+
+Independent review passed `ad9cedb0`; the copied-region repair is reviewed
+and its P10 increment is recorded in the task. The remaining O07c bridge
+observation is a mixed token/group/protected-fragment, contextual-identifier
+and origin round trip. Other evidence, whole-path review, gate and retention
+work remain open; no M or C row closes here.
+
+### Mixed bridge and admission evidence
+
+The host now has a demonstrated exact mixed round trip, and the ordinary
+declaration controls establish the polymorphic and constrained unused-target
+refusals. Both observations are described in the task and await review. The
+term fresh-identifier association, remaining evidence reconciliation,
+whole-path review, final gate and retained readback remain open.

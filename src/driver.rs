@@ -3391,6 +3391,45 @@ mod tests {
     }
 
     #[test]
+    fn unused_transformer_rejects_polymorphic_and_constrained_targets() {
+        let declarations = [
+            r#"wrong<E : EffectRow> : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops | E}
+wrong input = {
+    let origin = Syntax.invocation_origin(input)
+    Syntax.Rejected(Syntax.MacroDiagnostic("unused", origin, Syntax.NoOrigins))
+}
+"#,
+            r#"interface Marker<A> {
+    mark : A -> Int
+}
+wrong : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops} where Marker<Int>
+wrong input = {
+    let origin = Syntax.invocation_origin(input)
+    Syntax.Rejected(Syntax.MacroDiagnostic("unused", origin, Syntax.NoOrigins))
+}
+"#,
+        ];
+        for declaration in declarations {
+            let ordinary = format!(
+                "import @builtin.compiler.syntax as Syntax\n\n{declaration}\nmain : Unit -> Int\nmain () = 42\n"
+            );
+            let fixture = TestSource::write(&ordinary);
+            let compiled = compile_path(fixture.configuration())
+                .expect("the same ordinary declaration checks without a syntax target");
+            assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+
+            let syntax = ordinary.replace(
+                "import @builtin.compiler.syntax as Syntax\n",
+                "import @builtin.compiler.syntax as Syntax\npub syntax invalid $value:expr => using wrong\n",
+            );
+            fs::write(&fixture.0, syntax).unwrap();
+            let failure = compile_path(fixture.configuration())
+                .expect_err("an unused invalid transformer is refused at admission");
+            assert_eq!(failure.reason_code(), "syntax.invalid-transformer");
+        }
+    }
+
+    #[test]
     fn unchanged_transformer_entry_is_reused_only_within_one_compilation() {
         let fixture = TestSource::write(
             "import macros (syntax twice)\n\

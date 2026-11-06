@@ -21,16 +21,16 @@
 
 ## Current delivery status, 6 November
 
-The latest reviewed product checkpoint is `8c99b226`: **70.5/99 original-scope
-points are reviewed and 28.5 remain**. The separately estimated 30 points of
-additional performed work give an effort index of **100.5/129**, not an
+The latest reviewed product checkpoint is `ad9cedb0`: **70.75/99 original-scope
+points are reviewed and 28.25 remain**. The separately estimated 30 points of
+additional performed work give an effort index of **100.75/129**, not an
 acceptance percentage. M01–M14 and C1/C2 remain open.
 
 The [operational plan](../plans/2026-11-05-expression-macros.md#2130-source-binder-reservation-finding)
-records the reviewed source-binder reservation repair and a newly demonstrated
-copied-region validation failure. The preceding 141-minute scenario did not
-include these repairs and is not a current complete forecast. Actual event
-windows and remaining estimates are recorded separately. The historical
+records the reviewed source-binder reservation and copied-region repairs. The
+preceding 141-minute scenario did not include these repairs and is not a
+current complete forecast. Actual event windows and remaining estimates are
+recorded separately. The historical
 checkpoints below are preserved as written.
 
 ## Dependencies
@@ -1523,6 +1523,40 @@ does all-target Clippy (`/tmp/ash-syntax-copied-region-clippy.log`, SHA-256
 `644d905475073b19ec7d260c8e3fc60c71e2a5a7ea921805f7b16da4097c851e`).
 This candidate awaits independent review; no additional point or M row is
 closed here.
+
+### Reviewed copied-region update
+
+Independent review passed `ad9cedb0`. P10 gains its remaining 0.25 point for
+the copied region identities and their own/caller uses, completing P10 at
+5/5. This does not close M05 or repeat P28 credit. The current total is
+**70.75/99 reviewed, with 28.25 remaining**. The separately estimated 30
+additional-effort points are unchanged; **100.75/129** is an effort index,
+not an acceptance percentage.
+
+### Mixed bridge and transformer-admission observations
+
+The private invocation-host test now captures a mixed tree, calls
+`expression_syntax` with the issued fragment handle and transfers a normal
+`Expanded` result. The exposed contents retain their group, token and
+protected fragment; same-spelled caller and freshly issued identifiers keep
+their different contexts and written status. The complete ordered combined
+origin compares equal, and its frame and nested protected storage retain their
+original shared identities. The original capture remains retained
+(`/tmp/ash-syntax-mixed-roundtrip-final.log`, SHA-256
+`effcab3eb30f8fc0e5b18886b2e7823a3dbe3d49c5f0c8b158e7e00f4399e32f`).
+This is a private host observation alongside the existing real-Ash service
+tests; it does not alone close M10.
+
+Two unused `using` targets are rejected as `syntax.invalid-transformer`: an
+open-row polymorphic target and an otherwise exact closed-row target with an
+interface requirement. Each identical ordinary declaration first checks and
+runs without the syntax declaration (`/tmp/ash-syntax-transformer-admission.log`,
+SHA-256 `1fc3aff9469e2e986e7218760223e240e5dfb2944002877d66bc000b5358628e`).
+The first case combines polymorphism and an open row; it does not isolate
+those two restrictions. All-target Clippy passes
+(`/tmp/ash-syntax-bridge-admission-clippy.log`, SHA-256
+`2bf41681fed040c82ad126e9a326646353f28c9610797c1461b97ea124645fa4`). These
+observations await independent review and add no points yet.
 
 ## Progress
 
