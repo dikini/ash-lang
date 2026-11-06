@@ -1449,6 +1449,10 @@ where
     let mut checked_syntax_imports = Vec::<Vec<crate::syntax::SelectedSyntax>>::new();
     let mut checked_syntax_terms = Vec::<crate::syntax::SyntaxOwnerBindings>::new();
     let mut checked_by_module: HashMap<ModuleId, usize> = HashMap::with_capacity(input.len());
+    let mut transformer_entries = HashMap::<
+        (ModuleId, crate::resolved::BinderId),
+        crate::core::validate::ValidatedMacroEntry,
+    >::new();
     let (mut checking_type_work, source_bytes) = input.source_work().map_err(|()| {
         FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
             crate::elaborate::ElaborationFailure::TypeResourceExhausted,
@@ -1596,9 +1600,21 @@ where
                             &checked_syntax_imports,
                             owners,
                         ));
-                        match prepare_transformer_entry(selection, &checked, constraint_work) {
+                        let entry = match transformer_owner_and_binder(selection, &checked) {
+                            Ok((owner, binder)) => {
+                                match transformer_entries.entry((owner.module(), binder)) {
+                                    std::collections::hash_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
+                                    std::collections::hash_map::Entry::Vacant(entry) => {
+                                        prepare_transformer_entry(owner, binder, &checked, constraint_work)
+                                            .map(|validated| entry.insert(validated))
+                                    }
+                                }
+                            }
+                            Err(error) => Err(error),
+                        };
+                        match entry {
                             Ok(entry) => match crate::eval::evaluate_transformer(
-                                &entry,
+                                entry,
                                 captures,
                                 span,
                                 module.source(),
@@ -2157,11 +2173,22 @@ fn modular_phase_work(
     Ok((work, normal, source_bytes))
 }
 
-fn prepare_transformer_entry(
+#[cfg(test)]
+std::thread_local! {
+    static TRANSFORMER_ENTRY_PREPARATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TRANSFORMER_ENTRY_VALIDATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn transformer_owner_and_binder<'a>(
     selection: &crate::syntax::SelectedSyntax,
-    checked: &[Arc<crate::resolved::CheckedModule>],
-    constraint_work: &mut InterfaceConstraintBudget,
-) -> Result<crate::core::validate::ValidatedMacroEntry, FileFailure> {
+    checked: &'a [Arc<crate::resolved::CheckedModule>],
+) -> Result<
+    (
+        &'a crate::resolved::CheckedModule,
+        crate::resolved::BinderId,
+    ),
+    FileFailure,
+> {
     let owner = checked
         .get(selection.owner)
         .ok_or_else(internal_file_failure)?;
@@ -2176,6 +2203,17 @@ fn prepare_transformer_entry(
         .find(|scheme| scheme.spelling == name.text)
         .map(|scheme| scheme.binder)
         .ok_or_else(internal_file_failure)?;
+    Ok((owner, binder))
+}
+
+fn prepare_transformer_entry(
+    owner: &crate::resolved::CheckedModule,
+    binder: crate::resolved::BinderId,
+    checked: &[Arc<crate::resolved::CheckedModule>],
+    constraint_work: &mut InterfaceConstraintBudget,
+) -> Result<crate::core::validate::ValidatedMacroEntry, FileFailure> {
+    #[cfg(test)]
+    TRANSFORMER_ENTRY_PREPARATIONS.set(TRANSFORMER_ENTRY_PREPARATIONS.get() + 1);
     let mut reachable = std::collections::HashSet::new();
     let mut pending = vec![owner.module()];
     while let Some(id) = pending.pop() {
@@ -2246,6 +2284,8 @@ fn prepare_transformer_entry(
         .map_err(TypeError::Internal)
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::from)?;
+    #[cfg(test)]
+    TRANSFORMER_ENTRY_VALIDATIONS.set(TRANSFORMER_ENTRY_VALIDATIONS.get() + 1);
     crate::core::validate::validate_effect_macro_modules_linked_with_work(
         program,
         &sources,
@@ -3130,6 +3170,56 @@ mod tests {
                 let _ = fs::remove_dir_all(directory);
             }
         }
+    }
+
+    #[test]
+    fn unchanged_transformer_entry_is_reused_only_within_one_compilation() {
+        let fixture = TestSource::write(
+            "import macros (syntax twice)\n\
+             import support (value)\n\
+             main : Unit -> Int\n\
+             main () = value(()) + (twice 11)\n",
+        );
+        fixture.write_sibling(
+            "support.ash",
+            "import macros (syntax twice)\n\
+             pub value : Unit -> Int\n\
+             value () = twice 10\n",
+        );
+        fixture.write_sibling(
+            "other_dsl.ash",
+            include_str!("../tests/fixtures/surface-macros/other_dsl.ash"),
+        );
+        let macros = include_str!("../tests/fixtures/surface-macros/macros.ash").replace(
+            "Syntax.make_token(Syntax.Plus, \"+\")",
+            "Syntax.make_token(Syntax.Plus, Helpers.operator_spelling(()))",
+        );
+        fixture.write_sibling("macros.ash", &macros);
+        let helpers = format!(
+            "{}\npub operator_spelling : Unit -> String\noperator_spelling () = \"+\"\n",
+            include_str!("../tests/fixtures/surface-macros/helpers.ash")
+        );
+        fixture.write_sibling("helpers.ash", &helpers);
+
+        TRANSFORMER_ENTRY_PREPARATIONS.set(0);
+        TRANSFORMER_ENTRY_VALIDATIONS.set(0);
+        let compiled = compile_path(fixture.configuration()).expect("both invocations compile");
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+        assert_eq!(TRANSFORMER_ENTRY_PREPARATIONS.get(), 1);
+        assert_eq!(TRANSFORMER_ENTRY_VALIDATIONS.get(), 1);
+
+        fixture.write_sibling(
+            "helpers.ash",
+            &helpers.replace(
+                "operator_spelling () = \"+\"",
+                "operator_spelling () = \"-\"",
+            ),
+        );
+        let failure =
+            compile_path(fixture.configuration()).expect_err("the changed helper rejects");
+        assert_eq!(failure.reason_code(), "syntax.rejected");
+        assert_eq!(TRANSFORMER_ENTRY_PREPARATIONS.get(), 2);
+        assert_eq!(TRANSFORMER_ENTRY_VALIDATIONS.get(), 2);
     }
 
     #[test]
