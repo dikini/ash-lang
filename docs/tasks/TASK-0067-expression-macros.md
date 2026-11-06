@@ -1390,6 +1390,40 @@ name-admission work had no separately weighted pending point; its removal is
 not counted as completion. Grant-only image data is likewise superseded,
 while the mixed P32 cap remains above.
 
+### M01–M14 evidence inventory, 21:20
+
+The following maps the acceptance matrix to evidence already recorded in
+this task and the remaining observation or delivery boundary. An unverified
+observation is an evidence gap, not a demonstrated product defect. The test
+names refer to `tests/surface_macros.rs` or `tests/macro_host.rs` unless a
+different owner is given. The focused receipts are recorded at the reviewed
+checkpoints above; all rows still require the retaining checkpoint and
+integration verification specified by the matrix.
+
+| Case | Existing evidence | Remaining boundary |
+| --- | --- | --- |
+| M01 | `imported_if_preserves_boundaries_nesting_and_line_endings` covers the imported conditional, nesting, precedence, line endings and parser refusals. | Reconcile the complete case with the final candidate and gate. |
+| M02 | `template_macro_preserves_expression_capture_grouping` and `expression_unwrapping_preserves_groups_and_nested_fragments` contrast protected and unwrapped expressions. | Explicit trailing-output and recovery-bearing fragment refusal observations need reconciliation. |
+| M03 | `imported_templates_and_ash_transformer_run_through_the_driver`, `parse_expression_does_not_run_discarded_nested_syntax` and the host failure cases exercise both authoring forms and ordinary failures. | Reconcile the complete signature, row and failure set with the final candidate. |
+| M04 | Captured and caller identifiers, non-capture, copied binders and their actual uses are exercised by the host and copied-fragment tests. | Check whether existing cases distinguish two independently issued, same-spelled fresh identifiers. |
+| M05 | Copied local nominals, resources, their uses and the caller's free reference have checked-Core observations; region scope positives and negatives run through the driver. | A copied lexical-region identity and internal-use observation is not yet established. |
+| M06 | `definition_context_keeps_private_helpers_and_types_through_linking`, qualified/facade and withheld-constructor cases, `generated_fresh_context_does_not_select_syntax_or_caller_binding` and expansion-time missing-helper cases exercise the source-access boundary. | Reconcile the checked dependency closure and all ordinary privacy/refusal cases; grant objects are superseded. |
+| M07 | `syntax_imports_are_contextual_and_preserve_ordinary_syntax_names`, `syntax_selectors_reject_reexports_and_non_lowercase_names`, the missing-export staging test and unused-transformer test cover parts of the boundary. | Reconcile duplicate/conflicting selectors, complete-import non-activation, unsupported local forms and cycles against explicit observations. |
+| M08 | The combined template/computed graph and `template_uses_its_defining_modules_syntax_imports` exercise nested separately authored syntax and caller shadowing. | Reconcile the complete graph on the retaining candidate. |
+| M09 | Method-evidence, continuation-capability, effect-order and resource/region tests include ordinary failure controls. | Reconcile the full required capability and direct-builtin-import cases with the final candidate. |
+| M10 | Captured identifier and combined-origin tests, `syntax_services_reject_invalid_requests_without_losing_a_valid_capture`, the private host identity test and parser-diagnostic tests cover individual bridge operations and failures. | A single mixed token/group/fragment/context/origin identity round trip and complete diagnostic-label audit remain unverified. |
+| M11 | `transformer_failures_dispose_the_real_invocation_root` and `transformer_closes_root_and_preserves_rejection_on_teardown_failure` cover real completion and failure paths; the shared disposal handoff supplies the reviewed compositional evidence above. | Finish the failure/publication and limit audit. A direct combined active-transformer teardown injection was not observed and is not asserted by the composition. |
+| M12 | The reviewed `copied_macro_fragments_have_distinct_checked_local_identities` repeat and `changed_macro_inputs_are_checked_in_each_compilation` cover the named fixture's copy relations and changed inputs. | Reconcile the matrix's full modulo-renaming claim and fixed compiler-interface/semantic inputs; no persistent cache is required. |
+| M13 | The transformer-reuse test and existing generated-binder, local-nominal scope and origin mutation tests exercise checked and Core boundaries. | Confirm their complete association with the production macro graph and the independent compile-time/final validation paths. |
+| M14 | `tests/parser.rs::out_of_place_dollar_is_a_parser_error`, existing ordinary-language suites and the supported source-removal native graph cover concrete compatibility cases. | Refresh affected verification and the supported native result for the retained candidate; reconcile runtime syntax-service non-use and the existing local-newtype image limitation. |
+
+For P21, `syntax_constructed_ops.ash::make_line` already emits the same fresh
+identifier as both binder and reference, and
+`checked_transformer_fresh_identifier_does_not_capture_the_caller` executes
+that path. The remaining question is the separate same-spelled fresh-handle
+contrast, not whether any fresh handle has ever been reused. This refinement
+does not award the prior positive evidence again.
+
 ## Progress
 
 The weighted ledger records **61.5/100 reviewed delivery points**. The latest
