@@ -142,6 +142,44 @@ fn qualified_effects_follow_their_alias_context() {
 }
 
 #[test]
+fn targeted_and_generic_owner_effects_keep_their_checked_identity() {
+    for path in [
+        "qualified-effect/targeted_manual.ash",
+        "qualified-effect/targeted_entry.ash",
+        "qualified-effect/targeted_generic.ash",
+        "qualified-effect/targeted_facade.ash",
+        "qualified-effect/owner_generic_manual.ash",
+        "qualified-effect/owner_generic_entry.ash",
+        "qualified-effect/owner_generic_private.ash",
+    ] {
+        let compiled = compile_path(fixture(path)).expect(path);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42", "{path}");
+    }
+    for (path, reason) in [
+        ("qualified-effect/targeted_caller.ash", "effect.unknown"),
+        (
+            "qualified-effect/targeted_private.ash",
+            "resolve.unavailable-export",
+        ),
+        (
+            "qualified-effect/owner_generic_caller.ash",
+            "effect.unknown",
+        ),
+        (
+            "qualified-effect/wrong_arity.ash",
+            "effect.handler-coverage",
+        ),
+        (
+            "qualified-effect/wrong_arity_manual.ash",
+            "effect.handler-coverage",
+        ),
+    ] {
+        let failure = compile_path(fixture(path)).expect_err(path);
+        assert_eq!(failure.reason_code(), reason, "{path}: {failure:?}");
+    }
+}
+
+#[test]
 fn generated_token_diagnostics_point_to_the_invocation() {
     use ash::{
         message::{Catalogue, Locale},

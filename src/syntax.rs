@@ -354,6 +354,7 @@ pub(crate) struct SyntaxOwnerBindings {
     targeted: HashMap<String, (DirectDependencyRoute, String, Span)>,
     targeted_nominals: HashMap<String, (DirectDependencyRoute, String, Span)>,
     targeted_interfaces: HashMap<String, (DirectDependencyRoute, String, Span)>,
+    targeted_effects: HashMap<String, (DirectDependencyRoute, String, Span)>,
 }
 
 impl SyntaxOwnerBindings {
@@ -405,6 +406,7 @@ impl SyntaxOwnerBindings {
         let mut targeted = HashMap::new();
         let mut targeted_nominals = HashMap::new();
         let mut targeted_interfaces = HashMap::new();
+        let mut targeted_effects = HashMap::new();
         for (import, edge) in loaded.surface().imports.iter().zip(
             loaded
                 .dependencies()
@@ -460,6 +462,15 @@ impl SyntaxOwnerBindings {
                                 return Err(());
                             }
                         }
+                        if dependency.exports().effect(&name.text).is_some() {
+                            let local = alias.as_ref().unwrap_or(name);
+                            if targeted_effects
+                                .insert(local.text.clone(), (route, name.text.clone(), *span))
+                                .is_some()
+                            {
+                                return Err(());
+                            }
+                        }
                     }
                 }
             }
@@ -472,6 +483,7 @@ impl SyntaxOwnerBindings {
             targeted,
             targeted_nominals,
             targeted_interfaces,
+            targeted_effects,
         })
     }
 
@@ -484,6 +496,7 @@ impl SyntaxOwnerBindings {
             targeted: HashMap::new(),
             targeted_nominals: HashMap::new(),
             targeted_interfaces: HashMap::new(),
+            targeted_effects: HashMap::new(),
         }
     }
 
@@ -517,6 +530,14 @@ impl SyntaxOwnerBindings {
         spelling: &str,
     ) -> Option<(DirectDependencyRoute, &str, Span)> {
         let (route, original, selector) = self.targeted_interfaces.get(spelling)?;
+        Some((*route, original, *selector))
+    }
+
+    pub(crate) fn targeted_effect(
+        &self,
+        spelling: &str,
+    ) -> Option<(DirectDependencyRoute, &str, Span)> {
+        let (route, original, selector) = self.targeted_effects.get(spelling)?;
         Some((*route, original, *selector))
     }
 

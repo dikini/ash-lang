@@ -548,6 +548,19 @@ A first parser change broke the existing captured-operation case
 the corrected lookahead and seven affected suites pass 184 cases
 (`/tmp/ash-qualified-effect-suite-pinned.log`, SHA-256
 `537640c96a9bd6b2c66c7f3b0c58d38979fe8b0b8abf49b8499a1a1fdf2376f2`).
+Independent review cleared this partial result at `2ad6e6be`; it adds no ledger
+credit.
+
+Renamed targeted effect imports and owner-defined generic effects now retain
+their original checked identities. Seven real graphs, including handwritten
+controls, direct and facade imports, caller shadowing and an owner-private
+generic effect, return 42. Five negative cases preserve caller privacy, reject
+dependency-private imports and match handwritten wrong-arity failure. The
+original targeted-import failure is `/tmp/ash-targeted-generic-effect-red.log`
+(SHA-256 `54abc2e72e7bdb838d9b05aaef75a19aa153ff9a06c8636c77d52d7649e54120`);
+six affected suites pass 180 cases in
+`/tmp/ash-targeted-generic-effect-suite.log` (SHA-256
+`7c7fa3b9683d53317e0784ae25d16c4335551174ce021027978a172be69d2900`).
 This partial result awaits review and adds no ledger credit.
 
 The previously supported combined macro graph still builds with public
@@ -563,7 +576,7 @@ hygiene, causal diagnostics, M01–M14, C1 and C2 remain open.
 ## Progress
 
 The weighted ledger records **58.5/100 reviewed delivery points**. The latest
-reviewed implementation pin is `24bd8410`. These are partial implementation
+reviewed implementation pin is `2ad6e6be`. These are partial implementation
 observations, not acceptance of the whole feature.
 M01–M14 and C1/C2 remain pending.
 

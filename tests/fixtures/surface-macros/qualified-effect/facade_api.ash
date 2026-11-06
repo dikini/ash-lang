@@ -1,1 +1,1 @@
-pub import api (Ask)
+pub import api (Ask, Generic)

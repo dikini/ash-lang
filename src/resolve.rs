@@ -6117,21 +6117,33 @@ impl Resolver<'_, '_> {
                     );
                     continue;
                 }
-                let effect = owner
-                    .effects()
-                    .iter()
-                    .find(|effect| {
-                        effect.id.module() == owner.module()
-                            && effect.parameters.is_empty()
-                            && effect.spelling == usage.name.text
-                    })
-                    .ok_or_else(invalid)?;
+                let local = owner.effects().iter().find(|effect| {
+                    effect.id.module() == owner.module() && effect.spelling == usage.name.text
+                });
+                let (effect, effect_owner, span) = if let Some(effect) = local {
+                    (effect, owner, usage.import_span)
+                } else if let Some((route, original, selector)) =
+                    terms.targeted_effect(&usage.name.text)
+                {
+                    if !owner.direct_dependencies().contains(&route) {
+                        return Err(invalid());
+                    }
+                    let dependency = syntax
+                        .owners
+                        .iter()
+                        .find(|candidate| candidate.module() == route.target())
+                        .ok_or_else(invalid)?;
+                    let effect = dependency.exports().effect(original).ok_or_else(invalid)?;
+                    (effect, dependency, selector)
+                } else {
+                    return Err(invalid());
+                };
                 self.retain_imported_effect_from_owner(
                     effect,
-                    owner.exports(),
-                    usage.import_span,
+                    effect_owner.exports(),
+                    span,
                     Some(SyntaxOwnerLookup {
-                        owner,
+                        owner: effect_owner,
                         graph: syntax.owners,
                     }),
                 )?;
