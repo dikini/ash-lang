@@ -617,7 +617,7 @@ pub(crate) enum MacroParseFailure {
     Invalid,
 }
 
-// D6 connects this syntax-only handoff to declaration expansion.
+// The expansion path will connect this syntax-only handoff separately.
 #[allow(dead_code)]
 pub(crate) fn parse_macro_declarations(
     source: &SourceFile,
@@ -627,12 +627,50 @@ pub(crate) fn parse_macro_declarations(
     contexts: &crate::syntax::SyntaxContexts,
     frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
 ) -> Result<crate::surface::SurfaceModule, MacroParseFailure> {
+    parse_macro_declarations_inner(
+        source,
+        invocation,
+        construction,
+        output,
+        contexts,
+        &[],
+        frame,
+    )
+}
+
+pub(crate) fn parse_declaration_template_admission(
+    source: &SourceFile,
+    invocation: Span,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    placeholders: &[crate::surface::SurfaceName],
+) -> Result<crate::surface::SurfaceModule, MacroParseFailure> {
+    parse_macro_declarations_inner(
+        source,
+        invocation,
+        None,
+        output,
+        contexts,
+        placeholders,
+        None,
+    )
+}
+
+fn parse_macro_declarations_inner(
+    source: &SourceFile,
+    invocation: Span,
+    construction: Option<(Span, usize)>,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    placeholders: &[crate::surface::SurfaceName],
+    frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
+) -> Result<crate::surface::SurfaceModule, MacroParseFailure> {
     let parsed = parse_macro_tree(
         source,
         invocation,
         output,
         contexts,
-        &[],
+        placeholders,
         MacroOutputPosition::Declarations,
     )?;
     project::project_macro_declarations(
