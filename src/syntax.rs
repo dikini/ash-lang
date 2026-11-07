@@ -735,6 +735,7 @@ pub(crate) fn validate_template_syntax(
                     introduction: usize::MAX - captures.len(),
                     introduced_at: Some(name.span),
                     written: false,
+                    diagnostic: None,
                 };
                 identifiers.push(placeholder.clone());
                 SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {

@@ -21,9 +21,9 @@
 
 ## Current delivery status, 7 November
 
-The latest reviewed product checkpoint is `1631b1b5`: **81.75/99 original-scope
-points are reviewed and 17.25 remain**. The separately estimated 30.25 points of
-additional performed work give an effort index of **112/129.25**, not an
+The latest reviewed product checkpoint is `1631b1b5`: **82.5/99 original-scope
+points are reviewed and 16.5 remain**. The separately estimated 30.25 points of
+additional performed work give an effort index of **112.75/129.25**, not an
 acceptance percentage. M01–M14 and C1/C2 remain open.
 
 The [operational plan](../plans/2026-11-05-expression-macros.md#2130-source-binder-reservation-finding)
@@ -1787,6 +1787,68 @@ points; an evidence audit does not assume a product defect or a new test.
 | Documentation: P35 | 1 | Complete status, links, authority and transition cleanup at the owning checkpoint. |
 | Delivery: P36–P39 | 7 | Complete independent whole-path review, the fresh gate, retained verification and authorized milestone integration. |
 | **Total** | **17.25** | **M01–M14 and C1/C2 remain open until their owning evidence and handoffs are accepted.** |
+
+### Completion and limit evidence, 7 November
+
+Independent review reconciled the existing real transformer failure and
+teardown tests with the common disposal scope and the host's service and
+structural-depth limits. The two lifecycle tests pass in
+`/tmp/ash-syntax-lifecycle-current.log` (SHA-256
+`e3dcc3a03458e41ee6756fb900e5fc6dbe122653bc8206badb8b11b05cd0d3ba`), and the
+reviewed host suite exercises the relevant limits. This adds P24 +0.25 and
+P26 +0.5, closing those rows at 2.5/2.5 and 0.5/0.5 respectively. It does
+not repeat the earlier disposal-composition or divergence credit. Active
+transformer destruction and failure combination are supported by their
+shared production handoff and separate observations; a single directly
+injected active-transformer teardown refusal was not observed.
+
+The remaining original-scope work is now 16.5 points: source and hygiene 5,
+host and completion 2, diagnostics and native execution 1.5, documentation 1,
+and delivery 7. These are outstanding evidence and handoffs, not a claim of
+unimplemented functionality. M01–M14 and C1/C2 remain open.
+
+### Qualified-name diagnostic candidate, 7 November
+
+A nested transformer can emit a qualified name whose member has multiple
+causes. A real unavailable-member error retained the ordinary reason and
+frames but lost the member's additional definition cause
+(`/tmp/ash-qualified-combined-origin-probe.json`, SHA-256
+`83f8495c1140994526968af2f31d40a3f464d55438de4fe8f3d491f562b44c9f`).
+A successful qualified lookup followed by an argument error lost that same
+cause (`/tmp/ash-qualified-success-origin-probe.json`, SHA-256
+`3a7c17fa58b43ac59cc97bc9936c6c0e88a6b81dd60e5f80c02c0baf19abc95d`).
+The focused real-driver tests reproduced both losses before the candidate:
+`/tmp/ash-qualified-origin-red.log` (SHA-256
+`d49a653da8c663867275824cdac98cc941c734d815b5836b8913b1111a45fb13`)
+and `/tmp/ash-qualified-success-red.log` (SHA-256
+`b830e8ae6ea2b23eb4ca5d9365966999991475c44c1ea7aa9262d9b172f534a6`).
+
+The candidate carries each projected name's actual output-node origin as
+diagnostic metadata without changing its identity or lookup context. An alias
+miss uses the alias location; a member miss uses the member location. A
+successful qualified expression retains both component locations for the
+existing type-error path. The source-origin control does not acquire the
+identifier handle's different construction origin. The tests assert the
+original reasons and facts, component-owned primary locations, the member's
+additional cause, and outer-to-inner frame pairs. The successful case's
+focused green receipt is `/tmp/ash-qualified-success-green.log` (SHA-256
+`d90204b19d3a48b564cdb8745ffa880d22e3ee2c2a657c866e2b5d820e00052b`).
+
+Six affected integration suites pass 283 cases in
+`/tmp/ash-qualified-origin-suites-final.log` (SHA-256
+`d1b039df4dfa9a8ee0ac0919a843850f351e5d2f5e69a93e011a5c24d687528f`).
+The unchanged resolver and local-nominal 256 KiB stack checks pass in
+`/tmp/ash-qualified-origin-stack-a-final.log` and
+`/tmp/ash-qualified-origin-stack-b.log` (SHA-256
+`fca365e514280aca0c39f7ccfc2ab20072d87f38a99fc0057ebe3d70c655caf7` and
+`4123b24148c78d6ba9a1aa16829f11e6dd5036d9d9fbcc9c77eb7f85b9c491e2`).
+Real CLI JSON cases and English/Bulgarian human output are checked in
+`/tmp/ash-qualified-origin-cli-final.log` (SHA-256
+`2e66e83f35006aea7a2696710ed51e824bc2c1e04da53e16b1dd25af6f4eaf95`).
+All-target Clippy passes in `/tmp/ash-qualified-origin-clippy-final.log`
+(SHA-256 `24cd19b8aaebcee518b81d48bc1df70c19a3ee076332f672864fd3aa51748c2b`).
+This bounded candidate awaits independent review; no new points or M/C
+closure are inferred, and other qualified-name positions are not claimed.
 
 ## Progress
 

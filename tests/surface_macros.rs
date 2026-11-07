@@ -529,6 +529,185 @@ fn unresolved_nested_identifier_preserves_combined_causes() {
 }
 
 #[test]
+fn qualified_lookup_errors_preserve_the_failing_component_origin() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    let outer = include_str!("fixtures/surface-macros/identifier-origin/outer.ash");
+    let inner = include_str!("fixtures/surface-macros/identifier-origin/inner.ash");
+    for (entry, source, invocation, outer_definition, inner_definition, name, combined) in [
+        (
+            "qualified_member.ash",
+            include_str!("fixtures/surface-macros/identifier-origin/qualified_member.ash"),
+            "outer_member 42",
+            "pub syntax outer_member $value:expr => using expand_member",
+            "pub syntax observe_member $name:ident = $value:expr => using emit_member",
+            "item",
+            true,
+        ),
+        (
+            "qualified_alias.ash",
+            include_str!("fixtures/surface-macros/identifier-origin/qualified_alias.ash"),
+            "outer_alias 42",
+            "pub syntax outer_alias $value:expr => using expand_alias",
+            "pub syntax observe_alias $name:ident = $value:expr => using emit_alias",
+            "Missing",
+            true,
+        ),
+        (
+            "qualified_plain.ash",
+            include_str!("fixtures/surface-macros/identifier-origin/qualified_plain.ash"),
+            "outer_plain 42",
+            "pub syntax outer_plain $value:expr => using expand_plain",
+            "pub syntax observe_plain $name:ident = $value:expr => using emit_plain",
+            "item",
+            false,
+        ),
+    ] {
+        let failure = compile_path(fixture(&format!("identifier-origin/{entry}")))
+            .expect_err("the generated qualified name is unavailable");
+        assert_eq!(failure.reason_code(), "resolve.unavailable-export");
+        let diagnostics = compile_file_diagnostics(&failure).unwrap();
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        let labels = json["labels"].as_array().unwrap();
+        let start = source.find(invocation).unwrap();
+        assert_eq!(labels[0]["relationship"], "inaccessible_name");
+        assert_eq!(labels[0]["facts"][0]["value"], name);
+        assert!(labels[0]["path"].as_str().unwrap().ends_with(entry));
+        assert_eq!(labels[0]["byte_start"], start);
+        assert_eq!(labels[0]["byte_end"], start + invocation.len());
+
+        let definition_start = outer.find(outer_definition).unwrap();
+        let causes: Vec<_> = labels
+            .iter()
+            .filter(|label| label["relationship"] == "syntax_cause")
+            .collect();
+        assert_eq!(causes.len(), usize::from(combined), "{entry}: {json}");
+        if combined {
+            assert!(causes[0]["path"].as_str().unwrap().ends_with("outer.ash"));
+            assert_eq!(causes[0]["byte_start"], definition_start);
+            assert_eq!(
+                causes[0]["byte_end"],
+                definition_start + outer_definition.len()
+            );
+        }
+        let frames: Vec<_> = labels
+            .iter()
+            .filter(|label| {
+                label["relationship"] == "syntax_invocation"
+                    || label["relationship"] == "syntax_definition"
+            })
+            .collect();
+        assert_eq!(frames.len(), 4, "{entry}: {json}");
+        for frame in [frames[0], frames[2]] {
+            assert_eq!(frame["relationship"], "syntax_invocation");
+            assert!(frame["path"].as_str().unwrap().ends_with(entry));
+            assert_eq!(frame["byte_start"], start);
+            assert_eq!(frame["byte_end"], start + invocation.len());
+        }
+        assert_eq!(frames[1]["relationship"], "syntax_definition");
+        assert!(frames[1]["path"].as_str().unwrap().ends_with("outer.ash"));
+        assert_eq!(frames[1]["byte_start"], definition_start);
+        assert_eq!(
+            frames[1]["byte_end"],
+            definition_start + outer_definition.len()
+        );
+        let inner_start = inner.find(inner_definition).unwrap();
+        assert_eq!(frames[3]["relationship"], "syntax_definition");
+        assert!(frames[3]["path"].as_str().unwrap().ends_with("inner.ash"));
+        assert_eq!(frames[3]["byte_start"], inner_start);
+        assert_eq!(frames[3]["byte_end"], inner_start + inner_definition.len());
+    }
+}
+
+#[test]
+fn qualified_application_error_preserves_member_origin() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    let entry = include_str!("fixtures/surface-macros/identifier-origin/qualified_success.ash");
+    let outer = include_str!("fixtures/surface-macros/identifier-origin/outer.ash");
+    let inner = include_str!("fixtures/surface-macros/identifier-origin/inner.ash");
+    let failure = compile_path(fixture("identifier-origin/qualified_success.ash"))
+        .expect_err("the generated Bool argument does not match Int");
+    assert_eq!(failure.reason_code(), "type.argument");
+    let diagnostics = compile_file_diagnostics(&failure).unwrap();
+    let mut output = Vec::new();
+    write_json(&mut output, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let labels = json["labels"].as_array().unwrap();
+    let facts = json["facts"].as_array().unwrap();
+    for (name, value) in [("expected", "Int"), ("found", "Bool")] {
+        assert!(
+            facts
+                .iter()
+                .any(|fact| fact["name"] == name && fact["value"] == value)
+        );
+    }
+    let invocation = "outer_success 42";
+    let start = entry.find(invocation).unwrap();
+    assert_eq!(labels[0]["relationship"], "argument");
+    assert!(
+        labels[0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("qualified_success.ash")
+    );
+    assert_eq!(labels[0]["byte_start"], start);
+    assert_eq!(labels[0]["byte_end"], start + invocation.len());
+    assert!(labels.iter().any(|label| {
+        label["relationship"] == "function_domain"
+            && label["path"].as_str().unwrap().ends_with("/success.ash")
+    }));
+
+    let outer_definition = "pub syntax outer_success $value:expr => using expand_success";
+    let definition_start = outer.find(outer_definition).unwrap();
+    assert!(
+        labels.iter().any(|label| {
+            label["relationship"] == "syntax_cause"
+                && label["path"].as_str().unwrap().ends_with("outer.ash")
+                && label["byte_start"] == definition_start
+                && label["byte_end"] == definition_start + outer_definition.len()
+        }),
+        "{json}"
+    );
+
+    let frames: Vec<_> = labels
+        .iter()
+        .filter(|label| {
+            label["relationship"] == "syntax_invocation"
+                || label["relationship"] == "syntax_definition"
+        })
+        .collect();
+    assert_eq!(frames.len(), 4, "{json}");
+    for frame in [frames[0], frames[2]] {
+        assert_eq!(frame["relationship"], "syntax_invocation");
+        assert!(
+            frame["path"]
+                .as_str()
+                .unwrap()
+                .ends_with("qualified_success.ash")
+        );
+        assert_eq!(frame["byte_start"], start);
+        assert_eq!(frame["byte_end"], start + invocation.len());
+    }
+    assert_eq!(frames[1]["relationship"], "syntax_definition");
+    assert!(frames[1]["path"].as_str().unwrap().ends_with("outer.ash"));
+    assert_eq!(frames[1]["byte_start"], definition_start);
+    assert_eq!(
+        frames[1]["byte_end"],
+        definition_start + outer_definition.len()
+    );
+    let inner_definition =
+        "pub syntax observe_success $name:ident = $value:expr => using emit_success";
+    let inner_start = inner.find(inner_definition).unwrap();
+    assert_eq!(frames[3]["relationship"], "syntax_definition");
+    assert!(frames[3]["path"].as_str().unwrap().ends_with("inner.ash"));
+    assert_eq!(frames[3]["byte_start"], inner_start);
+    assert_eq!(frames[3]["byte_end"], inner_start + inner_definition.len());
+}
+
+#[test]
 fn application_failure_preserves_function_occurrence() {
     use ash::presentation::{compile_file_diagnostics, write_json};
 

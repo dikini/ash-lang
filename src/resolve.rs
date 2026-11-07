@@ -6203,6 +6203,10 @@ impl Resolver<'_, '_> {
                         &qualifier.text,
                         "this module alias is not bound in the syntax owner",
                     )
+                    .with_fallback_diagnostic(
+                        qualifier.diagnostic.as_deref(),
+                        &self.diagnostic_frames,
+                    )
                 })?;
                 if !owner.direct_dependencies().contains(&route) {
                     return Err(invalid());
@@ -6280,6 +6284,10 @@ impl Resolver<'_, '_> {
                                 &usage.name.text,
                             )
                         }),
+                    )
+                    .with_fallback_diagnostic(
+                        usage.name.diagnostic.as_deref(),
+                        &self.diagnostic_frames,
                     ));
                 }
                 continue;
@@ -7927,6 +7935,10 @@ impl Resolver<'_, '_> {
                     qualified.qualifier.span,
                     &qualified.qualifier.text,
                     "this module alias is not bound",
+                )
+                .with_fallback_diagnostic(
+                    qualified.qualifier.diagnostic.as_deref(),
+                    &self.diagnostic_frames,
                 )
             })
     }
@@ -14852,6 +14864,10 @@ impl Resolver<'_, '_> {
                         member.span,
                         &member.text,
                         qualified_withheld,
+                    )
+                    .with_fallback_diagnostic(
+                        member.diagnostic.as_deref(),
+                        &self.diagnostic_frames,
                     ));
                 } else {
                     if let Some(kind) = self
@@ -21240,6 +21256,7 @@ mod tests {
                         introduction: 0,
                         introduced_at: None,
                         written: true,
+                        diagnostic: None,
                     })
                 };
                 let wide = || SurfaceType {
@@ -21603,6 +21620,7 @@ mod tests {
             introduction: 0,
             introduced_at: None,
             written: true,
+            diagnostic: None,
         });
         let owner = NominalTypeId::lexical(ModuleId::new(7_014), 0);
         let constructor = ConstructorId::new(owner, 0);
@@ -22482,6 +22500,7 @@ mod tests {
             introduction: 0,
             introduced_at: None,
             written: true,
+            diagnostic: None,
         })
     }
 
@@ -22863,6 +22882,7 @@ mod tests {
                     introduction: 0,
                     introduced_at: None,
                     written: true,
+                    diagnostic: None,
                 })),
                 span,
             }
@@ -23102,6 +23122,7 @@ mod tests {
                     introduction: 0,
                     introduced_at: None,
                     written: true,
+                    diagnostic: None,
                 }),
                 arguments: vec![argument; WIDTH],
             },
@@ -23150,6 +23171,7 @@ mod tests {
                     introduction: 0,
                     introduced_at: None,
                     written: true,
+                    diagnostic: None,
                 }),
                 arguments: vec![
                     SurfaceType {
@@ -23233,6 +23255,7 @@ mod tests {
                     introduction: 0,
                     introduced_at: None,
                     written: true,
+                    diagnostic: None,
                 }),
                 arguments: vec![
                     SurfaceType {
@@ -23319,6 +23342,7 @@ mod tests {
                                     introduction: 0,
                                     introduced_at: None,
                                     written: true,
+                                    diagnostic: None,
                                 }),
                                 arguments: vec![
                                     SurfaceType {
@@ -23338,6 +23362,7 @@ mod tests {
                                     introduction: 0,
                                     introduced_at: None,
                                     written: true,
+                                    diagnostic: None,
                                 },
                             )),
                             span: missing_span,

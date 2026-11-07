@@ -338,6 +338,7 @@ impl SyntaxHost {
                     introduction,
                     introduced_at,
                     written: false,
+                    diagnostic: None,
                 });
                 let identifier = self.handle(CompilerSyntaxHandleKind::Identifier(index));
                 self.construct(heap, "MadeIdentifier", Some(identifier))
@@ -937,6 +938,7 @@ mod tests {
             introduction: 0,
             introduced_at: None,
             written: true,
+            diagnostic: None,
         };
         let make_host = || SyntaxHost {
             occurrence,

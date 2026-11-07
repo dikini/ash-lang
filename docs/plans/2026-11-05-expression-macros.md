@@ -1280,3 +1280,20 @@ repeating vocabulary or host-bridge credit. The published syntax example
 matches the executable fixtures, and its positive and negative CLI
 observations pass on `7becbffc`; review confirmed P34 +1. Final gate and
 retained verification remain open.
+
+### Completion and limit reconciliation, 7 November
+
+Independent review reconciled the existing transformer disposal and host
+limit observations with their common owning path. The task records P24 +0.25
+and P26 +0.5 without asserting a direct combined active-transformer teardown
+injection. The current reviewed total is 82.5/99; M01–M14, whole-path review,
+the final gate and retained verification remain open.
+
+### Qualified-name diagnostic candidate, 7 November
+
+The task records a real lost-cause failure for both an unavailable member and
+a successful qualified reference used in an argument error. The candidate
+retains the actual qualifier and member locations at the ordinary projection
+and lookup handoffs. Focused red/green, affected suites, small-stack checks,
+CLI output and Clippy are recorded there. The candidate awaits independent
+review; it does not claim all qualified-name positions or M/C completion.

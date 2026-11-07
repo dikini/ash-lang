@@ -1,15 +1,29 @@
 import @builtin.compiler.syntax as Syntax
-import inner (syntax observe, syntax observe_resolve)
+import inner (syntax observe, syntax observe_resolve, syntax observe_member, syntax observe_alias, syntax observe_plain, syntax observe_success)
+import helpers as H
+import success as Success
 import relay (syntax forward)
 pub syntax outer $value:expr => using expand
 pub syntax outer_forward $value:expr => using expand_forward
 pub syntax outer_resolve $value:expr => using expand_resolve
+pub syntax outer_member $value:expr => using expand_member
+pub syntax outer_alias $value:expr => using expand_alias
+pub syntax outer_plain $value:expr => using expand_plain
+pub syntax outer_success $value:expr => using expand_success
 expand : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
 expand input = expand_for(input, "observe")
 expand_forward : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
 expand_forward input = expand_for(input, "forward")
 expand_resolve : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
 expand_resolve input = expand_for(input, "observe_resolve")
+expand_member : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
+expand_member input = expand_for(input, "observe_member")
+expand_alias : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
+expand_alias input = expand_for(input, "observe_alias")
+expand_plain : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
+expand_plain input = expand_for(input, "observe_plain")
+expand_success : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
+expand_success input = expand_for(input, "observe_success")
 expand_for : (Syntax.Input, String) -> Syntax.MacroResult ! {Syntax.Ops}
 expand_for (input, target) = {
     let invocation = Syntax.invocation_origin(input)

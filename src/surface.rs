@@ -753,7 +753,7 @@ pub struct FunctionExpr {
 }
 
 /// An unresolved source name and its exact span.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq)]
 pub struct SurfaceName {
     /// The source spelling.
     pub text: String,
@@ -765,6 +765,19 @@ pub struct SurfaceName {
     pub(crate) introduced_at: Option<Span>,
     /// Whether this identifier was written in source, including when captured.
     pub(crate) written: bool,
+    /// Diagnostic origin of this emitted name occurrence, if present.
+    pub(crate) diagnostic: Option<Box<crate::syntax::DiagnosticLocation>>,
+}
+
+impl PartialEq for SurfaceName {
+    fn eq(&self, other: &Self) -> bool {
+        // Diagnostic origin does not change name or placeholder identity.
+        self.text == other.text
+            && self.span == other.span
+            && self.introduction == other.introduction
+            && self.introduced_at == other.introduced_at
+            && self.written == other.written
+    }
 }
 
 /// One declaration-level source type parameter.

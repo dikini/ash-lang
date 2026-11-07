@@ -2025,6 +2025,7 @@ fn project_import(
                 introduction: 0,
                 introduced_at: None,
                 written: true,
+                diagnostic: None,
             }),
             _ => None,
         })
@@ -3014,8 +3015,16 @@ fn project_expression_with_fragments(
                         optional_child_of_kind(node, NodeKind::QualifiedName)?
                     {
                         let name = project_qualified_name(source, name, tokens)?;
+                        let mut diagnostic = name.qualifier.diagnostic.clone();
+                        if let Some(member) = &name.member.diagnostic {
+                            if let Some(location) = &mut diagnostic {
+                                location.add_cause(member);
+                            } else {
+                                diagnostic = Some(member.clone());
+                            }
+                        }
                         projected.push(SurfaceExpr {
-                            diagnostic: None,
+                            diagnostic,
                             span: name.span,
                             kind: SurfaceExprKind::Name(SurfaceReference::Qualified(name)),
                         });
@@ -3948,7 +3957,13 @@ fn project_recursive_binder(
 
 fn surface_name(token: ProjectionToken<'_>) -> Result<SurfaceName, ProjectionError> {
     match token.original {
-        Some(crate::syntax::MacroOutputNode::Identifier(name, _)) => return Ok(name.clone()),
+        Some(crate::syntax::MacroOutputNode::Identifier(name, origin)) => {
+            let mut name = name.clone();
+            name.diagnostic = Some(Box::new(crate::syntax::DiagnosticLocation::new(
+                origin.clone(),
+            )));
+            return Ok(name);
+        }
         Some(
             crate::syntax::MacroOutputNode::Expression(_, _)
             | crate::syntax::MacroOutputNode::ForwardedExpression(_, _),
@@ -3967,6 +3982,7 @@ fn surface_name(token: ProjectionToken<'_>) -> Result<SurfaceName, ProjectionErr
         introduction: 0,
         introduced_at: None,
         written: true,
+        diagnostic: None,
     })
 }
 
