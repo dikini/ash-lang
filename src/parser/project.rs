@@ -18,12 +18,12 @@ use crate::{
         SurfaceInterfaceDeclaration, SurfaceInterfaceDetermination, SurfaceInterfaceMethod,
         SurfaceKind, SurfaceKindKind, SurfaceLocalDeclaration, SurfaceMatchArm, SurfaceMatchExpr,
         SurfaceModule, SurfaceModulePath, SurfaceName, SurfaceNominalDeclarationKind,
-        SurfacePattern, SurfacePatternKind, SurfacePerformExpr, SurfaceQualifiedName,
-        SurfaceRecursiveGroup, SurfaceRecursiveMember, SurfaceReference, SurfaceRequirement,
-        SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind, SurfaceSyntaxCategory,
+        SurfacePattern, SurfacePatternCapture, SurfacePatternKind, SurfacePerformExpr,
+        SurfaceQualifiedName, SurfaceRecursiveGroup, SurfaceRecursiveMember, SurfaceReference,
+        SurfaceRequirement, SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind, SurfaceSyntaxCategory,
         SurfaceSyntaxDeclaration, SurfaceSyntaxImplementation, SurfaceSyntaxMatcherPart,
-        SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeParameter,
-        SurfaceTypeVisibility, SurfaceTypedPattern,
+        SurfaceType, SurfaceTypeCapture, SurfaceTypeDeclaration, SurfaceTypeKind,
+        SurfaceTypeParameter, SurfaceTypeVisibility, SurfaceTypedPattern,
     },
 };
 
@@ -566,8 +566,11 @@ fn validate_shallow_shape(
                 if shape.peek_node_is(NodeKind::SyntaxCapture) {
                     if !declaration
                         && shape.peek_node().is_some_and(|capture| {
-                            direct_tokens(capture, tokens)
-                                .any(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+                            direct_tokens(capture, tokens).any(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+                                || direct_tokens(capture, tokens).last().is_some_and(|token| {
+                                    matches!(&token.kind, TokenKind::Type)
+                                        || matches!(&token.kind, TokenKind::Identifier(name) if name == "pattern")
+                                })
                         })
                     {
                         return malformed(InternalReason::UnexpectedShape);
@@ -647,13 +650,23 @@ fn validate_shallow_shape(
             })?;
             shape.token(&TokenKind::Colon)?;
             shape.token_matching(
-                |kind| matches!(kind, TokenKind::Identifier(name) if name == "expr" || name == "ident"),
+                |kind| matches!(kind, TokenKind::Type)
+                    || matches!(kind, TokenKind::Identifier(name) if name == "expr" || name == "ident" || name == "pattern"),
             )?;
         }
         NodeKind::SyntaxInvocation | NodeKind::DeclarationSyntaxInvocation => {
             shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
             while shape.position < shape.children.len() {
                 if shape.peek_node_is(NodeKind::SyntaxArgument) {
+                    if node.kind == NodeKind::SyntaxInvocation
+                        && shape.peek_node().is_some_and(|argument| {
+                            child_nodes(argument).any(|child| {
+                                matches!(child.kind, NodeKind::Type | NodeKind::Pattern)
+                            })
+                        })
+                    {
+                        return malformed(InternalReason::UnexpectedShape);
+                    }
                     shape.node(NodeKind::SyntaxArgument)?;
                 } else {
                     shape.token_matching(|kind| {
@@ -663,7 +676,11 @@ fn validate_shallow_shape(
             }
         }
         NodeKind::SyntaxArgument => {
-            if shape.peek_node().is_some() {
+            if shape.peek_node_is(NodeKind::Type) {
+                shape.node(NodeKind::Type)?;
+            } else if shape.peek_node_is(NodeKind::Pattern) {
+                shape.node(NodeKind::Pattern)?;
+            } else if shape.peek_node().is_some() {
                 shape.expression()?;
             } else {
                 shape.token_matching(|kind| {
@@ -1768,28 +1785,25 @@ fn project_surface_module(
                         ConcreteElement::Node(capture)
                             if capture.kind == NodeKind::SyntaxCapture =>
                         {
-                            let names = direct_tokens(capture, tokens)
-                                .filter(|token| {
-                                    matches!(
-                                        token.kind,
-                                        TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
-                                    )
-                                })
-                                .collect::<Vec<_>>();
-                            if names.len() != 2 {
+                            let parts = direct_tokens(capture, tokens).collect::<Vec<_>>();
+                            if parts.len() != 4 {
                                 return malformed(InternalReason::UnexpectedShape);
                             }
-                            let kind = match &names[1].kind {
+                            let kind = match &parts[3].kind {
                                 TokenKind::Identifier(kind) if kind == "expr" => {
                                     SurfaceSyntaxCaptureKind::Expression
                                 }
                                 TokenKind::Identifier(kind) if kind == "ident" => {
                                     SurfaceSyntaxCaptureKind::Identifier
                                 }
+                                TokenKind::Type if declaration => SurfaceSyntaxCaptureKind::Type,
+                                TokenKind::Identifier(kind) if declaration && kind == "pattern" => {
+                                    SurfaceSyntaxCaptureKind::Pattern
+                                }
                                 _ => return malformed(InternalReason::UnexpectedShape),
                             };
                             matcher.push(SurfaceSyntaxMatcherPart::Capture {
-                                name: surface_name(names[0])?,
+                                name: surface_name(parts[1])?,
                                 kind,
                             });
                         }
@@ -2841,6 +2855,24 @@ fn project_declaration_invocation_from_tokens(
                     captures.push(SurfaceSyntaxCapture::Expression(
                         project_syntax_expression_capture(expression, contents),
                     ));
+                }
+                SurfaceSyntaxCaptureKind::Type => {
+                    let node = only_child_of_kind(argument, NodeKind::Type)?;
+                    let contents = capture_contents(source, node, tokens, originals)?;
+                    let ty = project_type(source, node, tokens)?;
+                    captures.push(SurfaceSyntaxCapture::Type(SurfaceTypeCapture {
+                        ty,
+                        contents: contents.into(),
+                    }));
+                }
+                SurfaceSyntaxCaptureKind::Pattern => {
+                    let node = only_child_of_kind(argument, NodeKind::Pattern)?;
+                    let contents = capture_contents(source, node, tokens, originals)?;
+                    let pattern = project_pattern(source, node, tokens)?;
+                    captures.push(SurfaceSyntaxCapture::Pattern(SurfacePatternCapture {
+                        pattern,
+                        contents: contents.into(),
+                    }));
                 }
             },
             _ => return malformed(InternalReason::UnexpectedShape),
@@ -5569,6 +5601,280 @@ mod tests {
             &value.contents
         ));
         assert_eq!(expression.expression.span, value.expression.span);
+    }
+
+    #[test]
+    fn d4_structured_captures_keep_context_origin_and_diagnostic_frames() {
+        use crate::syntax::{
+            DiagnosticLocation, ExpansionFrame, MacroDelimiter, MacroOrigin, MacroOutputNode,
+            SelectedSyntax, SyntaxContexts,
+        };
+        use std::sync::Arc;
+
+        let owner = SourceFile::new(
+            "owner.ash",
+            "pub syntax declaration: (typed) $T:type matching $p:pattern yields $body:expr => {}\n",
+        )
+        .unwrap();
+        let definition = project_module_retaining_templates(&owner, &parse(lex(&owner).unwrap()))
+            .unwrap()
+            .syntax_declarations
+            .remove(0);
+        let caller = SourceFile::new("caller.ash", "invoke").unwrap();
+        let invocation = caller.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let written = SourceFile::new(
+            "written.ash",
+            "typed Model matching (Some(value), flag) yields value",
+        )
+        .unwrap();
+        let span = |start: usize, end: usize| {
+            written
+                .span(ByteRange::new(start as u32, end as u32).unwrap())
+                .unwrap()
+        };
+        let at = |text: &str| {
+            let start = written.text().find(text).unwrap();
+            span(start, start + text.len())
+        };
+        let earlier_frame = Arc::new(ExpansionFrame {
+            invocation: at("typed"),
+            definition: definition.span,
+        });
+        let current_frame = Arc::new(ExpansionFrame {
+            invocation,
+            definition: definition.span,
+        });
+        let related = MacroOrigin::Source(at("matching"));
+        let make_name = |text: &str, introduction: usize, name_span: Span| {
+            let mut diagnostic = DiagnosticLocation::new(MacroOrigin::Source(name_span));
+            diagnostic.related.push(related.clone());
+            diagnostic.add_frame(&earlier_frame);
+            SurfaceName {
+                text: text.into(),
+                span: name_span,
+                introduction,
+                introduced_at: Some(name_span),
+                written: false,
+                diagnostic: Some(Box::new(diagnostic)),
+            }
+        };
+        let typed = make_name("typed", 1, at("typed"));
+        let model = make_name("Model", 7, at("Model"));
+        let constructor = make_name("Some", 6, at("Some"));
+        let binder = make_name("value", 8, at("value"));
+        let flag = make_name("flag", 9, at("flag"));
+        let body_start = written.text().rfind("value").unwrap();
+        let body_name = make_name("value", 8, span(body_start, body_start + 5));
+        let body = SurfaceExpressionCapture {
+            expression: SurfaceExpr {
+                kind: SurfaceExprKind::Name(SurfaceReference::Unqualified(body_name.clone())),
+                span: body_name.span,
+                diagnostic: None,
+            },
+            contents: Arc::from([MacroOutputNode::Identifier(
+                body_name.clone(),
+                body_name.span.into(),
+            )]),
+        };
+        let selection = SelectedSyntax {
+            name: "typed".into(),
+            declaration: definition,
+            owner: 42,
+            import_span: at("typed"),
+        };
+        let contexts = SyntaxContexts::new(&[], &[vec![selection.clone()]], &[Some(0)]);
+        let pattern_start = written.text().find('(').unwrap();
+        let pattern_end = written.text().rfind(')').unwrap() + 1;
+        let some_start = written.text().find("Some(").unwrap() + "Some".len();
+        let some_end = written.text()[some_start..].find(')').unwrap() + some_start + 1;
+        let output = vec![
+            MacroOutputNode::Identifier(typed.clone(), typed.span.into()),
+            MacroOutputNode::Identifier(model.clone(), model.span.into()),
+            MacroOutputNode::Identifier(
+                make_name("matching", 1, at("matching")),
+                at("matching").into(),
+            ),
+            MacroOutputNode::Group(
+                MacroDelimiter::Parentheses,
+                vec![
+                    MacroOutputNode::Identifier(constructor.clone(), constructor.span.into()),
+                    MacroOutputNode::Group(
+                        MacroDelimiter::Parentheses,
+                        vec![MacroOutputNode::Identifier(
+                            binder.clone(),
+                            binder.span.into(),
+                        )],
+                        span(some_start, some_end).into(),
+                    ),
+                    MacroOutputNode::Token(TokenKind::Comma, ",".into(), at(",").into()),
+                    MacroOutputNode::Identifier(flag.clone(), flag.span.into()),
+                ],
+                span(pattern_start, pattern_end).into(),
+            ),
+            MacroOutputNode::Identifier(make_name("yields", 1, at("yields")), at("yields").into()),
+            MacroOutputNode::ForwardedExpression(body.clone(), body_name.span.into()),
+        ];
+        let mut wrong_pattern = output.clone();
+        wrong_pattern[3] = MacroOutputNode::Expression(body.clone(), body_name.span.into());
+        let mut wrong_type = output.clone();
+        wrong_type[1] = MacroOutputNode::Expression(body.clone(), body_name.span.into());
+        let Err(super::super::MacroParseFailure::Syntax { diagnostics, .. }) =
+            super::super::parse_macro_tree(
+                &caller,
+                invocation,
+                wrong_type,
+                &contexts,
+                &[],
+                super::super::MacroOutputPosition::Declarations,
+            )
+        else {
+            panic!("a protected expression cannot be a type");
+        };
+        assert_eq!(
+            diagnostics[0].expected_form(),
+            Some(super::super::ExpectedForm::Type)
+        );
+        let mut wrong_nested = output.clone();
+        let MacroOutputNode::Group(_, children, _) = &mut wrong_nested[3] else {
+            panic!("expected a pattern group");
+        };
+        let MacroOutputNode::Group(_, payload, _) = &mut children[1] else {
+            panic!("expected a constructor payload");
+        };
+        payload[0] = MacroOutputNode::ForwardedExpression(body.clone(), body_name.span.into());
+        for wrong in [wrong_pattern, wrong_nested] {
+            let Err(super::super::MacroParseFailure::Syntax { diagnostics, .. }) =
+                super::super::parse_macro_tree(
+                    &caller,
+                    invocation,
+                    wrong,
+                    &contexts,
+                    &[],
+                    super::super::MacroOutputPosition::Declarations,
+                )
+            else {
+                panic!("a protected expression cannot be a pattern");
+            };
+            assert_eq!(
+                diagnostics[0].expected_form(),
+                Some(super::super::ExpectedForm::Pattern)
+            );
+        }
+        let parsed = super::super::parse_macro_tree(
+            &caller,
+            invocation,
+            output,
+            &contexts,
+            &[],
+            super::super::MacroOutputPosition::Declarations,
+        )
+        .unwrap();
+        let node = child_nodes(parsed.tree.root().unwrap())
+            .find(|node| node.kind == NodeKind::DeclarationSyntaxInvocation)
+            .unwrap();
+        let mut expression_node = node.clone();
+        expression_node.kind = NodeKind::SyntaxInvocation;
+        assert_eq!(
+            validate_node_shape_with_admission(
+                &expression_node,
+                &parsed.tree.tokens,
+                Some(&parsed.admission_identifiers),
+            ),
+            Err(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape
+            ))
+        );
+        let matched = project_macro_declaration_invocation(
+            &caller,
+            invocation,
+            None,
+            &parsed,
+            node,
+            &contexts,
+            Some(&current_frame),
+        )
+        .unwrap();
+        assert_eq!(matched.selection.owner, selection.owner);
+        assert_eq!(matched.selection.import_span, selection.import_span);
+        let [
+            SurfaceSyntaxCapture::Type(ty),
+            SurfaceSyntaxCapture::Pattern(pattern),
+            SurfaceSyntaxCapture::Expression(expression),
+        ] = matched.captures.as_slice()
+        else {
+            panic!("expected ordered type, pattern and expression captures");
+        };
+        let SurfaceTypeKind::Named(SurfaceReference::Unqualified(type_name)) = &ty.ty.kind else {
+            panic!("expected a named type");
+        };
+        assert_eq!(type_name.introduction, 7);
+        assert_eq!(type_name.span, model.span);
+        let diagnostic = type_name.diagnostic.as_ref().unwrap();
+        assert!(diagnostic.related.contains(&related));
+        assert!(
+            diagnostic
+                .frames
+                .iter()
+                .any(|frame| Arc::ptr_eq(frame, &earlier_frame))
+        );
+        assert!(
+            diagnostic
+                .frames
+                .iter()
+                .any(|frame| Arc::ptr_eq(frame, &current_frame))
+        );
+        assert!(
+            matches!(&ty.contents[..], [MacroOutputNode::Identifier(name, origin)] if name.introduction == 7 && origin.primary() == model.span)
+        );
+        let SurfacePatternKind::Tuple(items) = &pattern.pattern.kind else {
+            panic!("expected a tuple pattern");
+        };
+        let SurfacePatternKind::Constructor {
+            payload: Some(payload),
+            ..
+        } = &items[0].kind
+        else {
+            panic!("expected constructor payload");
+        };
+        let SurfacePatternKind::Binder(pattern_binder) = &payload.kind else {
+            panic!("expected captured binder");
+        };
+        assert_eq!(pattern_binder.name.introduction, 8);
+        assert_eq!(pattern_binder.name.span, binder.span);
+        let diagnostic = pattern_binder.name.diagnostic.as_ref().unwrap();
+        assert!(diagnostic.related.contains(&related));
+        assert!(
+            diagnostic
+                .frames
+                .iter()
+                .any(|frame| Arc::ptr_eq(frame, &earlier_frame))
+        );
+        assert!(
+            diagnostic
+                .frames
+                .iter()
+                .any(|frame| Arc::ptr_eq(frame, &current_frame))
+        );
+        assert!(
+            pattern
+                .pattern
+                .diagnostic
+                .as_ref()
+                .unwrap()
+                .frames
+                .iter()
+                .any(|frame| Arc::ptr_eq(frame, &current_frame))
+        );
+        assert!(
+            matches!(&pattern.contents[..], [MacroOutputNode::Group(MacroDelimiter::Parentheses, _, origin)] if origin.primary() == span(pattern_start, pattern_end))
+        );
+        assert!(Arc::ptr_eq(&expression.contents, &body.contents));
+        let SurfaceExprKind::Name(SurfaceReference::Unqualified(body_name)) =
+            &expression.expression.kind
+        else {
+            panic!("expected captured body name");
+        };
+        assert_eq!(body_name.introduction, pattern_binder.name.introduction);
     }
 
     #[test]

@@ -199,6 +199,40 @@ fn declaration_matcher_capture_names_include_uppercase_without_changing_expressi
 }
 
 #[test]
+fn declaration_headers_accept_fixed_type_and_pattern_captures() {
+    let forms = include_str!("../docs/design/macros/fixtures/declarations/forms.ash");
+    let start = forms
+        .find("pub syntax declaration: (make_identity)")
+        .unwrap();
+    let end = start + forms[start..].find("\n}\n").unwrap() + "\n}\n".len();
+    for (text, expected) in [
+        (&forms[start..end], SurfaceSyntaxCaptureKind::Type),
+        (
+            include_str!("../docs/design/macros/fixtures/captures/binder_forms.ash"),
+            SurfaceSyntaxCaptureKind::Pattern,
+        ),
+    ] {
+        let (source, tree) = parsed(text);
+        assert!(
+            tree.parse_diagnostics().is_empty(),
+            "{:?}",
+            tree.parse_diagnostics()
+        );
+        let module = project_module(&source, &tree).unwrap();
+        assert!(module.syntax_declarations[0].matcher.iter().any(|part| {
+            matches!(part, SurfaceSyntaxMatcherPart::Capture { kind, .. } if *kind == expected)
+        }));
+    }
+    for text in [
+        "pub syntax ordinary $value:type then $body:expr => { $body }\n",
+        "pub syntax ordinary $value:pattern then $body:expr => { $body }\n",
+    ] {
+        let (_, tree) = parsed(text);
+        assert!(!tree.parse_diagnostics().is_empty(), "accepted {text:?}");
+    }
+}
+
+#[test]
 fn malformed_declaration_headers_stop_at_recovery_boundary() {
     for text in [
         "pub syntax declaration: () => {}\n",

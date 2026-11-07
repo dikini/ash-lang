@@ -3209,6 +3209,421 @@ mod tests {
         assert!(crate::parser::project_module_retaining_templates(&source, &tree).is_err());
     }
 
+    fn d4_invocation_node(tree: &crate::parser::ConcreteTree) -> &crate::parser::ConcreteNode {
+        tree.root()
+            .unwrap()
+            .children
+            .iter()
+            .find_map(|child| match child {
+                crate::parser::ConcreteElement::Node(node)
+                    if node.kind == crate::parser::NodeKind::DeclarationSyntaxInvocation =>
+                {
+                    Some(node)
+                }
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn d4_i07_captures_type_and_rejects_missing_type() {
+        let forms = include_str!("../docs/design/macros/fixtures/declarations/forms.ash");
+        let start = forms
+            .find("pub syntax declaration: (make_identity)")
+            .unwrap();
+        let forms = &forms[start..];
+        let fixed = include_str!("../docs/design/macros/fixtures/declarations/case_07.ash");
+        for missing in [false, true] {
+            let text = if missing {
+                fixed.replace("make_identity id for Int", "make_identity id for")
+            } else {
+                fixed.to_owned()
+            };
+            let fixture = TestSource::write(&text);
+            fixture.write_sibling("forms.ash", forms);
+            let (source, tree, selected) = parse_selected_fixture(&fixture.0);
+            if missing {
+                let diagnostic = &tree.parse_diagnostics()[0];
+                assert_eq!(
+                    diagnostic.expected_form(),
+                    Some(crate::parser::ExpectedForm::Type)
+                );
+                let start =
+                    text.find("make_identity id for\n").unwrap() + "make_identity id for".len();
+                assert_eq!(diagnostic.primary.span().range().start() as usize, start);
+                let frames = &diagnostic.primary.diagnostic_location().unwrap().frames;
+                assert_eq!(frames.len(), 1);
+                assert_eq!(frames[0].definition, selected[0].declaration.span);
+                continue;
+            }
+            assert!(
+                tree.parse_diagnostics().is_empty(),
+                "{:?}",
+                tree.parse_diagnostics()
+            );
+            let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+            let matched = crate::parser::project_declaration_invocation(
+                &source,
+                &tree,
+                d4_invocation_node(&tree),
+                &contexts,
+            )
+            .unwrap();
+            let [
+                crate::surface::SurfaceSyntaxCapture::Identifier(name),
+                crate::surface::SurfaceSyntaxCapture::Type(ty),
+            ] = matched.captures.as_slice()
+            else {
+                panic!("I07 captures an identifier and a type");
+            };
+            assert_eq!(name.name.text, "id");
+            assert!(matches!(ty.ty.kind, crate::surface::SurfaceTypeKind::Int));
+            let range = ty.ty.span.range();
+            assert_eq!(
+                &source.text()[range.start() as usize..range.end() as usize],
+                "Int"
+            );
+            assert!(
+                matches!(&ty.contents[..], [crate::syntax::MacroOutputNode::Token(crate::lexer::TokenKind::IntType, _, origin)]
+                if origin.primary() == ty.ty.span)
+            );
+            assert_eq!(matched.selection.owner, selected[0].owner);
+            assert_eq!(matched.selection.import_span, selected[0].import_span);
+            assert!(crate::parser::project_module_retaining_templates(&source, &tree).is_err());
+        }
+    }
+
+    #[test]
+    fn d4_i19_preserves_pattern_binder_and_body_captures() {
+        let fixture = TestSource::write(include_str!(
+            "../docs/design/macros/fixtures/captures/binder.ash"
+        ));
+        fixture.write_sibling(
+            "binder_forms.ash",
+            include_str!("../docs/design/macros/fixtures/captures/binder_forms.ash"),
+        );
+        let (source, tree, selected) = parse_selected_fixture(&fixture.0);
+        assert!(
+            tree.parse_diagnostics().is_empty(),
+            "{:?}",
+            tree.parse_diagnostics()
+        );
+        let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+        let matched = crate::parser::project_declaration_invocation(
+            &source,
+            &tree,
+            d4_invocation_node(&tree),
+            &contexts,
+        )
+        .unwrap();
+        let [
+            crate::surface::SurfaceSyntaxCapture::Identifier(name),
+            crate::surface::SurfaceSyntaxCapture::Pattern(pattern),
+            crate::surface::SurfaceSyntaxCapture::Expression(body),
+        ] = matched.captures.as_slice()
+        else {
+            panic!("I19 captures a name, pattern and expression");
+        };
+        assert_eq!(name.name.text, "identity");
+        let crate::surface::SurfacePatternKind::Binder(binder) = &pattern.pattern.kind else {
+            panic!("the fixed pattern is a binder");
+        };
+        assert_eq!(binder.name.text, "value");
+        assert_eq!(binder.name.introduction, 0);
+        assert!(
+            matches!(&pattern.contents[..], [crate::syntax::MacroOutputNode::Identifier(name, origin)]
+            if name.text == "value" && origin.primary() == binder.name.span)
+        );
+        let range = body.expression.span.range();
+        assert_eq!(
+            &source.text()[range.start() as usize..range.end() as usize],
+            "value"
+        );
+        assert!(
+            matches!(&body.contents[..], [crate::syntax::MacroOutputNode::Identifier(name, _)]
+            if name.text == "value" && name.introduction == binder.name.introduction)
+        );
+        assert_eq!(matched.selection.owner, selected[0].owner);
+        assert_eq!(matched.selection.import_span, selected[0].import_span);
+    }
+
+    #[test]
+    fn d4_i19_predicate_captures_the_fixed_boolean_pattern() {
+        let forms = include_str!("../docs/design/macros/fixtures/captures/forms.ash");
+        let start = forms.find("pub syntax declaration: (predicate)").unwrap();
+        let end = start + forms[start..].find("\n}\n").unwrap() + "\n}\n".len();
+        let line = include_str!("../docs/design/macros/fixtures/captures/main.ash")
+            .lines()
+            .find(|line| line.starts_with("predicate "))
+            .unwrap();
+        let fixture = TestSource::write(&format!("import forms (syntax predicate)\n\n{line}\n"));
+        fixture.write_sibling("forms.ash", &forms[start..end]);
+        let (source, tree, selected) = parse_selected_fixture(&fixture.0);
+        assert!(
+            tree.parse_diagnostics().is_empty(),
+            "{:?}",
+            tree.parse_diagnostics()
+        );
+        let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+        let matched = crate::parser::project_declaration_invocation(
+            &source,
+            &tree,
+            d4_invocation_node(&tree),
+            &contexts,
+        )
+        .unwrap();
+        let [
+            crate::surface::SurfaceSyntaxCapture::Identifier(name),
+            crate::surface::SurfaceSyntaxCapture::Pattern(pattern),
+        ] = matched.captures.as_slice()
+        else {
+            panic!("the I19 predicate captures a name and pattern");
+        };
+        assert_eq!(name.name.text, "selected");
+        assert!(matches!(
+            pattern.pattern.kind,
+            crate::surface::SurfacePatternKind::Boolean(true)
+        ));
+        assert!(
+            matches!(&pattern.contents[..], [crate::syntax::MacroOutputNode::Token(crate::lexer::TokenKind::True, _, origin)] if origin.primary() == pattern.pattern.span)
+        );
+    }
+
+    #[test]
+    fn d4_type_captures_use_ordinary_boundaries_and_hide_nested_stops() {
+        use crate::parser::ExpectedForm;
+        for (matcher, line, expected_text, error) in [
+            (
+                "$T:type , $name:ident",
+                "take Pair<Foo, Bar> , item",
+                Some("Pair<Foo, Bar>"),
+                None,
+            ),
+            (
+                "$T:type , $name:ident",
+                "take (Foo, Bar) , item",
+                Some("(Foo, Bar)"),
+                None,
+            ),
+            (
+                "$T:type , $name:ident",
+                "take Mod.Foo -> Pair<Bar, Baz> , item",
+                Some("Mod.Foo -> Pair<Bar, Baz>"),
+                None,
+            ),
+            (
+                "$T:type -> $name:ident",
+                "take (Int -> Bool) -> item",
+                Some("(Int -> Bool)"),
+                None,
+            ),
+            (
+                "$T:type . $name:ident",
+                "take Foo -> Bar . item",
+                Some("Foo -> Bar"),
+                None,
+            ),
+            (
+                "$T:type < $name:ident",
+                "take Foo < item",
+                Some("Foo"),
+                None,
+            ),
+            (
+                "$T:type , $name:ident",
+                "take , item",
+                None,
+                Some(ExpectedForm::Type),
+            ),
+            (
+                "$T:type , $name:ident",
+                "take 42 , item",
+                None,
+                Some(ExpectedForm::Type),
+            ),
+            (
+                "$T:type , $name:ident",
+                "take Pair<Foo,> , item",
+                None,
+                Some(ExpectedForm::Type),
+            ),
+            (
+                "$T:type End $name:ident",
+                "take Foo -> End item",
+                None,
+                Some(ExpectedForm::Type),
+            ),
+        ] {
+            let fixture = TestSource::write(&format!("import forms (syntax take)\n\n{line}\n"));
+            fixture.write_sibling(
+                "forms.ash",
+                &format!("pub syntax declaration: (take) {matcher} => {{}}\n"),
+            );
+            let (source, tree, selected) = parse_selected_fixture(&fixture.0);
+            if let Some(error) = error {
+                assert_eq!(
+                    tree.parse_diagnostics()[0].expected_form(),
+                    Some(error),
+                    "{line}"
+                );
+                continue;
+            }
+            assert!(
+                tree.parse_diagnostics().is_empty(),
+                "{line}: {:?}",
+                tree.parse_diagnostics()
+            );
+            let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+            let matched = crate::parser::project_declaration_invocation(
+                &source,
+                &tree,
+                d4_invocation_node(&tree),
+                &contexts,
+            )
+            .unwrap();
+            let [
+                crate::surface::SurfaceSyntaxCapture::Type(ty),
+                crate::surface::SurfaceSyntaxCapture::Identifier(name),
+            ] = matched.captures.as_slice()
+            else {
+                panic!("expected type and identifier captures for {line}");
+            };
+            let range = ty.ty.span.range();
+            assert_eq!(
+                &source.text()[range.start() as usize..range.end() as usize],
+                expected_text.unwrap()
+            );
+            assert_eq!(name.name.text, "item");
+            assert!(!ty.contents.is_empty());
+            if expected_text == Some("Pair<Foo, Bar>") {
+                assert!(
+                    matches!(&ty.ty.kind, crate::surface::SurfaceTypeKind::Application { arguments, .. } if arguments.len() == 2)
+                );
+            }
+            if expected_text == Some("Mod.Foo -> Pair<Bar, Baz>") {
+                assert!(
+                    matches!(&ty.ty.kind, crate::surface::SurfaceTypeKind::Function(function)
+                    if matches!(&function.domain.kind, crate::surface::SurfaceTypeKind::Named(crate::surface::SurfaceReference::Qualified(_)))
+                        && matches!(&function.codomain.kind, crate::surface::SurfaceTypeKind::Application { arguments, .. } if arguments.len() == 2))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn d4_patterns_stop_before_literals_and_reject_wrong_categories() {
+        use crate::parser::ExpectedForm;
+        for (line, expected_text, error) in [
+            (
+                "take (Some(value), flag) yields value",
+                Some("(Some(value), flag)"),
+                None,
+            ),
+            (
+                "take (yields, flag) yields value",
+                Some("(yields, flag)"),
+                None,
+            ),
+            (
+                "take Mod.Some(value) yields value",
+                Some("Mod.Some(value)"),
+                None,
+            ),
+            ("take yields value", None, Some(ExpectedForm::Pattern)),
+            ("take 42 yields value", None, Some(ExpectedForm::Pattern)),
+            (
+                "take (Some(value) yields value",
+                None,
+                Some(ExpectedForm::RightParen),
+            ),
+        ] {
+            let fixture = TestSource::write(&format!("import forms (syntax take)\n\n{line}\n"));
+            fixture.write_sibling(
+                "forms.ash",
+                "pub syntax declaration: (take) $p:pattern yields $body:expr => {}\n",
+            );
+            let (source, tree, selected) = parse_selected_fixture(&fixture.0);
+            if let Some(error) = error {
+                assert_eq!(
+                    tree.parse_diagnostics()[0].expected_form(),
+                    Some(error),
+                    "{line}"
+                );
+                continue;
+            }
+            assert!(
+                tree.parse_diagnostics().is_empty(),
+                "{line}: {:?}",
+                tree.parse_diagnostics()
+            );
+            let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+            let matched = crate::parser::project_declaration_invocation(
+                &source,
+                &tree,
+                d4_invocation_node(&tree),
+                &contexts,
+            )
+            .unwrap();
+            let [
+                crate::surface::SurfaceSyntaxCapture::Pattern(pattern),
+                crate::surface::SurfaceSyntaxCapture::Expression(_),
+            ] = matched.captures.as_slice()
+            else {
+                panic!("expected pattern and expression captures for {line}");
+            };
+            let range = pattern.pattern.span.range();
+            assert_eq!(
+                &source.text()[range.start() as usize..range.end() as usize],
+                expected_text.unwrap()
+            );
+            assert!(!pattern.contents.is_empty());
+            if expected_text == Some("(Some(value), flag)") {
+                assert!(
+                    matches!(&pattern.pattern.kind, crate::surface::SurfacePatternKind::Tuple(items) if items.len() == 2)
+                );
+            }
+            if expected_text == Some("Mod.Some(value)") {
+                assert!(matches!(
+                    &pattern.pattern.kind,
+                    crate::surface::SurfacePatternKind::Constructor {
+                        name: crate::surface::SurfaceReference::Qualified(_),
+                        payload: Some(_),
+                        ..
+                    }
+                ));
+            }
+        }
+        for line in ["take Some . item", "take binder . item"] {
+            let fixture = TestSource::write(&format!("import forms (syntax take)\n\n{line}\n"));
+            fixture.write_sibling(
+                "forms.ash",
+                "pub syntax declaration: (take) $p:pattern . $name:ident => {}\n",
+            );
+            let (source, tree, selected) = parse_selected_fixture(&fixture.0);
+            assert!(
+                tree.parse_diagnostics().is_empty(),
+                "{line}: {:?}",
+                tree.parse_diagnostics()
+            );
+            let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+            let matched = crate::parser::project_declaration_invocation(
+                &source,
+                &tree,
+                d4_invocation_node(&tree),
+                &contexts,
+            )
+            .unwrap();
+            let [
+                crate::surface::SurfaceSyntaxCapture::Pattern(_),
+                crate::surface::SurfaceSyntaxCapture::Identifier(name),
+            ] = matched.captures.as_slice()
+            else {
+                panic!("expected pattern and identifier captures for {line}");
+            };
+            assert_eq!(name.name.text, "item");
+        }
+    }
+
     #[test]
     fn d3_expression_captures_stop_at_their_literal_and_reject_incomplete_input() {
         let forms = "pub syntax declaration: (pair) $value:expr then $name:ident => {}\n";

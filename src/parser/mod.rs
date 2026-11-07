@@ -919,6 +919,9 @@ fn parse_macro_tree(
         syntax_spellings: Some(&syntax_spellings),
         diagnostic_spans: Some(&diagnostic_spans),
         admission_identifiers: Some(&admission_identifiers),
+        declaration_output_nodes: matches!(position, MacroOutputPosition::Declarations)
+            .then_some(&original_nodes),
+        in_declaration_pattern_capture: false,
         syntax_stops: Vec::new(),
     };
     parser.start(NodeKind::Module);
@@ -1038,6 +1041,8 @@ pub(crate) fn parse_module_header(
             syntax_spellings: None,
             diagnostic_spans: None,
             admission_identifiers: None,
+            declaration_output_nodes: None,
+            in_declaration_pattern_capture: false,
             syntax_stops: Vec::new(),
         };
         grammar::module_header(&mut parser);
@@ -1111,6 +1116,8 @@ pub(crate) fn finish_module_from_checkpoint_with_syntax(
         syntax_spellings: None,
         diagnostic_spans: None,
         admission_identifiers: None,
+        declaration_output_nodes: None,
+        in_declaration_pattern_capture: false,
         syntax_stops: Vec::new(),
     };
     grammar::module_body(&mut parser);
@@ -1164,6 +1171,9 @@ pub(crate) struct Parser<'tokens> {
     syntax_spellings: Option<&'tokens std::collections::HashMap<usize, std::sync::Arc<str>>>,
     diagnostic_spans: Option<&'tokens std::collections::HashMap<usize, Span>>,
     admission_identifiers: Option<&'tokens std::collections::HashSet<usize>>,
+    declaration_output_nodes:
+        Option<&'tokens std::collections::HashMap<usize, crate::syntax::MacroOutputNode>>,
+    in_declaration_pattern_capture: bool,
     syntax_stops: Vec<(TokenKind, String, usize)>,
 }
 
@@ -1212,7 +1222,14 @@ impl Parser<'_> {
     }
 
     fn at_syntax_literal(&self, kind: &TokenKind, spelling: &str) -> bool {
-        let Some(token) = self.tokens.get(self.position) else {
+        self.nth_syntax_literal(0, kind, spelling)
+    }
+
+    fn nth_syntax_literal(&self, distance: usize, kind: &TokenKind, spelling: &str) -> bool {
+        let Some(position) = self.position.checked_add(distance) else {
+            return false;
+        };
+        let Some(token) = self.tokens.get(position) else {
             return false;
         };
         if token.kind != *kind {
@@ -1220,7 +1237,7 @@ impl Parser<'_> {
         }
         if let Some(spellings) = self.syntax_spellings {
             return spellings
-                .get(&self.position)
+                .get(&position)
                 .is_some_and(|found| found.as_ref() == spelling);
         }
         let Some(source) = self.syntax_source else {
@@ -1234,8 +1251,16 @@ impl Parser<'_> {
     }
 
     fn at_syntax_stop(&self) -> bool {
+        self.nth_at_syntax_stop(0)
+    }
+
+    fn nth_at_syntax_stop(&self, distance: usize) -> bool {
+        self.nth_at_syntax_stop_in_depth(distance, self.nesting_depth)
+    }
+
+    fn nth_at_syntax_stop_in_depth(&self, distance: usize, level: usize) -> bool {
         self.syntax_stops.iter().any(|(kind, spelling, depth)| {
-            *depth == self.nesting_depth && self.at_syntax_literal(kind, spelling)
+            *depth == level && self.nth_syntax_literal(distance, kind, spelling)
         })
     }
     fn start(&mut self, kind: NodeKind) {

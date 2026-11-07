@@ -254,6 +254,9 @@ impl SyntaxHost {
                         let capture = self.construct(heap, "IdentifierCapture", Some(fields))?;
                         self.construct(heap, "Captured", Some(capture))
                     }
+                    Some(SurfaceSyntaxCapture::Type(_) | SurfaceSyntaxCapture::Pattern(_)) => {
+                        Err(RuntimeFailure::InvalidControlState)
+                    }
                     None => self.construct(heap, "MissingCapture", None),
                 }
             }
@@ -893,7 +896,9 @@ mod tests {
             source::{ByteRange, Origin, SourceFile},
             surface::{
                 SurfaceExpr, SurfaceExprKind, SurfaceExpressionCapture, SurfaceIdentifierCapture,
-                SurfaceName, SurfaceReference, SurfaceSyntaxCapture,
+                SurfaceName, SurfacePattern, SurfacePatternCapture, SurfacePatternKind,
+                SurfaceReference, SurfaceSyntaxCapture, SurfaceType, SurfaceTypeCapture,
+                SurfaceTypeKind,
             },
             syntax::{
                 ExpansionFrame, MacroDelimiter, MacroOrigin, MacroOutputNode, SyntaxContexts,
@@ -988,6 +993,38 @@ mod tests {
             let argument = Value::Location(allocate_heap(heap, HeapCell::Tuple(fields)).unwrap());
             host.request(capture, argument, heap, &mut TypeWorkBudget::unbounded())
         };
+
+        let mut unsupported = make_host();
+        unsupported.captures = vec![
+            SurfaceSyntaxCapture::Type(SurfaceTypeCapture {
+                ty: SurfaceType {
+                    kind: SurfaceTypeKind::Int,
+                    span,
+                    diagnostic: None,
+                },
+                contents: Arc::from([]),
+            }),
+            SurfaceSyntaxCapture::Pattern(SurfacePatternCapture {
+                pattern: SurfacePattern {
+                    kind: SurfacePatternKind::Wildcard,
+                    span,
+                    diagnostic: None,
+                },
+                contents: Arc::from([]),
+            }),
+        ];
+        let unsupported_input = unsupported.input();
+        for index in [0, 1] {
+            assert!(matches!(
+                request(
+                    &mut unsupported,
+                    unsupported_input.clone(),
+                    index,
+                    &mut heap
+                ),
+                Err(RuntimeFailure::InvalidControlState)
+            ));
+        }
 
         let input = host.input();
         let captured = request(&mut host, input.clone(), 0, &mut heap).unwrap();
