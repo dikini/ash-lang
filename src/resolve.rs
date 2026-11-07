@@ -10762,12 +10762,12 @@ impl Resolver<'_, '_> {
         surface: &SurfaceType,
         operation_outer: bool,
     ) -> Result<crate::resolved::ResolvedOwnerArgument, ResolveError> {
-        fn retain_name_diagnostic(
-            reference: &SurfaceReference,
+        fn retain_diagnostic(
+            location: Option<Box<crate::syntax::DiagnosticLocation>>,
             frames: &[Arc<crate::syntax::ExpansionFrame>],
             diagnostics: &mut Vec<(usize, Box<crate::syntax::DiagnosticLocation>)>,
         ) -> Option<usize> {
-            let mut location = reference.diagnostic_location()?;
+            let mut location = location?;
             let own_frames = std::mem::take(&mut location.frames);
             for frame in frames.iter().chain(&own_frames) {
                 location.add_frame(frame);
@@ -10839,25 +10839,29 @@ impl Resolver<'_, '_> {
                             tasks.push(Task::Row(row, count));
                             tasks.push(Task::EffectInstances(row.effects.iter()));
                         }
-                        SurfaceTypeKind::Bytes => {
+                        SurfaceTypeKind::Bytes
+                        | SurfaceTypeKind::String
+                        | SurfaceTypeKind::Int
+                        | SurfaceTypeKind::Bool
+                        | SurfaceTypeKind::Unit => {
+                            let ty = match current.kind {
+                                SurfaceTypeKind::Bytes => Type::Bytes,
+                                SurfaceTypeKind::String => Type::String,
+                                SurfaceTypeKind::Int => Type::Int,
+                                SurfaceTypeKind::Bool => Type::Bool,
+                                SurfaceTypeKind::Unit => Type::Unit,
+                                _ => unreachable!("the arm contains only primitive types"),
+                            };
                             provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                            completed.push((Type::Bytes, provenance.len() - 1));
-                        }
-                        SurfaceTypeKind::String => {
-                            provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                            completed.push((Type::String, provenance.len() - 1));
-                        }
-                        SurfaceTypeKind::Int => {
-                            provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                            completed.push((Type::Int, provenance.len() - 1));
-                        }
-                        SurfaceTypeKind::Bool => {
-                            provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                            completed.push((Type::Bool, provenance.len() - 1));
-                        }
-                        SurfaceTypeKind::Unit => {
-                            provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                            completed.push((Type::Unit, provenance.len() - 1));
+                            let root = provenance.len() - 1;
+                            if let Some(slot) = retain_diagnostic(
+                                current.diagnostic.clone(),
+                                &self.diagnostic_frames,
+                                &mut diagnostics,
+                            ) {
+                                diagnostics[slot].0 = root;
+                            }
+                            completed.push((ty, root));
                         }
                         SurfaceTypeKind::Named(name) => {
                             let ty = if matches!(name, SurfaceReference::Unqualified(_))
@@ -10869,8 +10873,8 @@ impl Resolver<'_, '_> {
                             };
                             provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
                             let root = provenance.len() - 1;
-                            if let Some(slot) = retain_name_diagnostic(
-                                name,
+                            if let Some(slot) = retain_diagnostic(
+                                name.diagnostic_location(),
                                 &self.diagnostic_frames,
                                 &mut diagnostics,
                             ) {
@@ -10907,8 +10911,8 @@ impl Resolver<'_, '_> {
                                     _ => ApplicationHead::Nominal(family),
                                 }
                             };
-                            let diagnostic = retain_name_diagnostic(
-                                constructor,
+                            let diagnostic = retain_diagnostic(
+                                constructor.diagnostic_location(),
                                 &self.diagnostic_frames,
                                 &mut diagnostics,
                             );
@@ -21321,10 +21325,12 @@ mod tests {
                     })
                 };
                 let wide = || SurfaceType {
+                    diagnostic: None,
                     kind: SurfaceTypeKind::Application {
                         constructor: name("Wide"),
                         arguments: vec![
                             SurfaceType {
+                                diagnostic: None,
                                 kind: SurfaceTypeKind::Int,
                                 span,
                             };
@@ -21432,6 +21438,7 @@ mod tests {
                                     span,
                                 },
                                 annotation: Some(SurfaceType {
+                                    diagnostic: None,
                                     kind: SurfaceTypeKind::Named(name("Missing")),
                                     span,
                                 }),
@@ -22567,6 +22574,7 @@ mod tests {
 
     fn declaration_named_type(text: &str, span: crate::source::Span) -> SurfaceType {
         SurfaceType {
+            diagnostic: None,
             kind: SurfaceTypeKind::Named(declaration_name(text, span)),
             span,
         }
@@ -22574,10 +22582,12 @@ mod tests {
 
     fn deep_declaration_type(span: crate::source::Span) -> SurfaceType {
         SurfaceType {
+            diagnostic: None,
             kind: SurfaceTypeKind::Application {
                 constructor: declaration_name("Wide", span),
                 arguments: vec![
                     SurfaceType {
+                        diagnostic: None,
                         kind: SurfaceTypeKind::Int,
                         span,
                     };
@@ -22937,6 +22947,7 @@ mod tests {
                 .span(ByteRange::new(start, end).expect("the range is ordered"))
                 .expect("the range belongs to the fixture");
             SurfaceType {
+                diagnostic: None,
                 kind: SurfaceTypeKind::Named(SurfaceReference::Unqualified(SurfaceName {
                     text: text.to_owned(),
                     span,
@@ -22949,6 +22960,7 @@ mod tests {
             }
         };
         let annotation = SurfaceType {
+            diagnostic: None,
             kind: SurfaceTypeKind::Tuple(vec![name("A", 0, 1), name("B", 2, 3), name("C", 4, 5)]),
             span: source
                 .span(ByteRange::new(0, 5).expect("the range is ordered"))
@@ -23130,10 +23142,12 @@ mod tests {
             .span(ByteRange::new(0, 3).expect("the range is ordered"))
             .expect("the range belongs to the fixture");
         let int = SurfaceType {
+            diagnostic: None,
             kind: SurfaceTypeKind::Int,
             span,
         };
         let annotation = SurfaceType {
+            diagnostic: None,
             kind: SurfaceTypeKind::Tuple(vec![int; WIDTH]),
             span,
         };
@@ -23172,10 +23186,12 @@ mod tests {
             .expect("the range belongs to the fixture");
         let owner = NominalTypeId::new(source.id(), 0);
         let argument = SurfaceType {
+            diagnostic: None,
             kind: SurfaceTypeKind::Int,
             span: argument_span,
         };
         let annotation = SurfaceType {
+            diagnostic: None,
             kind: SurfaceTypeKind::Application {
                 constructor: SurfaceReference::Unqualified(SurfaceName {
                     text: "Wide".to_owned(),
@@ -23225,6 +23241,7 @@ mod tests {
         let second_span = span(10, 14);
         let owner = NominalTypeId::new(source.id(), 0);
         let annotation = SurfaceType {
+            diagnostic: None,
             kind: SurfaceTypeKind::Application {
                 constructor: SurfaceReference::Unqualified(SurfaceName {
                     text: "Pair".to_owned(),
@@ -23236,10 +23253,12 @@ mod tests {
                 }),
                 arguments: vec![
                     SurfaceType {
+                        diagnostic: None,
                         kind: SurfaceTypeKind::Int,
                         span: first_span,
                     },
                     SurfaceType {
+                        diagnostic: None,
                         kind: SurfaceTypeKind::Bool,
                         span: second_span,
                     },
@@ -23309,6 +23328,7 @@ mod tests {
         let constructor_span = span(0, 6);
         let owner = NominalTypeId::new(source.id(), 0);
         let annotation = SurfaceType {
+            diagnostic: None,
             kind: SurfaceTypeKind::Application {
                 constructor: SurfaceReference::Unqualified(SurfaceName {
                     text: "Triple".to_owned(),
@@ -23320,14 +23340,17 @@ mod tests {
                 }),
                 arguments: vec![
                     SurfaceType {
+                        diagnostic: None,
                         kind: SurfaceTypeKind::Int,
                         span: span(7, 10),
                     },
                     SurfaceType {
+                        diagnostic: None,
                         kind: SurfaceTypeKind::Bool,
                         span: span(12, 16),
                     },
                     SurfaceType {
+                        diagnostic: None,
                         kind: SurfaceTypeKind::Unit,
                         span: span(18, 22),
                     },
@@ -23394,8 +23417,10 @@ mod tests {
                 let missing_span = span(11, 18);
                 let owner = NominalTypeId::new(source.id(), 0);
                 let annotation = SurfaceType {
+                    diagnostic: None,
                     kind: SurfaceTypeKind::Tuple(vec![
                         SurfaceType {
+                            diagnostic: None,
                             kind: SurfaceTypeKind::Application {
                                 constructor: SurfaceReference::Unqualified(SurfaceName {
                                     text: "Wide".to_owned(),
@@ -23407,6 +23432,7 @@ mod tests {
                                 }),
                                 arguments: vec![
                                     SurfaceType {
+                                        diagnostic: None,
                                         kind: SurfaceTypeKind::Int,
                                         span: argument_span,
                                     };
@@ -23416,6 +23442,7 @@ mod tests {
                             span: wide_span,
                         },
                         SurfaceType {
+                            diagnostic: None,
                             kind: SurfaceTypeKind::Named(SurfaceReference::Unqualified(
                                 SurfaceName {
                                     text: "Missing".to_owned(),

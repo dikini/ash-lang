@@ -943,12 +943,19 @@ pub enum SurfacePatternKind {
 }
 
 /// A source type.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq)]
 pub struct SurfaceType {
     /// The type payload.
     pub kind: SurfaceTypeKind,
     /// The complete accepted type span.
     pub span: Span,
+    pub(crate) diagnostic: Option<Box<crate::syntax::DiagnosticLocation>>,
+}
+
+impl PartialEq for SurfaceType {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.span == other.span
+    }
 }
 
 /// The closed Ash type family.

@@ -1337,3 +1337,13 @@ provenance views to the expected-type diagnostic. The task records the focused
 contrasts, affected suites, small-stack, image and Clippy receipts. This
 candidate awaits independent review; whole-path acceptance, the final gate and
 retained verification remain open.
+
+### Expected-type diagnostic follow-up, 7 November
+
+Review of `028af7a0` and two real-driver contrasts found missing causes at an
+early function check, a generated primitive annotation and a function-pattern
+domain. The candidate carries the actual primitive token through the existing
+type-provenance path and uses the expected occurrence at those ordinary error
+boundaries. The task records red/green evidence, the source control and the
+affected, stack and image checks. Independent review and the final gate remain
+open; no whole-path completion is inferred.

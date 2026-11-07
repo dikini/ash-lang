@@ -4318,6 +4318,7 @@ fn project_type(
                             projected.push(SurfaceType {
                                 span: name.span,
                                 kind: SurfaceTypeKind::Named(SurfaceReference::Qualified(name)),
+                                diagnostic: None,
                             });
                         } else {
                             projected.push(project_atomic_primitive(node, tokens)?);
@@ -4367,6 +4368,7 @@ fn project_type(
                         span,
                     }),
                     span,
+                    diagnostic: None,
                 });
             }
             TypeTask::FinishFunction { span, has_effects } => {
@@ -4395,6 +4397,7 @@ fn project_type(
                         effects,
                     }),
                     span,
+                    diagnostic: None,
                 });
             }
             TypeTask::FinishTuple { count, span } => {
@@ -4409,6 +4412,7 @@ fn project_type(
                 projected.push(SurfaceType {
                     kind: SurfaceTypeKind::Tuple(elements),
                     span,
+                    diagnostic: None,
                 });
             }
             TypeTask::ApplyGroupingSpan(span) => {
@@ -4436,6 +4440,7 @@ fn project_type(
                         arguments,
                     },
                     span,
+                    diagnostic: None,
                 });
             }
         }
@@ -4563,6 +4568,17 @@ fn project_atomic_primitive(
         }
         _ => return malformed(InternalReason::UnexpectedShape),
     };
+    let diagnostic = if matches!(kind, SurfaceTypeKind::Named(_)) {
+        None
+    } else if let (Some(crate::syntax::MacroOutputNode::Token(_, _, origin)), Some(frame)) =
+        (token.original, tokens.frame)
+    {
+        let mut location = crate::syntax::DiagnosticLocation::new(origin.clone());
+        location.add_frame(frame);
+        Some(Box::new(location))
+    } else {
+        None
+    };
     Ok(SurfaceType {
         kind,
         span: if tokens.construction_extents && tokens.construction.is_some() {
@@ -4572,6 +4588,7 @@ fn project_atomic_primitive(
         } else {
             tokens.occurrence.unwrap_or(token.span)
         },
+        diagnostic,
     })
 }
 

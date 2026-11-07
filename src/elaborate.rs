@@ -18444,12 +18444,16 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         match &expression.kind {
             ResolvedExprKind::Function(function) => {
                 let expected = ProvenancedTypeOwner::new(expected);
+                let expected_provenance = expected.provenance.clone();
                 let mut expected = self
                     .expose_expected_function(expected, expression.span)
                     .map_err(|error| {
                         error
                             .with_diagnostic_location(expression.diagnostic.as_deref())
                             .with_related_diagnostic(kind.expected_cause())
+                            .with_related_diagnostic(
+                                expected_provenance.diagnostic_location().as_deref(),
+                            )
                     })?;
                 let ambient_rows = self.qualify_checking_type(&mut expected, false)?;
                 let (domain_ty, codomain_ty) =
@@ -21707,7 +21711,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         &mut pattern_binders,
                         GeneratedReason::FunctionLowering,
                     )
-                    .map_err(|error| error.with_related_diagnostic(body_check.expected_cause()))?;
+                    .map_err(|error| {
+                        error
+                            .with_related_diagnostic(body_check.expected_cause())
+                            .with_related_diagnostic(
+                                domain.provenance.diagnostic_location().as_deref(),
+                            )
+                    })?;
                 (
                     CorePatternOwner::new(Some(checked.pattern)),
                     checked.inference_changed,

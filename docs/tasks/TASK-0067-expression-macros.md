@@ -1959,6 +1959,54 @@ Any separate corrective-work conversion awaits review of overlap with original
 delivery credit. This candidate awaits review; no new points or M/C closure
 are inferred.
 
+### Expected-type diagnostic follow-up, 7 November
+
+Review of `028af7a0` found an early function-check error that still lost the
+captured annotation's Combined cause. The real-driver regression failed in
+`/tmp/ash-expected-function-origin-test-red.log` (SHA-256
+`0bfbb35b385ddce1e5e14c51593e4fdc9b54104e832bf139cea78dae3347013a`)
+and passed after the expected-type handoff in
+`/tmp/ash-expected-function-origin-test-green.log` (SHA-256
+`68b57dc1d8aa44a59b5254338bb88ffdace97365cb02ac6e9e34cc505a51e436`).
+The caller's function remains primary with the ordinary reason and ordered
+frames.
+
+A separate generated primitive `Int` annotation retained only the invocation
+extent. Its generated-versus-written contrast failed in
+`/tmp/ash-primitive-annotation-red.log` (SHA-256
+`48bc468094b43f598081eff14692c413b2ef14c64e7f086858ed96b096046dfa`)
+and passed after retaining the actual primitive token's location in the same
+type-provenance path (`/tmp/ash-primitive-annotation-green.log`, SHA-256
+`b2a5930287f9e3c1e801b5191c5eb687891a963c0cb13af1f5e147e2f11b9af4`).
+The Boolean initializer remains primary; the generated `Int` is a related
+cause, and the written-source annotation retains its ordinary label.
+
+An ordinary function-pattern failure had the same missing expected-domain
+cause. Its red/green receipts are `/tmp/ash-function-pattern-origin-red.log`
+(SHA-256 `f0891adf7b03d686a14b3dc2c66c8631f24863fcecc48f86bd44cd610f906698`)
+and `/tmp/ash-function-pattern-origin-green.log` (SHA-256
+`e35f32c4c0e150be044e32295c8a83dd7726fb40daf49681fda23cfe2d8b534a`).
+The test retains the caller's pattern and the domain `Int`, without attributing
+the unrelated `Bool` codomain.
+
+Seven affected and architecture suites pass 333 tests in
+`/tmp/ash-type-origin-final-suites.log` (SHA-256
+`3a7d1631870d921a19c25dd03452743370b7646f026a1a5975a02dca3b6b4bc6`).
+The provenance-view unit and both unchanged 256 KiB canaries pass in
+`/tmp/ash-type-origin-final-lib.log` (SHA-256
+`98b46a3aa970f67a96ebe1dccc643d52bb19ba2b356b8914b0f5c9b65516c1a9`);
+the existing image reconstruction/corruption unit also passes in
+`/tmp/ash-type-origin-final-image.log` (SHA-256
+`9538e702efb8ac8ac7c7ff89990b246428e3426c9f41433d00068dbc87e54df7`).
+All-target Clippy passes in `/tmp/ash-type-origin-final-clippy.log` (SHA-256
+`70d0cb9a8d7a9b812497cb549e2b91ae8213660819fe506775c7980d37cd8fbb`).
+The first follow-up probe at 07:05:14 and the affected-suite receipt at
+07:14:23 span about 9 minutes 9 seconds elapsed, including diagnosis, edits,
+tests and waits; this is not measured active time. Any separate corrective-work
+conversion still requires review of overlap with the original scope.
+These observations await independent review. They do not establish M/C
+acceptance or imply a new point award.
+
 ## Progress
 
 The weighted ledger records **61.5/100 reviewed delivery points**. The latest

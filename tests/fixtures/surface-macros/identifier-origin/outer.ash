@@ -61,3 +61,12 @@ make_name (input, head, spelling, invocation, definition, combined) = match Synt
     }
     _ => Syntax.Rejected(Syntax.MacroDiagnostic("name failed", invocation, Syntax.NoOrigins))
 }
+pub syntax annotated $value:expr => {
+    let x : Int = $value
+    42
+}
+
+pub syntax annotated_function $value:expr => {
+    let x : Int -> Bool = $value
+    42
+}

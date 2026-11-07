@@ -744,6 +744,16 @@ fn captured_type_name_preserves_its_origin_through_lookup_and_checking() {
             "pub syntax observe_tuple $name:ident = $value:expr => {\n    let x : ($name, Bool) = $value\n    42\n}",
             Some(("(MissingType, Bool)", "(Int, Bool)")),
         ),
+        (
+            "type_function_mismatch.ash",
+            include_str!("fixtures/surface-macros/identifier-origin/type_function_mismatch.ash"),
+            "outer_type (fn(value) {\n    value\n})",
+            "type.function-needs-context",
+            "anonymous_function",
+            "pub syntax outer_type $value:expr => using expand_type",
+            "pub syntax observe_type $name:ident = $value:expr => {\n    let x : $name = $value\n    42\n}",
+            None,
+        ),
     ] {
         let failure = compile_path(fixture(&format!("identifier-origin/{entry}")))
             .expect_err("the generated annotation is invalid");
@@ -768,12 +778,20 @@ fn captured_type_name_preserves_its_origin_through_lookup_and_checking() {
                     .iter()
                     .any(|label| label["relationship"] == "binding_annotation")
             );
-        } else {
+        } else if reason == "resolve.unknown-type" {
             assert!(
                 facts
                     .iter()
                     .any(|fact| fact["name"] == "name" && fact["value"] == "MissingType")
             );
+        } else {
+            assert!(facts.iter().any(|fact| {
+                fact["name"] == "required_context" && fact["value"] == "expected-function"
+            }));
+            let function = "(fn(value) {\n    value\n})";
+            let function_start = source.find(function).unwrap();
+            assert_eq!(labels[0]["byte_start"], function_start);
+            assert_eq!(labels[0]["byte_end"], function_start + function.len());
         }
         let definition_start = outer.find(outer_definition).unwrap();
         assert!(
@@ -817,6 +835,105 @@ fn captured_type_name_preserves_its_origin_through_lookup_and_checking() {
         let valid = compile_path(fixture(&format!("identifier-origin/{entry}"))).unwrap();
         assert_eq!(execute(&valid).unwrap().value_display(), "42");
     }
+}
+
+#[test]
+fn generated_primitive_annotation_preserves_its_token_origin() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    let forms = include_str!("fixtures/surface-macros/identifier-origin/outer.ash");
+    let entry = include_str!("fixtures/surface-macros/identifier-origin/primitive_mismatch.ash");
+    let manual = include_str!("fixtures/surface-macros/identifier-origin/primitive_manual.ash");
+    for (file, source, generated) in [
+        ("primitive_mismatch.ash", entry, true),
+        ("primitive_manual.ash", manual, false),
+    ] {
+        let failure = compile_path(fixture(&format!("identifier-origin/{file}")))
+            .expect_err("the Boolean initializer cannot have type Int");
+        assert_eq!(failure.reason_code(), "type.binding-initializer");
+        let diagnostic = compile_file_diagnostics(&failure).unwrap();
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostic[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        let labels = json["labels"].as_array().unwrap();
+        let primary = source.rfind("true").unwrap();
+        assert_eq!(labels[0]["relationship"], "initializer");
+        assert_eq!(labels[0]["byte_start"], primary);
+        assert_eq!(labels[0]["byte_end"], primary + 4);
+        assert!(
+            json["facts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|fact| { fact["name"] == "expected" && fact["value"] == "Int" })
+        );
+        let annotation = if generated { forms } else { source };
+        let start = annotation.rfind("Int =").unwrap();
+        let relationship = if generated {
+            "syntax_cause"
+        } else {
+            "binding_annotation"
+        };
+        assert!(
+            labels.iter().any(|label| {
+                label["relationship"] == relationship
+                    && label["byte_start"] == start
+                    && label["byte_end"] == start + 3
+                    && label["path"].as_str().unwrap().ends_with(if generated {
+                        "outer.ash"
+                    } else {
+                        file
+                    })
+            }),
+            "{json}"
+        );
+    }
+}
+
+#[test]
+fn generated_function_domain_preserves_its_cause_for_a_pattern_error() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    let forms = include_str!("fixtures/surface-macros/identifier-origin/outer.ash");
+    let entry =
+        include_str!("fixtures/surface-macros/identifier-origin/primitive_function_pattern.ash");
+    let failure = compile_path(fixture("identifier-origin/primitive_function_pattern.ash"))
+        .expect_err("a Boolean pattern cannot match Int");
+    assert_eq!(failure.reason_code(), "pattern.type-mismatch");
+    let diagnostic = compile_file_diagnostics(&failure).unwrap();
+    let mut output = Vec::new();
+    write_json(&mut output, &diagnostic[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let labels = json["labels"].as_array().unwrap();
+    let pattern = entry.find("true").unwrap();
+    assert_eq!(labels[0]["relationship"], "pattern");
+    assert_eq!(labels[0]["byte_start"], pattern);
+    assert_eq!(labels[0]["byte_end"], pattern + 4);
+    assert!(
+        json["facts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|fact| { fact["name"] == "expected_type" && fact["value"] == "Int" })
+    );
+    let domain = forms.rfind("Int -> Bool").unwrap();
+    assert!(
+        labels.iter().any(|label| {
+            label["relationship"] == "syntax_cause"
+                && label["path"].as_str().unwrap().ends_with("outer.ash")
+                && label["byte_start"] == domain
+                && label["byte_end"] == domain + 3
+        }),
+        "{json}"
+    );
+    assert!(
+        !labels.iter().any(|label| {
+            label["relationship"] == "syntax_cause"
+                && label["path"].as_str().unwrap().ends_with("outer.ash")
+                && label["byte_start"] == domain + "Int -> ".len()
+        }),
+        "the unrelated codomain is not a cause: {json}"
+    );
 }
 
 #[test]
