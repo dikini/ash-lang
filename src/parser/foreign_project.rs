@@ -22,7 +22,10 @@ fn head_word<'a>(node: &'a ConcreteNode, tokens: &'a [Token]) -> Result<&'a str,
         _ => malformed(InternalReason::UnexpectedShape),
     }
 }
-fn first_name(node: &ConcreteNode, tokens: &[Token]) -> Result<SurfaceName, ProjectionError> {
+fn first_name(
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+) -> Result<SurfaceName, ProjectionError> {
     direct_tokens(node, tokens)
         .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
         .map(surface_name)
@@ -33,7 +36,7 @@ fn first_name(node: &ConcreteNode, tokens: &[Token]) -> Result<SurfaceName, Proj
 }
 fn literal_string(
     node: &ConcreteNode,
-    tokens: &[Token],
+    tokens: &ProjectionTokens<'_>,
 ) -> Result<SurfaceForeignString, ProjectionError> {
     for token in direct_tokens(node, tokens) {
         if let TokenKind::StringLiteral(value) = &token.kind {

@@ -617,6 +617,36 @@ pub(crate) enum MacroParseFailure {
     Invalid,
 }
 
+// D6 connects this syntax-only handoff to declaration expansion.
+#[allow(dead_code)]
+pub(crate) fn parse_macro_declarations(
+    source: &SourceFile,
+    invocation: Span,
+    construction: Option<(Span, usize)>,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
+) -> Result<crate::surface::SurfaceModule, MacroParseFailure> {
+    let parsed = parse_macro_tree(
+        source,
+        invocation,
+        output,
+        contexts,
+        &[],
+        MacroOutputPosition::Declarations,
+    )?;
+    project::project_macro_declarations(
+        source,
+        invocation,
+        construction,
+        &parsed.tree,
+        &parsed.original_nodes,
+        &parsed.admission_identifiers,
+        frame,
+    )
+    .map_err(|_| MacroParseFailure::Invalid)
+}
+
 pub(crate) fn parse_macro_expression(
     source: &SourceFile,
     invocation: Span,
@@ -663,6 +693,46 @@ fn parse_macro_expression_inner(
     placeholders: &[crate::surface::SurfaceName],
     frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
 ) -> Result<crate::surface::SurfaceExpr, MacroParseFailure> {
+    let parsed = parse_macro_tree(
+        source,
+        invocation,
+        output,
+        contexts,
+        placeholders,
+        MacroOutputPosition::Expression,
+    )?;
+    project::project_macro_expression(
+        source,
+        invocation,
+        construction,
+        &parsed.tree,
+        &parsed.original_nodes,
+        &parsed.admission_identifiers,
+        frame,
+    )
+    .map_err(|_| MacroParseFailure::Invalid)
+}
+
+#[derive(Clone, Copy)]
+enum MacroOutputPosition {
+    Expression,
+    Declarations,
+}
+
+struct ParsedMacroTree {
+    tree: ConcreteTree,
+    original_nodes: std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
+    admission_identifiers: std::collections::HashSet<usize>,
+}
+
+fn parse_macro_tree(
+    source: &SourceFile,
+    invocation: Span,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    placeholders: &[crate::surface::SurfaceName],
+    position: MacroOutputPosition,
+) -> Result<ParsedMacroTree, MacroParseFailure> {
     use crate::source::ByteRange;
     use crate::syntax::MacroOutputNode;
     let start = invocation.range().start();
@@ -798,9 +868,14 @@ fn parse_macro_expression_inner(
         syntax_stops: Vec::new(),
     };
     parser.start(NodeKind::Module);
-    grammar::expression(&mut parser);
-    if !parser.at(&TokenKind::EndOfFile) {
-        parser.error_at_current(ParseReason::UnexpectedToken);
+    match position {
+        MacroOutputPosition::Expression => {
+            grammar::expression(&mut parser);
+            if !parser.at(&TokenKind::EndOfFile) {
+                parser.error_at_current(ParseReason::UnexpectedToken);
+            }
+        }
+        MacroOutputPosition::Declarations => grammar::module_body(&mut parser),
     }
     if !parser.diagnostics.is_empty() || parser.resource_failure.is_some() {
         return Err(MacroParseFailure::Syntax {
@@ -808,26 +883,21 @@ fn parse_macro_expression_inner(
             resource: parser.resource_failure,
         });
     }
-    let _ = parser.bump();
-    parser.finish();
+    if matches!(position, MacroOutputPosition::Expression) {
+        let _ = parser.bump();
+        parser.finish();
+    }
     let Parser {
         events,
         diagnostics,
         resource_failure,
         ..
     } = parser;
-    let tree = cst::build(tokens, Vec::new(), diagnostics, events, resource_failure);
-    let expression = project::project_macro_expression(
-        source,
-        invocation,
-        construction,
-        &tree,
-        &original_nodes,
-        &admission_identifiers,
-        frame,
-    )
-    .map_err(|_| MacroParseFailure::Invalid)?;
-    Ok(expression)
+    Ok(ParsedMacroTree {
+        tree: cst::build(tokens, Vec::new(), diagnostics, events, resource_failure),
+        original_nodes,
+        admission_identifiers,
+    })
 }
 
 fn parse_parts(

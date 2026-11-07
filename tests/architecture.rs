@@ -468,6 +468,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/module.rs::HeaderGraph.pending", FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree, Mixed),
     kind_site!("src/module.rs::HeaderGraph.loaded", FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree, Mixed),
     kind_site!("src/module.rs::HeaderGraph.completed", FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree, Mixed),
+    kind_site!("src/parser/mod.rs::ParsedMacroTree.original_nodes", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/parser/mod.rs::Parser.syntax", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
     kind_site!("src/parser/mod.rs::Parser.syntax_selections", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
     kind_site!("src/parser/project.rs::ProjectionTokens.originals", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
