@@ -12,12 +12,19 @@ pub type Node = TokenNode(Token, Origin)
     | IdentifierNode(Identifier, Origin)
     | GroupNode(Delimiter, Syntax, Origin)
     | ExpressionNode(ExpressionFragment, Origin)
+    | TypeNode(TypeFragment, Origin)
+    | PatternNode(PatternFragment, Origin)
+    | DeclarationNode(DeclarationFragment, Origin)
 pub type Delimiter = Parentheses
     | Braces
 pub type Origins = NoOrigins
     | MoreOrigins(Origin, Origins)
 pub type Capture = ExpressionCapture(ExpressionFragment)
     | IdentifierCapture(Identifier, Origin)
+    | TypeCapture(TypeFragment)
+    | PatternCapture(PatternFragment)
+    | DeclarationCapture(DeclarationFragment)
+    | RepeatedCapture(Captures)
 pub type CaptureResult = Captured(Capture)
     | MissingCapture
 pub type OriginsResult = Combined(Origin)
@@ -76,14 +83,25 @@ pub type TokenKind = Wildcard
     | Less
     | Greater
     | LineEnd
+    | SyntaxKeyword
+    | Dollar
 pub type TokenResult = MadeToken(Token)
     | InvalidToken
 pub type ParseResult = Parsed(ExpressionFragment)
     | ParseRejected(ParseFailure)
+    | ParsedType(TypeFragment)
+    | ParsedPattern(PatternFragment)
+    | ParsedDeclaration(DeclarationFragment)
 pub type MacroDiagnostic = MacroDiagnostic(String, Origin, Origins)
     | SyntaxDiagnostic(ParseFailure)
 pub type MacroResult = Expanded(Syntax)
     | Rejected(MacroDiagnostic)
+
+pub opaque type TypeFragment = HiddenTypeFragment
+pub opaque type PatternFragment = HiddenPatternFragment
+pub opaque type DeclarationFragment = HiddenDeclarationFragment
+pub type Captures = NoCaptures
+    | MoreCaptures(Capture, Captures)
 
 pub effect Ops {
     capture : (Input, Int) -> CaptureResult

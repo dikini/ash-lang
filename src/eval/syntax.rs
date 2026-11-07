@@ -786,14 +786,14 @@ fn token_kind_name(kind: &TokenKind) -> Option<&'static str> {
         TokenKind::Less => "Less",
         TokenKind::Greater => "Greater",
         TokenKind::LineEnd => "LineEnd",
+        TokenKind::SyntaxKeyword => "SyntaxKeyword",
+        TokenKind::Dollar => "Dollar",
         TokenKind::Identifier(_)
         | TokenKind::UpperIdentifier(_)
         | TokenKind::LeftParen
         | TokenKind::RightParen
         | TokenKind::LeftBrace
         | TokenKind::RightBrace
-        | TokenKind::SyntaxKeyword
-        | TokenKind::Dollar
         | TokenKind::Semicolon
         | TokenKind::EndOfFile => return None,
     })
@@ -1201,6 +1201,8 @@ mod tests {
             ("Less", "<"),
             ("Greater", ">"),
             ("LineEnd", "\n"),
+            ("SyntaxKeyword", "syntax"),
+            ("Dollar", "$"),
         ];
         let source = crate::source::SourceFile::new(
             "@builtin.compiler.syntax",
@@ -1231,7 +1233,7 @@ mod tests {
             Some("LineEnd")
         );
         for spelling in [
-            "", "name", "Name", "(", ")", "{", "}", "$", ";", "01", "-1", " +", "+ ",
+            "", "name", "Name", "(", ")", "{", "}", ";", "01", "-1", " +", "+ ",
         ] {
             assert!(
                 token_from_spelling(spelling).unwrap().is_none(),
