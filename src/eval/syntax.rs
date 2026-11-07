@@ -703,7 +703,11 @@ impl SyntaxHost {
                     rest = self.construct(heap, "NoNodes", None)?;
                     continue;
                 }
-                Some(MacroOutputNode::Splice(_)) => {
+                Some(
+                    MacroOutputNode::Splice(_)
+                    | MacroOutputNode::ForwardedType(_, _)
+                    | MacroOutputNode::ForwardedPattern(_, _),
+                ) => {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
                 None => {
@@ -1022,6 +1026,23 @@ mod tests {
                     index,
                     &mut heap
                 ),
+                Err(RuntimeFailure::InvalidControlState)
+            ));
+        }
+        let [
+            SurfaceSyntaxCapture::Type(ty),
+            SurfaceSyntaxCapture::Pattern(pattern),
+        ] = unsupported.captures.as_slice()
+        else {
+            panic!("expected the protected capture categories");
+        };
+        let forwarded = [
+            MacroOutputNode::ForwardedType(ty.clone(), span.into()),
+            MacroOutputNode::ForwardedPattern(pattern.clone(), span.into()),
+        ];
+        for node in forwarded {
+            assert!(matches!(
+                unsupported.syntax_value(&[node], &mut heap, 0),
                 Err(RuntimeFailure::InvalidControlState)
             ));
         }

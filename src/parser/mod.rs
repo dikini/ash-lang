@@ -809,6 +809,26 @@ fn parse_macro_tree(
                 fragment_count += 1;
                 TokenKind::Identifier(name)
             }
+            MacroOutputNode::ForwardedType(capture, origin) => {
+                if !matches!(position, MacroOutputPosition::Declarations) {
+                    return Err(MacroParseFailure::Invalid);
+                }
+                original_nodes.insert(
+                    tokens.len(),
+                    MacroOutputNode::ForwardedType(capture, origin),
+                );
+                TokenKind::IntType
+            }
+            MacroOutputNode::ForwardedPattern(capture, origin) => {
+                if !matches!(position, MacroOutputPosition::Declarations) {
+                    return Err(MacroParseFailure::Invalid);
+                }
+                original_nodes.insert(
+                    tokens.len(),
+                    MacroOutputNode::ForwardedPattern(capture, origin),
+                );
+                TokenKind::Wildcard
+            }
             MacroOutputNode::Identifier(identifier, origin) => {
                 if placeholders.iter().any(|name| name == &identifier) {
                     admission_identifiers.insert(tokens.len());
@@ -876,6 +896,8 @@ fn parse_macro_tree(
             let origin = match node {
                 MacroOutputNode::Expression(_, origin)
                 | MacroOutputNode::ForwardedExpression(_, origin)
+                | MacroOutputNode::ForwardedType(_, origin)
+                | MacroOutputNode::ForwardedPattern(_, origin)
                 | MacroOutputNode::Identifier(_, origin)
                 | MacroOutputNode::Token(_, _, origin)
                 | MacroOutputNode::Group(_, _, origin) => origin,
@@ -921,7 +943,6 @@ fn parse_macro_tree(
         admission_identifiers: Some(&admission_identifiers),
         declaration_output_nodes: matches!(position, MacroOutputPosition::Declarations)
             .then_some(&original_nodes),
-        in_declaration_pattern_capture: false,
         syntax_stops: Vec::new(),
     };
     parser.start(NodeKind::Module);
@@ -1042,7 +1063,6 @@ pub(crate) fn parse_module_header(
             diagnostic_spans: None,
             admission_identifiers: None,
             declaration_output_nodes: None,
-            in_declaration_pattern_capture: false,
             syntax_stops: Vec::new(),
         };
         grammar::module_header(&mut parser);
@@ -1117,7 +1137,6 @@ pub(crate) fn finish_module_from_checkpoint_with_syntax(
         diagnostic_spans: None,
         admission_identifiers: None,
         declaration_output_nodes: None,
-        in_declaration_pattern_capture: false,
         syntax_stops: Vec::new(),
     };
     grammar::module_body(&mut parser);
@@ -1173,7 +1192,6 @@ pub(crate) struct Parser<'tokens> {
     admission_identifiers: Option<&'tokens std::collections::HashSet<usize>>,
     declaration_output_nodes:
         Option<&'tokens std::collections::HashMap<usize, crate::syntax::MacroOutputNode>>,
-    in_declaration_pattern_capture: bool,
     syntax_stops: Vec<(TokenKind, String, usize)>,
 }
 
