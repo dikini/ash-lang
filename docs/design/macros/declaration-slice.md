@@ -5,6 +5,8 @@ It is a proposed design and prospective delivery map, not an active task,
 accepted grammar, implementation plan, or current Ash. It assumes the complete
 CP-0033 expression slice is retained first. Recheck that contract and its
 implementation before fixing producer/consumer interfaces or dispatching work.
+Use the [working issue-planning rules](../../project/issue-planning.md) when
+revising the delivery breakdown.
 
 ## Objective and difficulty
 
