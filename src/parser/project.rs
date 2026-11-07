@@ -523,7 +523,7 @@ fn validate_shallow_shape(
     let mut shape = ShapeCursor::with_admission(node, tokens, admission);
     match node.kind {
         NodeKind::ForeignLibrary | NodeKind::ForeignMember => {
-            return foreign::validate_shape(node, tokens);
+            return foreign::validate_shape(node, tokens, admission);
         }
         NodeKind::Module => {
             while shape.peek_node_is(NodeKind::ImportDeclaration) {
@@ -5401,6 +5401,178 @@ mod tests {
         match &definition.kind {
             SurfaceDefinitionKind::Equational(global) => &global.interface.name,
             SurfaceDefinitionKind::InlineOperational(global) => &global.header.name,
+        }
+    }
+
+    #[test]
+    fn foreign_admission_names_preserve_context_and_diagnostic_origins() {
+        use crate::syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin, MacroOutputNode};
+
+        fn span_of(source: &SourceFile, text: &str) -> Span {
+            let start = source.text().find(text).unwrap();
+            source
+                .span(ByteRange::new(start as u32, (start + text.len()) as u32).unwrap())
+                .unwrap()
+        }
+
+        fn placeholders(
+            output: &mut [MacroOutputNode],
+            names: &mut Vec<SurfaceName>,
+            prior: &std::sync::Arc<ExpansionFrame>,
+            cause: &MacroOrigin,
+        ) {
+            for node in output {
+                match node {
+                    MacroOutputNode::Identifier(name, origin)
+                        if matches!(name.text.as_str(), "Fixture" | "Make") =>
+                    {
+                        name.text = format!("__ash_template_capture_{}", names.len());
+                        name.introduction = usize::MAX - names.len();
+                        name.introduced_at = Some(name.span);
+                        name.written = false;
+                        *origin = name.span.into();
+                        let mut diagnostic = DiagnosticLocation::new(origin.clone());
+                        diagnostic.related.push(cause.clone());
+                        diagnostic.add_frame(prior);
+                        name.diagnostic = Some(Box::new(diagnostic));
+                        names.push(name.clone());
+                    }
+                    MacroOutputNode::Group(_, children, _) => {
+                        placeholders(children, names, prior, cause);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let text = "pub foreign library Fixture {\n    profile \"x86_64-unknown-linux-gnu\"\n    symbol Make : Unit -> F.Address { name \"fixture_make\" }\n}\n";
+        let (_authored_source, _, mut output) = structured_declarations(text);
+        let forms = SourceFile::new(
+            "forms.ash",
+            include_str!("../../docs/design/macros/fixtures/declarations/forms.ash"),
+        )
+        .unwrap();
+        let prior_definition = forms
+            .text()
+            .split_once("pub syntax declaration: (make_type)")
+            .unwrap()
+            .1
+            .split_once("\npub syntax declaration: (make_newtype)")
+            .unwrap()
+            .0;
+        let definition = forms
+            .text()
+            .split_once("pub syntax declaration: (make_foreign)")
+            .unwrap()
+            .1
+            .split_once("\npub syntax declaration: (make_identity)")
+            .unwrap()
+            .0;
+        let prior_definition = format!("pub syntax declaration: (make_type){prior_definition}");
+        let definition = format!("pub syntax declaration: (make_foreign){definition}");
+        let prior_source = SourceFile::new("prior.ash", "make_type Color constructor Red").unwrap();
+        let caller = SourceFile::new("caller.ash", "make_foreign Fixture symbol Make").unwrap();
+        let invocation = span_of(&caller, caller.text());
+        let prior = std::sync::Arc::new(ExpansionFrame {
+            invocation: span_of(&prior_source, prior_source.text()),
+            definition: span_of(&forms, &prior_definition),
+        });
+        let current = std::sync::Arc::new(ExpansionFrame {
+            invocation,
+            definition: span_of(&forms, &definition),
+        });
+        let cause = MacroOrigin::from(prior.definition);
+        let mut names = Vec::new();
+        placeholders(&mut output, &mut names, &prior, &cause);
+        assert_eq!(names.len(), 2);
+        let contexts = crate::syntax::SyntaxContexts::new(&[], &[], &[]);
+
+        let parsed = super::super::parse_macro_tree(
+            &caller,
+            invocation,
+            output.clone(),
+            &contexts,
+            &names,
+            super::super::MacroOutputPosition::Declarations,
+        )
+        .unwrap();
+        let projected = project_macro_declarations(
+            &caller,
+            invocation,
+            None,
+            &parsed.tree,
+            &parsed.original_nodes,
+            &parsed.admission_identifiers,
+            Some(&current),
+        )
+        .expect("foreign placeholder names should project");
+        let library = &projected.foreign_libraries[0];
+        let crate::surface::SurfaceForeignMember::Symbol(symbol) = &library.members[1] else {
+            panic!("expected the fixture symbol");
+        };
+        for (actual, expected) in [(&library.name, &names[0]), (&symbol.name, &names[1])] {
+            assert_eq!(actual, expected);
+            let diagnostic = actual.diagnostic.as_ref().unwrap();
+            assert_eq!(diagnostic.primary, MacroOrigin::from(expected.span));
+            assert!(diagnostic.related.contains(&cause));
+            assert!(
+                diagnostic
+                    .frames
+                    .iter()
+                    .any(|frame| std::sync::Arc::ptr_eq(frame, &prior))
+            );
+            assert!(
+                diagnostic
+                    .frames
+                    .iter()
+                    .any(|frame| std::sync::Arc::ptr_eq(frame, &current))
+            );
+        }
+
+        assert!(matches!(
+            super::super::parse_macro_declarations(
+                &caller,
+                invocation,
+                None,
+                output,
+                &contexts,
+                Some(&current)
+            ),
+            Err(super::super::MacroParseFailure::Syntax { .. })
+        ));
+    }
+
+    #[test]
+    fn foreign_output_without_admission_rejects_lowercase_names() {
+        use crate::syntax::MacroOutputNode;
+
+        fn lower_name(output: &mut [MacroOutputNode], target: &str) -> bool {
+            output.iter_mut().any(|node| match node {
+                MacroOutputNode::Identifier(name, _) if name.text == target => {
+                    name.text = "lower".into();
+                    true
+                }
+                MacroOutputNode::Group(_, children, _) => lower_name(children, target),
+                _ => false,
+            })
+        }
+
+        for visibility in ["", "pub "] {
+            let text = format!(
+                "{visibility}foreign library Fixture {{\n    profile \"x86_64-unknown-linux-gnu\"\n    symbol Make : Unit -> F.Address {{ name \"fixture_make\" }}\n}}\n"
+            );
+            for target in ["Fixture", "Make"] {
+                let (source, _, mut output) = structured_declarations(&text);
+                assert!(lower_name(&mut output, target));
+                let invocation = source.span(ByteRange::new(0, 0).unwrap()).unwrap();
+                let contexts = crate::syntax::SyntaxContexts::new(&[], &[], &[]);
+                assert!(matches!(
+                    super::super::parse_macro_declarations(
+                        &source, invocation, None, output, &contexts, None
+                    ),
+                    Err(super::super::MacroParseFailure::Syntax { .. })
+                ));
+            }
         }
     }
 
