@@ -1356,7 +1356,7 @@ pub(super) fn origin_depth_within_limit(root: &Origin) -> bool {
     let mut current = root;
     for _ in 0..=CORE_PAYLOAD_DEPTH_LIMIT {
         match current {
-            Origin::Source(_) => return true,
+            Origin::Source(_) | Origin::Expansion { .. } => return true,
             Origin::Generated { cause, .. } => current = cause,
             Origin::Related { primary, .. } => current = primary,
         }
@@ -1773,6 +1773,30 @@ pub(crate) struct CheckedFragmentNode<'a, F: CoreOperationFamily> {
     pub(crate) kind: &'a F::Kind,
 }
 
+// These original parser records are independent of the mutable registry rows.
+// Only a successfully validated linked program may create a nonempty set.
+#[derive(Debug, Default)]
+pub(super) struct GeneratedParameterAnchors(crate::resolved::GeneratedParameterOrders);
+
+impl GeneratedParameterAnchors {
+    pub(super) fn from_linked(
+        linked: &crate::evidence_validation::ValidatedInterfaceProgram,
+    ) -> Self {
+        Self(
+            linked
+                .groups()
+                .iter()
+                .flat_map(|group| group.generated_parameter_orders())
+                .map(|(owner, order)| (*owner, Arc::clone(order)))
+                .collect(),
+        )
+    }
+
+    pub(super) fn orders(&self) -> &crate::resolved::GeneratedParameterOrders {
+        &self.0
+    }
+}
+
 /// An unchecked compiler-built Core arena which must cross [`super::validate()`]
 /// before use. A linked compiler image reconstructs an already-validated arena.
 #[derive(Debug)]
@@ -1780,6 +1804,7 @@ pub struct UnvalidatedCoreProgram<F: CoreOperationFamily> {
     pub(super) registry: Arc<ResolvedRegistry>,
     pub(super) method_evidence: Arc<MethodEvidenceCatalog>,
     pub(super) method_evidence_anchors: Box<[MethodEvidenceAnchor]>,
+    pub(super) generated_parameter_anchors: Arc<GeneratedParameterAnchors>,
     pub(super) arena: ArenaId,
     pub(super) nodes: Vec<StoredNode<F>>,
     pub(super) root: NodeId,
@@ -1789,6 +1814,7 @@ type UnvalidatedParts<F> = (
     Arc<ResolvedRegistry>,
     Arc<MethodEvidenceCatalog>,
     Box<[MethodEvidenceAnchor]>,
+    Arc<GeneratedParameterAnchors>,
     ArenaId,
     Vec<StoredNode<F>>,
     NodeId,
@@ -1816,11 +1842,13 @@ impl<F: CoreOperationFamily> UnvalidatedCoreProgram<F> {
             Arc::clone(empty_method_evidence()),
         );
         let method_evidence_anchors = std::mem::take(&mut self.method_evidence_anchors);
+        let generated_parameter_anchors = std::mem::take(&mut self.generated_parameter_anchors);
         let nodes = std::mem::take(&mut self.nodes);
         (
             registry,
             method_evidence,
             method_evidence_anchors,
+            generated_parameter_anchors,
             self.arena,
             nodes,
             self.root,
@@ -1846,7 +1874,8 @@ impl<F: CoreOperationFamily> UnvalidatedCoreProgram<F> {
         nodes
             .try_reserve_exact(self.nodes.len())
             .map_err(|_| BuildError::TypeWorkExceeded)?;
-        let (registry, method_evidence, anchors, arena, stored, root) = self.into_parts();
+        let (registry, method_evidence, anchors, parameter_anchors, arena, stored, root) =
+            self.into_parts();
         for node in stored {
             nodes.push(CoreTypedExpr {
                 ty: node.ty,
@@ -1859,6 +1888,7 @@ impl<F: CoreOperationFamily> UnvalidatedCoreProgram<F> {
             registry,
             method_evidence,
             anchors,
+            parameter_anchors,
             arena,
             nodes,
             root,
@@ -1913,6 +1943,7 @@ pub struct CoreProgram<F: CoreOperationFamily> {
     registry: Arc<ResolvedRegistry>,
     method_evidence: Arc<MethodEvidenceCatalog>,
     method_evidence_anchors: Box<[MethodEvidenceAnchor]>,
+    generated_parameter_anchors: Arc<GeneratedParameterAnchors>,
     arena: ArenaId,
     nodes: Box<[CoreTypedExpr<F>]>,
     root: NodeId,
@@ -1927,6 +1958,7 @@ impl<F: CoreOperationFamily> CoreProgram<F> {
         registry: Arc<ResolvedRegistry>,
         method_evidence: Arc<MethodEvidenceCatalog>,
         method_evidence_anchors: Box<[MethodEvidenceAnchor]>,
+        generated_parameter_anchors: Arc<GeneratedParameterAnchors>,
         arena: ArenaId,
         nodes: Vec<CoreTypedExpr<F>>,
         root: NodeId,
@@ -1935,6 +1967,7 @@ impl<F: CoreOperationFamily> CoreProgram<F> {
             registry,
             method_evidence,
             method_evidence_anchors,
+            generated_parameter_anchors,
             arena,
             nodes: nodes.into_boxed_slice(),
             root,
@@ -2064,14 +2097,25 @@ impl<F: CoreOperationFamily> ValidatedCoreProgram<F> {
     pub(crate) fn method_evidence_anchors(&self) -> &[MethodEvidenceAnchor] {
         self.0.method_evidence_anchors()
     }
+
+    pub(super) fn generated_parameter_anchors(&self) -> &Arc<GeneratedParameterAnchors> {
+        &self.0.generated_parameter_anchors
+    }
 }
 
 #[cfg(test)]
 pub(crate) fn forge_validated_for_test<F: CoreOperationFamily>(
     program: UnvalidatedCoreProgram<F>,
 ) -> ValidatedCoreProgram<F> {
-    let (registry, method_evidence, method_evidence_anchors, arena, stored_nodes, root) =
-        program.into_parts();
+    let (
+        registry,
+        method_evidence,
+        method_evidence_anchors,
+        parameter_anchors,
+        arena,
+        stored_nodes,
+        root,
+    ) = program.into_parts();
     let nodes = stored_nodes
         .into_iter()
         .map(|stored| CoreTypedExpr {
@@ -2087,6 +2131,7 @@ pub(crate) fn forge_validated_for_test<F: CoreOperationFamily>(
         registry,
         method_evidence,
         method_evidence_anchors,
+        parameter_anchors,
         arena,
         nodes,
         root,
@@ -4175,6 +4220,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             ),
             method_evidence_anchors: std::mem::take(&mut self.method_evidence_anchors)
                 .into_boxed_slice(),
+            generated_parameter_anchors: Arc::new(GeneratedParameterAnchors::default()),
             arena,
             nodes: std::mem::take(&mut self.nodes),
             root,
@@ -5247,6 +5293,7 @@ enum OriginAdmissionTask {
 
 enum OriginToken {
     Source(Span),
+    Expansion { invocation: Span, definition: Span },
     Generated(GeneratedReason),
     Related(Vec<Span>),
 }
@@ -5259,6 +5306,18 @@ fn admit_origin(origin: Origin) -> Result<Origin, BuildError> {
         match task {
             OriginAdmissionTask::Visit(Origin::Source(span), _) => {
                 tokens.push(OriginToken::Source(span));
+            }
+            OriginAdmissionTask::Visit(
+                Origin::Expansion {
+                    invocation,
+                    definition,
+                },
+                _,
+            ) => {
+                tokens.push(OriginToken::Expansion {
+                    invocation,
+                    definition,
+                });
             }
             OriginAdmissionTask::Visit(Origin::Generated { cause, reason }, depth) => {
                 let child_depth = depth.saturating_add(1);
@@ -5288,6 +5347,15 @@ fn admit_origin(origin: Origin) -> Result<Origin, BuildError> {
     for token in tokens {
         match token {
             OriginToken::Source(span) => rebuilt.push(Origin::Source(span)),
+            OriginToken::Expansion {
+                invocation,
+                definition,
+            } => {
+                rebuilt.push(Origin::Expansion {
+                    invocation,
+                    definition,
+                });
+            }
             OriginToken::Generated(reason) => {
                 let Some(cause) = rebuilt.pop() else {
                     return Err(BuildError::InvalidPayload);

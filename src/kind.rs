@@ -8924,6 +8924,7 @@ mod tests {
 
     fn unit_expression(span: Span) -> ResolvedExpr {
         ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Unit,
             span,
         }
@@ -9864,6 +9865,7 @@ mod tests {
                 let mut expression = unit_expression(span);
                 for _ in 0..DEPTH {
                     expression = ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
                             function: Box::new(expression),
                             argument: Box::new(unit_expression(span)),
@@ -9905,9 +9907,11 @@ mod tests {
     fn nested_block_results_are_scheduled_once() {
         let span = span();
         let expression = ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Block(ResolvedBlock {
                 declarations: Vec::new(),
                 result: Box::new(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Block(ResolvedBlock {
                         declarations: Vec::new(),
                         result: Box::new(unit_expression(span)),

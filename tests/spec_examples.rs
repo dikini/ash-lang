@@ -718,6 +718,7 @@ impl Drop for TempFile {
     }
 }
 
+#[allow(clippy::result_large_err)] // Examples inspect the original public pipeline failure.
 fn run(name: &str, text: &str) -> Result<ash::driver::Observation, PipelineFailure> {
     let source = TempFile::write_named(name, text);
     match run_path(RunConfiguration {

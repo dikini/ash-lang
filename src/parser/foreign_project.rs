@@ -92,7 +92,7 @@ pub(super) fn validate_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<()
 pub(super) fn library(
     source: &SourceFile,
     node: &ConcreteNode,
-    tokens: &[Token],
+    tokens: &ProjectionTokens<'_>,
 ) -> Result<SurfaceForeignLibrary, ProjectionError> {
     require_kind(node, NodeKind::ForeignLibrary)?;
     Ok(SurfaceForeignLibrary {
@@ -107,7 +107,7 @@ pub(super) fn library(
 fn member(
     source: &SourceFile,
     node: &ConcreteNode,
-    tokens: &[Token],
+    tokens: &ProjectionTokens<'_>,
 ) -> Result<SurfaceForeignMember, ProjectionError> {
     require_kind(node, NodeKind::ForeignMember)?;
     let span = node_span(source, node, tokens)?;

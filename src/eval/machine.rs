@@ -7,6 +7,8 @@ mod instantiation;
 pub(super) use instantiation::Instantiation;
 #[path = "region.rs"]
 mod region;
+#[path = "syntax.rs"]
+mod syntax;
 use region::BackingRecord;
 pub(super) use region::HostRootCompletion;
 
@@ -1130,10 +1132,23 @@ impl Transition {
 #[cfg(test)]
 type WorkTrace = Arc<std::sync::Mutex<Vec<(NodeId, usize)>>>;
 
+#[cfg(test)]
+#[derive(Debug)]
+struct TransformerDropObserver;
+
+#[cfg(test)]
+impl Drop for TransformerDropObserver {
+    fn drop(&mut self) {
+        let drops = machine_test_hooks::TRANSFORMER_DROPS.get();
+        machine_test_hooks::TRANSFORMER_DROPS.set(drops + 1);
+    }
+}
+
 /// The retained explicit evaluator machine shared by pure and effect Core.
 #[derive(Debug)]
 pub struct Machine<'runtime> {
     worker: Option<WorkerStartup>,
+    syntax_host: Option<syntax::SyntaxHost>,
     source_bindings: Option<&'runtime crate::foreign::source_bindings::SourceNativeBindings>,
     cleanup_limit: usize,
     live_cleanups: usize,
@@ -1159,6 +1174,9 @@ pub struct Machine<'runtime> {
     work_trace: Option<WorkTrace>,
     #[cfg(test)]
     allocation_frames: AllocationFrameObservations,
+    // Last so the test observes completion after frames and heap are dropped.
+    #[cfg(test)]
+    transformer_drop_observer: Option<TransformerDropObserver>,
 }
 
 struct WorkerStartup {
@@ -1699,6 +1717,18 @@ fn run_network_carrier(input: CarrierInput, gate: triomphe::Arc<CarrierGate>) {
 
 impl Drop for Machine<'_> {
     fn drop(&mut self) {
+        #[cfg(test)]
+        if self.transformer_drop_observer.is_some() {
+            for frame in &self.frames {
+                if let Frame::RegionBoundary { node, records, .. } = frame
+                    && self.region_scope(*node).is_some_and(|scope| scope.entry)
+                {
+                    let roots = machine_test_hooks::ACTIVE_ROOT_DROPS.get();
+                    machine_test_hooks::ACTIVE_ROOT_DROPS.set(roots + 1);
+                    machine_test_hooks::ACTIVE_ROOT_RECORDS.set(records.len());
+                }
+            }
+        }
         if let Some(root) = &mut self.root_completion {
             root.close(&mut self.heap);
         }
@@ -1709,6 +1739,7 @@ impl<'runtime> Machine<'runtime> {
     fn new(program: &ValidatedProgram) -> Self {
         Self {
             worker: None,
+            syntax_host: None,
             source_bindings: None,
             program: ExecutableProgram::Pure(program.shared()),
             cleanup_limit: 0,
@@ -1734,6 +1765,8 @@ impl<'runtime> Machine<'runtime> {
             work_trace: None,
             #[cfg(test)]
             allocation_frames: AllocationFrameObservations::default(),
+            #[cfg(test)]
+            transformer_drop_observer: None,
         }
     }
 
@@ -1755,6 +1788,7 @@ impl<'runtime> Machine<'runtime> {
     ) -> Self {
         Self {
             worker: None,
+            syntax_host: None,
             source_bindings: None,
             program: ExecutableProgram::Effect(program),
             cleanup_limit: MAX_CAPTURED_FRAME_CELLS,
@@ -1780,6 +1814,8 @@ impl<'runtime> Machine<'runtime> {
             work_trace: None,
             #[cfg(test)]
             allocation_frames: AllocationFrameObservations::default(),
+            #[cfg(test)]
+            transformer_drop_observer: None,
         }
     }
 
@@ -1836,12 +1872,32 @@ impl<'runtime> Machine<'runtime> {
     fn run_loop(&mut self) -> Result<Evaluation, RuntimeFailure> {
         loop {
             disposal::check()?;
+            if let Some(host) = &mut self.syntax_host {
+                host.steps_left = host
+                    .steps_left
+                    .checked_sub(1)
+                    .ok_or(RuntimeFailure::ResourceCapacity)?;
+            }
             let control = self
                 .control
                 .take()
                 .ok_or(RuntimeFailure::InvalidControlState)?;
             match control {
                 Control::Evaluate(node, environment) => {
+                    if let Some(host) = &mut self.syntax_host
+                        && host.occurrence == node
+                        && !host.started
+                    {
+                        host.started = true;
+                        let argument = host.input();
+                        let function = environment
+                            .lookup(host.binder, &self.program)
+                            .ok_or(RuntimeFailure::InvalidControlState)?;
+                        reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+                        self.frames.push(Frame::ApplyArgument { function });
+                        self.apply(Transition::direct(Control::Return(argument)));
+                        continue;
+                    }
                     if self
                         .worker
                         .as_ref()
@@ -4603,6 +4659,18 @@ impl<'runtime> Machine<'runtime> {
         }
         disposal::check()?;
         let Some(selected) = selected else {
+            if let Some(host) = &mut self.syntax_host
+                && effect.effect() == host.ops
+            {
+                let result = host.request(
+                    operation,
+                    value,
+                    &mut self.heap,
+                    &mut self.instantiation_work,
+                )?;
+                self.apply(Transition::direct(Control::Return(result)));
+                return Ok(());
+            }
             return Err(RuntimeFailure::ForeignBinding);
         };
         let retained = match &self.frames[selected] {
@@ -6826,6 +6894,71 @@ pub fn evaluate_effect(program: &ValidatedEffectProgram) -> Result<Evaluation, R
     Machine::new_effect(program).run()
 }
 
+pub(crate) fn evaluate_transformer(
+    entry: &crate::core::validate::ValidatedMacroEntry,
+    captures: &[crate::surface::SurfaceSyntaxCapture],
+    source: &crate::source::SourceFile,
+    caller: &crate::surface::SurfaceName,
+    introduction: usize,
+    contexts: std::sync::Arc<crate::syntax::SyntaxContexts>,
+    frame: std::sync::Arc<crate::syntax::ExpansionFrame>,
+) -> Result<(crate::syntax::TransformerOutput, usize), RuntimeFailure> {
+    let scope = disposal::Scope::enter();
+    let mut result = (|| {
+        let mut machine = Machine::new_effect(&entry.program);
+        machine.syntax_host = Some(syntax::SyntaxHost::new(
+            entry,
+            captures,
+            source,
+            caller,
+            introduction,
+            contexts,
+            frame,
+        )?);
+        #[cfg(test)]
+        {
+            machine.transformer_drop_observer = Some(TransformerDropObserver);
+        }
+        let evaluation = machine.run_loop()?;
+        let (value, heap) = evaluation.into_observation_parts();
+        let host = machine
+            .syntax_host
+            .as_ref()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        #[cfg(test)]
+        {
+            let attempts = machine_test_hooks::TRANSFER_ATTEMPTS.get();
+            machine_test_hooks::TRANSFER_ATTEMPTS.set(attempts + 1);
+        }
+        let transferred = host
+            .transfer(&value, heap.cells(), &mut machine.instantiation_work)
+            .map(|output| (output, host.fresh_count()));
+        #[cfg(test)]
+        if transferred.is_err() {
+            let failures = machine_test_hooks::TRANSFER_FAILURES.get();
+            machine_test_hooks::TRANSFER_FAILURES.set(failures + 1);
+        }
+        drop(value);
+        drop(heap);
+        drop(machine);
+        transferred
+    })();
+    if let Some(teardown) = disposal::failure() {
+        match &mut result {
+            Ok((crate::syntax::TransformerOutput::Rejected(failure), _)) => {
+                failure.teardown = Some(teardown);
+                return result;
+            }
+            Ok((crate::syntax::TransformerOutput::SyntaxRejected(failure), _)) => {
+                failure.teardown = Some(teardown);
+                return result;
+            }
+            _ => {}
+        }
+    }
+    scope.finish(result)
+}
+
 /// Evaluates only a program whose source-native bindings were admitted before
 /// Ash execution. This borrows the immutable original binding table throughout.
 ///
@@ -6858,6 +6991,314 @@ fn apply_primitive(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn copied_nested_transformers_each_execute_before_the_runtime_program() {
+        use crate::{
+            driver::{RunConfiguration, compile_path, execute},
+            module::ModuleRoots,
+        };
+
+        super::machine_test_hooks::reset();
+        let configuration = RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/entry_nested_copied_transformers.ash"),
+            roots: ModuleRoots::empty(),
+        };
+        let compiled = compile_path(configuration).expect("copied nested syntax compiles");
+        assert_eq!(super::machine_test_hooks::TRANSFORMER_DROPS.get(), 3);
+        assert_eq!(super::machine_test_hooks::TRANSFER_ATTEMPTS.get(), 3);
+        assert_eq!(super::machine_test_hooks::TRANSFER_FAILURES.get(), 0);
+        let requests = super::machine_test_hooks::SYNTAX_REQUESTS.get();
+        assert!(requests > 0);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+        assert_eq!(super::machine_test_hooks::SYNTAX_REQUESTS.get(), requests);
+        super::machine_test_hooks::reset();
+    }
+
+    #[test]
+    fn discarded_capture_does_not_run_its_nested_transformer() {
+        use crate::{
+            driver::{RunConfiguration, compile_path, execute},
+            module::ModuleRoots,
+        };
+
+        super::machine_test_hooks::reset();
+        let configuration = RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/entry_discard_captured_bomb.ash"),
+            roots: ModuleRoots::empty(),
+        };
+        let compiled =
+            compile_path(configuration).expect("the nested rejecting syntax is discarded");
+        assert_eq!(super::machine_test_hooks::TRANSFORMER_DROPS.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFER_ATTEMPTS.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFER_FAILURES.get(), 0);
+        let requests = super::machine_test_hooks::SYNTAX_REQUESTS.get();
+        assert!(requests > 0);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+        assert_eq!(super::machine_test_hooks::SYNTAX_REQUESTS.get(), requests);
+        super::machine_test_hooks::reset();
+    }
+
+    #[test]
+    fn malformed_capture_is_rejected_before_a_discarding_transformer_runs() {
+        use crate::{
+            driver::{RunConfiguration, compile_path, execute},
+            module::ModuleRoots,
+        };
+
+        let configuration = |entry: &str| RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros")
+                .join(entry),
+            roots: ModuleRoots::empty(),
+        };
+        super::machine_test_hooks::reset();
+        let compiled = compile_path(configuration("entry_generated_parse_discard.ash"))
+            .expect("the valid capture can be parsed and discarded");
+        assert_eq!(super::machine_test_hooks::TRANSFORMER_DROPS.get(), 1);
+        assert!(super::machine_test_hooks::SYNTAX_REQUESTS.get() > 0);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+
+        super::machine_test_hooks::reset();
+        let failure = compile_path(configuration("entry_generated_parse_discard_invalid.ash"))
+            .expect_err("a malformed capture cannot reach the transformer");
+        assert_eq!(failure.reason_code(), "parse.expected-operand");
+        assert_eq!(super::machine_test_hooks::TRANSFORMER_DROPS.get(), 0);
+        assert_eq!(super::machine_test_hooks::SYNTAX_REQUESTS.get(), 0);
+        assert_eq!(super::machine_test_hooks::TRANSFER_ATTEMPTS.get(), 0);
+        super::machine_test_hooks::reset();
+    }
+
+    #[test]
+    fn transformer_failures_dispose_the_real_invocation_root() {
+        use crate::{
+            driver::{PipelineFailure, RunConfiguration, compile_path},
+            module::ModuleRoots,
+        };
+        let configuration = |entry: &str| RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros")
+                .join(entry),
+            roots: ModuleRoots::empty(),
+        };
+        for (entry, has_requests, transfer) in [
+            ("entry_diverge.ash", false, false),
+            ("entry_origin_doubling.ash", true, false),
+            ("entry_transfer_failure.ash", true, true),
+        ] {
+            super::machine_test_hooks::reset();
+            let failure = compile_path(configuration(entry)).expect_err("no output is published");
+            assert_eq!(
+                failure.reason_code(),
+                "syntax.transformer-failed",
+                "{entry}"
+            );
+            let Some(PipelineFailure::SyntaxRuntime(error)) = failure.pipeline_failure() else {
+                panic!("{entry}: the original evaluator or transfer failure is retained");
+            };
+            assert_eq!(
+                error.cause().reason_code(),
+                "runtime.resource-capacity",
+                "{entry}"
+            );
+            assert_eq!(
+                super::machine_test_hooks::TRANSFORMER_DROPS.get(),
+                1,
+                "{entry}"
+            );
+            assert_eq!(
+                super::machine_test_hooks::SYNTAX_REQUESTS.get() > 0,
+                has_requests,
+                "{entry}"
+            );
+            assert_eq!(
+                super::machine_test_hooks::TRANSFER_ATTEMPTS.get(),
+                usize::from(transfer),
+                "{entry}"
+            );
+            assert_eq!(
+                super::machine_test_hooks::TRANSFER_FAILURES.get(),
+                usize::from(transfer),
+                "{entry}"
+            );
+            if transfer {
+                assert_eq!(
+                    super::machine_test_hooks::TRANSFER_GROUPS_COMPLETED.get(),
+                    crate::parser::STRUCTURAL_DEPTH_LIMIT,
+                    "the completed depth-128 sibling is discarded on refusal"
+                );
+            }
+            assert_eq!(
+                super::machine_test_hooks::ROOT_CLOSES.get(),
+                usize::from(transfer),
+                "{entry}"
+            );
+            assert_eq!(
+                super::machine_test_hooks::ACTIVE_ROOT_DROPS.get(),
+                usize::from(!transfer),
+                "{entry}"
+            );
+            if !transfer {
+                assert!(
+                    super::machine_test_hooks::ACTIVE_ROOT_RECORDS.get() > 0,
+                    "{entry}"
+                );
+            }
+        }
+
+        super::machine_test_hooks::reset();
+        super::machine_test_hooks::FAIL_ROOT_CLOSE.set(true);
+        let failure = compile_path(configuration("entry_transfer_failure.ash")).unwrap_err();
+        let Some(PipelineFailure::SyntaxRuntime(error)) = failure.pipeline_failure() else {
+            panic!("transfer and teardown failures remain a transformer failure");
+        };
+        let super::RuntimeFailure::Report(report) = error.cause() else {
+            panic!("both failures must remain structured");
+        };
+        assert_eq!(report.primary.reason_code(), "runtime.resource-capacity");
+        let teardown = report.teardown.expect("root-close refusal is retained");
+        assert_eq!(teardown.phase, super::RuntimePhase::Teardown);
+        assert_eq!(
+            teardown.cause,
+            super::ResourceFailureCause::ConfiguredCapacity
+        );
+        assert_eq!(report.cleanup, crate::eval::CleanupStatus::Incomplete);
+        assert_eq!(super::machine_test_hooks::ROOT_CLOSES.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFER_FAILURES.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFORMER_DROPS.get(), 1);
+        super::machine_test_hooks::reset();
+    }
+
+    #[test]
+    fn transformer_closes_root_and_preserves_rejection_on_teardown_failure() {
+        use crate::{
+            driver::{RunConfiguration, compile_path, execute},
+            message::{Catalogue, Locale},
+            module::ModuleRoots,
+            presentation::{compile_file_diagnostics, write_human, write_json, write_short},
+        };
+        let configuration = |entry: &str| RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros")
+                .join(entry),
+            roots: ModuleRoots::empty(),
+        };
+        let assert_presented = |failure: &crate::driver::FileFailure, expected: &str| {
+            let diagnostics = compile_file_diagnostics(failure).unwrap();
+            let [diagnostic] = diagnostics.as_slice() else {
+                panic!("one primary diagnostic and its teardown cause");
+            };
+            let mut json = Vec::new();
+            write_json(&mut json, diagnostic).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+            assert_eq!(json["reason"], expected);
+            let facts = json["facts"].as_array().unwrap();
+            for (name, value) in [
+                ("teardown_cause", "runtime.capacity-exhausted"),
+                ("teardown_phase", "teardown"),
+                ("teardown_resource", "environment disposal entries"),
+                ("cleanup", "incomplete"),
+            ] {
+                assert!(
+                    facts
+                        .iter()
+                        .any(|fact| fact["name"] == name && fact["value"] == value)
+                );
+            }
+            assert!(
+                facts
+                    .iter()
+                    .any(|fact| { fact["name"] == "teardown_requested" && fact["value"] == 1 })
+            );
+            assert!(
+                facts
+                    .iter()
+                    .any(|fact| { fact["name"] == "teardown_available" && fact["value"] == 0 })
+            );
+            assert!(
+                json["labels"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|label| label["relationship"] == "syntax_teardown")
+            );
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let catalogue = Catalogue::new(locale).unwrap();
+                let mut human = Vec::new();
+                write_human(&mut human, diagnostic, &catalogue).unwrap();
+                assert!(
+                    String::from_utf8(human)
+                        .unwrap()
+                        .contains("runtime.capacity-exhausted")
+                );
+                let mut short = Vec::new();
+                write_short(&mut short, diagnostic, &catalogue).unwrap();
+                assert!(
+                    String::from_utf8(short)
+                        .unwrap()
+                        .contains("runtime.capacity-exhausted")
+                );
+            }
+        };
+
+        super::machine_test_hooks::reset();
+        let compiled = compile_path(configuration("entry_host.ash")).unwrap();
+        assert_eq!(super::machine_test_hooks::ROOT_CLOSES.get(), 1);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+
+        for (entry, expected) in [
+            ("entry_reject_ops.ash", "syntax.rejected"),
+            ("entry_parse_failure.ash", "parse.expected-operand"),
+        ] {
+            super::machine_test_hooks::reset();
+            super::machine_test_hooks::FAIL_ROOT_CLOSE.set(true);
+            let failure = compile_path(configuration(entry)).unwrap_err();
+            assert_eq!(super::machine_test_hooks::ROOT_CLOSES.get(), 1, "{entry}");
+            assert!(!super::machine_test_hooks::FAIL_ROOT_CLOSE.get(), "{entry}");
+            assert_eq!(failure.reason_code(), expected, "{entry}");
+            let teardown = match failure.pipeline_failure() {
+                Some(crate::driver::PipelineFailure::SyntaxExpansion(error)) => {
+                    assert_eq!(error.message(), "expected a positive value");
+                    error.teardown()
+                }
+                Some(crate::driver::PipelineFailure::SyntaxParse(error)) => error.teardown(),
+                _ => panic!("the original rejection must be retained"),
+            }
+            .expect("the first teardown failure is retained with the rejection");
+            assert_eq!(teardown.phase, super::RuntimePhase::Teardown);
+            assert_eq!(
+                teardown.resource,
+                super::RuntimeResource::EnvironmentDisposal
+            );
+            assert_eq!(
+                teardown.cause,
+                super::ResourceFailureCause::ConfiguredCapacity
+            );
+            assert_presented(&failure, expected);
+        }
+
+        super::machine_test_hooks::reset();
+        super::machine_test_hooks::FAIL_ROOT_CLOSE.set(true);
+        let failure = compile_path(configuration("entry_host.ash"))
+            .expect_err("successful output is not published when root closure fails");
+        assert_eq!(super::machine_test_hooks::ROOT_CLOSES.get(), 1);
+        let Some(crate::driver::PipelineFailure::SyntaxRuntime(error)) = failure.pipeline_failure()
+        else {
+            panic!("root-close refusal must be a transformer failure");
+        };
+        let super::RuntimeFailure::Report(report) = error.cause() else {
+            panic!("root-close refusal retains structured resource details");
+        };
+        assert_eq!(
+            report.primary.resource().unwrap().phase,
+            super::RuntimePhase::Teardown
+        );
+        assert_eq!(report.cleanup, crate::eval::CleanupStatus::Incomplete);
+        assert_presented(&failure, "syntax.transformer-failed");
+        super::machine_test_hooks::reset();
+    }
+
     #[test]
     fn integer_region_reader_is_paid_and_preserves_digit_aliases() {
         use super::*;

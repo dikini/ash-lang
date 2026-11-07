@@ -2,9 +2,9 @@
 
 Name resolution gives each module, nominal type, constructor, interface,
 method, anonymous implementation, requirement, type parameter, and term binder
-an identity and connects every occurrence to exactly one such identity. Later
-phases use identity, not source spelling or import route, to distinguish
-declarations.
+an identity and connects every occurrence in an expanded program to exactly one
+such identity. Later phases use identity, not source spelling or import route,
+to distinguish declarations.
 
 ## Module paths and identity
 
@@ -43,7 +43,7 @@ filesystem root fails with `invocation.reserved-root` before filesystem
 inspection. The modules specified beneath that root are `@builtin.cell`,
 `@builtin.generic_cell`, `@builtin.retained_control`, `@builtin.bytes`,
 `@builtin.string`, `@builtin.integer`, `@builtin.foreign`,
-`@builtin.network` and `@builtin.regions`. Unknown paths,
+`@builtin.network`, `@builtin.regions` and `@builtin.compiler.syntax`. Unknown paths,
 including `@builtin.cell.extra`, fail
 with `module.unknown-builtin`.
 
@@ -166,6 +166,15 @@ conversion. Complete and targeted imports, aliases and public re-exports preserv
 the original nominal and function identities. A same-spelled ordinary declaration
 does not select builtin execution or become the canonical ABI Address type.
 
+### Compiler-owned syntax module
+
+`@builtin.compiler.syntax` is a canonical passive module containing the opaque
+handles, structural data, and compile-time service effect specified by
+[syntax expansion](syntax-expansion.md#canonical-syntax-interface). Imports
+preserve its defining identities. Its service is supplied to checked
+transformers during expansion; importing it does not install a runtime handler
+or make its opaque handles constructible from ordinary data.
+
 ### Compiler-owned region bindings
 
 `@builtin.regions` supplies the canonical binding facade for `Request`,
@@ -197,7 +206,9 @@ alias. It does not copy declarations or change their identities. Public globals,
 nominal types, resource families, interfaces, effects, methods, operations, and constructors are
 available through qualified occurrences such as `List.map`, `List.Option`,
 `List.Equal`, `List.State`, `List.State.get`, `List.equal`, and `List.Some`. A
-qualified occurrence must use an alias bound by an import in the same module. A
+source-written qualified occurrence must use an alias bound by an import in
+the same module. Generated qualified syntax resolves its alias in the retained
+identifier context, then selects the member from that module's exports. A
 complete import is private and selects no implementation facts.
 
 Hook and registration targets use these same effect names and defining
@@ -223,6 +234,13 @@ dependency summary's public implementation closure. The item binds no source
 name and cannot be renamed. A qualified import and a targeted name item select
 no implementation facts. Conversely, an implementation item does not bind the
 interface or any method spelling.
+
+A targeted `syntax name` item selects that dependency's own public syntax
+export and activates its local name, optionally renamed. It is a separate
+syntax namespace, not an ordinary name or implementation import. A complete
+import does not activate syntax, and a public re-export of a syntax item is
+not admitted. The selection and local reservation rules are specified in
+[syntax expansion](syntax-expansion.md#definitions-and-imports).
 
 Every import establishes one direct dependency regardless of which channel it
 selects. A private targeted import makes its selected names and implementation
@@ -944,7 +962,9 @@ main () = first ()
 
 ## Unresolved names
 
-Every occurrence must resolve. The executable test
+Every occurrence in an expanded program must resolve. A template's free names
+are checked in its defining context when it is expanded; an unused template
+does not resolve them. The executable test
 `resolution_unknown_name_example_has_its_documented_reason` checks that this
 complete entry module is rejected with `resolve.unknown-name`:
 

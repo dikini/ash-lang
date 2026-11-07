@@ -102,7 +102,7 @@ impl EffectSource<'_> {
     }
 }
 
-impl Resolver {
+impl Resolver<'_, '_> {
     pub(super) fn validate_source_foreign_members(
         &mut self,
         surface: &SurfaceModule,

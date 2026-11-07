@@ -106,6 +106,8 @@ pub enum TokenKind {
     RightBrace,
     /// `@`, introducing a named module root.
     At,
+    /// `$`, introducing a syntax matcher capture or template splice.
+    Dollar,
     /// `.`, separating module path segments and qualified names.
     Dot,
     /// `:`.

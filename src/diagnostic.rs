@@ -22,6 +22,7 @@ pub(crate) fn compare_source_spans(left: Span, right: Span) -> Ordering {
 pub struct SourceLabel {
     span: Span,
     message: String,
+    diagnostic: Option<Box<crate::syntax::DiagnosticLocation>>,
 }
 
 impl SourceLabel {
@@ -30,7 +31,46 @@ impl SourceLabel {
         Self {
             span,
             message: message.into(),
+            diagnostic: None,
         }
+    }
+
+    pub(crate) fn with_location(
+        mut self,
+        location: Option<&crate::syntax::DiagnosticLocation>,
+    ) -> Self {
+        if let Some(location) = location {
+            self.span = location.primary.primary();
+            self.diagnostic = Some(Box::new(location.clone()));
+        }
+        self
+    }
+
+    pub(crate) fn diagnostic_location(&self) -> Option<&crate::syntax::DiagnosticLocation> {
+        self.diagnostic.as_deref()
+    }
+
+    pub(crate) fn inherit_frames(
+        &mut self,
+        frames: &[std::sync::Arc<crate::syntax::ExpansionFrame>],
+    ) {
+        if frames.is_empty() {
+            return;
+        }
+        let span = self.span;
+        let location = self
+            .diagnostic
+            .get_or_insert_with(|| Box::new(crate::syntax::DiagnosticLocation::new(span.into())));
+        for frame in frames {
+            location.add_frame(frame);
+        }
+    }
+
+    pub(crate) fn add_cause(&mut self, cause: &crate::syntax::DiagnosticLocation) {
+        let span = self.span;
+        self.diagnostic
+            .get_or_insert_with(|| Box::new(crate::syntax::DiagnosticLocation::new(span.into())))
+            .add_cause(cause);
     }
 
     /// Returns the source span carrying this label.

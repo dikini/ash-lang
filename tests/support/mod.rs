@@ -45,6 +45,7 @@ impl Drop for TempModule {
 }
 
 /// Runs one complete declarations-only module through the public modular driver.
+#[allow(clippy::result_large_err)] // Test callers inspect the original public pipeline failure.
 pub fn run_module(name: &str, source: &str) -> Result<Observation, PipelineFailure> {
     let module = TempModule::write(name, source);
     match run_path(RunConfiguration {

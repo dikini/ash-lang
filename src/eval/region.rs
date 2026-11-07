@@ -30,6 +30,18 @@ pub(in crate::eval) struct HostRootCompletion {
 
 impl HostRootCompletion {
     pub(in crate::eval) fn close(&mut self, heap: &mut [HeapCell]) {
+        #[cfg(test)]
+        {
+            let closes = super::machine_test_hooks::ROOT_CLOSES.get();
+            super::machine_test_hooks::ROOT_CLOSES.set(closes + 1);
+            if super::machine_test_hooks::FAIL_ROOT_CLOSE.replace(false) {
+                let _bounded = disposal::NoGrowth::enter();
+                let mut pending = disposal::Pending::new(RuntimeResource::EnvironmentDisposal);
+                for _ in 0..9 {
+                    pending.push(0_u8);
+                }
+            }
+        }
         // Preparation authenticated every location and paid these two flat passes.
         // Empty the Rust representation before freeing any root backing. Existing
         // metadata disposal reports through the ambient Scope, if one is active.

@@ -706,6 +706,108 @@ fn projects_imports_visibility_and_a_declarations_only_root() {
 }
 
 #[test]
+fn projects_expression_template_with_a_capture_splice() {
+    let module = parse_valid("pub syntax times_five $value:expr => {\n    $value * 5\n}\n");
+    assert_eq!(module.syntax_declarations.len(), 1);
+    let syntax = &module.syntax_declarations[0];
+    assert_eq!(syntax.name.text, "times_five");
+    assert!(matches!(
+        &syntax.matcher[..],
+        [ash::surface::SurfaceSyntaxMatcherPart::Capture {
+            name,
+            kind: ash::surface::SurfaceSyntaxCaptureKind::Expression,
+        }] if name.text == "value"
+    ));
+    assert!(matches!(
+        syntax.implementation,
+        ash::surface::SurfaceSyntaxImplementation::Template
+    ));
+}
+
+#[test]
+fn rejects_a_balanced_malformed_template_at_projection() {
+    let source = SourceFile::new(
+        "malformed-template.ash",
+        "pub syntax bad $value:expr => {\nlet item =\n$value\n}\n",
+    )
+    .unwrap();
+    let tree = parse(lex(&source).unwrap());
+    assert!(matches!(
+        project_module(&source, &tree),
+        Err(ProjectionError::RecoveryNodesPresent)
+    ));
+}
+
+#[test]
+fn template_admission_preserves_structural_depth_failure() {
+    let expression =
+        std::iter::repeat_n(" + 1", ash::parser::STRUCTURAL_DEPTH_LIMIT + 1).collect::<String>();
+    let source = SourceFile::new(
+        "deep-template.ash",
+        format!("pub syntax deep $value:expr => {{\n$value{expression}\n}}\n"),
+    )
+    .unwrap();
+    let tree = parse(lex(&source).unwrap());
+    assert!(matches!(
+        project_module(&source, &tree),
+        Err(ProjectionError::ResourceLimit(
+            ash::parser::ResourceFailure::StructuralDepth { .. }
+        ))
+    ));
+}
+
+#[test]
+fn projects_literal_separated_expression_matcher() {
+    let module = parse_valid(
+        "pub syntax choose $condition:expr then $yes:expr else $no:expr => {\n    match $condition {\n        true => $yes\n        false => $no\n    }\n}\n",
+    );
+    let matcher = &module.syntax_declarations[0].matcher;
+    assert_eq!(matcher.len(), 5);
+    assert!(matches!(
+        &matcher[1],
+        ash::surface::SurfaceSyntaxMatcherPart::Literal { spelling, .. } if spelling == "then"
+    ));
+    assert!(matches!(
+        &matcher[3],
+        ash::surface::SurfaceSyntaxMatcherPart::Literal { spelling, .. } if spelling == "else"
+    ));
+}
+
+#[test]
+fn syntax_imports_are_contextual_and_preserve_ordinary_syntax_names() {
+    let module = parse_valid(
+        "import macros (syntax choose as selected, syntax)\nsyntax : Unit -> Int\nsyntax () = 42\n",
+    );
+    let SurfaceImportSelection::Targeted(items) = &module.imports[0].selection else {
+        panic!("expected targeted selectors");
+    };
+    assert_eq!(items.len(), 2);
+    assert!(matches!(
+        &items[0],
+        SurfaceImportItem::Syntax { name, alias: Some(alias), .. }
+            if name.text == "choose" && alias.text == "selected"
+    ));
+    assert!(matches!(
+        &items[1],
+        SurfaceImportItem::Name { name, alias: None, .. } if name.text == "syntax"
+    ));
+    assert_eq!(module.definitions.len(), 1);
+}
+
+#[test]
+fn syntax_selectors_reject_reexports_and_non_lowercase_names() {
+    for text in [
+        "pub import macros (syntax choose)\n",
+        "import macros (syntax Choose)\n",
+        "import macros (syntax choose as Chosen)\n",
+        "import macros (syntax _choose)\n",
+        "import macros (syntax choose as _chosen)\n",
+    ] {
+        assert_parser_rejected("invalid syntax selector", text);
+    }
+}
+
+#[test]
 fn projects_public_imports_and_independent_selector_channels() {
     let text = "pub import equality (Equal as Equality, equal, impl Equal)\n";
     let source = SourceFile::new("public-import.ash", text).expect("module source should fit");
@@ -1140,4 +1242,14 @@ fn lowercase_qualifiers_never_enter_the_qualified_name_grammar() {
             "{case} should stop at the parser recovery boundary"
         );
     }
+}
+
+#[test]
+fn projects_ash_transformer_syntax_declaration() {
+    let module = parse_valid("pub syntax twice $value:expr => using expand_twice\n");
+    assert!(matches!(
+        &module.syntax_declarations[0].implementation,
+        ash::surface::SurfaceSyntaxImplementation::Transformer(name)
+            if name.text == "expand_twice"
+    ));
 }

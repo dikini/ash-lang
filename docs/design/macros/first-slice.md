@@ -1,11 +1,15 @@
 # Hygienic surface macros: first-slice design
 
 This companion to [DN-0062](../DN-0062-hygienic-surface-macros.md) records the
-design behind [CP-0033](../../proposals/CP-0033-hygienic-expression-syntax.md).
-CP-0033 accepts this first slice, which is not implemented or current Ash.
-This document does not accept a parser architecture decision or create an
-implementation task. Examples use accepted future syntax. The delivery plan
-below is prospective planning, not an active task or task-owned execution plan.
+design behind the accepted first slice. Its implementation and
+[specification](../../../spec/syntax-expansion.md) are on the reviewed product
+checkpoint; milestone integration remains pending and Main is separate. The
+retired CP-0033 transition is retained in Git at `f621d075`.
+The parser amendment is recorded in
+[AD-0005](../../decisions/AD-0005-parser-architecture.md);
+[TASK-0067](../../tasks/TASK-0067-expression-macros.md) owns implementation and
+its execution plan. This companion remains design rationale. Examples
+illustrate the accepted slice.
 
 ## Scope and choice
 
@@ -29,7 +33,7 @@ The selected alternatives are:
 | Keyword-led syntax with explicit imports | Provides unmarked DSL notation. A reserved leading spelling and restricted matchers bound ambiguity; some ordinary names need import renaming. |
 | Context-bearing tokens, groups, and protected expression fragments | Preserves binding, origins, and grouping without publishing the compiler AST. Requires an Ash-defined interchange and host adapter. |
 | Templates and Ash procedures together | Supports substitutions and computed transformations under one contract. Requires a checked-Ash execution bridge in the first slice. |
-| Scope sets with authenticated definition references | Handles caller binders and definition-site helpers across namespaces. Requires an expansion-aware lexical walk and reference authorization. |
+| Scope sets with checked definition-context lookup | Handles caller binders and definition-site helpers across namespaces. Requires expansion-aware lexical resolution. |
 
 A mandatory punctuation-marked invocation would simplify parsing but would not
 meet the natural-syntax goal. Arbitrary grammar callbacks would admit more DSLs
@@ -80,7 +84,7 @@ values. The procedural name must denote an ordinary global in the defining
 module with the transformer type below. It may be private. Every syntax
 declaration in this slice is public.
 
-The proposed grammar adds the following forms. `matcher_item` and its validity
+The first-slice grammar adds the following forms. `matcher_item` and its validity
 conditions are described in the next section. `template_block` uses the current
 block grammar with named expression and identifier placeholders admitted in
 their corresponding positions; it is not an ordinary source block before
@@ -202,7 +206,7 @@ results; opaque compiler-issued handles retain lexical and provenance facts.
 The compiler authenticates these declarations by canonical origin. Copying
 their source or matching their spelling supplies no compiler authority.
 
-These proposed data declarations show the structural boundary. `Token`,
+These data declarations show the structural boundary. `Token`,
 `Identifier`, `ExpressionFragment`, `Input`, `Origin`, and `ParseFailure` are
 opaque; their constructors are not exported.
 
@@ -232,16 +236,10 @@ kinds admitted in expression output, including logical newlines and reserved
 words. Parentheses and braces are represented by groups, not standalone
 delimiter tokens. A token's kind and original spelling are inspectable.
 
-The public constructor names and their mapping to source spellings belong to
-Ash's general lexical and metaprogramming vocabulary. The current
-[lexical specification](../../../spec/lexical-structure.md#tokens) defines
-token classes and spellings but does not define that public constructor family.
-This macro interface depends on the shared vocabulary; it does not define a
-separate list or expose Rust lexer discriminants. Its implemented interface must
-document the applicable cases and spelling validation, and implementations of
-the same interface version must agree on them. The shared vocabulary and its
-conformance evidence can be defined alongside the language and tool interface;
-selecting its names is not a decision this macro design must settle.
+The public constructor names and their mapping to source spellings are defined
+in the shared [lexical vocabulary](../../../spec/lexical-structure.md#public-token-kinds).
+The syntax interface uses that vocabulary and its spelling validation; it does
+not expose Rust lexer discriminants or define a separate token list.
 
 `expression_syntax` returns the fragment's contents as an ordered
 syntax sequence and leaves the original fragment intact. Reusing that sequence
@@ -252,8 +250,8 @@ that conversion.
 The module exposes these operations. Types use unqualified names as seen
 inside that module. A tuple is one ordinary Ash argument. `Ops` is a canonical
 compiler-service effect; each signature has the latent row `{Ops}` plus the
-current implicit default-allocation requirement. These are proposed signatures,
-not declarations already supplied by Ash.
+current implicit default-allocation requirement. The delivery branch supplies
+these signatures in the [canonical syntax interface](../../../spec/syntax-expansion.md#canonical-syntax-interface).
 
 ```text
 capture : (Input, Int) -> CaptureResult ! {Ops}
@@ -305,13 +303,12 @@ from a nonempty ordered origin list and retains the current expansion frame.
 Every output node receives that frame even when it preserves an input's
 primary source origin.
 
-Handles are valid within their issuing compilation and carry their authority
-chain. Raw numbers, pointers, serializations, and source spans cannot recreate
-them. Output admission rejects stale or foreign-compilation handles. The first
-slice exposes no raw scope IDs, identity ordering, binding-equivalence query,
-or API for minting an authorization grant. These omissions keep procedures
-independent of allocation order and avoid pretending an unresolved fragment
-already has final binder identity.
+Handles are valid within their issuing invocation and compilation. Raw numbers,
+pointers, serializations, and source spans cannot recreate them. Output
+admission rejects stale or foreign-compilation handles. The first slice exposes no raw scope IDs,
+identity ordering, or binding-equivalence query. These omissions keep
+procedures independent of allocation order and avoid pretending an unresolved
+fragment already has final binder identity.
 
 The usual transformer signature is `Input -> MacroResult ! {Ops}`, including
 implicit default allocation. Admission requires an unconstrained, monomorphic
@@ -419,22 +416,22 @@ not choose an arbitrary capture's context or replace mixed contexts with one.
 
 ## Definition references, authority, and linking
 
-Templates are parsed at definition time using category-correct placeholders.
-Literal local binders and references can be classified there; literal free
-references must resolve in the defining module's checked environment. A missing
-free helper is a definition error even if a caller has a matching name.
-Captured identifier positions and bodies retain their own contexts and wait
-for expansion. Procedurally constructed definition-context names resolve after
-the generated binding structure is known; missing names then report the
-invocation and construction origin.
+Templates are parsed for syntactic validity at definition time using
+category-correct placeholders, without resolving free names. When expanded,
+literal free references resolve in the defining module's checked environment
+after generated binding structure is known; a missing or inaccessible name
+then fails ordinary resolution even if a caller has a matching name. Unused
+templates do not fail for unresolved names. Captured identifiers and
+expressions retain their contexts, and introduced local binders retain ordinary
+hygiene. Procedurally constructed definition-context names use the same
+expansion-time lookup; diagnostics retain invocation and construction causes.
 
-Publishing `pub syntax` authorizes that syntax declaration to use its defining
-module's lexical access. It does not make that whole environment an ordinary
-caller import. For every surviving definition-site reference, the compiler
-retains an authenticated grant tying the syntax export, original declaration,
-allowed namespace/access, and original import route to that occurrence. The
-caller cannot mint or retarget this grant through spelling or an origin handle.
-Nested macros retain the original issuer's grant chain.
+Publishing `pub syntax` permits its definition-context references to use the
+defining module's lexical access. Compiler-issued contexts select that checked
+environment; ordinary resolution checks each actual declaration, namespace,
+access, and import route, then records its identity. Spelling and origin handles
+cannot create definition context. Nested syntax preserves each identifier's
+context. The defining environment does not become an ordinary caller import.
 
 The owner may deliberately publish syntax using a same-module private helper,
 private type, or its own opaque constructor, just as it may publish a helper
@@ -453,8 +450,8 @@ same-spelled alias cannot redirect a definition-site reference.
 Syntax exports retain the checked declaration closure needed to typecheck
 authorized references and the completed executable fragments and dependencies
 needed when those references survive into runtime code. Linking follows the
-grants without placing private names in caller scope. It does not recheck
-dependency bodies, rebuild their evidence, or treat a checked module as
+checked dependencies and fragments without placing private names in caller scope.
+It does not recheck dependency bodies, rebuild their evidence, or treat a checked module as
 independently validated Core. The new linked representation still receives
 independent validation under
 [AD-0007](../../decisions/AD-0007-typed-core-dialects.md).
@@ -479,7 +476,7 @@ generic-cell API reference.
 A syntax-defining module completes ordinary parsing, expansion of its imported
 forms, resolution, typechecking, lowering, selected evidence, and metadata
 before publication. The compiler then publishes its syntax matcher, template
-or transformer identity, definition environment, grants, source origins, and
+or transformer identity, definition environment, source origins, and
 declared dependency closure. An imported module is checked once at that
 boundary, as required by
 [AD-0006](../../decisions/AD-0006-front-end-semantic-boundaries.md).
@@ -527,7 +524,7 @@ interface version, and semantic options, expansion is deterministic modulo
 renaming fresh compiler identities and possible resource exhaustion. Fresh
 identity numbers and host allocation order are not observable through the API.
 Source order fixes expansion and diagnostic order. Alpha-renaming must preserve
-every binder/use and authorization relationship; it cannot change visible
+every binder/use and checked access relationship; it cannot change visible
 spelling, chosen declaration, or source location. Repeat-compilation tests
 compare this equivalence rather than raw handle numbers.
 
@@ -579,106 +576,30 @@ completion prerequisite. Normal errors must be useful without one.
 
 ## Required acceptance evidence
 
-The proposal owns the complete evidence requirements. This matrix gives stable
-case names for delivery planning; all are pending implementation.
+The accepted transition's M01–M14 delivery matrix is in its owning
+[TASK-0067 acceptance record](../../tasks/TASK-0067-expression-macros.md#acceptance-evidence).
+The task retains the positive and negative cases, the real file-graph acceptance,
+checkpoint obligations, and retained verification. The transfer of criteria
+alone does not close final acceptance.
 
-| Case | Positive and negative evidence |
-| --- | --- |
-| M01: natural syntax | Imported template `if`, both nestings above, precedence, parentheses, LF/CRLF, missing capture/separator, and no ordinary-application fallback. |
-| M02: grouping | Splice `a + b`, blocks, and nested DSL forms as arguments; inspect protected fragments and compare handwritten parenthesized behavior. Reject trailing output and recovery-bearing fragments. |
-| M03: procedural path | An Ash transformer reads captures, computes an output tree, and executes through the real host. A discarded nested rejection does not run. Compare a template result; reject wrong signature/row, malformed output, authored rejection, and evaluator failure. |
-| M04: term hygiene | Caller/introduced temporary collision, reused and distinct fresh identifiers, supplied binder/body with preceding initializer, repeated splices, and nested expansion. Assert exact binder/use relationships. |
-| M05: non-term scope | Local `newtype` and constructor, parameters, annotation types, recursive groups, and resource/region type and value scopes. Duplicate a fragment containing local binders, local nominal/region identities, and nested syntax; assert distinct output declarations with connected internal uses and unchanged caller free references. Include invalid scope and duplicate cases. |
-| M06: definition authority | Private helper and own opaque construction; targeted/qualified/facade imports with caller shadowing. Reject ordinary caller private access, another module's withheld constructor, forged/retargeted grants, and missing definition helpers. |
-| M07: imports and staging | Renamed and duplicate syntax imports, term-name conflicts, no activation through complete import, missing exports, unsupported re-exports/local definitions, and canonical dependency cycles. Unused imports cannot run transformers. |
-| M08: DSL composition | Two separately authored forms nest and embed Ash. A template invokes a syntax dependency absent from caller imports. A same-spelled caller syntax import cannot redirect a generated identifier. |
-| M09: current checks | Generated method obligations require ordinary evidence; wrappers preserve current handler selection and observable effect count/order. Test valid/invalid `resume` and resource escape/use, including a nested function and required direct builtin import. |
-| M10: bridge and origins | Identity transformer round-trips token/group/fragment structure, contexts, grants, and origins. Reject wrong nominal constructors, malformed data, and stale/foreign handles. Assert multiple input origins and nested frames in human/JSON diagnostics. |
-| M11: completion and limits | Successful output survives evaluation-root teardown; authored failure, malformed output, evaluator/transfer failure, and exhausted budgets publish no partial result and retain teardown information. Bound self-producing recursive expansion. |
-| M12: reproducibility | Repeat equal compilations modulo fresh identity renaming; change caller binding, matcher, helper, imported syntax, and interface/semantic inputs and show updated output or rejection. No persistent cache is required. |
-| M13: module/Core boundary | Reuse a completed dependency without repeating its source proof; validate new compile-time and final linked Core independently. Reject mutations of declaration grants, scope, type, and provenance at their owning boundaries. |
-| M14: compatibility | Existing valid no-syntax programs keep their behavior; retain unaffected diagnostic regression cases and test the specified new syntax error for out-of-place `$`. Compile generated output through the current interpreted and supported program-image/build paths; generated runtime code needs no syntax-service interpretation. |
+## Delivery ownership
 
-The production acceptance is a real file graph: a helper dependency, a public
-syntax module with both a template and computed Ash transformer, a second DSL
-dependency, and an entry module importing renamed syntax. Compile that graph
-through the public compiler driver, execute the entry, and observe a private
-definition helper surviving linking, caller binding preservation, nested DSL
-expansion, and useful diagnostics from an invalid variant. Internal fixtures
-alone cannot close this acceptance.
+The prospective D0–D4 sequence is now the task-owned
+[execution plan](../../plans/2026-11-05-expression-macros.md). It records the
+producer/consumer agreements, source/header staging, private reference closure,
+checked Ash host transfer and failure, shared public token vocabulary,
+real interpreter/build consumers, integration ownership, checkpoints, and the
+whole remaining delivery estimate. It has no independent semantic authority.
 
-## Prospective delivery plan
+The accepted parser amendment in
+[AD-0005](../../decisions/AD-0005-parser-architecture.md) admits one built-in
+prefix mechanism parameterized by imported matcher data. Lexer separation,
+shared precedence, token-complete recovery, and rejection at projection remain.
+It admits no executable parser registry. The reviewed product checkpoint
+implements this mechanism; final integration remains pending.
 
-Before implementation, record the corresponding parser-architecture decision
-and create one owning delivery task. Assign one
-production integration owner and the same independent reviewer for the
-boundary map and retained result. This is a delivery sequence, not an active
-task. Transfer this plan and pending M01–M14 matrix to
-that task; do not create a parallel acceptance ledger.
-
-The parser decision must explicitly extend
-[AD-0005](../../decisions/AD-0005-parser-architecture.md)'s closed assembly with
-an imported matcher environment for one built-in expression-prefix mechanism.
-It must keep lexer/parser separation, the shared precedence owner,
-token-complete recovery, and projection rejection. It must not imply an open
-registry of executable parser callbacks. The semantic contract above is
-accepted; an implementation encountering a missing rule
-returns to CP-0033 instead of inventing one locally.
-
-Agree on these producer/consumer interfaces before dividing work:
-
-| Boundary | Producer → consumer and ownership | Failure and real-path check |
-| --- | --- | --- |
-| Import header → body parser | Loader publishes canonical selected syntax identities, matchers, source routes, and checked dependency ownership; integration owner coordinates loader/parser work. | Cycles/conflicts fail before expansion. M07/M08 observe the imported matcher through entry compilation. |
-| Parser → expansion/resolution | Parser supplies protected unexpanded fragments, token-complete invocation, contexts, and origins; frontend owner retains one lexical-scope policy. | No recovery node crosses. M01/M02/M04/M05 assert grouping and final binder identities. |
-| Checked module → compile-time host | Checker supplies completed transformer/helper fragments, canonical API identities, checked signature/row, and metadata; host owner links and validates its program. | No dependency body recheck. M03/M13 call the actual checked Ash body through the compiler entry. |
-| Ash value → admitted syntax | Host supplies decoded syntax and authenticated handles; expansion owner transfers them before root teardown. | Invalid output/failure publishes nothing. M10/M11 inspect output after teardown and exercise failure paths. |
-| Definition context → caller/linker | Frontend supplies exact grants, original declaration/import provenance, and executable closure; linker validates new connections. | No arbitrary private import or evidence capture. M06/M09/M13 execute a retained private helper and reject grant mutation. |
-| Expanded caller → runtime/reporting | Checker/linker supply checked, independently validated Core and causal diagnostics; integration owner owns interpreter and supported build consumers. | M09/M10/M14 observe runtime behavior and human/JSON causes from the actual driver. |
-
-Implement these ordered deliveries in the authorized task. File areas are
-existing owners to inspect, not a demand for one Rust module per row.
-
-| Delivery | Scope and dependencies | Verification and completion |
-| --- | --- | --- |
-| D0: freeze contracts | Confirm parser decision, builtin declarations, scope/grant representation, driver entry, and M01–M14 fixtures. Inspect `src/module.rs`, `src/parser/`, `src/resolve.rs`, `src/resolved.rs`, `src/elaborate.rs`, `src/eval/`, and `src/core/validate.rs`. | Reviewer challenges the whole path before substantial implementation. Establish the graph acceptance test with expected rejection before support exists. |
-| D1: first template path | Add contextual syntax forms, header discovery/import exports, restricted matcher, protected fragments, lexical expansion, and definition grants. Wire through caller checking and linking; do not deliver a parser-only facility. | M01/M02/M04/M06/M07/M08 and a real entry with a private helper. Focused parser/module/resolution tests plus the vertical fixture. |
-| D2: checked Ash path | Add canonical Ash syntax declarations, `Ops` interpretation, interchange conversion, transformer admission/compile-time entry, root transfer and failure cleanup. Depends on D1 interfaces; uses the same expansion consumer. | M03/M10/M11/M13 through the real graph. First full-gate checkpoint when both authoring forms execute and the transfer/failure path is covered. |
-| D3: complete scope and consumers | Complete M05/M09/M12/M14, causal diagnostics/locales, supported image/build consumer, deterministic ordering and invalidation. Reuse existing runtime checks rather than add macro-specific type/effect rules. | All M01–M14 evidence, focused affected callers, source examples, and runtime/build observations. Independent review covers admission, authorization, execution, and teardown. |
-| D4: product checkpoint | Update specification and tool docs with implementation, amend design/decision status only for retained scope, refresh checks after review repairs, and retain the authorized integration candidate. | Fresh `cargo xtask verify` on the pinned candidate, Markdown/link/authority checks, reviewed graph evidence, and acceptance by the assigned owner. Main integration and proposal retirement follow the artifact workflow. |
-
-Plan new `tests/surface_macros.rs` for production file graphs, parsing, hygiene,
-and composition, and `tests/macro_host.rs` for transformer admission, bridge
-round-trips, limits, and root teardown. Extend the current diagnostic and build
-consumer tests where they own the behavior. The focused commands, after those
-new test targets exist, are:
-
-```text
-cargo test -j 1 -p ash --test surface_macros
-cargo test -j 1 -p ash --test macro_host
-cargo test -j 1 -p ash --test diagnostic_json
-cargo test -j 1 -p ash --test program_build_native
-```
-
-Internal parser/resolver/validator mutation tests complement these targets;
-the owning task records their exact filters and the retained inputs. Builtin
-source and authentication belong with the compiler-owned modules in
-`src/module.rs`; service adapters belong with `src/eval/`, not the public Ash
-data definition. D0 may refine file organization while preserving these checks
-and the single production acceptance path.
-
-The whole remaining implementation chain is roughly 25–45 focused
-engineer-days: D0 2–3, D1 7–12, D2 8–14, D3 5–10, and D4 3–6. These are
-uncalibrated planning ranges, not measured timings or calendar commitments.
-They assume reuse of the current checked-module linker and evaluator, one
-integration owner, no effects redesign, and no additional output category.
-The main uncertainty is connecting authenticated syntax handles and definition
-grants to existing checking, lowering, images, and allocation ownership.
-Re-estimate the whole remainder after D0 and the first vertical path. A shorter
-component estimate cannot stand in for that remaining chain.
-
-No experiment is a prerequisite to these design choices. Implementation must
-supply the specified evidence; a contradiction or missing semantic rule reopens
-the proposal. Persistent caches, an expansion UI, declaration macros, typed
-compiler transformations, self-hosting, browser hosting, and migrations that
-shrink the foundation remain separate work.
+No experiment is a prerequisite to the accepted design choices. A contradiction
+or missing semantic rule returns to the specification and design process.
+Persistent caches, an expansion UI,
+declaration macros, typed compiler transformations, self-hosting, browser hosting,
+and migrations that shrink the foundation remain separate work.
