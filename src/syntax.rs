@@ -708,12 +708,12 @@ pub(crate) fn validate_template_syntax(
     source: &crate::source::SourceFile,
     contexts: &SyntaxContexts,
 ) -> Result<(), crate::parser::MacroParseFailure> {
-    // Declaration template admission and selection are not connected yet.
-    if declaration.category == crate::surface::SurfaceSyntaxCategory::Declaration {
-        return Err(crate::parser::MacroParseFailure::Invalid);
-    }
     let SurfaceSyntaxImplementation::Template = &declaration.implementation else {
-        return Ok(());
+        return if declaration.category == crate::surface::SurfaceSyntaxCategory::Declaration {
+            Err(crate::parser::MacroParseFailure::Invalid)
+        } else {
+            Ok(())
+        };
     };
     let mut captures = Vec::new();
     let mut identifiers = Vec::new();
@@ -763,13 +763,26 @@ pub(crate) fn validate_template_syntax(
         declaration.span,
     )
     .map_err(|_| crate::parser::MacroParseFailure::Invalid)?;
-    crate::parser::parse_template_admission(
-        source,
-        declaration.span,
-        contents,
-        contexts,
-        &identifiers,
-    )?;
+    match declaration.category {
+        crate::surface::SurfaceSyntaxCategory::Expression => {
+            crate::parser::parse_template_admission(
+                source,
+                declaration.span,
+                contents,
+                contexts,
+                &identifiers,
+            )?;
+        }
+        crate::surface::SurfaceSyntaxCategory::Declaration => {
+            crate::parser::parse_declaration_template_admission(
+                source,
+                declaration.span,
+                contents,
+                contexts,
+                &identifiers,
+            )?;
+        }
+    }
     Ok(())
 }
 

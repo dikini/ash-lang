@@ -231,7 +231,80 @@ fn fixed_header_and_reservation_fixtures_run_through_the_driver() {
 }
 
 #[test]
-fn declaration_headers_are_not_admitted_by_the_expression_driver() {
-    compile_path(fixture("header_compat", "forms.ash"))
-        .expect_err("declaration admission is a later delivery");
+fn declaration_templates_are_checked_when_their_defining_module_is_admitted() {
+    use ash::{
+        driver::PipelineFailure,
+        message::{Catalogue, Locale},
+        presentation::{compile_file_diagnostics, write_human, write_json},
+    };
+
+    for (entry, defining_file, reason) in [
+        (
+            "unused_bad.ash",
+            "malformed_forms.ash",
+            "parse.expected-form",
+        ),
+        (
+            "forbidden_import.ash",
+            "import_forms.ash",
+            "parse.unexpected-token",
+        ),
+    ] {
+        let failure = compile_path(fixture("diagnostics", entry)).expect_err(entry);
+        assert_eq!(failure.reason_code(), reason, "{entry}: {failure:?}");
+        let Some(PipelineFailure::Syntax(syntax)) = failure.pipeline_failure() else {
+            panic!("{entry} did not reach declaration template parsing");
+        };
+        if entry == "unused_bad.ash" {
+            assert_eq!(
+                syntax.parser[0].expected_form(),
+                Some(ash::parser::ExpectedForm::Expression)
+            );
+            assert_eq!(
+                syntax.parser[0].found_token(),
+                Some(ash::parser::FoundToken::LineEnd)
+            );
+        }
+        let diagnostics = compile_file_diagnostics(&failure).unwrap();
+        let (source_text, marker, advance, width) = if entry == "unused_bad.ash" {
+            (
+                include_str!("../docs/design/macros/fixtures/diagnostics/malformed_forms.ash"),
+                "$name () =",
+                "$name () =".len(),
+                1,
+            )
+        } else {
+            (
+                include_str!("../docs/design/macros/fixtures/diagnostics/import_forms.ash"),
+                "import dependency",
+                0,
+                "import".len(),
+            )
+        };
+        let start = source_text.find(marker).unwrap() + advance;
+        let mut human = Vec::new();
+        write_human(
+            &mut human,
+            &diagnostics[0],
+            &Catalogue::new(Locale::English).unwrap(),
+        )
+        .unwrap();
+        assert!(String::from_utf8(human).unwrap().contains(marker));
+        let mut json = Vec::new();
+        write_json(&mut json, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert!(
+            json["labels"][0]["path"]
+                .as_str()
+                .unwrap()
+                .ends_with(defining_file),
+            "{entry}: {json}"
+        );
+        assert_eq!(json["labels"][0]["byte_start"], start);
+        assert_eq!(json["labels"][0]["byte_end"], start + width);
+    }
+
+    let compiled = compile_path(fixture("diagnostics", "unused_free.ash"))
+        .expect("an unused template does not resolve its free names");
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
 }

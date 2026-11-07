@@ -2929,8 +2929,8 @@ mod tests {
     }
 
     #[test]
-    fn d2_i21_declaration_graphs_still_stop_at_definition_admission() {
-        for name in ["renamed.ash", "both.ash", "collision.ash"] {
+    fn d2_i21_checked_exports_reach_selection_before_declaration_invocation() {
+        for (name, invocation) in [("renamed.ash", "make_number"), ("both.ash", "make_value")] {
             let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("docs/design/macros/fixtures/header_compat")
                 .join(name);
@@ -2939,23 +2939,67 @@ mod tests {
                 roots: ModuleRoots::empty(),
             })
             .unwrap_err();
-            let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
-                panic!("{name}: expected declaration admission failure: {failure:?}");
+            let Some(LoadGraphError::Syntax(error)) = failure.graph_failure() else {
+                panic!("{name}: expected invocation parse failure: {failure:?}");
             };
-            assert_eq!(error.reason, crate::resolve::ResolveReason::InternalState);
-            let source = failure
-                .sources()
-                .iter()
-                .find(|source| source.id() == error.primary.span().source())
-                .expect("the declaration source is retained");
-            assert!(source.display_path().ends_with("forms.ash"), "{name}");
-            let range = error.primary.span().range();
-            assert!(
-                source.text()[range.start() as usize..range.end() as usize]
-                    .starts_with("pub syntax declaration: (make_value)"),
-                "{name}"
+            assert_eq!(
+                error.parser[0].reason,
+                crate::parser::ParseReason::UnexpectedToken
+            );
+            assert!(error.source.display_path().ends_with(name));
+            let range = error.parser[0].primary.span().range();
+            assert_eq!(
+                &error.source.text()[range.start() as usize..range.end() as usize],
+                invocation
             );
         }
+
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/design/macros/fixtures/header_compat/collision.ash");
+        let failure = compile_path(RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+            panic!("expected an import collision after definition admission: {failure:?}");
+        };
+        assert_eq!(error.reason, crate::resolve::ResolveReason::ImportConflict);
+        let source = failure
+            .sources()
+            .iter()
+            .find(|source| source.id() == error.primary.span().source())
+            .expect("the importer is retained");
+        assert!(source.display_path().ends_with("collision.ash"));
+        let range = error.primary.span().range();
+        assert_eq!(
+            &source.text()[range.start() as usize..range.end() as usize],
+            "declaration"
+        );
+    }
+
+    #[test]
+    fn d6_template_admission_uses_the_defining_modules_expression_syntax() {
+        let entry =
+            TestSource::write("import forms (syntax make)\nmain : Unit -> Int\nmain () = 42\n");
+        entry.write_sibling(
+            "expressions.ash",
+            include_str!("../docs/design/macros/fixtures/header_compat/expressions.ash"),
+        );
+        entry.write_sibling(
+            "forms.ash",
+            "import expressions (syntax declaration)\n\
+             pub syntax declaration: (make) $name:ident => {\n\
+                 pub $name : Unit -> Int\n\
+                 $name () = declaration : foo 42\n\
+             }\n",
+        );
+        let program = compile_path(RunConfiguration {
+            entry: entry.0.clone(),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the template can contain expression syntax selected by its defining module");
+        assert_eq!(execute(&program).unwrap().value_display(), "42");
     }
 
     #[test]

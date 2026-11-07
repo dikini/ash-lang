@@ -1779,10 +1779,31 @@ fn project_surface_module(
                 let (implementation, template_contents) = if let Some(block) =
                     child_nodes(child).find(|node| node.kind == NodeKind::TemplateBody)
                 {
-                    (
-                        SurfaceSyntaxImplementation::Template,
-                        Some(capture_contents(source, block, tokens, &Default::default())?.into()),
-                    )
+                    let mut contents =
+                        capture_contents(source, block, tokens, &Default::default())?;
+                    if declaration {
+                        contents = match contents.pop() {
+                            Some(crate::syntax::MacroOutputNode::Group(
+                                crate::syntax::MacroDelimiter::Braces,
+                                mut children,
+                                _,
+                            )) if contents.is_empty() => {
+                                if matches!(
+                                    children.first(),
+                                    Some(crate::syntax::MacroOutputNode::Token(
+                                        TokenKind::LineEnd,
+                                        _,
+                                        _
+                                    ))
+                                ) {
+                                    children.remove(0);
+                                }
+                                children
+                            }
+                            _ => return malformed(InternalReason::UnexpectedShape),
+                        };
+                    }
+                    (SurfaceSyntaxImplementation::Template, Some(contents.into()))
                 } else {
                     let mut after_arrow = direct_tokens(child, tokens)
                         .skip_while(|token| token.kind != TokenKind::FatArrow)
@@ -5160,6 +5181,72 @@ mod tests {
             SurfaceDefinitionKind::Equational(global) => &global.interface.name,
             SurfaceDefinitionKind::InlineOperational(global) => &global.header.name,
         }
+    }
+
+    #[test]
+    fn declaration_template_admission_uses_category_correct_placeholders() {
+        let contexts = crate::syntax::SyntaxContexts::new(&[], &[], &[]);
+        for text in [
+            "pub syntax declaration: (make_type) $name:ident => {\n    pub type $name = $name\n}\n",
+            "pub syntax declaration: (make_value) $name:ident for $value:expr => {\n    pub $name : Unit -> Int\n    $name () = $value\n}\n",
+            "pub syntax declaration: (empty) => {}\n",
+        ] {
+            let source = SourceFile::new("template.ash", text).unwrap();
+            let tree = parse(lex(&source).unwrap());
+            let module = project_module_retaining_templates(&source, &tree).unwrap();
+            crate::syntax::validate_template_syntax(
+                &module.syntax_declarations[0],
+                &source,
+                &contexts,
+            )
+            .expect(text);
+        }
+
+        let source = SourceFile::new(
+            "unbound.ash",
+            "pub syntax declaration: (bad) $name:ident => {\n    pub $missing : Unit -> Int\n    $missing () = 42\n}\n",
+        )
+        .unwrap();
+        let tree = parse(lex(&source).unwrap());
+        let module = project_module_retaining_templates(&source, &tree).unwrap();
+        assert!(matches!(
+            crate::syntax::validate_template_syntax(
+                &module.syntax_declarations[0],
+                &source,
+                &contexts
+            ),
+            Err(crate::parser::MacroParseFailure::Invalid)
+        ));
+    }
+
+    #[test]
+    fn declaration_template_keeps_its_structured_contents_without_outer_braces() {
+        use crate::syntax::MacroOutputNode;
+
+        let source = SourceFile::new(
+            "template.ash",
+            "pub syntax declaration: (make) $name:ident => {\n    pub $name : Unit -> Int\n    $name () = 42\n}\n",
+        )
+        .unwrap();
+        let tree = parse(lex(&source).unwrap());
+        let module = project_module_retaining_templates(&source, &tree).unwrap();
+        let declaration = &module.syntax_declarations[0];
+        assert_eq!(declaration.category, SurfaceSyntaxCategory::Declaration);
+        let contents = declaration.template_contents.as_ref().unwrap();
+        let Some(MacroOutputNode::Token(TokenKind::Pub, _, origin)) = contents.first() else {
+            panic!("the declaration contents start inside the template delimiters");
+        };
+        let origin = origin.primary();
+        let range = origin.range();
+        assert_eq!(origin.source(), source.id());
+        assert_eq!(
+            &source.text()[range.start() as usize..range.end() as usize],
+            "pub"
+        );
+        assert!(
+            matches!(contents.get(1), Some(MacroOutputNode::Splice(name))
+            if name.text == "name" && name.span.source() == source.id())
+        );
     }
 
     #[test]
