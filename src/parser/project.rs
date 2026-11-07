@@ -42,6 +42,8 @@ struct ProjectionTokens<'a> {
     construction_extents: bool,
     admission_identifiers: Option<&'a std::collections::HashSet<usize>>,
     frame: Option<&'a std::sync::Arc<crate::syntax::ExpansionFrame>>,
+    name_frame: Option<&'a std::sync::Arc<crate::syntax::ExpansionFrame>>,
+    preserve_name_diagnostic: bool,
 }
 
 impl<'a> ProjectionTokens<'a> {
@@ -54,6 +56,8 @@ impl<'a> ProjectionTokens<'a> {
             construction_extents: false,
             admission_identifiers: None,
             frame: None,
+            name_frame: None,
+            preserve_name_diagnostic: false,
         }
     }
 
@@ -66,6 +70,8 @@ impl<'a> ProjectionTokens<'a> {
             construction_extents: true,
             admission_identifiers: self.admission_identifiers,
             frame: self.frame,
+            name_frame: self.name_frame,
+            preserve_name_diagnostic: self.preserve_name_diagnostic,
         }
     }
 
@@ -127,6 +133,8 @@ struct ProjectionToken<'a> {
     span: Span,
     original: Option<&'a crate::syntax::MacroOutputNode>,
     admission_identifier: bool,
+    name_frame: Option<&'a std::sync::Arc<crate::syntax::ExpansionFrame>>,
+    preserve_name_diagnostic: bool,
 }
 
 impl ProjectionToken<'_> {
@@ -154,6 +162,8 @@ impl ProjectionTokenSource for [Token] {
             span: token.span,
             original: None,
             admission_identifier: false,
+            name_frame: None,
+            preserve_name_diagnostic: false,
         })
     }
 }
@@ -167,6 +177,8 @@ impl ProjectionTokenSource for ProjectionTokens<'_> {
             admission_identifier: self
                 .admission_identifiers
                 .is_some_and(|indices| indices.contains(&index)),
+            name_frame: self.name_frame,
+            preserve_name_diagnostic: self.preserve_name_diagnostic,
         })
     }
 }
@@ -2476,7 +2488,8 @@ fn project_expression(
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
 ) -> Result<SurfaceExpr, ProjectionError> {
-    project_expression_with_fragments(source, node, tokens, &std::collections::HashMap::new())
+    let empty = std::collections::HashMap::new();
+    project_expression_with_fragments(source, node, tokens, tokens.originals.unwrap_or(&empty))
 }
 
 fn capture_contents(
@@ -2581,15 +2594,10 @@ fn capture_contents(
     sequence(source, &indices, &mut 0, tokens, originals, None)
 }
 
-pub(super) fn project_macro_expression(
+fn validated_macro_root<'tree>(
     source: &SourceFile,
-    invocation: Span,
-    construction: Option<(Span, usize)>,
-    tree: &ConcreteTree,
-    original_nodes: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
-    admission_identifiers: &std::collections::HashSet<usize>,
-    frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
-) -> Result<SurfaceExpr, ProjectionError> {
+    tree: &'tree ConcreteTree,
+) -> Result<&'tree ConcreteNode, ProjectionError> {
     if tree.resource_failure.is_some()
         || tree.malformed.is_some()
         || !tree.lexical_diagnostics.is_empty()
@@ -2606,6 +2614,52 @@ pub(super) fn project_macro_expression(
         return Err(ProjectionError::RecoveryNodesPresent);
     }
     validate_concrete_token_coverage(root, tree.tokens.len())?;
+    Ok(root)
+}
+
+pub(super) fn project_macro_declarations(
+    source: &SourceFile,
+    invocation: Span,
+    construction: Option<(Span, usize)>,
+    tree: &ConcreteTree,
+    original_nodes: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
+    admission_identifiers: &std::collections::HashSet<usize>,
+    frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
+) -> Result<SurfaceModule, ProjectionError> {
+    let root = validated_macro_root(source, tree)?;
+    validate_node_shape_with_admission(root, &tree.tokens, Some(admission_identifiers))?;
+    if child_nodes(root).any(|child| {
+        matches!(
+            child.kind,
+            NodeKind::ImportDeclaration | NodeKind::SyntaxDeclaration
+        )
+    }) {
+        return malformed(InternalReason::UnexpectedShape);
+    }
+    let tokens = ProjectionTokens {
+        tokens: &tree.tokens,
+        originals: Some(original_nodes),
+        occurrence: Some(invocation),
+        construction,
+        construction_extents: false,
+        admission_identifiers: Some(admission_identifiers),
+        frame,
+        name_frame: frame,
+        preserve_name_diagnostic: true,
+    };
+    project_surface_module(source, root, &tokens)
+}
+
+pub(super) fn project_macro_expression(
+    source: &SourceFile,
+    invocation: Span,
+    construction: Option<(Span, usize)>,
+    tree: &ConcreteTree,
+    original_nodes: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
+    admission_identifiers: &std::collections::HashSet<usize>,
+    frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
+) -> Result<SurfaceExpr, ProjectionError> {
+    let root = validated_macro_root(source, tree)?;
     let expression = expression_child(root)?;
     validate_node_shape_with_admission(expression, &tree.tokens, Some(admission_identifiers))?;
     let tokens = ProjectionTokens {
@@ -2616,6 +2670,8 @@ pub(super) fn project_macro_expression(
         construction_extents: false,
         admission_identifiers: Some(admission_identifiers),
         frame,
+        name_frame: None,
+        preserve_name_diagnostic: false,
     };
     project_expression_with_fragments(source, expression, &tokens, original_nodes)
 }
@@ -4024,9 +4080,25 @@ fn surface_name(token: ProjectionToken<'_>) -> Result<SurfaceName, ProjectionErr
     match token.original {
         Some(crate::syntax::MacroOutputNode::Identifier(name, origin)) => {
             let mut name = name.clone();
-            name.diagnostic = Some(Box::new(crate::syntax::DiagnosticLocation::new(
-                origin.clone(),
-            )));
+            let mut diagnostic = crate::syntax::DiagnosticLocation::new(origin.clone());
+            if token.preserve_name_diagnostic
+                && let Some(previous) = &name.diagnostic
+            {
+                if previous.primary == diagnostic.primary {
+                    diagnostic.related.extend(previous.related.iter().cloned());
+                    for frame in &previous.frames {
+                        diagnostic.add_frame(frame);
+                    }
+                } else {
+                    diagnostic.add_cause(previous);
+                }
+                diagnostic.token_cause = previous.token_cause;
+                diagnostic.captured_expression = previous.captured_expression;
+            }
+            if let Some(frame) = token.name_frame {
+                diagnostic.add_frame(frame);
+            }
+            name.diagnostic = Some(Box::new(diagnostic));
             return Ok(name);
         }
         Some(
@@ -5053,6 +5125,681 @@ mod tests {
             .expect("the shape fixture should fit");
         let lexed = lex(&source).expect("the shape fixture should lex");
         (source, parse(lexed))
+    }
+
+    fn structured_declarations(
+        text: &str,
+    ) -> (
+        SourceFile,
+        ConcreteTree,
+        Vec<crate::syntax::MacroOutputNode>,
+    ) {
+        let source = SourceFile::new("handwritten.ash", text).unwrap();
+        let tree = parse(lex(&source).unwrap());
+        let (root, raw_tokens) = validated_root(&source, &tree).unwrap();
+        let mut output = capture_contents(
+            &source,
+            root,
+            &ProjectionTokens::source(raw_tokens),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        assert!(matches!(
+            output.pop(),
+            Some(crate::syntax::MacroOutputNode::Token(
+                TokenKind::EndOfFile,
+                _,
+                _
+            ))
+        ));
+        (source, tree, output)
+    }
+
+    fn output_definition_name(definition: &SurfaceDefinition) -> &SurfaceName {
+        match &definition.kind {
+            SurfaceDefinitionKind::Equational(global) => &global.interface.name,
+            SurfaceDefinitionKind::InlineOperational(global) => &global.header.name,
+        }
+    }
+
+    #[test]
+    fn structured_declaration_output_parses_i01_and_i07_controls() {
+        for text in [
+            include_str!("../../docs/design/macros/fixtures/declarations/control_01.ash"),
+            include_str!("../../docs/design/macros/fixtures/declarations/control_07.ash"),
+        ] {
+            let (source, tree, output) = structured_declarations(text);
+            let expected = project_module(&source, &tree).unwrap();
+            let caller = SourceFile::new("invocation.ash", "invoke").unwrap();
+            let invocation = caller.span(ByteRange::new(0, 6).unwrap()).unwrap();
+            let contexts = crate::syntax::SyntaxContexts::new(&[], &[], &[]);
+            let actual = super::super::parse_macro_declarations(
+                &caller, invocation, None, output, &contexts, None,
+            )
+            .expect("complete structured declarations project");
+            assert!(actual.imports.is_empty() && actual.syntax_declarations.is_empty());
+            assert_eq!(actual.declaration_order, expected.declaration_order);
+            assert_eq!(
+                actual.type_declarations.len(),
+                expected.type_declarations.len()
+            );
+            for (actual, expected) in actual
+                .type_declarations
+                .iter()
+                .zip(&expected.type_declarations)
+            {
+                assert_eq!(actual.name, expected.name);
+                assert_eq!(actual.name.span.source(), source.id());
+                assert_eq!(actual.span, invocation);
+            }
+            assert_eq!(actual.definitions.len(), expected.definitions.len());
+            for (actual, expected) in actual.definitions.iter().zip(&expected.definitions) {
+                assert_eq!(
+                    output_definition_name(actual),
+                    output_definition_name(expected)
+                );
+                assert_eq!(output_definition_name(actual).span.source(), source.id());
+                assert_eq!(actual.span, invocation);
+            }
+            if let [nominal] = actual.type_declarations.as_slice() {
+                assert!(nominal.visibility == SurfaceTypeVisibility::PublicTransparent);
+                assert_eq!(nominal.constructors[0].name.text, "Red");
+                assert!(matches!(
+                    nominal.constructors[0].fields[0].kind,
+                    SurfaceTypeKind::Int
+                ));
+            } else {
+                let SurfaceDefinitionKind::Equational(identity) = &actual.definitions[0].kind
+                else {
+                    panic!("expected the equational identity");
+                };
+                let SurfaceTypeKind::Function(annotation) = &identity.interface.annotation.kind
+                else {
+                    panic!("expected the identity function type");
+                };
+                assert!(matches!(annotation.domain.kind, SurfaceTypeKind::Int));
+                assert!(matches!(annotation.codomain.kind, SurfaceTypeKind::Int));
+                let SurfaceDefinitionKind::InlineOperational(inline) = &actual.definitions[1].kind
+                else {
+                    panic!("expected the inline global");
+                };
+                assert!(matches!(
+                    inline.header.result_type.kind,
+                    SurfaceTypeKind::Int
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn structured_declaration_output_preserves_other_ordinary_declaration_forms() {
+        use crate::syntax::{MacroOutputNode, SyntaxContexts};
+
+        let caller = SourceFile::new("invocation.ash", "invoke").unwrap();
+        let invocation = caller.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        for text in [
+            include_str!("../../docs/design/macros/fixtures/declarations/control_02.ash"),
+            include_str!("../../docs/design/macros/fixtures/declarations/control_03.ash"),
+            include_str!("../../docs/design/macros/fixtures/declarations/control_04.ash"),
+            include_str!("../../docs/design/macros/fixtures/declarations/control_05.ash"),
+            include_str!("../../docs/design/macros/fixtures/declarations/control_06.ash"),
+        ] {
+            let (source, tree, mut output) = structured_declarations(text);
+            let expected = project_module(&source, &tree).unwrap();
+            if !expected.imports.is_empty() {
+                let line_end = output
+                    .iter()
+                    .position(|node| {
+                        matches!(node, MacroOutputNode::Token(TokenKind::LineEnd, _, _))
+                    })
+                    .unwrap();
+                output.drain(..=line_end);
+            }
+            let actual = super::super::parse_macro_declarations(
+                &caller, invocation, None, output, &contexts, None,
+            )
+            .expect("ordinary declarations project without their source imports");
+            assert_eq!(actual.declaration_order, expected.declaration_order);
+            for (actual, expected) in actual
+                .type_declarations
+                .iter()
+                .zip(&expected.type_declarations)
+            {
+                assert_eq!(actual.name, expected.name);
+            }
+            for (actual, expected) in actual.interfaces.iter().zip(&expected.interfaces) {
+                assert_eq!(actual.name, expected.name);
+            }
+            for (actual, expected) in actual.effects.iter().zip(&expected.effects) {
+                assert_eq!(actual.name, expected.name);
+            }
+            for (actual, expected) in actual
+                .foreign_libraries
+                .iter()
+                .zip(&expected.foreign_libraries)
+            {
+                assert_eq!(actual.name, expected.name);
+                let (
+                    crate::surface::SurfaceForeignMember::Symbol(actual),
+                    crate::surface::SurfaceForeignMember::Symbol(expected),
+                ) = (&actual.members[1], &expected.members[1])
+                else {
+                    panic!("expected the fixture's foreign symbol");
+                };
+                assert_eq!(actual.name, expected.name);
+            }
+        }
+    }
+
+    #[test]
+    fn structured_declaration_output_preserves_expression_fragments_and_contexts() {
+        use crate::syntax::{MacroOrigin, MacroOutputNode, SyntaxContexts};
+
+        let (source, _, output) = structured_declarations(include_str!(
+            "../../docs/design/macros/fixtures/declarations/control_07.ash"
+        ));
+        let (captured_source, captured_tree) = parsed("40 + 2");
+        let captured = project_module(&captured_source, &captured_tree).unwrap();
+        let SurfaceDefinitionKind::Equational(captured) = &captured.definitions[0].kind else {
+            panic!("expected a captured expression");
+        };
+        let expression = captured.equations[0].body.clone();
+        let capture = SurfaceExpressionCapture {
+            expression: expression.clone(),
+            contents: std::sync::Arc::from([]),
+        };
+        let caller = SourceFile::new("invocation.ash", "invoke").unwrap();
+        let invocation = caller.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        for forwarded in [false, true] {
+            let mut output = output.clone();
+            let binder = output
+                .iter_mut()
+                .find_map(|node| match node {
+                    MacroOutputNode::Identifier(name, _) if name.text == "id" => Some(name),
+                    _ => None,
+                })
+                .unwrap();
+            let original_span = binder.span;
+            binder.introduction = 3;
+            binder.introduced_at = Some(invocation);
+            binder.written = false;
+            let index = output
+                .iter()
+                .rposition(|node| {
+                    matches!(
+                        node, MacroOutputNode::Identifier(name, _) if name.text == "value"
+                    )
+                })
+                .unwrap();
+            output[index] = if forwarded {
+                MacroOutputNode::ForwardedExpression(capture.clone(), expression.span.into())
+            } else {
+                MacroOutputNode::Expression(capture.clone(), expression.span.into())
+            };
+            let actual = super::super::parse_macro_declarations(
+                &caller, invocation, None, output, &contexts, None,
+            )
+            .expect("structured declarations retain protected expressions");
+            let SurfaceDefinitionKind::Equational(global) = &actual.definitions[0].kind else {
+                panic!("expected the first equation");
+            };
+            assert_eq!(global.equations[0].body, expression);
+            let name = &global.interface.name;
+            assert_eq!(name.span, original_span);
+            assert_eq!(name.span.source(), source.id());
+            assert_eq!(name.introduction, 3);
+            assert_eq!(name.introduced_at, Some(invocation));
+            assert!(!name.written);
+            assert!(
+                matches!(name.diagnostic.as_deref().map(|location| &location.primary),
+                Some(MacroOrigin::Source(span)) if *span == original_span)
+            );
+        }
+        let mut inline_output = output;
+        let children = inline_output
+            .iter_mut()
+            .find_map(|node| match node {
+                MacroOutputNode::Group(crate::syntax::MacroDelimiter::Braces, children, _) => {
+                    Some(children)
+                }
+                _ => None,
+            })
+            .expect("the inline global has a body group");
+        let result = children
+            .iter()
+            .position(|node| {
+                matches!(
+                    node, MacroOutputNode::Identifier(name, _) if name.text == "value"
+                )
+            })
+            .unwrap();
+        children[result] = MacroOutputNode::Expression(capture, expression.span.into());
+        let actual = super::super::parse_macro_declarations(
+            &caller,
+            invocation,
+            None,
+            inline_output,
+            &contexts,
+            None,
+        )
+        .expect("inline declarations retain nested protected expressions");
+        let SurfaceDefinitionKind::InlineOperational(inline) = &actual.definitions[1].kind else {
+            panic!("expected the inline global");
+        };
+        assert_eq!(*inline.body.result, expression);
+    }
+
+    #[test]
+    fn structured_declaration_names_retain_the_expansion_frame() {
+        let (source, _, output) = structured_declarations(include_str!(
+            "../../docs/design/macros/fixtures/declarations/control_01.ash"
+        ));
+        let caller = SourceFile::new("invocation.ash", "invoke").unwrap();
+        let invocation = caller.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let definition = source.span(ByteRange::new(0, 26).unwrap()).unwrap();
+        let frame = std::sync::Arc::new(crate::syntax::ExpansionFrame {
+            invocation,
+            definition,
+        });
+        let contexts = crate::syntax::SyntaxContexts::new(&[], &[], &[]);
+        let actual = super::super::parse_macro_declarations(
+            &caller,
+            invocation,
+            None,
+            output,
+            &contexts,
+            Some(&frame),
+        )
+        .unwrap();
+        let name = &actual.type_declarations[0].name;
+        let location = name.diagnostic.as_ref().expect("name retains an origin");
+        assert!(
+            location
+                .frames
+                .iter()
+                .any(|found| std::sync::Arc::ptr_eq(found, &frame))
+        );
+    }
+
+    #[test]
+    fn structured_declaration_names_preserve_prior_frames_and_related_causes() {
+        use crate::syntax::{
+            DiagnosticLocation, ExpansionFrame, MacroOrigin, MacroOutputNode, SyntaxContexts,
+        };
+
+        let text = include_str!("../../docs/design/macros/fixtures/declarations/control_01.ash");
+        let (definition_source, _, mut first_output) = structured_declarations(text);
+        let first_caller = SourceFile::new("first-invocation.ash", "first").unwrap();
+        let first_span = first_caller.span(ByteRange::new(0, 5).unwrap()).unwrap();
+        let definition = definition_source
+            .span(ByteRange::new(0, 26).unwrap())
+            .unwrap();
+        let earlier_frame = std::sync::Arc::new(ExpansionFrame {
+            invocation: first_span,
+            definition,
+        });
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        let first_name = first_output
+            .iter_mut()
+            .find_map(|node| match node {
+                MacroOutputNode::Identifier(name, _) if name.text == "Color" => Some(name),
+                _ => None,
+            })
+            .unwrap();
+        first_name.introduction = 4;
+        first_name.introduced_at = Some(first_span);
+        first_name.written = false;
+        let first = super::super::parse_macro_declarations(
+            &first_caller,
+            first_span,
+            None,
+            first_output,
+            &contexts,
+            Some(&earlier_frame),
+        )
+        .unwrap();
+        let mut forwarded = first.type_declarations[0].name.clone();
+        let earlier = forwarded
+            .diagnostic
+            .as_mut()
+            .expect("the earlier parser retained an origin");
+        assert!(
+            earlier
+                .frames
+                .iter()
+                .any(|frame| std::sync::Arc::ptr_eq(frame, &earlier_frame))
+        );
+        let related_source = SourceFile::new("construction.ash", "cause").unwrap();
+        let related_span = related_source.span(ByteRange::new(0, 5).unwrap()).unwrap();
+        let related = MacroOrigin::Source(related_span);
+        earlier.add_cause(&DiagnosticLocation::new(related.clone()));
+        earlier.token_cause = true;
+        earlier.captured_expression = true;
+        let earlier_primary = earlier.primary.clone();
+
+        let (_, _, output) = structured_declarations(text);
+        let current_caller = SourceFile::new("current-invocation.ash", "current").unwrap();
+        let current_span = current_caller.span(ByteRange::new(0, 7).unwrap()).unwrap();
+        let current_frame = std::sync::Arc::new(ExpansionFrame {
+            invocation: current_span,
+            definition,
+        });
+        for (frame, origin) in [
+            (Some(&current_frame), MacroOrigin::Source(current_span)),
+            (None, MacroOrigin::Source(current_span)),
+            (Some(&earlier_frame), earlier_primary.clone()),
+        ] {
+            let mut output = output.clone();
+            let node = output
+                .iter_mut()
+                .find(|node| {
+                    matches!(
+                        node, MacroOutputNode::Identifier(name, _) if name.text == "Color"
+                    )
+                })
+                .unwrap();
+            *node = MacroOutputNode::Identifier(forwarded.clone(), origin.clone());
+            let projected = super::super::parse_macro_declarations(
+                &current_caller,
+                current_span,
+                None,
+                output,
+                &contexts,
+                frame,
+            )
+            .unwrap();
+            let name = &projected.type_declarations[0].name;
+            assert_eq!(name.text, "Color");
+            assert_eq!(name.span, forwarded.span);
+            assert_eq!(name.introduction, 4);
+            assert_eq!(name.introduced_at, Some(first_span));
+            assert!(!name.written);
+            let location = name
+                .diagnostic
+                .as_ref()
+                .expect("the forwarded name retains diagnostics");
+            assert!(
+                location
+                    .frames
+                    .iter()
+                    .any(|frame| std::sync::Arc::ptr_eq(frame, &earlier_frame)),
+                "earlier frame lost"
+            );
+            if let Some(frame) = frame {
+                assert!(
+                    location
+                        .frames
+                        .iter()
+                        .any(|found| std::sync::Arc::ptr_eq(found, frame)),
+                    "current frame lost"
+                );
+            }
+            assert_eq!(
+                location.frames.len(),
+                if frame == Some(&current_frame) { 2 } else { 1 }
+            );
+            if origin != earlier_primary {
+                assert!(
+                    location.related.contains(&earlier_primary),
+                    "earlier primary origin lost"
+                );
+            } else {
+                assert!(
+                    !location.related.contains(&earlier_primary),
+                    "identical primary was duplicated"
+                );
+            }
+            assert!(
+                location.related.contains(&related),
+                "related construction cause lost"
+            );
+            assert_eq!(location.primary, origin);
+            assert!(location.token_cause && location.captured_expression);
+        }
+    }
+
+    #[test]
+    fn structured_impl_output_accepts_end_after_its_final_group() {
+        use crate::syntax::{MacroDelimiter, MacroOutputNode, SyntaxContexts};
+
+        let (_, _, output) = structured_declarations(include_str!(
+            "../../docs/design/macros/fixtures/declarations/control_04.ash"
+        ));
+        let start = output
+            .iter()
+            .position(|node| matches!(node, MacroOutputNode::Token(TokenKind::Impl, _, _)))
+            .unwrap();
+        let end = start
+            + output[start..]
+                .iter()
+                .position(|node| matches!(node, MacroOutputNode::Token(TokenKind::LineEnd, _, _)))
+                .unwrap();
+        let fragment = output[start..end].to_vec();
+        assert!(matches!(
+            fragment.last(),
+            Some(MacroOutputNode::Group(MacroDelimiter::Braces, _, _))
+        ));
+        let caller = SourceFile::new("invocation.ash", "invoke").unwrap();
+        let invocation = caller.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        let actual = super::super::parse_macro_declarations(
+            &caller, invocation, None, fragment, &contexts, None,
+        )
+        .expect("a complete final declaration does not need a trailing node");
+        assert_eq!(
+            actual.declaration_order,
+            [SurfaceDeclarationIndex::Implementation(0)]
+        );
+        assert_eq!(actual.implementations.len(), 1);
+        for text in [
+            include_str!("../../docs/design/macros/fixtures/declarations/control_01.ash"),
+            include_str!("../../docs/design/macros/fixtures/declarations/control_07.ash"),
+        ] {
+            let (_, _, mut output) = structured_declarations(text);
+            assert!(matches!(
+                output.pop(),
+                Some(MacroOutputNode::Token(TokenKind::LineEnd, _, _))
+            ));
+            super::super::parse_macro_declarations(
+                &caller, invocation, None, output, &contexts, None,
+            )
+            .expect("the final logical boundary also works after multiple declarations");
+        }
+    }
+
+    #[test]
+    fn structured_output_still_rejects_missing_internal_boundaries_and_incomplete_types() {
+        use crate::syntax::{MacroOutputNode, SyntaxContexts};
+
+        let caller = SourceFile::new("invocation.ash", "invoke").unwrap();
+        let invocation = caller.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        let (_, _, mut missing_separator) = structured_declarations(include_str!(
+            "../../docs/design/macros/fixtures/declarations/control_01.ash"
+        ));
+        let first_end = missing_separator
+            .iter()
+            .position(|node| matches!(node, MacroOutputNode::Token(TokenKind::LineEnd, _, _)))
+            .unwrap();
+        missing_separator.remove(first_end);
+        let (_, _, mut incomplete) = structured_declarations(include_str!(
+            "../../docs/design/macros/fixtures/declarations/control_07.ash"
+        ));
+        let arrow = incomplete
+            .iter()
+            .position(|node| matches!(node, MacroOutputNode::Token(TokenKind::Arrow, _, _)))
+            .unwrap();
+        incomplete.remove(arrow + 1);
+        assert!(matches!(
+            incomplete.pop(),
+            Some(MacroOutputNode::Token(TokenKind::LineEnd, _, _))
+        ));
+        for output in [missing_separator, incomplete] {
+            let failure = super::super::parse_macro_declarations(
+                &caller, invocation, None, output, &contexts, None,
+            )
+            .unwrap_err();
+            assert!(
+                matches!(failure, super::super::MacroParseFailure::Syntax { diagnostics, .. }
+                if !diagnostics.is_empty())
+            );
+        }
+    }
+
+    #[test]
+    fn structured_declaration_output_rejects_incomplete_i01_and_i07_forms() {
+        use crate::syntax::{MacroOutputNode, SyntaxContexts};
+
+        let caller = SourceFile::new("invocation.ash", "invoke").unwrap();
+        let invocation = caller.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        let (_, _, mut i01) = structured_declarations(include_str!(
+            "../../docs/design/macros/fixtures/declarations/control_01.ash"
+        ));
+        let constructor = i01
+            .iter()
+            .position(|node| {
+                matches!(
+                    node, MacroOutputNode::Identifier(name, _) if name.text == "Red"
+                )
+            })
+            .unwrap();
+        i01.remove(constructor);
+        let (_, _, mut i07) = structured_declarations(include_str!(
+            "../../docs/design/macros/fixtures/declarations/control_07.ash"
+        ));
+        let arrow = i07
+            .iter()
+            .position(|node| matches!(node, MacroOutputNode::Token(TokenKind::Arrow, _, _)))
+            .unwrap();
+        assert!(matches!(
+            i07[arrow + 1],
+            MacroOutputNode::Token(TokenKind::IntType, _, _)
+        ));
+        i07.remove(arrow + 1);
+        for output in [i01, i07] {
+            let failure = super::super::parse_macro_declarations(
+                &caller, invocation, None, output, &contexts, None,
+            )
+            .unwrap_err();
+            assert!(
+                matches!(failure, super::super::MacroParseFailure::Syntax { diagnostics, .. }
+                if !diagnostics.is_empty())
+            );
+        }
+    }
+
+    #[test]
+    fn structured_declaration_output_rejects_forbidden_and_trailing_forms() {
+        use crate::syntax::{MacroOutputNode, SyntaxContexts};
+
+        let caller = SourceFile::new("invocation.ash", "invoke").unwrap();
+        let invocation = caller.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        for text in [
+            "import forms as Forms\n",
+            "pub syntax declaration: (generated) => {}\n",
+        ] {
+            let (_, _, output) = structured_declarations(text);
+            assert!(
+                super::super::parse_macro_declarations(
+                    &caller, invocation, None, output, &contexts, None,
+                )
+                .is_err(),
+                "accepted {text:?}"
+            );
+        }
+        let (_, _, mut output) = structured_declarations(include_str!(
+            "../../docs/design/macros/fixtures/declarations/control_01.ash"
+        ));
+        output.push(MacroOutputNode::Token(
+            TokenKind::Semicolon,
+            ";".into(),
+            invocation.into(),
+        ));
+        assert!(
+            super::super::parse_macro_declarations(
+                &caller, invocation, None, output, &contexts, None,
+            )
+            .is_err()
+        );
+        let empty = super::super::parse_macro_declarations(
+            &caller,
+            invocation,
+            None,
+            Vec::new(),
+            &contexts,
+            None,
+        )
+        .expect("empty declaration output is accepted");
+        assert!(empty.declaration_order.is_empty());
+    }
+
+    #[test]
+    fn structured_declaration_projection_refuses_recovery_even_without_diagnostics() {
+        let source = SourceFile::new("recovery.ash", "pub type Color =\n").unwrap();
+        let mut tree = parse(lex(&source).unwrap());
+        assert!(!tree.parse_diagnostics().is_empty());
+        tree.parse_diagnostics.clear();
+        let invocation = source.span(ByteRange::new(0, 3).unwrap()).unwrap();
+        assert_eq!(
+            project_macro_declarations(
+                &source,
+                invocation,
+                None,
+                &tree,
+                &std::collections::HashMap::new(),
+                &std::collections::HashSet::new(),
+                None,
+            ),
+            Err(ProjectionError::RecoveryNodesPresent),
+        );
+    }
+
+    #[test]
+    fn declaration_projection_preserves_protected_expression_fragments() {
+        let (captured_source, captured_tree) = parsed("40 + 2");
+        let captured_module = project_module(&captured_source, &captured_tree).unwrap();
+        let SurfaceDefinitionKind::Equational(captured) = &captured_module.definitions[0].kind
+        else {
+            panic!("expected the captured expression's equation");
+        };
+        let expression = captured.equations[0].body.clone();
+        let capture = SurfaceExpressionCapture {
+            expression: expression.clone(),
+            contents: std::sync::Arc::from([]),
+        };
+
+        let (source, tree) = parsed("placeholder");
+        let (root, raw_tokens) = validated_root(&source, &tree).unwrap();
+        let index = raw_tokens
+            .iter()
+            .position(
+                |token| matches!(&token.kind, TokenKind::Identifier(name) if name == "placeholder"),
+            )
+            .unwrap();
+        let originals = std::collections::HashMap::from([(
+            index,
+            crate::syntax::MacroOutputNode::Expression(capture, expression.span.into()),
+        )]);
+        let tokens = ProjectionTokens {
+            tokens: raw_tokens,
+            originals: Some(&originals),
+            occurrence: Some(source.span(ByteRange::new(0, 4).unwrap()).unwrap()),
+            construction: None,
+            construction_extents: false,
+            admission_identifiers: None,
+            frame: None,
+            name_frame: None,
+            preserve_name_diagnostic: false,
+        };
+        let projected = project_surface_module(&source, root, &tokens).unwrap();
+        let SurfaceDefinitionKind::Equational(global) = &projected.definitions[0].kind else {
+            panic!("expected the projected equation");
+        };
+        assert_eq!(global.equations[0].body, expression);
     }
 
     #[test]
