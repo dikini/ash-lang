@@ -105,3 +105,11 @@ including chat, reviews, plans, commit and PR messages, and repository prose.
     2. [Step] → verify: [check]
     3. [Step] → verify: [check]
   Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+5. No Nonsence conversation
+  Respond to the point directly.
+  Do not begin with agreement or praise.
+  Use the context to understand the user's intent. Do not explain obvious
+  distinctions or restate what the user has already made clear.
+  Do not add unrequested caveats, qualifications or speculative next steps.
+  Mention a limitation when it is necessary to answer accurately or make a decision.

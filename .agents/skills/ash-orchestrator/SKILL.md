@@ -43,3 +43,26 @@ evidence; report any final gate outside the authorized scope as outstanding.
 Keep live assignments/blockers in existing issues/PRs and durable scope/findings
 in tasks. Return completed deliveries, active next owner/action and any decision
 needed. This skill starts work when invoked; it does not schedule its own wakeup.
+
+For a long delivery that needs quantitative tracking, maintain a small,
+effort-weighted set of observable product steps and required delivery gates in
+the existing task or its plan. Size the steps to show meaningful progress at the
+requested reporting cadence, without making that cadence a commit, review or
+test gate. Record the weights, evidence and current owner; distinguish
+demonstrated, independently reviewed, retained and accepted work. Do not count
+the same outcome twice or treat test counts, line counts or unchecked acceptance
+rows as a measure of effort. Preserve acceptance criteria separately.
+
+Estimate remaining Codex elapsed time from comparable actual session timestamps,
+turns and receipts when available, adjusted for remaining scope and dependencies.
+Separate active work, builds, review and external waits where observable; label
+unknowns and assumptions. Compare forecasts with actual outcomes and revise them
+without unsupported safety multipliers. On request report the weighted score,
+change, completed behavior, remaining work, next owner and estimate. If the user
+asks for a recurring chart in reports, use recorded snapshots, distinguish
+reviewed from provisional results, and include any requested regression and
+prediction band. State its method, level and limits; distinguish prediction bands
+from uncertainty in the fitted mean. Report zero progress honestly when needed,
+with the finding or next check, rather than awarding points for elapsed time or
+investigation. Do not invent historical points or add an automation without a
+request.
