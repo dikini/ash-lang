@@ -22,12 +22,12 @@
 ## Current delivery status, 7 November
 
 The expression-macro product is retained on `integration/expression-macros`
-at merge `2c95a3ac`. The reviewed, freshly gated candidate was `6574d7ff`;
-the merge has its identical tree. **98.5/99 original-scope points are
-reviewed and 0.5 remains** for acceptance readback and owned cleanup. The
-separately estimated 34 points of additional performed work give an effort
-index of **132.5/133**, not an acceptance percentage. M01–M14 await QA
-confirmation. Main integration and signing remain separate.
+at merge `387fdc96`. The reviewed, freshly gated candidate was `3c024d72`;
+the merge has its identical tree. QA confirmed M01–M14 within the limits
+recorded below. **98.5/99 original-scope points are reviewed and 0.5 remains**
+for acceptance readback and owned cleanup. The separately estimated 35 points
+of additional performed work give an effort index of **133.5/134**, not an
+acceptance percentage. Main integration and signing remain separate.
 
 The [operational plan](../plans/2026-11-05-expression-macros.md#2130-source-binder-reservation-finding)
 records the reviewed source-binder reservation, copied-region and bounded
@@ -2154,6 +2154,56 @@ Ash all-target, all-feature Clippy passed with warnings denied
 The candidate awaits review and a fresh gate. M11's common disposal evidence
 does not assert a direct joint active-transformer teardown injection.
 
+### QA-confirmed retention, 7 November
+
+QA confirmed that M01–M14 support the accepted expression-macro slice,
+conditional on a fresh gate and retained readback of `3c024d72`; both have
+now passed independently reviewed verification. Its M10 identity test runs a
+checked Ash transformer over the mixed capture. For M11, active-failure
+disposal is supported by the observed common handoff and paired transfer and
+teardown failures; a direct combined active-transformer injection was not
+observed. M12 compares the fixture's source-relative identity/use relations
+and changed caller, matcher, helper, imported syntax and used interface. The
+current compiler exposes no selectable syntax-interface version or semantic
+option switch, so no such variation is claimed. M14 covers the supported
+source-free native graph; broader local-newtype image support is not claimed.
+
+The final candidate `3c024d72`, tree
+`f174e32ebe805bd832a06e177e2bece997a3b040`, passed a fresh full gate with
+seven stages executed and none reused in 770.78 seconds. The log and copied
+summary have SHA-256
+`b298b1d1d0460eca3f38e8c1fc8e4ac9b7dec1bfa2a79d7ac3179f168349d5f8` and
+`6e734ae150a55425c9841a2bb1970e3b2c3aa3987282242769c2348d3cc98207`.
+The explicit local milestone merge `387fdc96` has parents `75108e36` and
+`3c024d72` and the same tree. All seven fresh receipts matched the retained
+checkout under `cargo xtask verify --reuse`; this established input equality,
+not a second fresh gate. Its log and summary have SHA-256
+`2edee5bdaa2a900d6fc258913a6610536bf05e6ae081cf5d003e44399412e93c` and
+`5d6f38be6867698920f43397198dba4a386bdfcf24a07c6c8460381e3bff0b35`.
+The matching native graph returned `42 : Int` under the interpreter, then
+returned `42` as a native executable after all five copied sources were
+removed, and again after retention. Its native and retained-readback logs have
+SHA-256 `320d44f323badf95e841f932a99f74281c05537a6a3ba7c16ac848ecb5de72a3`
+and `c6e03a1c126dd3232076114dc02cb8ac91ddec1e29b0ec30d714fcc71e295b81`.
+The stage receipts, logs and handoff records are preserved independently of
+build output in
+`/home/dikini/.local/share/ash/evidence/TASK-0067/3c024d72-retained-evidence.tar.gz`
+(SHA-256 `15db871dbb3e4c9e693dc6a3196fce5cffdabe90dd1252d71f477b397879c6a4`).
+
+X10 adds approximately 1.0 extra elapsed-equivalent point for the M10 evidence
+correction. The recorded gap finding at 08:18:11.715 and candidate pin at
+08:28:04 on 7 November (Europe/Sofia) span about 9 minutes 52 seconds. At
+the previously recorded 5.55 points per elapsed hour this is approximately
+0.91, rounded to a quarter point. It is a partial elapsed-window proxy,
+including checks and waits, not measured active time or a complete cost. The
+earlier QA reproduction and later gate are excluded. No original-scope point
+is awarded again.
+
+The M01–M14 rows below record QA confirmation on the retained candidate.
+Acceptance-record review, readback and owned cleanup remain; Main integration
+and signing are separate. This later reporting-only documentation tree was
+not the input to the fresh `3c024d72` gate.
+
 ## Progress
 
 The weighted ledger records **61.5/100 reviewed delivery points**. The latest
@@ -2655,12 +2705,14 @@ remain open. Historical D0 receipts follow; they describe earlier candidates.
 ### Acceptance evidence
 
 This is the single delivery matrix transferred from the first-slice companion.
-The accepted transition's requirements are retained here. All rows remain
-unchecked until their complete original scope has evidence on the intended
-retaining branch, including the applicable checkpoint and integration
-verification.
+The accepted transition's requirements are retained here. QA confirmed the
+rows on the intended retaining branch after the applicable checkpoint and
+integration verification; the qualifications are recorded above.
 
 #### Retained delivery and QA handoff, 7 November
+
+This handoff records the earlier state at `75108e36`; its pending QA status
+is superseded by the QA-confirmed retention above.
 
 Delivered: the independently reviewed candidate `6574d7ff` passed a fresh
 `cargo xtask verify` with all seven stages executed and none reused. The local
@@ -2741,20 +2793,20 @@ commit, and the retired proposal remains accessible with
 
 | State | Case | Required positive and negative evidence |
 | --- | --- | --- |
-| Pending | M01: natural syntax | Imported template `if`, both accepted nestings, precedence, parentheses, LF/CRLF, missing capture/separator, and no ordinary-application fallback. |
-| Pending | M02: grouping | Splice `a + b`, blocks, and nested DSL forms as arguments; inspect protected fragments and compare handwritten parenthesized behavior. Contrast protected splicing with explicit `expression_syntax` unwrapping while retaining the original fragment and nested context/origins. Reject trailing output and recovery-bearing fragments. |
-| Pending | M03: procedural path | An Ash transformer reads captures, computes an output tree, and executes through the real host. A discarded nested rejection does not run. Compare a template result; reject wrong signature/row, malformed output, authored rejection, and evaluator failure. |
-| Pending | M04: term hygiene | Caller/introduced temporary collision, reused and distinct fresh identifiers, supplied binder/body with preceding initializer, repeated splices, and nested expansion. Positively demonstrate deliberate `caller_identifier` capture; contrast definition/fresh contexts and ordinary hygienic non-capture. Assert exact binder/use relationships. |
-| Pending | M05: non-term scope | Local `newtype` and constructor, parameters, annotation types, recursive groups, and resource/region type and value scopes. Duplicate a fragment containing local binders, local nominal/region identities, and nested syntax; assert distinct output declarations with connected internal uses and unchanged caller free references. Include invalid scope and duplicate cases. |
-| Pending | M06: definition authority | Private helper and own opaque construction; targeted/qualified/facade imports with caller shadowing. Reject ordinary caller private access, another module's withheld constructor, fabricated definition contexts, and missing definition helpers when expanded. |
-| Pending | M07: imports and staging | Renamed and duplicate syntax imports, term-name conflicts, no activation through complete import, missing exports, unsupported re-exports/local definitions, and canonical dependency cycles. Unused imports cannot run transformers. |
-| Pending | M08: DSL composition | Two separately authored forms nest and embed Ash. A template invokes a syntax dependency absent from caller imports. A same-spelled caller syntax import cannot redirect a generated identifier. |
-| Pending | M09: current checks | Generated method obligations require ordinary evidence; wrappers preserve current handler selection and observable effect count/order. Test valid/invalid `resume` and resource escape/use, including a nested function and required direct builtin import. |
-| Pending | M10: bridge and origins | Identity transformer round-trips token/group/fragment structure, contexts, and origins. Check total negative/out-of-range capture indices, empty origin combination, invalid identifier/token construction, and `parse_expression` without name resolution or expansion; returning `SyntaxDiagnostic` preserves parse causes/origins. Reject wrong nominal constructors, malformed data, stale/foreign handles, and authority gained from strings/origins/caller syntax. Assert multiple input origins and nested frames in human/JSON diagnostics. |
-| Pending | M11: completion and limits | Successful output survives evaluation-root teardown; authored failure, malformed output, evaluator/transfer failure, and exhausted budgets publish no partial result and retain teardown information. Bound self-producing recursive expansion. |
-| Pending | M12: reproducibility | Repeat equal compilations modulo fresh identity renaming; change caller binding, matcher, helper, imported syntax, and interface/semantic inputs and show updated output or rejection. No persistent cache is required. |
-| Pending | M13: module/Core boundary | Reuse a completed dependency without repeating its source proof; validate new compile-time and final linked Core independently. Reject scope, type, and provenance mutations at their owning boundaries. |
-| Pending | M14: compatibility | Existing valid no-syntax programs keep their behavior; retain unaffected diagnostic regression cases and test the specified new syntax error for out-of-place `$`. Compile generated output through the current interpreted and supported program-image/build paths; generated runtime code needs no syntax-service interpretation. |
+| Accepted | M01: natural syntax | Imported template `if`, both accepted nestings, precedence, parentheses, LF/CRLF, missing capture/separator, and no ordinary-application fallback. |
+| Accepted | M02: grouping | Splice `a + b`, blocks, and nested DSL forms as arguments; inspect protected fragments and compare handwritten parenthesized behavior. Contrast protected splicing with explicit `expression_syntax` unwrapping while retaining the original fragment and nested context/origins. Reject trailing output and recovery-bearing fragments. |
+| Accepted | M03: procedural path | An Ash transformer reads captures, computes an output tree, and executes through the real host. A discarded nested rejection does not run. Compare a template result; reject wrong signature/row, malformed output, authored rejection, and evaluator failure. |
+| Accepted | M04: term hygiene | Caller/introduced temporary collision, reused and distinct fresh identifiers, supplied binder/body with preceding initializer, repeated splices, and nested expansion. Positively demonstrate deliberate `caller_identifier` capture; contrast definition/fresh contexts and ordinary hygienic non-capture. Assert exact binder/use relationships. |
+| Accepted | M05: non-term scope | Local `newtype` and constructor, parameters, annotation types, recursive groups, and resource/region type and value scopes. Duplicate a fragment containing local binders, local nominal/region identities, and nested syntax; assert distinct output declarations with connected internal uses and unchanged caller free references. Include invalid scope and duplicate cases. |
+| Accepted | M06: definition authority | Private helper and own opaque construction; targeted/qualified/facade imports with caller shadowing. Reject ordinary caller private access, another module's withheld constructor, fabricated definition contexts, and missing definition helpers when expanded. |
+| Accepted | M07: imports and staging | Renamed and duplicate syntax imports, term-name conflicts, no activation through complete import, missing exports, unsupported re-exports/local definitions, and canonical dependency cycles. Unused imports cannot run transformers. |
+| Accepted | M08: DSL composition | Two separately authored forms nest and embed Ash. A template invokes a syntax dependency absent from caller imports. A same-spelled caller syntax import cannot redirect a generated identifier. |
+| Accepted | M09: current checks | Generated method obligations require ordinary evidence; wrappers preserve current handler selection and observable effect count/order. Test valid/invalid `resume` and resource escape/use, including a nested function and required direct builtin import. |
+| Accepted | M10: bridge and origins | Identity transformer round-trips token/group/fragment structure, contexts, and origins. Check total negative/out-of-range capture indices, empty origin combination, invalid identifier/token construction, and `parse_expression` without name resolution or expansion; returning `SyntaxDiagnostic` preserves parse causes/origins. Reject wrong nominal constructors, malformed data, stale/foreign handles, and authority gained from strings/origins/caller syntax. Assert multiple input origins and nested frames in human/JSON diagnostics. |
+| Accepted | M11: completion and limits | Successful output survives evaluation-root teardown; authored failure, malformed output, evaluator/transfer failure, and exhausted budgets publish no partial result and retain teardown information. Bound self-producing recursive expansion. |
+| Accepted | M12: reproducibility | Repeat equal compilations modulo fresh identity renaming; change caller binding, matcher, helper, imported syntax, and interface/semantic inputs and show updated output or rejection. No persistent cache is required. |
+| Accepted | M13: module/Core boundary | Reuse a completed dependency without repeating its source proof; validate new compile-time and final linked Core independently. Reject scope, type, and provenance mutations at their owning boundaries. |
+| Accepted | M14: compatibility | Existing valid no-syntax programs keep their behavior; retain unaffected diagnostic regression cases and test the specified new syntax error for out-of-place `$`. Compile generated output through the current interpreted and supported program-image/build paths; generated runtime code needs no syntax-service interpretation. |
 
 The required production graph has a helper dependency, a syntax module with a
 template and a computed Ash transformer, a separately authored DSL dependency,

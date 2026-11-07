@@ -1384,3 +1384,13 @@ transformer callback and runs the resulting graph; its focused check and
 all-target/all-feature Ash Clippy pass. Independent review and a fresh gate on
 the changed candidate remain open. M11 retains the recorded direct-injection
 limitation. Earlier completed checkpoints remain unchanged.
+
+### QA-confirmed retention, 7 November
+
+QA confirmed M01–M14 within the task's stated M11, M12 and M14 limits. The
+reviewed identity candidate `3c024d72` passed a fresh seven-stage gate, then
+was retained with its exact tree at milestone merge `387fdc96`. Independent
+review verified the retained inputs and source-free native result. The task
+records the receipts, evidence archive and X10's separate elapsed-work proxy.
+Acceptance-record readback and owned cleanup remain; Main and signing are
+separate. This reporting-only update was not the fresh gate's input.
