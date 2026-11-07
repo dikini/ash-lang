@@ -1422,6 +1422,57 @@ fn check_loaded_module(check: impl FnOnce() -> Result<(), FileFailure>) -> Resul
     check()
 }
 
+fn select_imported_syntax<'a>(
+    imports: &[SurfaceImport],
+    edges: &[crate::module::ModuleDependency],
+    mut exports: impl FnMut(
+        ModuleId,
+    ) -> Result<
+        (usize, &'a [crate::surface::SurfaceSyntaxDeclaration]),
+        FileFailure,
+    >,
+) -> Result<Vec<crate::syntax::SelectedSyntax>, FileFailure> {
+    let mut selected = Vec::new();
+    for (import, edge) in imports
+        .iter()
+        .zip(edges.iter().filter(|edge| !edge.is_region_service()))
+    {
+        let SurfaceImportSelection::Targeted(items) = &import.selection else {
+            continue;
+        };
+        for item in items {
+            let SurfaceImportItem::Syntax { name, alias, .. } = item else {
+                continue;
+            };
+            let (owner, declarations) = exports(edge.target())?;
+            let declaration = declarations
+                .iter()
+                .find(|declaration| declaration.name.text == name.text)
+                .ok_or_else(|| {
+                    FileFailure::from(PipelineFailure::Resolution(
+                        crate::resolve::unavailable_syntax_export(name),
+                    ))
+                })?;
+            let local = alias.as_ref().unwrap_or(name);
+            if selected
+                .iter()
+                .any(|selection: &crate::syntax::SelectedSyntax| selection.name == local.text)
+            {
+                return Err(FileFailure::from(PipelineFailure::Resolution(
+                    crate::resolve::duplicate_syntax_import(local),
+                )));
+            }
+            selected.push(crate::syntax::SelectedSyntax {
+                name: local.text.clone(),
+                declaration: declaration.clone(),
+                owner,
+                import_span: import.span,
+            });
+        }
+    }
+    Ok(selected)
+}
+
 fn compile_graph_with_report<I, V>(
     input: &mut CompilationInput<'_>,
     constraint_work: &mut InterfaceConstraintBudget,
@@ -1493,60 +1544,22 @@ where
     })?;
     let mut coverage_work = UsefulnessBudget::default();
     while input.has_next() {
-        let mut selected = Vec::new();
-        if let Some((imports, edges)) = input.next_imports() {
-            for (import, edge) in imports
-                .iter()
-                .zip(edges.iter().filter(|edge| !edge.is_region_service()))
-            {
-                let SurfaceImportSelection::Targeted(items) = &import.selection else {
-                    continue;
-                };
-                for item in items {
-                    let SurfaceImportItem::Syntax { name, alias, .. } = item else {
-                        continue;
-                    };
-                    let index = *checked_by_module
-                        .get(&edge.target())
-                        .ok_or_else(internal_file_failure)?;
-                    if checked
-                        .get(index)
-                        .is_none_or(|dependency| dependency.module() != edge.target())
-                    {
-                        return Err(internal_file_failure());
-                    }
-                    let declaration = checked_syntax
-                        .get(index)
-                        .and_then(|exports| {
-                            exports
-                                .iter()
-                                .find(|declaration| declaration.name.text == name.text)
-                        })
-                        .ok_or_else(|| {
-                            FileFailure::from(PipelineFailure::Resolution(
-                                crate::resolve::unavailable_syntax_export(name),
-                            ))
-                        })?;
-                    let local = alias.as_ref().unwrap_or(name);
-                    if selected
-                        .iter()
-                        .any(|selection: &crate::syntax::SelectedSyntax| {
-                            selection.name == local.text
-                        })
-                    {
-                        return Err(FileFailure::from(PipelineFailure::Resolution(
-                            crate::resolve::duplicate_syntax_import(local),
-                        )));
-                    }
-                    selected.push(crate::syntax::SelectedSyntax {
-                        name: local.text.clone(),
-                        declaration: declaration.clone(),
-                        owner: index,
-                        import_span: import.span,
-                    });
+        let selected = if let Some((imports, edges)) = input.next_imports() {
+            select_imported_syntax(imports, edges, |target| {
+                let index = *checked_by_module
+                    .get(&target)
+                    .ok_or_else(internal_file_failure)?;
+                if checked
+                    .get(index)
+                    .is_none_or(|dependency| dependency.module() != target)
+                {
+                    return Err(internal_file_failure());
                 }
-            }
-        }
+                Ok((index, checked_syntax.get(index).map_or(&[], Vec::as_slice)))
+            })?
+        } else {
+            Vec::new()
+        };
         if !input.advance(&selected)? {
             return Err(internal_file_failure());
         }
@@ -2720,6 +2733,230 @@ mod tests {
         source::{ByteRange, Origin},
         types::{InferenceVariableId, NominalTypeId, TypeVariableId},
     };
+
+    fn i21_graph(name: &str) -> HeaderGraph {
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/design/macros/fixtures/header_compat")
+            .join(name);
+        discover_headers(&entry, &ModuleRoots::empty()).unwrap()
+    }
+
+    fn projected_syntax_dependencies(
+        graph: &mut HeaderGraph,
+    ) -> Vec<(ModuleId, Vec<crate::surface::SurfaceSyntaxDeclaration>)> {
+        let mut dependencies = Vec::new();
+        while dependencies.len() + 1 < graph.len() {
+            let module = graph.next_module().unwrap().expect("fixture dependency");
+            dependencies.push((module.id(), module.surface().syntax_declarations.clone()));
+        }
+        dependencies
+    }
+
+    fn select_projected_syntax(
+        graph: &HeaderGraph,
+        dependencies: &[(ModuleId, Vec<crate::surface::SurfaceSyntaxDeclaration>)],
+    ) -> Result<Vec<crate::syntax::SelectedSyntax>, FileFailure> {
+        let (imports, edges) = graph.next_imports().expect("fixture importer");
+        select_imported_syntax(imports, edges, |target| {
+            let owner = dependencies
+                .iter()
+                .position(|(module, _)| *module == target)
+                .ok_or_else(internal_file_failure)?;
+            Ok((owner, dependencies[owner].1.as_slice()))
+        })
+    }
+
+    #[test]
+    fn d2_selects_renamed_declaration_export_and_retains_its_context() {
+        use crate::surface::SurfaceSyntaxCategory;
+
+        let mut graph = i21_graph("renamed.ash");
+        let dependencies = projected_syntax_dependencies(&mut graph);
+        let (imports, _) = graph.next_imports().unwrap();
+        let selected = select_projected_syntax(&graph, &dependencies).unwrap();
+        let [declaration] = selected.as_slice() else {
+            panic!("one syntax import was selected");
+        };
+        assert_eq!(declaration.name, "make_number");
+        assert_eq!(declaration.declaration.name.text, "make_value");
+        assert_eq!(
+            declaration.declaration.category,
+            SurfaceSyntaxCategory::Declaration
+        );
+        assert_eq!(
+            declaration.declaration,
+            dependencies[declaration.owner].1[0]
+        );
+        assert_eq!(declaration.import_span, imports[0].span);
+
+        let SurfaceImportSelection::Targeted(items) = &imports[0].selection else {
+            panic!("the fixture has a targeted import");
+        };
+        let [
+            SurfaceImportItem::Syntax {
+                alias: Some(alias), ..
+            },
+        ] = items.as_slice()
+        else {
+            panic!("the fixture selects a renamed syntax");
+        };
+        let owner_imports = vec![selected.clone()];
+        let caller_contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+        assert_eq!(
+            caller_contexts.select(alias).unwrap().declaration,
+            declaration.declaration
+        );
+        let owner_contexts = crate::syntax::SyntaxContexts::new(&[], &owner_imports, &[Some(0)]);
+        assert!(owner_contexts.select(alias).is_none());
+        let mut introduced = alias.clone();
+        introduced.introduction = 1;
+        assert_eq!(
+            owner_contexts.select(&introduced).unwrap().owner,
+            declaration.owner
+        );
+        introduced.introduction = 2;
+        assert!(owner_contexts.select(&introduced).is_none());
+
+        let source = SourceFile::new("generated.ash", "make_number").unwrap();
+        let span = source.span(ByteRange::new(0, 11).unwrap()).unwrap();
+        for introduction in [0, 1] {
+            let mut name = alias.clone();
+            name.span = span;
+            name.introduction = introduction;
+            let expression = crate::parser::parse_macro_expression(
+                &source,
+                span,
+                None,
+                vec![crate::syntax::MacroOutputNode::Identifier(
+                    name,
+                    crate::syntax::MacroOrigin::Source(span),
+                )],
+                if introduction == 0 {
+                    &caller_contexts
+                } else {
+                    &owner_contexts
+                },
+                None,
+            )
+            .expect("declaration syntax is not an expression invocation");
+            assert!(matches!(
+                expression.kind,
+                crate::surface::SurfaceExprKind::Name(reference)
+                    if reference.member().text == "make_number"
+            ));
+        }
+    }
+
+    #[test]
+    fn d2_selects_both_i21_categories_without_changing_their_exports() {
+        use crate::surface::SurfaceSyntaxCategory;
+
+        let mut graph = i21_graph("both.ash");
+        let dependencies = projected_syntax_dependencies(&mut graph);
+        let (imports, _) = graph.next_imports().unwrap();
+        let selected = select_projected_syntax(&graph, &dependencies).unwrap();
+        let [expression, declaration] = selected.as_slice() else {
+            panic!("the two syntax imports were selected");
+        };
+        assert_eq!(expression.name, "declaration");
+        assert_eq!(
+            expression.declaration.category,
+            SurfaceSyntaxCategory::Expression
+        );
+        assert_eq!(declaration.name, "make_value");
+        assert_eq!(
+            declaration.declaration.category,
+            SurfaceSyntaxCategory::Declaration
+        );
+        for (selection, import) in selected.iter().zip(imports) {
+            assert_eq!(selection.declaration, dependencies[selection.owner].1[0]);
+            assert_eq!(selection.import_span, import.span);
+        }
+    }
+
+    #[test]
+    fn d2_rejects_the_i21_collision_at_the_second_selected_name() {
+        let mut graph = i21_graph("collision.ash");
+        let dependencies = projected_syntax_dependencies(&mut graph);
+        let (imports, _) = graph.next_imports().unwrap();
+        let SurfaceImportSelection::Targeted(items) = &imports[1].selection else {
+            panic!("the fixture has a targeted import");
+        };
+        let [SurfaceImportItem::Syntax { name, .. }] = items.as_slice() else {
+            panic!("the fixture selects expression syntax");
+        };
+        let failure = select_projected_syntax(&graph, &dependencies).unwrap_err();
+        let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+            panic!("expected an import conflict: {failure:?}");
+        };
+        assert_eq!(error.reason, crate::resolve::ResolveReason::ImportConflict);
+        assert_eq!(error.primary.span(), name.span);
+        assert_eq!(name.text, "declaration");
+    }
+
+    #[test]
+    fn d2_reports_a_missing_export_from_a_declaration_syntax_module() {
+        let entry =
+            TestSource::write("import forms (syntax absent)\nmain : Unit -> Int\nmain () = 42\n");
+        entry.write_sibling(
+            "forms.ash",
+            include_str!("../docs/design/macros/fixtures/header_compat/forms.ash"),
+        );
+        let mut graph = discover_headers(&entry.0, &ModuleRoots::empty()).unwrap();
+        let dependencies = projected_syntax_dependencies(&mut graph);
+        let failure = select_projected_syntax(&graph, &dependencies).unwrap_err();
+        let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+            panic!("expected an unavailable export: {failure:?}");
+        };
+        assert_eq!(
+            error.reason,
+            crate::resolve::ResolveReason::UnavailableExport
+        );
+        assert_eq!(error.found.as_deref(), Some("absent"));
+    }
+
+    #[test]
+    fn d2_does_not_select_same_module_definitions_without_an_import() {
+        let mut graph = i21_graph("own_definition.ash");
+        let _dependencies = projected_syntax_dependencies(&mut graph);
+        let (imports, edges) = graph.next_imports().unwrap();
+        assert!(imports.is_empty());
+        let selected = select_imported_syntax(imports, edges, |_| {
+            panic!("an unimported local definition must not be looked up")
+        })
+        .unwrap();
+        assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn d2_i21_declaration_graphs_still_stop_at_definition_admission() {
+        for name in ["renamed.ash", "both.ash", "collision.ash"] {
+            let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/header_compat")
+                .join(name);
+            let failure = compile_path(RunConfiguration {
+                entry,
+                roots: ModuleRoots::empty(),
+            })
+            .unwrap_err();
+            let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+                panic!("{name}: expected declaration admission failure: {failure:?}");
+            };
+            assert_eq!(error.reason, crate::resolve::ResolveReason::InternalState);
+            let source = failure
+                .sources()
+                .iter()
+                .find(|source| source.id() == error.primary.span().source())
+                .expect("the declaration source is retained");
+            assert!(source.display_path().ends_with("forms.ash"), "{name}");
+            let range = error.primary.span().range();
+            assert!(
+                source.text()[range.start() as usize..range.end() as usize]
+                    .starts_with("pub syntax declaration: (make_value)"),
+                "{name}"
+            );
+        }
+    }
 
     #[test]
     fn copied_macro_fragments_have_distinct_checked_local_identities() {

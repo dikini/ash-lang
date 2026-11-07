@@ -1065,13 +1065,17 @@ impl Parser<'_> {
     }
 
     fn selected_syntax(&self) -> Option<&crate::syntax::SelectedSyntax> {
-        if let Some(selections) = self.syntax_selections {
-            return selections.get(&self.position);
-        }
-        let Some(TokenKind::Identifier(name)) = self.current() else {
-            return None;
+        let selection = if let Some(selections) = self.syntax_selections {
+            selections.get(&self.position)
+        } else {
+            let Some(TokenKind::Identifier(name)) = self.current() else {
+                return None;
+            };
+            self.syntax.iter().find(|syntax| syntax.name == *name)
         };
-        self.syntax.iter().find(|syntax| syntax.name == *name)
+        selection.filter(|syntax| {
+            syntax.declaration.category == crate::surface::SurfaceSyntaxCategory::Expression
+        })
     }
 
     fn at_syntax_literal(&self, kind: &TokenKind, spelling: &str) -> bool {
