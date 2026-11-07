@@ -3,13 +3,12 @@
 This companion to [DN-0062](../DN-0062-hygienic-surface-macros.md) records the
 design behind the accepted first slice. Its implementation and
 [specification](../../../spec/syntax-expansion.md) are on the reviewed product
-checkpoint retained on the milestone branch; QA and Main are separate. The
+checkpoint retained and QA-confirmed on the milestone branch; Main is separate. The
 retired CP-0033 transition is retained in Git at `f621d075`.
 The parser amendment is recorded in
-[AD-0005](../../decisions/AD-0005-parser-architecture.md);
-[TASK-0067](../../tasks/TASK-0067-expression-macros.md) owns implementation and
-its execution plan. This companion remains design rationale. Examples
-illustrate the accepted slice.
+[AD-0005](../../decisions/AD-0005-parser-architecture.md). The accepted task
+and plan are retained in Git at `d0b1bf68`. This companion remains design
+rationale. Examples illustrate the accepted slice.
 
 ## Scope and choice
 
@@ -576,27 +575,23 @@ completion prerequisite. Normal errors must be useful without one.
 
 ## Required acceptance evidence
 
-The accepted transition's M01–M14 delivery matrix is in its owning
-[TASK-0067 acceptance record](../../tasks/TASK-0067-expression-macros.md#acceptance-evidence).
-The task retains the positive and negative cases, the real file-graph acceptance,
-checkpoint obligations, and retained verification. The transfer of criteria
-alone does not close final acceptance.
+The accepted transition's M01–M14 delivery matrix, positive and negative cases,
+real file-graph acceptance, checkpoint obligations and retained verification are
+in the historical TASK-0067 record at `d0b1bf68` in Git.
 
 ## Delivery ownership
 
-The prospective D0–D4 sequence is now the task-owned
-[execution plan](../../plans/2026-11-05-expression-macros.md). It records the
-producer/consumer agreements, source/header staging, private reference closure,
-checked Ash host transfer and failure, shared public token vocabulary,
-real interpreter/build consumers, integration ownership, checkpoints, and the
-whole remaining delivery estimate. It has no independent semantic authority.
+The completed D0–D4 execution plan is retained in Git at `d0b1bf68`. It records
+the producer/consumer agreements, checked host, real interpreter/build
+consumers and checkpoints. It has no independent semantic authority.
 
 The accepted parser amendment in
 [AD-0005](../../decisions/AD-0005-parser-architecture.md) admits one built-in
 prefix mechanism parameterized by imported matcher data. Lexer separation,
 shared precedence, token-complete recovery, and rejection at projection remain.
 It admits no executable parser registry. The retained milestone implements
-this mechanism; QA confirmation and Main integration remain separate.
+this mechanism and QA confirmed the accepted slice. Main integration remains
+separate.
 
 No experiment is a prerequisite to the accepted design choices. A contradiction
 or missing semantic rule returns to the specification and design process.

@@ -7,16 +7,15 @@
   [AD-0006](../decisions/AD-0006-front-end-semantic-boundaries.md),
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md),
   [AD-0010](../decisions/AD-0010-human-diagnostic-presentation-and-localization.md),
-  [TASK-0067](../tasks/TASK-0067-expression-macros.md),
   [DN-0030](DN-0030-typed-compiler-macros-and-hooks.md),
   [DN-0061](DN-0061-effects-and-resources-first-slice.md)
 
 > The accepted first expression-macro slice has an implementation and
 > [specification](../../spec/syntax-expansion.md) on the reviewed product
-> checkpoint retained on the milestone branch; QA and Main are separate.
+> checkpoint retained and QA-confirmed on the milestone branch; Main is separate.
 > Broader macro ideas and
 > illustrations in this note remain exploratory. This note does not define
-> current Ash. AD-0005 records the parser amendment; TASK-0067 owns delivery.
+> current Ash. AD-0005 records the parser amendment.
 
 ## Question
 
@@ -98,12 +97,12 @@ imported keyword-led expression syntax, templates and
 Ash-authored procedural transformers over a shared binding-aware syntax
 representation. It defines import, parsing, expansion, binding, bridge,
 diagnostic and admission boundaries and required acceptance cases. The slice's
-implementation and specification are on the reviewed product checkpoint; AD-0005
-and TASK-0067 record parser architecture and remaining delivery work. Template
+implementation and specification are retained on the milestone branch;
+AD-0005 records the parser architecture. Template
 syntax is checked at definition; its free names
 resolve in the defining environment when expanded. Where
 an earlier exploratory alternative below differs, the companion records the
-accepted first slice. The task's M01–M14 cases cover that slice;
+accepted first slice. Its M01–M14 acceptance cases cover that slice;
 the broader corpus below includes later output categories and transformations.
 
 The two authoring forms are:

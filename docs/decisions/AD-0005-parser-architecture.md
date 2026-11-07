@@ -5,8 +5,7 @@
 - Related: [AD-0006](AD-0006-front-end-semantic-boundaries.md),
   [DN-0003](../design/DN-0003-parser-architecture.md),
   [DN-0016](../design/DN-0016-first-mini-ash-corpus.md),
-  [first-stratum parser comparison](../design/mini-ash/first-stratum/comparisons/parser-architecture.md),
-  [TASK-0067](../tasks/TASK-0067-expression-macros.md)
+  [first-stratum parser comparison](../design/mini-ash/first-stratum/comparisons/parser-architecture.md)
 
 ## Decision
 
@@ -34,8 +33,8 @@ origins, import routes, and ownership of their checked dependencies. It cannot
 install a parser function, operator, precedence entry, or recovery callback.
 The [grammar](../../spec/syntax.md#grammar) and
 [syntax-expansion specification](../../spec/syntax-expansion.md) describe its
-language forms retained on the milestone branch. QA confirmation remains
-pending; Main integration is separate.
+language forms retained and QA-confirmed on the milestone branch. Main
+integration is separate.
 
 Fixed import-header discovery precedes body parsing. The loader discovers and
 canonicalizes declared dependencies without executing transformers. The
@@ -91,8 +90,8 @@ matchers as data for one built-in prefix mechanism preserves the existing parser
 boundaries. Executable grammar callbacks would add parsing, recovery, and
 execution contracts outside the accepted slice; printing expansions and
 reparsing them would lose protected grouping and context. This amendment records
-the architecture for TASK-0067; it does not create a broader grammar extension
-API.
+the architecture for the first expression-macro slice; it does not create a
+broader grammar extension API.
 
 ## Consequences
 
@@ -136,10 +135,10 @@ Parser implementation and every grammar-changing task must show:
 - agreement between the implementation grammar and the applicable normative
   grammar without publishing parser extension points as Ash syntax.
 
-TASK-0067 additionally verifies the data-defined prefix mechanism against
+The expression-macro acceptance verifies the data-defined prefix mechanism against
 CP-0033's M01/M02/M07/M08 cases: checked imports reach the real body parser,
 nested forms consume their own separators, protected fragments keep grouping,
 and recovery-bearing structures are rejected before expansion. Existing valid
 no-syntax inputs retain their parse and applicable diagnostic regression
-evidence. The reviewed product checkpoint implements this extension;
-TASK-0067 records its evidence and remaining integration work.
+evidence. The retained milestone implements this extension; its acceptance
+record remains in Git history.

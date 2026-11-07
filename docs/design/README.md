@@ -185,10 +185,8 @@ and exclusions remain at their linked owners.
 - [DN-0062: Hygienic Surface Macros](DN-0062-hygienic-surface-macros.md)
   — a smaller surface and Core, Ash-authored DSLs, hygienic expansion,
   compiler interfaces and diagnostics. The accepted expression-macro slice is
-  retained on the milestone branch; QA confirmation and Main remain separate.
-  See its [design](macros/first-slice.md) and
-  owning [TASK-0067](../tasks/TASK-0067-expression-macros.md). Broader ideas
-  remain exploratory.
+  retained and QA-confirmed on the milestone branch; Main remains separate.
+  See its [design](macros/first-slice.md). Broader ideas remain exploratory.
 - [DN-0061: Effects and Resources as the First Typed Slice](DN-0061-effects-and-resources-first-slice.md)
   — the first semantic slice and its opaque data and function boundaries; its
   [effects elaboration package](effects-resources/effect-interface-elaboration-proposal.md)
