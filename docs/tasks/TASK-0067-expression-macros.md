@@ -19,16 +19,17 @@
 > [2026-11-06 amendment](#2026-11-06-approved-amendment) gives the
 > current remaining scope where that text describes removed work.
 
-## Current delivery status, 6 November
+## Current delivery status, 7 November
 
-The latest reviewed product checkpoint is `e0aa54ec`: **72.75/99 original-scope
-points are reviewed and 26.25 remain**. The separately estimated 30.25 points of
-additional performed work give an effort index of **103/129.25**, not an
+The latest reviewed product checkpoint is `fcd3325e`: **73/99 original-scope
+points are reviewed and 26 remain**. The separately estimated 30.25 points of
+additional performed work give an effort index of **103.25/129.25**, not an
 acceptance percentage. M01–M14 and C1/C2 remain open.
 
 The [operational plan](../plans/2026-11-05-expression-macros.md#2130-source-binder-reservation-finding)
-records the reviewed source-binder reservation and copied-region repairs and
-an open combined-origin resolution failure. The preceding 141-minute scenario
+records the reviewed source-binder reservation, copied-region and bounded
+combined-origin resolution repairs. A malformed discarded-capture control is
+demonstrated and awaits review. The preceding 141-minute scenario
 is not a current complete forecast. Actual event windows and remaining
 estimates are recorded separately. The historical
 checkpoints below are preserved as written.
@@ -1670,6 +1671,32 @@ frames; the JSON receipt is `/tmp/ash-combined-origin-cli-json.log` (SHA-256
 `f42bf81e02afe1b5c1af5bd9af138cb8020bae09ad4ecabd4274f52b5ded097d`).
 This candidate awaits independent review. It does not establish origin
 transport for every resolver position or close any M/C acceptance row.
+
+### Reviewed combined-origin handoff and malformed-capture control
+
+Independent review passed `fcd3325e`. The exact unqualified-name handoff and
+its ordered frame/cause evidence are reviewed; broader resolver positions and
+M/C acceptance remain open. Its distinct ordinary semantic cause adds P30
++0.25 (2/2.5 reviewed); bounded copy/relocation remains 0.5. No P31 rendering
+credit is repeated. The previous 72.75 reviewed points and the separately
+estimated 30.25 additional-work points are unchanged historical records.
+
+An additional test-only candidate exercises the recovery boundary through the
+real driver. The existing `parsed_discard 41` transformer receives a valid
+capture, runs once, discards the parsed nested expression, and produces 42.
+Changing the capture to `(1 +)` returns the ordinary `parse.expected-operand`
+error before any transformer drop, syntax request, or transfer attempt. The
+focused test is
+`cargo test -j 1 -p ash --lib malformed_capture_is_rejected_before_a_discarding_transformer_runs`
+(`/tmp/ash-discard-malformed-capture-test.log`, SHA-256
+`24eca03b0bcbc45b3a4973146987d37e176152a8685bea30a5115d1caf376f5c`). A real
+CLI JSON observation gives the same parser reason
+(`/tmp/ash-discard-malformed-capture-probe.json`, SHA-256
+`048ec9f1b552045a8d5ea5843f6cc9634aa56f4163f5560c100588f751ec7b0c`).
+All-target Clippy passed after the test addition
+(`/tmp/ash-discard-malformed-capture-clippy.log`, SHA-256
+`7b86761702fcb38939e5ff1da0ce47739ace57f5b3fb55c80ffbc573945c14b0`).
+This observation awaits independent review and does not by itself close M02.
 
 ## Progress
 

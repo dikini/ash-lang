@@ -7016,6 +7016,36 @@ mod tests {
     }
 
     #[test]
+    fn malformed_capture_is_rejected_before_a_discarding_transformer_runs() {
+        use crate::{
+            driver::{RunConfiguration, compile_path, execute},
+            module::ModuleRoots,
+        };
+
+        let configuration = |entry: &str| RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros")
+                .join(entry),
+            roots: ModuleRoots::empty(),
+        };
+        super::machine_test_hooks::reset();
+        let compiled = compile_path(configuration("entry_generated_parse_discard.ash"))
+            .expect("the valid capture can be parsed and discarded");
+        assert_eq!(super::machine_test_hooks::TRANSFORMER_DROPS.get(), 1);
+        assert!(super::machine_test_hooks::SYNTAX_REQUESTS.get() > 0);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+
+        super::machine_test_hooks::reset();
+        let failure = compile_path(configuration("entry_generated_parse_discard_invalid.ash"))
+            .expect_err("a malformed capture cannot reach the transformer");
+        assert_eq!(failure.reason_code(), "parse.expected-operand");
+        assert_eq!(super::machine_test_hooks::TRANSFORMER_DROPS.get(), 0);
+        assert_eq!(super::machine_test_hooks::SYNTAX_REQUESTS.get(), 0);
+        assert_eq!(super::machine_test_hooks::TRANSFER_ATTEMPTS.get(), 0);
+        super::machine_test_hooks::reset();
+    }
+
+    #[test]
     fn transformer_failures_dispose_the_real_invocation_root() {
         use crate::{
             driver::{PipelineFailure, RunConfiguration, compile_path},

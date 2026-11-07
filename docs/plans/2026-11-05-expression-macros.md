@@ -1247,3 +1247,13 @@ observations and Clippy. This candidate awaits independent review; other
 resolver positions, evidence reconciliation, the final gate and retained
 handoff remain open. No progress points or completion forecast are inferred
 from the candidate alone.
+
+### Reviewed resolver handoff and malformed capture
+
+Independent review passed `fcd3325e`; the task records its P30 +0.25 for the
+distinct ordinary semantic cause. A further test-only candidate now
+compares a valid capture used by a discarding transformer with a malformed
+capture rejected before that transformer runs. The task records the focused
+driver test, CLI observation and Clippy receipt. This bounded observation
+awaits review; the remaining evidence audit, final gate and retention work
+stay open.
