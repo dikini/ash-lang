@@ -1,7 +1,7 @@
 # CP-0034: Top-Level Declaration and Derive Macros
 
 - ID: `CP-0034`
-- Status: proposed
+- Status: accepted
 - Related: [DN-0062](../design/DN-0062-hygienic-surface-macros.md),
   [expression-syntax specification](../../spec/syntax-expansion.md),
   [first-slice design](../design/macros/first-slice.md),
@@ -9,10 +9,9 @@
   [declaration grammar](../design/macros/declaration-grammar.md),
   [derive authoring and grammar design](../design/macros/derive-syntax.md).
 
-> This is a working proposal, not current Ash or implementation authority.
-> It builds on the implemented expression-syntax slice. The candidate source
-> syntax and unresolved contracts in the companion need review before this
-> proposal can be accepted.
+> This proposal is accepted but not implemented. It builds on the implemented
+> expression-syntax slice and does not yet describe current Ash. Product work
+> also requires an owning task and an authorized delivery base.
 
 ## Current behavior
 
@@ -339,9 +338,9 @@ selected implementations, compiler IR, or unchecked private declarations.
 
 ### Executable template escapes and expression subtemplates
 
-The escape and subtemplate design in this section is approved for CP-0034;
-the proposal as a whole remains proposed and this syntax is not yet current
-Ash. A template describes the syntax it emits. `${ ... }` marks an ordinary
+The escape and subtemplate design in this section is accepted with CP-0034;
+this syntax is not yet current Ash. A template describes the syntax it emits.
+`${ ... }` marks an ordinary
 Ash block to run while filling that template; the resulting syntax value is
 inserted at the escape's position.
 The initial form admits the already specified protected fragment categories:
@@ -613,7 +612,7 @@ written but have not run. The procedural graph selects fragments
 created by quotation; it does not demonstrate fresh fragment construction
 from raw syntax. The selected generator type and construction approaches
 remain unchanged.
-Implementation requires a separately accepted proposal and owning task. C3
+Implementation requires an owning task and authorized delivery base. C3
 reviewed the proposed grammar, syntax-service contract and integration corpus
 against the retained CP-0033 result; review subsequent substantive changes as
 needed. Handwritten controls and limited stand-ins have run; the proposed macro

@@ -4,8 +4,8 @@ This companion develops derive-specific syntax for
 [CP-0034](../../proposals/CP-0034-top-level-declaration-macros.md). The
 derive-authoring forms and derive-specific grammar below were approved as the
 working design, along with a `deriving` clause on top-level types and newtypes
-and Rust-like additive derivation. CP-0034 remains proposed; these choices are
-neither current Ash nor implementation authority. They reuse the
+and Rust-like additive derivation. CP-0034 is accepted but unimplemented;
+these choices are not current Ash. They reuse the
 declaration-template and syntax-service proposals in the
 [declaration design](declaration-slice.md).
 
@@ -113,8 +113,8 @@ deriving_clause ::= "deriving" "(" identifier { "," identifier } [ "," ] ")" ;
 
 The list is nonempty and permits a trailing comma. The clause starts at the
 logical line after its subject, as in the approved examples. Parentheses obey
-Ash's existing logical-line rules. `syntax` is reserved as proposed by
-CP-0034; `derive` and `deriving` are contextual in these forms and remain
+Ash's existing logical-line rules. CP-0034 reserves `syntax`; `derive` and
+`deriving` are contextual in these forms and remain
 ordinary identifiers in other positions. The `derive: (name)` header also clearly separates the definition
 from an expression macro named `derive`. Slice 1 expression matchers must end
 in an expression capture, so the previously proposed derive forms were already
@@ -184,4 +184,5 @@ Neither derive execution path has run. A general generic derive must reconstruct
 all of its subject's parameters and constraints with correct binding contexts;
 the simple declarative name binding does not do this for it. The fixture set includes opaque types, derive ordering, generated-subject
 failure and unused malformed and unresolved templates. These fixed inputs still
-need independent review against the proposed grammar before proposal acceptance.
+were independently reviewed as acceptance inputs; they still require execution
+against the implementation.

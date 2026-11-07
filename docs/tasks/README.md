@@ -14,6 +14,14 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 - [TASK-0059: Nested Cell Validation](TASK-0059-nested-cell-validation.md) tracks
   the correction for [issue #195](https://github.com/dikini/ash-lang/issues/195).
 
+## Planned deliveries
+
+- [TASK-0068: Top-Level Declaration and Derive Macros](TASK-0068-top-level-declaration-macros.md)
+  owns the accepted CP-0034 delivery. Its branch and role assignments remain
+  to be selected; implementation has not started.
+
+## Retained delivery evidence
+
 The expression-macro milestone was retained at `387fdc96` and QA confirmed
 M01–M14. The completed TASK-0067 and its execution plan are preserved in Git at
 `d0b1bf68`:

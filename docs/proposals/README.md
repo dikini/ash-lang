@@ -19,11 +19,13 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-- [CP-0034: Top-Level Declaration and Derive Macros](CP-0034-top-level-declaration-macros.md)
-  — proposed module-level syntax rewriting and derives, with working grammar,
-  service contracts and integration fixtures; slice 1 reconciliation remains.
+No proposals are currently marked proposed.
 
 ## Accepted changes
+
+- [CP-0034: Top-Level Declaration and Derive Macros](CP-0034-top-level-declaration-macros.md)
+  — accepted module-level syntax rewriting and derives; implementation and
+  connected evidence remain outstanding.
 
 - [CP-0032: Row-Indexed Handler Contexts](CP-0032-row-indexed-handler-contexts.md),
   accepted as one package with

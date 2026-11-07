@@ -8,11 +8,14 @@
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md),
   [AD-0010](../decisions/AD-0010-human-diagnostic-presentation-and-localization.md),
   [DN-0030](DN-0030-typed-compiler-macros-and-hooks.md),
-  [DN-0061](DN-0061-effects-and-resources-first-slice.md)
+  [DN-0061](DN-0061-effects-and-resources-first-slice.md),
+  [CP-0034](../proposals/CP-0034-top-level-declaration-macros.md)
 
 > The accepted first expression-macro slice has a reviewed and QA-confirmed
 > implementation and [specification](../../spec/syntax-expansion.md).
-> Broader macro ideas and
+> [CP-0034](../proposals/CP-0034-top-level-declaration-macros.md) accepts
+> top-level declaration and derive macros, including executable escapes and
+> subtemplates; that slice is not implemented. Broader macro ideas and
 > illustrations in this note remain exploratory. This note does not define
 > current Ash. AD-0005 records the parser amendment.
 
@@ -716,9 +719,9 @@ This note alone does not authorize a prototype or select an implementation.
 
 ## Open questions
 
-The accepted first slice fixes its own boundaries in the linked design. These
-questions concern later extensions or the broader direction; they do not
-replace the first-slice contract.
+The accepted slices fix their boundaries in the linked design and CP-0034.
+These questions concern later extensions or the broader direction; they do
+not replace those contracts.
 
 - Which natural syntax forms and output categories are essential, and which
   should remain delimited or ordinary functions?

@@ -1,11 +1,12 @@
 # Declaration-macro grammar
 
-This proposed grammar completes the declaration-macro surface described by
-[CP-0034](../../proposals/CP-0034-top-level-declaration-macros.md). It does not
-change current Ash or authorize implementation. The derive-specific grammar is
+This grammar describes the declaration-macro surface accepted in
+[CP-0034](../../proposals/CP-0034-top-level-declaration-macros.md). It is not
+yet current Ash or an active implementation task. The derive-specific grammar is
 in [derive authoring and grammar](derive-syntax.md). The
 [current expression grammar](../../../spec/syntax.md#grammar) is extended by
-the proposed `syntax` reservation and quotation and escape forms below.
+the accepted `syntax` reservation and quotation and escape forms below once
+implemented.
 
 ## Definitions and imports
 
@@ -89,14 +90,14 @@ matcher literal but prohibits matcher groups. Thus an expression syntax named
 meaning. A module-level definition cannot silently change category based on
 which importer later uses it.
 
-CP-0034 proposes making `syntax` a reserved word in all identifier positions,
-instead of the current contextual word. Existing user-defined identifiers
+CP-0034 makes `syntax` a reserved word in all identifier positions upon
+implementation, instead of the current contextual word. Existing user-defined identifiers
 named `syntax`, including macro names and import aliases, must be renamed.
 The existing compiler-owned path `@builtin.compiler.syntax` remains valid.
 The word `declaration` remains contextual. Test both the rejected old names
 and unaffected names such as `syntax_value` and `declaration`; retain the
 compiler-owned path and existing syntax-definition and targeted-import forms.
-The [proposed quotation and escape forms](../../proposals/CP-0034-top-level-declaration-macros.md#executable-template-escapes-and-expression-subtemplates)
+The [accepted quotation and escape forms](../../proposals/CP-0034-top-level-declaration-macros.md#executable-template-escapes-and-expression-subtemplates)
 specify their staging and capture access. Outside an escape, a macro template
 still processes its own `$name` splices, including those inside a quotation in
 its output; an unbound outer splice remains an outer-template error. An escape

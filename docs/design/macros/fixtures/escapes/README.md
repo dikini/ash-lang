@@ -12,11 +12,22 @@ tests. Each entry file is compiled independently in this directory.
   syntax values in escapes. `make_expr` passes its fragment explicitly to an
   ordinary helper. `local_capture` gives an Ash variable the same spelling as
   a macro capture: the escape's `$value` reads the capture, and the inner
-  quote's `$value` splices the local variable.
+  quote's `$value` splices the local variable. Like `nested.ash`, this graph
+  imports the shared module with repetition and generator definitions.
+- `early_categories.ash` is a supplemental early-driver case using the same
+  six definitions and caller in `early_categories_forms.ash`, without the
+  shared module's other definitions. It returns `246 : Int`, matching
+  `control_categories.ash`. It does not replace the original categories gate.
 - `nested.ash` invokes a template that constructs a subtemplate, whose escape
   constructs another subtemplate. It returns `44 : Int`, as does
   `control_nested.ash`; the result distinguishes `(10 + 1) * 2` from a lost
-  fragment boundary. Two invocations must remain independent.
+  fragment boundary. Two invocations must remain independent. Its shared
+  `forms.ash` also defines repetitions and generators, which must be admitted
+  even though this caller does not invoke them.
+- `early_nested.ash` is a supplemental early-driver case with the same
+  `nested_quote` definition and caller, isolated in `early_nested_forms.ash`
+  from the shared module's other definitions. It returns `44 : Int`, matching
+  `control_nested.ash`. It does not replace the original `nested.ash` gate.
 - `repetition.ash` returns `44 : Int`, as does `control_repetition.ash`.
   `zip_values` reads `$value` only inside the escape, so that read must drive
   its template repetition alongside `$name`. `cached` reads `$number` twice
