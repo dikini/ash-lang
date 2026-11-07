@@ -708,6 +708,10 @@ pub(crate) fn validate_template_syntax(
     source: &crate::source::SourceFile,
     contexts: &SyntaxContexts,
 ) -> Result<(), crate::parser::MacroParseFailure> {
+    // Declaration template admission and selection are not connected yet.
+    if declaration.category == crate::surface::SurfaceSyntaxCategory::Declaration {
+        return Err(crate::parser::MacroParseFailure::Invalid);
+    }
     let SurfaceSyntaxImplementation::Template = &declaration.implementation else {
         return Ok(());
     };

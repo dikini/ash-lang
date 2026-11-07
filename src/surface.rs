@@ -15,7 +15,7 @@ pub use foreign::{
 pub struct SurfaceModule {
     /// Imports in source order.
     pub imports: Vec<SurfaceImport>,
-    /// Public expression syntax declarations in source order.
+    /// Public syntax declarations in source order.
     pub syntax_declarations: Vec<SurfaceSyntaxDeclaration>,
     /// Cross-family declaration order using category-local indices.
     pub declaration_order: Vec<SurfaceDeclarationIndex>,
@@ -39,9 +39,11 @@ pub struct SurfaceModule {
     pub span: Span,
 }
 
-/// A source expression syntax declaration.
+/// A source syntax declaration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceSyntaxDeclaration {
+    /// The syntactic position in which the definition can be invoked.
+    pub category: SurfaceSyntaxCategory,
     /// The exported syntax spelling.
     pub name: SurfaceName,
     /// The literal and capture sequence after the syntax name.
@@ -54,7 +56,16 @@ pub struct SurfaceSyntaxDeclaration {
     pub span: Span,
 }
 
-/// The source implementation of an expression syntax declaration.
+/// A source syntax definition's output category.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceSyntaxCategory {
+    /// An expression syntax definition.
+    Expression,
+    /// A top-level declaration syntax definition.
+    Declaration,
+}
+
+/// The source implementation of a syntax declaration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceSyntaxImplementation {
     /// A template with capture splices.
@@ -63,7 +74,7 @@ pub enum SurfaceSyntaxImplementation {
     Transformer(SurfaceName),
 }
 
-/// One part of an expression syntax matcher.
+/// One part of a syntax matcher.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceSyntaxMatcherPart {
     /// A literal token, matched by kind and source spelling.
@@ -75,7 +86,7 @@ pub enum SurfaceSyntaxMatcherPart {
     },
 }
 
-/// A capture admitted by an expression syntax matcher.
+/// A capture admitted by a syntax matcher.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SurfaceSyntaxCaptureKind {
     /// An unexpanded expression fragment.

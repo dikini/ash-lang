@@ -16,15 +16,27 @@ fn token_kinds(source: &SourceFile) -> Vec<TokenKind> {
 }
 
 #[test]
-fn dollar_is_a_token_while_syntax_remains_an_identifier() {
-    let source = SourceFile::new("syntax-punctuation.ash", "syntax $value").unwrap();
+fn syntax_is_a_keyword_and_dollar_is_a_token() {
+    let source = SourceFile::new(
+        "syntax-punctuation.ash",
+        "syntax $value syntax_value declaration",
+    )
+    .unwrap();
     let lexed = lex(&source).unwrap();
     assert!(lexed.diagnostics.is_empty(), "{:?}", lexed.diagnostics);
-    assert_eq!(lexed.tokens.len(), 4);
-    assert_eq!(lexed.tokens[0].kind, TokenKind::Identifier("syntax".into()));
+    assert_eq!(lexed.tokens.len(), 6);
+    assert_eq!(lexed.tokens[0].kind, TokenKind::SyntaxKeyword);
     assert_eq!(lexed.tokens[1].kind, TokenKind::Dollar);
     assert_range(&lexed.tokens[1], 7, 8);
     assert_eq!(lexed.tokens[2].kind, TokenKind::Identifier("value".into()));
+    assert_eq!(
+        lexed.tokens[3].kind,
+        TokenKind::Identifier("syntax_value".into())
+    );
+    assert_eq!(
+        lexed.tokens[4].kind,
+        TokenKind::Identifier("declaration".into())
+    );
 }
 
 #[test]

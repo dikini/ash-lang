@@ -540,6 +540,7 @@ fn classify_word(word: &str) -> Option<TokenKind> {
         "discard" => Some(TokenKind::Discard),
         "retain" => Some(TokenKind::Retain),
         "import" => Some(TokenKind::Import),
+        "syntax" => Some(TokenKind::SyntaxKeyword),
         "as" => Some(TokenKind::As),
         "pub" => Some(TokenKind::Pub),
         "opaque" => Some(TokenKind::Opaque),

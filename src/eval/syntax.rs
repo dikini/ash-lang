@@ -792,6 +792,7 @@ fn token_kind_name(kind: &TokenKind) -> Option<&'static str> {
         | TokenKind::RightParen
         | TokenKind::LeftBrace
         | TokenKind::RightBrace
+        | TokenKind::SyntaxKeyword
         | TokenKind::Dollar
         | TokenKind::Semicolon
         | TokenKind::EndOfFile => return None,
