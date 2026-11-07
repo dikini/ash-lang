@@ -43,6 +43,7 @@ struct ProjectionTokens<'a> {
     admission_identifiers: Option<&'a std::collections::HashSet<usize>>,
     frame: Option<&'a std::sync::Arc<crate::syntax::ExpansionFrame>>,
     name_frame: Option<&'a std::sync::Arc<crate::syntax::ExpansionFrame>>,
+    staging_frames: Option<&'a [std::sync::Arc<crate::syntax::ExpansionFrame>]>,
     preserve_name_diagnostic: bool,
 }
 
@@ -57,6 +58,7 @@ impl<'a> ProjectionTokens<'a> {
             admission_identifiers: None,
             frame: None,
             name_frame: None,
+            staging_frames: None,
             preserve_name_diagnostic: false,
         }
     }
@@ -71,6 +73,7 @@ impl<'a> ProjectionTokens<'a> {
             admission_identifiers: self.admission_identifiers,
             frame: self.frame,
             name_frame: self.name_frame,
+            staging_frames: self.staging_frames,
             preserve_name_diagnostic: self.preserve_name_diagnostic,
         }
     }
@@ -136,6 +139,7 @@ struct ProjectionToken<'a> {
     original: Option<&'a crate::syntax::MacroOutputNode>,
     admission_identifier: bool,
     name_frame: Option<&'a std::sync::Arc<crate::syntax::ExpansionFrame>>,
+    staging_frames: Option<&'a [std::sync::Arc<crate::syntax::ExpansionFrame>]>,
     preserve_name_diagnostic: bool,
 }
 
@@ -165,6 +169,7 @@ impl ProjectionTokenSource for [Token] {
             original: None,
             admission_identifier: false,
             name_frame: None,
+            staging_frames: None,
             preserve_name_diagnostic: false,
         })
     }
@@ -180,6 +185,7 @@ impl ProjectionTokenSource for ProjectionTokens<'_> {
                 .admission_identifiers
                 .is_some_and(|indices| indices.contains(&index)),
             name_frame: self.name_frame,
+            staging_frames: self.staging_frames,
             preserve_name_diagnostic: self.preserve_name_diagnostic,
         })
     }
@@ -2033,7 +2039,10 @@ impl DeclarationFrame<'_> {
         }
     }
 
-    fn tokens(&self) -> ProjectionTokens<'_> {
+    fn tokens<'a>(
+        &'a self,
+        staging_frames: &'a [std::sync::Arc<crate::syntax::ExpansionFrame>],
+    ) -> ProjectionTokens<'a> {
         match &self.tree {
             DeclarationTree::Source(tree) => ProjectionTokens::source(&tree.tokens),
             DeclarationTree::Output(parsed) => ProjectionTokens {
@@ -2045,6 +2054,7 @@ impl DeclarationFrame<'_> {
                 admission_identifiers: Some(&parsed.admission_identifiers),
                 frame: self.frame.as_ref(),
                 name_frame: self.frame.as_ref(),
+                staging_frames: Some(staging_frames),
                 preserve_name_diagnostic: true,
             },
         }
@@ -2083,6 +2093,7 @@ pub(crate) fn project_declaration_expansions(
         construction: None,
         frame: None,
     }];
+    let mut staging_frames = Vec::new();
     let mut module = ModuleProjection::default();
     loop {
         let depth = pending.len();
@@ -2097,13 +2108,16 @@ pub(crate) fn project_declaration_expansions(
             .as_ref()
             .and_then(|root| root.children.get(index))
         else {
+            if current.invocation.is_some() {
+                staging_frames.pop();
+            }
             pending.pop();
             continue;
         };
         let ConcreteElement::Node(child) = element else {
             continue;
         };
-        let tokens = current.tokens();
+        let tokens = current.tokens(&staging_frames);
         if child.kind != NodeKind::DeclarationSyntaxInvocation {
             if current.invocation.is_some() {
                 if matches!(
@@ -2155,7 +2169,9 @@ pub(crate) fn project_declaration_expansions(
             &staged_owners,
             budget,
         )?;
-        let parsed = super::parse_macro_tree_inner(
+        budget.charge_units(2)?;
+        staging_frames.push(std::sync::Arc::clone(&frame));
+        let parsed = match super::parse_macro_tree_inner(
             source,
             anchor,
             output,
@@ -2163,7 +2179,30 @@ pub(crate) fn project_declaration_expansions(
             &[],
             super::MacroOutputPosition::StagedDeclarations,
             budget,
-        )?;
+        ) {
+            Ok(parsed) => parsed,
+            Err(super::MacroParseFailure::Syntax {
+                mut diagnostics,
+                resource,
+            }) => {
+                for diagnostic in &mut diagnostics {
+                    let existing = diagnostic
+                        .primary
+                        .diagnostic_location()
+                        .map_or(0, |location| location.frames.len());
+                    charge_frame_additions(staging_frames.len(), existing, budget)?;
+                    diagnostic
+                        .diagnostic
+                        .primary
+                        .inherit_frames(&staging_frames);
+                }
+                return Err(DeclarationExpansionFailure::Syntax {
+                    diagnostics,
+                    resource,
+                });
+            }
+            Err(error) => return Err(error.into()),
+        };
         // Recovery, depth, coverage, and shape checks each build a worklist.
         for _ in 0..4 {
             budget.charge_units(parsed.tree.events.len())?;
@@ -2189,6 +2228,36 @@ pub(crate) fn project_declaration_expansions(
     Ok(module.finish(span))
 }
 
+/// Reserve every retained frame and the comparisons needed to deduplicate it.
+fn charge_frame_additions(
+    count: usize,
+    existing: usize,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    for added in 0..count {
+        budget.charge_units(existing.saturating_add(added).saturating_add(2))?;
+    }
+    Ok(())
+}
+
+fn charge_staged_name_frames(
+    token: ProjectionToken<'_>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    let Some(frames) = token.staging_frames else {
+        return Ok(());
+    };
+    let previous = match token.original {
+        Some(crate::syntax::MacroOutputNode::Identifier(name, _)) => name
+            .diagnostic
+            .as_ref()
+            .map_or(0, |location| location.frames.len()),
+        _ => 0,
+    };
+    charge_frame_additions(previous, 0, budget)?;
+    charge_frame_additions(frames.len(), previous, budget)
+}
+
 /// Refuse unsupported captures before the shared invocation projector can copy them.
 fn charge_identifier_invocation(
     node: &ConcreteNode,
@@ -2204,6 +2273,7 @@ fn charge_identifier_invocation(
         .ok_or(ProjectionError::MalformedTree(
             InternalReason::TokenOutOfRange,
         ))?;
+    charge_staged_name_frames(token, budget)?;
     let (text, introduction) = match token.original {
         Some(crate::syntax::MacroOutputNode::Identifier(name, _)) => {
             crate::syntax::charge_name(name, budget)?;
@@ -2354,6 +2424,11 @@ fn charge_projection_subtree(
     while let Some(node) = pending.pop() {
         // Projected node, traversal/worklist entry, and child-vector retention.
         budget.charge_units(3)?;
+        if let Some(frames) = tokens.staging_frames {
+            // An expression, pattern, or primitive type can retain a location
+            // at each visited node, including through grouped nodes.
+            charge_frame_additions(frames.len(), frames.len(), budget)?;
+        }
         for child in &node.children {
             match child {
                 ConcreteElement::Node(child) => {
@@ -2362,6 +2437,9 @@ fn charge_projection_subtree(
                 }
                 ConcreteElement::Token(index) => {
                     budget.charge()?;
+                    if let Some(token) = tokens.projection_token(*index) {
+                        charge_staged_name_frames(token, budget)?;
+                    }
                     if let Some(original) = tokens.originals.and_then(|items| items.get(index)) {
                         match original {
                             crate::syntax::MacroOutputNode::Identifier(name, _) => {
@@ -3241,6 +3319,7 @@ pub(super) fn project_macro_declaration_invocation(
         admission_identifiers: Some(&parsed.admission_identifiers),
         frame,
         name_frame: frame,
+        staging_frames: None,
         preserve_name_diagnostic: true,
     };
     project_declaration_invocation_from_tokens(source, root, node, &tokens, contexts)
@@ -3399,6 +3478,7 @@ pub(super) fn validate_declaration_template(
         admission_identifiers: Some(&parsed.admission_identifiers),
         frame: None,
         name_frame: None,
+        staging_frames: None,
         preserve_name_diagnostic: true,
     };
     for child in child_nodes(root) {
@@ -3466,6 +3546,7 @@ pub(super) fn project_macro_declarations(
         admission_identifiers: Some(admission_identifiers),
         frame,
         name_frame: frame,
+        staging_frames: None,
         preserve_name_diagnostic: true,
     };
     project_surface_module(source, root, &tokens)
@@ -3492,6 +3573,7 @@ pub(super) fn project_macro_expression(
         admission_identifiers: Some(admission_identifiers),
         frame,
         name_frame: None,
+        staging_frames: None,
         preserve_name_diagnostic: false,
     };
     project_expression_with_fragments(source, expression, &tokens, original_nodes)
@@ -3548,7 +3630,11 @@ fn project_expression_with_fragments(
                             InternalReason::UnexpectedShape,
                         ))?;
                     let name = match original_nodes.get(&index) {
-                        Some(crate::syntax::MacroOutputNode::Identifier(name, _)) => name.clone(),
+                        Some(crate::syntax::MacroOutputNode::Identifier(name, _))
+                            if tokens.staging_frames.is_none() =>
+                        {
+                            name.clone()
+                        }
                         _ => surface_name(tokens.projection_token(index).ok_or(
                             ProjectionError::MalformedTree(InternalReason::TokenOutOfRange),
                         )?)?,
@@ -3571,11 +3657,20 @@ fn project_expression_with_fragments(
                                 original_nodes,
                             )?);
                         } else {
-                            captures.push(Some(project_syntax_identifier_capture(
+                            let mut capture = project_syntax_identifier_capture(
                                 argument,
                                 tokens,
                                 original_nodes,
-                            )?));
+                            )?;
+                            if let Some(frames) = tokens.staging_frames {
+                                let location = capture.name.diagnostic.get_or_insert_with(|| {
+                                    Box::new(crate::syntax::DiagnosticLocation::new(
+                                        capture.origin.clone(),
+                                    ))
+                                });
+                                add_projection_frames(location, None, Some(frames));
+                            }
+                            captures.push(Some(capture));
                         }
                     }
                     tasks.push(ExpressionTask::FinishSyntaxInvocation {
@@ -4430,7 +4525,7 @@ fn project_expression_with_fragments(
                     location.related.push(cause);
                 }
                 location.captured_expression |= capture;
-                location.add_frame(&frame);
+                add_projection_frames(location, Some(&frame), tokens.staging_frames);
             }
         }
     }
@@ -4867,6 +4962,20 @@ fn project_recursive_binder(
     ))
 }
 
+fn add_projection_frames(
+    diagnostic: &mut crate::syntax::DiagnosticLocation,
+    frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
+    staging_frames: Option<&[std::sync::Arc<crate::syntax::ExpansionFrame>]>,
+) {
+    if let Some(frames) = staging_frames {
+        for frame in frames {
+            diagnostic.add_frame(frame);
+        }
+    } else if let Some(frame) = frame {
+        diagnostic.add_frame(frame);
+    }
+}
+
 fn surface_name(token: ProjectionToken<'_>) -> Result<SurfaceName, ProjectionError> {
     match token.original {
         Some(crate::syntax::MacroOutputNode::Identifier(name, origin)) => {
@@ -4886,9 +4995,7 @@ fn surface_name(token: ProjectionToken<'_>) -> Result<SurfaceName, ProjectionErr
                 diagnostic.token_cause = previous.token_cause;
                 diagnostic.captured_expression = previous.captured_expression;
             }
-            if let Some(frame) = token.name_frame {
-                diagnostic.add_frame(frame);
-            }
+            add_projection_frames(&mut diagnostic, token.name_frame, token.staging_frames);
             name.diagnostic = Some(Box::new(diagnostic));
             return Ok(name);
         }
@@ -5159,7 +5266,7 @@ fn project_pattern_diagnostic(
         _ => span.into(),
     };
     let mut location = crate::syntax::DiagnosticLocation::new(origin);
-    location.add_frame(frame);
+    add_projection_frames(&mut location, Some(frame), tokens.staging_frames);
     Ok(Some(Box::new(location)))
 }
 
@@ -5632,7 +5739,7 @@ fn project_atomic_primitive(
         (token.original, tokens.frame)
     {
         let mut location = crate::syntax::DiagnosticLocation::new(origin.clone());
-        location.add_frame(frame);
+        add_projection_frames(&mut location, Some(frame), tokens.staging_frames);
         Some(Box::new(location))
     } else {
         None
@@ -6264,6 +6371,549 @@ mod tests {
     }
 
     #[test]
+    fn h1_generated_parse_error_retains_the_invocation_and_definition_frame() {
+        let make = SourceFile::new(
+            "make.ash",
+            "pub syntax declaration: (make) $name:ident => {\n$name : Unit -> Int\n$name () = 42\n}\n",
+        ).unwrap();
+        let selected = [h1_selection(&make, 0, None)];
+        let caller = SourceFile::new("caller.ash", "make Upper\n").unwrap();
+        let tree = h1_tree(&caller, &selected);
+        let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+        let root = tree.root.as_ref().unwrap();
+        let node = child_nodes(root)
+            .find(|child| child.kind == NodeKind::DeclarationSyntaxInvocation)
+            .unwrap();
+        let invocation = project_declaration_invocation(&caller, &tree, node, &contexts).unwrap();
+        let upper = tree
+            .tokens
+            .iter()
+            .find(
+                |token| matches!(&token.kind, TokenKind::UpperIdentifier(text) if text == "Upper"),
+            )
+            .unwrap()
+            .span;
+        let result = project_declaration_expansions(
+            &caller,
+            &tree,
+            &selected,
+            &[],
+            &mut Vec::new(),
+            &mut crate::syntax_resource::SyntaxBudget::default(),
+        );
+        let Err(DeclarationExpansionFailure::Syntax {
+            diagnostics,
+            resource: None,
+        }) = result
+        else {
+            panic!("expected a syntax failure, got {result:?}");
+        };
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.primary.span() == upper)
+            .expect("the caller's Upper token is the primary source");
+        let location = diagnostic
+            .primary
+            .diagnostic_location()
+            .expect("the parse failure retains its expansion frame");
+        assert_eq!(diagnostic.reason, ParseReason::UnexpectedToken);
+        assert_eq!(diagnostic.found_token(), Some(FoundToken::UpperIdentifier));
+        assert_eq!(location.primary.primary(), upper);
+        assert!(location.related.is_empty());
+        assert!(
+            location
+                .frames
+                .iter()
+                .any(|frame| frame.invocation == invocation.span
+                    && frame.definition == selected[0].declaration.span),
+            "expected actual invocation {:?} and definition {:?}; location {location:#?}",
+            invocation.span,
+            selected[0].declaration.span
+        );
+    }
+
+    #[test]
+    fn h1_fixed_nested_output_retains_both_expansion_frames() {
+        let outer = SourceFile::new(
+            "outer_forms.ash",
+            include_str!("../../docs/design/macros/fixtures/nested/outer_forms.ash"),
+        )
+        .unwrap();
+        let inner = SourceFile::new(
+            "inner_forms.ash",
+            include_str!("../../docs/design/macros/fixtures/nested/inner_forms.ash"),
+        )
+        .unwrap();
+        let caller = SourceFile::new(
+            "main.ash",
+            include_str!("../../docs/design/macros/fixtures/nested/main.ash"),
+        )
+        .unwrap();
+        let outer = h1_selection(&outer, 0, None);
+        let inner = h1_selection(&inner, 1, None);
+        let selected = [outer.clone()];
+        let imports = [vec![inner.clone()], vec![]];
+        let tree = h1_tree(&caller, &selected);
+        let contexts = crate::syntax::SyntaxContexts::new(&selected, &imports, &[]);
+        let node = child_nodes(tree.root.as_ref().unwrap())
+            .find(|child| child.kind == NodeKind::DeclarationSyntaxInvocation)
+            .unwrap();
+        let invocation = project_declaration_invocation(&caller, &tree, node, &contexts).unwrap();
+        let module = project_declaration_expansions(
+            &caller,
+            &tree,
+            &selected,
+            &imports,
+            &mut Vec::new(),
+            &mut crate::syntax_resource::SyntaxBudget::default(),
+        )
+        .unwrap();
+        let SurfaceDefinitionKind::Equational(global) = &module.definitions[0].kind else {
+            panic!("fixed I20 output should be equational");
+        };
+        let name = &global.interface.name;
+        let body = &global.equations[0].body;
+        let SurfaceTypeKind::Function(function) = &global.interface.annotation.kind else {
+            panic!("fixed I20 output should have a function annotation");
+        };
+        assert_eq!(name.text, "answer");
+        assert_eq!(name.span.source(), caller.id());
+        assert_eq!(
+            name.diagnostic.as_ref().unwrap().primary.primary(),
+            name.span
+        );
+        assert!(body.diagnostic.as_ref().unwrap().token_cause);
+        for (what, diagnostic) in [
+            ("forwarded name", name.diagnostic.as_deref()),
+            ("inner body", body.diagnostic.as_deref()),
+            ("domain", function.domain.diagnostic.as_deref()),
+            ("codomain", function.codomain.diagnostic.as_deref()),
+            (
+                "pattern",
+                global.equations[0].patterns[0].diagnostic.as_deref(),
+            ),
+        ] {
+            let diagnostic =
+                diagnostic.unwrap_or_else(|| panic!("{what} lost all diagnostic metadata"));
+            assert_eq!(
+                diagnostic
+                    .frames
+                    .iter()
+                    .map(|frame| (frame.invocation, frame.definition))
+                    .collect::<Vec<_>>(),
+                [
+                    (invocation.span, outer.declaration.span),
+                    (invocation.span, inner.declaration.span)
+                ],
+                "wrong frames for {what}: {diagnostic:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn h1_nested_generated_parse_error_retains_every_actual_frame() {
+        let outer = SourceFile::new(
+            "outer_forms.ash",
+            include_str!("../../docs/design/macros/fixtures/nested/outer_forms.ash"),
+        )
+        .unwrap();
+        let inner = SourceFile::new(
+            "inner_forms.ash",
+            include_str!("../../docs/design/macros/fixtures/nested/inner_forms.ash"),
+        )
+        .unwrap();
+        let inner_pub = lex(&inner)
+            .unwrap()
+            .into_parts()
+            .0
+            .into_iter()
+            .filter(|token| token.kind == TokenKind::Pub)
+            .nth(1)
+            .unwrap()
+            .span;
+        let outer = h1_selection(&outer, 0, None);
+        let inner = h1_selection(&inner, 1, None);
+        let selected = [outer.clone()];
+        let imports = [vec![inner.clone()], vec![]];
+        let caller = SourceFile::new("caller.ash", "outer Upper\n").unwrap();
+        let tree = h1_tree(&caller, &selected);
+        let contexts = crate::syntax::SyntaxContexts::new(&selected, &imports, &[]);
+        let node = child_nodes(tree.root.as_ref().unwrap())
+            .find(|child| child.kind == NodeKind::DeclarationSyntaxInvocation)
+            .unwrap();
+        let invocation = project_declaration_invocation(&caller, &tree, node, &contexts).unwrap();
+        let mut owners = Vec::new();
+        let mut measured = crate::syntax_resource::SyntaxBudget::default();
+        let result = project_declaration_expansions(
+            &caller,
+            &tree,
+            &selected,
+            &imports,
+            &mut owners,
+            &mut measured,
+        );
+        let Err(DeclarationExpansionFailure::Syntax {
+            diagnostics,
+            resource: None,
+        }) = result
+        else {
+            panic!("expected generated parse failure: {result:?}")
+        };
+        let error = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.primary.span() == inner_pub)
+            .expect("the original parser primary is the inner template's pub token");
+        let location = error.primary.diagnostic_location().unwrap();
+        assert_eq!(error.found_token(), Some(FoundToken::Spelling("pub")));
+        assert_eq!(location.primary.primary(), inner_pub);
+        assert_eq!(
+            location
+                .frames
+                .iter()
+                .map(|frame| (frame.invocation, frame.definition))
+                .collect::<Vec<_>>(),
+            [
+                (invocation.span, outer.declaration.span),
+                (invocation.span, inner.declaration.span)
+            ]
+        );
+        assert!(owners.is_empty());
+        let mut short = crate::syntax_resource::SyntaxBudget::with_limit(measured.consumed() - 1);
+        assert!(matches!(
+            project_declaration_expansions(
+                &caller,
+                &tree,
+                &selected,
+                &imports,
+                &mut owners,
+                &mut short
+            ),
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        assert!(owners.is_empty());
+    }
+
+    #[test]
+    fn h1_pops_nested_frames_before_projecting_later_siblings() {
+        let outer = SourceFile::new("outer.ash", "pub syntax declaration: (outer) $name:ident => {\ninner $name\ntype After = After\n}\n").unwrap();
+        let inner = SourceFile::new("inner.ash", "pub syntax declaration: (inner) $name:ident => {\n$name : Unit -> Int\n$name () = 42\n}\n").unwrap();
+        let other = SourceFile::new("other.ash", "pub syntax declaration: (other) $name:ident => {\n$name : Unit -> Int\n$name () = 42\n}\n").unwrap();
+        let outer = h1_selection(&outer, 0, None);
+        let inner = h1_selection(&inner, 1, None);
+        let other = h1_selection(&other, 2, None);
+        let selected = [outer.clone(), other.clone()];
+        let imports = [vec![inner.clone()], vec![], vec![]];
+        let caller = SourceFile::new("caller.ash", "outer first\nother second\n").unwrap();
+        let tree = h1_tree(&caller, &selected);
+        let module = project_declaration_expansions(
+            &caller,
+            &tree,
+            &selected,
+            &imports,
+            &mut Vec::new(),
+            &mut crate::syntax_resource::SyntaxBudget::default(),
+        )
+        .unwrap();
+        for (name, expected) in [
+            (
+                output_definition_name(&module.definitions[0]),
+                vec![outer.declaration.span, inner.declaration.span],
+            ),
+            (
+                &module.type_declarations[0].name,
+                vec![outer.declaration.span],
+            ),
+            (
+                output_definition_name(&module.definitions[1]),
+                vec![other.declaration.span],
+            ),
+        ] {
+            assert_eq!(
+                name.diagnostic
+                    .as_ref()
+                    .unwrap()
+                    .frames
+                    .iter()
+                    .map(|frame| frame.definition)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn h1_emitted_expression_syntax_keeps_frames_on_its_identifier_capture() {
+        let outer = SourceFile::new(
+            "outer.ash",
+            "pub syntax declaration: (outer) $name:ident => { inner $name }\n",
+        )
+        .unwrap();
+        let inner = SourceFile::new("inner.ash", "pub syntax declaration: (inner) $name:ident => {\n$name : Unit -> Int\n$name () = keep $name from 42\n}\n").unwrap();
+        let expression = SourceFile::new(
+            "expression.ash",
+            "pub syntax keep $name:ident from $value:expr => {\n$value\n}\n",
+        )
+        .unwrap();
+        let outer = h1_selection(&outer, 0, None);
+        let inner = h1_selection(&inner, 1, None);
+        let expression = h1_selection(&expression, 2, None);
+        let selected = [outer.clone()];
+        let imports = [vec![inner.clone()], vec![expression], vec![]];
+        let caller = SourceFile::new("caller.ash", "outer answer\n").unwrap();
+        let tree = h1_tree(&caller, &selected);
+        let module = project_declaration_expansions(
+            &caller,
+            &tree,
+            &selected,
+            &imports,
+            &mut Vec::new(),
+            &mut crate::syntax_resource::SyntaxBudget::default(),
+        )
+        .unwrap();
+        let SurfaceDefinitionKind::Equational(global) = &module.definitions[0].kind else {
+            panic!("expected equational output")
+        };
+        let SurfaceExprKind::SyntaxInvocation { name, captures } = &global.equations[0].body.kind
+        else {
+            panic!("expected emitted expression syntax")
+        };
+        let [
+            SurfaceSyntaxCapture::Identifier(capture),
+            SurfaceSyntaxCapture::Expression(_),
+        ] = captures.as_slice()
+        else {
+            panic!("expected identifier capture")
+        };
+        assert_eq!(name.text, "keep");
+        assert_eq!(capture.name.text, "answer");
+        assert_eq!(capture.origin.primary(), capture.name.span);
+        assert_eq!(capture.name.span.source(), caller.id());
+        for location in [
+            name.diagnostic.as_deref().unwrap(),
+            capture.name.diagnostic.as_deref().unwrap(),
+        ] {
+            assert_eq!(
+                location
+                    .frames
+                    .iter()
+                    .map(|frame| frame.definition)
+                    .collect::<Vec<_>>(),
+                [outer.declaration.span, inner.declaration.span]
+            );
+        }
+    }
+
+    #[test]
+    fn h1_generated_name_preserves_a_d3_location_and_its_prior_cause() {
+        use crate::syntax::{DiagnosticLocation, ExpansionFrame, MacroOutputNode, SyntaxContexts};
+        use std::sync::Arc;
+
+        let outer_source = SourceFile::new(
+            "outer.ash",
+            "pub syntax declaration: (outer) $name:ident => { inner $name }\n",
+        )
+        .unwrap();
+        let inner_source = SourceFile::new("inner.ash", "pub syntax declaration: (inner) $name:ident => {\nhelper : Unit -> Int\nhelper () = 42\n}\n").unwrap();
+        let outer = h1_selection(&outer_source, 0, None);
+        let mut inner = h1_selection(&inner_source, 1, None);
+        let selected = [outer.clone()];
+        let imports = [vec![inner.clone()], vec![]];
+
+        // Obtain the earlier name and capture through the real D3 handoff.
+        let previous_caller = SourceFile::new("previous.ash", "outer earlier\n").unwrap();
+        let previous_tree = h1_tree(&previous_caller, &selected);
+        let previous_node = child_nodes(previous_tree.root.as_ref().unwrap())
+            .find(|child| child.kind == NodeKind::DeclarationSyntaxInvocation)
+            .unwrap();
+        let contexts = SyntaxContexts::new(&selected, &imports, &[]);
+        let previous = project_declaration_invocation(
+            &previous_caller,
+            &previous_tree,
+            previous_node,
+            &contexts,
+        )
+        .unwrap();
+        let [SurfaceSyntaxCapture::Identifier(capture)] = previous.captures.as_slice() else {
+            panic!("expected the real caller capture")
+        };
+        let cause = DiagnosticLocation::new(capture.origin.clone());
+        let prior_frame = Arc::new(ExpansionFrame {
+            invocation: previous.span,
+            definition: outer.declaration.span,
+        });
+        let output = crate::syntax::instantiate_declaration_template(
+            &outer,
+            &previous.captures,
+            1,
+            previous.span,
+            &mut crate::syntax_resource::SyntaxBudget::default(),
+        )
+        .unwrap();
+        let contexts = SyntaxContexts::new(&selected, &imports, &[Some(0)]);
+        let parsed = super::super::parse_macro_tree_inner(
+            &previous_caller,
+            previous.span,
+            output,
+            &contexts,
+            &[],
+            super::super::MacroOutputPosition::StagedDeclarations,
+            &mut crate::syntax_resource::SyntaxBudget::default(),
+        )
+        .unwrap();
+        let nested_node = child_nodes(parsed.tree.root.as_ref().unwrap())
+            .find(|child| child.kind == NodeKind::DeclarationSyntaxInvocation)
+            .unwrap();
+        let nested = project_macro_declaration_invocation(
+            &previous_caller,
+            previous.span,
+            Some((outer.declaration.span, 1)),
+            &parsed,
+            nested_node,
+            &contexts,
+            Some(&prior_frame),
+        )
+        .unwrap();
+        let mut prior = nested.name.diagnostic.as_deref().unwrap().clone();
+        assert_eq!(prior.primary.primary().source(), outer_source.id());
+        assert_eq!(cause.primary.primary(), capture.name.span);
+        assert!(
+            prior
+                .frames
+                .iter()
+                .any(|frame| Arc::ptr_eq(frame, &prior_frame))
+        );
+        prior.add_cause(&cause);
+
+        // Seed the real D3 location onto a later structured name, retaining
+        // its own source origin; no procedural output is enabled here.
+        let template = Arc::make_mut(inner.declaration.template_contents.as_mut().unwrap());
+        let target = template
+            .iter_mut()
+            .find_map(|node| match node {
+                MacroOutputNode::Identifier(name, _) if name.text == "helper" => Some(name),
+                _ => None,
+            })
+            .expect("the actual inner template contains helper");
+        let name_span = target.span;
+        target.diagnostic = Some(Box::new(prior.clone()));
+        let imports = [vec![inner.clone()], vec![]];
+        let caller = SourceFile::new("caller.ash", "outer answer\n").unwrap();
+        let tree = h1_tree(&caller, &selected);
+        let module = project_declaration_expansions(
+            &caller,
+            &tree,
+            &selected,
+            &imports,
+            &mut Vec::new(),
+            &mut crate::syntax_resource::SyntaxBudget::default(),
+        )
+        .unwrap();
+        let name = output_definition_name(&module.definitions[0]);
+        let diagnostic = name.diagnostic.as_deref().unwrap();
+        assert_eq!(diagnostic.primary.primary(), name_span);
+        assert!(diagnostic.related.contains(&prior.primary));
+        assert!(diagnostic.related.contains(&cause.primary));
+        assert_eq!(diagnostic.token_cause, prior.token_cause);
+        assert_eq!(diagnostic.captured_expression, prior.captured_expression);
+        assert!(
+            diagnostic
+                .frames
+                .iter()
+                .any(|frame| Arc::ptr_eq(frame, &prior_frame))
+        );
+        assert!(
+            diagnostic
+                .frames
+                .iter()
+                .any(|frame| frame.invocation.source() == caller.id()
+                    && frame.definition == outer.declaration.span)
+        );
+        assert!(
+            diagnostic
+                .frames
+                .iter()
+                .any(|frame| frame.invocation.source() == caller.id()
+                    && frame.definition == inner.declaration.span)
+        );
+    }
+
+    #[test]
+    fn h1_nested_frame_retention_obeys_the_cumulative_allowance() {
+        let outer = SourceFile::new(
+            "outer.ash",
+            "pub syntax declaration: (outer) $name:ident => { inner $name }\n",
+        )
+        .unwrap();
+        let inner = SourceFile::new("inner.ash", "pub syntax declaration: (inner) $name:ident => {\n$name : Unit -> Int\n$name () = 42\n}\n").unwrap();
+        let selected = [h1_selection(&outer, 0, None)];
+        let imports = [vec![h1_selection(&inner, 1, None)], vec![]];
+        let caller = SourceFile::new("caller.ash", "outer answer\n").unwrap();
+        let tree = h1_tree(&caller, &selected);
+        let mut measured = crate::syntax_resource::SyntaxBudget::default();
+        let mut owners = Vec::new();
+        let first = project_declaration_expansions(
+            &caller,
+            &tree,
+            &selected,
+            &imports,
+            &mut owners,
+            &mut measured,
+        )
+        .unwrap();
+        assert_eq!(
+            output_definition_name(&first.definitions[0])
+                .diagnostic
+                .as_ref()
+                .unwrap()
+                .frames
+                .len(),
+            2
+        );
+        let used = measured.consumed();
+        let mut short = crate::syntax_resource::SyntaxBudget::with_limit(used - 1);
+        let mut owners = Vec::new();
+        assert!(matches!(
+            project_declaration_expansions(
+                &caller,
+                &tree,
+                &selected,
+                &imports,
+                &mut owners,
+                &mut short
+            ),
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        assert!(owners.is_empty());
+        let mut exact = crate::syntax_resource::SyntaxBudget::with_limit(used);
+        let retried = project_declaration_expansions(
+            &caller,
+            &tree,
+            &selected,
+            &imports,
+            &mut owners,
+            &mut exact,
+        )
+        .unwrap();
+        assert_eq!(exact.consumed(), used);
+        assert_eq!(owners.len(), 2);
+        assert_eq!(
+            output_definition_name(&retried.definitions[0])
+                .diagnostic
+                .as_ref()
+                .unwrap()
+                .frames
+                .len(),
+            2
+        );
+    }
+
+    #[test]
     fn h1_rejects_non_identifier_captures_and_transformers_before_staging() {
         for (definition, invocation) in [
             (
@@ -6401,6 +7051,7 @@ mod tests {
                 admission_identifiers: Some(&parsed.admission_identifiers),
                 frame: Some(&current),
                 name_frame: Some(&current),
+                staging_frames: None,
                 preserve_name_diagnostic: true,
             };
             let mut values = Vec::new();
@@ -6438,6 +7089,7 @@ mod tests {
             admission_identifiers: Some(&parsed.admission_identifiers),
             frame: Some(&current),
             name_frame: Some(&current),
+            staging_frames: None,
             preserve_name_diagnostic: true,
         };
         let mut children = child_nodes(root);
@@ -6526,6 +7178,7 @@ mod tests {
                 admission_identifiers: Some(&parsed.admission_identifiers),
                 frame: Some(&current),
                 name_frame: Some(&current),
+                staging_frames: None,
                 preserve_name_diagnostic: true,
             };
             let mut budget = crate::syntax_resource::SyntaxBudget::default();
@@ -6556,6 +7209,7 @@ mod tests {
             admission_identifiers: Some(&parsed.admission_identifiers),
             frame: Some(&current),
             name_frame: Some(&current),
+            staging_frames: None,
             preserve_name_diagnostic: true,
         };
         let child = child_nodes(root).next().unwrap();
@@ -8743,6 +9397,7 @@ mod tests {
             admission_identifiers: None,
             frame: None,
             name_frame: None,
+            staging_frames: None,
             preserve_name_diagnostic: false,
         };
         let projected = project_surface_module(&source, root, &tokens).unwrap();
