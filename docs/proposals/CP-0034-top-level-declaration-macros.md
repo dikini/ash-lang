@@ -72,6 +72,30 @@ output.
 
 ## Proposed behavior
 
+### Reserved word `syntax`
+
+Reserve `syntax` throughout Ash. It cannot be used as a user-defined
+identifier, including a term, module-path segment, import alias or syntax
+name. It remains the keyword used for syntax declarations and imports. This
+allows a quotation form beginning with `syntax` without treating an ordinary
+identifier or an imported macro of that name as a quotation. The existing
+compiler-owned module path `@builtin.compiler.syntax` remains valid; its final
+segment is not a user-defined identifier.
+
+This is a deliberate compatibility change: programs that currently use
+`syntax` as an identifier must rename it. Other identifiers, including
+`declaration`, retain their existing status. The proposed quotation and escape
+forms are described below.
+
+Extend the existing closed `Syntax.TokenKind` sum with `SyntaxKeyword` for
+`syntax` and `Dollar` for `$`. The existing `make_token` and `token_kind`
+operations use those exact spellings. This lets ordinary quoted expressions
+survive traversal through the existing syntax service; delimiters remain
+structured groups, and identifier nodes retain their contexts. A dollar
+token in syntax data is not itself an instruction to expand an outer template.
+Ordinary parsing still rejects it where it has no syntactic role. Existing
+exhaustive `TokenKind` matches must account for the two new cases.
+
 ### Scope and output
 
 A module may invoke an explicitly imported declaration macro in a module
@@ -220,8 +244,9 @@ Any ordinary Ash function with the required state-to-pair type can be used as
 the step. The compiler checks its type using ordinary Ash rules; the macro
 system threads its state and substitutes the returned fragment. It does not
 inspect how the function constructs that fragment or require a conversion
-interface. The old wrapper-based I17 fixture must be revised to use the
-selected result type.
+interface. I17 provides both a subtemplate graph and a procedural graph that
+selects quote-created fragments using the syntax service. It does not
+demonstrate fresh fragment construction from raw syntax.
 
 #### Syntax admission and failures
 
@@ -312,6 +337,139 @@ the declarative derive form binds the subject name. Implementation must not
 assume a matcher's spelling is an identity test or depend on inferred types,
 selected implementations, compiler IR, or unchecked private declarations.
 
+### Executable template escapes and expression subtemplates
+
+The escape and subtemplate design in this section is approved for CP-0034;
+the proposal as a whole remains proposed and this syntax is not yet current
+Ash. A template describes the syntax it emits. `${ ... }` marks an ordinary
+Ash block to run while filling that template; the resulting syntax value is
+inserted at the escape's position.
+The initial form admits the already specified protected fragment categories:
+`Syntax.ExpressionFragment`, `Syntax.TypeFragment`, `Syntax.PatternFragment`,
+`Syntax.DeclarationFragment`, and an identifier together with its
+`Syntax.Origin`. It introduces no implicit conversion or new syntax-value
+interface. The existing output parser admits or rejects the resulting syntax
+at its position; for example an expression fragment in a type position fails
+syntax admission. Ordinary Ash checking handles the escaped block and its
+result. Other result categories and raw declaration sequences are not added by
+this form.
+
+```ash
+pub syntax declaration: (define_plus) $name:ident from $value:expr => {
+    pub $name : Unit -> Int
+    $name () = ${
+        let input = $value
+        syntax { $input + 100 }
+    }
+}
+```
+
+Given `define_plus answer from 5`, the output is equivalent to a function
+`answer () = 5 + 100`. The `let` is expansion-time code and is not emitted.
+A `syntax { expression }` expression selects an expression subtemplate with
+the intended `Syntax.ExpressionFragment` result. Its braces delimit the
+expression syntax rather than adding a block. The macro subsystem constructs
+the fragment from the quoted syntax as the ordinary function executes, using
+the existing checked host and syntax-handle boundaries. It may use internal
+syntax transformation helpers; the function needs no compiler `Input` argument
+or special function category. Inside the quote, `$input` splices the fragment
+held by the ordinary Ash variable `input`. A quote can contain another
+`${ ... }` escape, whose block can construct another quote. Protected fragment
+boundaries preserve precedence across insertions.
+
+An escape uses an ordinary Ash block: `${` opens the escape, the block uses
+normal balanced braces, parentheses and logical-line rules, and `}` ends it.
+A quote is a `primary_expression` of the form `syntax { ... }` containing
+exactly one expression with fragment-valued `$name` holes and `${ ... }`
+escapes; it can occur wherever an ordinary primary expression is admitted. The
+quote's outer braces delimit its content. Parse these forms by the token after
+`$`: `{` begins an escape, `(` begins a template repetition only in existing
+repetition-enabled macro templates, and a macro name begins a splice or capture
+reference according to the surrounding mode. Expression quotes do not add a
+new repetition form.
+
+Inside escaped code, `$value` reads the lexically enclosing macro's capture as
+an Ash value, not as code to evaluate or text to re-lex. Its type follows the
+capture kind:
+
+| Capture | Ash value |
+| --- | --- |
+| `expr` | `Syntax.ExpressionFragment` |
+| `type` | `Syntax.TypeFragment` |
+| `pattern` | `Syntax.PatternFragment` |
+| `declaration` | `Syntax.DeclarationFragment` |
+| `ident` | `(Syntax.Identifier, Syntax.Origin)` |
+
+Each value retains its syntax context and source origin. Capture access is
+lexical: an ordinary helper called by an escape does not acquire the caller's
+capture names. Pass any needed value as an ordinary argument. A `$name` in a
+quote inside escaped code splices an ordinary Ash variable, not a macro capture;
+bind a capture to a variable first, as above.
+
+Existing repetition scope applies. An escape inside a template repetition sees
+the current selected values at that depth; a capture cannot be read outside the
+repetition scope required for its remaining levels. Capture reads in escaped
+code count as uses when determining the surrounding template repetition's
+existing drivers. Multiple drivers retain the existing matching-length rule;
+nested repetitions select their current values in the existing order. This form
+does not add a way to read an entire repeated capture outside its existing
+scope; the procedural syntax service retains `RepeatedCapture(Captures)` and
+its nested grouping. Generator bindings in scope may be read inside escaped
+code as their syntax values, with the same per-iteration stepping, nesting and
+cached reuse as ordinary template splices; generator reads do not themselves
+supply a repetition driver. `from $start` remains the existing seed expression
+and its existing caller-context checking, not an escape capture-value read.
+
+An outer macro template processes its `$name` splices recursively through
+ordinary nested groups and quotes, as in slice 1. A quote simply written as
+part of that outer template does not establish a new splice scope, and an
+unknown outer splice still fails. A `${ ... }` encountered there executes as
+an escape of that outer template. Entering an escape changes mode: its block is
+ordinary Ash with lexical capture-value reads. A `syntax { ... }` evaluated in
+that block constructs a subtemplate with its own ordinary-Ash-variable holes.
+An escape in that subtemplate executes when the subtemplate is constructed and
+can construct another subtemplate. Thus the escape boundary, not mere nested
+braces, separates the stages.
+
+Parse escapes and quotes with their containing definition; reject malformed
+notation, including a malformed unused quote, there. Ordinary Ash compilation
+checks executable code, names, calls, hole variable types and results in their
+lexical environments. Literal free names written as quoted output follow slice
+1's deferred resolution when surviving generated code is checked. Each reached
+escape executes once in source order when its containing template is filled;
+escapes in zero repetitions and unused definitions do not execute. Use the
+existing checked host, handle authentication, bounds and failure propagation.
+A failed escape rejects the complete invocation without publishing partial
+output.
+
+Literal quoted identifiers retain the quoting definition's context and a fresh
+introduction for each quotation construction, as in slice 1. Literal syntax
+retains its construction origin. Captured and spliced syntax retains its own
+contexts, protected boundaries and origins; copied fragments follow slice 1's
+existing copy rules. Origins do not confer authority. Preserve macro
+invocation and definition frames for diagnostics. Syntax admission checks
+fragment placement; downstream compiler stages check the generated program. No
+macro-specific semantic checker, new generator conversion interface, implicit
+primitive conversion, new error protocol or user-visible compiler `Input`
+parameter is added.
+
+The state-only generator contract remains `State -> (State,
+Syntax.ExpressionFragment)`. The quote specifies the subtemplate source form
+and its macro-subsystem construction. The independently reviewed I17 procedural
+variant uses syntax-service operations on quoted fragments; it does not
+demonstrate constructing a fresh fragment from raw syntax.
+
+Required evidence: the [I22 source fixtures](../design/macros/fixtures/escapes/README.md)
+cover all five capture categories,
+capture-versus-local names, an escape's use as a repetition driver, current
+iteration and generator cached values, nested repetitions and subtemplates,
+zero iterations, independent macro invocations and hygiene, precedence,
+definition-time malformed unused quotes, executable ordinary type errors,
+wrong fragment positions, retained diagnostics and atomic failure. Check the
+reserved-word cases and `@builtin.compiler.syntax` path. Exercise these through
+the public compiler path after implementation; none is a passing product test
+until then.
+
 ### Staging, names and authority
 
 Resolve explicit syntax imports from the fixed acyclic dependency graph.
@@ -331,7 +489,8 @@ context and the existing bounded expansion policy. Declaration collection
 precedes body resolution, allowing
 ordinary forward and recursive references. Fresh identities must be
 deterministic modulo renaming, and ordinary no-macro modules retain their
-existing parse and meaning. The initial corpus fixes generated-subject,
+existing parse and meaning except for the newly reserved `syntax` word. The
+initial corpus fixes generated-subject,
 derive-order and definition-time template cases; their agreement with this
 contract remains subject to independent review before acceptance.
 
@@ -391,8 +550,9 @@ diagnostic locations do not grant authority.
   declaration output, without exposing compiler ASTs or inferred types.
 - Extend contextual hygiene, origin propagation and definition-context
   resolution to generated module declarations and their checked exports.
-- Preserve existing no-syntax program behavior, subject to an explicitly
-  specified compatibility rule for the candidate contextual source notation.
+- Reserve `syntax` as a keyword; existing uses of that word as a user-defined
+  identifier must be renamed. Preserve other existing no-syntax program behavior,
+  subject to the compatibility rule for candidate source notation.
 
 ## Affected specification areas
 
@@ -442,14 +602,22 @@ completion, one-shot, or evidence properties.
 The companion records the historical 65- and 95-point predictions alongside
 the declaration inventory, integration catalogue and dependency-ordered tasks.
 The local [delivery plan](../design/macros/slice2-delivery-plan.md) preserves
-the earlier 126-point prediction and records a revised forecast of 130 points,
-including four points of already recorded planning work. Its pre-implementation
-gates include completing and independently reviewing the I17 source fixtures.
-Implementation requires a separately accepted proposal and owning task. Before
-acceptance, independently review the proposed grammar, syntax-service contract,
-integration corpus and remaining semantic decisions against the retained
-CP-0033 result, and resolve findings. Handwritten controls and limited
-stand-ins have run; the proposed macro paths are not passing product tests.
+the earlier 126- and 130-point predictions and estimates the current scope at
+150 points, with 142 remaining. The new prediction accounts for executable
+escapes, token changes and their connected evidence. C4 source preparation and
+C3 independent review are recorded as complete. Points predict difficulty;
+they are not measured results or an acceptance decision.
+The I17 [fixture record](../design/macros/fixtures/generators/README.md) fixes
+the expected behavior and construction coverage. Both source graphs are
+written but have not run. The procedural graph selects fragments
+created by quotation; it does not demonstrate fresh fragment construction
+from raw syntax. The selected generator type and construction approaches
+remain unchanged.
+Implementation requires a separately accepted proposal and owning task. C3
+reviewed the proposed grammar, syntax-service contract and integration corpus
+against the retained CP-0033 result; review subsequent substantive changes as
+needed. Handwritten controls and limited stand-ins have run; the proposed macro
+paths are not passing product tests.
 
 The final implementation must execute the accepted integration corpus through
 the real public compiler driver, interpreter and supported build/image path;

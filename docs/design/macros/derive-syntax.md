@@ -113,9 +113,9 @@ deriving_clause ::= "deriving" "(" identifier { "," identifier } [ "," ] ")" ;
 
 The list is nonempty and permits a trailing comma. The clause starts at the
 logical line after its subject, as in the approved examples. Parentheses obey
-Ash's existing logical-line rules. `syntax`, `derive`, and `deriving` are
-contextual in these forms; the latter two remain ordinary identifiers in other
-positions. The `derive: (name)` header also clearly separates the definition
+Ash's existing logical-line rules. `syntax` is reserved as proposed by
+CP-0034; `derive` and `deriving` are contextual in these forms and remain
+ordinary identifiers in other positions. The `derive: (name)` header also clearly separates the definition
 from an expression macro named `derive`. Slice 1 expression matchers must end
 in an expression capture, so the previously proposed derive forms were already
 distinguishable by their complete headers; the parenthesized spelling provides

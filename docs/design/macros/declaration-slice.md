@@ -33,8 +33,8 @@ review identified grant-specific work not required by the retained expression
 slice and implementation choices that remain open. The 95 points are the
 recorded pre-review prediction, not a fresh estimate for the revised contract.
 The [local delivery plan](slice2-delivery-plan.md) records the later 126-point
-prediction and the revised 130-point forecast, including four points of already
-recorded planning work.
+prediction, the later 130-point forecast and the current 150-point scope
+prediction, including 142 points of remaining delivery work.
 
 | Functionality | Points | Counted once |
 | --- | ---: | --- |
@@ -188,6 +188,10 @@ The following proposed additions extend the slice 1 public types in
 `DeclarationFragment` are opaque, compiler-issued handles like slice 1's
 `ExpressionFragment`. The alternatives shown are added to the existing sums;
 the existing alternatives and their meaning remain unchanged.
+
+Add `SyntaxKeyword` and `Dollar` to `TokenKind`, with fixed spellings `syntax`
+and `$`. The existing token operations and exhaustive-match migration rules
+apply; this extends the closed sum rather than adding a separate syntax API.
 
 ```text
 pub type Captures = NoCaptures
@@ -364,9 +368,10 @@ add no generator-specific effect rule.
 Any ordinary Ash function with the required type can be used as the step.
 The macro machinery threads its state and substitutes the fragment; it does not
 inspect the function body or add a type checker. Reuse existing syntax admission
-and diagnostics, and leave semantic checking to the ordinary compiler. Revise
-I17 to use the selected fragment result type; the current wrapper-based graph
-predates this decision.
+and diagnostics, and leave semantic checking to the ordinary compiler. I17
+provides a subtemplate graph and a procedural graph that selects quote-created
+fragments using the syntax service. It does not demonstrate fresh fragment
+construction from raw syntax.
 
 Check and execute the seed and step through the retained slice 1 host. Preserve
 its checked entry, bounded execution, syntax services, authenticated handles,
@@ -628,6 +633,7 @@ opacity and malformed-member graphs and their handwritten controls.
 | I19: repetition and captures | Match zero, one and multiple items with `*`, and one and multiple with `+`; reject zero with `+`. Exercise separators, paired equal-length captures in source order, a length mismatch, and each supported identifier, type, expression, pattern and braced multi-line declaration capture. |
 | I20: nested declarations | Generate an invocation of another declaration macro and verify source-order output and definition-versus-caller syntax context. Exercise forward and mutually recursive references, a bounded recursive expansion failure and atomic rejection without partial publication. With two authored expansion failures, verify that a derive preceding a declaration invocation fails first, and vice versa. |
 | I21: contextual declaration | Define `syntax declaration: (name)` in a macro module; separately use `declaration` as an ordinary identifier and as a CP-0033 expression-syntax name with `:` and identifier matcher literals. Verify unchanged parsing and behavior. Check imported syntax-name collision and rename rules and reject a module's use of its own syntax definition. |
+| I22: executable escapes | Exercise all five capture kinds as syntax values, nested quotes and escapes, repetition drivers and cached generators, ordinary helper calls, syntax contexts and origins, zero iterations, atomic failure, ordinary type errors and the reserved `syntax` word. The [escape graphs](fixtures/escapes/README.md) specify the source inputs and assertions. |
 
 The fixed-derive case I09 has these candidate inputs. The derive receives the
 type declaration itself; there is no separate caller-supplied target name.
@@ -887,10 +893,10 @@ the combined production path after the independently progressing units connect.
 
 ## Before proposal acceptance
 
-1. Review the remaining public-name behavior and corpus obligations recorded in
-   the [local plan](slice2-delivery-plan.md). The generator's ordinary function
+1. Review the recalibrated [local plan](slice2-delivery-plan.md) for the current
+   scope. C3 reviewed the public-name contract and corpus; connected public-name
+   behavior remains an implementation gate. The generator's ordinary function
    type is decided; no conversion interface or separate evidence mechanism is
-   required. Keep the revised 130-point forecast and earlier predictions
-   visible as the scope and acceptance evidence are reviewed.
+   required. Preserve the earlier predictions.
 2. Obtain an explicit acceptance decision. Product implementation, its
    mutation harness and passing integration evidence follow that decision.

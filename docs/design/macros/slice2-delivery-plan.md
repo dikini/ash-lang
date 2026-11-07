@@ -99,6 +99,7 @@ start; they are not mandates for particular Rust types or new public APIs.
 | Output | Template/host -> declaration parser and collector | Ordered structured syntax and protected fragments; category, origin and failure handling, without text re-lexing or partial publication. |
 | Module staging | Collector/derive entry -> ordinary resolver | Source-order expansion, original derive subject, generated declarations, forward references, scope and export spelling. |
 | Generator | Matcher/seed/step -> template repetition | Seed environment; `State -> (State, Syntax.ExpressionFragment)` state threading, per-iteration reuse and nesting; both selected construction paths, ordinary Ash checking and retained host rules. |
+| Quote and escape | Template/ordinary Ash -> checked host -> syntax admission | Lexical capture values, quote holes, contexts and origins; one reached escape per expansion position, existing host limits, and atomic publication. Escape reads participate in the existing repetition driver rules. |
 | Provenance and host | Syntax services -> parser, resolver, diagnostics and linker | Context versus origin, valid handle lifetime, checked-host effects, bounds, output transfer and teardown. |
 
 Likely implementation areas on the retained baseline are `src/parser/grammar.rs`,
@@ -120,18 +121,20 @@ They must not add implementation or silently decide language semantics.
 | --- | --- | ---: | --- | --- |
 | C1 | Reconcile CP-0034 with slice 1's grammar, service, contexts and host. | 2 | Slice 1 on local main | **Planning reconciliation recorded:** see the proposal and [boundary record](declaration-slice.md#slice-1-contract-boundary). I18/I21 connected tests await slice 2; check their inputs against the retained interface before acceptance. |
 | C2 | Record the ordinary typed generator contract. | 2 | Retained syntax service | **Decision recorded:** any ordinary function of the required state-to-pair type can be used; normal Ash checking applies. Both subtemplate and procedural construction are selected. C4 owns complete proposed I17 source inputs; G7 owns their implementation and connected evidence. |
-| C4 | Transcribe complete I17 source variants from the fixed behavior. | 2 | C1, C2 | Replace obsolete wrapper-based inputs with both selected 0–5 fragment builders, ordinary state-only steps/helpers, callers and negative variants. Preserve the README's results and add unused malformed-subtemplate inputs. Deliver proposed source graphs and their case mapping to C3; do not claim they run before implementation. |
-| C3 | Independently review and freeze interfaces, corpus inputs and scope. | 2 | C1, C2, C4 | Review C4's complete I17 inputs, the boundary map, first connected path, exclusions and initial fixtures, including how syntax and origins reach unchanged downstream consumers. G7 must consume those fixed inputs through existing syntax admission, without a new API or error protocol. Check the baseline without claiming unimplemented macro graphs pass; I12's connected checks belong to H2–H4 and V3. Record downstream gaps separately; return contract changes to design. Slice 1 has no selectable interface version; artifact versioning remains a separate concern. |
+| C4 | Transcribe complete I17 source variants from the fixed behavior. | 2 | C1, C2 | **Source inputs prepared:** both selected 0–5 fragment builders, ordinary state-only steps/helpers, callers and negative variants are mapped in the fixture record. They are proposed inputs, not passing macro tests. |
+| C3 | Independently review and freeze interfaces, corpus inputs and scope. | 2 | C1, C2, C4 | **Independent review completed:** no remaining findings in the reviewed candidate. The review covered I17 and I22, the boundary map, connected path, exclusions and the initial corpus, including syntax and origins reaching downstream consumers. I12's connected checks remain with H2–H4 and V3. Slice 1 has no selectable interface version; artifact versioning remains separate. |
 
-C3 is the pre-implementation corpus gate. I17's expected values and failures
-are fixed in its README, but C4 must first transcribe complete Ash sources:
-both bounded 0–5 fragment builders, their ordinary state-only steps and helpers,
-the existing callers and mutations, and the unused malformed-subtemplate
-cases. Preserve those assertions and the selected approaches; do not invent
-grammar or an API to make a source example look complete. Incomplete sources
-keep C3 open. The sources are proposed acceptance inputs, not passing tests;
-G7 implements and exercises them after this gate rather than defining its own
-integration cases during implementation.
+C4 prepared the subtemplate and quote-backed procedural I17 source graphs,
+callers, controls and negative cases. C3 independently reviewed the proposal,
+retained slice 1 boundary and proposed corpus, including the added I22 escape
+cases; the author and independent Sol 6.1 Max reviewer found no remaining
+findings. The
+[fixture record](fixtures/generators/README.md#construction-details-needed-for-transcription)
+records the procedural graph's raw-syntax construction coverage limit. These
+are proposed acceptance inputs, not passing macro tests; G7 implements and
+exercises them. CP-0034 remains proposed. The 130-point forecast predates the
+approved executable-escape design and token changes; the recalibration below
+accounts for both.
 
 Implementation units below require **accepted CP-0034, C3, an owning task and
 an authorized implementation base**. C1 and C2 can be investigated in parallel;
@@ -142,10 +145,10 @@ one owner reconciles their changes to shared proposal text.
 Points are fixed predictions of relative difficulty, including each unit's
 focused verification and review. They are not elapsed time or earned credit.
 Each unit is at most four points in this draft; the sum is checked below.
-The revised total is 130 points. Preserve the earlier 65-, 95- and 126-point
-predictions and the intermediate 128-point revision as historical records.
-The calibration below records the changed score and added preparation unit;
-this is not a measured result or an arithmetic conversion from slice 1.
+The current total-scope prediction is 150 points, of which 142 are remaining.
+Preserve the earlier 65-, 95-, 126-, 128- and 130-point predictions as
+historical records. These are not measured results or arithmetic conversions
+from slice 1.
 
 The I-identifiers refer to the [initial corpus](fixtures/README.md). A focused
 gate may establish an early parser or component assertion, but its connected
@@ -156,7 +159,7 @@ and expected results are those specified by the linked fixture README.
 
 | Unit | Result | Points | Prerequisites | Acceptance gate |
 | --- | --- | ---: | --- | --- |
-| D1 | Parse and project `syntax declaration: (name)` headers. | 2 | C3 | I21 old expression headers still parse; malformed new header rejects. |
+| D1 | Parse and project `syntax declaration: (name)` headers and the reserved `syntax` word. | 3 | C3 | I21 expression headers still parse except names now prohibited by the reservation; malformed new headers and I22 user-defined `syntax` terms, macro names, module paths and imported aliases reject. `syntax_value`, `declaration` and `@builtin.compiler.syntax` remain usable. |
 | D2 | Select imported declaration syntax by category and rename. | 3 | D1 | I21 renamed import works; collision and same-module use reject. |
 | D3 | Match declaration invocations with identifier and expression captures. | 3 | D2 | I01/I07/I19 select the intended captures; missing input fails at the invocation. |
 | D4 | Connect type and pattern captures to their ordinary parsers. | 3 | D3 | I07/I19 type and binder/body captures retain boundaries; invalid category rejects. |
@@ -188,7 +191,7 @@ stages or introduce per-reference grants or macro duplicate/type analysis.
 
 | Unit | Result | Points | Prerequisites | Acceptance gate |
 | --- | --- | ---: | --- | --- |
-| S1 | Extend the agreed closed syntax sums and capture shapes; preserve existing fragment cases and origin metadata. | 3 | C3 | I18 old exhaustive source match fails for missing cases; explicit migration and appropriate fallback are checked. |
+| S1 | Extend the agreed closed syntax sums and capture shapes, including `SyntaxKeyword` and `Dollar`; preserve existing fragment cases and origin metadata. | 4 | C3 | I18 old exhaustive capture match fails for missing cases; explicit migration and fallback are checked. I22 `token_exhaustive.ash` fails ordinary coverage under CP-0034; `token_kinds` recognizes the new tokens and rejects incorrect spellings. Its connected quote round trip also needs E2 and E4. |
 | S2 | Expose protected type, pattern and declaration fragments to checked Ash. | 3 | S1, D4, D5 | I11/I19 preserve category, contexts and origins through parse and unwrap, including nested groups and siblings; wrong category and excess depth are refused without a stack abort. |
 | S3 | Transfer structured declaration output through the retained host. | 4 | S1, D7 | I16 foreign-handle output rejects and valid output survives root closure. Nested groups and siblings exercise both parse-service and final-output transfer; excess depth fails without partial publication. I14 wrong-category graph also needs S2. |
 | S4 | Connect checked procedural declaration expansion to module staging. | 3 | S3, H1 | I16 real transformer and nested/failed output use the public driver with no partial result. |
@@ -197,6 +200,21 @@ stages or introduce per-reference grants or macro duplicate/type analysis.
 **Boundary:** reuse the checked Ash host, syntax services, bounds and teardown.
 Do not create a second host or assume a selectable syntax-interface version
 without a reconciled contract. Preserve the retained stack-safe transfer path.
+
+### Quotation and executable escapes
+
+| Unit | Result | Points | Prerequisites | Acceptance gate |
+| --- | --- | ---: | --- | --- |
+| E1 | Parse and admit expression quotes, escaped blocks and their nesting with the containing definition. | 4 | D6, S1 | I17 unused malformed quotes reject at definition; I22 `unbound_outer.ash` rejects an unknown outer splice. Existing `$name` and repetition forms keep their meaning; parsing does not execute an escape. |
+| E2 | Construct expression fragments from quotes in ordinary checked Ash, with variable holes and protected syntax. | 4 | E1, S2, S4 | I17 state-only subtemplate builder supplies the fixed 0–5 fragments and `wrong_hole.ash` fails ordinary checking. Once E4 connects escapes, I22 `freshness.ash` returns 20 and constructions from the same quote source have distinct introductions; the quote round trip checks structure, contexts and origins. |
+| E4 | Prepare ordinary escaped code for checking, execute reached escapes through the existing checked host and insert their results through syntax admission. | 4 | E1, E2, S4, D8 | As the early connected quote path, I22 `nested.ash` returns 44 through the public driver with nested quotes and escapes. `atomic.ash` is bounded and publishes nothing; `wrong_category.ash` rejects through syntax admission. `wrong_code_type.ash` and `primitive_escape.ash` fail through ordinary checking or existing syntax admission; no escape-specific type checker. |
+| E3 | Supply lexically scoped captures as syntax values to escaped code. | 3 | E4, S2, H2, H3, G1 | I22 `categories.ash` returns 246 for all five capture categories and distinguishes capture and local names; `illicit_helper.ash` and `out_of_scope.ash` reject. `hygiene.ash` returns 205 once H5 is connected. |
+| E5 | Connect escape reads to repetition drivers and cached generator values. | 3 | E3, G2, G6 | I22 `repetition.ash` returns 44, its mismatch rejects and zero iterations do not execute the escape; `nested_repetition.ash` returns 46420 using the correct capture and cached generator at each depth. |
+
+**Boundary:** reuse ordinary Ash checking and the existing syntax host,
+admission, limits and diagnostic propagation. Do not add a compiler input to
+ordinary helpers, a conversion library, a new error protocol, semantic checks
+on generated code or repeated-capture access outside its existing scope.
 
 ### Derives
 
@@ -220,7 +238,7 @@ is implemented by the derive author and checked as ordinary output.
 | G1 | Parse and match nested `*`/`+` repetitions and separators. | 4 | D3 | Focused I19 matcher checks capture zero, one and multiple items in source order; `empty_plus.ash`, `trailing_separator.ash` and `ambiguous_definition.ash` reject with their specified syntax causes. The `counts.ash` connected result belongs to G2. |
 | G2 | Expand template repetitions from captured drivers. | 3 | G1, D6 | I19 ordered equal-length drivers work; `mismatched.ash` and `missing_driver_definition.ash` reject with their specified syntax causes. `counts.ash` returns 42 through the connected path once D8 exists. |
 | G3 | Parse generator clauses, bind names and construct seed/step uses for unchanged ordinary Ash checking. | 3 | G2, S1 | I17 clause ownership and duplicate names are checked at definition; generated uses preserve seed and step contexts. Invalid-step and caller-global refusals need the checked execution in G7; inline/imported seed results also need G5. |
-| G7 | Implement both selected fragment-construction paths through checked execution using C3's frozen I17 inputs. | 4 | G3, S4 | Subtemplate and procedural variants each return the fixed fragments for states 0–5 with a state-only step and ordinary helpers. A malformed subtemplate in an unused generator or helper rejects at definition. Wrong-category and generated-type-error variants retain the existing syntax or ordinary checking cause and origins. Full caller and nesting results join G5/G6. |
+| G7 | Connect state-only generator calls to both selected fragment-construction paths using C3's I17 inputs. | 3 | G3, S4, E2 | Subtemplate and procedural variants each return the fixed fragments for states 0–5 with a state-only step and ordinary helpers. A malformed subtemplate in an unused generator or helper rejects at definition. Wrong-category and generated-type-error variants retain the existing syntax or ordinary checking cause and origins. Full caller and nesting results join G5/G6. |
 | G4 | Initialize independent generator state at the owning scope. | 3 | G7 | I17 two generators retain separate seeds; zero iterations do not create per-iteration instances. |
 | G5 | Thread `(next state, value)` and cache one value per iteration. | 3 | G4 | I17 three names produce 0, 1, 2; repeated `$number` in an iteration uses the same value. |
 | G6 | Preserve nested generator lifetime and outer cached values. | 4 | G5 | I17 global, reset and mixed-depth graphs return 3210, 1010 and 546210. |
@@ -228,11 +246,12 @@ is implemented by the derive author and checked as ordinary output.
 **Boundary:** state threading and substitution are macro responsibilities.
 Type mismatches remain ordinary Ash errors. Do not add compiler input to the
 step signature, a conversion interface, or automatic primitive conversion.
-G7 delivers the already selected subtemplate and procedural authoring paths;
-it does not select another API or error protocol. C3's complete source inputs
+E1–E4 deliver quote and escape construction and execution. G7 connects the
+already selected generator paths to that support; it does not select another
+API or error protocol. C3's complete source inputs
 preserve the fixed I17 behavior for both variants, including the same seeds,
-cache, nesting and failure assertions. The old wrapper-based source is not
-complete input for this gate. Intermediate helpers may use any ordinary Ash
+cache, nesting and failure assertions. The procedural source selects quoted
+fragments; raw-syntax construction is not yet established. Intermediate helpers may use any ordinary Ash
 types; effects obey ordinary checking and the existing host rules.
 
 ### Connected verification and delivery
@@ -240,10 +259,10 @@ types; effects obey ordinary checking and the existing host rules.
 | Unit | Result | Points | Prerequisites | Acceptance gate |
 | --- | --- | ---: | --- | --- |
 | V1 | Exercise all current declaration output forms through the driver. | 3 | D8, D4, D5, H3 | I01–I08 and handwritten controls, including ordinary malformed/duplicate and opacity failures. |
-| V2 | Verify cross-stage diagnostics, origins and bounded failure. | 3 | D8, R5, G6, G7, H5 | I14–I15 human/JSON causes, macro frames, recursion and atomic failures; no second type checker. |
-| V3 | Connect the full macro library, caller, importer and supported consumers. | 4 | V1, V2, R6, G6, G7, S5, H5, H6 | I16–I21 through the public driver; interpreter, supported build/image and retained-host teardown. Use existing downstream checks without modifying them. |
+| V2 | Verify cross-stage diagnostics, origins and bounded failure. | 4 | D8, R5, G6, G7, H5, E5 | I14–I15 and I22 human/JSON causes, macro and quote frames, recursion and atomic failures; no second type checker. |
+| V3 | Connect the full macro library, caller, importer and supported consumers. | 4 | V1, V2, R6, G6, G7, S5, H5, H6, E5 | I16–I22 through the public driver; interpreter, supported build/image and retained-host teardown. Use existing downstream checks without modifying them. |
 | V4 | Update language and tool documentation for the implemented delta. | 3 | V3 | Specification and compiler syntax-service documentation describe retained behavior, with links and authority checked. |
-| V5 | Perform independent integrated QA against the corpus. | 3 | V3, V4 | I01–I21 and slice 1 regression coverage are mapped to the exact candidate; gaps remain explicit. |
+| V5 | Perform independent integrated QA against the corpus. | 3 | V3, V4 | I01–I22 and slice 1 regression coverage are mapped to the exact candidate; gaps remain explicit. |
 | V6 | Perform independent integrated review and address confirmed findings. | 3 | V3, V4 | Review checks boundaries, real consumers and pinned evidence; affected repairs are re-reviewed. |
 | V7 | Run the agreed fresh full gate and retain its receipts. | 2 | V5, V6 | The exact integrated candidate passes the required workspace gate and its specified native/image evidence. |
 | V8 | Integrate to the authorized retaining branch and read back acceptance. | 2 | V7 | Retained inputs match evidence; task acceptance and remaining limitations are recorded and independently checked. Main is a separate gate. |
@@ -269,20 +288,21 @@ it.
   and return a contract change to CP-0034. H2–H4 do not authorize resolver
   changes.
 - C2 records the chosen generator type; no separate construction API, type
-  checker or error protocol is required by the macro contract. The current I17
-  wrapper-based source predates the decision. C4 transcribes the complete
-  proposed inputs and C3 independently reviews them before implementation; G7 then
-  delivers both selected construction variants and definition-time syntax
-  checks. This is remaining corpus and delivery work, not an unresolved choice
-  between the two approaches.
+  checker or error protocol is required by the macro contract. The I17
+  subtemplate and quote-backed procedural graphs use the chosen type. C3
+  independently reviewed the inputs and their construction coverage; G7
+  delivers both construction variants and
+  definition-time syntax checks.
+  This is remaining delivery work, not an unresolved choice between
+  the two approaches.
 - I16's Core mutation assertion may use test-only fixtures and a harness that
   exercises the existing validator. If it requires changing validator behavior,
   record a downstream validator issue; do not silently remove the assertion.
 - The initial I19 corpus now fixes positive repetition counts and the
   trailing-separator, ambiguous-matcher and missing-driver failures. I09 and
   I14–I15 also fix derive ordering, generated-subject failure and unused derive
-  template cases. These are proposed inputs, not passing implementation tests;
-  independent review must check them against the proposal before C3 closes.
+  template cases. C3 reviewed these proposed inputs against the proposal; they
+  are not passing implementation tests.
 
 ## Unit-specific do not do boundaries
 
@@ -315,6 +335,11 @@ result conflicts with them.
 | S3 | Do not create a second host or bypass handle lifetime and transfer checks. |
 | S4 | Do not change the host's effect rules or publish partial output after failure. |
 | S5 | Do not change existing expression-macro meaning or suppress exhaustive-match failures. |
+| E1 | Do not resolve output names, type-check template output or introduce new splice or repetition forms. |
+| E2 | Do not add automatic conversions, require a compiler `Input` argument, or change protected-fragment copy rules. |
+| E3 | Do not make capture bindings ambient in ordinary helpers or add access to whole repeated captures. |
+| E4 | Do not add a second host, error protocol, special semantic checker or partial publication. |
+| E5 | Do not step generators per read, invent repetition drivers, or add lazy generator execution. |
 | R1 | Do not add attributes or derives on functions, interfaces or local declarations. |
 | R2 | Do not supply inferred types or already elaborated declarations. |
 | R3 | Do not change the original subject or reorder derives. |
@@ -327,7 +352,7 @@ result conflicts with them.
 | G4 | Do not share state between independent generators or add ambient compiler input. |
 | G5 | Do not call a step more than once per owning iteration or independently for each use. |
 | G6 | Do not extend generator visibility beyond its declared repetition or introduce lazy evaluation. |
-| G7 | Do not add a construction API, error protocol, conversion or evidence resolution in the macro engine, restrict ordinary helper types, or expose definition-private values to callers. Do not count the old wrapper-based source as revised I17 input. |
+| G7 | Do not add a construction API, error protocol, conversion or evidence resolution in the macro engine, restrict ordinary helper types, or expose definition-private values to callers. Do not count quote-backed traversal as raw-syntax construction evidence. |
 | V1 | Do not replace driver tests with hand-written controls or add per-form semantic checks. |
 | V2 | Do not change downstream diagnostics or invent a macro-specific checker. |
 | V3 | Do not add downstream compiler validation or quietly waive the I16 requirement. |
@@ -360,7 +385,7 @@ test counts or the ledger's final effort index.
 | A captured constructor qualifier failed admission; a repeated nullary capture was then mistaken for duplicate binders. The repair preserved refusal of actual duplicate lowercase binders and used ordinary pattern resolution. `ROOT` lines 19733, 19790, 19829 and 20027; reviewed commit `81eefcc9`. | D4, D6 and H3 need category and context cases with real positive and negative consumers. Keep their three-point scores. This does not authorize another pattern representation or downstream resolver repair in slice 2. |
 | Nested output transfer overflowed a test-thread stack. Iterative transfer covered groups, siblings, parse-service transfer, final output and bounded refusal. Reverse conversion later failed separately on 100 nested groups at a 1 MiB stack. `ROOT` lines 16746, 16979 and 20012; reviewed commits `50ed262f` and `f106bbe7`. The retained task records unsuccessful active-disposal injections separately from observed failures. | Reuse the retained iterative paths and limits. S2 and S3 explicitly exercise both directions, nested siblings, lifetime and structured failure; their scores remain three and four. Do not infer a passing combined failure from an injection that never reached its hook or rebuild the host. |
 | The all-use Core correspondence experiment and per-reference grants checked stronger machinery than the required source behavior. The planner and reviewer found no demonstrated source-level need; the grants were removed while contextual resolution, linking and privacy tests remained. `ROOT` lines 25624, 25691, 25726 and 25850; the retained task's approved amendment. | H1–H6 hand syntax to existing consumers. No grant, census, second resolver or semantic-checking work is in these estimates. The 126-point draft had no separate unit for that removed machinery, so there is no supported numerical subtraction to make a second time. H4 still requires the generated-public-name observation; a downstream gap remains separate work. |
-| Late review found missing combined causes at diagnostic handoffs even after examples executed. `ROOT` lines 30718, 30937, 31935, 32898 and 33253; reviewed commits `fcd3325e`, `97a9113f` and `f621d075`. | V2 keeps a three-point connected diagnostic gate. Check retained causes and frames in human and JSON output, including ordinary generated-program errors. Transfer the failure cases, not permission to change downstream checking or diagnostics; report a gap separately if preserved syntax provenance is insufficient. |
+| Late review found missing combined causes at diagnostic handoffs even after examples executed. `ROOT` lines 30718, 30937, 31935, 32898 and 33253; reviewed commits `fcd3325e`, `97a9113f` and `f621d075`. | V2 checks retained causes and frames in human and JSON output, including ordinary generated-program errors. The new nested quote/escape handoffs add a point to this connected diagnostic gate. Transfer the failure cases, not permission to change downstream checking or diagnostics; report a gap separately if preserved syntax provenance is insufficient. |
 | Separate syntax tests did not establish the exact mixed-tree round trip through one Ash identity transformer. QA exposed the missing observation, and `3c024d72` added it through the public driver before a fresh gate. `ROOT` lines 34611, 34660, 34740, 34871 and 34900. Final acceptance at `e58aea09` also retained the supported source-free native result and stated evidence limits (`ROOT` line 35233). | V3 requires an actual transformer, macro library, caller, importer and supported consumer. Keep V3 at four and retain separate V5/V6 independent audits, V7 gate and V8 retained readback. Each owns a distinct result; do not repeat component checks merely to fill these units or infer broader image support. |
 | A forecast retired estimated minutes faster than elapsed time because work overlapped or was already underway; that was not an observed work rate. `ROOT` lines 30394 and 30486. | Preserve forecasts and completed planning separately. Reconcile existing evidence before assigning implementation, and record later observed difficulty without rewriting these predictions. No elapsed-to-point conversion is used here. |
 
@@ -370,27 +395,36 @@ audit the integrated candidate rather than charging again for those reviews.
 
 | Units and fixed scores | Basis for the prediction |
 | --- | --- |
-| C1/C2/C3/C4: 2 each | C1/C2 decisions are recorded. C4 produces the missing fixed corpus source; C3 independently reviews the complete boundary map and inputs. Source authorship and review have distinct outputs and owners. The I17 builders cover only the fixed 0–5 mapping, not a conversion library. C1–C3 retain their predictions; C4 is a new preparation estimate. None is measured actual difficulty. |
-| D1: 2; D2–D6 and D8: 3 each; D7: 4 | Header syntax adapts a defined entry. Selection, capture categories, template admission and the first driver connection each cross a retained boundary. D7 must project all ordinary declaration forms and preserve protected fragments while refusing incomplete output. The constructor-capture repair is the comparison for category failures, not an estimate for duplicating ordinary parsers. |
+| C1/C2/C3/C4: 2 each | C1/C2 decisions are recorded. C4 supplied the fixed corpus sources and C3 independently reviewed the boundary map and inputs. Source authorship and review have distinct outputs and owners. The I17 builders cover only the fixed 0–5 mapping, not a conversion library. These are predictions, not measured actual difficulty. |
+| D1–D6 and D8: 3 each; D7: 4 | D1 adds the global keyword reservation and compatibility cases to the earlier header-only estimate. Selection, capture categories, template admission and the first driver connection each cross a retained boundary. D7 must project all ordinary declaration forms and preserve protected fragments while refusing incomplete output. The constructor-capture repair is the comparison for category failures, not an estimate for duplicating ordinary parsers. |
 | H1/H2/H3/H5: 3 each; H4: 4; H6: 2 | Context propagation crosses collection and ordinary lookup; generated public spelling adds a caller/importer observation. H6 is the narrower publication handoff. Existing expression hygiene reduces the mechanism to preserve and hand off, but does not establish module-binder or export behavior. H4 is not a budget for changing the resolver. |
-| S1/S2/S4/S5: 3 each; S3: 4 | Extend closed sums, protected categories and their actual Ash consumers; retain migration failures and expression behavior. Transfer has the larger category, lifetime and bounded-failure surface demonstrated by the two separate stack repairs. These scores reuse the host rather than estimate a new host implementation. |
+| S1/S3: 4 each; S2/S4/S5: 3 each | S1 adds the two public token kinds and their spelling and migration cases to its earlier three-point sum work. Transfer has the larger category, lifetime and bounded-failure surface demonstrated by the two separate stack repairs. These scores reuse the host rather than estimate a new host implementation. |
+| E1/E2/E4: 4 each; E3/E5: 3 each | Parsing nested modes, constructing fresh protected fragments and executing checked escape blocks each cross a distinct boundary. Lexical capture values and their repetition/generator use are bounded integrations. Reuse slice 1's host, transfer and provenance rather than estimating a replacement. |
 | R1: 2; R2–R6: 3 each | A bounded header/clause grammar precedes subject capture, ordering, ordinary declaration output and an authored syntax traversal. Multiple and generated subjects join both expansion branches. Slice 1 has no derive delivery to serve as an observed difficulty score; these are predictions from the named interfaces and cases. |
-| G1/G6/G7: 4 each; G2–G5: 3 each | Nested matching, nested state and both fragment-construction paths have distinct failure surfaces. The other units each own one repetition or state boundary. Retained host evidence transfers; generator state, caching and the selected authoring paths have not been delivered. G7's correction is detailed below. |
-| V1/V2/V4/V5/V6: 3 each; V3: 4; V7/V8: 2 each | Corpus coverage, causal diagnostics, documentation and the two independent audits have separate outputs. The complete library-to-consumer path is larger; pinned gate execution and retained acceptance are narrower bounded units. The late slice 1 mixed-tree case is why these final gates remain explicit. |
+| G1/G6: 4 each; G2–G5/G7: 3 each | Nested matching and nested state have distinct failure surfaces. G7 connects both fixed generator paths; E1/E2 own quotation construction, so G7 no longer includes that work a second time. Retained host evidence transfers; generator state, caching and the selected authoring paths have not been delivered. |
+| V2/V3: 4 each; V1/V4/V5/V6: 3 each; V7/V8: 2 each | Corpus coverage, causal diagnostics, documentation and the two independent audits have separate outputs. V2 includes the additional nested-escape diagnostic handoffs. The late slice 1 mixed-tree case is why the full consumer path and final gates remain explicit. |
 
-G7 changes from **2 to 4 points**. The old row covered fragment/context
+The earlier forecast changed G7 from **2 to 4 points**. The old row covered fragment/context
 preservation but did not explicitly implement both selected construction paths
 or definition-time admission of subtemplates inside ordinary functions.
 These are connected parts of one
 fragment-producing boundary, so the correction keeps one unit. It adds no
 new requested functionality, construction API, error protocol or semantic
-analysis. C4 owns the missing complete I17 source before implementation, C3
-owns independent review, and G7 owns execution; transcription is not charged
-twice. Fixed outputs
+analysis. C4 supplied the I17 source and C3 reviewed it. This recalibration
+moves quote construction to E1/E2 and sets G7 to **3 points** for connecting
+the two state-only generator paths; construction is not charged twice. Fixed outputs
 and handwritten controls are not evidence that either path works. The other
-unit scores are unchanged: the log evidence supports their
-failure and verification obligations but supplies no measured difficulty that
-would justify a numerical rerating.
+unit scores remain estimates, not measured difficulty.
+
+The approved quote/escape contract and I22 add E1–E5, **18 points**. D1 gains
+**1 point** for global keyword reservation; S1 gains **1 point** for token
+vocabulary and migration; V2 gains **1 point** for the new cross-stage
+diagnostics. Moving quote construction out of G7 removes
+**1 point** from that unit. Relative to the earlier 130-point scope prediction,
+the new total is **150 points**. The four previously recorded C units retain
+their original **8 predicted points**, leaving **142 points** of current
+delivery work. This comparison is scope accounting, not an actual difficulty
+measurement.
 
 C4 adds **2 points** for the missing pre-implementation source preparation.
 The intermediate 128-point forecast corrected G7 but left transcription inside
@@ -404,36 +438,38 @@ functionality or implementation authority.
 | Functionality or delivery area | Unit points |
 | --- | ---: |
 | Contract and corpus preparation, C1–C4 | 8 |
-| Declaration syntax, D1–D8 | 24 |
+| Declaration syntax, D1–D8 | 25 |
 | Contexts and publication, H1–H6 | 18 |
-| Syntax service and host, S1–S5 | 16 |
+| Syntax service and host, S1–S5 | 17 |
+| Quotation and executable escapes, E1–E5 | 18 |
 | Derives, R1–R6 | 17 |
-| Repetition and generators, G1–G7 | 24 |
-| Connected verification and delivery, V1–V8 | 23 |
-| **Revised draft prediction** | **130** |
+| Repetition and generators, G1–G7 | 23 |
+| Connected verification and delivery, V1–V8 | 24 |
+| **Current draft prediction** | **150** |
 
 | Prediction or remaining scope | Points | Meaning |
 | --- | ---: | --- |
 | First declaration/derive prediction | 65 | Historical allocation retained in the companion. |
 | Added generator and deriving scope | 30 | Historical increment; 65 + 30 = 95. |
 | First local full-chain prediction | 126 | Historical 43-unit breakdown before this calibration; G7 was 2. |
-| G7 coverage correction | 2 | Selected authoring/admission work made explicit; G7 is now 4. |
+| G7 coverage correction | 2 | Selected authoring/admission work made explicit; G7 was then 4. |
 | Intermediate revised prediction | 128 | G7 correction before separating corpus source preparation from independent review. |
 | C4 corpus preparation | 2 | New bounded pre-implementation producer for complete I17 source inputs. |
-| Current total-scope prediction | 130 | Sum of the 44 unit estimates and the seven functionality totals above. |
-| Recorded C1/C2 planning scope | 4 | Two recorded planning decisions; no product implementation or connected gate is credited. |
-| Remaining corpus preparation and contract review, C4/C3 | 4 | Complete I17 source transcription and independent boundary/corpus review remain open. |
-| Remaining product and delivery units | 122 | D, H, S, R, G and V; implementation authority and connected evidence remain required. |
-| **Current remaining-work forecast** | **126** | **4 + 122**, excluding Main integration and separately owned downstream repairs. |
+| Earlier total-scope prediction | 130 | Sum of the earlier 44 unit estimates, before the approved escape and token changes. |
+| Earlier remaining-work forecast | 126 | The 130-point prediction less the then-recorded C1/C2 scope; C3/C4 were still open. |
+| Recorded C1–C4 planning scope | 8 | Four estimated planning units now recorded; not measured actual difficulty. |
+| Original product and delivery allocations | 122 | D, H, S, R, G and V in the earlier 130-point prediction. |
+| Current total-scope prediction | 150 | 130 + 18 for E1–E5 + 1 each for D1, S1 and V2 − 1 moved out of G7. |
+| **Current remaining-work forecast** | **142** | **150 − 8** recorded C1–C4 planning scope; excludes separately owned downstream repairs and Main integration. |
 
 The earlier totals are predictions for their recorded scopes, not performance
 measures. This revision includes the syntax-only restriction and the ordinary
 fragment-returning generator contract, without estimating discarded semantic
-machinery. C1/C2's recorded decisions do not close C3, accept CP-0034, make I17
-complete, or pass any product gate. Record observed difficulty separately after
-delivery. If a downstream gap blocks a required case, name that dependency and
-its separate estimate before forecasting the whole delivery again; 126 is not
-an estimate for unbounded downstream repair.
+machinery. C1–C4 do not accept CP-0034 or pass a product gate. Record observed
+difficulty separately after delivery. If a downstream gap blocks a required
+case, name that dependency and its separate estimate when forecasting the
+whole delivery; the historical estimates do not cover unbounded downstream
+repair.
 
 ## Dependency and parallelism overview
 
@@ -457,6 +493,11 @@ flowchart LR
     S1 & D7 --> S3
     S3 & H1 --> S4
     S2 & S4 --> S5
+    D6 & S1 --> E1
+    E1 & S2 & S4 --> E2
+    E1 & E2 & S4 & D8 --> E4
+    E4 & S2 & H2 & H3 & G1 --> E3
+    E3 & G2 & G6 --> E5
     R1 & S2 --> R2
     R2 & H1 & D7 --> R3
     R3 & H2 --> R4
@@ -464,13 +505,13 @@ flowchart LR
     R4 & R5 & H5 --> R6
     G1 & D6 --> G2
     G2 & S1 --> G3
-    G3 & S4 --> G7
+    G3 & S4 & E2 --> G7
     G7 --> G4
     G4 --> G5
     G5 --> G6
     D8 & D4 & D5 & H3 --> V1
-    D8 & R5 & G6 & G7 & H5 --> V2
-    V1 & V2 & R6 & G6 & G7 & S5 & H5 & H6 --> V3
+    D8 & R5 & G6 & G7 & H5 & E5 --> V2
+    V1 & V2 & R6 & G6 & G7 & S5 & H5 & H6 & E5 --> V3
     V3 --> V4
     V3 & V4 --> V5 & V6
     V5 & V6 --> V7
@@ -498,6 +539,6 @@ unit as it becomes available; V5/V6 are the integrated audit, not the first
 time either role participates.
 
 The candidate issue/PR hierarchy and exact owner assignments remain for a
-later planning decision. The point baseline above is the revised local
-forecast; C3 still requires independent review before implementation. No
-GitHub issues are created by this document.
+later planning decision. This is a difficulty forecast for the current
+proposed scope, not implementation authority. No GitHub issues are created by
+this document.

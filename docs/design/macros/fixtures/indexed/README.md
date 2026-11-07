@@ -36,11 +36,7 @@ constructs `Syntax` nodes without source-text re-lexing.
 
 The token constructor spellings in this fixture (`Type`, `Impl`, `Less`,
 `Greater`, `Equal`, `IntegerLiteral`, `LineEnd`, and `Pipe`) follow the
-expression-slice delivery worktree at the time of drafting. That worktree has
-not been retained as current language truth. The shared public token vocabulary
-must document the final mapping; if its names differ, update this fixture and
-its conformance assertions to the agreed vocabulary rather than treating these
-spellings as a separate macro-specific language decision.
+[current public token vocabulary](../../../../../spec/lexical-structure.md#public-token-kinds).
 
 The ordinary Ash portions of `derives.ash` were checked with a temporary local
 stand-in for the proposed `DeclarationFragment`, `DeclarationCapture`, and

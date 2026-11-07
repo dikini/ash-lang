@@ -3,18 +3,24 @@
 This proposed grammar completes the declaration-macro surface described by
 [CP-0034](../../proposals/CP-0034-top-level-declaration-macros.md). It does not
 change current Ash or authorize implementation. The derive-specific grammar is
-in [derive authoring and grammar](derive-syntax.md); expression macros retain
-their [current grammar](../../../spec/syntax.md#grammar).
+in [derive authoring and grammar](derive-syntax.md). The
+[current expression grammar](../../../spec/syntax.md#grammar) is extended by
+the proposed `syntax` reservation and quotation and escape forms below.
 
 ## Definitions and imports
 
 The following productions add a public declaration syntax definition to module
-syntax. `identifier`, `upper_identifier`, `expression`, `line_end`, and
+syntax. `identifier`, `upper_identifier`, `expression`, `block`, `line_end`, and
 `qualified_term_reference` use the existing Ash grammar. A `macro_name` after
 `$` can be lowercase or uppercase; this applies to these declaration templates
 and does not change the accepted expression-macro matcher grammar. The
 `matcher_literal`, `template_literal` and `repetition_separator` lexical
 classes are defined immediately below.
+
+In an escape block only, the ordinary expression grammar additionally admits
+`$` followed by a capture or generator name as a primary expression. It reads
+that syntax value as specified by CP-0034; quotation holes use ordinary Ash
+variables. This does not change `from` seed expressions.
 
 ```ebnf
 declaration_syntax_definition ::=
@@ -34,9 +40,10 @@ matcher_literal ::= /matcher-literal-token/ ;
 repetition_separator ::= /repetition-separator-token/ ;
 
 declaration_template ::= "{" { template_item } "}" ;
-template_item ::= template_splice | template_repeat | template_group
+template_item ::= template_splice | template_escape | template_repeat | template_group
   | template_literal | line_end ;
 template_splice ::= "$" macro_name ;
+template_escape ::= "$" block ;
 template_repeat ::=
   "$" "(" { template_item } ")" [ repetition_separator ]
   repetition_operator [ generator_clause ] ;
@@ -81,6 +88,19 @@ matcher literal but prohibits matcher groups. Thus an expression syntax named
 `declaration` with `:` and an identifier as matcher literals keeps its slice 1
 meaning. A module-level definition cannot silently change category based on
 which importer later uses it.
+
+CP-0034 proposes making `syntax` a reserved word in all identifier positions,
+instead of the current contextual word. Existing user-defined identifiers
+named `syntax`, including macro names and import aliases, must be renamed.
+The existing compiler-owned path `@builtin.compiler.syntax` remains valid.
+The word `declaration` remains contextual. Test both the rejected old names
+and unaffected names such as `syntax_value` and `declaration`; retain the
+compiler-owned path and existing syntax-definition and targeted-import forms.
+The [proposed quotation and escape forms](../../proposals/CP-0034-top-level-declaration-macros.md#executable-template-escapes-and-expression-subtemplates)
+specify their staging and capture access. Outside an escape, a macro template
+still processes its own `$name` splices, including those inside a quotation in
+its output; an unbound outer splice remains an outer-template error. An escape
+is an explicit boundary for ordinary Ash code and nested quotation holes.
 
 ## Invocation and matcher contract
 
@@ -161,7 +181,8 @@ resulting ordinary declarations.
 The lexical token vocabulary and punctuation-to-kind mapping are specified in
 [lexical structure](../../../spec/lexical-structure.md#public-token-kinds).
 Interface and artifact versioning are separate language-interface concerns;
-slice 1 specifies no version-selection mechanism. This grammar does not select
-new shared token constructors. Its concrete use must be
+slice 1 specifies no version-selection mechanism. CP-0034 adds the closed
+`TokenKind` cases `SyntaxKeyword` and `Dollar` for `syntax` and `$` so quoted
+expressions can pass through the existing syntax service. Its concrete use must be
 checked against the retained expression-slice parser and the complete fixture
 corpus, including ambiguous stops, nested repetitions and every output form.
