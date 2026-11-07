@@ -648,16 +648,17 @@ pub(crate) fn parse_declaration_template_admission(
     output: Vec<crate::syntax::MacroOutputNode>,
     contexts: &crate::syntax::SyntaxContexts,
     placeholders: &[crate::surface::SurfaceName],
-) -> Result<crate::surface::SurfaceModule, MacroParseFailure> {
-    parse_macro_declarations_inner(
+) -> Result<(), MacroParseFailure> {
+    let parsed = parse_macro_tree(
         source,
         invocation,
-        None,
         output,
         contexts,
         placeholders,
-        None,
-    )
+        MacroOutputPosition::Declarations,
+    )?;
+    project::validate_declaration_template(source, invocation, &parsed, contexts)
+        .map_err(|_| MacroParseFailure::Invalid)
 }
 
 fn parse_macro_declarations_inner(

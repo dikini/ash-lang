@@ -2794,6 +2794,15 @@ fn project_declaration_invocation_from_tokens(
     {
         return malformed(InternalReason::UnexpectedShape);
     }
+    project_declaration_invocation_node(source, node, tokens, contexts)
+}
+
+fn project_declaration_invocation_node(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    contexts: &crate::syntax::SyntaxContexts,
+) -> Result<ProjectedDeclarationInvocation, ProjectionError> {
     let mut children = node.children.iter();
     let Some(ConcreteElement::Token(index)) = children.next() else {
         return malformed(InternalReason::UnexpectedShape);
@@ -2901,6 +2910,68 @@ fn project_declaration_invocation_from_tokens(
         captures,
         span: node_span(source, node, tokens)?,
     })
+}
+
+/// Validate each complete declaration template child without expanding nested syntax.
+/// `contexts` is the same selection and owner mapping used to parse `parsed`.
+pub(super) fn validate_declaration_template(
+    source: &SourceFile,
+    invocation: Span,
+    parsed: &super::ParsedMacroTree,
+    contexts: &crate::syntax::SyntaxContexts,
+) -> Result<(), ProjectionError> {
+    let root = validated_macro_root(source, &parsed.tree)?;
+    validate_node_shape_with_admission(
+        root,
+        &parsed.tree.tokens,
+        Some(&parsed.admission_identifiers),
+    )?;
+    let tokens = ProjectionTokens {
+        tokens: &parsed.tree.tokens,
+        originals: Some(&parsed.original_nodes),
+        occurrence: Some(invocation),
+        construction: None,
+        construction_extents: false,
+        admission_identifiers: Some(&parsed.admission_identifiers),
+        frame: None,
+        name_frame: None,
+        preserve_name_diagnostic: true,
+    };
+    for child in child_nodes(root) {
+        match child.kind {
+            NodeKind::DeclarationSyntaxInvocation => {
+                // This child comes directly from the already-validated root;
+                // avoid rescanning that root for each nested invocation.
+                project_declaration_invocation_node(source, child, &tokens, contexts)?;
+            }
+            NodeKind::ForeignLibrary => {
+                foreign::library(source, child, &tokens)?;
+            }
+            NodeKind::TypeDeclaration => {
+                project_type_declaration(source, child, &tokens)?;
+            }
+            NodeKind::NewtypeDeclaration => {
+                project_newtype_declaration(source, child, &tokens)?;
+            }
+            NodeKind::InterfaceDeclaration => {
+                project_interface_declaration(source, child, &tokens)?;
+            }
+            NodeKind::ResourceDefinition => {
+                project_resource_definition(source, child, &tokens)?;
+            }
+            NodeKind::EffectDeclaration => {
+                project_effect_declaration(source, child, &tokens)?;
+            }
+            NodeKind::ImplementationDeclaration => {
+                project_implementation(source, child, &tokens)?;
+            }
+            NodeKind::EquationalGlobal | NodeKind::InlineOperationalGlobal => {
+                project_definition(source, child, &tokens)?;
+            }
+            _ => return malformed(InternalReason::UnexpectedShape),
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn project_macro_declarations(
@@ -6900,6 +6971,119 @@ mod tests {
     }
 
     #[test]
+    fn declaration_template_admission_projects_each_ordinary_declaration_family() {
+        use crate::syntax::{MacroOutputNode, SyntaxContexts};
+
+        let caller = SourceFile::new("invocation.ash", "invoke").unwrap();
+        let invocation = caller.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        for text in [
+            include_str!("../../docs/design/macros/fixtures/declarations/control_01.ash"),
+            include_str!("../../docs/design/macros/fixtures/declarations/control_02.ash"),
+            include_str!("../../docs/design/macros/fixtures/declarations/control_03.ash"),
+            include_str!("../../docs/design/macros/fixtures/declarations/control_04.ash"),
+            include_str!("../../docs/design/macros/fixtures/declarations/control_05.ash"),
+            include_str!("../../docs/design/macros/fixtures/declarations/control_06.ash"),
+            include_str!("../../docs/design/macros/fixtures/declarations/control_07.ash"),
+            RESOURCE_FAMILY_SHAPE,
+        ] {
+            let (_, tree, mut output) = structured_declarations(text);
+            if child_nodes(tree.root().unwrap())
+                .any(|child| child.kind == NodeKind::ImportDeclaration)
+            {
+                let end = output
+                    .iter()
+                    .position(|node| {
+                        matches!(node, MacroOutputNode::Token(TokenKind::LineEnd, _, _))
+                    })
+                    .unwrap();
+                output.drain(..=end);
+            }
+            super::super::parse_declaration_template_admission(
+                &caller,
+                invocation,
+                output,
+                &contexts,
+                &[],
+            )
+            .expect("each ordinary declaration must pass its existing projector");
+        }
+        super::super::parse_declaration_template_admission(
+            &caller,
+            invocation,
+            Vec::new(),
+            &contexts,
+            &[],
+        )
+        .expect("an empty template is admitted");
+    }
+
+    #[test]
+    fn declaration_template_admission_uses_the_parse_time_owner_mapping() {
+        use crate::syntax::{MacroOutputNode, SelectedSyntax, SyntaxContexts};
+
+        let select = |matcher: &str, owner| {
+            let text = format!("pub syntax declaration: (inner) {matcher} $name:ident => {{}}\n");
+            let source = SourceFile::new(format!("owner-{owner}.ash"), text).unwrap();
+            let tree = parse(lex(&source).unwrap());
+            let declaration = project_module_retaining_templates(&source, &tree)
+                .unwrap()
+                .syntax_declarations
+                .remove(0);
+            SelectedSyntax {
+                name: "inner".into(),
+                owner,
+                import_span: declaration.span,
+                declaration,
+            }
+        };
+        let caller = select("left", 3);
+        let owner = select("right", 7);
+        let contexts = SyntaxContexts::new(&[caller], &[vec![owner.clone()]], &[Some(0)]);
+        let source = SourceFile::new("invocation.ash", "inner right target").unwrap();
+        let span = |start, end| source.span(ByteRange::new(start, end).unwrap()).unwrap();
+        let name = |text: &str, introduction, start, end| {
+            let span = span(start, end);
+            MacroOutputNode::Identifier(
+                SurfaceName {
+                    text: text.into(),
+                    span,
+                    introduction,
+                    introduced_at: None,
+                    written: introduction == 0,
+                    diagnostic: None,
+                },
+                span.into(),
+            )
+        };
+        let invocation = span(0, 18);
+        let output = vec![
+            name("inner", 1, 0, 5),
+            name("right", 0, 6, 11),
+            name("target", 0, 12, 18),
+        ];
+        let parsed = super::super::parse_macro_tree(
+            &source,
+            invocation,
+            output,
+            &contexts,
+            &[],
+            super::super::MacroOutputPosition::Declarations,
+        )
+        .unwrap();
+        validate_declaration_template(&source, invocation, &parsed, &contexts).unwrap();
+        let node = child_nodes(parsed.tree.root().unwrap())
+            .find(|node| node.kind == NodeKind::DeclarationSyntaxInvocation)
+            .unwrap();
+        let projected = project_macro_declaration_invocation(
+            &source, invocation, None, &parsed, node, &contexts, None,
+        )
+        .unwrap();
+        assert_eq!(projected.selection.owner, owner.owner);
+        assert_eq!(projected.selection.import_span, owner.import_span);
+    }
+
+    #[test]
     fn structured_declaration_output_preserves_other_ordinary_declaration_forms() {
         use crate::syntax::{MacroOutputNode, SyntaxContexts};
 
@@ -7422,6 +7606,16 @@ mod tests {
                 &std::collections::HashSet::new(),
                 None,
             ),
+            Err(ProjectionError::RecoveryNodesPresent),
+        );
+        let contexts = crate::syntax::SyntaxContexts::new(&[], &[], &[]);
+        let parsed = super::super::ParsedMacroTree {
+            tree,
+            original_nodes: Default::default(),
+            admission_identifiers: Default::default(),
+        };
+        assert_eq!(
+            validate_declaration_template(&source, invocation, &parsed, &contexts),
             Err(ProjectionError::RecoveryNodesPresent),
         );
     }

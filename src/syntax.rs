@@ -906,6 +906,113 @@ mod tests {
         },
     };
 
+    fn nested_template(
+        text: &str,
+        transformer: bool,
+    ) -> Result<(), crate::parser::MacroParseFailure> {
+        let inner_source = SourceFile::new(
+            "inner_forms.ash",
+            include_str!("../docs/design/macros/fixtures/nested/inner_forms.ash"),
+        )
+        .unwrap();
+        let inner_tree = crate::parser::parse(crate::lexer::lex(&inner_source).unwrap());
+        let mut inner =
+            crate::parser::project_module_retaining_templates(&inner_source, &inner_tree)
+                .unwrap()
+                .syntax_declarations
+                .remove(0);
+        if transformer {
+            inner.implementation = SurfaceSyntaxImplementation::Transformer(inner.name.clone());
+            inner.template_contents = None;
+        }
+        let selected = [SelectedSyntax {
+            name: inner.name.text.clone(),
+            owner: 0,
+            import_span: inner.span,
+            declaration: inner,
+        }];
+        let contexts = SyntaxContexts::new(&selected, &[], &[]);
+        let source = SourceFile::new("outer_forms.ash", text).unwrap();
+        let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+        let module = crate::parser::project_module_retaining_templates(&source, &tree).unwrap();
+        validate_template_syntax(&module.syntax_declarations[0], &source, &contexts)
+    }
+
+    #[test]
+    fn nested_declaration_template_admits_fixed_invocation_without_executing_it() {
+        let outer = include_str!("../docs/design/macros/fixtures/nested/outer_forms.ash");
+        for transformer in [false, true] {
+            nested_template(outer, transformer)
+                .expect("admission must validate the fixed nested invocation without executing it");
+            nested_template(
+                "pub syntax declaration: (outer) $name:ident => {\n    inner $name\n    middle : Unit -> Int\n    middle () = 42\n    inner $name\n}\n",
+                transformer,
+            )
+            .expect("each nested invocation and ordinary sibling is admitted");
+        }
+    }
+
+    #[test]
+    fn nested_declaration_template_rejects_malformed_siblings_and_matchers() {
+        for body in [
+            "bad : Int ->\n    inner $name",
+            "inner $name\n    bad : Int ->",
+            "inner",
+            "inner 42",
+            "inner $name unexpected",
+            "inner $name\n    inner 42",
+            "import other\n    inner $name",
+            "inner $name\n    pub syntax declaration: (new) => {}",
+            "inner $name\n    ;",
+        ] {
+            let source =
+                format!("pub syntax declaration: (outer) $name:ident => {{\n    {body}\n}}\n");
+            assert!(
+                nested_template(&source, false).is_err(),
+                "accepted {body:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_declaration_template_rejects_protected_wrong_category_holes() {
+        for body in [
+            "inner $body",
+            "$body : Unit -> Int\n    $body () = 42\n    inner $name",
+            "inner $name\n    $body : Unit -> Int\n    $body () = 42",
+        ] {
+            let source = format!(
+                "pub syntax declaration: (outer) $body:expr then $name:ident => {{\n    {body}\n}}\n"
+            );
+            assert!(
+                matches!(
+                    nested_template(&source, false),
+                    Err(crate::parser::MacroParseFailure::Invalid)
+                ),
+                "the protected expression must fail projection in {body:?}"
+            );
+        }
+        for (capture, body) in [
+            ("T:type", "inner $T"),
+            ("p:pattern", "inner $p"),
+            (
+                "p:pattern",
+                "inner $name\n    bad : $p -> Int\n    bad _ = 42",
+            ),
+        ] {
+            let source = format!(
+                "pub syntax declaration: (outer) ${capture} then $name:ident => {{\n    {body}\n}}\n"
+            );
+            assert!(
+                matches!(
+                    nested_template(&source, false),
+                    Err(crate::parser::MacroParseFailure::Syntax { .. })
+                ),
+                "the wrong category must fail ordinary parsing in {body:?}"
+            );
+        }
+    }
+
     #[test]
     fn declaration_templates_admit_fixed_type_and_pattern_captures() {
         let declarations = include_str!("../docs/design/macros/fixtures/declarations/forms.ash");
