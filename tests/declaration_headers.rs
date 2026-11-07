@@ -163,6 +163,42 @@ fn projects_existing_expression_headers_without_changing_their_category() {
 }
 
 #[test]
+fn declaration_matcher_capture_names_include_uppercase_without_changing_expression_headers() {
+    let forms = include_str!("../docs/design/macros/fixtures/declarations/forms.ash");
+    let start = forms.find("pub syntax declaration: (make_type)").unwrap();
+    let end = start + forms[start..].find("\n}\n").unwrap() + "\n}\n".len();
+    let text = &forms[start..end];
+    let (source, tree) = parsed(text);
+    assert!(
+        tree.parse_diagnostics().is_empty(),
+        "{:?}",
+        tree.parse_diagnostics()
+    );
+    let module = project_module(&source, &tree).unwrap();
+    let definition = &module.syntax_declarations[0];
+    assert_eq!(definition.category, SurfaceSyntaxCategory::Declaration);
+    assert!(matches!(definition.matcher.as_slice(), [
+        SurfaceSyntaxMatcherPart::Capture { name: first, kind: SurfaceSyntaxCaptureKind::Identifier },
+        SurfaceSyntaxMatcherPart::Literal { spelling, .. },
+        SurfaceSyntaxMatcherPart::Capture { name: second, kind: SurfaceSyntaxCaptureKind::Identifier },
+    ] if first.text == "T" && text_at(&source, first.span) == "T"
+        && spelling == "constructor"
+        && second.text == "C" && text_at(&source, second.span) == "C"));
+
+    for text in [
+        "pub syntax declaration: (bad) $T:ident then $T:ident => {}\n",
+        "pub syntax ordinary $T:ident then $value:expr => { $value }\n",
+    ] {
+        let (source, tree) = parsed(text);
+        assert!(!tree.parse_diagnostics().is_empty(), "accepted {text:?}");
+        assert_eq!(
+            project_module(&source, &tree),
+            Err(ProjectionError::RecoveryNodesPresent)
+        );
+    }
+}
+
+#[test]
 fn malformed_declaration_headers_stop_at_recovery_boundary() {
     for text in [
         "pub syntax declaration: () => {}\n",

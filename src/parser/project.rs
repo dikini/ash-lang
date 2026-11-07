@@ -538,6 +538,7 @@ fn validate_shallow_shape(
                 || shape.peek_node_is(NodeKind::EffectDeclaration)
                 || shape.peek_node_is(NodeKind::ImplementationDeclaration)
                 || shape.peek_node_is(NodeKind::SyntaxDeclaration)
+                || shape.peek_node_is(NodeKind::DeclarationSyntaxInvocation)
                 || shape.peek_node_is(NodeKind::EquationalGlobal)
                 || shape.peek_node_is(NodeKind::InlineOperationalGlobal)
             {
@@ -549,7 +550,8 @@ fn validate_shallow_shape(
         NodeKind::SyntaxDeclaration => {
             shape.token(&TokenKind::Pub)?;
             shape.token(&TokenKind::SyntaxKeyword)?;
-            if is_declaration_syntax(node, tokens) {
+            let declaration = is_declaration_syntax(node, tokens);
+            if declaration {
                 shape.token_matching(
                     |kind| matches!(kind, TokenKind::Identifier(name) if name == "declaration"),
                 )?;
@@ -562,6 +564,14 @@ fn validate_shallow_shape(
             }
             while !shape.peek_token_is(&TokenKind::FatArrow) {
                 if shape.peek_node_is(NodeKind::SyntaxCapture) {
+                    if !declaration
+                        && shape.peek_node().is_some_and(|capture| {
+                            direct_tokens(capture, tokens)
+                                .any(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+                        })
+                    {
+                        return malformed(InternalReason::UnexpectedShape);
+                    }
                     shape.node(NodeKind::SyntaxCapture)?;
                 } else {
                     shape.token_matching(|kind| {
@@ -629,13 +639,18 @@ fn validate_shallow_shape(
         }
         NodeKind::SyntaxCapture => {
             shape.token(&TokenKind::Dollar)?;
-            shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
+            shape.token_matching(|kind| {
+                matches!(
+                    kind,
+                    TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
+                )
+            })?;
             shape.token(&TokenKind::Colon)?;
             shape.token_matching(
                 |kind| matches!(kind, TokenKind::Identifier(name) if name == "expr" || name == "ident"),
             )?;
         }
-        NodeKind::SyntaxInvocation => {
+        NodeKind::SyntaxInvocation | NodeKind::DeclarationSyntaxInvocation => {
             shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
             while shape.position < shape.children.len() {
                 if shape.peek_node_is(NodeKind::SyntaxArgument) {
@@ -1754,7 +1769,12 @@ fn project_surface_module(
                             if capture.kind == NodeKind::SyntaxCapture =>
                         {
                             let names = direct_tokens(capture, tokens)
-                                .filter(|token| matches!(token.kind, TokenKind::Identifier(_)))
+                                .filter(|token| {
+                                    matches!(
+                                        token.kind,
+                                        TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
+                                    )
+                                })
                                 .collect::<Vec<_>>();
                             if names.len() != 2 {
                                 return malformed(InternalReason::UnexpectedShape);
@@ -2513,6 +2533,53 @@ fn project_expression(
     project_expression_with_fragments(source, node, tokens, tokens.originals.unwrap_or(&empty))
 }
 
+fn project_syntax_identifier_capture(
+    argument: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    originals: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
+) -> Result<SurfaceIdentifierCapture, ProjectionError> {
+    let index = argument
+        .children
+        .iter()
+        .find_map(|child| match child {
+            ConcreteElement::Token(index) => Some(*index),
+            _ => None,
+        })
+        .ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?;
+    match originals.get(&index) {
+        Some(crate::syntax::MacroOutputNode::Identifier(name, origin)) => {
+            Ok(SurfaceIdentifierCapture {
+                name: name.clone(),
+                origin: origin.clone(),
+            })
+        }
+        _ => {
+            let name = surface_name(only_direct_token(argument, tokens)?)?;
+            Ok(SurfaceIdentifierCapture {
+                origin: name.span.into(),
+                name,
+            })
+        }
+    }
+}
+
+fn project_syntax_expression_capture(
+    expression: SurfaceExpr,
+    contents: Vec<crate::syntax::MacroOutputNode>,
+) -> SurfaceExpressionCapture {
+    if let [crate::syntax::MacroOutputNode::ForwardedExpression(original, _)] = contents.as_slice()
+    {
+        original.clone()
+    } else {
+        SurfaceExpressionCapture {
+            expression,
+            contents: contents.into(),
+        }
+    }
+}
+
 fn capture_contents(
     source: &SourceFile,
     node: &ConcreteNode,
@@ -2636,6 +2703,158 @@ fn validated_macro_root<'tree>(
     }
     validate_concrete_token_coverage(root, tree.tokens.len())?;
     Ok(root)
+}
+
+/// One selected invocation projected from its position in an ordered module tree.
+#[allow(dead_code)]
+pub(crate) struct ProjectedDeclarationInvocation {
+    pub(crate) selection: crate::syntax::SelectedSyntax,
+    pub(crate) name: SurfaceName,
+    pub(crate) captures: Vec<SurfaceSyntaxCapture>,
+    pub(crate) span: Span,
+}
+
+/// Project a declaration invocation in the module's existing child order.
+///
+/// `contexts` must retain the same selections and introduction-to-owner/import
+/// mapping used to parse this tree. Matching spelling and matcher shape do not
+/// establish selection identity.
+#[allow(dead_code)]
+pub(crate) fn project_declaration_invocation(
+    source: &SourceFile,
+    tree: &ConcreteTree,
+    node: &ConcreteNode,
+    contexts: &crate::syntax::SyntaxContexts,
+) -> Result<ProjectedDeclarationInvocation, ProjectionError> {
+    let (root, raw_tokens) = validated_root(source, tree)?;
+    let tokens = ProjectionTokens::source(raw_tokens);
+    project_declaration_invocation_from_tokens(source, root, node, &tokens, contexts)
+}
+
+/// Project a structured-output invocation in the existing child order.
+///
+/// `contexts` must retain the same selections and introduction-to-owner/import
+/// mapping used to parse this tree. Matching spelling and matcher shape do not
+/// establish selection identity.
+#[allow(dead_code)]
+pub(super) fn project_macro_declaration_invocation(
+    source: &SourceFile,
+    invocation: Span,
+    construction: Option<(Span, usize)>,
+    parsed: &super::ParsedMacroTree,
+    node: &ConcreteNode,
+    contexts: &crate::syntax::SyntaxContexts,
+    frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
+) -> Result<ProjectedDeclarationInvocation, ProjectionError> {
+    let root = validated_macro_root(source, &parsed.tree)?;
+    validate_node_shape_with_admission(
+        root,
+        &parsed.tree.tokens,
+        Some(&parsed.admission_identifiers),
+    )?;
+    let tokens = ProjectionTokens {
+        tokens: &parsed.tree.tokens,
+        originals: Some(&parsed.original_nodes),
+        occurrence: Some(invocation),
+        construction,
+        construction_extents: false,
+        admission_identifiers: Some(&parsed.admission_identifiers),
+        frame,
+        name_frame: frame,
+        preserve_name_diagnostic: true,
+    };
+    project_declaration_invocation_from_tokens(source, root, node, &tokens, contexts)
+}
+
+fn project_declaration_invocation_from_tokens(
+    source: &SourceFile,
+    root: &ConcreteNode,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    contexts: &crate::syntax::SyntaxContexts,
+) -> Result<ProjectedDeclarationInvocation, ProjectionError> {
+    if node.kind != NodeKind::DeclarationSyntaxInvocation
+        || !child_nodes(root).any(|child| std::ptr::eq(child, node))
+    {
+        return malformed(InternalReason::UnexpectedShape);
+    }
+    let mut children = node.children.iter();
+    let Some(ConcreteElement::Token(index)) = children.next() else {
+        return malformed(InternalReason::UnexpectedShape);
+    };
+    let name = surface_name(tokens.projection_token(*index).ok_or(
+        ProjectionError::MalformedTree(InternalReason::TokenOutOfRange),
+    )?)?;
+    let selection = contexts
+        .select(&name)
+        .filter(|selected| selected.declaration.category == SurfaceSyntaxCategory::Declaration)
+        .ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?
+        .clone();
+    let empty = std::collections::HashMap::new();
+    let originals = tokens.originals.unwrap_or(&empty);
+    let mut captures = Vec::new();
+    for part in &selection.declaration.matcher {
+        match (part, children.next()) {
+            (
+                SurfaceSyntaxMatcherPart::Literal { kind, spelling },
+                Some(ConcreteElement::Token(index)),
+            ) => {
+                let token = tokens.get(*index).ok_or(ProjectionError::MalformedTree(
+                    InternalReason::TokenOutOfRange,
+                ))?;
+                let range = token.span.range();
+                let actual = match originals.get(index) {
+                    Some(crate::syntax::MacroOutputNode::Token(_, spelling, _)) => {
+                        Some(spelling.as_ref())
+                    }
+                    Some(crate::syntax::MacroOutputNode::Identifier(name, _)) => {
+                        Some(name.text.as_str())
+                    }
+                    _ => source
+                        .text()
+                        .get(range.start() as usize..range.end() as usize),
+                };
+                if &token.kind != kind || actual != Some(spelling.as_str()) {
+                    return malformed(InternalReason::UnexpectedShape);
+                }
+            }
+            (
+                SurfaceSyntaxMatcherPart::Capture { kind, .. },
+                Some(ConcreteElement::Node(argument)),
+            ) if argument.kind == NodeKind::SyntaxArgument => match kind {
+                SurfaceSyntaxCaptureKind::Identifier => {
+                    captures.push(SurfaceSyntaxCapture::Identifier(
+                        project_syntax_identifier_capture(argument, tokens, originals)?,
+                    ));
+                }
+                SurfaceSyntaxCaptureKind::Expression => {
+                    let expression = child_nodes(argument)
+                        .find(|child| is_expression_kind(child.kind))
+                        .ok_or(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        ))?;
+                    let contents = capture_contents(source, expression, tokens, originals)?;
+                    let expression =
+                        project_expression_with_fragments(source, expression, tokens, originals)?;
+                    captures.push(SurfaceSyntaxCapture::Expression(
+                        project_syntax_expression_capture(expression, contents),
+                    ));
+                }
+            },
+            _ => return malformed(InternalReason::UnexpectedShape),
+        }
+    }
+    if children.next().is_some() {
+        return malformed(InternalReason::UnexpectedShape);
+    }
+    Ok(ProjectedDeclarationInvocation {
+        selection,
+        name,
+        captures,
+        span: node_span(source, node, tokens)?,
+    })
 }
 
 pub(super) fn project_macro_declarations(
@@ -2771,32 +2990,11 @@ fn project_expression_with_fragments(
                                 original_nodes,
                             )?);
                         } else {
-                            let index = argument
-                                .children
-                                .iter()
-                                .find_map(|child| match child {
-                                    ConcreteElement::Token(index) => Some(*index),
-                                    _ => None,
-                                })
-                                .ok_or(ProjectionError::MalformedTree(
-                                    InternalReason::UnexpectedShape,
-                                ))?;
-                            let capture = match original_nodes.get(&index) {
-                                Some(crate::syntax::MacroOutputNode::Identifier(name, origin)) => {
-                                    SurfaceIdentifierCapture {
-                                        name: name.clone(),
-                                        origin: origin.clone(),
-                                    }
-                                }
-                                _ => {
-                                    let name = surface_name(only_direct_token(argument, tokens)?)?;
-                                    SurfaceIdentifierCapture {
-                                        origin: name.span.into(),
-                                        name,
-                                    }
-                                }
-                            };
-                            captures.push(Some(capture));
+                            captures.push(Some(project_syntax_identifier_capture(
+                                argument,
+                                tokens,
+                                original_nodes,
+                            )?));
                         }
                     }
                     tasks.push(ExpressionTask::FinishSyntaxInvocation {
@@ -3206,18 +3404,9 @@ fn project_expression_with_fragments(
                             let contents = contents.next().ok_or(
                                 ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
                             )?;
-                            let capture = if let [
-                                crate::syntax::MacroOutputNode::ForwardedExpression(original, _),
-                            ] = contents.as_slice()
-                            {
-                                original.clone()
-                            } else {
-                                SurfaceExpressionCapture {
-                                    expression,
-                                    contents: contents.into(),
-                                }
-                            };
-                            Ok(SurfaceSyntaxCapture::Expression(capture))
+                            Ok(SurfaceSyntaxCapture::Expression(
+                                project_syntax_expression_capture(expression, contents),
+                            ))
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -5247,6 +5436,139 @@ mod tests {
             matches!(contents.get(1), Some(MacroOutputNode::Splice(name))
             if name.text == "name" && name.span.source() == source.id())
         );
+    }
+
+    #[test]
+    fn declaration_invocation_handoff_preserves_structured_contexts_and_origins() {
+        use crate::syntax::{
+            DiagnosticLocation, ExpansionFrame, MacroDelimiter, MacroOrigin, MacroOutputNode,
+            SelectedSyntax, SyntaxContexts,
+        };
+
+        let owner = SourceFile::new(
+            "owner.ash",
+            "pub syntax declaration: (make) $name:ident from $value:expr => {}\n",
+        )
+        .unwrap();
+        let owner_tree = parse(lex(&owner).unwrap());
+        let owner_module = project_module_retaining_templates(&owner, &owner_tree).unwrap();
+        let declaration = owner_module.syntax_declarations[0].clone();
+        let caller = SourceFile::new("caller.ash", "invoke").unwrap();
+        let invocation = caller.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let written = SourceFile::new("earlier.ash", "make chosen from ()").unwrap();
+        let span = |start, end| written.span(ByteRange::new(start, end).unwrap()).unwrap();
+        let earlier_frame = std::sync::Arc::new(ExpansionFrame {
+            invocation: span(0, 4),
+            definition: declaration.span,
+        });
+        let current_frame = std::sync::Arc::new(ExpansionFrame {
+            invocation,
+            definition: declaration.span,
+        });
+        let mut diagnostic = DiagnosticLocation::new(MacroOrigin::Source(span(0, 4)));
+        diagnostic.add_frame(&earlier_frame);
+        let make_name = SurfaceName {
+            text: "make".into(),
+            span: span(0, 4),
+            introduction: 1,
+            introduced_at: Some(span(0, 4)),
+            written: false,
+            diagnostic: Some(Box::new(diagnostic)),
+        };
+        let captured = SurfaceName {
+            text: "chosen".into(),
+            span: span(5, 11),
+            introduction: 7,
+            introduced_at: Some(span(5, 11)),
+            written: false,
+            diagnostic: None,
+        };
+        let literal = SurfaceName {
+            text: "from".into(),
+            span: span(12, 16),
+            introduction: 1,
+            introduced_at: Some(span(0, 4)),
+            written: false,
+            diagnostic: None,
+        };
+        let value = SurfaceExpressionCapture {
+            expression: SurfaceExpr {
+                diagnostic: None,
+                kind: SurfaceExprKind::Unit,
+                span: span(17, 19),
+            },
+            contents: std::sync::Arc::from([MacroOutputNode::Group(
+                MacroDelimiter::Parentheses,
+                Vec::new(),
+                MacroOrigin::Source(span(17, 19)),
+            )]),
+        };
+        let selected = SelectedSyntax {
+            name: "make".into(),
+            declaration,
+            owner: 42,
+            import_span: span(0, 4),
+        };
+        let contexts = SyntaxContexts::new(&[], &[vec![selected.clone()]], &[Some(0)]);
+        let output = vec![
+            MacroOutputNode::Identifier(make_name, MacroOrigin::Source(span(0, 4))),
+            MacroOutputNode::Identifier(captured.clone(), MacroOrigin::Source(span(5, 11))),
+            MacroOutputNode::Identifier(literal, MacroOrigin::Source(span(12, 16))),
+            MacroOutputNode::ForwardedExpression(value.clone(), MacroOrigin::Source(span(17, 19))),
+        ];
+        let parsed = super::super::parse_macro_tree(
+            &caller,
+            invocation,
+            output,
+            &contexts,
+            &[],
+            super::super::MacroOutputPosition::Declarations,
+        )
+        .unwrap();
+        let root = parsed.tree.root().unwrap();
+        let node = child_nodes(root)
+            .find(|node| node.kind == NodeKind::DeclarationSyntaxInvocation)
+            .unwrap();
+        let matched = project_macro_declaration_invocation(
+            &caller,
+            invocation,
+            None,
+            &parsed,
+            node,
+            &contexts,
+            Some(&current_frame),
+        )
+        .unwrap();
+        assert_eq!(matched.name.introduction, 1);
+        assert_eq!(matched.selection.owner, 42);
+        assert_eq!(matched.selection.import_span, selected.import_span);
+        assert_eq!(matched.span, invocation);
+        let frames = &matched.name.diagnostic.as_ref().unwrap().frames;
+        assert!(
+            frames
+                .iter()
+                .any(|frame| std::sync::Arc::ptr_eq(frame, &earlier_frame))
+        );
+        assert!(
+            frames
+                .iter()
+                .any(|frame| std::sync::Arc::ptr_eq(frame, &current_frame))
+        );
+        let [
+            SurfaceSyntaxCapture::Identifier(name),
+            SurfaceSyntaxCapture::Expression(expression),
+        ] = matched.captures.as_slice()
+        else {
+            panic!("the selected matcher retains both captured categories");
+        };
+        assert_eq!(name.name.introduction, 7);
+        assert_eq!(name.name.span, captured.span);
+        assert_eq!(name.origin, MacroOrigin::Source(span(5, 11)));
+        assert!(std::sync::Arc::ptr_eq(
+            &expression.contents,
+            &value.contents
+        ));
+        assert_eq!(expression.expression.span, value.expression.span);
     }
 
     #[test]

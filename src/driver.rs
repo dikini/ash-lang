@@ -2766,6 +2766,34 @@ mod tests {
         })
     }
 
+    fn parse_selected_fixture(
+        path: &std::path::Path,
+    ) -> (
+        SourceFile,
+        crate::parser::ConcreteTree,
+        Vec<crate::syntax::SelectedSyntax>,
+    ) {
+        let mut graph = discover_headers(path, &ModuleRoots::empty()).unwrap();
+        let dependencies = projected_syntax_dependencies(&mut graph);
+        let selected = select_projected_syntax(&graph, &dependencies).unwrap();
+        let source = SourceFile::new(
+            path.to_string_lossy(),
+            std::fs::read_to_string(path).unwrap(),
+        )
+        .unwrap();
+        let lexed = crate::lexer::lex(&source).unwrap();
+        let (tokens, diagnostics, budget, resource) = lexed.into_parts();
+        assert!(resource.is_none());
+        let (checkpoint, budget) = crate::parser::parse_module_header(tokens, diagnostics, budget);
+        let (tree, _) = crate::parser::finish_module_from_checkpoint_with_syntax(
+            checkpoint,
+            budget,
+            Some(&source),
+            &selected,
+        );
+        (source, tree, selected)
+    }
+
     #[test]
     fn d2_selects_renamed_declaration_export_and_retains_its_context() {
         use crate::surface::SurfaceSyntaxCategory;
@@ -2929,8 +2957,375 @@ mod tests {
     }
 
     #[test]
+    fn d3_parses_a_renamed_imported_declaration_invocation_in_module_order() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/design/macros/fixtures/header_compat/renamed.ash");
+        let (source, tree, selected) = parse_selected_fixture(&path);
+        assert!(
+            tree.parse_diagnostics().is_empty(),
+            "{:?}",
+            tree.parse_diagnostics()
+        );
+        let kinds = tree
+            .root()
+            .unwrap()
+            .children
+            .iter()
+            .filter_map(|child| match child {
+                crate::parser::ConcreteElement::Node(node) => Some(format!("{:?}", node.kind)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            [
+                "ImportDeclaration",
+                "DeclarationSyntaxInvocation",
+                "EquationalGlobal"
+            ]
+        );
+        let node = tree
+            .root()
+            .unwrap()
+            .children
+            .iter()
+            .find_map(|child| match child {
+                crate::parser::ConcreteElement::Node(node)
+                    if node.kind == crate::parser::NodeKind::DeclarationSyntaxInvocation =>
+                {
+                    Some(node)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+        let invocation =
+            crate::parser::project_declaration_invocation(&source, &tree, node, &contexts).unwrap();
+        assert_eq!(invocation.name.text, "make_number");
+        assert_eq!(invocation.selection.name, "make_number");
+        assert_eq!(invocation.selection.declaration.name.text, "make_value");
+        assert_eq!(invocation.selection.owner, selected[0].owner);
+        assert_eq!(invocation.selection.import_span, selected[0].import_span);
+        let [crate::surface::SurfaceSyntaxCapture::Identifier(capture)] =
+            invocation.captures.as_slice()
+        else {
+            panic!("the selected matcher captures one identifier");
+        };
+        assert_eq!(capture.name.text, "number");
+        assert_eq!(capture.name.introduction, 0);
+        assert_eq!(capture.origin.primary(), capture.name.span);
+        assert_eq!(capture.name.span.source(), source.id());
+        let range = invocation.span.range();
+        assert_eq!(
+            &source.text()[range.start() as usize..range.end() as usize],
+            "make_number number"
+        );
+        assert!(crate::parser::project_module_retaining_templates(&source, &tree).is_err());
+        assert!(
+            crate::parser::project_declaration_invocation(&source, &tree, &node.clone(), &contexts)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn d3_missing_identifier_fails_at_the_invocation_boundary() {
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/design/macros/fixtures/diagnostics/missing.ash");
+        let failure = compile_path(RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        let Some(LoadGraphError::Syntax(error)) = failure.graph_failure() else {
+            panic!("expected a matcher syntax failure: {failure:?}");
+        };
+        assert!(error.source.display_path().ends_with("missing.ash"));
+        let diagnostic = &error.parser[0];
+        assert_eq!(diagnostic.reason, crate::parser::ParseReason::ExpectedForm);
+        assert_eq!(
+            diagnostic.expected_form(),
+            Some(crate::parser::ExpectedForm::Identifier)
+        );
+        assert_eq!(
+            diagnostic.found_token(),
+            Some(crate::parser::FoundToken::LineEnd)
+        );
+        let start = error.source.text().find("need_name\n").unwrap() + "need_name".len();
+        assert_eq!(diagnostic.primary.span().range().start() as usize, start);
+        let location = diagnostic
+            .primary
+            .diagnostic_location()
+            .expect("the matcher diagnostic retains its selected definition frame");
+        let [frame] = location.frames.as_slice() else {
+            panic!("expected one declaration invocation frame");
+        };
+        assert_eq!(frame.invocation.source(), error.source.id());
+        assert_eq!(
+            frame.invocation.range().start() as usize,
+            start - "need_name".len()
+        );
+        assert_eq!(frame.invocation.range().end() as usize, start);
+        let FileFailure::Graph(context) = &failure else {
+            panic!("the matcher failure retains the graph sources");
+        };
+        let definition = context
+            .sources()
+            .find(|source| source.id() == frame.definition.source())
+            .expect("the selected definition source is retained");
+        assert!(definition.display_path().ends_with("typed_forms.ash"));
+        let range = frame.definition.range();
+        assert!(
+            definition.text()[range.start() as usize..range.end() as usize]
+                .starts_with("pub syntax declaration: (need_name)")
+        );
+    }
+
+    #[test]
+    fn d3_projects_the_i01_identifier_captures_from_selected_syntax() {
+        let forms = include_str!("../docs/design/macros/fixtures/declarations/forms.ash");
+        let start = forms.find("pub syntax declaration: (make_type)").unwrap();
+        let end = start + forms[start..].find("\n}\n").unwrap() + "\n}\n".len();
+        let fixture = TestSource::write(include_str!(
+            "../docs/design/macros/fixtures/declarations/case_01.ash"
+        ));
+        fixture.write_sibling("forms.ash", &forms[start..end]);
+        let (source, tree, selected) = parse_selected_fixture(&fixture.0);
+        assert!(
+            tree.parse_diagnostics().is_empty(),
+            "{:?}",
+            tree.parse_diagnostics()
+        );
+        let node = tree
+            .root()
+            .unwrap()
+            .children
+            .iter()
+            .find_map(|child| match child {
+                crate::parser::ConcreteElement::Node(node)
+                    if node.kind == crate::parser::NodeKind::DeclarationSyntaxInvocation =>
+                {
+                    Some(node)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+        let matched =
+            crate::parser::project_declaration_invocation(&source, &tree, node, &contexts).unwrap();
+        let [
+            crate::surface::SurfaceSyntaxCapture::Identifier(first),
+            crate::surface::SurfaceSyntaxCapture::Identifier(second),
+        ] = matched.captures.as_slice()
+        else {
+            panic!("the selected I01 matcher captures two identifiers");
+        };
+        assert_eq!(
+            (&first.name.text[..], &second.name.text[..]),
+            ("Color", "Red")
+        );
+        for capture in [first, second] {
+            assert_eq!(capture.name.introduction, 0);
+            assert_eq!(capture.origin.primary(), capture.name.span);
+            assert_eq!(capture.name.span.source(), source.id());
+        }
+        assert_eq!(matched.selection.declaration.name.text, "make_type");
+        assert_eq!(matched.selection.owner, selected[0].owner);
+        assert_eq!(matched.selection.import_span, selected[0].import_span);
+        assert!(crate::parser::project_module_retaining_templates(&source, &tree).is_err());
+        let failure = compile_path(fixture.configuration()).unwrap_err();
+        assert!(matches!(
+            failure.graph_failure(),
+            Some(LoadGraphError::Projection { .. })
+        ));
+    }
+
+    #[test]
+    fn d3_projects_the_i19_expression_capture_in_source_order() {
+        let forms = include_str!("../docs/design/macros/fixtures/captures/forms.ash");
+        let end = forms.find("\n}\n").unwrap() + "\n}\n".len();
+        let fixed = include_str!("../docs/design/macros/fixtures/captures/main.ash")
+            .lines()
+            .find(|line| line.starts_with("expression_value "))
+            .unwrap();
+        let fixture = TestSource::write(&format!(
+            "import forms (syntax expression_value)\n\nbefore : Unit -> Int\nbefore () = 1\n{fixed}\nafter : Unit -> Int\nafter () = 2\nmain : Unit -> Int\nmain () = 42\n"
+        ));
+        fixture.write_sibling("forms.ash", &forms[..end]);
+        let (source, tree, selected) = parse_selected_fixture(&fixture.0);
+        assert!(
+            tree.parse_diagnostics().is_empty(),
+            "{:?}",
+            tree.parse_diagnostics()
+        );
+        let nodes = tree
+            .root()
+            .unwrap()
+            .children
+            .iter()
+            .filter_map(|child| match child {
+                crate::parser::ConcreteElement::Node(node) => Some(node),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            nodes.iter().map(|node| node.kind).collect::<Vec<_>>(),
+            [
+                crate::parser::NodeKind::ImportDeclaration,
+                crate::parser::NodeKind::EquationalGlobal,
+                crate::parser::NodeKind::DeclarationSyntaxInvocation,
+                crate::parser::NodeKind::EquationalGlobal,
+                crate::parser::NodeKind::EquationalGlobal,
+            ]
+        );
+        let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+        let matched =
+            crate::parser::project_declaration_invocation(&source, &tree, nodes[2], &contexts)
+                .unwrap();
+        let [
+            crate::surface::SurfaceSyntaxCapture::Identifier(name),
+            crate::surface::SurfaceSyntaxCapture::Expression(value),
+        ] = matched.captures.as_slice()
+        else {
+            panic!("the selected I19 matcher captures an identifier and expression");
+        };
+        assert_eq!(name.name.text, "forty_two");
+        assert_eq!(name.origin.primary(), name.name.span);
+        assert!(matches!(
+            value.expression.kind,
+            crate::surface::SurfaceExprKind::Add(_)
+        ));
+        let range = value.expression.span.range();
+        assert_eq!(
+            &source.text()[range.start() as usize..range.end() as usize],
+            "40 + 2"
+        );
+        assert_eq!(value.contents.len(), 3);
+        assert!(
+            matches!(&value.contents[1], crate::syntax::MacroOutputNode::Token(crate::lexer::TokenKind::Plus, _, origin)
+            if origin.primary().source() == source.id())
+        );
+        assert_eq!(matched.selection.owner, selected[0].owner);
+        assert_eq!(matched.selection.import_span, selected[0].import_span);
+        assert!(crate::parser::project_module_retaining_templates(&source, &tree).is_err());
+    }
+
+    #[test]
+    fn d3_expression_captures_stop_at_their_literal_and_reject_incomplete_input() {
+        let forms = "pub syntax declaration: (pair) $value:expr then $name:ident => {}\n";
+        for (line, expected) in [
+            ("pair (f(then) + 2) then answer", None),
+            (
+                "pair then answer",
+                Some(crate::parser::ExpectedForm::Expression),
+            ),
+            (
+                "pair 1 then answer extra",
+                Some(crate::parser::ExpectedForm::LineEnd),
+            ),
+        ] {
+            let fixture = TestSource::write(&format!(
+                "import forms (syntax pair)\n\n{line}\nmain : Unit -> Int\nmain () = 42\n"
+            ));
+            fixture.write_sibling("forms.ash", forms);
+            let (source, tree, selected) = parse_selected_fixture(&fixture.0);
+            if let Some(expected) = expected {
+                assert_eq!(
+                    tree.parse_diagnostics()[0].expected_form(),
+                    Some(expected),
+                    "{line}"
+                );
+                let frames = &tree.parse_diagnostics()[0]
+                    .primary
+                    .diagnostic_location()
+                    .expect("matcher failure retains its invocation frame")
+                    .frames;
+                assert_eq!(frames.len(), 1);
+                assert_eq!(frames[0].definition, selected[0].declaration.span);
+                assert_eq!(frames[0].invocation.source(), source.id());
+                continue;
+            }
+            assert!(
+                tree.parse_diagnostics().is_empty(),
+                "{line}: {:?}",
+                tree.parse_diagnostics()
+            );
+            let node = tree
+                .root()
+                .unwrap()
+                .children
+                .iter()
+                .find_map(|child| match child {
+                    crate::parser::ConcreteElement::Node(node)
+                        if node.kind == crate::parser::NodeKind::DeclarationSyntaxInvocation =>
+                    {
+                        Some(node)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+            let matched =
+                crate::parser::project_declaration_invocation(&source, &tree, node, &contexts)
+                    .unwrap();
+            let [
+                crate::surface::SurfaceSyntaxCapture::Expression(value),
+                crate::surface::SurfaceSyntaxCapture::Identifier(name),
+            ] = matched.captures.as_slice()
+            else {
+                panic!("the matcher retains its ordered expression and identifier captures");
+            };
+            let range = value.expression.span.range();
+            assert_eq!(
+                &source.text()[range.start() as usize..range.end() as usize],
+                "(f(then) + 2)"
+            );
+            assert_eq!(name.name.text, "answer");
+        }
+    }
+
+    #[test]
+    fn d3_empty_matcher_requires_a_complete_invocation_line() {
+        for (line, valid) in [("tag", true), ("tag extra", false), ("tag : Unit", false)] {
+            let fixture = TestSource::write(&format!(
+                "import forms (syntax tag)\n\n{line}\nmain : Unit -> Int\nmain () = 42\n"
+            ));
+            fixture.write_sibling("forms.ash", "pub syntax declaration: (tag) => {}\n");
+            let (source, tree, selected) = parse_selected_fixture(&fixture.0);
+            if !valid {
+                assert_eq!(
+                    tree.parse_diagnostics()[0].expected_form(),
+                    Some(crate::parser::ExpectedForm::LineEnd),
+                    "{line}"
+                );
+                continue;
+            }
+            assert!(tree.parse_diagnostics().is_empty());
+            let node = tree
+                .root()
+                .unwrap()
+                .children
+                .iter()
+                .find_map(|child| match child {
+                    crate::parser::ConcreteElement::Node(node)
+                        if node.kind == crate::parser::NodeKind::DeclarationSyntaxInvocation =>
+                    {
+                        Some(node)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+            let matched =
+                crate::parser::project_declaration_invocation(&source, &tree, node, &contexts)
+                    .unwrap();
+            assert!(matched.captures.is_empty());
+            assert_eq!(matched.selection.owner, selected[0].owner);
+        }
+    }
+
+    #[test]
     fn d2_i21_checked_exports_reach_selection_before_declaration_invocation() {
-        for (name, invocation) in [("renamed.ash", "make_number"), ("both.ash", "make_value")] {
+        for name in ["renamed.ash", "both.ash"] {
             let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("docs/design/macros/fixtures/header_compat")
                 .join(name);
@@ -2939,19 +3334,17 @@ mod tests {
                 roots: ModuleRoots::empty(),
             })
             .unwrap_err();
-            let Some(LoadGraphError::Syntax(error)) = failure.graph_failure() else {
-                panic!("{name}: expected invocation parse failure: {failure:?}");
+            let Some(LoadGraphError::Projection { source, error, .. }) = failure.graph_failure()
+            else {
+                panic!("{name}: expected unexpanded invocation refusal: {failure:?}");
             };
             assert_eq!(
-                error.parser[0].reason,
-                crate::parser::ParseReason::UnexpectedToken
+                *error,
+                crate::parser::ProjectionError::MalformedTree(
+                    crate::parser::InternalReason::UnexpectedShape
+                )
             );
-            assert!(error.source.display_path().ends_with(name));
-            let range = error.parser[0].primary.span().range();
-            assert_eq!(
-                &error.source.text()[range.start() as usize..range.end() as usize],
-                invocation
-            );
+            assert!(source.display_path().ends_with(name));
         }
 
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

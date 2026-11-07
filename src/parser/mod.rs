@@ -15,6 +15,8 @@ pub use crate::syntax_resource::{ResourceFailure, SYNTAX_WORK_LIMIT};
 pub use cst::{ConcreteElement, ConcreteNode, ConcreteTree, InternalReason};
 pub use event::Event;
 pub(crate) use project::module_span_from_checkpoint;
+#[allow(unused_imports)]
+pub(crate) use project::project_declaration_invocation;
 pub(crate) use project::project_module_header;
 pub(crate) use project::project_module_retaining_templates;
 pub(crate) use project::structural_weight as source_structural_weight;
@@ -59,6 +61,8 @@ pub enum NodeKind {
     TemplateBody,
     /// One imported expression syntax invocation.
     SyntaxInvocation,
+    /// One imported declaration syntax invocation, awaiting expansion.
+    DeclarationSyntaxInvocation,
     /// One identifier or expression captured by an invocation.
     SyntaxArgument,
     /// One passive source-authored foreign library.
@@ -1185,6 +1189,17 @@ impl Parser<'_> {
     }
 
     fn selected_syntax(&self) -> Option<&crate::syntax::SelectedSyntax> {
+        self.selected_syntax_in_category(crate::surface::SurfaceSyntaxCategory::Expression)
+    }
+
+    fn selected_declaration_syntax(&self) -> Option<&crate::syntax::SelectedSyntax> {
+        self.selected_syntax_in_category(crate::surface::SurfaceSyntaxCategory::Declaration)
+    }
+
+    fn selected_syntax_in_category(
+        &self,
+        category: crate::surface::SurfaceSyntaxCategory,
+    ) -> Option<&crate::syntax::SelectedSyntax> {
         let selection = if let Some(selections) = self.syntax_selections {
             selections.get(&self.position)
         } else {
@@ -1193,9 +1208,7 @@ impl Parser<'_> {
             };
             self.syntax.iter().find(|syntax| syntax.name == *name)
         };
-        selection.filter(|syntax| {
-            syntax.declaration.category == crate::surface::SurfaceSyntaxCategory::Expression
-        })
+        selection.filter(|syntax| syntax.declaration.category == category)
     }
 
     fn at_syntax_literal(&self, kind: &TokenKind, spelling: &str) -> bool {

@@ -473,6 +473,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/parser/mod.rs::Parser.syntax_selections", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
     kind_site!("src/parser/project.rs::ProjectionTokens.originals", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
     kind_site!("src/parser/project.rs::ProjectionToken.original", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
+    kind_site!("src/parser/project.rs::ProjectedDeclarationInvocation.selection", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/parser/project.rs::ProjectedDeclarationInvocation.captures", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/parser/project.rs::ExpressionTask.FinishSyntaxInvocation.contents", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/resolve.rs::SyntaxInputs.owners", FieldSyntaxOwnerContextBorrow),
     kind_site!("src/resolve.rs::SyntaxInputs.terms", FieldSyntaxOwnerContextBorrow),
