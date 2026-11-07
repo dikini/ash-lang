@@ -3015,18 +3015,11 @@ fn project_expression_with_fragments(
                         optional_child_of_kind(node, NodeKind::QualifiedName)?
                     {
                         let name = project_qualified_name(source, name, tokens)?;
-                        let mut diagnostic = name.qualifier.diagnostic.clone();
-                        if let Some(member) = &name.member.diagnostic {
-                            if let Some(location) = &mut diagnostic {
-                                location.add_cause(member);
-                            } else {
-                                diagnostic = Some(member.clone());
-                            }
-                        }
+                        let reference = SurfaceReference::Qualified(name);
                         projected.push(SurfaceExpr {
-                            diagnostic,
-                            span: name.span,
-                            kind: SurfaceExprKind::Name(SurfaceReference::Qualified(name)),
+                            diagnostic: reference.diagnostic_location(),
+                            span: reference.span(),
+                            kind: SurfaceExprKind::Name(reference),
                         });
                     } else {
                         projected.push(project_primitive(node, tokens)?);

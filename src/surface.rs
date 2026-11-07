@@ -852,6 +852,18 @@ impl SurfaceReference {
             Self::Qualified(name) => name.span,
         }
     }
+
+    pub(crate) fn diagnostic_location(&self) -> Option<Box<crate::syntax::DiagnosticLocation>> {
+        let mut location = self.qualifier().and_then(|name| name.diagnostic.clone());
+        if let Some(member) = &self.member().diagnostic {
+            if let Some(location) = &mut location {
+                location.add_cause(member);
+            } else {
+                location = Some(member.clone());
+            }
+        }
+        location
+    }
 }
 
 /// One module-qualified source reference.

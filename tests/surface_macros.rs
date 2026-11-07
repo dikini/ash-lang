@@ -708,6 +708,118 @@ fn qualified_application_error_preserves_member_origin() {
 }
 
 #[test]
+fn captured_type_name_preserves_its_origin_through_lookup_and_checking() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
+    let outer = include_str!("fixtures/surface-macros/identifier-origin/outer.ash");
+    let inner = include_str!("fixtures/surface-macros/identifier-origin/inner.ash");
+    for (entry, source, invocation, reason, primary, outer_definition, inner_definition, types) in [
+        (
+            "type_missing.ash",
+            include_str!("fixtures/surface-macros/identifier-origin/type_missing.ash"),
+            "outer_type 42",
+            "resolve.unknown-type",
+            "unresolved_name",
+            "pub syntax outer_type $value:expr => using expand_type",
+            "pub syntax observe_type $name:ident = $value:expr => {\n    let x : $name = $value\n    42\n}",
+            None,
+        ),
+        (
+            "type_mismatch.ash",
+            include_str!("fixtures/surface-macros/identifier-origin/type_mismatch.ash"),
+            "outer_type true",
+            "type.binding-initializer",
+            "initializer",
+            "pub syntax outer_type $value:expr => using expand_type",
+            "pub syntax observe_type $name:ident = $value:expr => {\n    let x : $name = $value\n    42\n}",
+            Some(("MissingType", "Bool")),
+        ),
+        (
+            "type_tuple_mismatch.ash",
+            include_str!("fixtures/surface-macros/identifier-origin/type_tuple_mismatch.ash"),
+            "outer_tuple (1, true)",
+            "type.binding-initializer",
+            "initializer",
+            "pub syntax outer_tuple $value:expr => using expand_tuple",
+            "pub syntax observe_tuple $name:ident = $value:expr => {\n    let x : ($name, Bool) = $value\n    42\n}",
+            Some(("(MissingType, Bool)", "(Int, Bool)")),
+        ),
+    ] {
+        let failure = compile_path(fixture(&format!("identifier-origin/{entry}")))
+            .expect_err("the generated annotation is invalid");
+        assert_eq!(failure.reason_code(), reason);
+        let diagnostics = compile_file_diagnostics(&failure).unwrap();
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        let labels = json["labels"].as_array().unwrap();
+        assert_eq!(labels[0]["relationship"], primary);
+        let facts = json["facts"].as_array().unwrap();
+        if let Some((expected, found)) = types {
+            for (name, value) in [("expected", expected), ("found", found)] {
+                assert!(
+                    facts
+                        .iter()
+                        .any(|fact| fact["name"] == name && fact["value"] == value)
+                );
+            }
+            assert!(
+                labels
+                    .iter()
+                    .any(|label| label["relationship"] == "binding_annotation")
+            );
+        } else {
+            assert!(
+                facts
+                    .iter()
+                    .any(|fact| fact["name"] == "name" && fact["value"] == "MissingType")
+            );
+        }
+        let definition_start = outer.find(outer_definition).unwrap();
+        assert!(
+            labels.iter().any(|label| {
+                label["relationship"] == "syntax_cause"
+                    && label["path"].as_str().unwrap().ends_with("outer.ash")
+                    && label["byte_start"] == definition_start
+                    && label["byte_end"] == definition_start + outer_definition.len()
+            }),
+            "{entry}: {json}"
+        );
+        let frames: Vec<_> = labels
+            .iter()
+            .filter(|label| {
+                label["relationship"] == "syntax_invocation"
+                    || label["relationship"] == "syntax_definition"
+            })
+            .collect();
+        assert_eq!(frames.len(), 4, "{entry}: {json}");
+        let start = source.find(invocation).unwrap();
+        for frame in [frames[0], frames[2]] {
+            assert_eq!(frame["relationship"], "syntax_invocation");
+            assert!(frame["path"].as_str().unwrap().ends_with(entry));
+            assert_eq!(frame["byte_start"], start);
+            assert_eq!(frame["byte_end"], start + invocation.len());
+        }
+        assert_eq!(frames[1]["relationship"], "syntax_definition");
+        assert!(frames[1]["path"].as_str().unwrap().ends_with("outer.ash"));
+        assert_eq!(frames[1]["byte_start"], definition_start);
+        assert_eq!(
+            frames[1]["byte_end"],
+            definition_start + outer_definition.len()
+        );
+        let inner_start = inner.find(inner_definition).unwrap();
+        assert_eq!(frames[3]["relationship"], "syntax_definition");
+        assert!(frames[3]["path"].as_str().unwrap().ends_with("inner.ash"));
+        assert_eq!(frames[3]["byte_start"], inner_start);
+        assert_eq!(frames[3]["byte_end"], inner_start + inner_definition.len());
+    }
+    for entry in ["type_valid.ash", "type_tuple_valid.ash"] {
+        let valid = compile_path(fixture(&format!("identifier-origin/{entry}"))).unwrap();
+        assert_eq!(execute(&valid).unwrap().value_display(), "42");
+    }
+}
+
+#[test]
 fn application_failure_preserves_function_occurrence() {
     use ash::presentation::{compile_file_diagnostics, write_json};
 

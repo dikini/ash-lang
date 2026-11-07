@@ -69,3 +69,13 @@ make_qualified (input, spelling, name, alias_origin, member_origin) = match (Syn
     }
     _ => Syntax.Rejected(Syntax.MacroDiagnostic("qualified construction failed", alias_origin, Syntax.NoOrigins))
 }
+
+pub syntax observe_type $name:ident = $value:expr => {
+    let x : $name = $value
+    42
+}
+
+pub syntax observe_tuple $name:ident = $value:expr => {
+    let x : ($name, Bool) = $value
+    42
+}

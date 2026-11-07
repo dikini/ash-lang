@@ -1898,6 +1898,30 @@ impl TypeProvenance {
         }
     }
 
+    fn diagnostic_location(&self) -> Option<Box<crate::syntax::DiagnosticLocation>> {
+        let mut pending = vec![self];
+        let mut location: Option<Box<crate::syntax::DiagnosticLocation>> = None;
+        while let Some(provenance) = pending.pop() {
+            match provenance {
+                Self::Built { .. } => {}
+                Self::Resolved(resolved) => {
+                    if let Some(cause) = resolved.diagnostic_location() {
+                        if let Some(location) = &mut location {
+                            location.add_cause(&cause);
+                        } else {
+                            location = Some(cause);
+                        }
+                    }
+                }
+                Self::Function { parts, .. } => {
+                    pending.push(&parts.1);
+                    pending.push(&parts.0);
+                }
+            }
+        }
+        location
+    }
+
     fn aligns(&self, ty: &Type) -> bool {
         self.aligns_inner(ty, None)
             .expect("unmetered provenance alignment cannot fail")
@@ -14668,6 +14692,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     expected.into_inner(),
                     callback.into_inner(),
                     Some(target_span),
+                    None,
                     &self.registry,
                 ))
             }
@@ -14797,6 +14822,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         expected.into_inner(),
                         actual.into_inner(),
                         Some(span),
+                        None,
                         &self.registry,
                     ));
                 }
@@ -17692,16 +17718,24 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Err(UnificationFailure::Mismatch) => {
                 let expected_ty = IterativeTypeOwner::new(self.zonk(&expected.ty)?);
                 let synthesized_ty = IterativeTypeOwner::new(self.zonk(&synthesized.ty)?);
-                return Err(check_mismatch(
+                let expected_location = expected.provenance.diagnostic_location();
+                let general = matches!(kind, CheckKind::General | CheckKind::CleanupAction(_));
+                let failure = check_mismatch(
                     kind,
                     span,
                     expected_ty.into_inner(),
                     synthesized_ty.into_inner(),
                     expected.provenance.span(),
+                    expected_location.as_deref(),
                     &self.registry,
                 )
                 .with_diagnostic_location(synthesized.diagnostic.as_deref())
-                .with_related_diagnostic(expected_cause.as_deref()));
+                .with_related_diagnostic(expected_cause.as_deref());
+                return Err(if general {
+                    failure.with_related_diagnostic(expected_location.as_deref())
+                } else {
+                    failure
+                });
             }
             Err(UnificationFailure::Kind { context, span }) => {
                 return Err(TypeError::Internal(ElaborationFailure::Kind {
@@ -27845,6 +27879,7 @@ fn check_mismatch(
     expected: Type,
     found: Type,
     expected_cause: Option<Span>,
+    expected_location: Option<&crate::syntax::DiagnosticLocation>,
     registry: &ResolvedRegistry,
 ) -> TypeError {
     let expected = IterativeTypeOwner::new(expected);
@@ -27876,10 +27911,14 @@ fn check_mismatch(
                         "this recursive call requires a different type instantiation",
                     ),
                 );
-                diagnostic.related.push(SourceLabel::new(
+                let mut function = SourceLabel::new(
                     function_span,
                     "this recursive function is checked monomorphically",
-                ));
+                );
+                if let Some(location) = expected_location {
+                    function.add_cause(location);
+                }
+                diagnostic.related.push(function);
                 diagnostic.expected = Some(registry.display_source_type(&expected));
                 diagnostic.found = Some(registry.display_source_type(&found));
                 return TypeError::Source(Box::new(TypeDiagnostic {
@@ -27896,10 +27935,14 @@ fn check_mismatch(
                 TypeReason::Argument,
                 SourceLabel::new(span, "this argument does not match the function domain"),
             );
-            diagnostic.related.push(SourceLabel::new(
+            let mut domain = SourceLabel::new(
                 expected_cause.unwrap_or(function_span),
                 "the function domain is required here",
-            ));
+            );
+            if let Some(location) = expected_location {
+                domain.add_cause(location);
+            }
+            diagnostic.related.push(domain);
             if whole_span != span && whole_span != function_span {
                 diagnostic.related.push(SourceLabel::new(
                     whole_span,
@@ -27917,10 +27960,14 @@ fn check_mismatch(
                 TypeReason::DefinitionResult,
                 SourceLabel::new(span, "this function body has the wrong result type"),
             );
-            diagnostic.related.push(SourceLabel::new(
+            let mut result = SourceLabel::new(
                 expected_cause.unwrap_or(result_cause),
                 "the function interface requires this result type",
-            ));
+            );
+            if let Some(location) = expected_location {
+                result.add_cause(location);
+            }
+            diagnostic.related.push(result);
             diagnostic.expected = Some(expected);
             diagnostic.found = Some(found);
             TypeError::source(diagnostic)
@@ -27938,10 +27985,14 @@ fn check_mismatch(
                     format!("this initializer has type {found}"),
                 ),
             );
-            diagnostic.related.push(SourceLabel::new(
+            let mut annotation = SourceLabel::new(
                 annotation_span,
                 format!("this binding annotation requires {expected}"),
-            ));
+            );
+            if let Some(location) = expected_location {
+                annotation.add_cause(location);
+            }
+            diagnostic.related.push(annotation);
             diagnostic.expected = Some(expected);
             diagnostic.found = Some(found);
             TypeError::source(diagnostic)

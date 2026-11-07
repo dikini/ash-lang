@@ -1011,6 +1011,10 @@ impl ResolveError {
         self
     }
 
+    fn with_name(self, name: &SurfaceName, frames: &[Arc<crate::syntax::ExpansionFrame>]) -> Self {
+        self.with_fallback_diagnostic(name.diagnostic.as_deref(), frames)
+    }
+
     fn internal_message(&self) -> Option<(crate::message::Message<'static>, &'static str)> {
         use crate::message::Message;
         match self.0.context {
@@ -5914,6 +5918,7 @@ impl Resolver<'_, '_> {
                             &qualifier.text,
                             "this module alias is not bound in the syntax owner",
                         )
+                        .with_name(qualifier, &self.diagnostic_frames)
                     })?;
                     if !owner.direct_dependencies().contains(&route) {
                         return Err(invalid());
@@ -5929,7 +5934,8 @@ impl Resolver<'_, '_> {
                             .nominal(&usage.name.text)
                             .ok_or_else(|| {
                                 if dependency.exports().interface(&usage.name.text).is_some() {
-                                    return type_kind_error(usage.name.span, &usage.name.text);
+                                    return type_kind_error(usage.name.span, &usage.name.text)
+                                        .with_name(&usage.name, &self.diagnostic_frames);
                                 }
                                 withheld_export_error(
                                     usage.name.span,
@@ -5940,6 +5946,7 @@ impl Resolver<'_, '_> {
                                         &usage.name.text,
                                     ),
                                 )
+                                .with_name(&usage.name, &self.diagnostic_frames)
                             })?;
                     let nominal = dependency
                         .exports()
@@ -6010,6 +6017,7 @@ impl Resolver<'_, '_> {
                             &qualifier.text,
                             "this module alias is not bound in the syntax owner",
                         )
+                        .with_name(qualifier, &self.diagnostic_frames)
                     })?;
                     if !owner.direct_dependencies().contains(&route) {
                         return Err(invalid());
@@ -6028,7 +6036,8 @@ impl Resolver<'_, '_> {
                                 || dependency.exports().term(&usage.name.text).is_some()
                                 || dependency.exports().method(&usage.name.text).is_some()
                             {
-                                return interface_kind_error(usage.name.span, &usage.name.text);
+                                return interface_kind_error(usage.name.span, &usage.name.text)
+                                    .with_name(&usage.name, &self.diagnostic_frames);
                             }
                             withheld_export_error(
                                 usage.name.span,
@@ -6039,6 +6048,7 @@ impl Resolver<'_, '_> {
                                     &usage.name.text,
                                 ),
                             )
+                            .with_name(&usage.name, &self.diagnostic_frames)
                         })?;
                     self.retain_imported_interface_fact(
                         interface,
@@ -6114,6 +6124,7 @@ impl Resolver<'_, '_> {
                             &qualifier.text,
                             "this module alias is not bound in the syntax owner",
                         )
+                        .with_name(qualifier, &self.diagnostic_frames)
                     })?;
                     if !owner.direct_dependencies().contains(&route) {
                         return Err(invalid());
@@ -6131,7 +6142,8 @@ impl Resolver<'_, '_> {
                                 if dependency.exports().nominal(&usage.name.text).is_some()
                                     || dependency.exports().interface(&usage.name.text).is_some()
                                 {
-                                    return effect_kind_error(usage.name.span, &usage.name.text);
+                                    return effect_kind_error(usage.name.span, &usage.name.text)
+                                        .with_name(&usage.name, &self.diagnostic_frames);
                                 }
                                 lookup_error(
                                     ResolveContext::ExportedEffect,
@@ -6139,6 +6151,7 @@ impl Resolver<'_, '_> {
                                     &usage.name.text,
                                     "this effect is not exported by the selected module",
                                 )
+                                .with_name(&usage.name, &self.diagnostic_frames)
                             })?;
                     self.retain_imported_effect_from_owner(
                         effect,
@@ -6203,10 +6216,7 @@ impl Resolver<'_, '_> {
                         &qualifier.text,
                         "this module alias is not bound in the syntax owner",
                     )
-                    .with_fallback_diagnostic(
-                        qualifier.diagnostic.as_deref(),
-                        &self.diagnostic_frames,
-                    )
+                    .with_name(qualifier, &self.diagnostic_frames)
                 })?;
                 if !owner.direct_dependencies().contains(&route) {
                     return Err(invalid());
@@ -6285,10 +6295,7 @@ impl Resolver<'_, '_> {
                             )
                         }),
                     )
-                    .with_fallback_diagnostic(
-                        usage.name.diagnostic.as_deref(),
-                        &self.diagnostic_frames,
-                    ));
+                    .with_name(&usage.name, &self.diagnostic_frames));
                 }
                 continue;
             }
@@ -7936,10 +7943,7 @@ impl Resolver<'_, '_> {
                     &qualified.qualifier.text,
                     "this module alias is not bound",
                 )
-                .with_fallback_diagnostic(
-                    qualified.qualifier.diagnostic.as_deref(),
-                    &self.diagnostic_frames,
-                )
+                .with_name(&qualified.qualifier, &self.diagnostic_frames)
             })
     }
 
@@ -7966,14 +7970,15 @@ impl Resolver<'_, '_> {
                         name.span,
                         "this qualified nominal type is not available in the syntax context",
                     )
+                    .with_name(&name.member, &self.diagnostic_frames)
                 });
         }
         if let Some(namespace) = self.imported_namespace(reference)? {
             if namespace.interfaces.contains_key(&reference.member().text) {
-                return Err(type_kind_error(
-                    reference.member().span,
-                    &reference.member().text,
-                ));
+                return Err(
+                    type_kind_error(reference.member().span, &reference.member().text)
+                        .with_name(reference.member(), &self.diagnostic_frames),
+                );
             }
             return namespace
                 .nominals
@@ -7988,6 +7993,7 @@ impl Resolver<'_, '_> {
                             .get(&(reference.member().text.clone(), WithheldNamespace::Nominal))
                             .copied(),
                     )
+                    .with_name(reference.member(), &self.diagnostic_frames)
                 });
         }
         let name = reference.member();
@@ -8012,10 +8018,13 @@ impl Resolver<'_, '_> {
                         name.span,
                         "this nominal type is not declared in the syntax context",
                     )
+                    .with_name(name, &self.diagnostic_frames)
                 });
         }
         if self.interface_names.contains_key(&name.text) {
-            return Err(type_kind_error(name.span, &name.text));
+            return Err(
+                type_kind_error(name.span, &name.text).with_name(name, &self.diagnostic_frames)
+            );
         }
         let id = self.type_names.get(&name.text).copied().ok_or_else(|| {
             if let Some(withheld) = self
@@ -8023,7 +8032,8 @@ impl Resolver<'_, '_> {
                 .get(&(name.text.clone(), WithheldNamespace::Nominal))
                 .copied()
             {
-                return withheld_export_error(name.span, &name.text, Some(withheld));
+                return withheld_export_error(name.span, &name.text, Some(withheld))
+                    .with_name(name, &self.diagnostic_frames);
             }
             let mut diagnostic = Diagnostic::new(
                 ResolveReason::UnknownType,
@@ -8031,6 +8041,7 @@ impl Resolver<'_, '_> {
             );
             diagnostic.found = Some(name.text.clone());
             ResolveError::new(diagnostic, Some(ResolveContext::Type))
+                .with_name(name, &self.diagnostic_frames)
         })?;
         Ok(ImportedNominalName { id })
     }
@@ -8057,7 +8068,10 @@ impl Resolver<'_, '_> {
                     ))
                     .copied(),
             }
-            .ok_or_else(|| unknown_interface_error(member.span, &member.text))?;
+            .ok_or_else(|| {
+                unknown_interface_error(member.span, &member.text)
+                    .with_name(member, &self.diagnostic_frames)
+            })?;
             return Ok(ResolvedInterfaceOccurrence {
                 id,
                 spelling: member.text.clone(),
@@ -8076,7 +8090,8 @@ impl Resolver<'_, '_> {
                 || namespace.constructors.contains_key(&member.text)
                 || namespace.terms.contains_key(&member.text)
             {
-                return Err(interface_kind_error(member.span, &member.text));
+                return Err(interface_kind_error(member.span, &member.text)
+                    .with_name(member, &self.diagnostic_frames));
             }
             return Err(withheld_export_error(
                 member.span,
@@ -8085,7 +8100,8 @@ impl Resolver<'_, '_> {
                     .withheld
                     .get(&(member.text.clone(), WithheldNamespace::Nominal))
                     .copied(),
-            ));
+            )
+            .with_name(member, &self.diagnostic_frames));
         }
         if let Some(id) = self.interface_names.get(&member.text).copied() {
             return Ok(ResolvedInterfaceOccurrence {
@@ -8101,20 +8117,21 @@ impl Resolver<'_, '_> {
                 .rev()
                 .any(|scope| scope.contains_key(&member.text))
         {
-            return Err(interface_kind_error(member.span, &member.text));
+            return Err(interface_kind_error(member.span, &member.text)
+                .with_name(member, &self.diagnostic_frames));
         }
         if let Some(withheld) = self
             .targeted_withheld
             .get(&(member.text.clone(), WithheldNamespace::Nominal))
             .copied()
         {
-            return Err(withheld_export_error(
-                member.span,
-                &member.text,
-                Some(withheld),
-            ));
+            return Err(
+                withheld_export_error(member.span, &member.text, Some(withheld))
+                    .with_name(member, &self.diagnostic_frames),
+            );
         }
-        Err(unknown_interface_error(member.span, &member.text))
+        Err(unknown_interface_error(member.span, &member.text)
+            .with_name(member, &self.diagnostic_frames))
     }
 
     fn effect_reference(&mut self, reference: &SurfaceReference) -> Result<EffectId, ResolveError> {
@@ -8143,6 +8160,7 @@ impl Resolver<'_, '_> {
                     &member.text,
                     "this effect is not declared in the syntax context",
                 )
+                .with_name(member, &self.diagnostic_frames)
             });
         }
         if let Some(namespace) = self.imported_namespace(reference)? {
@@ -8152,14 +8170,16 @@ impl Resolver<'_, '_> {
             if namespace.nominals.contains_key(&member.text)
                 || namespace.interfaces.contains_key(&member.text)
             {
-                return Err(effect_kind_error(member.span, &member.text));
+                return Err(effect_kind_error(member.span, &member.text)
+                    .with_name(member, &self.diagnostic_frames));
             }
             return Err(lookup_error(
                 ResolveContext::ExportedEffect,
                 member.span,
                 &member.text,
                 "this effect is not exported by the selected module",
-            ));
+            )
+            .with_name(member, &self.diagnostic_frames));
         }
         if let Some(id) = self.effect_names.get(&member.text).copied() {
             return Ok(id);
@@ -8167,14 +8187,16 @@ impl Resolver<'_, '_> {
         if self.type_names.contains_key(&member.text)
             || self.interface_names.contains_key(&member.text)
         {
-            return Err(effect_kind_error(member.span, &member.text));
+            return Err(effect_kind_error(member.span, &member.text)
+                .with_name(member, &self.diagnostic_frames));
         }
         Err(lookup_error(
             ResolveContext::Effect,
             member.span,
             &member.text,
             "this effect is not declared",
-        ))
+        )
+        .with_name(member, &self.diagnostic_frames))
     }
 
     fn retain_written_effect_arity(
@@ -8396,6 +8418,7 @@ impl Resolver<'_, '_> {
                             &tail.text,
                             "this effect-row tail parameter is not declared",
                         )
+                        .with_name(tail, &self.diagnostic_frames)
                     })
             })
             .transpose()?;
@@ -8509,6 +8532,7 @@ impl Resolver<'_, '_> {
                     &operation.text,
                     "this operation is not declared by the selected effect",
                 )
+                .with_name(operation, &self.diagnostic_frames)
             })
     }
 
@@ -8692,6 +8716,7 @@ impl Resolver<'_, '_> {
                     member.span,
                     "this constructor is not exported through the syntax owner's alias",
                 )
+                .with_name(member, &self.diagnostic_frames)
             });
         }
         if matches!(reference, SurfaceReference::Unqualified(_)) && member.introduction != 0 {
@@ -8714,6 +8739,7 @@ impl Resolver<'_, '_> {
                         member.span,
                         "this constructor is not declared in the syntax owner",
                     )
+                    .with_name(member, &self.diagnostic_frames)
                 });
         }
         if let Some(namespace) = self.imported_namespace(reference)? {
@@ -8733,6 +8759,7 @@ impl Resolver<'_, '_> {
                             ))
                             .copied(),
                     )
+                    .with_name(reference.member(), &self.diagnostic_frames)
                 });
         }
         if let Some(constructor) = charged_lexical_scope_lookup(
@@ -8760,17 +8787,18 @@ impl Resolver<'_, '_> {
                 reference.member().span,
                 &reference.member().text,
                 Some(kind),
-            ));
+            )
+            .with_name(reference.member(), &self.diagnostic_frames));
         }
         let mut diagnostic = Diagnostic::new(
             ResolveReason::UnknownConstructor,
             SourceLabel::new(reference.member().span, "this constructor is not declared"),
         );
         diagnostic.found = Some(reference.member().text.clone());
-        Err(ResolveError::new(
-            diagnostic,
-            Some(ResolveContext::Constructor),
-        ))
+        Err(
+            ResolveError::new(diagnostic, Some(ResolveContext::Constructor))
+                .with_name(reference.member(), &self.diagnostic_frames),
+        )
     }
 
     fn allocate_global_binder(
@@ -10718,7 +10746,8 @@ impl Resolver<'_, '_> {
             tail.span,
             &tail.text,
             message,
-        ))
+        )
+        .with_name(tail, &self.diagnostic_frames))
     }
 
     fn resolve_owner_argument(
@@ -10733,6 +10762,21 @@ impl Resolver<'_, '_> {
         surface: &SurfaceType,
         operation_outer: bool,
     ) -> Result<crate::resolved::ResolvedOwnerArgument, ResolveError> {
+        fn retain_name_diagnostic(
+            reference: &SurfaceReference,
+            frames: &[Arc<crate::syntax::ExpansionFrame>],
+            diagnostics: &mut Vec<(usize, Box<crate::syntax::DiagnosticLocation>)>,
+        ) -> Option<usize> {
+            let mut location = reference.diagnostic_location()?;
+            let own_frames = std::mem::take(&mut location.frames);
+            for frame in frames.iter().chain(&own_frames) {
+                location.add_frame(frame);
+            }
+            let slot = diagnostics.len();
+            diagnostics.push((usize::MAX, location));
+            Some(slot)
+        }
+
         enum ApplicationHead {
             Nominal(NominalTypeId),
             Variable(TypeVariableId),
@@ -10756,11 +10800,13 @@ impl Resolver<'_, '_> {
                 &'a [SurfaceType],
                 crate::source::Span,
                 crate::source::Span,
+                Option<usize>,
             ),
         }
         let mut tasks = vec![Task::Visit(surface)];
         let mut completed = ResolvedTypeBuffer(Vec::new());
         let mut provenance = Vec::new();
+        let mut diagnostics = Vec::new();
         while let Some(task) = tasks.pop() {
             #[cfg(test)]
             {
@@ -10814,17 +10860,23 @@ impl Resolver<'_, '_> {
                             completed.push((Type::Unit, provenance.len() - 1));
                         }
                         SurfaceTypeKind::Named(name) => {
-                            if matches!(name, SurfaceReference::Unqualified(_))
+                            let ty = if matches!(name, SurfaceReference::Unqualified(_))
                                 && let Some(variable) = self.contextual_type_variable(name.member())
                             {
-                                provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                                completed.push((Type::Variable(variable), provenance.len() - 1));
-                                continue;
-                            }
-                            let nominal = self.nominal_reference(name)?;
-                            let id = nominal.id;
+                                Type::Variable(variable)
+                            } else {
+                                Type::Nominal(self.nominal_reference(name)?.id)
+                            };
                             provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                            completed.push((Type::Nominal(id), provenance.len() - 1));
+                            let root = provenance.len() - 1;
+                            if let Some(slot) = retain_name_diagnostic(
+                                name,
+                                &self.diagnostic_frames,
+                                &mut diagnostics,
+                            ) {
+                                diagnostics[slot].0 = root;
+                            }
+                            completed.push((ty, root));
                         }
                         SurfaceTypeKind::Application {
                             constructor,
@@ -10855,11 +10907,17 @@ impl Resolver<'_, '_> {
                                     _ => ApplicationHead::Nominal(family),
                                 }
                             };
+                            let diagnostic = retain_name_diagnostic(
+                                constructor,
+                                &self.diagnostic_frames,
+                                &mut diagnostics,
+                            );
                             tasks.push(Task::Application(
                                 head,
                                 arguments,
                                 current.span,
                                 constructor.span(),
+                                diagnostic,
                             ));
                             tasks.push(Task::Sequence(arguments.iter()));
                         }
@@ -11271,7 +11329,7 @@ impl Resolver<'_, '_> {
                         provenance.len() - 1,
                     ));
                 }
-                Task::Application(head, source_arguments, span, constructor_span) => {
+                Task::Application(head, source_arguments, span, constructor_span, diagnostic) => {
                     let count = source_arguments.len();
                     self.type_work.charge(count).map_err(|()| {
                         error(
@@ -11303,6 +11361,9 @@ impl Resolver<'_, '_> {
                             resource,
                             arguments: roots,
                         });
+                        if let Some(slot) = diagnostic {
+                            diagnostics[slot].0 = provenance.len() - 1;
+                        }
                         completed.push((
                             Type::ResourceApply(
                                 resource,
@@ -11317,6 +11378,9 @@ impl Resolver<'_, '_> {
                         continue;
                     }
                     provenance.push(ResolvedTypeProvenanceNode::Fact(constructor_span));
+                    if let Some(slot) = diagnostic {
+                        diagnostics[slot].0 = provenance.len() - 1;
+                    }
                     let mut function = match head {
                         ApplicationHead::Nominal(owner) => Type::Nominal(owner),
                         ApplicationHead::Variable(variable) => Type::Variable(variable),
@@ -11370,7 +11434,7 @@ impl Resolver<'_, '_> {
         })?;
         Ok(crate::resolved::ResolvedOwnerArgument {
             ty: ty.into_inner(),
-            provenance: ResolvedTypeProvenance::new(provenance, root),
+            provenance: ResolvedTypeProvenance::new(provenance, root).with_diagnostics(diagnostics),
             origin: Origin::Source(surface.span),
             span: surface.span,
         })
@@ -14865,10 +14929,7 @@ impl Resolver<'_, '_> {
                         &member.text,
                         qualified_withheld,
                     )
-                    .with_fallback_diagnostic(
-                        member.diagnostic.as_deref(),
-                        &self.diagnostic_frames,
-                    ));
+                    .with_name(member, &self.diagnostic_frames));
                 } else {
                     if let Some(kind) = self
                         .targeted_withheld

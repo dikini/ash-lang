@@ -18400,11 +18400,20 @@ impl ResolvedType {
     }
 }
 
+type TypeOccurrenceDiagnostics = Vec<(usize, Box<crate::syntax::DiagnosticLocation>)>;
+
 /// Shareable arena-shaped provenance for one resolved type occurrence.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq)]
 pub struct ResolvedTypeProvenance {
     nodes: Arc<[ResolvedTypeProvenanceNode]>,
     root: usize,
+    diagnostics: Option<Arc<TypeOccurrenceDiagnostics>>,
+}
+
+impl PartialEq for ResolvedTypeProvenance {
+    fn eq(&self, other: &Self) -> bool {
+        self.nodes == other.nodes && self.root == other.root
+    }
 }
 
 /// One node in a resolved type-provenance arena.
@@ -18450,7 +18459,68 @@ impl ResolvedTypeProvenance {
         Self {
             nodes: nodes.into(),
             root,
+            diagnostics: None,
         }
+    }
+
+    pub(crate) fn with_diagnostics(mut self, diagnostics: TypeOccurrenceDiagnostics) -> Self {
+        if !diagnostics.is_empty() {
+            self.diagnostics = Some(Arc::new(diagnostics));
+        }
+        self
+    }
+
+    pub(crate) fn diagnostic_location(&self) -> Option<Box<crate::syntax::DiagnosticLocation>> {
+        let diagnostics = self.diagnostics.as_deref()?;
+        let mut reachable = vec![false; self.nodes.len()];
+        let mut pending = vec![self.root];
+        while let Some(index) = pending.pop() {
+            let Some(seen) = reachable.get_mut(index) else {
+                continue;
+            };
+            if std::mem::replace(seen, true) {
+                continue;
+            }
+            match &self.nodes[index] {
+                ResolvedTypeProvenanceNode::Fact(_) => {}
+                ResolvedTypeProvenanceNode::Tuple { elements, .. } => {
+                    pending.extend(elements.iter().copied());
+                }
+                ResolvedTypeProvenanceNode::Function {
+                    domain,
+                    codomain,
+                    effect_arguments,
+                    ..
+                } => {
+                    pending.push(*domain);
+                    pending.push(*codomain);
+                    pending.extend(effect_arguments.iter().copied());
+                }
+                ResolvedTypeProvenanceNode::Application {
+                    function, argument, ..
+                } => {
+                    pending.push(*function);
+                    pending.push(*argument);
+                }
+                ResolvedTypeProvenanceNode::Resource { arguments, .. } => {
+                    pending.extend(arguments.iter().copied());
+                }
+                ResolvedTypeProvenanceNode::Row { argument_roots, .. } => {
+                    pending.extend(argument_roots.iter().copied());
+                }
+            }
+        }
+        let mut location: Option<Box<crate::syntax::DiagnosticLocation>> = None;
+        for (index, cause) in diagnostics {
+            if reachable.get(*index).copied().unwrap_or(false) {
+                if let Some(location) = &mut location {
+                    location.add_cause(cause);
+                } else {
+                    location = Some(cause.clone());
+                }
+            }
+        }
+        location
     }
 
     /// Returns the complete source span of this provenance view.
@@ -18498,6 +18568,7 @@ impl ResolvedTypeProvenance {
         Some(Self {
             nodes: Arc::clone(&self.nodes),
             root,
+            diagnostics: self.diagnostics.clone(),
         })
     }
 
@@ -20230,6 +20301,43 @@ pub(crate) fn discard_resolved_local_declaration_iteratively(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn type_provenance_views_keep_only_their_ordered_diagnostic_occurrences() {
+        use crate::syntax::{DiagnosticLocation, MacroOrigin};
+
+        let source = SourceFile::new("type-causes.ash", "A B").unwrap();
+        let first = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let second = source.span(ByteRange::new(2, 3).unwrap()).unwrap();
+        let plain = ResolvedTypeProvenance::new(
+            vec![
+                ResolvedTypeProvenanceNode::Fact(first),
+                ResolvedTypeProvenanceNode::Fact(second),
+                ResolvedTypeProvenanceNode::Row {
+                    span: source.span(ByteRange::new(0, 3).unwrap()).unwrap(),
+                    argument_roots: Box::new([1, 0]),
+                },
+            ],
+            2,
+        );
+        let located = plain.clone().with_diagnostics(vec![
+            (0, Box::new(DiagnosticLocation::new(first.into()))),
+            (1, Box::new(DiagnosticLocation::new(second.into()))),
+        ]);
+        assert_eq!(
+            plain, located,
+            "diagnostics do not alter provenance equality"
+        );
+        let whole = located.diagnostic_location().unwrap();
+        assert_eq!(whole.primary, MacroOrigin::Source(first));
+        assert_eq!(whole.related, [MacroOrigin::Source(second)]);
+        let second_only = located.view(1).unwrap().diagnostic_location().unwrap();
+        assert_eq!(second_only.primary, MacroOrigin::Source(second));
+        assert!(second_only.related.is_empty());
+        let first_only = located.view(0).unwrap().diagnostic_location().unwrap();
+        assert_eq!(first_only.primary, MacroOrigin::Source(first));
+        assert!(first_only.related.is_empty());
+    }
+
     #[test]
     fn generic_cell_identity_census_covers_every_kind_store_with_exact_retries() {
         let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {

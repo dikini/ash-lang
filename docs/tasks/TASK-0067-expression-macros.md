@@ -22,9 +22,9 @@
 
 ## Current delivery status, 7 November
 
-The latest reviewed product checkpoint is `97a9113f`: **83/99 original-scope
-points are reviewed and 16 remain**. The separately estimated 31.75 points of
-additional performed work give an effort index of **114.75/130.75**, not an
+The latest reviewed product checkpoint is `97a9113f`: **83.5/99 original-scope
+points are reviewed and 15.5 remain**. The separately estimated 31.75 points of
+additional performed work give an effort index of **115.25/130.75**, not an
 acceptance percentage. M01–M14 and C1/C2 remain open.
 
 The [operational plan](../plans/2026-11-05-expression-macros.md#2130-source-binder-reservation-finding)
@@ -1904,6 +1904,60 @@ verification. The check of 221 local links and anchors in the seven changed
 documents passes in `/tmp/ash-status-candidate-links.log` (SHA-256
 `3c04eb641ba71a074680785935cdf83a180eeb323c6c6ebe739e31ca24bbe4fe`).
 This documentation candidate awaits review; P35 and M/C completion remain open.
+
+### Reviewed delivery status, 7 November
+
+Independent review passed `15327fa1`. The current status and specification
+links add P35 +0.5, bringing that row to 1.5/2. Proposal retirement remains
+0.5 at its owning verified product checkpoint. M01–M14 and C1/C2 remain open.
+The remaining 15.5 original-scope points are source and hygiene 4.5, host and
+completion 2, diagnostics and native execution 1.5, documentation 0.5, and
+delivery 7.
+
+### Type-name diagnostic candidate, 7 November
+
+A disposable real-driver annotation using a captured Combined-origin type
+name retained its ordinary `resolve.unknown-type` reason and expansion frames
+but lost an input cause (`/tmp/ash-combined-type-origin-probe.json`, SHA-256
+`ccafa1a872b744addb3f069fe5cc1d383de1534993fd517056cccb93451872c5`).
+When that type resolved, its initializer mismatch also lost the annotation's
+input cause (`/tmp/ash-combined-type-resolved-probe.json`, SHA-256
+`efd4da0e1e28ebc30b1e4815609e179451c1f7ea2a2aaadd16fa0b8648f26043`).
+The focused real-driver regression was red at the missing-name check in
+`/tmp/ash-captured-type-origin-red.log` (SHA-256
+`eaa1bb554c0f9095502933efb1c7ffcfb135c5b0f2c689474e1b9ddf885ac487`);
+after the ordinary name-error handoff it reached the still-failing mismatch in
+`/tmp/ash-captured-type-origin-lookup.log` (SHA-256
+`68cee941f5f6c1a236899b6b98b85f992e1b25f4e873df87fb9a6ea81b5e926b`).
+
+The candidate associates the actual failing name with ordinary lookup errors.
+For a selected type name it retains diagnostic-only locations alongside the
+existing resolved type-provenance nodes. Shared views retain those locations;
+on mismatch the selected subtree contributes its source-ordered causes to the
+existing expected-type label. Structural provenance equality, type identities,
+Core and the image format are unchanged. The real-driver test passes for an
+unknown type, atomic and tuple mismatches, and two valid programs; the focused
+receipt is `/tmp/ash-captured-type-origin-focused.log` (SHA-256
+`2d5e813aebe3eae9092f641fff6c47ca313bff8d252245fc45fed9988e5bd6e4`).
+An existing-provenance-view test checks source order, child isolation and
+unchanged equality; both unchanged 256 KiB stack checks also pass in
+`/tmp/ash-type-origin-lib-final.log` (SHA-256
+`65315dfc3ae97c9c0123306fcef04587405bcb5fabe2ac18c72d16704c33e42e`).
+Six affected integration suites pass 284 tests in
+`/tmp/ash-type-origin-suites-final.log` (SHA-256
+`1e82f69e159b7b2482332c4f9b2ab5aa26e4f6c0775186cb0662afdcdae7918a`).
+The existing syntax image reconstruction and corruption unit passes in
+`/tmp/ash-type-origin-image-final.log` (SHA-256
+`cc7f5932f53113e054448ebf7a5a7ce8ea1eee6c4043a174c811ea3c9f0b4b05`).
+All-target Clippy passes in `/tmp/ash-type-origin-clippy-final.log` (SHA-256
+`5ad38daf74c9250befe3ae08769349c1aa6eaef91163813ae48aed87ffc270ee`).
+
+The first type-origin probe was recorded at 06:37:16 and the affected-suite
+receipt at 06:57:44 on 7 November, Europe/Sofia: 20 minutes 28 seconds elapsed,
+including diagnosis, implementation, tests and waits, not measured active time.
+Any separate corrective-work conversion awaits review of overlap with original
+delivery credit. This candidate awaits review; no new points or M/C closure
+are inferred.
 
 ## Progress
 

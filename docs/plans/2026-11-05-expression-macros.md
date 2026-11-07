@@ -1320,3 +1320,20 @@ The task records the status and specification-link cleanup for the delivery
 branch. CP-0033 remains until its owning verified product checkpoint; Main
 integration remains separate. This candidate awaits review before the final
 gate and retained handoff.
+
+### Reviewed delivery status, 7 November
+
+Independent review passed `15327fa1`; the task records P35 +0.5 for the
+status and specification links. The current reviewed total is 83.5/99.
+Proposal retirement remains at its owning verified product checkpoint, and
+Main integration remains separate.
+
+### Type-name diagnostic candidate, 7 November
+
+Real-driver probes found lost Combined-origin causes in an unknown type and a
+successfully resolved annotation. The candidate retains the actual name at
+ordinary lookup errors and carries selected type occurrences through existing
+provenance views to the expected-type diagnostic. The task records the focused
+contrasts, affected suites, small-stack, image and Clippy receipts. This
+candidate awaits independent review; whole-path acceptance, the final gate and
+retained verification remain open.
