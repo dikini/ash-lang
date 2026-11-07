@@ -13,7 +13,7 @@
 
 > The accepted first expression-macro slice has an implementation and
 > [specification](../../spec/syntax-expansion.md) on the reviewed product
-> checkpoint; milestone integration remains pending and Main is separate.
+> checkpoint retained on the milestone branch; QA and Main are separate.
 > Broader macro ideas and
 > illustrations in this note remain exploratory. This note does not define
 > current Ash. AD-0005 records the parser amendment; TASK-0067 owns delivery.
@@ -56,8 +56,8 @@ its elaboration strategy.
 ## Context and boundaries
 
 The [specification](../../spec/README.md) defines effects, requests, lexical
-handlers, one-shot continuation use, scoped resources and cleanup. The delivery
-branch also specifies expression syntax; Main integration remains pending.
+handlers, one-shot continuation use, scoped resources and cleanup. The
+milestone branch also specifies expression syntax; Main integration remains pending.
 Current effect and resource rules continue to apply to expanded programs unless
 a separate language change replaces them.
 A macro cannot establish a missing runtime operation or prove an ownership,
@@ -407,7 +407,7 @@ in the caller's context. The identifier `Integer` in a qualified reference is
 a module alias in a distinct syntactic role; its member must be resolved through
 the correct module, not looked up independently by spelling.
 
-These exploratory forms illustrate the accepted behavior; the delivery branch
+These exploratory forms illustrate the accepted behavior; the milestone branch
 implements it using the [first-slice syntax](../../spec/syntax-expansion.md),
 not the forms above. Main integration remains pending. The first slice retains
 compiler-issued definition contexts so ordinary resolution can select the

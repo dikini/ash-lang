@@ -34,8 +34,8 @@ origins, import routes, and ownership of their checked dependencies. It cannot
 install a parser function, operator, precedence entry, or recovery callback.
 The [grammar](../../spec/syntax.md#grammar) and
 [syntax-expansion specification](../../spec/syntax-expansion.md) describe its
-language forms on the reviewed product checkpoint. Milestone integration
-remains pending; Main integration is separate.
+language forms retained on the milestone branch. QA confirmation remains
+pending; Main integration is separate.
 
 Fixed import-header discovery precedes body parsing. The loader discovers and
 canonicalizes declared dependencies without executing transformers. The

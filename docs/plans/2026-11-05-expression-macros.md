@@ -1359,3 +1359,17 @@ records the disjoint evidence reconciliation, X9 corrective-work estimate and
 receipts. The current reviewed total is 95.5/99; proposal transition review,
 the fresh C2 gate on the final candidate, retained verification and authorized
 milestone integration remain. Main integration remains separate.
+
+### Retained milestone and QA handoff, 7 November
+
+The final integration candidate `6574d7ff` passed a fresh seven-stage gate.
+The explicit milestone merge `2c95a3ac` has the same tree, and its retained
+input check reused all seven matching receipts. The source-free executable
+returned `42` both before and after that merge. The task records the receipt
+hashes, independently reviewed scope and preserved evidence archive.
+
+Review supports P35 +0.5, P38 +1.5 and P39 +1. The reviewed original-scope
+total is 98.5/99, with 0.5 for acceptance readback and owned cleanup still
+open. M01–M14 await QA confirmation; this plan and the task remain active.
+The later reporting-only documentation tree was not the input to the fresh
+gate. Main integration and signing remain separate.

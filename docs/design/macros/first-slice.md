@@ -3,7 +3,7 @@
 This companion to [DN-0062](../DN-0062-hygienic-surface-macros.md) records the
 design behind the accepted first slice. Its implementation and
 [specification](../../../spec/syntax-expansion.md) are on the reviewed product
-checkpoint; milestone integration remains pending and Main is separate. The
+checkpoint retained on the milestone branch; QA and Main are separate. The
 retired CP-0033 transition is retained in Git at `f621d075`.
 The parser amendment is recorded in
 [AD-0005](../../decisions/AD-0005-parser-architecture.md);
@@ -250,7 +250,7 @@ that conversion.
 The module exposes these operations. Types use unqualified names as seen
 inside that module. A tuple is one ordinary Ash argument. `Ops` is a canonical
 compiler-service effect; each signature has the latent row `{Ops}` plus the
-current implicit default-allocation requirement. The delivery branch supplies
+current implicit default-allocation requirement. The milestone branch supplies
 these signatures in the [canonical syntax interface](../../../spec/syntax-expansion.md#canonical-syntax-interface).
 
 ```text
@@ -595,8 +595,8 @@ The accepted parser amendment in
 [AD-0005](../../decisions/AD-0005-parser-architecture.md) admits one built-in
 prefix mechanism parameterized by imported matcher data. Lexer separation,
 shared precedence, token-complete recovery, and rejection at projection remain.
-It admits no executable parser registry. The reviewed product checkpoint
-implements this mechanism; final integration remains pending.
+It admits no executable parser registry. The retained milestone implements
+this mechanism; QA confirmation and Main integration remain separate.
 
 No experiment is a prerequisite to the accepted design choices. A contradiction
 or missing semantic rule returns to the specification and design process.

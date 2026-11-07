@@ -12,7 +12,7 @@
   [execution plan](../plans/2026-11-05-expression-macros.md).
 
 > This task organizes delivery of accepted CP-0033, now implemented on the
-> delivery branch. It does not define current Ash semantics or extend the
+> milestone branch. It does not define current Ash semantics or extend the
 > proposal's scope.
 
 > Historical checkpoint and ledger text below remains unchanged. The
@@ -21,10 +21,13 @@
 
 ## Current delivery status, 7 November
 
-The reviewed product checkpoint is `f621d075`: **95.5/99 original-scope points
-are reviewed and 3.5 remain**. The separately estimated 34 points of additional
-performed work give an effort index of **129.5/133**, not an acceptance
-percentage. M01–M14 retained acceptance and the final C2 gate remain open.
+The expression-macro product is retained on `integration/expression-macros`
+at merge `2c95a3ac`. The reviewed, freshly gated candidate was `6574d7ff`;
+the merge has its identical tree. **98.5/99 original-scope points are
+reviewed and 0.5 remains** for acceptance readback and owned cleanup. The
+separately estimated 34 points of additional performed work give an effort
+index of **132.5/133**, not an acceptance percentage. M01–M14 await QA
+confirmation. Main integration and signing remain separate.
 
 The [operational plan](../plans/2026-11-05-expression-macros.md#2130-source-binder-reservation-finding)
 records the reviewed source-binder reservation, copied-region and bounded
@@ -2624,6 +2627,85 @@ The accepted transition's requirements are retained here. All rows remain
 unchecked until their complete original scope has evidence on the intended
 retaining branch, including the applicable checkpoint and integration
 verification.
+
+#### Retained delivery and QA handoff, 7 November
+
+Delivered: the independently reviewed candidate `6574d7ff` passed a fresh
+`cargo xtask verify` with all seven stages executed and none reused. The local
+milestone merge `2c95a3ac` has parents `80994bec` and `6574d7ff`, and its tree
+`435dc0846f8f8ab07165142f75d14e6b4f6bd430` is identical to the gated candidate.
+The retained checkout matched all seven saved receipt inputs with
+`cargo xtask verify --reuse`; this was an equality check, not another fresh
+gate. The interpreter returned `42 : Int`, and the native executable returned
+`42` after all five copied sources had been deleted. The same executable
+returned `42` again after the milestone merge.
+
+Independent review passed the product, transition, final gate, native result,
+and retained readback. The fresh gate log and summary have SHA-256
+`15d594f3ea9cdb0cfc542e64f035f2a0f4e31949ff1b700c9b5c889a8747a0e4` and
+`4a2c0d180f69ab48935de1c65cd6632d6e93cd48e0aa7f33dc3aca9abb01833a`.
+The retained verification log and summary have SHA-256
+`d1b3e8f9f7c07ba5fb2f159d0d4f6dfa593b6947732d146d20e16eedc629967b` and
+`572e57db82f3a275da5f7b645f373d8f6cbbddb55ce30730fac968f6c0bf47db`.
+The final native and retained-native logs have SHA-256
+`84f0c14a748ed66b741d56e6739eed59e4e691c210d145dbe77c42539ddd3834` and
+`7a9794b9fdb0fc5860794fbd1ca4ec08fa7b59b03eba7204f8777effc16e420b`.
+The seven stage receipts and logs, both summaries, native logs and script are
+preserved outside the disposable build output in
+`/home/dikini/.local/share/ash/evidence/TASK-0067/6574d7ff-retained-evidence.tar.gz`
+(SHA-256 `64577cd56214f8fd51059756e376f478ae5eb80c29597671919af494f894380a`).
+
+The following evidence is delivered for QA review; the detailed requirements
+remain in the matrix below and earlier checkpoint records. Remaining: QA
+confirmation of each original criterion. Awaiting: QA's acceptance readback.
+Owner: QA. The completed technical review does not substitute for that
+confirmation.
+
+- M01: `surface_macros::imported_if_preserves_boundaries_nesting_and_line_endings`
+  covers natural forms and parser boundaries.
+- M02: expression-capture grouping and unwrapping tests, together with the
+  malformed-capture and trailing-output controls, cover the protected boundary.
+- M03: `surface_macros::imported_templates_and_ash_transformer_run_through_the_driver`,
+  transformer admission and the discarded-capture test cover the procedural path.
+- M04: fresh/caller identifier controls and
+  `driver::tests::copied_macro_fragments_have_distinct_checked_local_identities`
+  inspect caller and generated binder/use associations.
+- M05: the copied-fragment and local-newtype tests and
+  `core::validate::tests::copied_region_order_requires_its_actual_owner_and_scope`
+  cover copied nominal and region ownership.
+- M06: `surface_macros::definition_context_keeps_private_helpers_and_types_through_linking`
+  and private, opaque, qualified and caller-shadowing controls cover checked
+  closure and access.
+- M07: `module_loading::syntax_import_selection_reserves_only_the_selected_name`,
+  syntax-selector staging, re-export and cycle tests cover selected imports.
+- M08: the combined template/computed graph and
+  `surface_macros::template_uses_its_defining_modules_syntax_imports` cover
+  nested separately authored syntax.
+- M09: handler-capability, effect-order and resource-scope controls exercise
+  ordinary checking.
+- M10: private host identity and mixed-roundtrip tests, plus nested, qualified
+  and type-origin diagnostics, cover the bridge and retained causes.
+- M11: root-disposal and teardown-failure tests, together with the common
+  disposal handoff, cover reviewed failure and publication paths. A direct
+  combined active-transformer teardown injection was not observed.
+- M12: the copied-fragment identity test and
+  `driver::tests::changed_macro_inputs_are_checked_in_each_compilation` cover
+  the demonstrated repeat and changed-input observations.
+- M13: the transformer dependency-reuse test and generated parameter-order,
+  origin and copied-region mutations cover checked and Core validation.
+- M14: the ordinary-language gate, out-of-place-dollar parser test, supported
+  image test and source-free native graph cover demonstrated compatibility.
+  Broader local-newtype image support is not asserted.
+
+Review also completed P35 +0.5 for transition cleanup, P38 +1.5 for the
+fresh final gate and retained-input verification, and P39 +1 for milestone
+integration and retained verification. P39's remaining 0.5 is acceptance
+readback and owned cleanup. These are progress records, not QA acceptance.
+This reporting-only documentation update follows the gated merge; its tree was
+not the input to the `6574d7ff` gate. It changes no product, test, configuration
+or builtin files. The previous task and plan remain accessible in the gated
+commit, and the retired proposal remains accessible with
+`git show f621d075:docs/proposals/CP-0033-hygienic-expression-syntax.md`.
 
 | State | Case | Required positive and negative evidence |
 | --- | --- | --- |
