@@ -1628,6 +1628,10 @@ where
                                     crate::syntax::TransformerOutput::Expanded(output),
                                     fresh_count,
                                 )) => {
+                                    #[cfg(test)]
+                                    if let Some(observe) = TRANSFORMER_OUTPUT_OBSERVER.get() {
+                                        observe(selection, captures, &output);
+                                    }
                                     match crate::syntax::admit_transformer_output(
                                         module.source(),
                                         output,
@@ -2174,7 +2178,15 @@ fn modular_phase_work(
 std::thread_local! {
     static TRANSFORMER_ENTRY_PREPARATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TRANSFORMER_ENTRY_VALIDATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TRANSFORMER_OUTPUT_OBSERVER: std::cell::Cell<Option<TransformerOutputObserver>> = const { std::cell::Cell::new(None) };
 }
+
+#[cfg(test)]
+type TransformerOutputObserver = fn(
+    &crate::syntax::SelectedSyntax,
+    &[crate::surface::SurfaceSyntaxCapture],
+    &[crate::syntax::MacroOutputNode],
+);
 
 fn transformer_owner_and_binder<'a>(
     selection: &crate::syntax::SelectedSyntax,
@@ -3388,6 +3400,95 @@ mod tests {
                 let _ = fs::remove_dir_all(directory);
             }
         }
+    }
+
+    #[test]
+    fn ash_identity_transformer_round_trips_mixed_capture() {
+        use crate::{
+            lexer::TokenKind,
+            surface::SurfaceSyntaxCapture,
+            syntax::{MacroDelimiter, MacroOrigin, MacroOutputNode, SelectedSyntax},
+        };
+
+        fn inspect(
+            selection: &SelectedSyntax,
+            captures: &[SurfaceSyntaxCapture],
+            output: &[MacroOutputNode],
+        ) {
+            if selection.declaration.name.text != "identity" {
+                return;
+            }
+            TRANSFORMER_OUTPUT_OBSERVER.set(None);
+            let [SurfaceSyntaxCapture::Expression(original)] = captures else {
+                panic!("identity receives one expression capture")
+            };
+            assert_eq!(output, original.contents.as_ref());
+            let [
+                MacroOutputNode::Group(
+                    MacroDelimiter::Parentheses,
+                    children,
+                    MacroOrigin::Combined { inputs, frame, .. },
+                ),
+            ] = original.contents.as_ref()
+            else {
+                panic!("identity receives a group with a combined origin")
+            };
+            let [
+                MacroOutputNode::Group(
+                    _,
+                    returned_children,
+                    MacroOrigin::Combined {
+                        inputs: returned_inputs,
+                        frame: returned_frame,
+                        ..
+                    },
+                ),
+            ] = output
+            else {
+                panic!("identity returns the group and combined origin")
+            };
+            assert!(Arc::ptr_eq(frame, returned_frame));
+            assert!(Arc::ptr_eq(inputs, returned_inputs));
+            assert_eq!(
+                inputs.as_ref(),
+                [
+                    MacroOrigin::Source(frame.invocation),
+                    MacroOrigin::Source(frame.definition),
+                ]
+            );
+            let [
+                MacroOutputNode::Identifier(introduced, _),
+                MacroOutputNode::Token(TokenKind::Integer(_), one, _),
+                MacroOutputNode::Token(TokenKind::Plus, plus, _),
+                MacroOutputNode::Expression(captured, _),
+            ] = children.as_slice()
+            else {
+                panic!("the mixed group has the expected token and fragment order")
+            };
+            assert_eq!(one.as_ref(), "1");
+            assert_eq!(plus.as_ref(), "+");
+            let [MacroOutputNode::Identifier(caller, _)] = captured.contents.as_ref() else {
+                panic!("the protected caller fragment retains its identifier")
+            };
+            assert_eq!(introduced.text, "same");
+            assert_eq!(caller.text, "same");
+            assert_ne!(introduced.introduction, caller.introduction);
+            assert!(!introduced.written && caller.written);
+            let MacroOutputNode::Expression(returned_capture, _) = &returned_children[3] else {
+                panic!("the returned caller fragment stays protected")
+            };
+            assert!(Arc::ptr_eq(&captured.contents, &returned_capture.contents));
+        }
+
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(inspect));
+        let configuration = RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/identity-roundtrip/entry.ash"),
+            roots: ModuleRoots::empty(),
+        };
+        let compiled = compile_path(configuration).expect("the identity graph compiles");
+        assert!(TRANSFORMER_OUTPUT_OBSERVER.get().is_none());
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
     }
 
     #[test]

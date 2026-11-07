@@ -2122,6 +2122,38 @@ Markdown lint reports no findings on changed lines in
 pre-existing findings on unchanged lines remain in the full lint log. The
 transition candidate awaits independent review and a fresh final gate.
 
+### QA reproduction and identity round trip, 7 November
+
+QA requested a focused reproduction on retained reporting commit `75108e36`.
+The four integration targets `surface_macros`, `macro_host`, `module_loading`
+and `modules_syntax` passed 192 tests. The four requested host-identity,
+copied-identity, changed-input and root-disposal library filters each ran one
+test and passed. Commands, times and individual log hashes are recorded in
+`/tmp/ash-expression-qa-repro-summary.log` (SHA-256
+`277f35d9e8d723e58d9ce99f12580be08a8c06c3ba6f20781d1cbb9fe636648f`). The
+script and logs are preserved at
+`/home/dikini/.local/share/ash/evidence/TASK-0067/75108e36-qa-reproduction.tar.gz`
+(SHA-256 `fefcb0a4fe09a8f5742b99ab75acfaf4c6874154f113c98bd4627d5d5c71f8c1`).
+This is focused QA reproduction, not a fresh full gate.
+
+QA identified one unproven part of M10: the prior mixed-tree equality test
+called the private host directly rather than executing an Ash identity
+transformer. The new real-driver test runs an Ash constructor followed by an
+Ash identity transformer over the captured group. At the existing transformer
+callback, a test-only one-shot assertion compares the returned tree to the
+input, including the ordered Combined origin, shared frame and protected
+fragment identities, token order and same-spelled definition/caller contexts.
+The resulting program returns `42`. The focused test ran once and passed
+(`cargo test -j 1 -p ash --lib
+driver::tests::ash_identity_transformer_round_trips_mixed_capture -- --exact`,
+`/tmp/ash-identity-roundtrip-focused.log`, SHA-256
+`e23ee363efc728a0c687670713486b08494317705f4104056b63a0b1855f1b56`).
+Ash all-target, all-feature Clippy passed with warnings denied
+(`/tmp/ash-identity-roundtrip-clippy.log`, SHA-256
+`47b29dac0a3652d87fca542f99d2ec3b25b89abcc5702d6eeccb7fa7ddae0308`).
+The candidate awaits review and a fresh gate. M11's common disposal evidence
+does not assert a direct joint active-transformer teardown injection.
+
 ## Progress
 
 The weighted ledger records **61.5/100 reviewed delivery points**. The latest
