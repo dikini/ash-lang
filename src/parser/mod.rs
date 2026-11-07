@@ -842,6 +842,18 @@ fn parse_macro_tree(
             (*index, origin.primary())
         })
         .collect::<std::collections::HashMap<_, _>>();
+    // The end of structured declaration output also ends its final logical line.
+    if matches!(position, MacroOutputPosition::Declarations)
+        && tokens
+            .last()
+            .is_some_and(|token| token.kind != TokenKind::LineEnd)
+    {
+        diagnostic_spans.insert(tokens.len(), invocation);
+        tokens.push(crate::lexer::Token {
+            kind: TokenKind::LineEnd,
+            span: anchor,
+        });
+    }
     diagnostic_spans.insert(tokens.len(), invocation);
     tokens.push(crate::lexer::Token {
         kind: TokenKind::EndOfFile,
