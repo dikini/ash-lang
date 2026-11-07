@@ -2,8 +2,7 @@
 
 - ID: `TASK-0067`
 - Status: active
-- Related: [CP-0033](../proposals/CP-0033-hygienic-expression-syntax.md),
-  [AD-0005](../decisions/AD-0005-parser-architecture.md),
+- Related: [AD-0005](../decisions/AD-0005-parser-architecture.md),
   [AD-0006](../decisions/AD-0006-front-end-semantic-boundaries.md),
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md),
   [AD-0010](../decisions/AD-0010-human-diagnostic-presentation-and-localization.md),
@@ -22,10 +21,10 @@
 
 ## Current delivery status, 7 November
 
-The latest reviewed product checkpoint is `97a9113f`: **83.5/99 original-scope
-points are reviewed and 15.5 remain**. The separately estimated 31.75 points of
-additional performed work give an effort index of **115.25/130.75**, not an
-acceptance percentage. M01–M14 and C1/C2 remain open.
+The reviewed product checkpoint is `f621d075`: **95.5/99 original-scope points
+are reviewed and 3.5 remain**. The separately estimated 34 points of additional
+performed work give an effort index of **129.5/133**, not an acceptance
+percentage. M01–M14 retained acceptance and the final C2 gate remain open.
 
 The [operational plan](../plans/2026-11-05-expression-macros.md#2130-source-binder-reservation-finding)
 records the reviewed source-binder reservation, copied-region and bounded
@@ -37,7 +36,9 @@ checkpoints below are preserved as written.
 
 ## Dependencies
 
-CP-0033 supplies the accepted semantic transition and Ash interface.
+CP-0033 recorded the accepted semantic transition and Ash interface; its
+retired text remains accessible with
+`git show f621d075:docs/proposals/CP-0033-hygienic-expression-syntax.md`.
 AD-0005 now accepts one data-defined imported expression-prefix mechanism while
 retaining its lexer, precedence, recovery, and projection boundaries. Current
 language behavior remains in [the specification](../../spec/README.md).
@@ -2007,6 +2008,117 @@ conversion still requires review of overlap with the original scope.
 These observations await independent review. They do not establish M/C
 acceptance or imply a new point award.
 
+### Reviewed product checkpoint and remaining evidence, 7 November
+
+Independent review passed `f621d075` and its complete producer/consumer audit.
+The following increments reconcile the remaining named scopes with their
+existing evidence; previously credited individual positives are not awarded
+again. The affected-suite receipt `/tmp/ash-type-origin-final-suites.log`
+(SHA-256 `3a7d1631870d921a19c25dd03452743370b7646f026a1a5975a02dca3b6b4bc6`)
+contains the named integration tests.
+The product-gate test log also contains the provenance and catalog units
+(SHA-256 `c664d7866d6bc6be4078cd183c57a3aaac1e19120f3015f3b7827adb29694f9a`).
+
+- P09 +0.25 (4/4):
+  `captured_pattern_constructors_keep_their_lookup_context` and
+  `sequential_captured_binders_enter_scope_only_after_their_initializer`
+  cover actual pattern and sequential-scope contexts and refusals.
+- P11 +1 (4/4 amended scope):
+  `definition_context_keeps_private_helpers_and_types_through_linking`,
+  `template_perform_uses_the_defining_effect_not_the_callers_shadow`, the
+  opaque constructor/coverage cases and qualified-private refusals cover
+  checked facts, closure and ordinary privacy.
+- P13 +1 (3/3): `generated_definition_context_recognizes_nested_syntax`,
+  `generated_caller_context_selects_the_callers_syntax`, the fresh-context
+  contrast and module-loading/selector tests cover selection, staging and
+  cycles.
+- P20 +0.75 (4/4):
+  `expression_unwrapping_preserves_groups_and_nested_fragments`,
+  `generated_nested_unwrap_keeps_the_protected_fragment`, the qualified-caller
+  and small-stack unwrapping cases complete the remaining consumer audit.
+- P21 +1.5 (3.5/3.5): `checked_transformer_emits_a_generic_local_newtype`,
+  `checked_transformer_caller_identifier_uses_the_active_lexical_scope`, the
+  fresh-context refusal and invalid-identifier cases complete the audit.
+- P18 +0.5 (2.5/2.5): the common host consumers authenticate invocation,
+  handle kind and table index across all six opaque handle kinds; existing
+  identity and invalid-request tests support that audit.
+- P23 +1.5 (4/4): `checked_transformer_transfers_nested_groups_with_siblings`,
+  `invalid_transformer_output_reports_its_parser_reason`, the authored
+  rejection and lifecycle tests support output authentication and publication.
+- P30 +0.5 (2.5/2.5):
+  `type_provenance_views_keep_only_their_ordered_diagnostic_occurrences`
+  checks view isolation, source order and semantic equality. The nested
+  identifier, qualified lookup/application, captured type, primitive annotation
+  and function-domain tests exercise the retained causes through their ordinary
+  consumers. This does not claim diagnostic-location serialization.
+- P31 +0.75 (2.5/2.5): the nested identifier and pattern tests cover ordered
+  causes and English/Bulgarian labels; equal-span expansion and Combined-origin
+  tests cover distinct frames. The `message::tests` catalog contract and
+  fallback tests complete the presentation audit.
+- P37 +2.5 (2.5/2.5): independent review completed the whole-path and M01–M14
+  producer/consumer evidence audit on `f621d075`; retained acceptance remains
+  separate.
+
+The existing host evidence includes `/tmp/ash-spec-host-unit-final2.log`
+(SHA-256 `9fb7c37fece82e9d7df834d578e02f98144ba5637d0d30e975cc04a78054b297`)
+and `/tmp/ash-syntax-lifecycle-current.log` (SHA-256
+`e3dcc3a03458e41ee6756fb900e5fc6dbe122653bc8206badb8b11b05cd0d3ba`).
+These are prior reviewed receipts, not new runs. The direct combined
+active-transformer teardown injection and broader local-newtype image support
+remain outside the demonstrated evidence.
+
+The fresh product-checkpoint gate at `f621d075` passed all seven stages with
+none reused, in 1122.84 seconds. Its log is
+`/tmp/ash-expression-macros-final-gate.log` (SHA-256
+`0deead525c6bbba63c8a750ddb09dcb5aac5b91c464b389c0fa75cdf25989ff3`), and
+the copied summary is `/tmp/ash-expression-macros-product-gate.json` (SHA-256
+`41aa4f5cf377e5a8aebda7c73ec001955b50a9b089afd9a7d89a746cbb67ffb9`).
+Independent review verified the stage receipts and input fingerprints. P36
+gains 1.5, closing its connected review and fresh product-gate cap.
+
+The matching computed graph interpreted to `42 : Int`; after the build and
+removal of all five copied Ash files, its executable returned `42`. The log
+`/tmp/ash-expression-macros-product-native.log` has SHA-256
+`44544de39d4d39361b112ed1321051aa76c64965324075fc603fbb185744509a`, and the
+script `/tmp/ash-expression-macros-native.sh` has SHA-256
+`c76a0deaa4a8b65dbd358c669d87a6864b100cac3cb54ce9ced8756803494fdb`.
+The compiler SHA-256 is
+`b44b4fcb38fd9199a69a949dd2050dee14c21100d27d42414e93a1e38225e8a8` and the
+executable SHA-256 is
+`12d5667fccd20a6674bc0c832d7067bc61476fd0074cc7644b3c6cdf180c7c74`.
+Independent review verified the source hashes and chronology. P33 gains 0.25,
+closing its remaining source-free native observation.
+
+X9 adds approximately 2.25 performed-work points for the type-origin
+correction. The two disjoint receipt windows, 06:37:16.411–06:57:44.397 and
+07:05:14.886–07:14:23.296 on 7 November (Europe/Sofia), total about
+29 minutes 36 seconds. At the inherited 5.55 points per elapsed hour this is
+about 2.74 points; deducting the 0.5 P30 scope in the same package and rounding
+to a quarter point yields 2.25. This is an elapsed proxy, not measured active
+time or a complete correction cost. It preserves all earlier point and receipt
+history.
+
+The reviewed total is **95.5/99**, with 3.5 original-scope points remaining.
+Including 34 estimated additional-work points gives **129.5/133** as effort
+accounting, not acceptance. The remaining work is proposal transition review,
+the fresh C2 gate on that exact candidate, retained verification, milestone
+integration and acceptance readback. Main integration remains separate.
+
+### Transition candidate, 7 November
+
+The verified product checkpoint retains implementation, tests, specification,
+review and its fresh gate. This documentation-only candidate retires CP-0033;
+its exact text remains in Git at `f621d075`. The task and plan remain active,
+with their completed checkpoints preserved, until retained acceptance closes.
+Eight changed Markdown files pass 200 relative-link checks in
+`/tmp/ash-expression-transition-links.log` (SHA-256
+`300577b2b95c5eca3c34b8e2cdd4f8245daecda487c54879b8249ad6ccf3796f`).
+Markdown lint reports no findings on changed lines in
+`/tmp/ash-expression-transition-lint-changed.log` (SHA-256
+`8c3fdab2634bf824811a19f9543a00c1d39bbeff2f1548c6c48a13fef5f11f88`);
+pre-existing findings on unchanged lines remain in the full lint log. The
+transition candidate awaits independent review and a fresh final gate.
+
 ## Progress
 
 The weighted ledger records **61.5/100 reviewed delivery points**. The latest
@@ -2508,9 +2620,10 @@ remain open. Historical D0 receipts follow; they describe earlier candidates.
 ### Acceptance evidence
 
 This is the single delivery matrix transferred from the first-slice companion.
-CP-0033 continues to own its semantic requirements. All rows remain unchecked
-until their complete original scope has evidence on the intended retaining
-branch, including the applicable checkpoint and integration verification.
+The accepted transition's requirements are retained here. All rows remain
+unchecked until their complete original scope has evidence on the intended
+retaining branch, including the applicable checkpoint and integration
+verification.
 
 | State | Case | Required positive and negative evidence |
 | --- | --- | --- |

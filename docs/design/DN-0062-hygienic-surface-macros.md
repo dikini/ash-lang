@@ -7,14 +7,14 @@
   [AD-0006](../decisions/AD-0006-front-end-semantic-boundaries.md),
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md),
   [AD-0010](../decisions/AD-0010-human-diagnostic-presentation-and-localization.md),
-  [CP-0033](../proposals/CP-0033-hygienic-expression-syntax.md),
   [TASK-0067](../tasks/TASK-0067-expression-macros.md),
   [DN-0030](DN-0030-typed-compiler-macros-and-hooks.md),
   [DN-0061](DN-0061-effects-and-resources-first-slice.md)
 
-> The accepted first expression-macro slice in CP-0033 has an implementation
-> and [specification](../../spec/syntax-expansion.md) on the delivery branch;
-> acceptance and Main integration remain pending. Broader macro ideas and
+> The accepted first expression-macro slice has an implementation and
+> [specification](../../spec/syntax-expansion.md) on the reviewed product
+> checkpoint; milestone integration remains pending and Main is separate.
+> Broader macro ideas and
 > illustrations in this note remain exploratory. This note does not define
 > current Ash. AD-0005 records the parser amendment; TASK-0067 owns delivery.
 
@@ -93,18 +93,17 @@ a macro model.
 
 ## Working direction
 
-The [first-slice design](macros/first-slice.md) supports the
-accepted [CP-0033](../proposals/CP-0033-hygienic-expression-syntax.md):
+The [first-slice design](macros/first-slice.md) records the accepted transition:
 imported keyword-led expression syntax, templates and
 Ash-authored procedural transformers over a shared binding-aware syntax
 representation. It defines import, parsing, expansion, binding, bridge,
 diagnostic and admission boundaries and required acceptance cases. The slice's
-implementation and specification are on the delivery branch; amended AD-0005
+implementation and specification are on the reviewed product checkpoint; AD-0005
 and TASK-0067 record parser architecture and remaining delivery work. Template
 syntax is checked at definition; its free names
 resolve in the defining environment when expanded. Where
-an earlier exploratory alternative below differs, CP-0033 and the companion
-state the accepted first slice. The task's M01–M14 cases cover that slice;
+an earlier exploratory alternative below differs, the companion records the
+accepted first slice. The task's M01–M14 cases cover that slice;
 the broader corpus below includes later output categories and transformations.
 
 The two authoring forms are:

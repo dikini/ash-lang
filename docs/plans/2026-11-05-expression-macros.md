@@ -3,6 +3,9 @@
 > The original plan and completed checkpoints below are preserved as history.
 > The [2026-11-06 remaining-scope amendment](#2026-11-06-remaining-scope-amendment)
 > supersedes conflicting outstanding requirements and forecasts.
+> CP-0033 was retired after the reviewed `f621d075` product checkpoint; its
+> historical text remains in that commit. The specification governs the branch's
+> language rules.
 
 > Execute task by task using `superpowers:executing-plans` and the Ash developer
 > workflow. [TASK-0067](../tasks/TASK-0067-expression-macros.md) owns this
@@ -20,7 +23,7 @@ independently validate new compile-time and runtime Core programs.
 Effect Core evaluator and allocation/completion machinery, Ash-defined canonical
 syntax data/services, generated program images, and current diagnostic catalogs.
 
-This plan implements [CP-0033](../proposals/CP-0033-hygienic-expression-syntax.md)
+This plan implements CP-0033
 and its [design companion](../design/macros/first-slice.md); it defines no new
 semantics or architecture. The task holds scope, refs, role ownership, the only
 M01–M14 acceptance matrix, and checkpoint status. The acceptance obligations
@@ -906,7 +909,7 @@ produce progress points or timing data.
 This section updates only work still outstanding. Earlier checkpoint descriptions,
 weights, evidence, sketches and estimates remain historical records; they do not
 require the removed implementation to be restored. The amended
-[CP-0033](../proposals/CP-0033-hygienic-expression-syntax.md) and
+CP-0033 and
 [first-slice design](../design/macros/first-slice.md) govern the remaining work.
 
 - Definition-context references use compiler-issued contexts and ordinary
@@ -1347,3 +1350,12 @@ type-provenance path and uses the expected occurrence at those ordinary error
 boundaries. The task records red/green evidence, the source control and the
 affected, stack and image checks. Independent review and the final gate remain
 open; no whole-path completion is inferred.
+
+### Reviewed product checkpoint, 7 November
+
+Independent review passed the `f621d075` implementation, whole-path evidence,
+fresh seven-stage product gate and matching source-free native graph. The task
+records the disjoint evidence reconciliation, X9 corrective-work estimate and
+receipts. The current reviewed total is 95.5/99; proposal transition review,
+the fresh C2 gate on the final candidate, retained verification and authorized
+milestone integration remain. Main integration remains separate.

@@ -1,10 +1,10 @@
 # Hygienic surface macros: first-slice design
 
 This companion to [DN-0062](../DN-0062-hygienic-surface-macros.md) records the
-design behind [CP-0033](../../proposals/CP-0033-hygienic-expression-syntax.md).
-CP-0033 accepts this first slice. Its implementation and
-[specification](../../../spec/syntax-expansion.md) are on the delivery branch;
-acceptance and Main integration remain pending.
+design behind the accepted first slice. Its implementation and
+[specification](../../../spec/syntax-expansion.md) are on the reviewed product
+checkpoint; milestone integration remains pending and Main is separate. The
+retired CP-0033 transition is retained in Git at `f621d075`.
 The parser amendment is recorded in
 [AD-0005](../../decisions/AD-0005-parser-architecture.md);
 [TASK-0067](../../tasks/TASK-0067-expression-macros.md) owns implementation and
@@ -576,13 +576,11 @@ completion prerequisite. Normal errors must be useful without one.
 
 ## Required acceptance evidence
 
-[CP-0033](../../proposals/CP-0033-hygienic-expression-syntax.md) owns the
-complete semantic evidence requirements. The pending M01–M14 delivery matrix
-has moved to its owning
+The accepted transition's M01–M14 delivery matrix is in its owning
 [TASK-0067 acceptance record](../../tasks/TASK-0067-expression-macros.md#acceptance-evidence).
 The task retains the positive and negative cases, the real file-graph acceptance,
-checkpoint obligations, and retained verification. No case is implemented or
-accepted by this transfer.
+checkpoint obligations, and retained verification. The transfer of criteria
+alone does not close final acceptance.
 
 ## Delivery ownership
 
@@ -597,9 +595,11 @@ The accepted parser amendment in
 [AD-0005](../../decisions/AD-0005-parser-architecture.md) admits one built-in
 prefix mechanism parameterized by imported matcher data. Lexer separation,
 shared precedence, token-complete recovery, and rejection at projection remain.
-It admits no executable parser registry. The implementation remains pending.
+It admits no executable parser registry. The reviewed product checkpoint
+implements this mechanism; final integration remains pending.
 
 No experiment is a prerequisite to the accepted design choices. A contradiction
-or missing semantic rule returns to CP-0033. Persistent caches, an expansion UI,
+or missing semantic rule returns to the specification and design process.
+Persistent caches, an expansion UI,
 declaration macros, typed compiler transformations, self-hosting, browser hosting,
 and migrations that shrink the foundation remain separate work.

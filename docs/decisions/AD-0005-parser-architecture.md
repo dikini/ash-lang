@@ -6,7 +6,6 @@
   [DN-0003](../design/DN-0003-parser-architecture.md),
   [DN-0016](../design/DN-0016-first-mini-ash-corpus.md),
   [first-stratum parser comparison](../design/mini-ash/first-stratum/comparisons/parser-architecture.md),
-  [CP-0033](../proposals/CP-0033-hygienic-expression-syntax.md),
   [TASK-0067](../tasks/TASK-0067-expression-macros.md)
 
 ## Decision
@@ -33,9 +32,10 @@ imported matcher environment. The environment contains selected
 syntax identities, local leading spellings, restricted matcher data, definition
 origins, import routes, and ownership of their checked dependencies. It cannot
 install a parser function, operator, precedence entry, or recovery callback.
-The delivery-branch [grammar](../../spec/syntax.md#grammar) and
+The [grammar](../../spec/syntax.md#grammar) and
 [syntax-expansion specification](../../spec/syntax-expansion.md) describe its
-language forms. CP-0033 records the transition pending product retention.
+language forms on the reviewed product checkpoint. Milestone integration
+remains pending; Main integration is separate.
 
 Fixed import-header discovery precedes body parsing. The loader discovers and
 canonicalizes declared dependencies without executing transformers. The
@@ -91,8 +91,8 @@ matchers as data for one built-in prefix mechanism preserves the existing parser
 boundaries. Executable grammar callbacks would add parsing, recovery, and
 execution contracts outside the accepted slice; printing expansions and
 reparsing them would lose protected grouping and context. This amendment records
-the architecture for TASK-0067, not an implementation claim or a broader grammar
-extension API.
+the architecture for TASK-0067; it does not create a broader grammar extension
+API.
 
 ## Consequences
 
@@ -141,5 +141,5 @@ CP-0033's M01/M02/M07/M08 cases: checked imports reach the real body parser,
 nested forms consume their own separators, protected fragments keep grouping,
 and recovery-bearing structures are rejected before expansion. Existing valid
 no-syntax inputs retain their parse and applicable diagnostic regression
-evidence. The delivery branch implements this extension; TASK-0067 records its
-evidence and remaining acceptance and integration work.
+evidence. The reviewed product checkpoint implements this extension;
+TASK-0067 records its evidence and remaining integration work.
