@@ -2,7 +2,8 @@
 
 - ID: `TASK-0068`
 - Status: planned; delivery base and role assignments pending
-- Related: [CP-0034](../proposals/CP-0034-top-level-declaration-macros.md),
+- Related: [GitHub parent issue #206](https://github.com/dikini/ash-lang/issues/206),
+  [CP-0034](../proposals/CP-0034-top-level-declaration-macros.md),
   [DN-0062](../design/DN-0062-hygienic-surface-macros.md),
   [slice 2 delivery plan](../design/macros/slice2-delivery-plan.md),
   [local work structure](../design/macros/slice2-work-structure.md),
@@ -21,9 +22,10 @@ permissions, and assign the developer, independent QA and reviewer, integration
 owner and acceptance owner. Agree the producer/consumer boundaries in the plan
 before parallel work touches shared representations or files.
 
-The local work structure contains candidate work items, not GitHub issues.
-Create GitHub issues and sub-issues only when explicitly requested. Do not
-start product work as a side effect of creating this task.
+The reviewed work structure is filed under [issue #206](https://github.com/dikini/ash-lang/issues/206)
+as seven workstreams and 45 child issues, with native blocking dependencies.
+The GitHub issues link to the reviewed baseline commit. Do not start product
+work as a side effect of filing the hierarchy.
 
 ## Work
 
@@ -62,6 +64,10 @@ reviewed and have a **142-point** difficulty prediction. C1–C4's recorded
 planning scope is **8 predicted points**, giving **150 points** for the full
 scope. These are fixed predictions, not measured effort. No slice 2 product
 implementation or connected acceptance gate has been completed.
+
+The GitHub hierarchy is filed under [issue #206](https://github.com/dikini/ash-lang/issues/206).
+The seven workstreams and 45 child issues have 112 native blocking links;
+their issue bodies and relationships were checked against the reviewed plan.
 
 The delivery plan retains the dependency graph and earlier predictions. The
 work structure records the first connected paths, separate QA/review gates,
