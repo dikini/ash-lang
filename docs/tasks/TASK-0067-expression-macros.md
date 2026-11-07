@@ -21,9 +21,9 @@
 
 ## Current delivery status, 7 November
 
-The latest reviewed product checkpoint is `1631b1b5`: **76.25/99 original-scope
-points are reviewed and 22.75 remain**. The separately estimated 30.25 points of
-additional performed work give an effort index of **106.5/129.25**, not an
+The latest reviewed product checkpoint is `1631b1b5`: **81.75/99 original-scope
+points are reviewed and 17.25 remain**. The separately estimated 30.25 points of
+additional performed work give an effort index of **112/129.25**, not an
 acceptance percentage. M01–M14 and C1/C2 remain open.
 
 The [operational plan](../plans/2026-11-05-expression-macros.md#2130-source-binder-reservation-finding)
@@ -1731,6 +1731,62 @@ Independent review confirmed that this test and its checked reachable-module
 handoff establish the remaining retained-helper-closure observation: P16
 +0.5, closing that row at 3/3. The earlier P17 reuse and changed-compilation
 credit is not repeated.
+
+### Core validation and published examples
+
+Four existing generated-graph Core tests pass on `7becbffc`:
+`generated_local_newtype_rejects_tampered_construction_origins`,
+`generated_local_type_parameters_reject_tampered_origins`,
+`procedural_local_type_parameters_retain_parser_order_for_revalidation`, and
+`copied_region_order_requires_its_actual_owner_and_scope`. They exercise
+generated origin, parameter-order, region-carrier and cross-sibling scope
+mutations, including original linked and post-identity validation. The receipt
+is `/tmp/ash-syntax-core-validation-current.log` (SHA-256
+`8d076c2861e418a147597ce7148472044db865ddb55830685018d6367788ed8a`),
+completed at 05:56:10 on 7 November, Europe/Sofia.
+
+Independent review reconciled those mutations with the distinct compile-time
+entry and final linked Core validators, and with the reuse of already checked
+reachable module owners and fragments. This adds P28 +2.5 (independent
+mutations 1, separate validations 1, checked dependency reuse 0.5), closing
+P28 at 2.5/2.5 without repeating P10/P17 observations or closing M13/C gates.
+
+Independent review also traced the canonical checked syntax module and its
+`Input`, `MacroResult`, and `Ops` identities from macro-entry validation to
+the host. That establishes P14 +1 (3/3) for canonical API identity and
+same-interface conformance; it does not claim a selectable version or
+cross-implementation testing, and does not repeat vocabulary/image credit.
+The validated entry's binder and occurrence then supply a fresh host's
+authenticated `Input` at that occurrence. The existing real recursive
+transformer consumes its identifier, initializer and body captures in order
+and runs to 42 in the reviewed 223-test suite. This establishes P17 +1 (2/2)
+for entry wiring without repeating P18 bridge/ownership or P17 reuse credit.
+
+The published `if` definition in the specification and tool guide matches the
+existing fixture exactly; the guide's entry module matches its precedence
+fixture. On `7becbffc`, the real CLI returns `42 : Int` for the published
+example and rejects missing capture, missing separator, and unparenthesized
+application with `parse.expected-form`. The receipt is
+`/tmp/ash-published-syntax-examples-current.log` (SHA-256
+`87a449ecd107b10d8b0c19991c7180c1ecbb94dfc3e5afb5e98270a417ef5960`),
+completed at 05:58:08 on 7 November, Europe/Sofia.
+Independent review confirmed P34 +1 (2/2) for these executable positive and
+negative examples; P35 status and transition cleanup remains separate.
+
+### Current remaining work, 7 November
+
+The older 26.25-point inventory above is retained as a historical checkpoint.
+The reviewed reconciliations since then leave these 17.25 original-scope
+points; an evidence audit does not assume a product defect or a new test.
+
+| Boundary | Remaining points | Next action |
+| --- | ---: | --- |
+| Source and hygiene: P09, P11, P13, P20, P21, P27 | 5 | Reconcile existing contextual binding, access, parse/fragment and nested-expansion observations against their exact requirements. |
+| Host and completion: P18, P23, P24, P26 | 2.75 | Reconcile existing handle, output, failure and resource-limit observations at their owning boundaries. |
+| Diagnostics and native execution: P30, P31, P33 | 1.5 | Audit remaining cause/copy and catalog variants; refresh the supported source-removal native result at retention. |
+| Documentation: P35 | 1 | Complete status, links, authority and transition cleanup at the owning checkpoint. |
+| Delivery: P36–P39 | 7 | Complete independent whole-path review, the fresh gate, retained verification and authorized milestone integration. |
+| **Total** | **17.25** | **M01–M14 and C1/C2 remain open until their owning evidence and handoffs are accepted.** |
 
 ## Progress
 

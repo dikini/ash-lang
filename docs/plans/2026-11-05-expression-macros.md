@@ -1269,3 +1269,14 @@ retained-closure evidence for P16 +0.5. Neither repeats native execution or
 entry-reuse credit. The source-removal native result must still be refreshed
 at the retained checkpoint. No new image machinery or local-newtype image
 support is inferred.
+
+### Core validation and published examples
+
+Independent review reconciled the existing generated-origin, parameter-order
+and copied-region mutation tests with separate compile-time/final validation
+and checked dependency reuse; the task records P28 +2.5. The canonical API
+identity and checked-entry-to-Input wiring add P14 +1 and P17 +1 without
+repeating vocabulary or host-bridge credit. The published syntax example
+matches the executable fixtures, and its positive and negative CLI
+observations pass on `7becbffc`; review confirmed P34 +1. Final gate and
+retained verification remain open.
