@@ -370,7 +370,6 @@ mod tests {
             diagnostic_spans: None,
             admission_identifiers: None,
             declaration_output_nodes: None,
-            in_declaration_pattern_capture: false,
             syntax_stops: Vec::new(),
         };
 

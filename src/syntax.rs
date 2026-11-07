@@ -11,9 +11,10 @@ use crate::{
     source::Span,
     surface::{
         SurfaceExpr, SurfaceExprKind, SurfaceExpressionCapture, SurfaceIdentifierCapture,
-        SurfaceImportItem, SurfaceImportSelection, SurfaceName, SurfaceSyntaxCapture,
-        SurfaceSyntaxCaptureKind, SurfaceSyntaxDeclaration, SurfaceSyntaxImplementation,
-        SurfaceSyntaxMatcherPart,
+        SurfaceImportItem, SurfaceImportSelection, SurfaceName, SurfacePattern,
+        SurfacePatternCapture, SurfacePatternKind, SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind,
+        SurfaceSyntaxDeclaration, SurfaceSyntaxImplementation, SurfaceSyntaxMatcherPart,
+        SurfaceType, SurfaceTypeCapture, SurfaceTypeKind,
     },
     types::TypeWorkBudget,
 };
@@ -23,6 +24,8 @@ use crate::{
 pub(crate) enum MacroOutputNode {
     Expression(SurfaceExpressionCapture, MacroOrigin),
     ForwardedExpression(SurfaceExpressionCapture, MacroOrigin),
+    ForwardedType(SurfaceTypeCapture, MacroOrigin),
+    ForwardedPattern(SurfacePatternCapture, MacroOrigin),
     Identifier(SurfaceName, MacroOrigin),
     Token(crate::lexer::TokenKind, Arc<str>, MacroOrigin),
     Group(MacroDelimiter, Vec<MacroOutputNode>, MacroOrigin),
@@ -747,8 +750,23 @@ pub(crate) fn validate_template_syntax(
                     name: placeholder,
                 })
             }
-            SurfaceSyntaxCaptureKind::Type | SurfaceSyntaxCaptureKind::Pattern => {
-                return Err(crate::parser::MacroParseFailure::Invalid);
+            SurfaceSyntaxCaptureKind::Type => SurfaceSyntaxCapture::Type(SurfaceTypeCapture {
+                ty: SurfaceType {
+                    kind: SurfaceTypeKind::Unit,
+                    span: name.span,
+                    diagnostic: None,
+                },
+                contents: Arc::from([]),
+            }),
+            SurfaceSyntaxCaptureKind::Pattern => {
+                SurfaceSyntaxCapture::Pattern(SurfacePatternCapture {
+                    pattern: SurfacePattern {
+                        kind: SurfacePatternKind::Wildcard,
+                        span: name.span,
+                        diagnostic: None,
+                    },
+                    contents: Arc::from([]),
+                })
             }
         };
         captures.push(capture);
@@ -824,7 +842,7 @@ pub(crate) fn admit_transformer_output(
     Ok(expression)
 }
 
-fn substitute_contents(
+pub(crate) fn substitute_contents(
     contents: &mut Vec<MacroOutputNode>,
     matcher: &[SurfaceSyntaxMatcherPart],
     captures: &[SurfaceSyntaxCapture],
@@ -841,9 +859,20 @@ fn substitute_contents(
                     SurfaceSyntaxCapture::Identifier(capture) => {
                         MacroOutputNode::Identifier(capture.name.clone(), capture.origin.clone())
                     }
-                    SurfaceSyntaxCapture::Type(_) | SurfaceSyntaxCapture::Pattern(_) => {
-                        return Err(name.span);
-                    }
+                    SurfaceSyntaxCapture::Type(capture) => MacroOutputNode::ForwardedType(
+                        capture.clone(),
+                        capture.ty.diagnostic.as_ref().map_or_else(
+                            || capture.ty.span.into(),
+                            |location| location.primary.clone(),
+                        ),
+                    ),
+                    SurfaceSyntaxCapture::Pattern(capture) => MacroOutputNode::ForwardedPattern(
+                        capture.clone(),
+                        capture.pattern.diagnostic.as_ref().map_or_else(
+                            || capture.pattern.span.into(),
+                            |location| location.primary.clone(),
+                        ),
+                    ),
                 };
             }
             MacroOutputNode::Identifier(name, _) => {
@@ -858,7 +887,9 @@ fn substitute_contents(
             }
             MacroOutputNode::Token(_, _, _)
             | MacroOutputNode::Expression(_, _)
-            | MacroOutputNode::ForwardedExpression(_, _) => {}
+            | MacroOutputNode::ForwardedExpression(_, _)
+            | MacroOutputNode::ForwardedType(_, _)
+            | MacroOutputNode::ForwardedPattern(_, _) => {}
         }
     }
     Ok(())
@@ -876,7 +907,63 @@ mod tests {
     };
 
     #[test]
-    fn d4_unconnected_type_and_pattern_splices_fail_without_flattening() {
+    fn declaration_templates_admit_fixed_type_and_pattern_captures() {
+        let declarations = include_str!("../docs/design/macros/fixtures/declarations/forms.ash");
+        let types = &declarations[declarations
+            .find("pub syntax declaration: (make_identity)")
+            .unwrap()..];
+        let forms = include_str!("../docs/design/macros/fixtures/captures/forms.ash");
+        let start = forms.find("pub syntax declaration: (predicate)").unwrap();
+        let end = forms
+            .find("pub syntax declaration: (pass_declaration)")
+            .unwrap();
+        for text in [
+            types,
+            &forms[start..end],
+            include_str!("../docs/design/macros/fixtures/captures/binder_forms.ash"),
+        ] {
+            let source = SourceFile::new("forms.ash", text).unwrap();
+            let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+            let module = crate::parser::project_module_retaining_templates(&source, &tree).unwrap();
+            let contexts = SyntaxContexts::new(&[], &[], &[]);
+            for declaration in &module.syntax_declarations {
+                validate_template_syntax(declaration, &source, &contexts)
+                    .expect("fixed type and pattern templates should be admitted");
+            }
+        }
+    }
+
+    #[test]
+    fn declaration_templates_reject_wrong_capture_categories_at_definition() {
+        for (text, expected) in [
+            (
+                "pub syntax declaration: (bad) $T:type => {\n    value : Unit -> Int\n    value $T = 42\n}\n",
+                crate::parser::ExpectedForm::Pattern,
+            ),
+            (
+                "pub syntax declaration: (bad) $p:pattern => {\n    value : $p -> Int\n    value _ = 42\n}\n",
+                crate::parser::ExpectedForm::Type,
+            ),
+        ] {
+            let source = SourceFile::new("bad.ash", text).unwrap();
+            let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+            let module = crate::parser::project_module_retaining_templates(&source, &tree).unwrap();
+            let contexts = SyntaxContexts::new(&[], &[], &[]);
+            let Err(crate::parser::MacroParseFailure::Syntax { diagnostics, .. }) =
+                validate_template_syntax(&module.syntax_declarations[0], &source, &contexts)
+            else {
+                panic!("wrong-category template must fail at definition admission");
+            };
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.expected_form() == Some(expected))
+            );
+        }
+    }
+
+    #[test]
+    fn declarative_substitution_preserves_protected_type_and_pattern_captures() {
         let source = SourceFile::new("splice.ash", "capture").unwrap();
         let span = source.span(ByteRange::new(0, 7).unwrap()).unwrap();
         let name = SurfaceName {
@@ -896,7 +983,11 @@ mod tests {
                         span,
                         diagnostic: None,
                     },
-                    contents: Arc::from([]),
+                    contents: Arc::from([MacroOutputNode::Token(
+                        crate::lexer::TokenKind::IntType,
+                        Arc::from("Int"),
+                        span.into(),
+                    )]),
                 }),
             ),
             (
@@ -907,7 +998,11 @@ mod tests {
                         span,
                         diagnostic: None,
                     },
-                    contents: Arc::from([]),
+                    contents: Arc::from([MacroOutputNode::Token(
+                        crate::lexer::TokenKind::Wildcard,
+                        Arc::from("_"),
+                        span.into(),
+                    )]),
                 }),
             ),
         ];
@@ -917,13 +1012,31 @@ mod tests {
                 kind,
             }];
             let mut output = vec![MacroOutputNode::Splice(name.clone())];
-            assert_eq!(
-                substitute_contents(&mut output, &matcher, &[capture], 0, span),
-                Err(span)
-            );
-            assert!(
-                matches!(&output[..], [MacroOutputNode::Splice(original)] if original.text == name.text)
-            );
+            substitute_contents(
+                &mut output,
+                &matcher,
+                std::slice::from_ref(&capture),
+                0,
+                span,
+            )
+            .unwrap();
+            match (&capture, output.as_slice()) {
+                (
+                    SurfaceSyntaxCapture::Type(original),
+                    [MacroOutputNode::ForwardedType(actual, origin)],
+                ) => {
+                    assert!(Arc::ptr_eq(&original.contents, &actual.contents));
+                    assert_eq!(origin.primary(), span);
+                }
+                (
+                    SurfaceSyntaxCapture::Pattern(original),
+                    [MacroOutputNode::ForwardedPattern(actual, origin)],
+                ) => {
+                    assert!(Arc::ptr_eq(&original.contents, &actual.contents));
+                    assert_eq!(origin.primary(), span);
+                }
+                _ => panic!("the capture must remain a protected node of its own category"),
+            }
         }
     }
 }

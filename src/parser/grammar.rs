@@ -1879,10 +1879,7 @@ fn syntax_invocation(
                                             ExpectedForm::Pattern,
                                         );
                                     } else {
-                                        let previous = parser.in_declaration_pattern_capture;
-                                        parser.in_declaration_pattern_capture = true;
                                         pattern(parser);
-                                        parser.in_declaration_pattern_capture = previous;
                                     }
                                 }
                                 crate::surface::SurfaceSyntaxCaptureKind::Identifier => {
@@ -2654,7 +2651,7 @@ fn pattern(parser: &mut Parser<'_>) {
 
 fn pattern_inner(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
     parser.start(NodeKind::Pattern);
-    if parser.in_declaration_pattern_capture
+    if parser.declaration_output_nodes.is_some()
         && matches!(
             parser
                 .declaration_output_nodes
@@ -2662,10 +2659,12 @@ fn pattern_inner(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
             Some(
                 crate::syntax::MacroOutputNode::Expression(_, _)
                     | crate::syntax::MacroOutputNode::ForwardedExpression(_, _)
+                    | crate::syntax::MacroOutputNode::ForwardedType(_, _)
             )
         )
     {
         parser.report(ParseReason::ExpectedForm, ExpectedForm::Pattern);
+        let _ = parser.bump();
         parser.finish();
         return;
     }

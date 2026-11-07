@@ -499,6 +499,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/surface.rs::SurfacePatternCapture.contents", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
     kind_site!("src/syntax.rs::MacroOutputNode.Expression.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/syntax.rs::MacroOutputNode.ForwardedExpression.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/syntax.rs::MacroOutputNode.ForwardedType.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
+    kind_site!("src/syntax.rs::MacroOutputNode.ForwardedPattern.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
     kind_site!("src/syntax.rs::MacroOutputNode.Group.1", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/syntax.rs::TransformerOutput.Expanded.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/syntax.rs::SelectedSyntax.declaration", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
