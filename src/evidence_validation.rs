@@ -5166,6 +5166,20 @@ fn same_origin_charged(
         match (left, right) {
             (Origin::Source(left), Origin::Source(right)) => return Ok(left == right),
             (
+                Origin::Expansion {
+                    invocation: left_invocation,
+                    definition: left_definition,
+                },
+                Origin::Expansion {
+                    invocation: right_invocation,
+                    definition: right_definition,
+                },
+            ) => {
+                return Ok(
+                    left_invocation == right_invocation && left_definition == right_definition
+                );
+            }
+            (
                 Origin::Generated {
                     cause: left_cause,
                     reason: left_reason,

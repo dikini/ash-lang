@@ -1,6 +1,8 @@
 //! Recovery-free, source-spanned syntax passed from parsing to resolution.
 
-use crate::{integer::Integer, source::Span};
+use std::sync::Arc;
+
+use crate::{integer::Integer, lexer::TokenKind, source::Span};
 
 mod foreign;
 pub use foreign::{
@@ -13,6 +15,8 @@ pub use foreign::{
 pub struct SurfaceModule {
     /// Imports in source order.
     pub imports: Vec<SurfaceImport>,
+    /// Public expression syntax declarations in source order.
+    pub syntax_declarations: Vec<SurfaceSyntaxDeclaration>,
     /// Cross-family declaration order using category-local indices.
     pub declaration_order: Vec<SurfaceDeclarationIndex>,
     /// Passive source-authored foreign libraries in source order.
@@ -33,6 +37,51 @@ pub struct SurfaceModule {
     pub definitions: Vec<SurfaceDefinition>,
     /// The complete accepted source span.
     pub span: Span,
+}
+
+/// A source expression syntax declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceSyntaxDeclaration {
+    /// The exported syntax spelling.
+    pub name: SurfaceName,
+    /// The literal and capture sequence after the syntax name.
+    pub matcher: Vec<SurfaceSyntaxMatcherPart>,
+    /// The template or checked Ash transformer selected by this declaration.
+    pub implementation: SurfaceSyntaxImplementation,
+    /// The template's original structured syntax, retained for instantiation.
+    pub(crate) template_contents: Option<Arc<[crate::syntax::MacroOutputNode]>>,
+    /// The complete declaration span.
+    pub span: Span,
+}
+
+/// The source implementation of an expression syntax declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SurfaceSyntaxImplementation {
+    /// A template with capture splices.
+    Template,
+    /// An ordinary global in the defining module.
+    Transformer(SurfaceName),
+}
+
+/// One part of an expression syntax matcher.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SurfaceSyntaxMatcherPart {
+    /// A literal token, matched by kind and source spelling.
+    Literal { kind: TokenKind, spelling: String },
+    /// A named expression or identifier capture.
+    Capture {
+        name: SurfaceName,
+        kind: SurfaceSyntaxCaptureKind,
+    },
+}
+
+/// A capture admitted by an expression syntax matcher.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceSyntaxCaptureKind {
+    /// An unexpanded expression fragment.
+    Expression,
+    /// One identifier.
+    Identifier,
 }
 
 /// One source declaration's category and category-local position.
@@ -97,6 +146,15 @@ pub enum SurfaceImportSelection {
 /// One selected import channel.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceImportItem {
+    /// A selected public expression syntax declaration and its optional alias.
+    Syntax {
+        /// The dependency's public syntax spelling.
+        name: SurfaceName,
+        /// The replacement local spelling, when present.
+        alias: Option<SurfaceName>,
+        /// The complete selector item span.
+        span: Span,
+    },
     /// A source spelling selected from the dependency's public namespaces.
     Name {
         /// The selected dependency spelling bound in the importing source.
@@ -151,6 +209,7 @@ pub struct SurfaceTypeDeclaration {
     pub constructors: Vec<SurfaceConstructorDeclaration>,
     /// The complete declaration span.
     pub span: Span,
+    pub(crate) generated_parameters: Option<Arc<crate::parser::ParsedParameterOrder>>,
 }
 
 /// One source constructor declaration.
@@ -364,11 +423,21 @@ pub struct SurfaceExpr {
     pub kind: SurfaceExprKind,
     /// The complete expression span.
     pub span: Span,
+    pub(crate) diagnostic: Option<Box<crate::syntax::DiagnosticLocation>>,
 }
 
 /// The closed Ash expression family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceExprKind {
+    /// An expression capture referenced from a syntax template.
+    TemplateSplice(SurfaceName),
+    /// An imported expression syntax invocation awaiting expansion.
+    SyntaxInvocation {
+        /// The selected local spelling.
+        name: SurfaceName,
+        /// The ordered identifier and protected expression captures.
+        captures: Vec<SurfaceSyntaxCapture>,
+    },
     /// An arbitrary-precision integer literal.
     Integer(Integer),
     /// An experimental decoded UTF-8 string literal.
@@ -422,6 +491,29 @@ pub enum SurfaceExprKind {
     Discard,
     /// Nullary transfer of the nearest private checkpoint clause's capture.
     Retain,
+}
+
+/// One invocation's captured syntax.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SurfaceSyntaxCapture {
+    /// A protected, unexpanded expression.
+    Expression(SurfaceExpressionCapture),
+    /// An identifier with its caller spelling, context and origin.
+    Identifier(SurfaceIdentifierCapture),
+}
+
+/// An identifier and its retained syntax origin.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceIdentifierCapture {
+    pub(crate) name: SurfaceName,
+    pub(crate) origin: crate::syntax::MacroOrigin,
+}
+
+/// An expression and its immutable, protected syntax contents.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceExpressionCapture {
+    pub(crate) expression: SurfaceExpr,
+    pub(crate) contents: Arc<[crate::syntax::MacroOutputNode]>,
 }
 
 /// The closed set of builtin acquisition designators.
@@ -627,6 +719,8 @@ pub struct SurfaceRecursiveMember {
     pub introducer_span: Span,
     /// The introduced binder.
     pub binder: SurfaceBinder,
+    /// Whether the binder is an identifier-capture splice.
+    pub(crate) binder_splice: bool,
     /// The required declared monotype.
     pub annotation: SurfaceType,
     /// The initializer expression.
@@ -644,6 +738,7 @@ pub struct SurfaceBinding {
     pub annotation: Option<SurfaceType>,
     /// The initializer expression.
     pub initializer: SurfaceExpr,
+
     /// The complete binding span.
     pub span: Span,
 }
@@ -658,12 +753,31 @@ pub struct FunctionExpr {
 }
 
 /// An unresolved source name and its exact span.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq)]
 pub struct SurfaceName {
     /// The source spelling.
     pub text: String,
     /// The exact name span.
     pub span: Span,
+    /// The compiler-issued template introduction, or zero for written names.
+    pub(crate) introduction: usize,
+    /// The invocation that introduced this template name, if any.
+    pub(crate) introduced_at: Option<Span>,
+    /// Whether this identifier was written in source, including when captured.
+    pub(crate) written: bool,
+    /// Diagnostic origin of this emitted name occurrence, if present.
+    pub(crate) diagnostic: Option<Box<crate::syntax::DiagnosticLocation>>,
+}
+
+impl PartialEq for SurfaceName {
+    fn eq(&self, other: &Self) -> bool {
+        // Diagnostic origin does not change name or placeholder identity.
+        self.text == other.text
+            && self.span == other.span
+            && self.introduction == other.introduction
+            && self.introduced_at == other.introduced_at
+            && self.written == other.written
+    }
 }
 
 /// One declaration-level source type parameter.
@@ -738,6 +852,18 @@ impl SurfaceReference {
             Self::Qualified(name) => name.span,
         }
     }
+
+    pub(crate) fn diagnostic_location(&self) -> Option<Box<crate::syntax::DiagnosticLocation>> {
+        let mut location = self.qualifier().and_then(|name| name.diagnostic.clone());
+        if let Some(member) = &self.member().diagnostic {
+            if let Some(location) = &mut location {
+                location.add_cause(member);
+            } else {
+                location = Some(member.clone());
+            }
+        }
+        location
+    }
 }
 
 /// One module-qualified source reference.
@@ -789,11 +915,14 @@ pub struct SurfacePattern {
     pub kind: SurfacePatternKind,
     /// The complete pattern span.
     pub span: Span,
+    pub(crate) diagnostic: Option<Box<crate::syntax::DiagnosticLocation>>,
 }
 
 /// The closed source pattern family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfacePatternKind {
+    /// An identifier capture used as a template pattern.
+    TemplateSplice(SurfaceName),
     /// An ordinary binding pattern.
     Binder(SurfaceBinder),
     /// A nonbinding wildcard.
@@ -814,12 +943,19 @@ pub enum SurfacePatternKind {
 }
 
 /// A source type.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq)]
 pub struct SurfaceType {
     /// The type payload.
     pub kind: SurfaceTypeKind,
     /// The complete accepted type span.
     pub span: Span,
+    pub(crate) diagnostic: Option<Box<crate::syntax::DiagnosticLocation>>,
+}
+
+impl PartialEq for SurfaceType {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.span == other.span
+    }
 }
 
 /// The closed Ash type family.

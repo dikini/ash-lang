@@ -14,8 +14,8 @@ Ash is a rank-1 language whose programs are acyclic graphs of passive source
 modules. Each `.ash` source file defines one unnamed module containing
 imports followed by nominal data or `newtype` declarations, method-only
 interface declarations, effect declarations, anonymous implementation
-declarations, foreign-library declarations, and global function
-definitions. Global signatures may state
+declarations, foreign-library declarations, public expression-syntax
+declarations, and global function definitions. Global signatures may state
 explicit interface constraints and latent effect rows, and implementation
 heads may state explicit prerequisite constraints. A module has no result
 expression, runtime module value, or initialization.
@@ -24,7 +24,15 @@ Imports expose only public facts. A private complete import places a
 dependency's public namespaces under a module alias. A private targeted import
 places selected public spellings in the importing module's file-wide
 namespaces. A public import must be targeted and re-exports its selected
-spellings. These name channels preserve the defining declaration identities.
+ordinary spellings. These name channels preserve the defining declaration
+identities.
+
+An explicit targeted syntax import activates a public expression matcher; a
+complete import does not. A template or checked Ash transformer expands the
+matched syntax into an ordinary expression before name resolution and
+checking. Captured syntax retains its caller context, while introduced names
+retain their checked definition context. The complete boundary is specified in
+[syntax expansion](syntax-expansion.md).
 
 An `impl Interface` item is an independent channel. It binds no source name and
 makes the dependency summary's public implementations for that interface
@@ -658,6 +666,8 @@ The specification is split by concern:
   tokens, whitespace, and logical line boundaries.
 - [Syntax](syntax.md) defines module, import, declaration, expression, and
   pattern grammar, precedence, and associativity.
+- [Syntax expansion](syntax-expansion.md) defines imported expression syntax,
+  hygiene, the compiler syntax interface, and checked transformer execution.
 - [Name resolution](name-resolution.md) defines module identity, import and
   export access, lexical scope, and binder identity.
 - [Static semantics](static-semantics.md) defines dependency-ordered module

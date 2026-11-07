@@ -3,30 +3,29 @@
 - ID: `CP-0034`
 - Status: proposed
 - Related: [DN-0062](../design/DN-0062-hygienic-surface-macros.md),
-  [CP-0033](CP-0033-hygienic-expression-syntax.md),
+  [expression-syntax specification](../../spec/syntax-expansion.md),
   [first-slice design](../design/macros/first-slice.md),
   [declaration cases and prospective delivery](../design/macros/declaration-slice.md),
   [declaration grammar](../design/macros/declaration-grammar.md),
   [derive authoring and grammar design](../design/macros/derive-syntax.md).
 
 > This is a working proposal, not current Ash or implementation authority.
-> It depends on CP-0033 being implemented and retained. The candidate source
+> It builds on the implemented expression-syntax slice. The candidate source
 > syntax and unresolved contracts in the companion need review before this
-> proposal can be accepted. The slice 1 definition-context and name-timing
-> amendments are in progress; their eventual retained contract is a dependency.
+> proposal can be accepted.
 
 ## Current behavior
 
-The current [module grammar](../../spec/syntax.md#grammar) admits imports
-followed by ordinary module declarations. It has no source macro invocation or
-derive. [Name resolution](../../spec/name-resolution.md#imports-and-namespaces)
+The current [module grammar](../../spec/syntax.md#grammar) admits imports,
+syntax definitions and ordinary module declarations. Imported expression
+syntax can be invoked in expressions; declaration-position macros and derive
+clauses are not part of current Ash.
+[Name resolution](../../spec/name-resolution.md#imports-and-namespaces)
 establishes module imports and declaration identities before resolving bodies.
 
-Accepted CP-0033 proposes imported expression syntax, declarative templates and
-checked Ash transformers; it does not add declaration or derive output. Its
-implementation is in progress and has not become current specification truth.
-This proposal builds on that slice and must be reconciled with its actual
-retained contract before implementation.
+The [expression-syntax slice](../../spec/syntax-expansion.md) provides
+declarative templates and checked Ash transformers without declaration or
+derive output. This proposal builds on that retained contract.
 
 ### Slice 1 reconciliation
 
@@ -37,16 +36,11 @@ top-level declarations and derive subjects; it does not replace the expression
 macro contract. The [reconciliation record](../design/macros/declaration-slice.md#slice-1-contract-boundary)
 maps these shared boundaries to the slice 2 additions and fixtures.
 
-Two CP-0033 amendments are still in the slice 1 delivery rather than the
-accepted proposal on the main branch. The current accepted text checks free
-template names when the macro is defined and requires per-reference grants.
-The user-directed amendment instead checks template syntax at definition,
-resolves surviving free names in the defining environment on expansion, and
-uses issued contexts and ordinary resolution without separate grant objects.
-CP-0034 below follows that amended direction. Until the slice 1 amendment and
-implementation are reviewed and retained, those two rules are a dependency,
-not a retained CP-0033 contract. The final reconciliation must compare this
-proposal and its fixtures with the actual retained result.
+The retained expression slice checks template syntax at definition and resolves
+surviving literal free names in their defining environment at expansion. Issued
+contexts and ordinary resolution enforce access without separate per-reference
+grant objects. CP-0034 follows that baseline; its declaration-specific rules
+remain proposed and its fixtures still require review.
 
 ## Proposed behavior
 

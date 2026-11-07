@@ -106,6 +106,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let (view, query) = self.saved_region_binding(api, span)?;
             let provenance = self.at_span_provenance(&Type::Unit, span)?;
             let action = TypedNodeOwner::new(TypedNode {
+                diagnostic: None,
                 node: action,
                 ty: Type::Unit,
                 effects,
@@ -402,7 +403,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         )?)
     }
 
-    pub(super) fn wrap_region_entry(&mut self, body: TypedNode) -> Result<TypedNode, TypeError> {
+    pub(super) fn wrap_region_entry(
+        &mut self,
+        body: TypedNode,
+        transformer_entry: bool,
+    ) -> Result<TypedNode, TypeError> {
         let body = TypedNodeOwner::new(body);
         let span = body.provenance.span().ok_or_else(invalid_state)?;
         let api = self.region_api_at(span)?;
@@ -415,7 +420,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .builder
             .binder(Type::Nominal(api.region_view()), Origin::Source(span))?;
         let provider = self.host_pair(api, identity, span)?;
-        let body = TypedNodeOwner::new(self.forward_default(body, &access, api, span)?);
+        // A transformer is applied by the evaluator at the selected entry
+        // occurrence, so its latent allocation requests need this same handler.
+        let body = TypedNodeOwner::new(if transformer_entry {
+            self.forward_cleanup_default(body, &access, api, span)?
+        } else {
+            self.forward_default(body, &access, api, span)?
+        });
         let preceding = self.builder.unit(Type::Unit, Origin::Source(span))?;
         let default = EffectInstance::new(api.default_alloc(), Box::new([]));
         let effects = self.remove_cleanup_effect(&body.effects, &default, span, true)?;
@@ -436,6 +447,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             })),
         )?;
         Ok(TypedNode {
+            diagnostic: None,
             node,
             ty: self.clone_type(&body.ty)?,
             effects,
@@ -518,6 +530,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .builder
             .tuple(vec![allocate, release], core_type, Origin::Source(span))?;
         Ok(TypedNodeOwner::new(TypedNode {
+            diagnostic: None,
             node,
             ty,
             effects: EffectRow::empty(),
@@ -534,17 +547,17 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     ) -> Result<EffectRow, TypeError> {
         let pair = IterativeTypeOwner::new(self.zonk(pair)?);
         let Type::Tuple(members) = &*pair else {
-            return Err(pattern_mismatch(span, &pair, &self.registry));
+            return Err(pattern_mismatch(span, &pair, None, &self.registry));
         };
         let [allocate, release] = members.as_ref() else {
-            return Err(pattern_mismatch(span, &pair, &self.registry));
+            return Err(pattern_mismatch(span, &pair, None, &self.registry));
         };
         let allocate = allocate
             .function_view()
-            .ok_or_else(|| pattern_mismatch(span, &pair, &self.registry))?;
+            .ok_or_else(|| pattern_mismatch(span, &pair, None, &self.registry))?;
         let release = release
             .function_view()
-            .ok_or_else(|| pattern_mismatch(span, &pair, &self.registry))?;
+            .ok_or_else(|| pattern_mismatch(span, &pair, None, &self.registry))?;
         self.refine_pattern_expected(allocate.domain(), &Type::Nominal(api.request()), span)?;
         self.refine_pattern_expected(
             allocate.value(),
@@ -731,6 +744,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             EffectOperation::Handler(HandlerNode::new(handler, body.node, default, clauses)),
         )?;
         Ok(TypedNode {
+            diagnostic: None,
             node,
             ty: self.clone_type(&body.ty)?,
             effects: output,
@@ -774,6 +788,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Origin::Source(span),
         )?;
         let call = TypedNodeOwner::new(TypedNode {
+            diagnostic: None,
             node: call,
             ty: result,
             effects: row,
@@ -937,6 +952,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Origin::Source(progress.span),
         )?;
         values.push(TypedNode {
+            diagnostic: None,
             node,
             ty: self.clone_type(&body.ty)?,
             effects: rows,
@@ -1019,6 +1035,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Origin::Source(progress.span),
         )?;
         values.push(TypedNode {
+            diagnostic: None,
             node,
             ty: self.clone_type(&body.ty)?,
             effects,

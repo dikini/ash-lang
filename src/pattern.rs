@@ -436,7 +436,20 @@ fn choices(
     let State(matrix, candidate, types) = state;
     let first_type = &types[0];
     if candidate[0].is_wildcard() {
-        if let Some(heads) = heads_for_type(first_type, registry) {
+        // A private family retained for an expanded pattern is not visible to
+        // unrelated source patterns. Enumerate it only when this case group
+        // actually contains a constructor admitted by that expansion.
+        let syntax_family_without_pattern = first_type.outer_nominal().is_some_and(|id| {
+            registry.syntax_only_family(id)
+                && !matrix.iter().any(|row| {
+                    matches!(row.first(), Some(WitnessPattern::Constructor(constructor, _))
+                        if constructor.owner() == id)
+                })
+        });
+        if let Some(heads) = (!syntax_family_without_pattern)
+            .then(|| heads_for_type(first_type, registry))
+            .flatten()
+        {
             if heads.len() > state_limit {
                 return Err(UsefulnessError::StateLimit);
             }

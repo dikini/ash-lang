@@ -17,19 +17,17 @@ use std::{
     collections::{HashMap, HashSet},
     error::Error,
     fmt,
+    sync::Arc,
 };
-
-#[cfg(test)]
-use std::sync::Arc;
 
 use super::{
     dialect::{
         CORE_PATTERN_DEPTH_LIMIT, CoreOperationFamily, CoreProgram, CoreTypedExpr, DialectId,
-        MethodEvidenceAnchor, MethodEvidenceAnchorRole, MethodEvidenceExpectedRole,
-        MethodEvidenceOwner, MethodEvidenceProducer, NodeId, PureComputation, PureExprKind,
-        PureOperationFamily, PureProgram, PureValue, StoredNode, TypedExpr, UnvalidatedCoreProgram,
-        UnvalidatedProgram, ValidatedCoreProgram, ValidatedProgram,
-        method_evidence_producer_matches, origin_depth_within_limit,
+        GeneratedParameterAnchors, MethodEvidenceAnchor, MethodEvidenceAnchorRole,
+        MethodEvidenceExpectedRole, MethodEvidenceOwner, MethodEvidenceProducer, NodeId,
+        PureComputation, PureExprKind, PureOperationFamily, PureProgram, PureValue, StoredNode,
+        TypedExpr, UnvalidatedCoreProgram, UnvalidatedProgram, ValidatedCoreProgram,
+        ValidatedProgram, method_evidence_producer_matches, origin_depth_within_limit,
     },
     variable::TypedBinder,
 };
@@ -3008,8 +3006,15 @@ pub(super) fn validate_family<F: CoreOperationFamily + ScopeFamily>(
         return Err(error);
     }
 
-    let (registry, method_evidence, method_evidence_anchors, arena, stored_nodes, root) =
-        program.into_parts();
+    let (
+        registry,
+        method_evidence,
+        method_evidence_anchors,
+        parameter_anchors,
+        arena,
+        stored_nodes,
+        root,
+    ) = program.into_parts();
     let mut nodes = Vec::with_capacity(stored_nodes.len());
     for (index, stored) in stored_nodes.into_iter().enumerate() {
         let node = node_id(arena, index)?;
@@ -3031,6 +3036,7 @@ pub(super) fn validate_family<F: CoreOperationFamily + ScopeFamily>(
         registry,
         method_evidence,
         method_evidence_anchors,
+        parameter_anchors,
         arena,
         nodes,
         root,
@@ -3046,7 +3052,8 @@ pub(super) fn validate_effect_family(
         program.discard_iteratively();
         return Err(error);
     }
-    let (registry, method_evidence, anchors, arena, stored, root) = program.into_parts();
+    let (registry, method_evidence, anchors, parameter_anchors, arena, stored, root) =
+        program.into_parts();
     let mut nodes = Vec::with_capacity(stored.len());
     for (index, stored) in stored.into_iter().enumerate() {
         let id = node_id(arena, index)?;
@@ -3067,6 +3074,7 @@ pub(super) fn validate_effect_family(
         registry,
         method_evidence,
         anchors,
+        parameter_anchors,
         arena,
         nodes,
         root,
@@ -3113,7 +3121,8 @@ pub(crate) fn validate_effect_modules_linked_with_work(
     linked: &crate::evidence_validation::ValidatedInterfaceProgram,
     work: &mut TypeWorkBudget,
 ) -> Result<ValidatedCoreProgram<super::effect::EffectOperationFamily>, ValidationError> {
-    validate_effect_modules_internal(program, sources, module_sources, Some(linked), work)
+    validate_effect_modules_internal(program, sources, module_sources, Some(linked), None, work)
+        .map(|(program, _)| program)
 }
 
 pub(crate) fn validate_effect_modules_with_work(
@@ -3122,16 +3131,72 @@ pub(crate) fn validate_effect_modules_with_work(
     module_sources: &[(ModuleId, SourceId)],
     work: &mut TypeWorkBudget,
 ) -> Result<ValidatedCoreProgram<super::effect::EffectOperationFamily>, ValidationError> {
-    validate_effect_modules_internal(program, sources, module_sources, None, work)
+    validate_effect_modules_internal(program, sources, module_sources, None, None, work)
+        .map(|(program, _)| program)
 }
 
+/// A validated compile-time entry and the exact linked occurrence at which the
+/// machine applies the compiler-issued input.
+pub(crate) struct ValidatedMacroEntry {
+    pub(crate) program: ValidatedCoreProgram<super::effect::EffectOperationFamily>,
+    pub(crate) occurrence: NodeId,
+    pub(crate) binder: BinderId,
+    pub(crate) syntax_module: ModuleId,
+    pub(crate) ops: crate::types::EffectId,
+}
+
+#[derive(Clone, Copy)]
+struct MacroEntryContract {
+    binder: BinderId,
+    syntax_module: ModuleId,
+}
+
+pub(crate) fn validate_effect_macro_modules_linked_with_work(
+    program: UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+    linked: &crate::evidence_validation::ValidatedInterfaceProgram,
+    binder: BinderId,
+    syntax_module: ModuleId,
+    work: &mut TypeWorkBudget,
+) -> Result<ValidatedMacroEntry, ValidationError> {
+    let (program, admission) = validate_effect_modules_internal(
+        program,
+        sources,
+        module_sources,
+        Some(linked),
+        Some(MacroEntryContract {
+            binder,
+            syntax_module,
+        }),
+        work,
+    )?;
+    let (occurrence, ops) =
+        admission.ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+    Ok(ValidatedMacroEntry {
+        program,
+        occurrence,
+        binder,
+        syntax_module,
+        ops,
+    })
+}
+
+#[allow(clippy::type_complexity)] // Return the validated program and its optional entry admission together.
 fn validate_effect_modules_internal(
     program: UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
     sources: &[&SourceFile],
     module_sources: &[(ModuleId, SourceId)],
     linked: Option<&crate::evidence_validation::ValidatedInterfaceProgram>,
+    macro_entry: Option<MacroEntryContract>,
     work: &mut TypeWorkBudget,
-) -> Result<ValidatedCoreProgram<super::effect::EffectOperationFamily>, ValidationError> {
+) -> Result<
+    (
+        ValidatedCoreProgram<super::effect::EffectOperationFamily>,
+        Option<(NodeId, crate::types::EffectId)>,
+    ),
+    ValidationError,
+> {
     let mut validator = match Validator::new_modules(&program, sources, module_sources) {
         Ok(validator) => validator,
         Err(error) => {
@@ -3141,17 +3206,28 @@ fn validate_effect_modules_internal(
     };
     validator.type_work_limit = work.remaining();
     validator.linked = linked;
-    let result = validator.run_effect();
+    let result = validator.run_effect().and_then(|()| {
+        macro_entry
+            .map(|contract| validator.check_macro_entry(contract))
+            .transpose()
+    });
     // The validator debits this exact remaining allowance, including failures.
     work.charge(validator.type_work.get())
         .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
-    if let Err(error) = result {
-        program.discard_iteratively();
-        return Err(error);
-    }
+    let macro_admission = match result {
+        Ok(admission) => admission,
+        Err(error) => {
+            program.discard_iteratively();
+            return Err(error);
+        }
+    };
     let admissions = std::mem::take(validator.network_admissions.get_mut());
     drop(validator);
-    let (registry, method_evidence, anchors, arena, stored, root) = program.into_parts();
+    let (registry, method_evidence, anchors, parameter_anchors, arena, stored, root) =
+        program.into_parts();
+    let parameter_anchors = linked.map_or(parameter_anchors, |linked| {
+        Arc::new(GeneratedParameterAnchors::from_linked(linked))
+    });
     let mut nodes = Vec::with_capacity(stored.len());
     for (index, stored) in stored.into_iter().enumerate() {
         let id = node_id(arena, index)?;
@@ -3168,9 +3244,17 @@ fn validate_effect_modules_internal(
             kind: stored.kind,
         });
     }
-    let mut core = CoreProgram::new(registry, method_evidence, anchors, arena, nodes, root);
+    let mut core = CoreProgram::new(
+        registry,
+        method_evidence,
+        anchors,
+        parameter_anchors,
+        arena,
+        nodes,
+        root,
+    );
     core.set_network_admissions(admissions);
-    Ok(ValidatedCoreProgram::new(core))
+    Ok((ValidatedCoreProgram::new(core), macro_admission))
 }
 
 /// Consumes unchecked Core assembled from multiple canonical modules.
@@ -3221,8 +3305,15 @@ pub(crate) fn validate_modules_with_work(
         return Err(error);
     }
 
-    let (registry, method_evidence, method_evidence_anchors, arena, stored_nodes, root) =
-        program.into_parts();
+    let (
+        registry,
+        method_evidence,
+        method_evidence_anchors,
+        parameter_anchors,
+        arena,
+        stored_nodes,
+        root,
+    ) = program.into_parts();
     let mut nodes = Vec::with_capacity(stored_nodes.len());
     for (index, stored) in stored_nodes.into_iter().enumerate() {
         let node = node_id(arena, index)?;
@@ -3244,6 +3335,7 @@ pub(crate) fn validate_modules_with_work(
         registry,
         method_evidence,
         method_evidence_anchors,
+        parameter_anchors,
         arena,
         nodes,
         root,
@@ -5413,6 +5505,32 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         &self,
         id: crate::types::TypeVariableId,
     ) -> Result<bool, ValidationError> {
+        for order in self.program.registry.generated_parameter_orders().values() {
+            if order.parameters().contains(&id) {
+                return Ok(true);
+            }
+        }
+        if self
+            .program
+            .registry
+            .type_variable(id)
+            .is_some_and(|parameter| matches!(parameter.origin, Origin::Expansion { .. }))
+        {
+            for nominal in self.program.registry.lexical_nominals() {
+                if !matches!(nominal.origin, Origin::Expansion { .. }) {
+                    continue;
+                }
+                let parameters = self
+                    .program
+                    .registry
+                    .nominal_parameters(nominal.id)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+                self.charge_type_work(parameters.len().saturating_add(1))?;
+                if parameters.iter().any(|parameter| parameter.id == id) {
+                    return Ok(true);
+                }
+            }
+        }
         for owner in self.program.method_evidence.lexical_owners() {
             self.charge_type_work(
                 1usize
@@ -5485,6 +5603,46 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     == Some(authority.span)
                 && Some(authority.span) == node.origin.as_ref().map(Origin::primary_span)
                 && self.same_type_charged(identity, &Type::Variable(id))?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    // Region identities, like Store identities, are allocated while resolving
+    // bodies. A copied lexical owner can retain the same source coordinate;
+    // require its actual carrier before excluding it from header ordering.
+    fn is_structural_region_identity(
+        &self,
+        id: crate::types::TypeVariableId,
+    ) -> Result<bool, ValidationError> {
+        let Some(module) = id.module() else {
+            return Ok(false);
+        };
+        let Some(canonical) = self.program.registry.type_variable(id) else {
+            return Ok(false);
+        };
+        if canonical.kind != Kind::Type {
+            return Ok(false);
+        }
+        for node in &self.program.nodes {
+            self.charge_type_work(1)?;
+            let Some(scope) = F::region_scope(&node.kind) else {
+                continue;
+            };
+            if scope.entry || scope.identity != id || scope.access.id().module() != Some(module) {
+                continue;
+            }
+            let Some(api) = crate::resolved::RegionApi::for_module(scope.api) else {
+                continue;
+            };
+            let Some(span) = node.origin.as_ref().map(Origin::primary_span) else {
+                continue;
+            };
+            if span.cover(canonical.origin.primary_span()) == Some(span)
+                && span.cover(scope.access.origin().primary_span()) == Some(span)
+                && self.same_type_charged(scope.access.ty(), &Type::Nominal(api.region_view()))?
             {
                 return Ok(true);
             }
@@ -7175,8 +7333,43 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         &self,
         original: Option<&source_declarations::OriginalDeclarationProvenance>,
     ) -> Result<RegistryParameterOwners, ValidationError> {
+        self.authenticate_generated_parameter_orders()?;
         self.validate_reserved_builtin_sources()?;
         self.validate_registry_contents(original)
+    }
+
+    fn authenticate_generated_parameter_orders(&self) -> Result<(), ValidationError> {
+        let actual = self.program.registry.generated_parameter_orders();
+        if let Some(linked) = self.linked {
+            let mut owners = HashSet::new();
+            for group in linked.groups() {
+                for (owner, original) in group.generated_parameter_orders() {
+                    if owner.module() != group.module()
+                        || !owners.insert(*owner)
+                        || !actual
+                            .get(owner)
+                            .is_some_and(|candidate| Arc::ptr_eq(original, candidate))
+                    {
+                        return Err(ValidationError::new(ValidationReason::Registry, None));
+                    }
+                }
+            }
+            if owners.len() != actual.len() {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+        } else {
+            let expected = self.program.generated_parameter_anchors.orders();
+            if expected.len() != actual.len()
+                || expected.iter().any(|(owner, original)| {
+                    !actual
+                        .get(owner)
+                        .is_some_and(|candidate| Arc::ptr_eq(original, candidate))
+                })
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+        }
+        Ok(())
     }
 
     fn validate_registry_contents(
@@ -7291,7 +7484,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 && previous_type_variable_start
                     .is_some_and(|previous| parameter_range.start() <= previous)
             {
-                contextual = self.is_structural_store_identity(parameter.id)?;
+                contextual = self.is_structural_store_identity(parameter.id)?
+                    || self.is_structural_region_identity(parameter.id)?;
             }
             if identity != parameter.id
                 || Some(parameter_span.source()) != registry_source
@@ -7532,6 +7726,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             self.charge_type_work(1)?;
             match current {
                 Origin::Source(span) => return Ok(span.range().start()),
+                Origin::Expansion { invocation, .. } => return Ok(invocation.range().start()),
                 Origin::Generated { cause, .. } => current = cause,
                 Origin::Related { primary, .. } => current = primary,
             }
@@ -7707,7 +7902,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         .get(&module)
                         .is_some_and(|previous| parameter_range.start() <= *previous)
                 {
-                    contextual = self.is_structural_store_identity(parameter.id)?;
+                    contextual = self.is_structural_store_identity(parameter.id)?
+                        || self.is_structural_region_identity(parameter.id)?;
                     if !contextual {
                         return Err(ValidationError::new(ValidationReason::Registry, None));
                     }
@@ -7908,6 +8104,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     ) -> Result<(), ValidationError> {
         let registry = &self.program.registry;
         let relation = self.module_sources.as_ref();
+        for (owner, order) in registry.generated_parameter_orders() {
+            if *owner != order.owner() || !owner.is_lexical() || registry.nominal(*owner).is_none()
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+        }
         self.charge_type_work(registry.lexical_nominals().len())?;
         let mut identities = HashSet::new();
         identities
@@ -7927,10 +8129,17 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
+            self.validate_origin(&nominal.origin, self.program.root)?;
             let nominal_range = nominal.origin.primary_span().range();
             let parameters = registry
                 .nominal_parameters(nominal.id)
                 .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            let generated = registry.generated_parameter_orders().get(&nominal.id);
+            if let Some(order) = generated {
+                self.validate_generated_parameter_order(nominal, parameters, source, order)?;
+            } else if !parameters.is_empty() && matches!(nominal.origin, Origin::Expansion { .. }) {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
             self.charge_type_work(
                 parameters
                     .len()
@@ -7944,20 +8153,53 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             names
                 .try_reserve(parameters.len())
                 .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
-            for parameter in parameters {
+            let mut previous_definition_end = None;
+            for (index, parameter) in parameters.iter().enumerate() {
                 let parameter_range = parameter.origin.primary_span().range();
                 let canonical = registry
                     .type_variable(parameter.id)
                     .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+                let introduction = generated.map_or(0, |order| {
+                    order.syntax().parameters()[index].name().introduction
+                });
                 if parameter.id.module() != Some(nominal.id.module())
                     || parameter_owners
                         .insert(parameter.id, RegistryParameterOwner::Nominal(nominal.id))
                         .is_some()
-                    || !names.insert(parameter.spelling.as_str())
+                    || !names.insert((parameter.spelling.as_str(), introduction))
                     || !self.same_registry_type_variable(canonical, parameter)?
                     || parameter_range.start() < nominal_range.start()
                     || parameter_range.end() > nominal_range.end()
                 {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                if generated.is_some_and(|order| order.syntax().occurrence_extent()) {
+                    continue;
+                }
+                if let Origin::Expansion {
+                    invocation,
+                    definition,
+                } = &nominal.origin
+                {
+                    let Origin::Expansion {
+                        invocation: parameter_invocation,
+                        definition: parameter_definition,
+                    } = &parameter.origin
+                    else {
+                        return Err(ValidationError::new(ValidationReason::Registry, None));
+                    };
+                    if invocation != parameter_invocation
+                        || definition.source() != parameter_definition.source()
+                        || !span_contains(*definition, *parameter_definition)
+                        || parameter_definition.range().start()
+                            >= parameter_definition.range().end()
+                        || previous_definition_end
+                            .is_some_and(|previous| parameter_definition.range().start() < previous)
+                    {
+                        return Err(ValidationError::new(ValidationReason::Registry, None));
+                    }
+                    previous_definition_end = Some(parameter_definition.range().end());
+                } else if matches!(parameter.origin, Origin::Expansion { .. }) {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
                 }
             }
@@ -7993,6 +8235,64 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
+            self.validate_origin(&constructor.origin, self.program.root)?;
+        }
+        Ok(())
+    }
+
+    fn validate_generated_parameter_order(
+        &self,
+        nominal: &crate::resolved::ResolvedNominalType,
+        parameters: &[crate::resolved::ResolvedTypeVariable],
+        source: SourceId,
+        order: &crate::resolve::GeneratedParameterOrder,
+    ) -> Result<(), ValidationError> {
+        let syntax = order.syntax();
+        let declaration_origin = match syntax.name().introduced_at {
+            Some(invocation) => Origin::Expansion {
+                invocation,
+                definition: syntax.span(),
+            },
+            None => Origin::Source(syntax.span()),
+        };
+        if order.owner() != nominal.id
+            || syntax.invocation().source() != source
+            || syntax.invocation() != nominal.origin.primary_span()
+            || syntax.name().text != nominal.spelling
+            || nominal.origin != declaration_origin
+            || syntax.declaration().start >= syntax.declaration().end
+            || parameters.len() != syntax.parameters().len()
+            || parameters.len() != order.parameters().len()
+        {
+            return Err(ValidationError::new(ValidationReason::Registry, None));
+        }
+        let mut previous = syntax.declaration().start;
+        for ((parameter, original), identity) in parameters
+            .iter()
+            .zip(syntax.parameters())
+            .zip(order.parameters())
+        {
+            let origin = if original.name().introduction == 0 {
+                Origin::Source(original.name().span)
+            } else {
+                Origin::Expansion {
+                    invocation: original
+                        .name()
+                        .introduced_at
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?,
+                    definition: original.name().span,
+                }
+            };
+            if parameter.id != *identity
+                || parameter.spelling != original.name().text
+                || parameter.origin != origin
+                || original.tokens().start < previous
+                || original.tokens().start >= original.tokens().end
+                || original.tokens().end > syntax.declaration().end
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            previous = original.tokens().end;
         }
         Ok(())
     }
@@ -8022,9 +8322,28 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 ) else {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
                 };
-                if !matches!(nominal.origin, Origin::Source(_))
-                    || !matches!(constructor.origin, Origin::Source(_))
-                    || constructor.owner != nominal.id
+                let (representation_source, declaration) =
+                    match (&nominal.origin, &constructor.origin) {
+                        (Origin::Source(_), Origin::Source(declaration)) => (source, *declaration),
+                        (
+                            Origin::Expansion {
+                                invocation,
+                                definition: nominal_definition,
+                            },
+                            Origin::Expansion {
+                                invocation: constructor_invocation,
+                                definition: constructor_definition,
+                            },
+                        ) if nominal.id.is_lexical()
+                            && invocation == constructor_invocation
+                            && nominal_definition.source() == constructor_definition.source()
+                            && span_contains(*nominal_definition, *constructor_definition) =>
+                        {
+                            (nominal_definition.source(), *constructor_definition)
+                        }
+                        _ => return Err(ValidationError::new(ValidationReason::Registry, None)),
+                    };
+                if constructor.owner != nominal.id
                     || constructor.spelling != nominal.spelling
                     || constructor.payload.is_some()
                     || !self.valid_registry_payload(
@@ -8040,8 +8359,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     || !self.valid_representation_provenance(
                         representation,
                         provenance,
-                        source,
-                        constructor.origin.primary_span(),
+                        representation_source,
+                        declaration,
                     )?
                 {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
@@ -10038,6 +10357,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         while let Some(current) = work.pop() {
             match current {
                 Origin::Source(span) => self.validate_span(*span, node)?,
+                Origin::Expansion {
+                    invocation,
+                    definition,
+                } => {
+                    self.validate_span(*invocation, node)?;
+                    self.validate_span(*definition, node)?;
+                }
                 Origin::Generated { cause, .. } => work.push(cause),
                 Origin::Related { primary, related } => {
                     let primary_source = primary.primary_span().source();
@@ -14758,6 +15084,96 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
     // not from a marker, binder spelling, or an arbitrary Bind-shaped prefix.
     // This is only a structural precursor: it does not admit entry bodies,
     // native services, or network execution.
+    fn check_macro_entry(
+        &self,
+        contract: MacroEntryContract,
+    ) -> Result<(NodeId, crate::types::EffectId), ValidationError> {
+        let invalid = || ValidationError::new(ValidationReason::Registry, Some(self.program.root));
+        if !contract.syntax_module.is_builtin_compiler_syntax() {
+            return Err(invalid());
+        }
+        let source_id = self
+            .module_sources
+            .as_ref()
+            .and_then(|sources| sources.get(&contract.syntax_module))
+            .ok_or_else(invalid)?;
+        let source = self.sources.get(source_id).ok_or_else(invalid)?;
+        if source.text() != crate::module::compiler_syntax_builtin_source_text() {
+            return Err(invalid());
+        }
+        let registry = &self.program.registry;
+        let input = registry
+            .nominals()
+            .iter()
+            .find(|nominal| {
+                nominal.id.module() == contract.syntax_module && nominal.spelling == "Input"
+            })
+            .ok_or_else(invalid)?
+            .id;
+        let output = registry
+            .nominals()
+            .iter()
+            .find(|nominal| {
+                nominal.id.module() == contract.syntax_module && nominal.spelling == "MacroResult"
+            })
+            .ok_or_else(invalid)?
+            .id;
+        let ops = registry
+            .effects()
+            .iter()
+            .find(|effect| effect.id.module() == contract.syntax_module && effect.spelling == "Ops")
+            .ok_or_else(invalid)?
+            .id;
+        let linked = self.linked.ok_or_else(invalid)?;
+        let owner = linked
+            .groups()
+            .iter()
+            .find(|group| group.module() == linked.entry())
+            .ok_or_else(invalid)?;
+        let scheme = owner
+            .schemes()
+            .iter()
+            .find(|scheme| scheme.binder == contract.binder)
+            .ok_or_else(invalid)?;
+        if contract.binder.module() != Some(owner.module())
+            || !scheme.scheme.type_parameters.is_empty()
+            || !scheme.scheme.requirements.is_empty()
+        {
+            return Err(invalid());
+        }
+        let (domain, result, row) = match &scheme.scheme.value_type {
+            Type::Function(domain, result) => (domain.as_ref(), result.as_ref(), None),
+            Type::EffectfulFunction(domain, result) => {
+                (domain.as_ref(), result.value(), Some(result.effects()))
+            }
+            _ => return Err(invalid()),
+        };
+        if domain != &Type::Nominal(input) || result != &Type::Nominal(output) {
+            return Err(invalid());
+        }
+        if let Some(row) = row
+            && (row.tail().is_some()
+                || row.known().iter().any(|instance| {
+                    !instance.arguments().is_empty()
+                        || (instance.effect() != ops
+                            && !crate::resolved::RegionApi::for_module(instance.effect().module())
+                                .is_some_and(|api| api.default_alloc() == instance.effect()))
+                }))
+        {
+            return Err(invalid());
+        }
+        let spine = self.reconstruct_network_linked_spine(self.program.root, None)?;
+        let occurrence = self.node(spine.result)?;
+        if !matches!(&occurrence.kind,
+            super::effect::EffectExprKind::Pure(PureExprKind::Variable(variable))
+                if variable.binder() == contract.binder)
+            || !self.same_type_charged(&occurrence.ty, &scheme.scheme.value_type)?
+        {
+            return Err(invalid());
+        }
+        Ok((spine.result, ops))
+    }
+
     fn check_network_linked_spine(
         &self,
         id: NodeId,
@@ -19358,6 +19774,77 @@ mod tests {
     }
 
     #[test]
+    fn expansion_binder_origin_checks_both_sources_and_the_caller_owner() {
+        let caller = SourceFile::new("caller.ash", "call").unwrap();
+        let definition = SourceFile::new("forms.ash", "temp").unwrap();
+        let other = SourceFile::new("other.ash", "x").unwrap();
+        let caller_span = caller.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        let definition_span = definition.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        let other_span = other.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let invalid_definition = crate::source::Span::unchecked_for_test(
+            definition.id(),
+            ByteRange::new(20, 21).unwrap(),
+        );
+        let module = ModuleId::new(9_101);
+        let other_module = ModuleId::new(9_102);
+        let modules = [(module, caller.id()), (other_module, definition.id())];
+        let mut builder = CoreBuilder::new();
+        let root = builder
+            .unit(Type::Unit, Origin::Source(caller_span))
+            .unwrap();
+        let program = builder.finish(root).unwrap();
+        let check = |origin| {
+            let binder = TypedBinder::new(
+                program.arena,
+                BinderId::resolved(module, 0),
+                Type::Unit,
+                origin,
+            );
+            Validator::new_modules(&program, &[&caller, &definition], &modules)
+                .unwrap()
+                .collect_binder(root, &binder, ValidationReason::NodeType, false, false)
+        };
+        assert!(
+            check(Origin::Expansion {
+                invocation: caller_span,
+                definition: definition_span,
+            })
+            .is_ok()
+        );
+        assert_eq!(
+            check(Origin::Source(definition_span)).unwrap_err().reason(),
+            ValidationReason::Registry
+        );
+        assert_eq!(
+            check(Origin::Expansion {
+                invocation: definition_span,
+                definition: caller_span,
+            })
+            .unwrap_err()
+            .reason(),
+            ValidationReason::Registry
+        );
+        assert_eq!(
+            check(Origin::Expansion {
+                invocation: caller_span,
+                definition: other_span,
+            })
+            .unwrap_err()
+            .cause_name(),
+            Some("unadmitted-origin-source")
+        );
+        assert_eq!(
+            check(Origin::Expansion {
+                invocation: caller_span,
+                definition: invalid_definition,
+            })
+            .unwrap_err()
+            .cause_name(),
+            Some("invalid-origin-span")
+        );
+    }
+
+    #[test]
     fn recursive_constructor_checks_keep_the_failed_relationship() {
         let file = source();
         let owner = crate::types::NominalTypeId::new(file.id(), 0);
@@ -21411,6 +21898,129 @@ mod tests {
         assert_eq!(
             validator.validate_registry().unwrap_err().reason(),
             ValidationReason::Registry
+        );
+    }
+
+    #[test]
+    fn copied_region_order_requires_its_actual_owner_and_scope() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/copied-declarations/region.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the copied regions pass linked validation");
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let mut regions = program
+            .nodes()
+            .iter()
+            .filter_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Region(scope)) if !scope.entry => {
+                    Some((scope.identity, scope.access.id()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        regions.sort_unstable_by_key(|(identity, _)| identity.local());
+        let [
+            (first_identity, first_access),
+            (second_identity, second_access),
+        ] = regions[..]
+        else {
+            panic!("the two copied lexical regions remain distinct")
+        };
+        assert_ne!(first_identity, second_identity);
+        assert_ne!(first_access, second_access);
+        let clean = identity_effect_traversal(program).unwrap();
+        let validator = Validator::new_modules(&clean, &sources, &modules).unwrap();
+        assert!(
+            validator
+                .is_structural_region_identity(first_identity)
+                .unwrap()
+        );
+        assert!(
+            validator
+                .is_structural_region_identity(second_identity)
+                .unwrap()
+        );
+        drop(validator);
+        validate_effect_modules(clean, &sources, &modules)
+            .expect("identity traversal retains the valid independent Core");
+
+        for mutation in 0..4 {
+            let mut altered = identity_effect_traversal(program).unwrap();
+            let arena = altered.arena;
+            let node = altered
+                .nodes
+                .iter_mut()
+                .find(|node| {
+                    matches!(&node.kind, EffectExprKind::Operation(EffectOperation::Region(scope))
+                        if scope.identity == second_identity)
+                })
+                .expect("the second region has its own carrier");
+            if mutation == 0 {
+                node.kind = EffectExprKind::Pure(PureExprKind::Value(PureValue::Unit(
+                    super::super::literal::UnitNode,
+                )));
+            } else {
+                let EffectExprKind::Operation(EffectOperation::Region(scope)) = &mut node.kind
+                else {
+                    unreachable!()
+                };
+                match mutation {
+                    1 => scope.identity = first_identity,
+                    2 => {
+                        scope.access = TypedBinder::new(
+                            arena,
+                            scope.access.id(),
+                            Type::Unit,
+                            scope.access.origin().clone(),
+                        );
+                    }
+                    3 => node.origin = Some(scope.access.origin().clone()),
+                    _ => unreachable!(),
+                }
+            }
+            let validator = Validator::new_modules(&altered, &sources, &modules).unwrap();
+            assert!(
+                !validator
+                    .is_structural_region_identity(second_identity)
+                    .unwrap(),
+                "a missing or mismatched region carrier cannot justify source order: {mutation}"
+            );
+            drop(validator);
+            assert!(
+                validate_effect_modules(altered, &sources, &modules).is_err(),
+                "independent validation must reject carrier mutation {mutation}"
+            );
+        }
+
+        let mut retargeted = identity_effect_traversal(program).unwrap();
+        let variable = retargeted
+            .nodes
+            .iter_mut()
+            .find_map(|node| match &mut node.kind {
+                EffectExprKind::Pure(PureExprKind::Variable(variable))
+                    if variable.binder() == second_access =>
+                {
+                    Some(variable)
+                }
+                _ => None,
+            })
+            .expect("the second region uses its own access binder");
+        *variable = super::super::variable::VariableNode::new(first_access);
+        assert!(
+            validate_effect_modules(retargeted, &sources, &modules).is_err(),
+            "a region access cannot be retargeted to its sibling"
         );
     }
 
@@ -29221,6 +29831,7 @@ mod tests {
                 registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
                 method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
                 method_evidence_anchors: Box::new([]),
+                generated_parameter_anchors: Arc::default(),
                 arena,
                 nodes: vec![StoredNode {
                     dialect: DialectId::PURE,
@@ -30317,6 +30928,541 @@ mod tests {
                 );
                 assert_eq!(retry.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
             }
+        }
+    }
+
+    #[test]
+    fn generated_local_newtype_rejects_tampered_construction_origins() {
+        use crate::resolved::{ResolvedTypeProvenance, ResolvedTypeProvenanceNode};
+
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/generated-newtype/entry.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the generated newtype graph must compile");
+        let (program, provenance) = compiled
+            .effect_build_input()
+            .expect("validated Effect Core");
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let [nominal] = program.registry().lexical_nominals() else {
+            panic!("one generated local newtype")
+        };
+        let Origin::Expansion {
+            invocation,
+            definition,
+        } = nominal.origin
+        else {
+            panic!("the newtype retains its invocation and definition")
+        };
+        let forms = sources
+            .iter()
+            .find(|source| source.id() == definition.source())
+            .unwrap();
+        let caller = sources
+            .iter()
+            .find(|source| source.id() == invocation.source())
+            .unwrap();
+        let other_caller = caller.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let outside = forms.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let invalid_definition = crate::source::Span::unchecked_for_test(
+            forms.id(),
+            ByteRange::new(forms.text().len() as u32 + 1, forms.text().len() as u32 + 2).unwrap(),
+        );
+
+        let clean = identity_effect_traversal(program).unwrap();
+        validate_effect_modules(clean, &sources, &modules)
+            .expect("the ordinary independent revalidation accepts the generated newtype");
+
+        for mutation in 0..10 {
+            let mut forged = identity_effect_traversal(program).unwrap();
+            let mut registry = (*forged.registry).clone();
+            let (nominal, constructor) = registry.first_lexical_newtype_for_core_test().unwrap();
+            let representation = nominal
+                .representation_provenance
+                .as_ref()
+                .unwrap()
+                .span()
+                .unwrap();
+            match mutation {
+                0 => {
+                    nominal.origin = Origin::Expansion {
+                        invocation: definition,
+                        definition,
+                    };
+                    constructor.origin = Origin::Expansion {
+                        invocation: definition,
+                        definition,
+                    };
+                }
+                1 => {
+                    let Origin::Expansion { invocation, .. } = &mut constructor.origin else {
+                        unreachable!()
+                    };
+                    *invocation = other_caller;
+                }
+                2 => {
+                    let Origin::Expansion { definition, .. } = &mut constructor.origin else {
+                        unreachable!()
+                    };
+                    *definition = invocation;
+                }
+                3 => {
+                    let Origin::Expansion { definition, .. } = &mut constructor.origin else {
+                        unreachable!()
+                    };
+                    *definition = outside;
+                }
+                4 => {
+                    nominal.representation_provenance = Some(ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(invocation)],
+                        0,
+                    ));
+                }
+                5 => {
+                    nominal.representation_provenance = Some(ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(outside)],
+                        0,
+                    ));
+                }
+                6 => {
+                    nominal.representation_provenance = Some(ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Tuple {
+                            span: representation,
+                            elements: Box::new([]),
+                        }],
+                        0,
+                    ));
+                }
+                7 => {
+                    let Origin::Expansion { definition, .. } = &mut nominal.origin else {
+                        unreachable!()
+                    };
+                    *definition = invalid_definition;
+                }
+                8 => {
+                    nominal.origin = Origin::Related {
+                        primary: Box::new(nominal.origin.clone()),
+                        related: Vec::new(),
+                    };
+                }
+                9 => {
+                    nominal.origin = Origin::Generated {
+                        cause: Box::new(nominal.origin.clone()),
+                        reason: crate::source::GeneratedReason::TypeChecking,
+                    };
+                }
+                _ => unreachable!(),
+            }
+            forged.registry = Arc::new(registry);
+            assert!(
+                validate_effect_modules(forged, &sources, &modules).is_err(),
+                "independent Core accepted construction-origin mutation {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn procedural_local_type_parameters_retain_parser_order_for_revalidation() {
+        let downgrade = |registry: &mut crate::resolved::ResolvedRegistry,
+                         sources: &[&SourceFile]| {
+            let nominal = registry.lexical_nominals().first().unwrap();
+            let owner = nominal.id;
+            let invocation = nominal.origin.primary_span();
+            let source = sources
+                .iter()
+                .find(|source| source.id() == invocation.source())
+                .unwrap();
+            let start = invocation.range().start();
+            let first = source
+                .span(ByteRange::new(start, start + 1).unwrap())
+                .unwrap();
+            let second = source
+                .span(ByteRange::new(start + 1, start + 2).unwrap())
+                .unwrap();
+            registry
+                .generated_parameter_orders_for_core_test()
+                .remove(&owner);
+            let (nominal, constructor) = registry.first_lexical_newtype_for_core_test().unwrap();
+            nominal.origin = Origin::Source(invocation);
+            constructor.origin = Origin::Source(invocation);
+            assert!(
+                registry.edit_lexical_parameter_for_core_test(owner, 0, |parameter| {
+                    parameter.origin = Origin::Source(first);
+                })
+            );
+            assert!(
+                registry.edit_lexical_parameter_for_core_test(owner, 1, |parameter| {
+                    parameter.origin = Origin::Source(second);
+                })
+            );
+        };
+        let compile = |name: &str| {
+            crate::driver::compile_path(crate::driver::RunConfiguration {
+                entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/surface-macros/procedural-newtype")
+                    .join(name),
+                roots: ModuleRoots::empty(),
+            })
+            .expect("the procedural pair graph must compile")
+        };
+        let compiled = compile("pair.ash");
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let [nominal] = program.registry().lexical_nominals() else {
+            panic!("one generated local newtype")
+        };
+        let owner = nominal.id;
+        let original = program
+            .registry()
+            .generated_parameter_orders()
+            .get(&owner)
+            .unwrap();
+        let checker = program
+            .registry()
+            .checker_view(
+                &crate::resolved::ImportedFacts::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the checker view retains generated parser order");
+        assert!(Arc::ptr_eq(
+            original,
+            checker.generated_parameter_orders().get(&owner).unwrap()
+        ));
+        let copied = identity_effect_traversal(program).unwrap();
+        assert!(Arc::ptr_eq(
+            program.generated_parameter_anchors(),
+            &copied.generated_parameter_anchors
+        ));
+        assert!(Arc::ptr_eq(
+            original,
+            copied
+                .registry
+                .generated_parameter_orders()
+                .get(&owner)
+                .unwrap()
+        ));
+        validate_effect_modules(copied, &sources, &modules)
+            .expect("public unlinked validation accepts the original parser order");
+        let folded = fold_effect_literal_primitives(program).unwrap();
+        assert!(Arc::ptr_eq(
+            program.generated_parameter_anchors(),
+            &folded.generated_parameter_anchors
+        ));
+        validate_effect_modules(folded, &sources, &modules)
+            .expect("literal folding preserves the original parser order");
+
+        let mut fresh_builder = super::super::EffectCoreBuilder::with_registry_and_method_evidence(
+            Arc::clone(program.registry()),
+            Arc::clone(program.method_evidence()),
+        )
+        .unwrap();
+        let root = fresh_builder
+            .unit(Type::Unit, Origin::Source(nominal.origin.primary_span()))
+            .unwrap();
+        let fresh = fresh_builder.finish(root).unwrap();
+        assert_eq!(
+            validate_effect_modules(fresh, &sources, &modules)
+                .expect_err("a fresh builder has no original parser-order authority")
+                .reason(),
+            ValidationReason::Registry
+        );
+
+        let donor = compile("pair.ash");
+        let donor_program = donor.effect_build_input().unwrap().0;
+        let donor_order = Arc::clone(
+            donor_program
+                .registry()
+                .generated_parameter_orders()
+                .values()
+                .next()
+                .unwrap(),
+        );
+        for mutation in 0..8 {
+            let mut forged = identity_effect_traversal(program).unwrap();
+            let mut registry = (*forged.registry).clone();
+            match mutation {
+                0 => registry
+                    .lexical_parameter_row_for_core_test(owner)
+                    .unwrap()
+                    .swap(0, 1),
+                1 => {
+                    let row = registry.lexical_parameter_row_for_core_test(owner).unwrap();
+                    row[1] = row[0].clone();
+                }
+                2 => {
+                    let row = registry.lexical_parameter_row_for_core_test(owner).unwrap();
+                    *row = vec![row[0].clone()].into_boxed_slice();
+                }
+                3 => {
+                    registry
+                        .generated_parameter_orders_for_core_test()
+                        .remove(&owner);
+                }
+                4 => {
+                    assert!(
+                        registry.edit_lexical_parameter_for_core_test(owner, 0, |parameter| {
+                            parameter.spelling = "Changed".to_owned();
+                        })
+                    )
+                }
+                5 => {
+                    assert!(
+                        registry.edit_lexical_parameter_for_core_test(owner, 0, |parameter| {
+                            parameter.origin = Origin::Source(nominal.origin.primary_span());
+                        })
+                    )
+                }
+                6 => {
+                    registry
+                        .generated_parameter_orders_for_core_test()
+                        .insert(owner, Arc::clone(&donor_order));
+                }
+                7 => downgrade(&mut registry, &sources),
+                _ => unreachable!(),
+            }
+            forged.registry = Arc::new(registry);
+            assert!(
+                validate_effect_modules(forged, &sources, &modules).is_err(),
+                "independent Core accepted parser-order mutation {mutation}"
+            );
+        }
+
+        let duplicated = compile("pair_copied.ash");
+        let (program, provenance) = duplicated.effect_build_input().unwrap();
+        let [first, second] = program.registry().lexical_nominals() else {
+            panic!("two separately expanded local newtypes")
+        };
+        assert_ne!(first.id, second.id);
+        let first_parameters = program.registry().nominal_parameters(first.id).unwrap();
+        let second_parameters = program.registry().nominal_parameters(second.id).unwrap();
+        assert!(
+            first_parameters
+                .iter()
+                .all(|first| { second_parameters.iter().all(|second| first.id != second.id) })
+        );
+        let donor_order = Arc::clone(
+            program
+                .registry()
+                .generated_parameter_orders()
+                .get(&second.id)
+                .unwrap(),
+        );
+        let mut forged = identity_effect_traversal(program).unwrap();
+        let mut registry = (*forged.registry).clone();
+        registry
+            .generated_parameter_orders_for_core_test()
+            .insert(first.id, donor_order);
+        forged.registry = Arc::new(registry);
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        assert!(validate_effect_modules(forged, &sources, &modules).is_err());
+
+        let mut reached_linked_validation = false;
+        let result = crate::driver::compile_path_with_effect_validation_for_test(
+            crate::driver::RunConfiguration {
+                entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/surface-macros/procedural-newtype/pair.ash"),
+                roots: ModuleRoots::empty(),
+            },
+            |mut forged, sources, modules, linked| {
+                reached_linked_validation = true;
+                assert!(forged.generated_parameter_anchors.orders().is_empty());
+                assert!(
+                    linked
+                        .groups()
+                        .iter()
+                        .any(|group| !group.generated_parameter_orders().is_empty())
+                );
+                let mut registry = (*forged.registry).clone();
+                downgrade(&mut registry, sources);
+                forged.registry = Arc::new(registry);
+                let result = validate_effect_modules_linked_with_work(
+                    forged,
+                    sources,
+                    modules,
+                    linked,
+                    &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
+                );
+                assert_eq!(
+                    result.as_ref().unwrap_err().reason(),
+                    ValidationReason::Registry
+                );
+                result
+            },
+        );
+        assert!(reached_linked_validation);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn generated_local_type_parameters_reject_tampered_origins() {
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/template-annotation/generic_pair.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the generated generic newtype graph must compile");
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let [nominal] = program.registry().lexical_nominals() else {
+            panic!("one generated local newtype")
+        };
+        let [first, second] = program.registry().nominal_parameters(nominal.id).unwrap() else {
+            panic!("two generated type parameters")
+        };
+        let (first_origin, second_origin) = (first.origin.clone(), second.origin.clone());
+        let Origin::Expansion {
+            invocation,
+            definition,
+        } = first_origin
+        else {
+            panic!("the first parameter retains its construction origin")
+        };
+        let forms = sources
+            .iter()
+            .find(|source| source.id() == definition.source())
+            .unwrap();
+        let caller = sources
+            .iter()
+            .find(|source| source.id() == invocation.source())
+            .unwrap();
+        let other_caller = caller.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let outside = forms.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let invalid = crate::source::Span::unchecked_for_test(
+            forms.id(),
+            ByteRange::new(forms.text().len() as u32 + 1, forms.text().len() as u32 + 2).unwrap(),
+        );
+        let Origin::Expansion {
+            definition: second_definition,
+            ..
+        } = second_origin
+        else {
+            panic!("the second parameter retains its construction origin")
+        };
+        let empty = forms
+            .span(ByteRange::new(definition.range().start(), definition.range().start()).unwrap())
+            .unwrap();
+        let overlap = forms
+            .span(
+                ByteRange::new(definition.range().start(), second_definition.range().end())
+                    .unwrap(),
+            )
+            .unwrap();
+        validate_effect_modules(
+            identity_effect_traversal(program).unwrap(),
+            &sources,
+            &modules,
+        )
+        .expect("independent Core accepts the unmodified graph");
+
+        for mutation in 0..10 {
+            let mut forged = identity_effect_traversal(program).unwrap();
+            let mut registry = (*forged.registry).clone();
+            let replacement = match mutation {
+                0 => Origin::Expansion {
+                    invocation: other_caller,
+                    definition,
+                },
+                1 => Origin::Expansion {
+                    invocation: definition,
+                    definition,
+                },
+                2 => Origin::Expansion {
+                    invocation,
+                    definition: invocation,
+                },
+                3 => Origin::Expansion {
+                    invocation,
+                    definition: outside,
+                },
+                4 => Origin::Expansion {
+                    invocation,
+                    definition: invalid,
+                },
+                5 | 6 => second_origin.clone(),
+                7 => Origin::Source(definition),
+                8 => Origin::Expansion {
+                    invocation,
+                    definition: empty,
+                },
+                9 => Origin::Expansion {
+                    invocation,
+                    definition: overlap,
+                },
+                _ => unreachable!(),
+            };
+            assert!(registry.replace_first_lexical_parameter_origin_for_core_test(0, replacement));
+            if mutation == 6 {
+                assert!(
+                    registry.replace_first_lexical_parameter_origin_for_core_test(
+                        1,
+                        first_origin.clone(),
+                    )
+                );
+            }
+            forged.registry = Arc::new(registry);
+            assert!(
+                validate_effect_modules(forged, &sources, &modules).is_err(),
+                "independent Core accepted parameter-origin mutation {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_local_newtypes_still_reject_wrapped_origins() {
+        for related in [false, true] {
+            let mut fixture = LinkedCoreValidationFixture::compile(
+                "",
+                "main : Unit -> Int\nmain () = {\nnewtype Token = Token(Int)\nmatch Token(42) {\nToken(value) => value\n}\n}\n",
+                &[],
+            );
+            let registry = Arc::get_mut(&mut fixture.program.registry).unwrap();
+            let (nominal, constructor) = registry.first_lexical_newtype_for_core_test().unwrap();
+            for origin in [&mut nominal.origin, &mut constructor.origin] {
+                *origin = if related {
+                    Origin::Related {
+                        primary: Box::new(origin.clone()),
+                        related: Vec::new(),
+                    }
+                } else {
+                    Origin::Generated {
+                        cause: Box::new(origin.clone()),
+                        reason: crate::source::GeneratedReason::TypeChecking,
+                    }
+                };
+            }
+            assert!(
+                fixture.validate().is_err(),
+                "wrapped source origins must be refused"
+            );
         }
     }
 
@@ -36639,6 +37785,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![
                 StoredNode {
@@ -36704,6 +37851,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![
                 StoredNode {
@@ -36779,6 +37927,7 @@ mod tests {
                 registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
                 method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
                 method_evidence_anchors: Box::new([]),
+                generated_parameter_anchors: Arc::default(),
                 arena,
                 nodes: vec![StoredNode {
                     dialect: DialectId::PURE,
@@ -36824,6 +37973,7 @@ mod tests {
                         super::super::dialect::MethodEvidenceCatalog::default(),
                     ),
                     method_evidence_anchors: Box::new([]),
+                    generated_parameter_anchors: Arc::default(),
                     arena,
                     nodes: vec![StoredNode {
                         dialect: DialectId::PURE,
@@ -36851,6 +38001,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
@@ -36875,6 +38026,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena: super::super::dialect::ArenaId::new(195),
             nodes: Vec::new(),
             root: NodeId::new(super::super::dialect::ArenaId::new(195), 0),
@@ -36905,6 +38057,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena: super::super::dialect::ArenaId::new(196),
             nodes: Vec::new(),
             root: NodeId::new(super::super::dialect::ArenaId::new(196), 0),
@@ -36944,6 +38097,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
@@ -36997,6 +38151,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
@@ -37048,6 +38203,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
@@ -37072,6 +38228,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![
                 StoredNode {
@@ -37166,6 +38323,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes,
             root,
@@ -37207,6 +38365,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![
                 StoredNode {
@@ -37286,6 +38445,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
@@ -37325,6 +38485,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![
                 StoredNode {
@@ -37439,6 +38600,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![
                 StoredNode {
@@ -37592,6 +38754,7 @@ mod tests {
             registry: Arc::new(registry),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
@@ -37654,6 +38817,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![
                 StoredNode {
@@ -38154,6 +39318,7 @@ mod tests {
             registry: Arc::new(registry),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: Vec::new(),
             root: NodeId::new(arena, 0),
@@ -38247,6 +39412,7 @@ mod tests {
             registry: Arc::new(registry),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: Vec::new(),
             root: NodeId::new(arena, 0),
@@ -38308,6 +39474,7 @@ mod tests {
             registry: Arc::new(registry),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: Vec::new(),
             root: NodeId::new(arena, 0),
@@ -38536,6 +39703,7 @@ mod tests {
             registry: Arc::new(registry),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![
                 StoredNode {
@@ -38754,6 +39922,7 @@ mod tests {
             registry: Arc::new(registry),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes,
             root: NodeId::new(arena, 0),
@@ -38826,6 +39995,7 @@ mod tests {
                         super::super::dialect::MethodEvidenceCatalog::default(),
                     ),
                     method_evidence_anchors: Box::new([]),
+                    generated_parameter_anchors: Arc::default(),
                     arena,
                     nodes: vec![
                         StoredNode {
@@ -38920,6 +40090,7 @@ mod tests {
                         super::super::dialect::MethodEvidenceCatalog::default(),
                     ),
                     method_evidence_anchors: Box::new([]),
+                    generated_parameter_anchors: Arc::default(),
                     arena,
                     nodes: vec![
                         StoredNode {
@@ -38998,6 +40169,7 @@ mod tests {
                         super::super::dialect::MethodEvidenceCatalog::default(),
                     ),
                     method_evidence_anchors: Box::new([]),
+                    generated_parameter_anchors: Arc::default(),
                     arena,
                     nodes: vec![
                         StoredNode {
@@ -39104,6 +40276,7 @@ mod tests {
                         super::super::dialect::MethodEvidenceCatalog::default(),
                     ),
                     method_evidence_anchors: Box::new([]),
+                    generated_parameter_anchors: Arc::default(),
                     arena,
                     nodes: vec![
                         StoredNode {
@@ -39231,6 +40404,7 @@ mod tests {
                         super::super::dialect::MethodEvidenceCatalog::default(),
                     ),
                     method_evidence_anchors: Box::new([]),
+                    generated_parameter_anchors: Arc::default(),
                     arena,
                     nodes: vec![StoredNode {
                         dialect: DialectId::PURE,
@@ -39323,6 +40497,7 @@ mod tests {
                         super::super::dialect::MethodEvidenceCatalog::default(),
                     ),
                     method_evidence_anchors: Box::new([]),
+                    generated_parameter_anchors: Arc::default(),
                     arena,
                     nodes: vec![StoredNode {
                         dialect: DialectId::PURE,
@@ -39941,6 +41116,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: Vec::new(),
             root: NodeId::new(arena, 0),
@@ -39979,6 +41155,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![unit, function],
             root: NodeId::new(arena, 1),
@@ -40017,6 +41194,7 @@ mod tests {
                 registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
                 method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
                 method_evidence_anchors: Box::new([]),
+                generated_parameter_anchors: Arc::default(),
                 arena,
                 nodes: vec![stored],
                 root: NodeId::new(arena, 0),
@@ -40044,6 +41222,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![cyclic],
             root: NodeId::new(arena, 0),
@@ -40100,6 +41279,7 @@ mod tests {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
             method_evidence_anchors: Box::new([]),
+            generated_parameter_anchors: Arc::default(),
             arena,
             nodes: vec![group, function, unit],
             root: NodeId::new(arena, 0),

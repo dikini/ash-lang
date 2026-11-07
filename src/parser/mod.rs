@@ -1,5 +1,7 @@
 //! Event-producing recursive-descent parsing and checked surface projection.
 
+#[cfg(test)]
+mod checkpoint_tests;
 mod cst;
 mod event;
 mod expression;
@@ -12,13 +14,17 @@ use std::ops::Deref;
 pub use crate::syntax_resource::{ResourceFailure, SYNTAX_WORK_LIMIT};
 pub use cst::{ConcreteElement, ConcreteNode, ConcreteTree, InternalReason};
 pub use event::Event;
+pub(crate) use project::module_span_from_checkpoint;
+pub(crate) use project::project_module_header;
+pub(crate) use project::project_module_retaining_templates;
 pub(crate) use project::structural_weight as source_structural_weight;
 pub use project::{ProjectionError, project_module};
 
 use crate::{
     diagnostic::{Diagnostic, SourceLabel},
     lexer::{Lexed, TokenKind},
-    source::Span,
+    source::{SourceFile, Span},
+    surface::SurfaceImport,
     syntax_resource::SyntaxBudget,
 };
 
@@ -45,6 +51,16 @@ pub enum NodeKind {
     ModulePath,
     /// One selected public spelling and its optional local alias.
     ImportItem,
+    /// One public expression syntax declaration.
+    SyntaxDeclaration,
+    /// One named syntax matcher capture.
+    SyntaxCapture,
+    /// The balanced token contents of an expression syntax template.
+    TemplateBody,
+    /// One imported expression syntax invocation.
+    SyntaxInvocation,
+    /// One identifier or expression captured by an invocation.
+    SyntaxArgument,
     /// One passive source-authored foreign library.
     ForeignLibrary,
     /// One structured foreign member.
@@ -496,6 +512,9 @@ impl ParseDiagnostic {
 }
 
 /// Parses one complete lexer result into an error-bearing concrete tree.
+///
+/// Template bodies are retained as balanced syntax. Their contents are parsed
+/// after capture substitution, when the relevant syntax imports are known.
 #[must_use]
 pub fn parse(lexed: Lexed) -> ConcreteTree {
     let (tokens, lexical_diagnostics, syntax_budget, lexical_resource_failure) = lexed.into_parts();
@@ -520,6 +539,297 @@ pub(crate) fn parse_with_budget(lexed: Lexed, syntax_budget: &mut SyntaxBudget) 
     tree
 }
 
+pub(crate) fn parse_with_budget_and_header(
+    source: &SourceFile,
+    lexed: Lexed,
+    syntax_budget: &mut SyntaxBudget,
+) -> (ConcreteTree, Result<Vec<SurfaceImport>, ProjectionError>) {
+    let (tokens, lexical_diagnostics, _, lexical_failure) = lexed.into_parts();
+    if let Some(failure) = lexical_failure {
+        return (
+            cst::resource_limited(tokens, lexical_diagnostics, Vec::new(), failure),
+            Err(ProjectionError::ResourceLimit(failure)),
+        );
+    }
+    let (checkpoint, retained_budget) =
+        parse_module_header(tokens, lexical_diagnostics, syntax_budget.clone());
+    let imports = project_module_header(source, &checkpoint);
+    let (tree, retained_budget) = finish_module_from_checkpoint(checkpoint, retained_budget);
+    *syntax_budget = retained_budget;
+    (tree, imports)
+}
+
+/// Parser-issued token order for one generated declaration. These coordinates
+/// are separate from the diagnostic origins supplied for generated syntax.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ParsedParameterOrder {
+    invocation: Span,
+    occurrence_extent: bool,
+    declaration: std::ops::Range<usize>,
+    name: crate::surface::SurfaceName,
+    span: Span,
+    parameters: Box<[ParsedParameterOccurrence]>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ParsedParameterOccurrence {
+    name: crate::surface::SurfaceName,
+    tokens: std::ops::Range<usize>,
+}
+
+impl ParsedParameterOrder {
+    pub(crate) fn invocation(&self) -> Span {
+        self.invocation
+    }
+    pub(crate) fn occurrence_extent(&self) -> bool {
+        self.occurrence_extent
+    }
+    pub(crate) fn declaration(&self) -> &std::ops::Range<usize> {
+        &self.declaration
+    }
+    pub(crate) fn name(&self) -> &crate::surface::SurfaceName {
+        &self.name
+    }
+    pub(crate) fn span(&self) -> Span {
+        self.span
+    }
+    pub(crate) fn parameters(&self) -> &[ParsedParameterOccurrence] {
+        &self.parameters
+    }
+}
+
+impl ParsedParameterOccurrence {
+    pub(crate) fn name(&self) -> &crate::surface::SurfaceName {
+        &self.name
+    }
+    pub(crate) fn tokens(&self) -> &std::ops::Range<usize> {
+        &self.tokens
+    }
+}
+
+/// A failure while parsing a transformer result with protected fragments.
+#[derive(Clone, Debug)]
+pub(crate) enum MacroParseFailure {
+    Syntax {
+        diagnostics: Vec<ParseDiagnostic>,
+        resource: Option<ResourceFailure>,
+    },
+    Invalid,
+}
+
+pub(crate) fn parse_macro_expression(
+    source: &SourceFile,
+    invocation: Span,
+    construction: Option<(Span, usize)>,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
+) -> Result<crate::surface::SurfaceExpr, MacroParseFailure> {
+    parse_macro_expression_inner(
+        source,
+        invocation,
+        construction,
+        output,
+        contexts,
+        &[],
+        frame,
+    )
+}
+
+pub(crate) fn parse_template_admission(
+    source: &SourceFile,
+    invocation: Span,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    placeholders: &[crate::surface::SurfaceName],
+) -> Result<crate::surface::SurfaceExpr, MacroParseFailure> {
+    parse_macro_expression_inner(
+        source,
+        invocation,
+        None,
+        output,
+        contexts,
+        placeholders,
+        None,
+    )
+}
+
+fn parse_macro_expression_inner(
+    source: &SourceFile,
+    invocation: Span,
+    construction: Option<(Span, usize)>,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    placeholders: &[crate::surface::SurfaceName],
+    frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
+) -> Result<crate::surface::SurfaceExpr, MacroParseFailure> {
+    use crate::source::ByteRange;
+    use crate::syntax::MacroOutputNode;
+    let start = invocation.range().start();
+    let anchor = source
+        .span(ByteRange::new(start, start).map_err(|_| MacroParseFailure::Invalid)?)
+        .map_err(|_| MacroParseFailure::Invalid)?;
+    let end = u32::try_from(source.text().len()).map_err(|_| MacroParseFailure::Invalid)?;
+    let eof = source
+        .span(ByteRange::new(end, end).map_err(|_| MacroParseFailure::Invalid)?)
+        .map_err(|_| MacroParseFailure::Invalid)?;
+    let mut tokens = Vec::new();
+    let mut original_nodes = std::collections::HashMap::new();
+    let mut admission_identifiers = std::collections::HashSet::new();
+    let mut syntax_selections = std::collections::HashMap::new();
+    let mut syntax_spellings = std::collections::HashMap::new();
+    let mut fragment_count = 0usize;
+    let mut pieces = output.into_iter().rev().collect::<Vec<_>>();
+    while let Some(piece) = pieces.pop() {
+        let forwarded = matches!(&piece, MacroOutputNode::ForwardedExpression(_, _));
+        let kind = match piece {
+            MacroOutputNode::Expression(expression, origin)
+            | MacroOutputNode::ForwardedExpression(expression, origin) => {
+                original_nodes.insert(
+                    tokens.len(),
+                    if forwarded {
+                        MacroOutputNode::ForwardedExpression(expression, origin)
+                    } else {
+                        MacroOutputNode::Expression(expression, origin)
+                    },
+                );
+                let name = format!("__ash_fragment_{fragment_count}");
+                fragment_count += 1;
+                TokenKind::Identifier(name)
+            }
+            MacroOutputNode::Identifier(identifier, origin) => {
+                if placeholders.iter().any(|name| name == &identifier) {
+                    admission_identifiers.insert(tokens.len());
+                }
+                original_nodes.insert(
+                    tokens.len(),
+                    MacroOutputNode::Identifier(identifier.clone(), origin),
+                );
+                if let Some(selection) = contexts.select(&identifier) {
+                    syntax_selections.insert(tokens.len(), selection.clone());
+                }
+                syntax_spellings.insert(
+                    tokens.len(),
+                    std::sync::Arc::<str>::from(identifier.text.as_str()),
+                );
+                let uppercase = identifier
+                    .text
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_uppercase);
+                let spelling = identifier.text.clone();
+                if uppercase {
+                    TokenKind::UpperIdentifier(spelling)
+                } else {
+                    TokenKind::Identifier(spelling)
+                }
+            }
+            MacroOutputNode::Token(kind, spelling, origin) => {
+                syntax_spellings.insert(tokens.len(), std::sync::Arc::clone(&spelling));
+                original_nodes.insert(
+                    tokens.len(),
+                    MacroOutputNode::Token(kind.clone(), spelling, origin),
+                );
+                kind
+            }
+            MacroOutputNode::Group(delimiter, children, origin) => {
+                original_nodes.insert(
+                    tokens.len(),
+                    MacroOutputNode::Group(delimiter.clone(), Vec::new(), origin.clone()),
+                );
+                let (open, close) = match delimiter {
+                    crate::syntax::MacroDelimiter::Parentheses => {
+                        (TokenKind::LeftParen, TokenKind::RightParen)
+                    }
+                    crate::syntax::MacroDelimiter::Braces => {
+                        (TokenKind::LeftBrace, TokenKind::RightBrace)
+                    }
+                };
+                let close_spelling = match close {
+                    TokenKind::RightParen => ")",
+                    TokenKind::RightBrace => "}",
+                    _ => unreachable!(),
+                };
+                pieces.push(MacroOutputNode::Token(close, close_spelling.into(), origin));
+                pieces.extend(children.into_iter().rev());
+                open
+            }
+            MacroOutputNode::Splice(_) => return Err(MacroParseFailure::Invalid),
+        };
+        tokens.push(crate::lexer::Token { kind, span: anchor });
+    }
+    let mut diagnostic_spans = original_nodes
+        .iter()
+        .map(|(index, node)| {
+            let origin = match node {
+                MacroOutputNode::Expression(_, origin)
+                | MacroOutputNode::ForwardedExpression(_, origin)
+                | MacroOutputNode::Identifier(_, origin)
+                | MacroOutputNode::Token(_, _, origin)
+                | MacroOutputNode::Group(_, _, origin) => origin,
+                MacroOutputNode::Splice(_) => unreachable!(),
+            };
+            (*index, origin.primary())
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    diagnostic_spans.insert(tokens.len(), invocation);
+    tokens.push(crate::lexer::Token {
+        kind: TokenKind::EndOfFile,
+        span: eof,
+    });
+    let mut parser = Parser {
+        tokens: &tokens,
+        position: 0,
+        events: Vec::new(),
+        diagnostics: Vec::new(),
+        pending_recoveries: Vec::new(),
+        recovered_expression_group_boundary: false,
+        nesting_depth: 0,
+        resource_failure: None,
+        syntax_budget: SyntaxBudget::default(),
+        syntax_work_exhausted: false,
+        in_template: false,
+        syntax: &[],
+        syntax_source: Some(source),
+        syntax_selections: Some(&syntax_selections),
+        syntax_spellings: Some(&syntax_spellings),
+        diagnostic_spans: Some(&diagnostic_spans),
+        admission_identifiers: Some(&admission_identifiers),
+        syntax_stops: Vec::new(),
+    };
+    parser.start(NodeKind::Module);
+    grammar::expression(&mut parser);
+    if !parser.at(&TokenKind::EndOfFile) {
+        parser.error_at_current(ParseReason::UnexpectedToken);
+    }
+    if !parser.diagnostics.is_empty() || parser.resource_failure.is_some() {
+        return Err(MacroParseFailure::Syntax {
+            diagnostics: parser.diagnostics,
+            resource: parser.resource_failure,
+        });
+    }
+    let _ = parser.bump();
+    parser.finish();
+    let Parser {
+        events,
+        diagnostics,
+        resource_failure,
+        ..
+    } = parser;
+    let tree = cst::build(tokens, Vec::new(), diagnostics, events, resource_failure);
+    let expression = project::project_macro_expression(
+        source,
+        invocation,
+        construction,
+        &tree,
+        &original_nodes,
+        &admission_identifiers,
+        frame,
+    )
+    .map_err(|_| MacroParseFailure::Invalid)?;
+    Ok(expression)
+}
+
 fn parse_parts(
     tokens: Vec<crate::lexer::Token>,
     lexical_diagnostics: Vec<Diagnostic<crate::lexer::LexReason>>,
@@ -533,7 +843,59 @@ fn parse_parts(
         );
     }
 
-    let (events, diagnostics, resource_failure, syntax_work_exhausted, syntax_budget) = {
+    let (checkpoint, syntax_budget) =
+        parse_module_header(tokens, lexical_diagnostics, syntax_budget);
+    finish_module_from_checkpoint(checkpoint, syntax_budget)
+}
+
+/// Retained parser state at the boundary between a module's header and body.
+///
+/// The token stream and lexical diagnostics remain with their parser state;
+/// the graph-wide budget remains with the caller. The event stream still has
+/// its module node open and can only be finished once.
+pub(crate) struct ParserCheckpoint {
+    tokens: Vec<crate::lexer::Token>,
+    lexical_diagnostics: Vec<Diagnostic<crate::lexer::LexReason>>,
+    position: usize,
+    events: Vec<Event>,
+    diagnostics: Vec<ParseDiagnostic>,
+    pending_recoveries: Vec<usize>,
+    recovered_expression_group_boundary: bool,
+    nesting_depth: usize,
+    resource_failure: Option<ResourceFailure>,
+    syntax_work_exhausted: bool,
+}
+
+impl ParserCheckpoint {
+    pub(crate) fn lexical_diagnostics(&self) -> &[Diagnostic<crate::lexer::LexReason>] {
+        &self.lexical_diagnostics
+    }
+
+    pub(crate) fn parse_diagnostics(&self) -> &[ParseDiagnostic] {
+        &self.diagnostics
+    }
+
+    pub(crate) const fn resource_failure(&self) -> Option<ResourceFailure> {
+        self.resource_failure
+    }
+}
+
+pub(crate) fn parse_module_header(
+    tokens: Vec<crate::lexer::Token>,
+    lexical_diagnostics: Vec<Diagnostic<crate::lexer::LexReason>>,
+    syntax_budget: SyntaxBudget,
+) -> (ParserCheckpoint, SyntaxBudget) {
+    let (
+        position,
+        events,
+        diagnostics,
+        pending_recoveries,
+        recovered_expression_group_boundary,
+        nesting_depth,
+        resource_failure,
+        syntax_work_exhausted,
+        syntax_budget,
+    ) = {
         let mut parser = Parser {
             tokens: &tokens,
             position: 0,
@@ -545,16 +907,97 @@ fn parse_parts(
             resource_failure: None,
             syntax_budget,
             syntax_work_exhausted: false,
+            in_template: false,
+            syntax: &[],
+            syntax_source: None,
+            syntax_selections: None,
+            syntax_spellings: None,
+            diagnostic_spans: None,
+            admission_identifiers: None,
+            syntax_stops: Vec::new(),
         };
-        grammar::module(&mut parser);
+        grammar::module_header(&mut parser);
         (
+            parser.position,
             parser.events,
             parser.diagnostics,
+            parser.pending_recoveries,
+            parser.recovered_expression_group_boundary,
+            parser.nesting_depth,
             parser.resource_failure,
             parser.syntax_work_exhausted,
             parser.syntax_budget,
         )
     };
+    let checkpoint = ParserCheckpoint {
+        tokens,
+        lexical_diagnostics,
+        position,
+        events,
+        diagnostics,
+        pending_recoveries,
+        recovered_expression_group_boundary,
+        nesting_depth,
+        resource_failure,
+        syntax_work_exhausted,
+    };
+    (checkpoint, syntax_budget)
+}
+
+pub(crate) fn finish_module_from_checkpoint(
+    checkpoint: ParserCheckpoint,
+    syntax_budget: SyntaxBudget,
+) -> (ConcreteTree, SyntaxBudget) {
+    finish_module_from_checkpoint_with_syntax(checkpoint, syntax_budget, None, &[])
+}
+
+pub(crate) fn finish_module_from_checkpoint_with_syntax(
+    checkpoint: ParserCheckpoint,
+    syntax_budget: SyntaxBudget,
+    source: Option<&SourceFile>,
+    syntax: &[crate::syntax::SelectedSyntax],
+) -> (ConcreteTree, SyntaxBudget) {
+    let ParserCheckpoint {
+        tokens,
+        lexical_diagnostics,
+        position,
+        events,
+        diagnostics,
+        pending_recoveries,
+        recovered_expression_group_boundary,
+        nesting_depth,
+        resource_failure,
+        syntax_work_exhausted,
+    } = checkpoint;
+    let mut parser = Parser {
+        tokens: &tokens,
+        position,
+        events,
+        diagnostics,
+        pending_recoveries,
+        recovered_expression_group_boundary,
+        nesting_depth,
+        resource_failure,
+        syntax_budget,
+        syntax_work_exhausted,
+        in_template: false,
+        syntax,
+        syntax_source: source,
+        syntax_selections: None,
+        syntax_spellings: None,
+        diagnostic_spans: None,
+        admission_identifiers: None,
+        syntax_stops: Vec::new(),
+    };
+    grammar::module_body(&mut parser);
+    let Parser {
+        events,
+        diagnostics,
+        resource_failure,
+        syntax_work_exhausted,
+        syntax_budget,
+        ..
+    } = parser;
     if syntax_work_exhausted {
         return (
             cst::resource_limited(
@@ -589,9 +1032,75 @@ pub(crate) struct Parser<'tokens> {
     resource_failure: Option<ResourceFailure>,
     syntax_budget: SyntaxBudget,
     syntax_work_exhausted: bool,
+    in_template: bool,
+    syntax: &'tokens [crate::syntax::SelectedSyntax],
+    syntax_source: Option<&'tokens SourceFile>,
+    syntax_selections:
+        Option<&'tokens std::collections::HashMap<usize, crate::syntax::SelectedSyntax>>,
+    syntax_spellings: Option<&'tokens std::collections::HashMap<usize, std::sync::Arc<str>>>,
+    diagnostic_spans: Option<&'tokens std::collections::HashMap<usize, Span>>,
+    admission_identifiers: Option<&'tokens std::collections::HashSet<usize>>,
+    syntax_stops: Vec<(TokenKind, String, usize)>,
 }
 
 impl Parser<'_> {
+    fn is_admission_identifier(&self) -> bool {
+        self.nth_is_admission_identifier(0)
+    }
+
+    fn nth_is_admission_identifier(&self, distance: usize) -> bool {
+        self.position.checked_add(distance).is_some_and(|position| {
+            self.admission_identifiers
+                .is_some_and(|indices| indices.contains(&position))
+        })
+    }
+
+    fn at_upper_identifier(&self) -> bool {
+        self.is_admission_identifier()
+            || matches!(self.current(), Some(TokenKind::UpperIdentifier(_)))
+    }
+
+    fn at_syntax_name(&self) -> bool {
+        self.selected_syntax().is_some()
+    }
+
+    fn selected_syntax(&self) -> Option<&crate::syntax::SelectedSyntax> {
+        if let Some(selections) = self.syntax_selections {
+            return selections.get(&self.position);
+        }
+        let Some(TokenKind::Identifier(name)) = self.current() else {
+            return None;
+        };
+        self.syntax.iter().find(|syntax| syntax.name == *name)
+    }
+
+    fn at_syntax_literal(&self, kind: &TokenKind, spelling: &str) -> bool {
+        let Some(token) = self.tokens.get(self.position) else {
+            return false;
+        };
+        if token.kind != *kind {
+            return false;
+        }
+        if let Some(spellings) = self.syntax_spellings {
+            return spellings
+                .get(&self.position)
+                .is_some_and(|found| found.as_ref() == spelling);
+        }
+        let Some(source) = self.syntax_source else {
+            return false;
+        };
+        let range = token.span.range();
+        source
+            .text()
+            .get(range.start() as usize..range.end() as usize)
+            == Some(spelling)
+    }
+
+    fn at_syntax_stop(&self) -> bool {
+        self.syntax_stops.iter().any(|(kind, spelling, depth)| {
+            *depth == self.nesting_depth && self.at_syntax_literal(kind, spelling)
+        })
+    }
     fn start(&mut self, kind: NodeKind) {
         let _ = self.retain_event(Event::Start(kind));
     }
@@ -719,6 +1228,11 @@ impl Parser<'_> {
     }
 
     fn current_span(&self) -> Option<Span> {
+        if let Some(spans) = self.diagnostic_spans
+            && let Some(span) = spans.get(&self.position)
+        {
+            return Some(*span);
+        }
         self.tokens
             .get(self.position)
             .or_else(|| self.tokens.last())
@@ -960,6 +1474,7 @@ fn retained_token(kind: &TokenKind) -> FoundToken {
         TokenKind::Greater => FoundToken::Spelling(">"),
         TokenKind::Semicolon => FoundToken::Spelling(";"),
         TokenKind::At => FoundToken::Spelling("@"),
+        TokenKind::Dollar => FoundToken::Spelling("$"),
         TokenKind::Dot => FoundToken::Spelling("."),
         TokenKind::LineEnd => FoundToken::LineEnd,
         TokenKind::EndOfFile => FoundToken::EndOfFile,

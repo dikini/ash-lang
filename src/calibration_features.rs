@@ -1,4 +1,4 @@
-//! Diagnostic input metrics collected before resolution or inference.
+//! Diagnostic input metrics over retained source-authored surfaces.
 //!
 //! Each loaded module contributes once, including builtin and foreign source.
 //! `nodes` counts visited structural surface records: modules, imports and
@@ -80,7 +80,8 @@ enum Visit<'a> {
 }
 
 /// Emits one immutable source-graph feature record for the calibration harness.
-/// The caller places this entire observation in a separate metrics phase.
+/// The caller waits for every source-authored surface and places the observation
+/// in a separate metrics phase; expanded syntax is not included.
 pub(crate) fn observe_input(graph: &ModuleGraph) {
     let mut features = Features::default();
     let mut sources = Vec::with_capacity(graph.modules().len());
@@ -325,8 +326,18 @@ fn walk<'a>(features: &mut Features, pending: &mut Vec<Visit<'a>>) {
                     | SurfaceExprKind::Boolean(_)
                     | SurfaceExprKind::Unit
                     | SurfaceExprKind::Name(_)
+                    | SurfaceExprKind::TemplateSplice(_)
                     | SurfaceExprKind::Discard
                     | SurfaceExprKind::Retain => {}
+                    SurfaceExprKind::SyntaxInvocation { captures, .. } => {
+                        for capture in captures {
+                            if let crate::surface::SurfaceSyntaxCapture::Expression(expression) =
+                                capture
+                            {
+                                pending.push(Visit::Expr(&expression.expression, scope));
+                            }
+                        }
+                    }
                     SurfaceExprKind::Tuple(elements) => {
                         pending.extend(elements.iter().map(|value| Visit::Expr(value, scope)));
                     }
@@ -425,7 +436,8 @@ fn walk<'a>(features: &mut Features, pending: &mut Vec<Visit<'a>>) {
                             pending.push(Visit::Pattern(payload));
                         }
                     }
-                    SurfacePatternKind::Binder(_)
+                    SurfacePatternKind::TemplateSplice(_)
+                    | SurfacePatternKind::Binder(_)
                     | SurfacePatternKind::Wildcard
                     | SurfacePatternKind::Boolean(_)
                     | SurfacePatternKind::Unit => {}

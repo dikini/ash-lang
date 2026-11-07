@@ -2,7 +2,10 @@
 
 - ID: `AD-0005`
 - Status: accepted
-- Related: [AD-0006: Front-End Semantic Boundaries](AD-0006-front-end-semantic-boundaries.md), [DN-0003: Parser Architecture](../design/DN-0003-parser-architecture.md), [DN-0016: First Mini-Ash Corpus Stratum](../design/DN-0016-first-mini-ash-corpus.md), [first-stratum parser comparison](../design/mini-ash/first-stratum/comparisons/parser-architecture.md)
+- Related: [AD-0006](AD-0006-front-end-semantic-boundaries.md),
+  [DN-0003](../design/DN-0003-parser-architecture.md),
+  [DN-0016](../design/DN-0016-first-mini-ash-corpus.md),
+  [first-stratum parser comparison](../design/mini-ash/first-stratum/comparisons/parser-architecture.md)
 
 ## Decision
 
@@ -19,9 +22,34 @@ layer.
 
 One explicit parser-dialect assembly point lists the global-definition forms,
 expression prefix forms, infix entries, pattern forms, and type forms available
-to that dialect. Feature parsers own their local grammar and recovery behavior;
-the assembly point remains closed so the implementation can review the exact
-accepted forms.
+to that dialect. Feature parsers own their local grammar and recovery behavior.
+The assembly point remains closed over built-in parsing mechanisms.
+
+For the expression-syntax transition in CP-0033, that assembly includes one
+built-in loose expression-prefix mechanism parameterized by an immutable
+imported matcher environment. The environment contains selected
+syntax identities, local leading spellings, restricted matcher data, definition
+origins, import routes, and ownership of their checked dependencies. It cannot
+install a parser function, operator, precedence entry, or recovery callback.
+The [grammar](../../spec/syntax.md#grammar) and
+[syntax-expansion specification](../../spec/syntax-expansion.md) describe its
+language forms.
+
+Fixed import-header discovery precedes body parsing. The loader discovers and
+canonicalizes declared dependencies without executing transformers. The
+compiler checks dependencies before supplying their selected syntax exports to
+the importer body parser. Context-bearing generated syntax uses the matcher
+environment retained by its identifiers. The parser recognizes invocations and
+captures; the expansion phase executes transformers. A selected invocation
+does not fall back to ordinary application after a parse failure.
+
+The existing precedence owner handles operators and application. The new prefix
+mechanism uses explicit enclosing expression boundaries and literal stop tokens;
+it does not become an application primary or add another operator parser.
+Protected expression fragments retain their parsed grouping without converting
+syntax to text. All source and generated input retains token-complete recovery
+information. Missing or error-bearing structure cannot become a capture,
+transformer input, or projected surface input.
 
 Parser events retain consumed tokens, delimiters, missing-token markers, error
 nodes, and structured diagnostics. A separate projection produces the spanned
@@ -55,6 +83,15 @@ Event-producing recursive descent kept grammar control explicit while
 separating token-complete recovery data from the resolver's validated surface
 input.
 
+CP-0033 requires dependency-selected natural syntax before importer body parsing.
+A fully static spelling list cannot represent those imports. Treating restricted
+matchers as data for one built-in prefix mechanism preserves the existing parser
+boundaries. Executable grammar callbacks would add parsing, recovery, and
+execution contracts outside the accepted slice; printing expansions and
+reparsing them would lose protected grouping and context. This amendment records
+the architecture for the first expression-macro slice; it does not create a
+broader grammar extension API.
+
 ## Consequences
 
 - Tokens carry exact source spans and preserve layout boundaries required by the
@@ -69,6 +106,9 @@ input.
   dialect entry rather than the infix parser.
 - Parser diagnostics carry structured reasons, primary and related spans,
   expected forms, and recovery context independently from rendering.
+- The imported matcher environment has checked dependency provenance and remains
+  owned for every source or generated parse that consumes it. Header discovery,
+  matcher recognition, and transformer execution are separate operations.
 - Formatter and editor tooling may reuse concrete syntax without making it
   language or semantic authority.
 - This decision does not choose Ash grammar, layout, semicolons, multiline
@@ -93,3 +133,11 @@ Parser implementation and every grammar-changing task must show:
 - locality evidence for adding one operator and one nested construct;
 - agreement between the implementation grammar and the applicable normative
   grammar without publishing parser extension points as Ash syntax.
+
+The expression-macro acceptance verifies the data-defined prefix mechanism against
+CP-0033's M01/M02/M07/M08 cases: checked imports reach the real body parser,
+nested forms consume their own separators, protected fragments keep grouping,
+and recovery-bearing structures are rejected before expansion. Existing valid
+no-syntax inputs retain their parse and applicable diagnostic regression
+evidence. The retained milestone implements this extension; its acceptance
+record remains in Git history.

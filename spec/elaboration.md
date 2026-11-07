@@ -10,6 +10,12 @@ independent validation once.
 
 ## Surface erasure
 
+Syntax declarations, imports, matchers, and expansion-service requests are
+compile-time forms. An admitted expansion is resolved and checked as an
+ordinary expression before it enters the semantic terms below. The checked
+transformer entry and its independently validated Core are described in
+[syntax expansion](syntax-expansion.md#transformer-execution).
+
 Parentheses group expressions and types but do not survive as semantic terms.
 Resolved spellings become their stable binder identities. Literal, application,
 and primitive-operation structure otherwise remains direct. Tuples,
@@ -183,6 +189,13 @@ multi-parameter anonymous function each receive one tuple-domain value and
 match it with the source pattern in the function body.
 
 ## Module linking and entry generation
+
+Syntax expansion retains the checked declaration facts and executable
+dependency fragments needed by surviving references. Linking uses those
+original checked modules without rechecking their bodies. The new compile-time
+entry and final linked program each cross their applicable independent Core
+validation boundary. Syntax imports do not become runtime module values or
+ordinary caller imports.
 
 After every module checks, linking combines the complete defining nominal,
 constructor, interface, effect, operation, and implementation registries of all

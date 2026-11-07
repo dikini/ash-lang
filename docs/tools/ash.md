@@ -253,12 +253,55 @@ once.
 `--root builtin=path` reports `invocation.reserved-root` before inspecting
 configured paths. `@builtin.cell`, `@builtin.generic_cell`, `@builtin.bytes`,
 `@builtin.string`, `@builtin.integer`, `@builtin.foreign`, `@builtin.regions`,
-`@builtin.retained_control` and `@builtin.network` are the public fixed modules
+`@builtin.retained_control`, `@builtin.network` and `@builtin.compiler.syntax`
+are the public fixed modules
 beneath this root; another path
 reports `module.unknown-builtin`. Ordinary aliases, targeted imports and
 facade re-exports preserve the API's identity. Legacy lowercase `resource cell`
 acquisition requires a direct builtin import. Named generic family acquisition
 follows its defining identity through aliases and facades.
+
+## Imported expression syntax
+
+A module may export a public expression matcher as a template or a checked
+Ash transformer. An importing module activates it with a targeted `syntax`
+item; a complete import alone does not. The following files are the
+parenthesized application and precedence case checked by
+`imported_if_preserves_boundaries_nesting_and_line_endings`:
+
+```ash
+pub syntax if $condition:expr then $yes:expr else $no:expr => {
+    match $condition {
+        true => $yes
+        false => $no
+    }
+}
+```
+
+Save that file as `acceptance_if_forms.ash` beside this entry module:
+
+```ash
+import acceptance_if_forms (syntax if)
+apply : Int -> Int
+apply value = value
+main : Unit -> Int
+main () = apply (if true then 40 else 0 + 1) + 2
+```
+
+Running `ash entry.ash` prints `42 : Int`. The final capture includes `0 + 1`;
+the enclosing parentheses make the invocation an argument to `apply`.
+Malformed captures and missing matcher literals report syntax failures rather
+than falling back to ordinary application. An unused template is checked for
+syntax, while its free names resolve in the defining context when expanded.
+
+Computed transformers use the canonical `@builtin.compiler.syntax` interface.
+Its data, operations, input ownership, and execution boundary are specified in
+[syntax expansion](../../spec/syntax-expansion.md#canonical-syntax-interface).
+Compiler diagnostics retain their ordinary reasons and facts with relevant
+syntax invocation, definition, and causal labels; `--message-format json`
+exposes these relationships for tools. Authored rejection text remains the
+transformer's message. Expansion happens during compilation and the generated
+executable does not run syntax services.
 
 ## Complete module-tree example
 

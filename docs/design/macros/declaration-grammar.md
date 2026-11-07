@@ -4,8 +4,7 @@ This proposed grammar completes the declaration-macro surface described by
 [CP-0034](../../proposals/CP-0034-top-level-declaration-macros.md). It does not
 change current Ash or authorize implementation. The derive-specific grammar is
 in [derive authoring and grammar](derive-syntax.md); expression macros retain
-the accepted [CP-0033](../../proposals/CP-0033-hygienic-expression-syntax.md)
-grammar.
+their [current grammar](../../../spec/syntax.md#grammar).
 
 ## Definitions and imports
 

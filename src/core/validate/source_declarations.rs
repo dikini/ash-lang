@@ -259,6 +259,7 @@ fn original_span(mut origin: &Origin, work: &mut TypeWorkBudget) -> Result<Span,
         charge(work, 1)?;
         match origin {
             Origin::Source(span) => return Ok(*span),
+            Origin::Expansion { invocation, .. } => return Ok(*invocation),
             Origin::Generated { cause, .. } => origin = cause,
             Origin::Related { primary, .. } => origin = primary,
         }

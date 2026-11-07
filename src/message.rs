@@ -1338,6 +1338,10 @@ messages! {
     retained_interpretation => "retained-interpretation" {},
     /// A pattern disagrees with the type of the value being matched.
     pattern_type_mismatch => "pattern-type-mismatch" { expected: &'a str = "Bool" },
+    /// The value being matched cannot satisfy the pattern.
+    pattern_match_value => "pattern-match-value" {},
+    /// A pattern's known type differs from the corresponding value's type.
+    pattern_type_requirement => "pattern-type-requirement" { required: &'a str = "Bool", actual: &'a str = "Int" },
     /// A constructor occurrence has the wrong payload shape.
     pattern_constructor_payload => "pattern-constructor-payload" {},
     /// A constructor pattern names another nominal type.
@@ -1373,6 +1377,15 @@ messages! {
     /// Retain cannot reach through an intervening clause to an older root.
     resolve_retain_outside_root => "resolve-retain-outside-root" {},
     /// An interface occupies a value-type position.
+    syntax_invalid_transformer => "syntax-invalid-transformer" {},
+    /// A transformer explicitly rejected its input.
+    syntax_expansion_rejected => "syntax-expansion-rejected" { detail: &'a str = "invalid input" },
+    syntax_transformer_failed => "syntax-transformer-failed" { cause: &'a str = "runtime.resource-capacity" },
+    syntax_teardown_failed => "syntax-teardown-failed" { cause: &'a str = "runtime.capacity-exhausted" },
+    syntax_rejection_site => "syntax-rejection-site" {},
+    syntax_rejection_cause => "syntax-rejection-cause" {},
+    syntax_invocation_frame => "syntax-invocation-frame" {},
+    syntax_definition_frame => "syntax-definition-frame" {},
     resolve_type_kind => "resolve-type-kind" { name: &'a str = "Marker" },
     /// An interface position contains a known non-interface name.
     resolve_interface_kind => "resolve-interface-kind" { name: &'a str = "Thing" },
@@ -1554,6 +1567,8 @@ messages! {
     module_unknown_root => "module-unknown-root" { root: &'a str = "std" },
     /// No compiler-owned module matches the selected builtin path.
     module_unknown_builtin => "module-unknown-builtin" {},
+    /// A syntax selector needs the checked compilation driver.
+    module_syntax_requires_driver => "module-syntax-requires-driver" {},
     module_unknown_foreign => "module-unknown-foreign" {},
     /// Canonicalization reported that the imported file does not exist.
     module_not_found => "module-not-found" { path: &'a Path = Path::new("missing.ash") },

@@ -14,6 +14,15 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 - [TASK-0059: Nested Cell Validation](TASK-0059-nested-cell-validation.md) tracks
   the correction for [issue #195](https://github.com/dikini/ash-lang/issues/195).
 
+The expression-macro milestone was retained at `387fdc96` and QA confirmed
+M01–M14. The completed TASK-0067 and its execution plan are preserved in Git at
+`d0b1bf68`:
+
+```sh
+git show d0b1bf68:docs/tasks/TASK-0067-expression-macros.md
+git show d0b1bf68:docs/plans/2026-11-05-expression-macros.md
+```
+
 The retained-control [specification](../../spec/README.md) and
 [bounded evidence](../design/retained-control/README.md) are integrated on
 Main through [PR #167](https://github.com/dikini/ash-lang/pull/167) at

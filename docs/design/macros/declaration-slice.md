@@ -2,9 +2,9 @@
 
 This companion develops [CP-0034](../../proposals/CP-0034-top-level-declaration-macros.md).
 It is a proposed design and prospective delivery map, not an active task,
-accepted grammar, implementation plan, or current Ash. It assumes the complete
-CP-0033 expression slice is retained first. Recheck that contract and its
-implementation before fixing producer/consumer interfaces or dispatching work.
+accepted grammar, implementation plan, or current Ash. The expression slice
+is implemented and retained. Recheck its contract before fixing declaration
+producer/consumer interfaces or dispatching work.
 Use the [working issue-planning rules](../../project/issue-planning.md) when
 revising the delivery breakdown.
 
@@ -29,10 +29,10 @@ clauses add scope after the 65-point prediction. Their separate estimate is
 30 points, making the revised scope **95 points**. The original prediction is
 retained rather than rescaled. The incremental tasks and acceptance assertions
 appear below; predicted and actual difficulty remain separate. The independent
-review identified grant-specific work that slice 1's current candidate removes
-and implementation choices that remain open. The 95 points are the recorded
-pre-review prediction, not a fresh estimate for the revised contract. Replan
-and estimate the remaining work after those choices and slice 1 retention.
+review identified grant-specific work not required by the retained expression
+slice and implementation choices that remain open. The 95 points are the
+recorded pre-review prediction, not a fresh estimate for the revised contract.
+Replan and estimate the remaining work after those choices.
 
 | Functionality | Points | Counted once |
 | --- | ---: | --- |
@@ -152,24 +152,21 @@ No automatic compatibility of exhaustive source matches is assumed.
 
 ### Slice 1 contract boundary
 
-This proposal is conditional on the completed CP-0033 slice. Its current
-accepted text and the active delivery do not yet agree on definition-site
-resolution: the accepted text requires early free-name checking and separate
-per-reference grants; the user-directed delivery candidate instead defers free
-names until expansion and reuses ordinary resolution with issued contexts. The
-candidate has focused evidence, but it has not been retained as the main-branch
-contract. CP-0034 follows the candidate and must be checked again against the
-retained result; this working note does not amend CP-0033.
+The retained expression slice checks template syntax at definition, then
+resolves surviving free names at expansion in their definition context. Issued
+contexts and ordinary resolution enforce access without separate per-reference
+grant objects. CP-0034 follows that baseline; declaration-specific additions
+remain proposed and must be checked against the retained contract.
 
 | Slice 1 boundary | Reuse and slice 2 addition | Initial evidence |
 | --- | --- | --- |
 | Explicit syntax imports and module staging | Reuse selection and rename rules; add declaration and derive categories without allowing self-use or generated imports. | I20–I21; [header compatibility](fixtures/header_compat/README.md) |
-| Contexts and ordinary resolution | Preserve caller and definition contexts, private access and ordinary evidence rules; add generated module binders and public names. Use the amended candidate's deferred free-name timing and no separate grants. | I12–I15; [hygiene](fixtures/hygiene/README.md), [diagnostics](fixtures/diagnostics/README.md) |
+| Contexts and ordinary resolution | Preserve caller and definition contexts, private access and ordinary evidence rules; add generated module binders and public names. Use the retained slice's deferred free-name timing and no separate grants. | I12–I15; [hygiene](fixtures/hygiene/README.md), [diagnostics](fixtures/diagnostics/README.md) |
 | Parser and projection | Reuse structured syntax, protected boundaries and the ordinary parser/projection path; add type, pattern and declaration fragments and module output. Do not add per-form semantic verification. | I01–I08, I14, I19; [declarations](fixtures/declarations/README.md), [captures](fixtures/captures/README.md) |
 | Checked host and service | Reuse ordinary checked transformers, permitted effect rows, handle validation, bounds, transfer and teardown; extend the closed syntax sums and calls for declaration data. Generator steps thread ordinary Ash state and share the host boundary. | I10–I11, I16–I18; [indexed derive](fixtures/indexed/README.md), [generators](fixtures/generators/README.md), [migration](fixtures/migration/README.md) |
 | Origins and diagnostics | Reuse input, construction and expansion origins; add declaration and derive frames while leaving program errors with ordinary checks. | I14–I15; [diagnostics](fixtures/diagnostics/README.md) |
 
-At the retention checkpoint, compare the final CP-0033/specification, public
+Before implementation, compare the retained specification, public
 syntax-service signatures and constructor set, parser and host behavior, and
 the reviewed receipt against this table and its fixtures. Update only actual
 deltas; do not infer completed behavior from the intermediate worktree or
@@ -394,7 +391,7 @@ At invocation, resolve surviving names in their preserved definition context;
 ordinary checking handles generated declarations and propagates their errors.
 An unused template with an unresolved free name is valid, while an unused
 syntactically malformed template is rejected by the parser. This follows the
-user's latest slice 1 direction; its implementation and retention remain open.
+retained expression slice; the declaration-specific policy remains proposed.
 
 The interface for emitted fragments and the closed syntax sums serve different
 roles. The interface permits a checked Ash function to expose a fragment;

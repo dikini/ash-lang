@@ -7,13 +7,14 @@
   [AD-0006](../decisions/AD-0006-front-end-semantic-boundaries.md),
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md),
   [AD-0010](../decisions/AD-0010-human-diagnostic-presentation-and-localization.md),
-  [CP-0033](../proposals/CP-0033-hygienic-expression-syntax.md),
   [DN-0030](DN-0030-typed-compiler-macros-and-hooks.md),
   [DN-0061](DN-0061-effects-and-resources-first-slice.md)
 
-> The first expression-macro slice in CP-0033 is accepted but unimplemented.
-> Broader macro ideas and illustrations in this note remain exploratory. This
-> note does not define current Ash or accept a parser architecture decision.
+> The accepted first expression-macro slice has a reviewed and QA-confirmed
+> implementation and [specification](../../spec/syntax-expansion.md).
+> Broader macro ideas and
+> illustrations in this note remain exploratory. This note does not define
+> current Ash. AD-0005 records the parser amendment.
 
 ## Question
 
@@ -52,10 +53,11 @@ its elaboration strategy.
 
 ## Context and boundaries
 
-The [current specification](../../spec/README.md) defines effects, requests,
-lexical handlers, one-shot continuation use, scoped resources and cleanup. It
-does not define macros. Current effect and resource rules continue to apply to
-any future expanded program unless a separate language change replaces them.
+The [specification](../../spec/README.md) defines effects, requests, lexical
+handlers, one-shot continuation use, scoped resources, cleanup and expression
+syntax.
+Current effect and resource rules continue to apply to expanded programs unless
+a separate language change replaces them.
 A macro cannot establish a missing runtime operation or prove an ownership,
 completion, or continuation property merely by generating syntax.
 
@@ -89,15 +91,16 @@ a macro model.
 
 ## Working direction
 
-The [first-slice design and delivery plan](macros/first-slice.md) supports the
-accepted [CP-0033](../proposals/CP-0033-hygienic-expression-syntax.md):
+The [first-slice design](macros/first-slice.md) records the accepted transition:
 imported keyword-led expression syntax, templates and
 Ash-authored procedural transformers over a shared binding-aware syntax
 representation. It defines import, parsing, expansion, binding, bridge,
-diagnostic and admission boundaries and required acceptance cases. The slice is
-unimplemented; a parser decision and owning task precede implementation. Where
-an earlier exploratory alternative below differs, CP-0033 and the companion
-state the accepted first slice. Their M01–M14 cases cover that slice;
+diagnostic and admission boundaries and required acceptance cases. The slice's
+implementation and specification are retained; AD-0005 records the parser
+architecture. Template syntax is checked at definition; its free names resolve
+in the defining environment when expanded. Where
+an earlier exploratory alternative below differs, the companion records the
+accepted first slice. Its M01–M14 acceptance cases cover that slice;
 the broader corpus below includes later output categories and transformations.
 
 The two authoring forms are:
@@ -401,16 +404,16 @@ in the caller's context. The identifier `Integer` in a qualified reference is
 a module alias in a distinct syntactic role; its member must be resolved through
 the correct module, not looked up independently by spelling.
 
-This is accepted future behavior, not a claim that Ash already permits exporting
-macros or using private helpers through them. The first slice selects
-authenticated definition-site references: publication authorizes the syntax
-declaration to use its module's lexical access, while each surviving reference
-retains the original declaration, grant and import route. The owner may expose
-its own private helper or opaque operation through syntax as through a public
-helper function. Neither the macro nor its caller gains access to another
-module's withheld members. Ordinary caller source gains no private name.
-Requiring public helpers would avoid this grant channel but would add names to
-the public API solely for expansion. Identity alone is not authorization.
+These exploratory forms illustrate the accepted behavior; the implementation
+uses the [first-slice syntax](../../spec/syntax-expansion.md), not the forms
+above. The first slice retains
+compiler-issued definition contexts so ordinary resolution can select the
+defining module's checked environment and enforce its access and import rules.
+The owner may expose its own private helper or opaque operation through syntax
+as through a public helper function. Neither the macro nor its caller gains
+access to another module's withheld members. Ordinary caller source gains no
+private name. Requiring public helpers would add names to the public API solely
+for expansion. Spelling or a diagnostic origin cannot select an environment.
 
 The same concern applies to types, constructors, interfaces, methods, effects
 and operations. Definition-site identity for a method or function also does

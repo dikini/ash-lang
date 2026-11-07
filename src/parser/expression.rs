@@ -89,6 +89,19 @@ fn parse_precedence(
 fn parse_primary(parser: &mut Parser<'_>, forms: &[PrimaryForm]) -> CompletedExpression {
     let start_event = parser.event_position();
     parser.start(NodeKind::PrimaryExpression);
+    if parser.in_template && parser.at(&TokenKind::Dollar) {
+        let _ = parser.bump();
+        if matches!(parser.current(), Some(TokenKind::Identifier(_))) {
+            let _ = parser.bump();
+        } else {
+            parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+        }
+        parser.finish();
+        return CompletedExpression {
+            start_event,
+            depth: 0,
+        };
+    }
     match primary_form(parser, forms) {
         Some(PrimaryForm::Identifier) if grammar::starts_lowercase_qualification(parser) => {
             grammar::reject_lowercase_qualification(parser);
@@ -182,6 +195,9 @@ fn current_infix<'a>(
     parser: &Parser<'_>,
     descriptors: &'a [InfixDescriptor],
 ) -> Option<&'a InfixDescriptor> {
+    if parser.at_syntax_stop() {
+        return None;
+    }
     let current = parser.current()?;
     descriptors
         .iter()
@@ -193,10 +209,19 @@ pub(super) fn starts_primary(parser: &Parser<'_>) -> bool {
 }
 
 fn starts_primary_in(parser: &Parser<'_>, forms: &[PrimaryForm]) -> bool {
-    primary_form(parser, forms).is_some()
+    !parser.at_syntax_name()
+        && !parser.at_syntax_stop()
+        && ((parser.in_template && parser.at(&TokenKind::Dollar))
+            || primary_form(parser, forms).is_some())
 }
 
 fn primary_form(parser: &Parser<'_>, forms: &[PrimaryForm]) -> Option<PrimaryForm> {
+    if parser.is_admission_identifier()
+        && parser.nth(1) == Some(&TokenKind::Dot)
+        && forms.contains(&PrimaryForm::Qualified)
+    {
+        return Some(PrimaryForm::Qualified);
+    }
     forms
         .iter()
         .copied()
@@ -337,6 +362,14 @@ mod tests {
             resource_failure: None,
             syntax_budget: crate::syntax_resource::SyntaxBudget::default(),
             syntax_work_exhausted: false,
+            in_template: false,
+            syntax: &[],
+            syntax_source: None,
+            syntax_selections: None,
+            syntax_spellings: None,
+            diagnostic_spans: None,
+            admission_identifiers: None,
+            syntax_stops: Vec::new(),
         };
 
         operator_expression_with(&mut parser, &dialect);

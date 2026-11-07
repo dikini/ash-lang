@@ -283,6 +283,17 @@ pub fn pipeline_failure(failure: &PipelineFailure) -> String {
     match failure {
         PipelineFailure::SourceModel(error) => format!("internal.source-model\n{error}"),
         PipelineFailure::Syntax(failure) => syntax_failure(failure),
+        PipelineFailure::SyntaxExpansion(failure) => {
+            format!("syntax.rejected\n{}", failure.message())
+        }
+        PipelineFailure::SyntaxParse(failure) => syntax_failure(&crate::driver::SyntaxFailure {
+            lexical: Vec::new(),
+            parser: failure.diagnostics.clone(),
+            resource: failure.resource,
+        }),
+        PipelineFailure::SyntaxRuntime(failure) => {
+            format!("syntax.transformer-failed\n{}", failure.cause())
+        }
         PipelineFailure::Projection(error) => projection_failure(*error),
         PipelineFailure::Resolution(error) => error.to_string(),
         PipelineFailure::Kind(crate::kind::KindFailure::Source(error)) => error.to_string(),
@@ -390,6 +401,9 @@ fn module_failure(failure: &ModuleFailure) -> String {
 
 const fn module_primary_message(reason: ModuleReason) -> &'static str {
     match reason {
+        ModuleReason::SyntaxRequiresDriver => {
+            "this syntax selector requires the checked compilation driver"
+        }
         ModuleReason::UnknownBuiltin => "this import names no compiler-owned module",
         ModuleReason::UnknownForeign => "this import names no registered foreign module",
         ModuleReason::ReservedRoot => "the builtin module root is reserved",

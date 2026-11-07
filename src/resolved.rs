@@ -8,6 +8,7 @@ pub(crate) use constructor_original::ConstructorOriginal;
 mod image_subset_tests;
 
 use std::{
+    borrow::Borrow,
     cmp::Ordering,
     collections::{HashMap, HashSet, hash_map::Entry},
     hash::Hash,
@@ -26,6 +27,7 @@ use crate::{
     },
     kind::{BodyFreeInterfaceMethodSeed, KindEnvironments, KindFailure},
     module::ModuleId,
+    resolve::GeneratedParameterOrder,
     source::{Origin, Span, discard_origin_iteratively},
     types::{
         ConstructorId, EffectId, EffectRow, EffectRowVariable, IterativeTypeOwner, Kind,
@@ -34,6 +36,8 @@ use crate::{
         clone_type_with_budget, discard_type_iteratively, same_kind_with_charge,
     },
 };
+
+pub(crate) type GeneratedParameterOrders = HashMap<NominalTypeId, Arc<GeneratedParameterOrder>>;
 
 /// Fixed private facts supplied by the authenticated compiler region module.
 /// These coordinates never establish source authority without its source pin.
@@ -1915,6 +1919,66 @@ impl CheckedModule {
         &self.schemes
     }
 
+    pub(crate) fn syntax_constructor_facts(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Vec<ExportedConstructor>, ()> {
+        let mut facts = Vec::new();
+        for constructor in self
+            .registry
+            .constructors()
+            .iter()
+            .filter(|constructor| constructor.owner.module() == self.module)
+        {
+            let nominal = self.registry.nominal(constructor.owner).ok_or(())?;
+            let parameters = self.registry.nominal_parameters(nominal.id).ok_or(())?;
+            let payload = if nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype {
+                nominal.representation.as_ref()
+            } else {
+                constructor.payload.as_ref()
+            };
+            let original =
+                ConstructorOriginal::from_checked(&self.registry, work).map_err(|_| ())?;
+            facts.push(ExportedConstructor {
+                original: Some(original),
+                id: constructor.id,
+                spelling: constructor.spelling.clone(),
+                payload: payload
+                    .map(|payload| clone_type_with_budget(payload, work))
+                    .transpose()?,
+                scheme: canonical_constructor_scheme(nominal.id, parameters, payload, work)?,
+                origin: constructor.origin.clone(),
+            });
+        }
+        Ok(facts)
+    }
+
+    pub(crate) fn syntax_nominal_fact(
+        &self,
+        id: NominalTypeId,
+    ) -> Option<ImportedNominalFactRef<'_>> {
+        if id.module() != self.module {
+            return None;
+        }
+        let nominal = self.registry.nominal(id)?;
+        let parameters = self.registry.nominal_parameters(id)?;
+        let public = self.exports.nominal_fact(id);
+        Some(ImportedNominalFactRef {
+            id,
+            declaration_kind: nominal.declaration_kind,
+            parameter_count: parameters.len(),
+            constructor_count: nominal.constructors.len(),
+            parameters,
+            representation: nominal.representation.as_ref(),
+            representation_provenance: nominal.representation_provenance.as_ref(),
+            constructors: &nominal.constructors,
+            access: ImportedTypeAccess::Transparent,
+            display_spelling: Some(&nominal.spelling),
+            display_is_private: public.is_none(),
+            origin: &nominal.origin,
+        })
+    }
+
     /// Returns checked local interface authentication records in source order.
     #[must_use]
     pub const fn checked_interfaces(&self) -> &[CheckedInterface] {
@@ -1982,6 +2046,7 @@ impl CheckedModule {
             .take_public_implementation_authorizations(constraint_work)?;
         Ok(ResolvedModuleGroup {
             module: self.module,
+            generated_parameter_orders: self.registry.generated_parameter_orders().clone(),
             direct_dependencies: std::mem::take(&mut self.direct_dependencies),
             declaration_order: std::mem::take(&mut self.declaration_order),
             interfaces: std::mem::take(&mut self.interfaces),
@@ -1997,6 +2062,7 @@ impl CheckedModule {
             typed_fragment: self.typed_fragment.take(),
             local_lowering,
             span: self.span,
+            shared_owner: None,
         })
     }
 }
@@ -2022,6 +2088,7 @@ impl Drop for CheckedModule {
 #[derive(Debug)]
 pub struct ResolvedModuleGroup {
     module: ModuleId,
+    generated_parameter_orders: HashMap<NominalTypeId, Arc<GeneratedParameterOrder>>,
     direct_dependencies: Box<[DirectDependencyRoute]>,
     declaration_order: Box<[ResolvedDeclarationIndex]>,
     interfaces: Box<[ResolvedInterfaceDeclaration]>,
@@ -2037,19 +2104,73 @@ pub struct ResolvedModuleGroup {
     typed_fragment: Option<crate::elaborate::CheckedTypedModule>,
     local_lowering: Option<crate::elaborate::SharedModuleLowering>,
     span: Span,
+    // A compile-time link borrows the same checked owner needed by final linking.
+    shared_owner: Option<Arc<CheckedModule>>,
 }
 
 impl ResolvedModuleGroup {
+    pub(crate) fn from_shared(
+        owner: Arc<CheckedModule>,
+        work: &mut crate::interface::InterfaceConstraintBudget,
+    ) -> Result<Self, ()> {
+        let local_lowering = owner
+            .exports
+            .lowerings
+            .iter()
+            .find(|lowering| lowering.module() == owner.module)
+            .cloned();
+        if owner.typed_fragment.is_some() && local_lowering.is_none() {
+            return Err(());
+        }
+        work.charge(owner.exports.implementations.len())?;
+        let mut public_implementations = Vec::new();
+        public_implementations
+            .try_reserve_exact(owner.exports.implementations.len())
+            .map_err(|_| ())?;
+        for implementation in &owner.exports.implementations {
+            public_implementations.push(PublicImplementationAuthorization {
+                id: implementation.fact.id,
+                authorization: implementation.authorization.clone_with_budget(work)?,
+            });
+        }
+        Ok(Self {
+            module: owner.module,
+            generated_parameter_orders: HashMap::new(),
+            direct_dependencies: Box::new([]),
+            declaration_order: Box::new([]),
+            interfaces: Box::new([]),
+            implementations: Box::new([]),
+            definitions: Box::new([]),
+            available_implementations: Box::new([]),
+            public_implementations: public_implementations.into_boxed_slice(),
+            schemes: Box::new([]),
+            checked_interfaces: Box::new([]),
+            checked_implementations: Box::new([]),
+            interface_facts: Box::new([]),
+            implementation_facts: Box::new([]),
+            typed_fragment: None,
+            local_lowering,
+            span: owner.span,
+            shared_owner: Some(owner),
+        })
+    }
+
     pub(crate) fn local_lowering(&self) -> Option<&crate::elaborate::SharedModuleLowering> {
         self.local_lowering.as_ref()
     }
     pub(crate) fn typed_fragment(&self) -> Option<&crate::elaborate::CheckedTypedModule> {
-        self.typed_fragment.as_ref()
+        self.shared_owner
+            .as_ref()
+            .and_then(|owner| owner.typed_fragment.as_ref())
+            .or(self.typed_fragment.as_ref())
     }
 
     #[cfg(test)]
     pub(crate) fn typed_fragment_for_test(&self) -> Option<&crate::elaborate::CheckedTypedModule> {
-        self.typed_fragment.as_ref()
+        self.shared_owner
+            .as_ref()
+            .and_then(|owner| owner.typed_fragment.as_ref())
+            .or(self.typed_fragment.as_ref())
     }
 
     /// Returns the stable canonical module identity.
@@ -2058,40 +2179,66 @@ impl ResolvedModuleGroup {
         self.module
     }
 
+    pub(crate) fn generated_parameter_orders(
+        &self,
+    ) -> &HashMap<NominalTypeId, Arc<GeneratedParameterOrder>> {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.generated_parameter_orders, |owner| {
+                owner.registry.generated_parameter_orders()
+            })
+    }
+
     /// Returns the resolver-authenticated direct dependency edges in source order.
     #[must_use]
-    pub const fn direct_dependencies(&self) -> &[DirectDependencyRoute] {
-        &self.direct_dependencies
+    pub fn direct_dependencies(&self) -> &[DirectDependencyRoute] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.direct_dependencies, |owner| {
+                &owner.direct_dependencies
+            })
     }
 
     /// Returns the cross-family declaration order within this module.
     #[must_use]
-    pub const fn declaration_order(&self) -> &[ResolvedDeclarationIndex] {
-        &self.declaration_order
+    pub fn declaration_order(&self) -> &[ResolvedDeclarationIndex] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.declaration_order, |owner| &owner.declaration_order)
     }
 
     /// Returns resolved local interfaces retained with checked metadata.
     #[must_use]
-    pub const fn interfaces(&self) -> &[ResolvedInterfaceDeclaration] {
-        &self.interfaces
+    pub fn interfaces(&self) -> &[ResolvedInterfaceDeclaration] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.interfaces, |owner| &owner.interfaces)
     }
 
     /// Returns checked local implementation bodies in declaration order.
     #[must_use]
-    pub const fn implementations(&self) -> &[CheckedImplementationBody] {
-        &self.implementations
+    pub fn implementations(&self) -> &[CheckedImplementationBody] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.implementations, |owner| &owner.implementations)
     }
 
     /// Returns checked local definitions in source order.
     #[must_use]
-    pub const fn definitions(&self) -> &[CheckedDefinition] {
-        &self.definitions
+    pub fn definitions(&self) -> &[CheckedDefinition] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.definitions, |owner| &owner.definitions)
     }
 
     /// Returns the effective implementation environment in deterministic order.
     #[must_use]
-    pub const fn available_implementations(&self) -> &[AvailableImplementation] {
-        &self.available_implementations
+    pub fn available_implementations(&self) -> &[AvailableImplementation] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.available_implementations, |owner| {
+                &owner.available_implementations
+            })
     }
 
     /// Returns lightweight public implementation authorizations in summary order.
@@ -2104,32 +2251,46 @@ impl ResolvedModuleGroup {
 
     /// Returns checked global schemes in definition order.
     #[must_use]
-    pub const fn schemes(&self) -> &[CheckedGlobalScheme] {
-        &self.schemes
+    pub fn schemes(&self) -> &[CheckedGlobalScheme] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.schemes, |owner| &owner.schemes)
     }
 
     /// Returns local interface authentication records in source order.
     #[must_use]
-    pub const fn checked_interfaces(&self) -> &[CheckedInterface] {
-        &self.checked_interfaces
+    pub fn checked_interfaces(&self) -> &[CheckedInterface] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.checked_interfaces, |owner| &owner.checked_interfaces)
     }
 
     /// Returns checked local implementations in declaration order.
     #[must_use]
-    pub const fn checked_implementations(&self) -> &[CheckedImplementation] {
-        &self.checked_implementations
+    pub fn checked_implementations(&self) -> &[CheckedImplementation] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.checked_implementations, |owner| {
+                &owner.checked_implementations
+            })
     }
 
     /// Returns checked local interface semantic facts in declaration order.
     #[must_use]
-    pub const fn interface_facts(&self) -> &[SharedCheckedInterfaceFact] {
-        &self.interface_facts
+    pub fn interface_facts(&self) -> &[SharedCheckedInterfaceFact] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.interface_facts, |owner| &owner.interface_facts)
     }
 
     /// Returns checked local implementation semantic facts in declaration order.
     #[must_use]
-    pub const fn implementation_facts(&self) -> &[CheckedImplementationFact] {
-        &self.implementation_facts
+    pub fn implementation_facts(&self) -> &[CheckedImplementationFact] {
+        self.shared_owner
+            .as_ref()
+            .map_or(&self.implementation_facts, |owner| {
+                &owner.implementation_facts
+            })
     }
 
     /// Returns the complete defining source span.
@@ -2438,6 +2599,7 @@ impl ResolvedModuleProgram {
 impl Drop for ResolvedModuleProgram {
     fn drop(&mut self) {
         let placeholder = ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Unit,
             span: self.result.span,
         };
@@ -2487,6 +2649,9 @@ pub struct ImportedFacts {
     resource_types: HashMap<String, Arc<ResourceTypeFact>>,
     resource_type_order: Vec<String>,
     constructors: HashMap<ConstructorId, ImportedConstructorFact>,
+    // Constructor families admitted solely for expansion checking do not change
+    // the source-visible import facts or their re-exports.
+    syntax_facts: Option<Box<ImportedFacts>>,
     interfaces: Vec<ImportedInterfaceFact>,
     interface_positions: HashMap<InterfaceId, usize>,
     effects: Vec<ResolvedEffectDeclaration>,
@@ -2737,6 +2902,51 @@ impl ImportedFacts {
         self.nominal_order
             .iter()
             .filter_map(|identity| self.nominals.get(identity))
+    }
+
+    pub(crate) fn take_syntax_facts(&mut self) -> ImportedFacts {
+        self.syntax_facts
+            .take()
+            .map(|facts| *facts)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn set_syntax_facts(&mut self, facts: ImportedFacts) {
+        debug_assert!(self.syntax_facts.is_none());
+        debug_assert!(facts.syntax_facts.is_none());
+        self.syntax_facts = Some(Box::new(facts));
+    }
+
+    // Only the checking registry sees a syntax-authorized family. Ordinary
+    // imports and export summaries continue to use `nominals`.
+    fn checking_nominals(&self) -> impl Iterator<Item = &ImportedNominalFact> {
+        let syntax = self.syntax_facts.as_deref();
+        self.nominals()
+            .filter(move |fact| {
+                !syntax
+                    .and_then(|facts| facts.nominal(fact.id))
+                    .is_some_and(|other| {
+                        other.access == ImportedTypeAccess::Transparent
+                            && fact.access != ImportedTypeAccess::Transparent
+                    })
+            })
+            .chain(
+                syntax
+                    .into_iter()
+                    .flat_map(ImportedFacts::nominals)
+                    .filter(move |fact| {
+                        self.nominal(fact.id).is_none()
+                            || fact.access == ImportedTypeAccess::Transparent
+                                && self.nominal(fact.id).is_some_and(|other| {
+                                    other.access != ImportedTypeAccess::Transparent
+                                })
+                    }),
+            )
+    }
+
+    fn checking_constructor(&self, id: ConstructorId) -> Option<&ImportedConstructorFact> {
+        self.constructor(id)
+            .or_else(|| self.syntax_facts.as_deref()?.constructor(id))
     }
 
     pub(crate) fn retain_implemented_interface(
@@ -6546,6 +6756,20 @@ fn same_origin_with_constraint_budget(
         match (left, right) {
             (Origin::Source(left), Origin::Source(right)) => return Ok(left == right),
             (
+                Origin::Expansion {
+                    invocation: left_invocation,
+                    definition: left_definition,
+                },
+                Origin::Expansion {
+                    invocation: right_invocation,
+                    definition: right_definition,
+                },
+            ) => {
+                return Ok(
+                    left_invocation == right_invocation && left_definition == right_definition
+                );
+            }
+            (
                 Origin::Generated {
                     cause: left_cause,
                     reason: left_reason,
@@ -6590,6 +6814,20 @@ fn same_origin_after_base_charge(
     loop {
         match (left, right) {
             (Origin::Source(left), Origin::Source(right)) => return Ok(left == right),
+            (
+                Origin::Expansion {
+                    invocation: left_invocation,
+                    definition: left_definition,
+                },
+                Origin::Expansion {
+                    invocation: right_invocation,
+                    definition: right_definition,
+                },
+            ) => {
+                return Ok(
+                    left_invocation == right_invocation && left_definition == right_definition
+                );
+            }
             (
                 Origin::Generated {
                     cause: left_cause,
@@ -13708,6 +13946,7 @@ pub struct ResolvedRegistry {
     lexical_constructors: Box<[ResolvedConstructor]>,
     lexical_nominal_positions: HashMap<NominalTypeId, usize>,
     lexical_constructor_positions: HashMap<ConstructorId, usize>,
+    generated_parameter_orders: HashMap<NominalTypeId, Arc<GeneratedParameterOrder>>,
     effects: Box<[ResolvedEffectDeclaration]>,
     owner_signatures: OwnerSignatures,
     owner_definitions: Vec<OwnerDefinition>,
@@ -13719,6 +13958,8 @@ pub struct ResolvedRegistry {
     global_parameter_positions: HashMap<BinderId, usize>,
     abstract_nominal_names: HashMap<NominalTypeId, String>,
     abstract_nominal_kinds: HashMap<NominalTypeId, NonMaterializedNominalKindFact>,
+    // These families are available to generated constructor patterns only.
+    syntax_only_families: HashSet<NominalTypeId>,
 
     native_symbols: HashMap<OperationId, Arc<crate::foreign::checked_source::CheckedForeignSymbol>>,
 }
@@ -14079,6 +14320,7 @@ struct CombinedRegistryBuilder {
     lexical_constructors: ResolvedConstructorBuffer,
     lexical_nominal_positions: HashMap<NominalTypeId, usize>,
     lexical_constructor_positions: HashMap<ConstructorId, usize>,
+    generated_parameter_orders: HashMap<NominalTypeId, Arc<GeneratedParameterOrder>>,
     effects: Vec<ResolvedEffectDeclaration>,
     effect_positions: HashMap<EffectId, usize>,
     parameter_rows: ResolvedNominalParameterBuffer,
@@ -14100,6 +14342,7 @@ impl CombinedRegistryBuilder {
             lexical_constructors: ResolvedConstructorBuffer(Vec::new()),
             lexical_nominal_positions: HashMap::new(),
             lexical_constructor_positions: HashMap::new(),
+            generated_parameter_orders: HashMap::new(),
             effects: Vec::new(),
             effect_positions: HashMap::new(),
             parameter_rows: ResolvedNominalParameterBuffer(Vec::new()),
@@ -14144,6 +14387,10 @@ impl CombinedRegistryBuilder {
         builder
             .lexical_constructor_positions
             .try_reserve(counts.lexical_constructors)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        builder
+            .generated_parameter_orders
+            .try_reserve(counts.lexical_nominals)
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         builder
             .effects
@@ -14192,9 +14439,9 @@ impl CombinedRegistryBuilder {
         Ok(builder)
     }
 
-    fn retain_global_parameter_row(
+    fn retain_global_parameter_row<M>(
         &mut self,
-        _validated: &ValidatedCheckedRegistries<'_>,
+        _validated: &ValidatedCheckedRegistries<'_, M>,
         owner: BinderId,
         parameters: &[(TypeVariableId, Kind)],
     ) -> Result<(), ResolvedBuildFailure> {
@@ -14276,6 +14523,7 @@ impl CombinedRegistryBuilder {
             lexical_constructors: lexical_constructors.into_boxed_slice(),
             lexical_nominal_positions: std::mem::take(&mut self.lexical_nominal_positions),
             lexical_constructor_positions: std::mem::take(&mut self.lexical_constructor_positions),
+            generated_parameter_orders: std::mem::take(&mut self.generated_parameter_orders),
             effects: std::mem::take(&mut self.effects).into_boxed_slice(),
             owner_signatures: OwnerSignatures::default(),
             owner_definitions: Vec::new(),
@@ -14288,6 +14536,7 @@ impl CombinedRegistryBuilder {
             global_parameter_positions: std::mem::take(&mut self.global_parameter_positions),
             abstract_nominal_names: HashMap::new(),
             abstract_nominal_kinds: HashMap::new(),
+            syntax_only_families: HashSet::new(),
 
             native_symbols: HashMap::new(),
         }
@@ -14342,14 +14591,15 @@ fn retained_kind_record_work(kind: &Kind) -> Result<usize, ResolvedBuildFailure>
     Ok(work)
 }
 
-fn checked_registry_counts(
-    modules: &[CheckedModule],
+fn checked_registry_counts<M: Borrow<CheckedModule>>(
+    modules: &[M],
 ) -> Result<CombinedRegistryCounts, ResolvedBuildFailure> {
     let mut counts = CombinedRegistryCounts {
         modules: modules.len(),
         ..CombinedRegistryCounts::default()
     };
     for checked in modules {
+        let checked = checked.borrow();
         let registry = checked.registry();
         checked_accumulate(&mut counts.nominals, registry.nominals.len())?;
         checked_accumulate(&mut counts.constructors, registry.constructors.len())?;
@@ -14489,23 +14739,23 @@ fn checked_registry_counts(
 }
 
 /// Borrowed checked registries whose destination identities are unique.
-struct ValidatedCheckedRegistries<'a> {
-    modules: &'a [CheckedModule],
+struct ValidatedCheckedRegistries<'a, M> {
+    modules: &'a [M],
 }
 
-impl ValidatedCheckedRegistries<'_> {
+impl<M> ValidatedCheckedRegistries<'_, M> {
     #[cfg(test)]
-    fn modules(&self) -> &[CheckedModule] {
+    fn modules(&self) -> &[M] {
         self.modules
     }
 }
 
-fn validate_checked_registries<'a>(
-    modules: &'a [CheckedModule],
+fn validate_checked_registries<'a, M: Borrow<CheckedModule>>(
+    modules: &'a [M],
     counts: &CombinedRegistryCounts,
     _type_work: &mut TypeWorkBudget,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
-) -> Result<ValidatedCheckedRegistries<'a>, ResolvedBuildFailure> {
+) -> Result<ValidatedCheckedRegistries<'a, M>, ResolvedBuildFailure> {
     // Each defining registry was completed by its own checker. This pass
     // charges and checks only identities that share a new destination index.
     constraint_work
@@ -14544,6 +14794,7 @@ fn validate_checked_registries<'a>(
         .try_reserve(counts.global_rows)
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
     for checked in modules {
+        let checked = checked.borrow();
         let module = checked.module();
         let registry = checked.registry();
         if !module_ids.insert(module) {
@@ -14643,11 +14894,12 @@ fn clone_type_variable_row_after_combined_precharge(
     Ok(cloned.into_vec().into_boxed_slice())
 }
 
-fn retain_checked_registries(
-    validated: ValidatedCheckedRegistries<'_>,
+fn retain_checked_registries<M: Borrow<CheckedModule>>(
+    validated: ValidatedCheckedRegistries<'_, M>,
     mut builder: CombinedRegistryBuilder,
 ) -> Result<ResolvedRegistry, ResolvedBuildFailure> {
     for checked in validated.modules {
+        let checked = checked.borrow();
         let registry = checked.registry();
         for nominal in registry.nominals() {
             let position = builder.nominals.0.len();
@@ -14706,6 +14958,15 @@ fn retain_checked_registries(
                 .lexical_nominal_positions
                 .insert(nominal.id, position);
             if displaced.is_some() {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            if let Some(order) = registry.generated_parameter_orders.get(&nominal.id)
+                && (order.owner() != nominal.id
+                    || builder
+                        .generated_parameter_orders
+                        .insert(nominal.id, Arc::clone(order))
+                        .is_some())
+            {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
             builder.lexical_nominals.0.push(retained);
@@ -14820,6 +15081,10 @@ impl Drop for ResolvedConstructorBuffer {
 }
 
 impl ResolvedRegistry {
+    pub(crate) fn syntax_only_family(&self, id: NominalTypeId) -> bool {
+        self.syntax_only_families.contains(&id)
+    }
+
     pub(crate) fn owner_signature(&self, owner: OwnerId) -> Option<&OwnerSignature> {
         self.owner_signatures.get(owner)
     }
@@ -15926,6 +16191,7 @@ impl ResolvedRegistry {
             lexical_constructors: Box::new([]),
             lexical_nominal_positions: HashMap::new(),
             lexical_constructor_positions: HashMap::new(),
+            generated_parameter_orders: HashMap::new(),
             effects: Box::new([]),
             owner_signatures: OwnerSignatures::default(),
             owner_definitions: Vec::new(),
@@ -15937,6 +16203,7 @@ impl ResolvedRegistry {
             global_parameter_positions: HashMap::new(),
             abstract_nominal_names: HashMap::new(),
             abstract_nominal_kinds: HashMap::new(),
+            syntax_only_families: HashSet::new(),
 
             native_symbols: HashMap::new(),
         }
@@ -16039,7 +16306,7 @@ impl ResolvedRegistry {
         imported: &ImportedFacts,
         budget: &mut TypeWorkBudget,
     ) -> Result<Self, ResolvedBuildFailure> {
-        for fact in imported.nominals() {
+        for fact in imported.checking_nominals() {
             budget
                 .charge(
                     fact.constructors
@@ -16053,7 +16320,7 @@ impl ResolvedRegistry {
             }
         }
         let materialized_import_count = imported
-            .nominals()
+            .checking_nominals()
             .filter(|fact| fact.access == ImportedTypeAccess::Transparent)
             .count();
         let materialized_nominal_count = self
@@ -16086,6 +16353,14 @@ impl ResolvedRegistry {
             .constructors
             .len()
             .checked_add(imported.constructors.len())
+            .and_then(|count| {
+                count.checked_add(
+                    imported
+                        .syntax_facts
+                        .as_deref()
+                        .map_or(0, |facts| facts.constructors.len()),
+                )
+            })
             .ok_or(ResolvedBuildFailure::TypeResource)?;
         let mut constructors = ResolvedConstructorBuffer(Vec::new());
         constructors
@@ -16194,7 +16469,7 @@ impl ResolvedRegistry {
             ));
         }
 
-        for fact in imported.nominals() {
+        for fact in imported.checking_nominals() {
             if fact.access != ImportedTypeAccess::Transparent {
                 continue;
             }
@@ -16205,7 +16480,7 @@ impl ResolvedRegistry {
             }
             for id in &fact.constructors {
                 let constructor = imported
-                    .constructor(*id)
+                    .checking_constructor(*id)
                     .ok_or(ResolvedBuildFailure::InvalidState)?;
                 if constructor.id.owner() != fact.id {
                     return Err(ResolvedBuildFailure::InvalidState);
@@ -16248,7 +16523,7 @@ impl ResolvedRegistry {
         }
 
         let abstract_nominal_count = imported
-            .nominals()
+            .checking_nominals()
             .filter(|fact| fact.access != ImportedTypeAccess::Transparent)
             .count();
         budget
@@ -16283,7 +16558,7 @@ impl ResolvedRegistry {
         // headers retained only by a method or a selective import.
 
         for fact in imported
-            .nominals()
+            .checking_nominals()
             .filter(|fact| fact.access != ImportedTypeAccess::Transparent)
         {
             let kind = clone_arrows_with_budget(
@@ -16362,6 +16637,31 @@ impl ResolvedRegistry {
             )
             .map_err(|()| ResolvedBuildFailure::TypeResource)?
             .with_abstract_nominal_facts(abstract_nominal_names, abstract_nominal_kinds);
+        registry
+            .generated_parameter_orders
+            .try_reserve(self.generated_parameter_orders.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for (owner, order) in &self.generated_parameter_orders {
+            if *owner != order.owner() || registry.nominal(*owner).is_none() {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            registry
+                .generated_parameter_orders
+                .insert(*owner, Arc::clone(order));
+        }
+        if let Some(syntax) = imported.syntax_facts.as_deref() {
+            registry.syntax_only_families.extend(
+                syntax
+                    .nominals()
+                    .filter(|fact| {
+                        fact.access == ImportedTypeAccess::Transparent
+                            && !imported.nominal(fact.id).is_some_and(|ordinary| {
+                                ordinary.access == ImportedTypeAccess::Transparent
+                            })
+                    })
+                    .map(|fact| fact.id),
+            );
+        }
         let effect_count = self
             .effects
             .len()
@@ -16505,8 +16805,8 @@ impl ResolvedRegistry {
     /// Destination identities and the exact compiler TypeWork precharge are
     /// checked before retained carriers are copied. A later allocation failure
     /// dismantles staging without publishing a registry.
-    pub(crate) fn combine_checked(
-        modules: &[CheckedModule],
+    pub(crate) fn combine_checked<M: Borrow<CheckedModule>>(
+        modules: &[M],
         type_work: &mut TypeWorkBudget,
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<Self, ResolvedBuildFailure> {
@@ -16518,6 +16818,7 @@ impl ResolvedRegistry {
         let builder = CombinedRegistryBuilder::with_counts(&counts)?;
         let mut registry = retain_checked_registries(validated, builder)?;
         for module in modules {
+            let module = module.borrow();
             retain_native_symbols(
                 &mut registry.native_symbols,
                 &module.registry().native_symbols,
@@ -16525,6 +16826,7 @@ impl ResolvedRegistry {
             )?;
         }
         for checked in modules {
+            let checked = checked.borrow();
             let defining = checked.registry();
             type_work
                 .charge(defining.owner_definitions.len())
@@ -16621,6 +16923,68 @@ impl ResolvedRegistry {
                 .ok_or(())?,
         )?;
         self.with_precharged_lexical_nominals(nominals, constructors, parameters, budget)
+    }
+
+    pub(crate) fn with_generated_parameter_orders(
+        mut self,
+        orders: Vec<Arc<GeneratedParameterOrder>>,
+    ) -> Result<Self, ()> {
+        self.generated_parameter_orders
+            .try_reserve(orders.len())
+            .map_err(|_| ())?;
+        for order in orders {
+            if !order.owner().is_lexical()
+                || self.nominal(order.owner()).is_none()
+                || self
+                    .generated_parameter_orders
+                    .insert(order.owner(), order)
+                    .is_some()
+            {
+                return Err(());
+            }
+        }
+        Ok(self)
+    }
+
+    pub(crate) fn generated_parameter_orders(
+        &self,
+    ) -> &HashMap<NominalTypeId, Arc<GeneratedParameterOrder>> {
+        &self.generated_parameter_orders
+    }
+
+    #[cfg(test)]
+    pub(crate) fn generated_parameter_orders_for_core_test(
+        &mut self,
+    ) -> &mut HashMap<NominalTypeId, Arc<GeneratedParameterOrder>> {
+        &mut self.generated_parameter_orders
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lexical_parameter_row_for_core_test(
+        &mut self,
+        owner: NominalTypeId,
+    ) -> Option<&mut Box<[ResolvedTypeVariable]>> {
+        self.nominal_parameters.get_mut(&owner)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn edit_lexical_parameter_for_core_test(
+        &mut self,
+        owner: NominalTypeId,
+        index: usize,
+        edit: impl FnOnce(&mut ResolvedTypeVariable),
+    ) -> bool {
+        let Some(parameter) = self
+            .nominal_parameters
+            .get_mut(&owner)
+            .and_then(|parameters| parameters.get_mut(index))
+        else {
+            return false;
+        };
+        edit(parameter);
+        let parameter = parameter.clone();
+        self.type_variables.insert(parameter.id, parameter.into());
+        true
     }
 
     fn with_precharged_lexical_nominals(
@@ -17093,6 +17457,40 @@ impl ResolvedRegistry {
             discard_type_iteratively(representation);
         }
         nominal.representation_provenance = None;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn first_lexical_newtype_for_core_test(
+        &mut self,
+    ) -> Option<(&mut ResolvedNominalType, &mut ResolvedConstructor)> {
+        let nominal = self.lexical_nominals.first_mut()?;
+        let constructor = self
+            .lexical_constructors
+            .iter_mut()
+            .find(|constructor| constructor.owner == nominal.id)?;
+        Some((nominal, constructor))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_first_lexical_parameter_origin_for_core_test(
+        &mut self,
+        index: usize,
+        origin: Origin,
+    ) -> bool {
+        let Some(nominal) = self.lexical_nominals.first() else {
+            return false;
+        };
+        let Some(parameter) = self
+            .nominal_parameters
+            .get_mut(&nominal.id)
+            .and_then(|parameters| parameters.get_mut(index))
+        else {
+            return false;
+        };
+        parameter.origin = origin;
+        let parameter = parameter.clone();
+        let _ = self.type_variables.insert(parameter.id, parameter.into());
         true
     }
 
@@ -17595,7 +17993,7 @@ fn charge_retained_origin(origin: &Origin, budget: &mut TypeWorkBudget) -> Resul
     loop {
         budget.charge(2)?;
         match current {
-            Origin::Source(_) => return Ok(()),
+            Origin::Source(_) | Origin::Expansion { .. } => return Ok(()),
             Origin::Generated { cause, .. } => current = cause,
             Origin::Related { primary, related } => {
                 budget.charge(related.len().checked_mul(2).ok_or(())?)?;
@@ -17679,6 +18077,20 @@ pub(crate) fn same_origin_with_budget(
         budget.charge(1)?;
         match (left, right) {
             (Origin::Source(left), Origin::Source(right)) => return Ok(left == right),
+            (
+                Origin::Expansion {
+                    invocation: left_invocation,
+                    definition: left_definition,
+                },
+                Origin::Expansion {
+                    invocation: right_invocation,
+                    definition: right_definition,
+                },
+            ) => {
+                return Ok(
+                    left_invocation == right_invocation && left_definition == right_definition
+                );
+            }
             (
                 Origin::Generated {
                     cause: left_cause,
@@ -17782,7 +18194,16 @@ pub(crate) fn clone_effect_origin_with_budget(
     let mut current = origin;
     let source = loop {
         match current {
-            Origin::Source(span) => break *span,
+            Origin::Source(span) => break Origin::Source(*span),
+            Origin::Expansion {
+                invocation,
+                definition,
+            } => {
+                break Origin::Expansion {
+                    invocation: *invocation,
+                    definition: *definition,
+                };
+            }
             Origin::Generated { cause, reason } => {
                 frames.try_reserve(1).map_err(|_| ())?;
                 frames.push(Frame::Generated(*reason));
@@ -17795,7 +18216,7 @@ pub(crate) fn clone_effect_origin_with_budget(
             }
         }
     };
-    let mut cloned = Owner(Some(Origin::Source(source)));
+    let mut cloned = Owner(Some(source));
     for frame in frames.into_iter().rev() {
         let related = match frame {
             Frame::Related(spans) => {
@@ -17979,11 +18400,20 @@ impl ResolvedType {
     }
 }
 
+type TypeOccurrenceDiagnostics = Vec<(usize, Box<crate::syntax::DiagnosticLocation>)>;
+
 /// Shareable arena-shaped provenance for one resolved type occurrence.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq)]
 pub struct ResolvedTypeProvenance {
     nodes: Arc<[ResolvedTypeProvenanceNode]>,
     root: usize,
+    diagnostics: Option<Arc<TypeOccurrenceDiagnostics>>,
+}
+
+impl PartialEq for ResolvedTypeProvenance {
+    fn eq(&self, other: &Self) -> bool {
+        self.nodes == other.nodes && self.root == other.root
+    }
 }
 
 /// One node in a resolved type-provenance arena.
@@ -18029,7 +18459,68 @@ impl ResolvedTypeProvenance {
         Self {
             nodes: nodes.into(),
             root,
+            diagnostics: None,
         }
+    }
+
+    pub(crate) fn with_diagnostics(mut self, diagnostics: TypeOccurrenceDiagnostics) -> Self {
+        if !diagnostics.is_empty() {
+            self.diagnostics = Some(Arc::new(diagnostics));
+        }
+        self
+    }
+
+    pub(crate) fn diagnostic_location(&self) -> Option<Box<crate::syntax::DiagnosticLocation>> {
+        let diagnostics = self.diagnostics.as_deref()?;
+        let mut reachable = vec![false; self.nodes.len()];
+        let mut pending = vec![self.root];
+        while let Some(index) = pending.pop() {
+            let Some(seen) = reachable.get_mut(index) else {
+                continue;
+            };
+            if std::mem::replace(seen, true) {
+                continue;
+            }
+            match &self.nodes[index] {
+                ResolvedTypeProvenanceNode::Fact(_) => {}
+                ResolvedTypeProvenanceNode::Tuple { elements, .. } => {
+                    pending.extend(elements.iter().copied());
+                }
+                ResolvedTypeProvenanceNode::Function {
+                    domain,
+                    codomain,
+                    effect_arguments,
+                    ..
+                } => {
+                    pending.push(*domain);
+                    pending.push(*codomain);
+                    pending.extend(effect_arguments.iter().copied());
+                }
+                ResolvedTypeProvenanceNode::Application {
+                    function, argument, ..
+                } => {
+                    pending.push(*function);
+                    pending.push(*argument);
+                }
+                ResolvedTypeProvenanceNode::Resource { arguments, .. } => {
+                    pending.extend(arguments.iter().copied());
+                }
+                ResolvedTypeProvenanceNode::Row { argument_roots, .. } => {
+                    pending.extend(argument_roots.iter().copied());
+                }
+            }
+        }
+        let mut location: Option<Box<crate::syntax::DiagnosticLocation>> = None;
+        for (index, cause) in diagnostics {
+            if reachable.get(*index).copied().unwrap_or(false) {
+                if let Some(location) = &mut location {
+                    location.add_cause(cause);
+                } else {
+                    location = Some(cause.clone());
+                }
+            }
+        }
+        location
     }
 
     /// Returns the complete source span of this provenance view.
@@ -18077,6 +18568,7 @@ impl ResolvedTypeProvenance {
         Some(Self {
             nodes: Arc::clone(&self.nodes),
             root,
+            diagnostics: self.diagnostics.clone(),
         })
     }
 
@@ -18531,6 +19023,7 @@ pub struct ResolvedPattern {
     pub kind: ResolvedPatternKind,
     /// Complete pattern span.
     pub span: Span,
+    pub(crate) diagnostic: Option<Box<crate::syntax::DiagnosticLocation>>,
 }
 
 /// The closed resolved pattern family.
@@ -18855,6 +19348,7 @@ pub struct ResolvedBinding {
     pub annotation: Option<ResolvedType>,
     /// Initializer resolved in the incoming scope.
     pub initializer: ResolvedExpr,
+
     /// Complete binding span.
     pub span: Span,
 }
@@ -18866,6 +19360,7 @@ pub struct ResolvedExpr {
     pub kind: ResolvedExprKind,
     /// Complete expression span.
     pub span: Span,
+    pub(crate) diagnostic: Option<Box<crate::syntax::DiagnosticLocation>>,
 }
 
 /// The closed resolved expression family.
@@ -19788,9 +20283,11 @@ pub(crate) fn discard_resolved_local_declaration_iteratively(
     };
     discard_resolved_body_work(
         vec![ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Block(ResolvedBlock {
                 declarations: vec![declaration],
                 result: Box::new(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Unit,
                     span,
                 }),
@@ -19804,6 +20301,43 @@ pub(crate) fn discard_resolved_local_declaration_iteratively(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn type_provenance_views_keep_only_their_ordered_diagnostic_occurrences() {
+        use crate::syntax::{DiagnosticLocation, MacroOrigin};
+
+        let source = SourceFile::new("type-causes.ash", "A B").unwrap();
+        let first = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let second = source.span(ByteRange::new(2, 3).unwrap()).unwrap();
+        let plain = ResolvedTypeProvenance::new(
+            vec![
+                ResolvedTypeProvenanceNode::Fact(first),
+                ResolvedTypeProvenanceNode::Fact(second),
+                ResolvedTypeProvenanceNode::Row {
+                    span: source.span(ByteRange::new(0, 3).unwrap()).unwrap(),
+                    argument_roots: Box::new([1, 0]),
+                },
+            ],
+            2,
+        );
+        let located = plain.clone().with_diagnostics(vec![
+            (0, Box::new(DiagnosticLocation::new(first.into()))),
+            (1, Box::new(DiagnosticLocation::new(second.into()))),
+        ]);
+        assert_eq!(
+            plain, located,
+            "diagnostics do not alter provenance equality"
+        );
+        let whole = located.diagnostic_location().unwrap();
+        assert_eq!(whole.primary, MacroOrigin::Source(first));
+        assert_eq!(whole.related, [MacroOrigin::Source(second)]);
+        let second_only = located.view(1).unwrap().diagnostic_location().unwrap();
+        assert_eq!(second_only.primary, MacroOrigin::Source(second));
+        assert!(second_only.related.is_empty());
+        let first_only = located.view(0).unwrap().diagnostic_location().unwrap();
+        assert_eq!(first_only.primary, MacroOrigin::Source(first));
+        assert!(first_only.related.is_empty());
+    }
+
     #[test]
     fn generic_cell_identity_census_covers_every_kind_store_with_exact_retries() {
         let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
@@ -20372,6 +20906,7 @@ mod tests {
             .span(ByteRange::new(0, 9).expect("range"))
             .expect("span");
         let occurrence = |ordinal, spelling: &str, start| ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
                 term: ResolvedTermName::Global(BinderId::resolved(module, ordinal)),
                 spelling: spelling.to_owned(),
@@ -20387,6 +20922,7 @@ mod tests {
                 .expect("span"),
         };
         let add = |left, right| ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Add(ResolvedBinaryExpr {
                 left: Box::new(left),
                 right: Box::new(right),
@@ -20411,6 +20947,7 @@ mod tests {
                     origin: binder.origin,
                 },
                 patterns: vec![ResolvedPattern {
+                    diagnostic: None,
                     kind: ResolvedPatternKind::Binder(Binder {
                         id: BinderId::resolved(module, 2),
                         spelling: "ignored".to_owned(),
@@ -20515,6 +21052,7 @@ mod tests {
         let module = ModuleId::new(42_005);
         let interface = InterfaceId::new(module, 1);
         let body = || ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
                 term: ResolvedTermName::Global(BinderId::resolved(module, 0)),
                 spelling: "x".to_owned(),
@@ -20545,6 +21083,7 @@ mod tests {
                                 origin: binder.origin.clone(),
                             },
                             patterns: vec![ResolvedPattern {
+                                diagnostic: None,
                                 kind: ResolvedPatternKind::Boolean(value),
                                 span,
                             }],
@@ -20557,6 +21096,7 @@ mod tests {
             })
             .collect();
         outer.equations[0].body = ResolvedExpr {
+            diagnostic: None,
             kind: ResolvedExprKind::Block(ResolvedBlock {
                 declarations: vec![ResolvedLocalDeclaration::Evidence(Box::new(
                     ResolvedLexicalEvidence {
@@ -20586,6 +21126,7 @@ mod tests {
                     },
                 ))],
                 result: Box::new(ResolvedExpr {
+                    diagnostic: None,
                     kind: ResolvedExprKind::Unit,
                     span,
                 }),
@@ -23817,6 +24358,7 @@ mod tests {
         fn group_fields(group: &ResolvedModuleGroup) {
             let ResolvedModuleGroup {
                 module,
+                generated_parameter_orders,
                 direct_dependencies,
                 declaration_order,
                 interfaces,
@@ -23832,10 +24374,12 @@ mod tests {
                 typed_fragment,
                 local_lowering,
                 span,
+                shared_owner,
             } = group;
             let _: &Option<crate::elaborate::SharedModuleLowering> = local_lowering;
             let _ = (
                 module,
+                generated_parameter_orders,
                 direct_dependencies,
                 declaration_order,
                 interfaces,
@@ -23851,6 +24395,7 @@ mod tests {
                 typed_fragment,
                 local_lowering,
                 span,
+                shared_owner,
             );
         }
 
@@ -23891,6 +24436,7 @@ mod tests {
                 lexical_constructors,
                 lexical_nominal_positions,
                 lexical_constructor_positions,
+                generated_parameter_orders,
                 effects,
                 effect_positions,
                 owner_signatures,
@@ -23900,6 +24446,7 @@ mod tests {
                 global_parameter_positions,
                 abstract_nominal_names,
                 abstract_nominal_kinds,
+                syntax_only_families,
                 native_symbols,
                 owner_definitions,
                 owner_definition_positions,
@@ -23909,6 +24456,7 @@ mod tests {
                 lexical_constructors,
                 lexical_nominal_positions,
                 lexical_constructor_positions,
+                generated_parameter_orders,
             );
             let global_parameter_rows: &Box<[ResolvedGlobalParameterRow]> = global_parameter_rows;
             for row in global_parameter_rows {
@@ -23933,6 +24481,7 @@ mod tests {
                 global_parameter_positions,
                 abstract_nominal_names,
                 abstract_nominal_kinds,
+                syntax_only_families,
                 native_symbols,
                 owner_definitions,
                 owner_definition_positions,
@@ -24902,7 +25451,7 @@ mod tests {
         let mut constraint_work =
             crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
         let mut type_work = TypeWorkBudget::default();
-        let witness: ValidatedCheckedRegistries<'_> =
+        let witness: ValidatedCheckedRegistries<'_, CheckedModule> =
             validate_checked_registries(&modules, &counts, &mut type_work, &mut constraint_work)
                 .expect("the exact prevalidation budget should produce row-retention authority");
         assert_eq!(constraint_work.used(), CONSTRAINT_WORK);
@@ -30054,6 +30603,7 @@ mod tests {
                     },
                     patterns: Vec::new(),
                     body: ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Unit,
                         span,
                     },
@@ -30243,13 +30793,16 @@ mod tests {
             .spawn(|| {
                 fn deep_expression(span: Span) -> ResolvedExpr {
                     let mut body = ResolvedExpr {
+                        diagnostic: None,
                         kind: ResolvedExprKind::Unit,
                         span,
                     };
                     for _ in 0..20_000 {
                         body = ResolvedExpr {
+                            diagnostic: None,
                             kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
                                 function: Box::new(ResolvedExpr {
+                                    diagnostic: None,
                                     kind: ResolvedExprKind::Unit,
                                     span,
                                 }),
@@ -30564,6 +31117,7 @@ mod tests {
                     lexical_constructors: Box::new([]),
                     lexical_nominal_positions: HashMap::new(),
                     lexical_constructor_positions: HashMap::new(),
+                    generated_parameter_orders: HashMap::new(),
                     effects: Box::new([]),
                     effect_positions: HashMap::new(),
                     nominal_parameters: HashMap::from([(
@@ -30578,6 +31132,7 @@ mod tests {
                     global_parameter_positions: HashMap::new(),
                     abstract_nominal_names: HashMap::new(),
                     abstract_nominal_kinds: HashMap::new(),
+                    syntax_only_families: HashSet::new(),
                     owner_signatures: OwnerSignatures::default(),
                     owner_definitions: Vec::new(),
                     owner_definition_positions: HashMap::new(),

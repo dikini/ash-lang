@@ -16,6 +16,18 @@ fn token_kinds(source: &SourceFile) -> Vec<TokenKind> {
 }
 
 #[test]
+fn dollar_is_a_token_while_syntax_remains_an_identifier() {
+    let source = SourceFile::new("syntax-punctuation.ash", "syntax $value").unwrap();
+    let lexed = lex(&source).unwrap();
+    assert!(lexed.diagnostics.is_empty(), "{:?}", lexed.diagnostics);
+    assert_eq!(lexed.tokens.len(), 4);
+    assert_eq!(lexed.tokens[0].kind, TokenKind::Identifier("syntax".into()));
+    assert_eq!(lexed.tokens[1].kind, TokenKind::Dollar);
+    assert_range(&lexed.tokens[1], 7, 8);
+    assert_eq!(lexed.tokens[2].kind, TokenKind::Identifier("value".into()));
+}
+
+#[test]
 fn recognizes_recursion_reserved_words() {
     let source = SourceFile::new("recursion-words.ash", "rec and record android")
         .expect("the token source should fit");
@@ -341,7 +353,6 @@ fn reports_each_excluded_lexical_form_with_its_exact_span() {
         ("// no", LexReason::Comment, 5),
         ("/* no */", LexReason::Comment, 8),
         ("01", LexReason::InvalidIntegerLiteral, 2),
-        ("$", LexReason::UnknownCharacter, 1),
         ("😀", LexReason::UnknownCharacter, 4),
     ];
 
@@ -398,7 +409,6 @@ fn collects_independent_lexical_errors_while_always_making_progress() {
         vec![
             LexReason::UnknownCharacter,
             LexReason::BareCarriageReturn,
-            LexReason::UnknownCharacter,
             LexReason::UnknownCharacter,
         ]
     );

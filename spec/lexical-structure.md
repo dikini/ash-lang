@@ -28,6 +28,10 @@ remain ordinary identifiers.
 resource acquisition and remains an ordinary identifier elsewhere.
 `foreign`, `library`, `profile`, `symbol` and `name` are contextual in foreign
 declarations and remain ordinary identifiers elsewhere.
+`syntax` is contextual in a syntax declaration or targeted syntax import and
+remains an ordinary identifier elsewhere. A locally imported syntax name is
+reserved for that syntax in the importing module as described by
+[syntax expansion](syntax-expansion.md#definitions-and-imports).
 `builtin` is reserved as a module-root name, not as an
 identifier; [name resolution](name-resolution.md#compiler-owned-cell-module)
 defines that root's fixed import.
@@ -38,7 +42,7 @@ integer. There is no fixed-width overflow. A leading zero in a multi-digit
 integer is invalid. A leading `-` is not part of an integer literal.
 
 The remaining punctuation admitted by Ash is `(`, `)`, `{`, `}`, `<`, `>`,
-`@`, `.`, `:`, `=`, `==`, `+`, `*`, `->`, `=>`, `!`, `|`, and comma. `@`
+`@`, `.`, `:`, `=`, `==`, `+`, `*`, `->`, `=>`, `!`, `|`, `$`, and comma. `@`
 introduces a named module root. A period separates module-path segments, a
 module alias from a qualified member, or an effect from one of its operations;
 it does not begin a floating-point literal. `!` introduces a latent effect row
@@ -51,6 +55,8 @@ written angle-bracketed parameter or argument list is nonempty. The longest
 token wins where one spelling prefixes another.
 Semicolon is recognized only to provide its specified source rejection; no
 grammar production admits it as source punctuation.
+`$` introduces a capture in a syntax matcher or a splice in its template;
+outside those positions it is rejected by the parser.
 Ordinary `String` literals, foreign profiles and native-symbol names use
 double-quoted strings. Their
 contents admit `\"`, `\\`, `\n`, `\r`, `\t` and `\0` escapes; other escapes,
@@ -60,6 +66,34 @@ literal has type `String` and contains its decoded UTF-8 text, including escaped
 NUL. There is no implicit String-to-native-pointer conversion. Ash has no
 comments, character literals, Unicode identifiers,
 floating-point literals, or negative integer expressions.
+
+### Public token kinds
+
+The canonical syntax interface exposes the following `TokenKind` constructors.
+The spelling of a fixed token must be exactly the spelling shown. An integer
+or string constructor accepts exactly one valid literal of that category.
+`LineEnd` accepts LF or CRLF. A token construction rejects leading or trailing
+whitespace and any spelling that does not form exactly one token of the
+requested kind.
+
+| Constructor | Spelling or category |
+| --- | --- |
+| `Wildcard`, `IntegerLiteral`, `StringLiteral` | `_`, an integer literal, a string literal |
+| `True`, `False` | `true`, `false` |
+| `Fn`, `Let`, `Rec`, `And`, `Type`, `Newtype`, `Effect`, `Match` | `fn`, `let`, `rec`, `and`, `type`, `newtype`, `effect`, `match` |
+| `Perform`, `Handle`, `With`, `Resume`, `Resource`, `Region`, `Using` | `perform`, `handle`, `with`, `resume`, `resource`, `region`, `using` |
+| `Hook`, `Register`, `Cleanup`, `Discard`, `Retain` | `hook`, `register`, `cleanup`, `discard`, `retain` |
+| `Import`, `As`, `Pub`, `Opaque`, `Interface`, `Impl`, `Where` | `import`, `as`, `pub`, `opaque`, `interface`, `impl`, `where` |
+| `IntType`, `BytesType`, `StringType`, `BoolType`, `UnitType` | `Int`, `Bytes`, `String`, `Bool`, `Unit` |
+| `At`, `Dot`, `Colon`, `Equal`, `EqualEqual` | `@`, `.`, `:`, `=`, `==` |
+| `Plus`, `Star`, `Arrow`, `FatArrow` | `+`, `*`, `->`, `=>` |
+| `Pipe`, `Bang`, `Comma`, `Less`, `Greater` | `\|`, `!`, `,`, `<`, `>` |
+| `LineEnd` | LF or CRLF |
+
+Identifiers have a separate syntax representation. Parentheses and braces
+are represented as balanced groups; `$`, semicolon and end-of-file have no
+public `TokenKind` constructor. The interface and token operations are
+specified by [syntax expansion](syntax-expansion.md#canonical-syntax-interface).
 
 This complete entry module is rejected with the lexical reason `lex.comment`.
 The executable test

@@ -217,6 +217,7 @@ fn runtime_class(program: &ValidatedEffectProgram, event: &TraceEvent) -> &'stat
 
 fn runtime_value_class(value: &Value) -> &'static str {
     match value {
+        Value::CompilerSyntaxHandle(_) => "compiler-syntax-handle",
         Value::ResourceHandle(_) => "resource-handle",
         Value::NetworkRegistration(_) => "network-registration",
         Value::RetainedKey(_) => "retained-key",
