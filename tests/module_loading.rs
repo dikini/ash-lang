@@ -300,13 +300,16 @@ fn syntax_selector_requires_a_checked_export_before_importer_body() {
 }
 
 #[test]
-fn ordinary_global_named_syntax_remains_importable() {
+fn ordinary_global_named_syntax_value_remains_importable() {
     let tree = TempTree::create();
     let entry = tree.write(
         "entry.ash",
-        "import library (syntax as value)\nmain : Unit -> Int\nmain () = value ()\n",
+        "import library (syntax_value as value)\nmain : Unit -> Int\nmain () = value ()\n",
     );
-    tree.write("library.ash", "pub syntax : Unit -> Int\nsyntax () = 42\n");
+    tree.write(
+        "library.ash",
+        "pub syntax_value : Unit -> Int\nsyntax_value () = 42\n",
+    );
     let compiled = compile_path(RunConfiguration {
         entry,
         roots: ModuleRoots::empty(),
@@ -955,6 +958,7 @@ fn root_configuration_rejects_every_reserved_word() {
         "type",
         "match",
         "import",
+        "syntax",
         "as",
         "pub",
         "opaque",

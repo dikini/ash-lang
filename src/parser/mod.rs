@@ -1445,6 +1445,7 @@ fn retained_token(kind: &TokenKind) -> FoundToken {
         TokenKind::Discard => FoundToken::Spelling("discard"),
         TokenKind::Retain => FoundToken::Spelling("retain"),
         TokenKind::Import => FoundToken::Spelling("import"),
+        TokenKind::SyntaxKeyword => FoundToken::Spelling("syntax"),
         TokenKind::As => FoundToken::Spelling("as"),
         TokenKind::Pub => FoundToken::Spelling("pub"),
         TokenKind::Opaque => FoundToken::Spelling("opaque"),

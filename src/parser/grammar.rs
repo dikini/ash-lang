@@ -310,6 +310,20 @@ fn import_declaration(parser: &mut Parser<'_>) {
 
 fn module_path(parser: &mut Parser<'_>) {
     parser.start(NodeKind::ModulePath);
+    let builtin_syntax = parser.at(&TokenKind::At)
+        && matches!(parser.nth(1), Some(TokenKind::Identifier(name)) if name == "builtin")
+        && parser.nth(2) == Some(&TokenKind::Dot)
+        && matches!(parser.nth(3), Some(TokenKind::Identifier(name)) if name == "compiler")
+        && parser.nth(4) == Some(&TokenKind::Dot)
+        && parser.nth(5) == Some(&TokenKind::SyntaxKeyword)
+        && parser.nth(6) != Some(&TokenKind::Dot);
+    if builtin_syntax {
+        for _ in 0..6 {
+            let _ = parser.bump();
+        }
+        parser.finish();
+        return;
+    }
     let absolute = parser.at(&TokenKind::At);
     if absolute {
         let _ = parser.bump();
@@ -328,12 +342,7 @@ fn module_path(parser: &mut Parser<'_>) {
 
 fn import_item(parser: &mut Parser<'_>, public: bool) -> bool {
     parser.start(NodeKind::ImportItem);
-    if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "syntax")
-        && matches!(
-            parser.nth(1),
-            Some(TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_))
-        )
-    {
+    if parser.at(&TokenKind::SyntaxKeyword) {
         if public {
             reject_import_line(parser, ExpectedForm::Identifier);
             parser.finish();
@@ -449,6 +458,7 @@ fn starts_module_declaration(parser: &Parser<'_>) -> bool {
                         | TokenKind::Interface
                         | TokenKind::Impl
                         | TokenKind::Fn
+                        | TokenKind::SyntaxKeyword
                         | TokenKind::Identifier(_)
                 )
             )
@@ -489,16 +499,25 @@ fn module_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
 }
 
 fn starts_syntax_declaration(parser: &Parser<'_>) -> bool {
-    parser.at(&TokenKind::Pub)
-        && matches!(parser.nth(1), Some(TokenKind::Identifier(name)) if name == "syntax")
-        && matches!(parser.nth(2), Some(TokenKind::Identifier(_)))
+    parser.at(&TokenKind::Pub) && parser.nth(1) == Some(&TokenKind::SyntaxKeyword)
 }
 
 fn syntax_declaration(parser: &mut Parser<'_>) {
     parser.start(NodeKind::SyntaxDeclaration);
     let _ = parser.bump(); // pub
     let _ = parser.bump(); // syntax
-    expect_syntax_name(parser);
+    let declaration = matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "declaration")
+        && parser.nth(1) == Some(&TokenKind::Colon)
+        && parser.nth(2) == Some(&TokenKind::LeftParen);
+    if declaration {
+        let _ = parser.bump(); // declaration
+        let _ = parser.bump(); // :
+        let _ = parser.bump(); // (
+        expect_syntax_name(parser);
+        let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
+    } else {
+        expect_syntax_name(parser);
+    }
     let mut names = std::collections::HashSet::new();
     let mut previous_capture = false;
     let mut final_expression = false;
@@ -546,7 +565,7 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
             final_expression = false;
         }
     }
-    if !previous_capture || !final_expression || names.is_empty() {
+    if !declaration && (!previous_capture || !final_expression || names.is_empty()) {
         parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
     }
     let _ = parser.expect(&TokenKind::FatArrow, ExpectedForm::FatArrow);

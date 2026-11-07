@@ -2931,6 +2931,7 @@ fn is_reserved_word(name: &str) -> bool {
             | "type"
             | "match"
             | "import"
+            | "syntax"
             | "as"
             | "pub"
             | "opaque"

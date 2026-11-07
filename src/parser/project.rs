@@ -20,9 +20,10 @@ use crate::{
         SurfaceModule, SurfaceModulePath, SurfaceName, SurfaceNominalDeclarationKind,
         SurfacePattern, SurfacePatternKind, SurfacePerformExpr, SurfaceQualifiedName,
         SurfaceRecursiveGroup, SurfaceRecursiveMember, SurfaceReference, SurfaceRequirement,
-        SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind, SurfaceSyntaxDeclaration,
-        SurfaceSyntaxImplementation, SurfaceSyntaxMatcherPart, SurfaceType, SurfaceTypeDeclaration,
-        SurfaceTypeKind, SurfaceTypeParameter, SurfaceTypeVisibility, SurfaceTypedPattern,
+        SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind, SurfaceSyntaxCategory,
+        SurfaceSyntaxDeclaration, SurfaceSyntaxImplementation, SurfaceSyntaxMatcherPart,
+        SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeParameter,
+        SurfaceTypeVisibility, SurfaceTypedPattern,
     },
 };
 
@@ -221,9 +222,11 @@ impl ProjectionError {
 
 /// Projects a complete, recovery-free module tree to surface syntax.
 ///
-/// This context-free API also checks template syntax using capture placeholders,
-/// without imported syntax matchers. The module driver instead checks templates
-/// with the selected matchers before resolving their bodies.
+/// This context-free API also checks expression template syntax using capture
+/// placeholders, without imported syntax matchers. Declaration headers and
+/// bodies are retained without declaration-template admission. The module
+/// driver checks expression templates with the selected matchers before
+/// resolving their bodies.
 ///
 /// # Errors
 ///
@@ -240,6 +243,9 @@ pub fn project_module(
     let module = project_module_retaining_templates(source, tree)?;
     let contexts = crate::syntax::SyntaxContexts::new(&[], &[], &[]);
     for declaration in &module.syntax_declarations {
+        if declaration.category == SurfaceSyntaxCategory::Declaration {
+            continue;
+        }
         crate::syntax::validate_template_syntax(declaration, source, &contexts).map_err(
             |failure| match failure {
                 super::MacroParseFailure::Syntax {
@@ -530,10 +536,18 @@ fn validate_shallow_shape(
         }
         NodeKind::SyntaxDeclaration => {
             shape.token(&TokenKind::Pub)?;
-            shape.token_matching(
-                |kind| matches!(kind, TokenKind::Identifier(name) if name == "syntax"),
-            )?;
-            shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
+            shape.token(&TokenKind::SyntaxKeyword)?;
+            if is_declaration_syntax(node, tokens) {
+                shape.token_matching(
+                    |kind| matches!(kind, TokenKind::Identifier(name) if name == "declaration"),
+                )?;
+                shape.token(&TokenKind::Colon)?;
+                shape.token(&TokenKind::LeftParen)?;
+                shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(name) if name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)))?;
+                shape.token(&TokenKind::RightParen)?;
+            } else {
+                shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
+            }
             while !shape.peek_token_is(&TokenKind::FatArrow) {
                 if shape.peek_node_is(NodeKind::SyntaxCapture) {
                     shape.node(NodeKind::SyntaxCapture)?;
@@ -663,6 +677,19 @@ fn validate_shallow_shape(
             }
         }
         NodeKind::ModulePath => {
+            if is_builtin_syntax_path(node, tokens) {
+                shape.token(&TokenKind::At)?;
+                shape.token_matching(
+                    |kind| matches!(kind, TokenKind::Identifier(name) if name == "builtin"),
+                )?;
+                shape.token(&TokenKind::Dot)?;
+                shape.token_matching(
+                    |kind| matches!(kind, TokenKind::Identifier(name) if name == "compiler"),
+                )?;
+                shape.token(&TokenKind::Dot)?;
+                shape.token(&TokenKind::SyntaxKeyword)?;
+                return shape.finish();
+            }
             let absolute = shape.peek_token_is(&TokenKind::At);
             if absolute {
                 shape.token(&TokenKind::At)?;
@@ -679,9 +706,7 @@ fn validate_shallow_shape(
         }
         NodeKind::ImportItem => {
             if is_syntax_import_item(node, tokens) {
-                shape.token_matching(
-                    |kind| matches!(kind, TokenKind::Identifier(text) if text == "syntax"),
-                )?;
+                shape.token(&TokenKind::SyntaxKeyword)?;
                 shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(name) if name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)))?;
                 if shape.peek_token_is(&TokenKind::As) {
                     shape.token(&TokenKind::As)?;
@@ -1681,12 +1706,12 @@ fn project_surface_module(
         match child.kind {
             NodeKind::ImportDeclaration => imports.push(project_import(source, child, tokens)?),
             NodeKind::SyntaxDeclaration => {
-                let name =
-                    direct_tokens(child, tokens)
-                        .nth(2)
-                        .ok_or(ProjectionError::MalformedTree(
-                            InternalReason::UnexpectedShape,
-                        ))?;
+                let declaration = is_declaration_syntax(child, tokens);
+                let name = direct_tokens(child, tokens)
+                    .nth(if declaration { 5 } else { 2 })
+                    .ok_or(ProjectionError::MalformedTree(
+                        InternalReason::UnexpectedShape,
+                    ))?;
                 let mut matcher = Vec::new();
                 let mut prefix = 0;
                 for element in &child.children {
@@ -1695,7 +1720,7 @@ fn project_surface_module(
                             let token = tokens.get(*index).ok_or(
                                 ProjectionError::MalformedTree(InternalReason::TokenOutOfRange),
                             )?;
-                            if prefix < 3 {
+                            if prefix < if declaration { 7 } else { 3 } {
                                 prefix += 1;
                             } else if token.kind == TokenKind::FatArrow {
                                 break;
@@ -1766,6 +1791,11 @@ fn project_surface_module(
                     )
                 };
                 syntax_declarations.push(SurfaceSyntaxDeclaration {
+                    category: if declaration {
+                        SurfaceSyntaxCategory::Declaration
+                    } else {
+                        SurfaceSyntaxCategory::Expression
+                    },
                     name: surface_name(name)?,
                     matcher,
                     implementation,
@@ -2018,16 +2048,20 @@ fn project_import(
     require_kind(node, NodeKind::ImportDeclaration)?;
     let path_node = only_child_of_kind(node, NodeKind::ModulePath)?;
     let mut path_names = direct_tokens(path_node, tokens)
-        .filter_map(|token| match &token.kind {
-            TokenKind::Identifier(text) => Some(SurfaceName {
-                text: text.clone(),
+        .filter_map(|token| {
+            let text = match &token.kind {
+                TokenKind::Identifier(text) => text.clone(),
+                TokenKind::SyntaxKeyword => "syntax".to_owned(),
+                _ => return None,
+            };
+            Some(SurfaceName {
+                text,
                 span: token.span,
                 introduction: 0,
                 introduced_at: None,
                 written: true,
                 diagnostic: None,
-            }),
-            _ => None,
+            })
         })
         .collect::<Vec<_>>();
     let absolute = direct_tokens(path_node, tokens).any(|token| token.kind == TokenKind::At);
@@ -2099,9 +2133,6 @@ fn project_import_item(
             TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
         )
     });
-    if syntax {
-        let _ = names.next();
-    }
     let name = surface_name(names.next().ok_or(ProjectionError::MalformedTree(
         InternalReason::UnexpectedShape,
     ))?)?;
@@ -2121,12 +2152,53 @@ fn is_syntax_import_item<T: ProjectionTokenSource + ?Sized>(
     node: &ConcreteNode,
     tokens: &T,
 ) -> bool {
-    let mut direct = direct_tokens(node, tokens);
-    matches!(direct.next().map(|token| &token.token.kind), Some(TokenKind::Identifier(name)) if name == "syntax")
+    matches!(
+        direct_tokens(node, tokens)
+            .next()
+            .map(|token| &token.token.kind),
+        Some(TokenKind::SyntaxKeyword)
+    )
+}
+
+fn is_declaration_syntax<T: ProjectionTokenSource + ?Sized>(
+    node: &ConcreteNode,
+    tokens: &T,
+) -> bool {
+    let mut direct = direct_tokens(node, tokens).skip(2);
+    matches!(direct.next().map(|token| &token.token.kind), Some(TokenKind::Identifier(name)) if name == "declaration")
         && matches!(
             direct.next().map(|token| &token.token.kind),
-            Some(TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_))
+            Some(TokenKind::Colon)
         )
+        && matches!(
+            direct.next().map(|token| &token.token.kind),
+            Some(TokenKind::LeftParen)
+        )
+}
+
+fn is_builtin_syntax_path<T: ProjectionTokenSource + ?Sized>(
+    node: &ConcreteNode,
+    tokens: &T,
+) -> bool {
+    let mut direct = direct_tokens(node, tokens);
+    matches!(
+        direct.next().map(|token| &token.token.kind),
+        Some(TokenKind::At)
+    ) && matches!(direct.next().map(|token| &token.token.kind), Some(TokenKind::Identifier(name)) if name == "builtin")
+        && matches!(
+            direct.next().map(|token| &token.token.kind),
+            Some(TokenKind::Dot)
+        )
+        && matches!(direct.next().map(|token| &token.token.kind), Some(TokenKind::Identifier(name)) if name == "compiler")
+        && matches!(
+            direct.next().map(|token| &token.token.kind),
+            Some(TokenKind::Dot)
+        )
+        && matches!(
+            direct.next().map(|token| &token.token.kind),
+            Some(TokenKind::SyntaxKeyword)
+        )
+        && direct.next().is_none()
 }
 
 fn project_type_declaration(
