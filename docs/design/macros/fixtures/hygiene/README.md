@@ -5,9 +5,8 @@ This proposed I12/I13/I16 graph exercises declaration and derive macros under
 uses unimplemented syntax and is not a passing product test.
 
 `main.ash` must return `252 : Int`: `first`, `second`, and `owner_result` each
-return 42, and `checked` returns 126. The first two generated functions have
-separate introduced `helper` bindings, isolated from each other and from the
-caller module's handwritten `helper`. The macro-owner references in
+return 42, and `checked` returns 126. The first two generated functions use the explicitly supplied names
+`helper_first` and `helper_second`, distinct from the caller module's handwritten `helper`. The macro-owner references in
 `owner_result` still refer to the private `private_calculation` and to the
 renamed public function through `facade`, despite same-spelled caller globals.
 The declaratively derived `Marker<Color>` implementation is used in the
@@ -15,9 +14,20 @@ generated module without publishing its private type or implementation.
 
 Required negative variants copy this directory and make one change each:
 
-- In `generated.ash`, replace `make_value second` with `make_value first`.
-  Reject the duplicate caller-visible global and publish neither conflicting
-  expansion as a usable successful module result.
+- In `generated.ash`, replace `make_value second using helper_second` with `make_value first using helper_second`.
+  Reject the duplicate caller-visible global in ordinary downstream checking;
+  identify both declarations and relevant macro invocations. The module must
+  not be published as a successful result.
+- In `generated.ash`, replace `make_value second using helper_second` with
+  `make_value second using helper_first`. Ordinary downstream checking rejects
+  the duplicate private helper and identifies both invocations and declaration
+  origins. In a separate copy, use `helper` as the second supplied helper and
+  require a diagnostic identifying the invocation and handwritten declaration.
+- In `private_types.ash`, give both invocations the type `HiddenFirst` and
+  distinct constructors. Ordinary downstream checking rejects the duplicate
+  private type and identifies both invocations and declaration origins. In a
+  separate copy, keep types distinct but use `HiddenFirst` for both constructors;
+  ordinary checking rejects the duplicate constructor with both origins.
 - In `main.ash`, replace its import with `import forms (private_calculation)`
   and replace `main`'s body with `private_calculation(())`. Reject the import of
   the macro owner's private helper; the macro's definition context does not
@@ -39,12 +49,12 @@ constructors and must return 42. `control_nominal_main.ash` and
 `control_nominal_generated.ash` are the handwritten graph. This tests a public
 caller-selected type and constructor across a module boundary.
 
-`private_types.ash` invokes the same macro twice; each expansion introduces its
-own private `Hidden` type and constructor, while the caller also has a
-same-spelled type and constructor. Its two caller-selected functions must
-return 42 each, giving 84. `control_private_types.ash` is the handwritten graph
-with distinct private names. This checks non-term hygiene, not a special
-duplicate-declaration exception.
+`private_types.ash` invokes the same macro twice with distinct caller-selected
+private type and constructor names, while the caller also has a `Hidden` type
+and constructor. Its two functions must return 42 each, giving 84.
+`control_private_types.ash` is the handwritten graph with distinct private
+names. Repeated names are errors under ordinary module rules, as the negative
+variants above check.
 
 `literal_public_forms.ash` writes a public function, type and constructor
 directly in the template. `literal_public_generated.ash` uses those names in

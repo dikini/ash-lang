@@ -13,6 +13,15 @@ not a fixed rendering of the message.
 - `unused_bad.ash` imports `broken` without invoking it. Its missing equation
   body is a template syntax error in `malformed_forms.ash` and must be rejected
   at definition admission.
+- `unused_bad_derive.ash` imports `broken_derive` without invoking it. The
+  missing `mark` equation body in `malformed_derive_forms.ash` is rejected as a
+  template syntax error at definition admission; report that body and definition.
+- `unused_free_derive.ash` imports the syntactically valid `missing_derive_free`
+  without invoking it and returns 42. `invoked_free_derive.ash` invokes it on
+  `Color` while the caller defines `unknown_helper`. Ordinary resolution rejects
+  the absent definition-context helper and identifies the generated reference,
+  definition and deriving clause; the caller's same-spelled helper cannot supply
+  it. This checks deferred resolution, not a macro-specific semantic check.
 - `forbidden_import.ash` is rejected because the template attempts to emit an
   import. Reject the literal import at template definition admission; the
   dependency graph is fixed before expansion and is not changed. Imports

@@ -136,8 +136,9 @@ Generator bindings and matcher captures have unique names within the macro.
 A binding's `from` expression can use captured expressions in its lexical
 repetition scope. The referenced ordinary Ash step function has type
 `A -> (A, B)`: its result contains the next state followed by the generated
-value, and `B` has an applicable `SyntaxFragment` instance. The seed and
-function are checked by ordinary Ash rules. Caller-supplied seeds can use inline expressions and checked imports,
+value. For the expression splices in the generator cases, `B` is
+`Syntax.ExpressionFragment`. The seed and function are checked by ordinary
+Ash rules; no conversion interface or macro-specific type checker is added. Caller-supplied seeds can use inline expressions and checked imports,
 not globals of the caller module that are unavailable at expansion time.
 Definition-site references retain their checked defining context. Generator
 initialization, iteration caching, nesting, error propagation and host effects
@@ -157,8 +158,10 @@ resulting ordinary declarations.
 
 ## Boundaries requiring retained evidence
 
-The lexical token vocabulary, punctuation-to-kind mapping and versioning are
-the general shared language contract identified in CP-0033. The exact shared
-constructor names are not selected by this grammar. Its concrete use must be
+The lexical token vocabulary and punctuation-to-kind mapping are specified in
+[lexical structure](../../../spec/lexical-structure.md#public-token-kinds).
+Interface and artifact versioning are separate language-interface concerns;
+slice 1 specifies no version-selection mechanism. This grammar does not select
+new shared token constructors. Its concrete use must be
 checked against the retained expression-slice parser and the complete fixture
 corpus, including ambiguous stops, nested repetitions and every output form.

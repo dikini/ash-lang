@@ -4,10 +4,10 @@ import derives (syntax marker)
 
 type Color = Red
     | Blue
-    deriving (marker)
+deriving (marker)
 
-make_value first
-make_value second
+make_value first using helper_first
+make_value second using helper_second
 use_private owner_result
 
 helper : Unit -> Int

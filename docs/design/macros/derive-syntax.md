@@ -162,7 +162,8 @@ subject and that deriving clause's output are not published.
 
 Caller-derived names, type parameters and constructors retain their source
 contexts. Names written in a derive template keep its definition context;
-introduced helpers are hygienic. Imports and ordinary callers do not gain
+local introduced helpers follow slice 1 hygiene; top-level declarations obey
+ordinary duplicate-name rules. Imports and ordinary callers do not gain
 access to the derive owner's private helpers. Generated `impl` versus
 `pub impl` uses ordinary Ash visibility: a public implementation can be
 selected by an importing module through `impl Interface`; a private one remains
@@ -181,6 +182,6 @@ Ash function bodies were checked against a stand-in syntax service, and the
 generic example's body was checked against the in-progress slice 1 service.
 Neither derive execution path has run. A general generic derive must reconstruct
 all of its subject's parameters and constraints with correct binding contexts;
-the simple declarative name binding does not do this for it. The fixture set
-includes opaque-type and failure examples; the complete integration inventory
-still needs review against the proposed grammar before proposal acceptance.
+the simple declarative name binding does not do this for it. The fixture set includes opaque types, derive ordering, generated-subject
+failure and unused malformed and unresolved templates. These fixed inputs still
+need independent review against the proposed grammar before proposal acceptance.

@@ -30,11 +30,32 @@ entry is a separate module; none of the derive expansions has run.
   must reject a clause on an interface.
 - `wrong_kind.ash` imports an expression syntax named `marker`; its use in a
   deriving clause must reject the wrong syntax category at that name.
+- `ordered_first.ash` and `ordered_second.ash` list the same two procedural
+  derives in opposite orders. Their respective first errors must be `first
+  derive rejected` and `second derive rejected`, with the subject, listed derive
+  and definition origins. Neither graph publishes a partial subject or output.
+- `generated_failure.ash` derives `spawn_failure` for `Source`. Its generated
+  `Generated` subject has the definition-context `first_failure` derive, which
+  rejects with `first derive rejected`. The diagnostic retains the original
+  invocation and generated-subject origins; the failed expansion publishes
+  neither `Source` nor `Generated` as part of a successful module.
+- `generated_order.ash` lists `spawn_failure` before `second_failure`. The
+  first derive emits a subject whose nested `first_failure` would reject. The
+  second listed derive must run before that nested output is expanded, so the
+  diagnostic is `second derive rejected`, not `first derive rejected`. The
+  failed expansion publishes no subject or generated output.
 - `nested.ash` derives `spawn` for `Source`; `spawn` emits a private generated
   type carrying a definition-context `marker` derive and a `probe` that needs
   the derived implementation. It must type-check the probe and return 42.
   This exercises generated subjects, owner-imported syntax, introduced names,
   ordered nested expansion and the existing expansion bound.
+
+For `main.ash`, check the expanded declaration sequence as well as execution:
+`Color` appears once, followed by `Marker<Color>` then `Tagged<Color>`; `Count`
+appears once, followed by `Marker<Count>` then `Tagged<Count>`. Both derives on
+each subject receive that subject's original declaration, including its full
+deriving clause, not an earlier derive's output. The sequence assertion is a
+syntax-expansion observation; the existing checker validates the implementations.
 
 Each failure must retain the relevant clause and derive-definition locations;
 no failing derive may publish its partial output.

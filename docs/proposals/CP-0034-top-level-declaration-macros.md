@@ -39,8 +39,36 @@ maps these shared boundaries to the slice 2 additions and fixtures.
 The retained expression slice checks template syntax at definition and resolves
 surviving literal free names in their defining environment at expansion. Issued
 contexts and ordinary resolution enforce access without separate per-reference
-grant objects. CP-0034 follows that baseline; its declaration-specific rules
-remain proposed and its fixtures still require review.
+grant objects. Its host admits checked monomorphic `Input -> MacroResult`
+transformers, transfers authenticated output before teardown, and preserves
+ordinary errors and origins. Its public `Node` and `Capture` sums are closed;
+`TokenKind` and its spellings are now specified in
+[lexical structure](../../spec/lexical-structure.md#public-token-kinds).
+These are the expression baseline, not evidence that generated module-level
+binders or generator adapters already work.
+
+Slice 2 implementation is confined to parsing, syntax transformation and
+their supporting helpers. Macros transform syntax and produce code; they are
+not responsible for proving that the produced code is valid or for repairing
+it. The ordinary parser and downstream compiler detect and report errors in
+that code. The macro subsystem checks its own notation and preserves source
+contexts, spans and origins so those errors can be traced to their sources.
+Name resolution,
+duplicate and visibility checks, type and effect checking, evidence selection,
+elaboration, publication, linking and Core validation belong to their existing
+downstream subsystems. Preserve source contexts, spans and expansion origins so
+those subsystems can report their own errors. Keep slice 1's syntax-handle
+admission and host boundaries; they do not establish semantic correctness.
+
+Do not duplicate or approximate a downstream check in macro machinery, even if
+the compiler currently misses a case. Record any downstream gap with a
+reproducer, expected behavior and affected subsystem as a separate downstream
+issue; stop dependent work until it is resolved or explicitly rescheduled, and
+continue independent work. This proposal does not authorize changes to the
+downstream subsystem. Any change to the proposed language contract returns to
+CP-0034 for a design decision. The proposed public-name behavior must still be
+checked against the existing pipeline; slice 1 does not yet support declaration
+output.
 
 ## Proposed behavior
 
@@ -157,23 +185,84 @@ Neither a Rust AST nor a compiler-internal enum is public API.
 The working choice is to extend slice 1's existing closed public syntax sums
 where declaration syntax requires additional cases. Existing consumers must
 be updated where their exhaustive matches no longer cover the extended sums.
-The companion specifies the affected sums and requires rebuilding artifacts
-whose syntax-interface version differs. An interface for generator-produced
-fragments can coexist with these closed sums; it does not make them open.
+The companion specifies the affected sums. Slice 1 defines no selectable or
+recorded syntax-interface version, so this proposal assumes no such mechanism.
+Changed constructor sets can require source consumers to update and be checked
+again; cross-version artifact policy is a separate language-interface concern.
+These public sums remain closed; generator outputs use syntax rather than an
+open conversion interface.
 
-The working generator API uses an ordinary Ash `SyntaxFragment<F>` interface
-whose `fragment_node` method converts a fragment and an origin to a `Node`.
-Its expression-fragment implementation returns the existing `ExpressionNode`;
-the extended syntax service also supports type, pattern and complete-declaration
-fragments. Interface implementations do not grant scope or visibility: the
-existing handle authentication, syntax admission and hygiene rules still apply.
+A generator returns syntax directly. For an expression splice, the step has
+the ordinary type `State -> (State, Syntax.ExpressionFragment)`. For example:
 
-Check seed and step calls using ordinary Ash rules and execute them through the
-slice 1 checked transformer host. Reuse its bounded execution, syntax services,
-handle validation and diagnostic propagation. Select generator interface
-evidence in the macro definition's environment without importing that evidence
-into caller code; check caller-supplied seed expressions and their evidence in
-the caller's available compile-time environment. An internally generated Ash
+```text
+next_number : Int -> (Int, Syntax.ExpressionFragment)
+```
+
+The argument is the current state: `from` supplies the first state, and the
+first returned component supplies the next. The second returned component is
+the fragment inserted into the template. Helpers may have any ordinary Ash
+types; only the step's final result must have the stated pair type. Pure
+generator functions are the expected case. If a function uses an effect
+row, including a row variable where ordinary Ash permits one, ordinary Ash
+checking and the existing slice 1 host rules apply. This proposal adds no
+generator-specific effect rule.
+
+Two authoring paths have been selected: a syntax subtemplate, parsed and filled
+with its variables, and procedural syntax construction in ordinary Ash code.
+Both produce an expression fragment and preserve its syntax context and origin.
+They use the existing syntax admission and diagnostic behavior; they do not
+perform semantic analysis. There is no generic conversion interface or
+implicit conversion from an `Int` value. General-purpose conversion libraries
+are outside this slice.
+
+Any ordinary Ash function with the required state-to-pair type can be used as
+the step. The compiler checks its type using ordinary Ash rules; the macro
+system threads its state and substitutes the returned fragment. It does not
+inspect how the function constructs that fragment or require a conversion
+interface. The old wrapper-based I17 fixture must be revised to use the
+selected result type.
+
+#### Syntax admission and failures
+
+Use the same syntax checks and diagnostics as slice 1 at their existing
+boundaries:
+
+- Parse a syntax subtemplate when its containing source definition is compiled.
+  This includes a subtemplate inside an ordinary generator or helper function.
+  Report malformed subtemplate syntax then, even if no macro later invokes that
+  function. Fill its holes during expansion; syntax admission checks the
+  resulting fragment without resolving or type-checking generated Ash.
+- Procedural construction uses the existing syntax parsing behavior. In slice
+  1, `parse_expression` returns `Parsed(fragment)` or
+  `ParseRejected(failure)`. A procedural transformer can handle a failure or
+  return `Rejected(SyntaxDiagnostic(failure))` to preserve its structured
+  cause. Construction from a generator must use the same syntax and
+  diagnostic path, not a new error model.
+- After substitution, parse and admit the complete macro output as ordinary
+  declaration syntax. A syntax error rejects the expansion without publishing
+  partial output. Generated declarations that parse then pass to the existing
+  downstream compiler for name, type and other semantic checks.
+
+When a generator calls an operation that returns a fallible result, its
+ordinary Ash code handles that result according to its declared return type.
+A generator need not introduce a separate error protocol. Syntax failures at
+definition and output admission continue through the existing macro diagnostic
+path. The generator itself follows its ordinary declared Ash type.
+
+The step is an ordinary Ash function checked as part of compiling its defining
+module. Because declaration macros are imported, that module is already
+checked when another module invokes the macro. The expander does not inspect
+or independently verify the function's body or type. An invocation-supplied
+seed and any generated call are subject to ordinary Ash checking in the
+appropriate existing environment; an incompatible use remains an ordinary Ash
+error. Preserve the relevant source contexts and spans for that error.
+
+Execute checked seed and step calls through the slice 1 transformer host.
+Reuse its bounded execution, syntax services,
+handle validation and diagnostic propagation. Check caller-supplied seed
+expressions in the caller's available compile-time environment, using ordinary
+Ash checking. An internally generated Ash
 adapter is one possible implementation, not a language requirement. A step has
 the ordinary shape `A -> (A, B)`: its input is the current state, and its output
 contains the next state followed by the generated value. No macro `Input`
@@ -181,9 +270,9 @@ argument or ambient input operation is needed to connect the seed and step. The
 macro machinery threads the returned state into the next call and substitutes
 the returned value at the generator's repetition scope.
 
-Ordinary Ash checking checks generator functions and their return types. The
-generated declarations then pass through ordinary resolution and type checking;
-the macro expander does not perform a separate type analysis of generated code.
+The generated declarations pass through ordinary resolution and type checking.
+The macro expander does not perform a separate type analysis of generators,
+their uses, or generated code, and does not extend the ordinary type checker.
 Syntax admission still rejects malformed output and fragments in the wrong
 syntactic position.
 
@@ -212,7 +301,7 @@ template-written free names then: an unused template may contain an unknown
 free name. When an invocation produces that reference, ordinary resolution
 uses the definition-site environment and reports an unavailable name there;
 a same-spelled caller name cannot supply it. Captured syntax and introduced
-bindings retain their respective contexts. As in slice 1's amended candidate,
+bindings retain their respective contexts. As in retained slice 1,
 ordinary imports and the `using` transformer target are still checked as
 definition dependencies. Ordinary Ash checking and error propagation handle
 generated-program meaning.
@@ -242,34 +331,51 @@ context and the existing bounded expansion policy. Declaration collection
 precedes body resolution, allowing
 ordinary forward and recursive references. Fresh identities must be
 deterministic modulo renaming, and ordinary no-macro modules retain their
-existing parse and meaning. Generated derive subjects and definition-time
-validation need complete rules and fixtures before acceptance.
+existing parse and meaning. The initial corpus fixes generated-subject,
+derive-order and definition-time template cases; their agreement with this
+contract remains subject to independent review before acceptance.
 
 Spliced caller identifiers keep caller lexical and syntax context. A
 caller-supplied binder can introduce a declaration referenced by caller source;
-its public visibility follows the emitted declaration. Introduced binders and
-their references share the macro introduction context and cannot accidentally
-capture caller names. Separate invocations have separate introduced helpers.
-An introduced `pub` name is accessible by its written spelling to the
-invoking module and, subject to ordinary visibility, to its importers. Public
-names collide under the ordinary module rules, including across expansions.
-Private introduced binders retain hygienic isolation. Deliberately constructed
-caller-context names use CP-0033's explicit context operation and remain
-subject to normal collision and visibility rules.
+its public visibility follows the emitted declaration. Local binders inside a
+generated declaration retain slice 1's existing hygiene rules.
+
+Generated top-level names, whether private or public and whether written by the
+macro or supplied by its caller, follow ordinary module namespace and duplicate
+rules. If declarations conflict, including across macro invocations or with a
+handwritten declaration, the unchanged downstream compiler reports the
+conflict. Syntax transformation does not detect, resolve or silently rename it.
+Preserve enough source spans and expansion origins for the diagnostic to
+identify both conflicting declarations and their relevant macro invocations.
+The author or caller controls which names the macro emits; passing distinct
+names is one way to avoid conflicts. A future or proposed helper may produce
+unique spellings under a clearly stated scope, but this decision does not add
+a helper or assume that a fresh syntax context alone changes a spelling.
+
+An introduced `pub` name is intended to be accessible by its written spelling
+to the invoking module and, subject to ordinary visibility, its importers.
+Whether this works through unchanged downstream resolution remains an
+acceptance question. Deliberately constructed caller-context names use slice
+1's explicit context operation and remain subject to normal collision and
+visibility rules.
 
 Definition-site references retain their issued syntax context. Ordinary
 resolution uses that context to select the defining environment and enforce
 its access and import rules; linking retains the necessary checked closure.
 They do not import an implementation into the caller, grant access to another
-module's withheld member, or grant builtin authority. Slice 1's in-progress
-amendment removes separate per-reference grant objects; this proposal does not
-reintroduce them. The amended slice 1 contract must be retained before this
-proposal is implemented.
+module's withheld member, or grant builtin authority. The retained slice 1
+contract uses no separate per-reference grant objects; this proposal does not
+reintroduce them.
 Generated declarations use the normal namespace, opacity, duplicate,
 implementation-evidence, type, effect, resource, and independent Core
-validation rules. Imports and ordinary caller syntax do not gain access to
-macro-private helpers. Generated public names and implementation facts enter
-the caller's checked public summary under the established module rules.
+validation rules, without changes to those downstream stages. Imports and
+ordinary caller syntax do not gain access to the macro owner's private helpers.
+Generated public names and implementation facts enter the caller's checked
+public summary under the established module rules. Ordinary duplicate errors
+are the intended result for conflicting generated names. Access to literal
+public names through unchanged resolution remains to be demonstrated; otherwise
+record a downstream resolution issue and return any contract change to the
+design owner.
 
 Retain invocation, definition, input and construction origins through parsing,
 checking, linking and diagnostics. Invalid subject, matcher and output errors,
@@ -335,8 +441,10 @@ completion, one-shot, or evidence properties.
 
 The companion records the historical 65- and 95-point predictions alongside
 the declaration inventory, integration catalogue and dependency-ordered tasks.
-The updated scope requires a new estimate once its remaining choices and the
-slice 1 contract are settled.
+The local [delivery plan](../design/macros/slice2-delivery-plan.md) preserves
+the earlier 126-point prediction and records a revised forecast of 130 points,
+including four points of already recorded planning work. Its pre-implementation
+gates include completing and independently reviewing the I17 source fixtures.
 Implementation requires a separately accepted proposal and owning task. Before
 acceptance, independently review the proposed grammar, syntax-service contract,
 integration corpus and remaining semantic decisions against the retained

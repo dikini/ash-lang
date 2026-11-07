@@ -32,7 +32,9 @@ appear below; predicted and actual difficulty remain separate. The independent
 review identified grant-specific work not required by the retained expression
 slice and implementation choices that remain open. The 95 points are the
 recorded pre-review prediction, not a fresh estimate for the revised contract.
-Replan and estimate the remaining work after those choices.
+The [local delivery plan](slice2-delivery-plan.md) records the later 126-point
+prediction and the revised 130-point forecast, including four points of already
+recorded planning work.
 
 | Functionality | Points | Counted once |
 | --- | ---: | --- |
@@ -144,11 +146,11 @@ affected types and constructors rather than assuming every family needs an
 extension. Existing matches without a suitable fallback may need new cases even
 when expression behavior is unchanged. Use explicit cases where their meaning
 matters; a wildcard is appropriate only when ignoring future cases is correct.
-The interface version identifies the public constructor set. A previously
-compiled artifact whose recorded syntax-interface version does not match is
-rechecked and rebuilt before use; it is not decoded using a different closed
-sum layout. This requires no shared binary representation across compilers.
-No automatic compatibility of exhaustive source matches is assumed.
+Slice 1 exposes no selectable or recorded syntax-interface version. No
+versioned-artifact mechanism is assumed by this proposal. Consumers must be
+checked against the constructor set they use; cross-version artifact policy is
+a separate language-interface concern. No automatic compatibility of
+exhaustive source matches is assumed.
 
 ### Slice 1 contract boundary
 
@@ -166,12 +168,18 @@ remain proposed and must be checked against the retained contract.
 | Checked host and service | Reuse ordinary checked transformers, permitted effect rows, handle validation, bounds, transfer and teardown; extend the closed syntax sums and calls for declaration data. Generator steps thread ordinary Ash state and share the host boundary. | I10–I11, I16–I18; [indexed derive](fixtures/indexed/README.md), [generators](fixtures/generators/README.md), [migration](fixtures/migration/README.md) |
 | Origins and diagnostics | Reuse input, construction and expansion origins; add declaration and derive frames while leaving program errors with ordinary checks. | I14–I15; [diagnostics](fixtures/diagnostics/README.md) |
 
-Before implementation, compare the retained specification, public
-syntax-service signatures and constructor set, parser and host behavior, and
-the reviewed receipt against this table and its fixtures. Update only actual
-deltas; do not infer completed behavior from the intermediate worktree or
-repeat slice 1 implementation as slice 2 work. The shared token vocabulary
-remains the general language-interface concern recorded in CP-0033.
+The [current syntax expansion specification](../../../spec/syntax-expansion.md)
+and the QA-confirmed slice 1 delivery establish the expression baseline in
+this table. `Node` has token, identifier, group and expression cases; `Capture`
+has expression and identifier cases. The declaration-specific cases remain
+proposed; generators return syntax directly without a conversion interface. The public
+token constructors and spellings are now specified in
+[lexical structure](../../../spec/lexical-structure.md#public-token-kinds).
+The expression host checks `Input -> MacroResult`, not an arbitrary generator
+step. Declaration staging, an adapter for steps and top-level identity behavior
+still require evidence. Slice 1 does not prove those additions work unchanged.
+The [local plan](slice2-delivery-plan.md#readiness-questions-before-implementation)
+records the outstanding checks and the syntax-only implementation boundary.
 
 ### Declaration syntax service
 
@@ -253,8 +261,8 @@ value type `B` has a step of type `A -> (A, B)`: each call receives the
 current state and returns the next state followed by its generated value.
 The `from` expression supplies the first state. The next call receives the
 previously returned state; the template splices the returned value. Ordinary
-Ash type checking verifies these connections and the applicable
-`SyntaxFragment<B>` implementation. No separate generator type checker or
+Ash type checking verifies these connections. The generator result is syntax;
+for expression splices it is `Syntax.ExpressionFragment`. No separate generator type checker or
 macro `Input` argument is needed. The macro machinery's generator-specific
 responsibility is to thread each returned state into the next call at the
 agreed repetition scope and substitute the corresponding value. For the
@@ -323,49 +331,49 @@ pub syntax declaration: (make_numbered) starting_at $start:expr names $( $name:i
 ```
 
 Evaluate that expression as ordinary Ash in its caller context.
-Seed and step types use ordinary Ash checking; there is no separate macro type
-system. The declaration-expansion availability rule is described below.
+The defining module's ordinary compilation checks the step function before an
+importer can invoke its macro. An invocation-supplied seed and a generated use
+are checked as ordinary Ash in their respective contexts; compiling the defining
+module alone cannot establish that every future caller's seed is compatible.
+There is no separate macro type system or type-checking pass. The
+declaration-expansion availability rule is described below.
 
-The author explicitly constructs a syntax value, such as integer- or
-Boolean-expression syntax, before returning it. There is no requirement to
-automatically convert an arbitrary `Int`, `Bool` or `String` to syntax at the
-template splice. The working Ash interface converts a fragment value and an
-origin into a syntax node:
+The author constructs the syntax returned by the step. For the example,
+`next_number : Int -> (Int, Syntax.ExpressionFragment)` and `is_first` also
+returns expression syntax. The first component remains the threaded state;
+`from` provides the initial state, not a compiler input handle. The proposed
+`SyntaxFragment<F>` conversion interface and its implementations are removed.
+Conversion libraries are outside this slice.
 
-```text
-pub interface SyntaxFragment<F> {
-    fragment_node : (F, Origin) -> Node
-}
+Two authoring paths are intended:
 
-pub impl SyntaxFragment<ExpressionFragment> {
-    fragment_node (fragment, origin) = ExpressionNode(fragment, origin)
-}
-```
+1. Parse a syntax subtemplate, fill its variables, and return an expression
+   fragment. This keeps a fixed shape close to ordinary Ash source. Check its
+   syntax while compiling the source definition containing it, including an
+   ordinary generator or helper, even when the function is never invoked.
+2. Construct expression syntax procedurally with the syntax service. This
+   permits a variable shape to be built from the generator state.
 
-The corresponding interface evidence is selected using ordinary Ash checking.
-Other fragment types can implement the interface; an implementation does not
-grant arbitrary scope, origin, builtin, or private-name authority. The host
-still authenticates handles and validates the fragment's category and the
-resulting declarations. The public fragment constructors and syntax operations
-are listed in the declaration syntax service above. The canonical syntax module
-also provides corresponding interface implementations for the new fragment
-types, returning their matching `Node` alternative.
+Both paths must return `Syntax.ExpressionFragment` and work with a step that
+receives only its state. A final helper could have the ordinary type
+`Int -> Syntax.ExpressionFragment`; intermediate helpers may use any ordinary
+Ash types. Pure functions are expected. Where a function uses an effect row,
+ordinary Ash checking and the existing compile-time host rules apply; macros
+add no generator-specific effect rule.
 
-A step may be an ordinary checked Ash function with syntax-service effects,
-for example `next_number : Int -> (Int, ExpressionFragment) ! {Ops}`. Ordinary
-Ash conversion helpers can use syntax services to construct the returned
-fragment. The existing fixture uses `make_token`. No automatic
-primitive-to-syntax conversion is required.
+Any ordinary Ash function with the required type can be used as the step.
+The macro machinery threads its state and substitutes the fragment; it does not
+inspect the function body or add a type checker. Reuse existing syntax admission
+and diagnostics, and leave semantic checking to the ordinary compiler. Revise
+I17 to use the selected fragment result type; the current wrapper-based graph
+predates this decision.
 
-Check and execute seed and step calls through the retained slice 1 host. Preserve
+Check and execute the seed and step through the retained slice 1 host. Preserve
 its checked entry, bounded execution, syntax services, authenticated handles,
 result transfer and diagnostics. An internal Ash adapter with a monomorphic
 `Input -> MacroResult` entry is one implementation candidate, not a required
-representation. Select `SyntaxFragment` evidence through normal checking in
-the macro definition's environment. A private implementation defined there can
-support its generator without becoming an import or generally available
-implementation in the caller's generated program. Check an invocation-supplied
-seed and its evidence in the caller's available compile-time environment.
+representation. Caller-supplied seeds retain caller context; the step retains
+its defining-module context. These rules add no macro-specific type checker.
 
 An invocation-supplied seed may use an inline Ash expression, its own lexical
 bindings and names from already checked imports. It cannot depend on the caller
@@ -378,12 +386,13 @@ The compile-time entry and its dependency closure obey the existing checked-host
 effect and execution bounds. Availability of caller-module globals may be
 widened in a later proposal.
 
-The generator function and its return type are checked by ordinary Ash type
-checking. Generated declarations are resolved and type checked in the ordinary
-pipeline; the expander performs no additional type analysis of their bodies.
+The step function is checked during its defining module's ordinary compilation.
+The expander preserves source and context, threads state and substitutes values;
+it does not inspect or independently check the function's type or body. The
+existing checker handles generated uses and declarations, reporting incompatible
+caller seeds or uses as ordinary Ash errors.
 Syntactic admission remains responsible for complete fragments and their
-placement. The proposed interface and syntax constructors need complete
-signatures, implementation and conformance examples.
+placement.
 
 At definition time, parse the template and check the macro notation's capture,
 generator and repetition bindings. Do not resolve free template names then.
@@ -392,11 +401,6 @@ ordinary checking handles generated declarations and propagates their errors.
 An unused template with an unresolved free name is valid, while an unused
 syntactically malformed template is rejected by the parser. This follows the
 retained expression slice; the declaration-specific policy remains proposed.
-
-The interface for emitted fragments and the closed syntax sums serve different
-roles. The interface permits a checked Ash function to expose a fragment;
-the closed sums provide inspectable syntax cases. Implementing the interface
-does not itself grant authority or make a closed sum extensible by users.
 
 Declaration and derive macros have distinct entry forms. Expand them in source
 order before ordinary module resolution. Each derive receives the original
@@ -614,12 +618,12 @@ opacity and malformed-member graphs and their handwritten controls.
 | I09: fixed derive | A `Color` type with `Red` and `Blue` constructors and a deriving clause is retained once; an interface-specific derive emits a `Marker<Color>` implementation. Main observes both constructors and returns 42. Include a `newtype` and a clause naming multiple derives; reject a deriving clause on an unsupported declaration form. |
 | I10: structural derive | A derive on `Color` traverses its `Red` and `Blue` constructors and emits an implementation with distinct constructor match arms; both execute their expected paths. A payload-bearing or unsupported constructor shape returns the specified authored diagnostic. |
 | I11: variable size and procedural parity | Run the same derive on one, two and at least three constructors; compare handwritten target behavior with a real checked Ash transformer. If declarative repetition is selected, run the equivalent declarative derive and compare binding and outputs. |
-| I12: caller/module hygiene | Generate public globals and nominals/constructors with caller-selected and macro-written names; later caller declarations and an importing module use them by spelling. Same-spelled macro-introduced private helpers stay distinct across invocations and from caller names. Ordinary checking rejects duplicate public names and import collisions. |
+| I12: caller/module hygiene | Generate public globals and nominals/constructors with caller-selected and macro-written names; later caller declarations and an importing module use them by spelling. Generated private or public name conflicts reject in ordinary downstream checking, with both sources and macro origins identified. Caller-selected distinct helper and type names succeed; import collisions reject. |
 | I13: owner authority | An imported macro references its private helper and a renamed/qualified public dependency despite caller shadowing. The caller cannot directly access the helper or a dependency's opaque constructor. Include a facade import. |
 | I14: output and staging failures | Reject imports, syntax definitions, malformed declarations, recovery nodes, partial declarations and out-of-category protected fragments. Preserve the original module graph and publish no part of a failed expansion. Reject malformed unused templates at definition time; check generated-program errors through ordinary Ash checking. |
 | I15: diagnostics and limits | Reject a generated type error, missing name, author rejection, invalid output and bounded recursion. Human and JSON output retain distinct causes, invocation, definition and relevant original input; repeated compilation preserves observable output modulo fresh identities. |
 | I16: real graph and consumers | A macro library, its helper dependency, a caller with a derive and declaration macro, and an importer of generated public names compile and execute through the public driver. Exercise interpreted and supported build/image execution, host root teardown, authenticated input handles and independent Core validation. Test source access and opacity with ordinary resolver and linker rules. |
-| I17: generator-assisted template | With the two-generator `make_constants` example above, construct syntax fragments explicitly and observe results 100, 1 and 2 in source order. Compare a template-level generator's `0, 1, 2, 3` with a generator attached to the outer repetition's `0, 1, 0, 1`. Include an ordinary Ash `SyntaxFragment` implementation and checked execution on the public path; repeated use within an iteration; independent seeds; rejection of duplicate generator names; inline and imported invocation-supplied seeds; rejection of a caller-module global seed; a seed fixed in `with`; a generator with an invalid return type; generated code with a type error; an invalid fragment category; checked execution and bound failures; and no partially published declarations. |
+| I17: generator-assisted template | With the two-generator `make_constants` example above, construct syntax fragments explicitly and observe results 100, 1 and 2 in source order. Compare a template-level generator's `0, 1, 2, 3` with a generator attached to the outer repetition's `0, 1, 0, 1`. Use a step returning `Syntax.ExpressionFragment` and checked execution on the public path; repeated use within an iteration; independent seeds; rejection of duplicate generator names; inline and imported invocation-supplied seeds; rejection of a caller-module global seed; a seed fixed in `with`; a generator with an invalid return type; generated code with a type error; an invalid fragment category; checked execution and bound failures; and no partially published declarations. |
 | I18: closed-sum migration | For a public syntax sum actually extended by the proposal, check that an old exhaustive match without a fallback is rejected for its missing new cases. Update the consumer to handle the new cases and show that its existing expression transformation still works. Check an existing fallback only where its behavior is correct, and preserve syntax origins and contexts across the migrated transformer. |
 | I19: repetition and captures | Match zero, one and multiple items with `*`, and one and multiple with `+`; reject zero with `+`. Exercise separators, paired equal-length captures in source order, a length mismatch, and each supported identifier, type, expression, pattern and braced multi-line declaration capture. |
 | I20: nested declarations | Generate an invocation of another declaration macro and verify source-order output and definition-versus-caller syntax context. Exercise forward and mutually recursive references, a bounded recursive expansion failure and atomic rejection without partial publication. With two authored expansion failures, verify that a derive preceding a declaration invocation fails first, and vice versa. |
@@ -788,7 +792,7 @@ pending until the connected driver path is available.
 | P02 | Checked Ash declaration output, transfer and host lifecycle | 4 | P01/D02a | I11/I16 real transformer, teardown, invalid output and no partial result. |
 | H01a | Stage declaration expansion and allocate resulting module identities | 3 | D02a | I01/I12/I16 declaration entry, output order and forward references through the driver. |
 | H01b | Expand derive entry forms and merge output in source order | 3 | H01a/R01a | I09/I12/I14/I20 derive timing, retained subject, forward references and source-ordered expansion failures. |
-| H02a | Preserve caller-selected and introduced term binders | 3 | H01a | I07/I12 generated globals: caller reference, introduced helper isolation and collision refusal. |
+| H02a | Preserve caller-selected and introduced term binders | 3 | H01a | I07/I12 generated globals: caller-selected distinct helper names and ordinary duplicate-name diagnostics. |
 | H02b | Preserve caller-selected and introduced non-term binders | 3 | H01a | I01/I02/I03/I04/I12 type, constructor, interface and method contexts with captured-versus-introduced refusals. |
 | H03a | Preserve definition-context public imports and aliases | 3 | H01a/H02a; retained CP-0033 contexts | I13 qualified, renamed and facade routes retain identity under caller shadowing. |
 | H03b | Resolve definition-private references and retain checked closure | 2 | H03a | I13/I16 private helper survives linking; ordinary resolution rejects direct caller access and inaccessible opaque members. No per-reference grant objects. |
@@ -814,7 +818,7 @@ are agreed; its acceptance still requires its stated connected evidence.
 | G01 | Parse matcher/template repetition and trailing generator clauses | 3 | D01a/D01b; grammar agreement | I17/I19 nested repetitions, clause ownership, malformed binding and separator refusals. |
 | G02 | Bind unique generator names and their lexical scopes | 3 | G01 | I17 duplicate-name refusal, independent names and references confined to their owning template. |
 | G03 | Check and evaluate seed expressions in the compile-time environment | 4 | G02/P01; compile-time call interface | I17 inline and imported seeds execute; caller-global and wrong-type seeds reject at their source. |
-| G04 | Check step calls and select fragment interface evidence | 4 | G02/P01/P02; compile-time call interface | I17 checked step, ordinary interface instance, wrong return type and out-of-category output. Add a case distinguishing caller seed evidence from definition-site fragment evidence. |
+| G04 | Construct ordinary step calls and preserve syntax fragment contexts | 4 | G02/P01/P02; compile-time call interface | I17 checked fragment-returning step, wrong return type, fragment admission and source origins. |
 | G05 | Execute per-scope generator state and iteration caching | 4 | G03/G04 | I17 `0,1,2,3` versus `0,1,0,1`, repeated splices, empty iterations and independent states. |
 | G06 | Preserve generator errors, origins and atomic failure | 3 | G03/G04/V01a/V01b | I15/I17 checked-step, bound and generated-code failures retain causes and publish no partial result. |
 | G07 | Run generator integration and generator-specific review | 2 | G05/G06; connected driver | I17 complete public-driver graphs, source and structured diagnostics, focused review and repairs. |
@@ -883,8 +887,10 @@ the combined production path after the independently progressing units connect.
 
 ## Before proposal acceptance
 
-1. Reconcile the retained slice 1 contract after its in-progress amendment and
-   gate. Re-estimate the revised task allocation without overwriting the 65- and
-   95-point historical predictions; complete and review the resulting gates.
+1. Review the remaining public-name behavior and corpus obligations recorded in
+   the [local plan](slice2-delivery-plan.md). The generator's ordinary function
+   type is decided; no conversion interface or separate evidence mechanism is
+   required. Keep the revised 130-point forecast and earlier predictions
+   visible as the scope and acceptance evidence are reviewed.
 2. Obtain an explicit acceptance decision. Product implementation, its
    mutation harness and passing integration evidence follow that decision.
