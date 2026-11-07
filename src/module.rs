@@ -20,7 +20,6 @@ use crate::{
         ParseDiagnostic, ParserCheckpoint, ProjectionError, ResourceFailure,
         finish_module_from_checkpoint_with_syntax, module_span_from_checkpoint,
         parse_module_header, parse_with_budget_and_header, project_module, project_module_header,
-        project_module_retaining_templates,
     },
     source::{SourceError, SourceFile, SourceId, Span},
     surface::{
@@ -1408,6 +1407,8 @@ impl StagedModule {
         self,
         budget: &mut SyntaxBudget,
         syntax: &[crate::syntax::SelectedSyntax],
+        owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
+        owners: &mut Vec<crate::syntax::SyntaxOwner>,
     ) -> Result<LoadedModule, LoadGraphError> {
         let StagedSyntax {
             imports,
@@ -1415,6 +1416,7 @@ impl StagedModule {
             body,
             import_span,
         } = self.surface;
+        let mut completed_owners = None;
         let (source, surface) = match body {
             ModuleBody::Parsed(mut surface) => {
                 surface.imports = imports;
@@ -1428,8 +1430,25 @@ impl StagedModule {
                     syntax,
                 );
                 *budget = retained;
-                let (source, mut surface) =
-                    project_finished_module(self.source, tree, import_span)?;
+                if let Err(resource) = budget.charge_units(owners.len()) {
+                    return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+                        lexical: Vec::new(),
+                        parser: Vec::new(),
+                        resource: Some(resource),
+                        source: self.source,
+                        import_span,
+                    })));
+                }
+                let mut staged_owners = owners.clone();
+                let (source, mut surface) = project_finished_module(
+                    self.source,
+                    tree,
+                    import_span,
+                    syntax,
+                    owner_imports,
+                    &mut staged_owners,
+                    budget,
+                )?;
                 if surface.imports != imports {
                     return Err(LoadGraphError::Projection {
                         source,
@@ -1440,6 +1459,7 @@ impl StagedModule {
                     });
                 }
                 surface.imports = imports;
+                completed_owners = Some(staged_owners);
                 (source, surface)
             }
         };
@@ -1449,6 +1469,9 @@ impl StagedModule {
                 error: ProjectionError::MalformedTree(crate::parser::InternalReason::InvalidSpan),
                 import_span,
             });
+        }
+        if let Some(staged_owners) = completed_owners {
+            *owners = staged_owners;
         }
         Ok(LoadedModule {
             id: self.id,
@@ -1508,17 +1531,19 @@ impl HeaderGraph {
     }
 
     pub(crate) fn next_module(&mut self) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
-        self.next_module_with_syntax(&[])
+        self.next_module_with_syntax(&[], &[], &mut Vec::new())
     }
 
     pub(crate) fn next_module_with_syntax(
         &mut self,
         syntax: &[crate::syntax::SelectedSyntax],
+        owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
+        owners: &mut Vec<crate::syntax::SyntaxOwner>,
     ) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
         let Some(module) = self.pending.pop_front() else {
             return Ok(None);
         };
-        match module.into_loaded(&mut self.syntax_budget, syntax) {
+        match module.into_loaded(&mut self.syntax_budget, syntax, owner_imports, owners) {
             Ok(module) => {
                 self.loaded.push(module);
                 Ok(self.loaded.last())
@@ -2631,6 +2656,10 @@ fn project_finished_module(
     source: SourceFile,
     tree: crate::parser::ConcreteTree,
     import_span: Option<Span>,
+    syntax: &[crate::syntax::SelectedSyntax],
+    owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
+    owners: &mut Vec<crate::syntax::SyntaxOwner>,
+    budget: &mut SyntaxBudget,
 ) -> Result<(SourceFile, SurfaceModule), LoadGraphError> {
     if tree.resource_failure().is_some()
         || !tree.lexical_diagnostics().is_empty()
@@ -2644,13 +2673,32 @@ fn project_finished_module(
             import_span,
         })));
     }
-    match project_module_retaining_templates(&source, &tree) {
+    match crate::parser::project_declaration_expansions(
+        &source,
+        &tree,
+        syntax,
+        owner_imports,
+        owners,
+        budget,
+    ) {
         Ok(surface) => Ok((source, surface)),
-        Err(error) => Err(LoadGraphError::Projection {
+        Err(crate::parser::DeclarationExpansionFailure::Projection(error)) => {
+            Err(LoadGraphError::Projection {
+                source,
+                error,
+                import_span,
+            })
+        }
+        Err(crate::parser::DeclarationExpansionFailure::Syntax {
+            diagnostics,
+            resource,
+        }) => Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+            lexical: Vec::new(),
+            parser: diagnostics,
+            resource,
             source,
-            error,
             import_span,
-        }),
+        }))),
     }
 }
 
@@ -2951,6 +2999,111 @@ mod tests {
     use crate::parser::parse_with_budget;
 
     use super::*;
+
+    fn h1_staged_fixture(text: &str) -> (HeaderGraph, crate::syntax::SelectedSyntax) {
+        let definition = SourceFile::new(
+            "definition.ash",
+            "pub syntax declaration: (make) $name:ident => {\n$name : Unit -> Int\n$name () = 42\n}\n",
+        ).unwrap();
+        let declaration = crate::parser::project_module_retaining_templates(
+            &definition,
+            &crate::parser::parse(crate::lexer::lex(&definition).unwrap()),
+        )
+        .unwrap()
+        .syntax_declarations
+        .remove(0);
+        let selected = crate::syntax::SelectedSyntax {
+            name: "make".into(),
+            owner: 0,
+            import_span: declaration.span,
+            declaration,
+        };
+        let source = SourceFile::new("caller.ash", text).unwrap();
+        let mut budget = SyntaxBudget::default();
+        let lexed = lex_with_budget(&source, &mut budget).unwrap();
+        let (tokens, diagnostics, _, resource) = lexed.into_parts();
+        assert!(resource.is_none());
+        let (checkpoint, budget) = parse_module_header(tokens, diagnostics, budget);
+        let imports = project_module_header(&source, &checkpoint).unwrap();
+        let span = module_span_from_checkpoint(&source, &checkpoint).unwrap();
+        let entry = ModuleId::new(0);
+        let staged = StagedModule {
+            id: entry,
+            canonical_path: PathBuf::from("caller.ash"),
+            owners: OwnerSet {
+                ordered: Vec::new(),
+                membership: HashSet::new(),
+            },
+            source,
+            surface: StagedSyntax {
+                imports,
+                span,
+                body: ModuleBody::Header(checkpoint),
+                import_span: None,
+            },
+            dependencies: Vec::new(),
+            relative_edges: Vec::new(),
+            state: VisitState::Finished,
+        };
+        (
+            HeaderGraph {
+                pending: VecDeque::from([staged]),
+                loaded: Vec::new(),
+                completed: None,
+                entry,
+                syntax_budget: budget,
+            },
+            selected,
+        )
+    }
+
+    #[test]
+    fn h1_late_output_failure_never_reaches_the_loaded_module_boundary() {
+        let (mut graph, selected) = h1_staged_fixture("make good\nmake Upper\n");
+        let mut owners = Vec::new();
+        assert!(
+            graph
+                .next_module_with_syntax(&[selected], &[], &mut owners)
+                .is_err()
+        );
+        assert!(graph.loaded.is_empty());
+        assert!(graph.current_module().is_none());
+        assert!(graph.completed.is_none());
+        assert!(owners.is_empty());
+    }
+
+    #[test]
+    fn h1_header_consistency_failure_keeps_preexisting_owners_unchanged() {
+        let (mut graph, selected) = h1_staged_fixture("make good\n");
+        let staged = graph.pending.front_mut().unwrap();
+        staged.surface.span = staged
+            .source
+            .span(crate::source::ByteRange::new(0, 0).unwrap())
+            .unwrap();
+        let previous = crate::syntax::SyntaxOwner {
+            owner: Some(9),
+            declaration: selected.declaration.span,
+            import_span: selected.import_span,
+        };
+        let mut owners = vec![previous];
+        let error = graph
+            .next_module_with_syntax(&[selected], &[], &mut owners)
+            .unwrap_err();
+        assert!(matches!(
+            error.failure(),
+            LoadGraphError::Projection {
+                error: ProjectionError::MalformedTree(crate::parser::InternalReason::InvalidSpan),
+                ..
+            }
+        ));
+        assert!(graph.loaded.is_empty());
+        assert!(graph.current_module().is_none());
+        assert!(graph.completed.is_none());
+        assert_eq!(owners.len(), 1);
+        assert_eq!(owners[0].owner, previous.owner);
+        assert_eq!(owners[0].declaration, previous.declaration);
+        assert_eq!(owners[0].import_span, previous.import_span);
+    }
 
     #[test]
     fn common_foreign_identity_and_admission_remain_distinct_and_retryable() {

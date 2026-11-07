@@ -1295,7 +1295,12 @@ impl CompilationInput<'_> {
         }
     }
 
-    fn advance(&mut self, syntax: &[crate::syntax::SelectedSyntax]) -> Result<bool, FileFailure> {
+    fn advance(
+        &mut self,
+        syntax: &[crate::syntax::SelectedSyntax],
+        owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
+        owners: &mut Vec<crate::syntax::SyntaxOwner>,
+    ) -> Result<bool, FileFailure> {
         match self {
             #[cfg(test)]
             Self::Parsed { graph, next } => {
@@ -1312,7 +1317,7 @@ impl CompilationInput<'_> {
                 }
                 let phase = crate::calibration::Phase::start("loading");
                 let advanced = graph
-                    .next_module_with_syntax(syntax)
+                    .next_module_with_syntax(syntax, owner_imports, owners)
                     .map(|module| module.is_some())
                     .map_err(FileFailure::Graph)?;
                 phase.finish(None, 0, 0);
@@ -1560,7 +1565,8 @@ where
         } else {
             Vec::new()
         };
-        if !input.advance(&selected)? {
+        let mut syntax_owners = Vec::new();
+        if !input.advance(&selected, &checked_syntax_imports, &mut syntax_owners)? {
             return Err(internal_file_failure());
         }
         #[cfg(feature = "resource-calibration")]
@@ -1706,6 +1712,7 @@ where
                 module.source(),
                 &selected,
                 &checked_syntax_imports,
+                syntax_owners,
                 &mut transformer,
             );
             let dependencies = module
@@ -3132,11 +3139,8 @@ mod tests {
         assert_eq!(matched.selection.owner, selected[0].owner);
         assert_eq!(matched.selection.import_span, selected[0].import_span);
         assert!(crate::parser::project_module_retaining_templates(&source, &tree).is_err());
-        let failure = compile_path(fixture.configuration()).unwrap_err();
-        assert!(matches!(
-            failure.graph_failure(),
-            Some(LoadGraphError::Projection { .. })
-        ));
+        let program = compile_path(fixture.configuration()).unwrap();
+        assert_eq!(execute(&program).unwrap().value_display(), "42");
     }
 
     #[test]
