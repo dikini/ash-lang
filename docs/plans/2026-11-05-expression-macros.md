@@ -1373,3 +1373,14 @@ total is 98.5/99, with 0.5 for acceptance readback and owned cleanup still
 open. M01–M14 await QA confirmation; this plan and the task remain active.
 The later reporting-only documentation tree was not the input to the fresh
 gate. Main integration and signing remain separate.
+
+### QA reproduction and identity candidate, 7 November
+
+The task records the focused QA reproduction on `75108e36`: four integration
+targets passed 192 tests and four library filters passed one test each. QA
+identified the missing real-Ash identity round-trip observation. The new
+test compares the actual mixed capture and returned tree at the existing
+transformer callback and runs the resulting graph; its focused check and
+all-target/all-feature Ash Clippy pass. Independent review and a fresh gate on
+the changed candidate remain open. M11 retains the recorded direct-injection
+limitation. Earlier completed checkpoints remain unchanged.
