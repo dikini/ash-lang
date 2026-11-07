@@ -79,7 +79,7 @@ pub enum SurfaceSyntaxImplementation {
 pub enum SurfaceSyntaxMatcherPart {
     /// A literal token, matched by kind and source spelling.
     Literal { kind: TokenKind, spelling: String },
-    /// A named expression or identifier capture.
+    /// A named syntax capture.
     Capture {
         name: SurfaceName,
         kind: SurfaceSyntaxCaptureKind,
@@ -93,6 +93,10 @@ pub enum SurfaceSyntaxCaptureKind {
     Expression,
     /// One identifier.
     Identifier,
+    /// A complete type fragment.
+    Type,
+    /// A complete pattern fragment.
+    Pattern,
 }
 
 /// One source declaration's category and category-local position.
@@ -511,6 +515,10 @@ pub enum SurfaceSyntaxCapture {
     Expression(SurfaceExpressionCapture),
     /// An identifier with its caller spelling, context and origin.
     Identifier(SurfaceIdentifierCapture),
+    /// A protected, unresolved type.
+    Type(SurfaceTypeCapture),
+    /// A protected, unresolved pattern.
+    Pattern(SurfacePatternCapture),
 }
 
 /// An identifier and its retained syntax origin.
@@ -524,6 +532,20 @@ pub struct SurfaceIdentifierCapture {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceExpressionCapture {
     pub(crate) expression: SurfaceExpr,
+    pub(crate) contents: Arc<[crate::syntax::MacroOutputNode]>,
+}
+
+/// A type and its immutable, protected syntax contents.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceTypeCapture {
+    pub(crate) ty: SurfaceType,
+    pub(crate) contents: Arc<[crate::syntax::MacroOutputNode]>,
+}
+
+/// A pattern and its immutable, protected syntax contents.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfacePatternCapture {
+    pub(crate) pattern: SurfacePattern,
     pub(crate) contents: Arc<[crate::syntax::MacroOutputNode]>,
 }
 

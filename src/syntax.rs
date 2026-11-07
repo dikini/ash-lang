@@ -747,6 +747,9 @@ pub(crate) fn validate_template_syntax(
                     name: placeholder,
                 })
             }
+            SurfaceSyntaxCaptureKind::Type | SurfaceSyntaxCaptureKind::Pattern => {
+                return Err(crate::parser::MacroParseFailure::Invalid);
+            }
         };
         captures.push(capture);
     }
@@ -838,6 +841,9 @@ fn substitute_contents(
                     SurfaceSyntaxCapture::Identifier(capture) => {
                         MacroOutputNode::Identifier(capture.name.clone(), capture.origin.clone())
                     }
+                    SurfaceSyntaxCapture::Type(_) | SurfaceSyntaxCapture::Pattern(_) => {
+                        return Err(name.span);
+                    }
                 };
             }
             MacroOutputNode::Identifier(name, _) => {
@@ -856,4 +862,68 @@ fn substitute_contents(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        source::{ByteRange, SourceFile},
+        surface::{
+            SurfacePattern, SurfacePatternCapture, SurfacePatternKind, SurfaceType,
+            SurfaceTypeCapture, SurfaceTypeKind,
+        },
+    };
+
+    #[test]
+    fn d4_unconnected_type_and_pattern_splices_fail_without_flattening() {
+        let source = SourceFile::new("splice.ash", "capture").unwrap();
+        let span = source.span(ByteRange::new(0, 7).unwrap()).unwrap();
+        let name = SurfaceName {
+            text: "capture".into(),
+            span,
+            introduction: 0,
+            introduced_at: None,
+            written: true,
+            diagnostic: None,
+        };
+        let captures = [
+            (
+                SurfaceSyntaxCaptureKind::Type,
+                SurfaceSyntaxCapture::Type(SurfaceTypeCapture {
+                    ty: SurfaceType {
+                        kind: SurfaceTypeKind::Int,
+                        span,
+                        diagnostic: None,
+                    },
+                    contents: Arc::from([]),
+                }),
+            ),
+            (
+                SurfaceSyntaxCaptureKind::Pattern,
+                SurfaceSyntaxCapture::Pattern(SurfacePatternCapture {
+                    pattern: SurfacePattern {
+                        kind: SurfacePatternKind::Wildcard,
+                        span,
+                        diagnostic: None,
+                    },
+                    contents: Arc::from([]),
+                }),
+            ),
+        ];
+        for (kind, capture) in captures {
+            let matcher = [SurfaceSyntaxMatcherPart::Capture {
+                name: name.clone(),
+                kind,
+            }];
+            let mut output = vec![MacroOutputNode::Splice(name.clone())];
+            assert_eq!(
+                substitute_contents(&mut output, &matcher, &[capture], 0, span),
+                Err(span)
+            );
+            assert!(
+                matches!(&output[..], [MacroOutputNode::Splice(original)] if original.text == name.text)
+            );
+        }
+    }
 }

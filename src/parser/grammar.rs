@@ -573,7 +573,8 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
             let _ = parser.expect(&TokenKind::Colon, ExpectedForm::Colon);
             final_expression =
                 matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "expr");
-            if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "expr" || name == "ident")
+            if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "expr" || name == "ident" || declaration && name == "pattern")
+                || declaration && parser.at(&TokenKind::Type)
             {
                 let _ = parser.bump();
             } else {
@@ -1846,7 +1847,9 @@ fn syntax_invocation(
                 crate::surface::SurfaceSyntaxMatcherPart::Capture { kind, .. } => {
                     parser.start(NodeKind::SyntaxArgument);
                     match kind {
-                        crate::surface::SurfaceSyntaxCaptureKind::Expression => {
+                        crate::surface::SurfaceSyntaxCaptureKind::Expression
+                        | crate::surface::SurfaceSyntaxCaptureKind::Type
+                        | crate::surface::SurfaceSyntaxCaptureKind::Pattern => {
                             let stop = matcher.get(index + 1).and_then(|part| match part {
                                 crate::surface::SurfaceSyntaxMatcherPart::Literal {
                                     kind,
@@ -1857,7 +1860,35 @@ fn syntax_invocation(
                             if let Some(stop) = stop.clone() {
                                 parser.syntax_stops.push(stop);
                             }
-                            expression(parser);
+                            match kind {
+                                crate::surface::SurfaceSyntaxCaptureKind::Expression => {
+                                    expression(parser)
+                                }
+                                crate::surface::SurfaceSyntaxCaptureKind::Type => {
+                                    if parser.at_syntax_stop() {
+                                        parser
+                                            .report(ParseReason::ExpectedForm, ExpectedForm::Type);
+                                    } else {
+                                        type_expression(parser);
+                                    }
+                                }
+                                crate::surface::SurfaceSyntaxCaptureKind::Pattern => {
+                                    if parser.at_syntax_stop() {
+                                        parser.report(
+                                            ParseReason::ExpectedForm,
+                                            ExpectedForm::Pattern,
+                                        );
+                                    } else {
+                                        let previous = parser.in_declaration_pattern_capture;
+                                        parser.in_declaration_pattern_capture = true;
+                                        pattern(parser);
+                                        parser.in_declaration_pattern_capture = previous;
+                                    }
+                                }
+                                crate::surface::SurfaceSyntaxCaptureKind::Identifier => {
+                                    unreachable!()
+                                }
+                            }
                             if stop.is_some() {
                                 let _ = parser.syntax_stops.pop();
                             }
@@ -2623,6 +2654,21 @@ fn pattern(parser: &mut Parser<'_>) {
 
 fn pattern_inner(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
     parser.start(NodeKind::Pattern);
+    if parser.in_declaration_pattern_capture
+        && matches!(
+            parser
+                .declaration_output_nodes
+                .and_then(|nodes| nodes.get(&parser.position)),
+            Some(
+                crate::syntax::MacroOutputNode::Expression(_, _)
+                    | crate::syntax::MacroOutputNode::ForwardedExpression(_, _)
+            )
+        )
+    {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Pattern);
+        parser.finish();
+        return;
+    }
     if parser.in_template && parser.at(&TokenKind::Dollar) {
         let _ = parser.bump();
         expect_lower_identifier(parser);
@@ -2630,6 +2676,7 @@ fn pattern_inner(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
         return;
     }
     let form = pattern_form(parser);
+    let outer_depth = parser.nesting_depth;
     let owns_structure = matches!(
         form,
         Some(PatternForm::Constructor | PatternForm::Parenthesized)
@@ -2640,7 +2687,9 @@ fn pattern_inner(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
         return;
     }
     match form {
-        Some(PatternForm::Binder) if starts_lowercase_qualification(parser) => {
+        Some(PatternForm::Binder)
+            if starts_lowercase_qualification(parser) && !parser.nth_at_syntax_stop(1) =>
+        {
             reject_lowercase_qualification(parser);
         }
         Some(PatternForm::Binder) => binder(parser),
@@ -2654,7 +2703,9 @@ fn pattern_inner(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
             let _ = parser.bump();
             parser.finish();
         }
-        Some(PatternForm::Constructor) => constructor_pattern(parser, allow_juxtaposed_payload),
+        Some(PatternForm::Constructor) => {
+            constructor_pattern(parser, allow_juxtaposed_payload, outer_depth)
+        }
         Some(PatternForm::Parenthesized) => parenthesized_pattern(parser),
         None => parser.report(ParseReason::ExpectedForm, ExpectedForm::Pattern),
     }
@@ -2696,11 +2747,16 @@ fn starts_pattern(parser: &Parser<'_>) -> bool {
     (parser.in_template && parser.at(&TokenKind::Dollar)) || pattern_form(parser).is_some()
 }
 
-fn constructor_pattern(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
+fn constructor_pattern(
+    parser: &mut Parser<'_>,
+    allow_juxtaposed_payload: bool,
+    outer_depth: usize,
+) {
     parser.start(NodeKind::ConstructorPattern);
-    if parser
-        .nth(1)
-        .is_some_and(|kind| matches!(kind, TokenKind::Dot))
+    if !parser.nth_at_syntax_stop_in_depth(1, outer_depth)
+        && parser
+            .nth(1)
+            .is_some_and(|kind| matches!(kind, TokenKind::Dot))
     {
         qualified_name(parser, true);
     } else {
@@ -2756,16 +2812,34 @@ fn typed_pattern(parser: &mut Parser<'_>) {
 
 fn type_expression(parser: &mut Parser<'_>) {
     parser.start(NodeKind::Type);
+    if parser.at_syntax_stop() {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Type);
+        parser.finish();
+        return;
+    }
     atomic_type(parser);
-    if parser.at(&TokenKind::Arrow) {
+    if parser.at(&TokenKind::Arrow) && !parser.at_syntax_stop() {
         let _ = parser.bump();
+        let outer_depth = parser.nesting_depth;
         if parser.enter_structure() {
+            let inherited = parser
+                .syntax_stops
+                .iter()
+                .enumerate()
+                .filter_map(|(index, (_, _, depth))| (*depth == outer_depth).then_some(index))
+                .collect::<Vec<_>>();
+            for index in &inherited {
+                parser.syntax_stops[*index].2 += 1;
+            }
             type_expression(parser);
+            for index in inherited {
+                parser.syntax_stops[index].2 -= 1;
+            }
             parser.leave_structure();
         } else {
             parser.consume_rest();
         }
-        if parser.at(&TokenKind::Bang) {
+        if parser.at(&TokenKind::Bang) && !parser.at_syntax_stop() {
             let _ = parser.bump();
             effect_row(parser);
         }
@@ -2836,21 +2910,22 @@ fn atomic_type(parser: &mut Parser<'_>) {
                 | AtomicTypeForm::Unit,
             ) => {
                 let _ = parser.bump();
-                if parser.at(&TokenKind::Less) {
+                if parser.at(&TokenKind::Less) && !parser.at_syntax_stop() {
                     parser.error_at_current(ParseReason::UnexpectedToken);
                     type_arguments(parser);
                 }
             }
             Some(AtomicTypeForm::Nominal) => {
-                if parser
-                    .nth(1)
-                    .is_some_and(|kind| matches!(kind, TokenKind::Dot))
+                if !parser.nth_at_syntax_stop(1)
+                    && parser
+                        .nth(1)
+                        .is_some_and(|kind| matches!(kind, TokenKind::Dot))
                 {
                     qualified_name(parser, true);
                 } else {
                     let _ = parser.bump();
                 }
-                if parser.at(&TokenKind::Less) {
+                if parser.at(&TokenKind::Less) && !parser.at_syntax_stop() {
                     type_arguments(parser);
                 }
             }
@@ -2862,6 +2937,8 @@ fn atomic_type(parser: &mut Parser<'_>) {
 }
 
 fn type_arguments(parser: &mut Parser<'_>) {
+    // An enclosing matcher literal cannot stop inside a complete type argument list.
+    let stops = std::mem::take(&mut parser.syntax_stops);
     let _ = parser.bump();
     application_argument(parser);
     while parser.at(&TokenKind::Comma) {
@@ -2869,6 +2946,8 @@ fn type_arguments(parser: &mut Parser<'_>) {
         application_argument(parser);
     }
     let _ = parser.expect(&TokenKind::Greater, ExpectedForm::Type);
+    debug_assert!(parser.syntax_stops.is_empty());
+    parser.syntax_stops = stops;
 }
 
 fn application_argument(parser: &mut Parser<'_>) {
