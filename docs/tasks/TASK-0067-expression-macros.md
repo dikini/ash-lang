@@ -21,15 +21,15 @@
 
 ## Current delivery status, 7 November
 
-The latest reviewed product checkpoint is `fcd3325e`: **73/99 original-scope
-points are reviewed and 26 remain**. The separately estimated 30.25 points of
-additional performed work give an effort index of **103.25/129.25**, not an
+The latest reviewed product checkpoint is `1631b1b5`: **76.25/99 original-scope
+points are reviewed and 22.75 remain**. The separately estimated 30.25 points of
+additional performed work give an effort index of **106.5/129.25**, not an
 acceptance percentage. M01–M14 and C1/C2 remain open.
 
 The [operational plan](../plans/2026-11-05-expression-macros.md#2130-source-binder-reservation-finding)
 records the reviewed source-binder reservation, copied-region and bounded
-combined-origin resolution repairs. A malformed discarded-capture control is
-demonstrated and awaits review. The preceding 141-minute scenario
+combined-origin resolution repairs and malformed discarded-capture control.
+The preceding 141-minute scenario
 is not a current complete forecast. Actual event windows and remaining
 estimates are recorded separately. The historical
 checkpoints below are preserved as written.
@@ -1697,6 +1697,40 @@ All-target Clippy passed after the test addition
 (`/tmp/ash-discard-malformed-capture-clippy.log`, SHA-256
 `7b86761702fcb38939e5ff1da0ce47739ace57f5b3fb55c80ffbc573945c14b0`).
 This observation awaits independent review and does not by itself close M02.
+
+### Reviewed malformed capture and existing image evidence
+
+Independent review passed `1631b1b5`. Rejecting a recovery-bearing source
+capture before host admission adds P20 +0.25 (3.25/4 reviewed); broader
+parsing and fragment contexts remain 0.75. No M02, P23, P09, or additional
+corrective-work credit is claimed.
+
+On `1631b1b5`, the existing
+`build::image::tests::syntax_builtin_image_reconstructs_and_refuses_changed_or_duplicate_roles`
+test passed with `cargo test -j 1 -p ash --lib syntax_builtin_image_reconstructs_and_refuses_changed_or_duplicate_roles`.
+It encodes the real four-file graph, removes its source tree, admits expected
+native facts, restores and evaluates the image to 42, and refuses changed and
+duplicate canonical syntax roles. The receipt is
+`/tmp/ash-syntax-image-reconstruction-current.log` (SHA-256
+`c08ecf88056c16eb6c398e38a3e3ad6e4a1c77cdec03348b9fcd90bcc27115e4`).
+Independent review reconciled this test with the canonical syntax role,
+ordinary checked Core/source/origin image records, wire encoding and both
+restore paths: P32 +2.5 (records 1, reconstruction 1, corruption refusal
+0.5), closing that row at 2.5/2.5. This does not repeat P33 native-execution
+credit or close M14/C gates. The earlier source-removal native build remains
+historical until retained-input refresh; the unsupported local-newtype image
+boundary is unchanged.
+
+The existing `driver::tests::unchanged_transformer_entry_is_reused_only_within_one_compilation`
+test also passed on `1631b1b5`. Its transformer uses a transitive Ash helper
+to choose token spelling, returns 42 across two imports with one entry
+preparation and validation, then rejects after the helper changes in a fresh
+compilation. The receipt is `/tmp/ash-syntax-entry-helper-current.log`
+(SHA-256 `225a9b9b772d39c195e9f0bcbd7f19eaa012f12d29e48a22cdf9f05fa3a3ed17`).
+Independent review confirmed that this test and its checked reachable-module
+handoff establish the remaining retained-helper-closure observation: P16
++0.5, closing that row at 3/3. The earlier P17 reuse and changed-compilation
+credit is not repeated.
 
 ## Progress
 

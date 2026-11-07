@@ -1257,3 +1257,15 @@ capture rejected before that transformer runs. The task records the focused
 driver test, CLI observation and Clippy receipt. This bounded observation
 awaits review; the remaining evidence audit, final gate and retention work
 stay open.
+
+### Reviewed malformed capture and image reconciliation
+
+Independent review passed `1631b1b5`; the task records P20 +0.25 for
+rejecting a recovery-bearing source capture before host admission. The
+existing image reconstruction and canonical-role corruption test also passes
+on that pin. Independent review reconciled its image records, reconstruction
+and corruption controls for P32 +2.5, and the existing transitive helper test's
+retained-closure evidence for P16 +0.5. Neither repeats native execution or
+entry-reuse credit. The source-removal native result must still be refreshed
+at the retained checkpoint. No new image machinery or local-newtype image
+support is inferred.
