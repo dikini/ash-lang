@@ -27,14 +27,15 @@ expression prefix forms, infix entries, pattern forms, and type forms available
 to that dialect. Feature parsers own their local grammar and recovery behavior.
 The assembly point remains closed over built-in parsing mechanisms.
 
-For the accepted, unimplemented expression-syntax transition in CP-0033, that
-assembly includes one built-in loose expression-prefix mechanism parameterized
-by an immutable imported matcher environment. The environment contains selected
+For the expression-syntax transition in CP-0033, that assembly includes one
+built-in loose expression-prefix mechanism parameterized by an immutable
+imported matcher environment. The environment contains selected
 syntax identities, local leading spellings, restricted matcher data, definition
 origins, import routes, and ownership of their checked dependencies. It cannot
 install a parser function, operator, precedence entry, or recovery callback.
-The language forms admitted by this mechanism come from CP-0033 until the
-complete transition is integrated into the specification.
+The delivery-branch [grammar](../../spec/syntax.md#grammar) and
+[syntax-expansion specification](../../spec/syntax-expansion.md) describe its
+language forms. CP-0033 records the transition pending product retention.
 
 Fixed import-header discovery precedes body parsing. The loader discovers and
 canonicalizes declared dependencies without executing transformers. The
@@ -140,5 +141,5 @@ CP-0033's M01/M02/M07/M08 cases: checked imports reach the real body parser,
 nested forms consume their own separators, protected fragments keep grouping,
 and recovery-bearing structures are rejected before expansion. Existing valid
 no-syntax inputs retain their parse and applicable diagnostic regression
-evidence. The amendment is accepted; this extension remains unimplemented until
-the task supplies that evidence.
+evidence. The delivery branch implements this extension; TASK-0067 records its
+evidence and remaining acceptance and integration work.

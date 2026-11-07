@@ -2,12 +2,14 @@
 
 This companion to [DN-0062](../DN-0062-hygienic-surface-macros.md) records the
 design behind [CP-0033](../../proposals/CP-0033-hygienic-expression-syntax.md).
-CP-0033 accepts this first slice, which is not implemented or current Ash.
+CP-0033 accepts this first slice. Its implementation and
+[specification](../../../spec/syntax-expansion.md) are on the delivery branch;
+acceptance and Main integration remain pending.
 The parser amendment is recorded in
 [AD-0005](../../decisions/AD-0005-parser-architecture.md);
 [TASK-0067](../../tasks/TASK-0067-expression-macros.md) owns implementation and
-its execution plan. This companion remains design rationale. Examples use
-accepted future syntax.
+its execution plan. This companion remains design rationale. Examples
+illustrate the accepted slice.
 
 ## Scope and choice
 
@@ -82,7 +84,7 @@ values. The procedural name must denote an ordinary global in the defining
 module with the transformer type below. It may be private. Every syntax
 declaration in this slice is public.
 
-The proposed grammar adds the following forms. `matcher_item` and its validity
+The first-slice grammar adds the following forms. `matcher_item` and its validity
 conditions are described in the next section. `template_block` uses the current
 block grammar with named expression and identifier placeholders admitted in
 their corresponding positions; it is not an ordinary source block before
@@ -204,7 +206,7 @@ results; opaque compiler-issued handles retain lexical and provenance facts.
 The compiler authenticates these declarations by canonical origin. Copying
 their source or matching their spelling supplies no compiler authority.
 
-These proposed data declarations show the structural boundary. `Token`,
+These data declarations show the structural boundary. `Token`,
 `Identifier`, `ExpressionFragment`, `Input`, `Origin`, and `ParseFailure` are
 opaque; their constructors are not exported.
 
@@ -234,16 +236,10 @@ kinds admitted in expression output, including logical newlines and reserved
 words. Parentheses and braces are represented by groups, not standalone
 delimiter tokens. A token's kind and original spelling are inspectable.
 
-The public constructor names and their mapping to source spellings belong to
-Ash's general lexical and metaprogramming vocabulary. The current
-[lexical specification](../../../spec/lexical-structure.md#tokens) defines
-token classes and spellings but does not define that public constructor family.
-This macro interface depends on the shared vocabulary; it does not define a
-separate list or expose Rust lexer discriminants. Its implemented interface must
-document the applicable cases and spelling validation, and implementations of
-the same interface version must agree on them. The shared vocabulary and its
-conformance evidence can be defined alongside the language and tool interface;
-selecting its names is not a decision this macro design must settle.
+The public constructor names and their mapping to source spellings are defined
+in the shared [lexical vocabulary](../../../spec/lexical-structure.md#public-token-kinds).
+The syntax interface uses that vocabulary and its spelling validation; it does
+not expose Rust lexer discriminants or define a separate token list.
 
 `expression_syntax` returns the fragment's contents as an ordered
 syntax sequence and leaves the original fragment intact. Reusing that sequence
@@ -254,8 +250,8 @@ that conversion.
 The module exposes these operations. Types use unqualified names as seen
 inside that module. A tuple is one ordinary Ash argument. `Ops` is a canonical
 compiler-service effect; each signature has the latent row `{Ops}` plus the
-current implicit default-allocation requirement. These are proposed signatures,
-not declarations already supplied by Ash.
+current implicit default-allocation requirement. The delivery branch supplies
+these signatures in the [canonical syntax interface](../../../spec/syntax-expansion.md#canonical-syntax-interface).
 
 ```text
 capture : (Input, Int) -> CaptureResult ! {Ops}

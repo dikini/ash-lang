@@ -1306,3 +1306,17 @@ product credit. An existing-hook driver test now demonstrates that a nested
 rejecting invocation in the original source capture is discarded before it
 runs; this candidate awaits review. Whole-path review, the final gate and
 retained verification remain open.
+
+### Reviewed captured nested syntax, 7 November
+
+Independent review passed `5d8db136`; the task records P27 +0.5 for the
+original source-capture observation. The current reviewed total is 83/99.
+M03 and the connected whole-path review, final gate and retained verification
+remain open.
+
+### Delivery-status documentation candidate, 7 November
+
+The task records the status and specification-link cleanup for the delivery
+branch. CP-0033 remains until its owning verified product checkpoint; Main
+integration remains separate. This candidate awaits review before the final
+gate and retained handoff.

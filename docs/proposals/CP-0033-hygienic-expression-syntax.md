@@ -10,11 +10,12 @@
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md),
   [AD-0010](../decisions/AD-0010-human-diagnostic-presentation-and-localization.md).
 
-> This proposal records the accepted first expression-macro slice. It is not
-> current Ash; no macro implementation or supporting experiment is claimed.
-> Amended AD-0005 records the parser decision; TASK-0067 owns delivery.
+> This proposal records the accepted first expression-macro slice and its
+> pre-transition baseline. An implementation and specification are on the
+> delivery branch; they are not current Ash until Main integration. Amended
+> AD-0005 records the parser decision; TASK-0067 owns remaining delivery.
 
-## Current behavior
+## Pre-transition behavior
 
 The [surface grammar](../../spec/syntax.md#grammar) is fixed. It has no syntax
 declarations, syntax imports, template splices, or procedural macro entry.
@@ -290,8 +291,8 @@ The compiler need not infer a DSL-specific role description from a source span.
 The accepted amendment to AD-0005 extends its closed built-in assembly with one
 expression-prefix mechanism parameterized by a data-defined imported matcher
 environment. Its lexer/precedence/recovery/projection boundaries remain. The
-amendment is architectural authority separate from this proposal and remains
-unimplemented under TASK-0067.
+amendment is architectural authority separate from this proposal. Its
+implementation is on the delivery branch; TASK-0067 owns remaining acceptance.
 
 ## Resulting specification truth
 

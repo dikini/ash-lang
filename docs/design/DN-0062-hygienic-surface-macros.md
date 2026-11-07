@@ -12,10 +12,11 @@
   [DN-0030](DN-0030-typed-compiler-macros-and-hooks.md),
   [DN-0061](DN-0061-effects-and-resources-first-slice.md)
 
-> The first expression-macro slice in CP-0033 is accepted but unimplemented.
-> Broader macro ideas and illustrations in this note remain exploratory. This
-> note does not define current Ash. AD-0005 records the accepted parser amendment;
-> TASK-0067 owns the unimplemented delivery.
+> The accepted first expression-macro slice in CP-0033 has an implementation
+> and [specification](../../spec/syntax-expansion.md) on the delivery branch;
+> acceptance and Main integration remain pending. Broader macro ideas and
+> illustrations in this note remain exploratory. This note does not define
+> current Ash. AD-0005 records the parser amendment; TASK-0067 owns delivery.
 
 ## Question
 
@@ -54,10 +55,11 @@ its elaboration strategy.
 
 ## Context and boundaries
 
-The [current specification](../../spec/README.md) defines effects, requests,
-lexical handlers, one-shot continuation use, scoped resources and cleanup. It
-does not define macros. Current effect and resource rules continue to apply to
-any future expanded program unless a separate language change replaces them.
+The [specification](../../spec/README.md) defines effects, requests, lexical
+handlers, one-shot continuation use, scoped resources and cleanup. The delivery
+branch also specifies expression syntax; Main integration remains pending.
+Current effect and resource rules continue to apply to expanded programs unless
+a separate language change replaces them.
 A macro cannot establish a missing runtime operation or prove an ownership,
 completion, or continuation property merely by generating syntax.
 
@@ -96,9 +98,10 @@ accepted [CP-0033](../proposals/CP-0033-hygienic-expression-syntax.md):
 imported keyword-led expression syntax, templates and
 Ash-authored procedural transformers over a shared binding-aware syntax
 representation. It defines import, parsing, expansion, binding, bridge,
-diagnostic and admission boundaries and required acceptance cases. The slice is
-unimplemented; amended AD-0005 and TASK-0067 now record parser architecture and
-delivery ownership. Template syntax is checked at definition; its free names
+diagnostic and admission boundaries and required acceptance cases. The slice's
+implementation and specification are on the delivery branch; amended AD-0005
+and TASK-0067 record parser architecture and remaining delivery work. Template
+syntax is checked at definition; its free names
 resolve in the defining environment when expanded. Where
 an earlier exploratory alternative below differs, CP-0033 and the companion
 state the accepted first slice. The task's M01–M14 cases cover that slice;
@@ -405,8 +408,9 @@ in the caller's context. The identifier `Integer` in a qualified reference is
 a module alias in a distinct syntactic role; its member must be resolved through
 the correct module, not looked up independently by spelling.
 
-This is accepted future behavior, not a claim that Ash already permits exporting
-macros or using private helpers through them. The first slice retains
+These exploratory forms illustrate the accepted behavior; the delivery branch
+implements it using the [first-slice syntax](../../spec/syntax-expansion.md),
+not the forms above. Main integration remains pending. The first slice retains
 compiler-issued definition contexts so ordinary resolution can select the
 defining module's checked environment and enforce its access and import rules.
 The owner may expose its own private helper or opaque operation through syntax

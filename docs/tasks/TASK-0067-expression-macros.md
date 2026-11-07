@@ -12,8 +12,9 @@
   [first-slice design](../design/macros/first-slice.md),
   [execution plan](../plans/2026-11-05-expression-macros.md).
 
-> This task organizes delivery of accepted, unimplemented CP-0033. It does not
-> define current Ash semantics or extend the proposal's scope.
+> This task organizes delivery of accepted CP-0033, now implemented on the
+> delivery branch. It does not define current Ash semantics or extend the
+> proposal's scope.
 
 > Historical checkpoint and ledger text below remains unchanged. The
 > [2026-11-06 amendment](#2026-11-06-approved-amendment) gives the
@@ -21,9 +22,9 @@
 
 ## Current delivery status, 7 November
 
-The latest reviewed product checkpoint is `1631b1b5`: **82.5/99 original-scope
-points are reviewed and 16.5 remain**. The separately estimated 31.75 points of
-additional performed work give an effort index of **114.25/130.75**, not an
+The latest reviewed product checkpoint is `97a9113f`: **83/99 original-scope
+points are reviewed and 16 remain**. The separately estimated 31.75 points of
+additional performed work give an effort index of **114.75/130.75**, not an
 acceptance percentage. M01–M14 and C1/C2 remain open.
 
 The [operational plan](../plans/2026-11-05-expression-macros.md#2130-source-binder-reservation-finding)
@@ -1881,6 +1882,28 @@ All-target Clippy passes in `/tmp/ash-original-capture-discard-clippy.log`
 (SHA-256 `0891611c4246b7b9bf97769ecbc96a208303175ccb70f7c38f8390d8fd43a4eb`).
 This distinct M03 observation awaits independent review; no P27 or M/C credit
 is inferred yet.
+
+### Reviewed captured nested syntax, 7 November
+
+Independent review passed `5d8db136`. The source-capture observation adds
+P27 +0.5, closing that row at 2.5/2.5 without repeating the earlier
+`parse_expression` observation. M03 and the delivery gates remain open. The
+remaining 16 original-scope points are source and hygiene 4.5, host and
+completion 2, diagnostics and native execution 1.5, documentation 1, and
+delivery 7.
+
+### Delivery-status documentation candidate, 7 November
+
+AD-0005, DN-0062, its index, the first-slice companion and CP-0033 now describe
+the implementation and specification on the delivery branch while keeping
+acceptance and Main integration pending. The companion links to the shared
+token vocabulary and canonical syntax interface; broader exploratory forms
+remain identified as such. CP-0033 remains in the tree until its owning
+product checkpoint retains implementation, tests, specification, review and
+verification. The check of 221 local links and anchors in the seven changed
+documents passes in `/tmp/ash-status-candidate-links.log` (SHA-256
+`3c04eb641ba71a074680785935cdf83a180eeb323c6c6ebe739e31ca24bbe4fe`).
+This documentation candidate awaits review; P35 and M/C completion remain open.
 
 ## Progress
 
