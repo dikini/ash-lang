@@ -18,6 +18,42 @@ fn parse_at_limit(source: &SourceFile, limit: usize) -> (ConcreteTree, usize) {
 }
 
 #[test]
+fn declaration_syntax_selection_is_not_an_expression_invocation() {
+    let definition = SourceFile::new(
+        "forms.ash",
+        include_str!("../../docs/design/macros/fixtures/header_compat/forms.ash"),
+    )
+    .unwrap();
+    let tree = parse(lex(&definition).unwrap());
+    let declaration = super::project_module(&definition, &tree)
+        .unwrap()
+        .syntax_declarations
+        .remove(0);
+    let selected = crate::syntax::SelectedSyntax {
+        name: "make_number".to_owned(),
+        declaration,
+        owner: 0,
+        import_span: definition
+            .span(crate::source::ByteRange::new(0, 0).unwrap())
+            .unwrap(),
+    };
+    let source =
+        SourceFile::new("caller.ash", "main : Unit -> Int\nmain () = make_number\n").unwrap();
+    let expected = parse(lex(&source).unwrap());
+    let mut budget = SyntaxBudget::default();
+    let (tokens, lexical, _, failure) = lex_with_budget(&source, &mut budget).unwrap().into_parts();
+    assert!(failure.is_none());
+    let (header, budget) = parse_module_header(tokens, lexical, budget);
+    let (actual, _) = super::finish_module_from_checkpoint_with_syntax(
+        header,
+        budget,
+        Some(&source),
+        &[selected],
+    );
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn module_header_and_body_have_exact_syntax_budget_boundaries() {
     for (text, original_cost) in [
         ("main : Unit -> Int\nmain () = 42\n", 52),

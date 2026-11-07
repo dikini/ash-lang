@@ -157,7 +157,7 @@ pub enum SurfaceImportSelection {
 /// One selected import channel.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceImportItem {
-    /// A selected public expression syntax declaration and its optional alias.
+    /// A selected public syntax declaration and its optional alias.
     Syntax {
         /// The dependency's public syntax spelling.
         name: SurfaceName,
