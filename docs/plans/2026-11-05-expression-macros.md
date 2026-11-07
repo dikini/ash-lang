@@ -1236,3 +1236,14 @@ the expansion frames but loses the combined input causes. The task records
 the disposable human/JSON red receipt; the generic existing location handoff
 needs review and repair before the final gate. No additional tracing framework
 or per-form semantic path is assumed.
+
+### Combined-origin resolver candidate, 7 November
+
+The bounded unqualified-name handoff now preserves the existing combined
+diagnostic location and orders inherited frames before the occurrence's own
+frames. The task records the independently inspected earlier cause failure,
+the new frame-order red/green, the affected suites, small-stack check, CLI
+observations and Clippy. This candidate awaits independent review; other
+resolver positions, evidence reconciliation, the final gate and retained
+handoff remain open. No progress points or completion forecast are inferred
+from the candidate alone.

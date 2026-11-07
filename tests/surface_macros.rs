@@ -450,6 +450,85 @@ fn nested_identifier_capture_preserves_combined_origin() {
 }
 
 #[test]
+fn unresolved_nested_identifier_preserves_combined_causes() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_file_diagnostics, write_human, write_json},
+    };
+
+    let failure = compile_path(fixture("identifier-origin/resolve.ash"))
+        .expect_err("the returned caller name is not bound");
+    assert_eq!(failure.reason_code(), "resolve.unknown-name");
+    let diagnostics = compile_file_diagnostics(&failure).unwrap();
+    let mut json = Vec::new();
+    write_json(&mut json, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    let labels = json["labels"].as_array().unwrap();
+    let entry = include_str!("fixtures/surface-macros/identifier-origin/resolve.ash");
+    let invocation = "outer_resolve 42";
+    let invocation_start = entry.find(invocation).unwrap();
+    assert_eq!(labels[0]["relationship"], "unresolved_name");
+    assert!(labels[0]["path"].as_str().unwrap().ends_with("resolve.ash"));
+    assert_eq!(labels[0]["byte_start"], invocation_start);
+    assert_eq!(labels[0]["byte_end"], invocation_start + invocation.len());
+    let outer = include_str!("fixtures/surface-macros/identifier-origin/outer.ash");
+    let definition = "pub syntax outer_resolve $value:expr => using expand_resolve";
+    let definition_start = outer.find(definition).unwrap();
+    let causes: Vec<_> = labels
+        .iter()
+        .filter(|label| label["relationship"] == "syntax_cause")
+        .collect();
+    assert_eq!(causes.len(), 1, "{json}");
+    assert!(causes[0]["path"].as_str().unwrap().ends_with("outer.ash"));
+    assert_eq!(causes[0]["byte_start"], definition_start);
+    assert_eq!(causes[0]["byte_end"], definition_start + definition.len());
+    let inner = include_str!("fixtures/surface-macros/identifier-origin/inner.ash");
+    let inner_definition = "pub syntax observe_resolve $name:ident = $value:expr => using emit";
+    let inner_start = inner.find(inner_definition).unwrap();
+    let frames: Vec<_> = labels
+        .iter()
+        .filter(|label| {
+            label["relationship"] == "syntax_invocation"
+                || label["relationship"] == "syntax_definition"
+        })
+        .collect();
+    assert_eq!(frames.len(), 4, "{json}");
+    for frame in [frames[0], frames[2]] {
+        assert_eq!(frame["relationship"], "syntax_invocation", "{json}");
+        assert!(frame["path"].as_str().unwrap().ends_with("resolve.ash"));
+        assert_eq!(frame["byte_start"], invocation_start);
+        assert_eq!(frame["byte_end"], invocation_start + invocation.len());
+    }
+    assert_eq!(frames[1]["relationship"], "syntax_definition");
+    assert!(
+        frames[1]["path"].as_str().unwrap().ends_with("outer.ash"),
+        "{json}"
+    );
+    assert_eq!(frames[1]["byte_start"], definition_start);
+    assert_eq!(frames[1]["byte_end"], definition_start + definition.len());
+    assert_eq!(frames[3]["relationship"], "syntax_definition");
+    assert!(frames[3]["path"].as_str().unwrap().ends_with("inner.ash"));
+    assert_eq!(frames[3]["byte_start"], inner_start);
+    assert_eq!(frames[3]["byte_end"], inner_start + inner_definition.len());
+    for (locale, expected) in [
+        (
+            Locale::English,
+            "This location contributed to the rejection.",
+        ),
+        (Locale::Bulgarian, "Това място допринесе за отхвърлянето."),
+    ] {
+        let mut human = Vec::new();
+        write_human(
+            &mut human,
+            &diagnostics[0],
+            &Catalogue::new(locale).unwrap(),
+        )
+        .unwrap();
+        assert!(String::from_utf8(human).unwrap().contains(expected));
+    }
+}
+
+#[test]
 fn application_failure_preserves_function_occurrence() {
     use ash::presentation::{compile_file_diagnostics, write_json};
 
@@ -1287,6 +1366,8 @@ fn template_continuations_use_the_actual_handler_capability() {
 
 #[test]
 fn template_names_are_checked_when_expanded() {
+    use ash::presentation::{compile_file_diagnostics, write_json};
+
     for path in [
         "template-admission/missing/entry.ash",
         "template-admission/missing_nested/entry.ash",
@@ -1297,6 +1378,25 @@ fn template_names_are_checked_when_expanded() {
     let failure = compile_path(fixture("template-admission/missing/invoked.ash"))
         .expect_err("expansion cannot resolve a missing helper through the caller");
     assert_eq!(failure.reason_code(), "resolve.unknown-name");
+    let diagnostics = compile_file_diagnostics(&failure).unwrap();
+    let mut json = Vec::new();
+    write_json(&mut json, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    let labels = json["labels"].as_array().unwrap();
+    let forms = include_str!("fixtures/surface-macros/template-admission/missing/forms.ash");
+    let missing = forms.find("missing $value").unwrap();
+    assert_eq!(labels[0]["relationship"], "unresolved_name");
+    assert!(labels[0]["path"].as_str().unwrap().ends_with("forms.ash"));
+    assert_eq!(labels[0]["byte_start"], missing);
+    assert_eq!(labels[0]["byte_end"], missing + "missing".len());
+    assert!(
+        !labels
+            .iter()
+            .any(|label| label["relationship"] == "syntax_cause")
+    );
+    assert_eq!(labels.len(), 3, "{json}");
+    assert_eq!(labels[1]["relationship"], "syntax_invocation");
+    assert_eq!(labels[2]["relationship"], "syntax_definition");
     for path in [
         "template-admission/good/entry.ash",
         "template-admission/good/reuse.ash",

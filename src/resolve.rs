@@ -988,6 +988,29 @@ impl ResolveError {
         self
     }
 
+    fn with_fallback_diagnostic(
+        mut self,
+        location: Option<&crate::syntax::DiagnosticLocation>,
+        frames: &[Arc<crate::syntax::ExpansionFrame>],
+    ) -> Self {
+        if let Some(location) = location
+            && self.0.diagnostic.primary.diagnostic_location().is_none()
+        {
+            let mut location = location.clone();
+            let own_frames = std::mem::take(&mut location.frames);
+            for frame in frames.iter().chain(&own_frames) {
+                location.add_frame(frame);
+            }
+            self.0.diagnostic.primary = self
+                .0
+                .diagnostic
+                .primary
+                .clone()
+                .with_location(Some(&location));
+        }
+        self
+    }
+
     fn internal_message(&self) -> Option<(crate::message::Message<'static>, &'static str)> {
         use crate::message::Message;
         match self.0.context {
@@ -13945,7 +13968,20 @@ impl Resolver<'_, '_> {
                     } else if let SurfaceExprKind::Handle(handler) = &expression.kind {
                         self.visit_handle_expression(handler, expression.span, &mut expressions)?;
                     } else {
-                        self.visit_expression(expression, &mut tasks, &mut expressions)?;
+                        self.visit_expression(expression, &mut tasks, &mut expressions)
+                            .map_err(|failure| {
+                                if matches!(
+                                    &expression.kind,
+                                    SurfaceExprKind::Name(SurfaceReference::Unqualified(_))
+                                ) {
+                                    failure.with_fallback_diagnostic(
+                                        expression.diagnostic.as_deref(),
+                                        &self.diagnostic_frames,
+                                    )
+                                } else {
+                                    failure
+                                }
+                            })?;
                     }
                 }
                 task => {

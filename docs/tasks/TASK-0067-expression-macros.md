@@ -1630,6 +1630,47 @@ does not establish their causal roles. The human and JSON red observation is
 ordinary source-origin missing-helper case retains its exact definition token
 and frames. Repair of the combined-origin handoff remains open.
 
+### Combined-origin resolution candidate, 7 November
+
+The candidate retains the existing diagnostic location when the ordinary
+resolver rejects an unqualified name expression. It fills only a missing
+primary location, and merges active expansion frames before the occurrence's
+own frames using their existing identities. Other resolver failures and their
+semantic checks are unchanged. The real nested-transformer test now asserts
+the unknown-name reason, the primary input, the additional combined input,
+and both outer-to-inner invocation/definition frame pairs. It also checks the
+human cause label in English and Bulgarian. The existing missing-helper
+control still points at the written definition token, with its one frame pair
+and no invented combined cause.
+
+The original missing-cause red recorded above was independently inspected and
+its hash verified during the `d14cd6e1` review. Its temporary file no longer
+exists after the session interruption. On 7 November, the stronger frame-order
+assertion failed at 05:39:58 before the ordering correction and passed at
+05:40:37 afterward. Those receipts are
+`/tmp/ash-combined-origin-frame-order-red.log` (SHA-256
+`bc83ca756161d49042e111757964d371a9e2414d2ba762c5f24e08ef97fa06bc`) and
+`/tmp/ash-combined-origin-frame-order-green.log` (SHA-256
+`6022b6a44296e8218388dd83d642acccc81ae77b4206ff852556c03c7d5e358a`).
+
+The final single-job affected run passed 223 tests across `diagnostics`,
+`macro_host`, `module_resolution`, and `surface_macros`:
+`cargo test -j 1 -p ash --test surface_macros --test macro_host --test diagnostics --test module_resolution --no-fail-fast`
+(`/tmp/ash-combined-origin-suites-j1.log`, SHA-256
+`82503301fbcb1ca0d7e7986e0b8f164abacfea3e87f3784e45d6858b88dd83ba`).
+The existing 256 KiB resolver-disposal test passed via
+`cargo test -j 1 -p ash --lib late_expression_resolution_errors_discard_deep_completed_work_on_a_small_stack`
+(`/tmp/ash-combined-origin-stack.log`, SHA-256
+`db69e9da8e35ef7875bab16a8345cd954890dc0dd54b511e3c6ab2361edd5824`).
+`cargo clippy -j 1 -p ash --all-targets -- -D warnings` passed
+(`/tmp/ash-combined-origin-clippy.log`, SHA-256
+`53eea506c7dfcbeee77a19b79224fb23a6f17d45ad18e4452e1780ac45e9d9db`).
+Direct CLI JSON and both human locales also retained the cause and ordered
+frames; the JSON receipt is `/tmp/ash-combined-origin-cli-json.log` (SHA-256
+`f42bf81e02afe1b5c1af5bd9af138cb8020bae09ad4ecabd4274f52b5ded097d`).
+This candidate awaits independent review. It does not establish origin
+transport for every resolver position or close any M/C acceptance row.
+
 ## Progress
 
 The weighted ledger records **61.5/100 reviewed delivery points**. The latest

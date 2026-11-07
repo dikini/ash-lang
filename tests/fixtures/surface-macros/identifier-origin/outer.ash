@@ -1,12 +1,15 @@
 import @builtin.compiler.syntax as Syntax
-import inner (syntax observe)
+import inner (syntax observe, syntax observe_resolve)
 import relay (syntax forward)
 pub syntax outer $value:expr => using expand
 pub syntax outer_forward $value:expr => using expand_forward
+pub syntax outer_resolve $value:expr => using expand_resolve
 expand : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
 expand input = expand_for(input, "observe")
 expand_forward : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
 expand_forward input = expand_for(input, "forward")
+expand_resolve : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
+expand_resolve input = expand_for(input, "observe_resolve")
 expand_for : (Syntax.Input, String) -> Syntax.MacroResult ! {Syntax.Ops}
 expand_for (input, target) = {
     let invocation = Syntax.invocation_origin(input)
