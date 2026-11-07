@@ -7016,6 +7016,31 @@ mod tests {
     }
 
     #[test]
+    fn discarded_capture_does_not_run_its_nested_transformer() {
+        use crate::{
+            driver::{RunConfiguration, compile_path, execute},
+            module::ModuleRoots,
+        };
+
+        super::machine_test_hooks::reset();
+        let configuration = RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/entry_discard_captured_bomb.ash"),
+            roots: ModuleRoots::empty(),
+        };
+        let compiled =
+            compile_path(configuration).expect("the nested rejecting syntax is discarded");
+        assert_eq!(super::machine_test_hooks::TRANSFORMER_DROPS.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFER_ATTEMPTS.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFER_FAILURES.get(), 0);
+        let requests = super::machine_test_hooks::SYNTAX_REQUESTS.get();
+        assert!(requests > 0);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+        assert_eq!(super::machine_test_hooks::SYNTAX_REQUESTS.get(), requests);
+        super::machine_test_hooks::reset();
+    }
+
+    #[test]
     fn malformed_capture_is_rejected_before_a_discarding_transformer_runs() {
         use crate::{
             driver::{RunConfiguration, compile_path, execute},

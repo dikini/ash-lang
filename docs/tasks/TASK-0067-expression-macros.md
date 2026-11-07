@@ -22,8 +22,8 @@
 ## Current delivery status, 7 November
 
 The latest reviewed product checkpoint is `1631b1b5`: **82.5/99 original-scope
-points are reviewed and 16.5 remain**. The separately estimated 30.25 points of
-additional performed work give an effort index of **112.75/129.25**, not an
+points are reviewed and 16.5 remain**. The separately estimated 31.75 points of
+additional performed work give an effort index of **114.25/130.75**, not an
 acceptance percentage. M01–M14 and C1/C2 remain open.
 
 The [operational plan](../plans/2026-11-05-expression-macros.md#2130-source-binder-reservation-finding)
@@ -1849,6 +1849,38 @@ All-target Clippy passes in `/tmp/ash-qualified-origin-clippy-final.log`
 (SHA-256 `24cd19b8aaebcee518b81d48bc1df70c19a3ee076332f672864fd3aa51748c2b`).
 This bounded candidate awaits independent review; no new points or M/C
 closure are inferred, and other qualified-name positions are not claimed.
+
+### Reviewed qualified names and captured nested syntax, 7 November
+
+Independent review passed `97a9113f`. The qualified-expression diagnostic
+repair is retained with its stated component and occurrence boundaries; it
+does not establish complete origin coverage or close an M/C row.
+
+X8 records approximately 1.5 additional performed-work points for this
+corrective episode. The recorded interval from the first CLI loss at
+06:03:25.553 to the final affected-suite receipt at 06:19:18.703 is 15 minutes
+53.150 seconds, or approximately 1.47 points at the existing 5.55 points per
+elapsed hour scale, rounded to a quarter point. It is an elapsed-window proxy,
+not measured active time or a complete repair cost; it excludes the later
+Clippy and review, separately recorded lifecycle bookkeeping and the following
+nested-capture check. No product-acceptance points are inferred from X8. The
+historical X30 and X7 records remain unchanged; X8 makes the additional-work
+estimate 31.75 points and the effort index 114.25/130.75.
+
+The existing `parsed_discard 41` test constructs its nested rejecting syntax
+inside `parse_expression`; it does not start with a nested invocation in the
+source capture. A new real-driver control selects `bomb` and passes
+`parsed_discard (bomb 41)`. It returns 42, with one transformer and one
+successful transfer, and runtime makes no further syntax requests. The focused
+machine test passes in `/tmp/ash-original-capture-discard-final.log`
+(SHA-256 `9b81af46623444791c5f970e8b69b2553eb6dc1677041026c81b50bfbdb6231b`);
+the real CLI also returns `42 : Int` in
+`/tmp/ash-original-capture-discard-cli.log` (SHA-256
+`93d158dc4f3e49e87da47f5208131722a2589ace79685e55de34a34302570487`).
+All-target Clippy passes in `/tmp/ash-original-capture-discard-clippy.log`
+(SHA-256 `0891611c4246b7b9bf97769ecbc96a208303175ccb70f7c38f8390d8fd43a4eb`).
+This distinct M03 observation awaits independent review; no P27 or M/C credit
+is inferred yet.
 
 ## Progress
 

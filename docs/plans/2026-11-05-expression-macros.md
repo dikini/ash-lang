@@ -1297,3 +1297,12 @@ retains the actual qualifier and member locations at the ordinary projection
 and lookup handoffs. Focused red/green, affected suites, small-stack checks,
 CLI output and Clippy are recorded there. The candidate awaits independent
 review; it does not claim all qualified-name positions or M/C completion.
+
+### Reviewed qualified names and captured nested syntax, 7 November
+
+Independent review passed `97a9113f`. The task records X8's separate
+elapsed-window estimate for that corrective work without changing reviewed
+product credit. An existing-hook driver test now demonstrates that a nested
+rejecting invocation in the original source capture is discarded before it
+runs; this candidate awaits review. Whole-path review, the final gate and
+retained verification remain open.
