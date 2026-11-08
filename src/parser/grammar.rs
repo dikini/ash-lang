@@ -487,8 +487,16 @@ fn starts_module_declaration(parser: &Parser<'_>) -> bool {
 }
 
 fn module_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
-    if let Some(selection) = parser.selected_declaration_syntax() {
-        let matcher = selection.declaration.matcher.clone();
+    if parser.selected_declaration_syntax().is_some() {
+        if !parser.charge_declaration_matcher() {
+            return TypeParametersOutcome::Complete;
+        }
+        let matcher = parser
+            .selected_declaration_syntax()
+            .expect("the selected declaration syntax has a matcher")
+            .declaration
+            .matcher
+            .clone();
         syntax_invocation(parser, NodeKind::DeclarationSyntaxInvocation, &matcher);
         TypeParametersOutcome::Complete
     } else if starts_syntax_declaration(parser) {

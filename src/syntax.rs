@@ -229,14 +229,101 @@ impl SyntaxContexts {
     }
 
     pub(crate) fn select(&self, name: &SurfaceName) -> Option<&SelectedSyntax> {
-        let imports = if name.introduction == 0 {
-            &self.caller
-        } else {
-            let owner = self.owners.get(name.introduction - 1)?.as_ref()?;
-            self.owner_imports.get(*owner)?
-        };
-        imports.iter().find(|syntax| syntax.name == name.text)
+        self.select_parts(&name.text, name.introduction)
     }
+
+    pub(crate) fn select_parts(&self, text: &str, introduction: usize) -> Option<&SelectedSyntax> {
+        self.imports_for(introduction)?
+            .iter()
+            .find(|syntax| syntax.name == text)
+    }
+
+    fn imports_for(&self, introduction: usize) -> Option<&[SelectedSyntax]> {
+        if introduction == 0 {
+            Some(&self.caller)
+        } else {
+            let owner = self.owners.get(introduction - 1)?.as_ref()?;
+            Some(self.owner_imports.get(*owner)?)
+        }
+    }
+
+    /// Reserve the comparisons for this scan and the immediately following lookup.
+    pub(crate) fn charge_selection_search(
+        &self,
+        text: &str,
+        introduction: usize,
+        budget: &mut crate::syntax_resource::SyntaxBudget,
+    ) -> Result<(), crate::syntax_resource::ResourceFailure> {
+        budget.charge_units(2)?;
+        if let Some(imports) = self.imports_for(introduction) {
+            for selection in imports {
+                // Compare once here and once in the following ordinary lookup.
+                budget.charge_units(2)?;
+                let bytes = text.len().min(selection.name.len());
+                budget.charge_units(bytes)?;
+                budget.charge_units(bytes)?;
+                if selection.name == text {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Copy the exact parse-time selection snapshot under the graph's ledger.
+    pub(crate) fn new_budgeted(
+        caller: &[SelectedSyntax],
+        owner_imports: &[Vec<SelectedSyntax>],
+        owners: &[SyntaxOwner],
+        budget: &mut crate::syntax_resource::SyntaxBudget,
+    ) -> Result<Self, crate::syntax_resource::ResourceFailure> {
+        budget.charge_units(owners.len())?;
+        budget.charge_units(owners.len())?;
+        budget.charge_units(owner_imports.len())?;
+        for selection in caller.iter().chain(owner_imports.iter().flatten()) {
+            charge_selected(selection, budget)?;
+        }
+        let owners = owners.iter().map(|owner| owner.owner).collect::<Vec<_>>();
+        Ok(Self::new(caller, owner_imports, &owners))
+    }
+}
+
+pub(crate) fn charge_name(
+    name: &SurfaceName,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), crate::syntax_resource::ResourceFailure> {
+    budget.charge()?;
+    budget.charge_units(name.text.len())?;
+    if let Some(diagnostic) = &name.diagnostic {
+        budget.charge()?;
+        budget.charge_units(diagnostic.related.len())?;
+        budget.charge_units(diagnostic.frames.len())?;
+    }
+    Ok(())
+}
+
+pub(crate) fn charge_selected(
+    selection: &SelectedSyntax,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), crate::syntax_resource::ResourceFailure> {
+    budget.charge()?;
+    budget.charge_units(selection.name.len())?;
+    charge_name(&selection.declaration.name, budget)?;
+    budget.charge_units(selection.declaration.matcher.len())?;
+    for part in &selection.declaration.matcher {
+        match part {
+            SurfaceSyntaxMatcherPart::Literal { spelling, .. } => {
+                // The spelling also bounds the storage of a cloned literal token.
+                budget.charge_units(spelling.len())?;
+                budget.charge_units(spelling.len())?;
+            }
+            SurfaceSyntaxMatcherPart::Capture { name, .. } => charge_name(name, budget)?,
+        }
+    }
+    if let SurfaceSyntaxImplementation::Transformer(name) = &selection.declaration.implementation {
+        charge_name(name, budget)?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -291,13 +378,14 @@ impl<'a> SyntaxExpansion<'a> {
         source: &'a crate::source::SourceFile,
         selected: &'a [SelectedSyntax],
         owner_imports: &'a [Vec<SelectedSyntax>],
+        owners: Vec<SyntaxOwner>,
         transformer: &'a mut SyntaxTransformer<'a>,
     ) -> Self {
         Self {
             source,
             selected,
             owner_imports,
-            owners: Vec::new(),
+            owners,
             parse_failure: None,
             transformer,
         }
@@ -821,6 +909,92 @@ fn capture_by_name<'a>(
         .position(|capture| capture.text == name.text)
         .ok_or(name.span)?;
     captures.get(index).ok_or(name.span)
+}
+
+/// Instantiate only identifier captures before the existing declaration parser.
+pub(crate) fn instantiate_declaration_template(
+    selection: &SelectedSyntax,
+    captures: &[SurfaceSyntaxCapture],
+    introduction: usize,
+    invocation: Span,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<Vec<MacroOutputNode>, crate::parser::MacroParseFailure> {
+    use crate::parser::{MacroParseFailure, STRUCTURAL_DEPTH_LIMIT};
+    use crate::syntax_resource::ResourceFailure;
+
+    fn resource(error: ResourceFailure) -> MacroParseFailure {
+        MacroParseFailure::Syntax {
+            diagnostics: Vec::new(),
+            resource: Some(error),
+        }
+    }
+
+    let template = selection
+        .declaration
+        .template_contents
+        .as_deref()
+        .ok_or(MacroParseFailure::Invalid)?;
+    budget.charge_units(template.len()).map_err(resource)?;
+    budget.charge_units(template.len()).map_err(resource)?;
+    let mut pending = template
+        .iter()
+        .map(|node| (node, 0usize))
+        .collect::<Vec<_>>();
+    while let Some((node, depth)) = pending.pop() {
+        budget.charge().map_err(resource)?;
+        match node {
+            MacroOutputNode::Identifier(name, _) => charge_name(name, budget).map_err(resource)?,
+            MacroOutputNode::Token(_, spelling, _) => {
+                budget.charge_units(spelling.len()).map_err(resource)?;
+            }
+            MacroOutputNode::Group(_, children, _) => {
+                if depth >= STRUCTURAL_DEPTH_LIMIT {
+                    return Err(resource(ResourceFailure::StructuralDepth {
+                        limit: STRUCTURAL_DEPTH_LIMIT,
+                    }));
+                }
+                budget.charge_units(children.len()).map_err(resource)?;
+                budget.charge_units(children.len()).map_err(resource)?;
+                pending.extend(children.iter().map(|child| (child, depth + 1)));
+            }
+            MacroOutputNode::Splice(name) => {
+                charge_name(name, budget).map_err(resource)?;
+                for part in &selection.declaration.matcher {
+                    // This scan, the preflight lookup, and substitution lookup.
+                    budget.charge_units(3).map_err(resource)?;
+                    if let SurfaceSyntaxMatcherPart::Capture { name: capture, .. } = part {
+                        let bytes = name.text.len().min(capture.text.len());
+                        budget.charge_units(bytes).map_err(resource)?;
+                        budget.charge_units(bytes).map_err(resource)?;
+                        budget.charge_units(bytes).map_err(resource)?;
+                        if name.text == capture.text {
+                            break;
+                        }
+                    }
+                }
+                match capture_by_name(name, &selection.declaration.matcher, captures) {
+                    Ok(SurfaceSyntaxCapture::Identifier(capture)) => {
+                        charge_name(&capture.name, budget).map_err(resource)?;
+                    }
+                    _ => return Err(MacroParseFailure::Invalid),
+                }
+            }
+            MacroOutputNode::Expression(_, _)
+            | MacroOutputNode::ForwardedExpression(_, _)
+            | MacroOutputNode::ForwardedType(_, _)
+            | MacroOutputNode::ForwardedPattern(_, _) => return Err(MacroParseFailure::Invalid),
+        }
+    }
+    let mut output = template.to_vec();
+    substitute_contents(
+        &mut output,
+        &selection.declaration.matcher,
+        captures,
+        introduction,
+        invocation,
+    )
+    .map_err(|_| MacroParseFailure::Invalid)?;
+    Ok(output)
 }
 
 pub(crate) fn admit_transformer_output(

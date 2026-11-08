@@ -1,6 +1,6 @@
 //! Shared accounting for retained syntax work.
 
-/// Maximum cumulative lexer-token, lexical-diagnostic, and parser-event work.
+/// Maximum cumulative lexing, parsing, and declaration-staging work.
 ///
 /// This is an implementation resource budget, not an Ash source restriction.
 /// It bounds retained front-end structures before their allocation.
@@ -14,8 +14,7 @@ pub enum ResourceFailure {
         /// The active implementation budget.
         limit: usize,
     },
-    /// Retaining another token, lexical diagnostic, or parser event would
-    /// exceed the cumulative syntax-work budget.
+    /// Retaining or copying more syntax would exceed the cumulative budget.
     SyntaxWork {
         /// The active implementation budget.
         limit: usize,
@@ -69,7 +68,12 @@ impl SyntaxBudget {
     }
 
     pub(crate) fn charge(&mut self) -> Result<(), ResourceFailure> {
-        let Some(remaining) = self.remaining.checked_sub(1) else {
+        self.charge_units(1)
+    }
+
+    /// Reserve work before copying a structured syntax value.
+    pub(crate) fn charge_units(&mut self, units: usize) -> Result<(), ResourceFailure> {
+        let Some(remaining) = self.remaining.checked_sub(units) else {
             return Err(ResourceFailure::SyntaxWork { limit: self.limit });
         };
         self.remaining = remaining;
