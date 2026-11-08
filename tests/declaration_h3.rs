@@ -86,10 +86,11 @@ fn i12_duplicate_private_types_and_constructors_reach_ordinary_resolution() {
             panic!("expected ordinary resolution failure: {failure:?}");
         };
         assert_eq!(error.reason, reason);
+        let entry = fs::canonicalize(fixture.0.join("entry.ash")).unwrap();
         let source = failure
             .sources()
             .iter()
-            .find(|source| Path::new(source.display_path()) == fixture.0.join("entry.ash"))
+            .find(|source| Path::new(source.display_path()) == entry)
             .expect("the caller source is retained");
         let [first] = error.related.as_slice() else {
             panic!("expected the earlier declaration");
