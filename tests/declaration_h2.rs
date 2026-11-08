@@ -86,7 +86,7 @@ fn caller_selected_references_and_introduced_parameters_remain_distinct() {
         ),
         (
             "entry.ash",
-            "import forms (syntax make_value)\nmake_value first using helper_first from left\nmake_value second using helper_second from right\nleft : Unit -> Int\nleft () = 10\nright : Unit -> Int\nright () = 20\nparameter : Unit -> Int\nparameter () = 999\nmain : Unit -> Int\nmain () = first(()) * 100 + second(())\n",
+            "import forms (syntax make_value)\nmake_value first using helper_first from parameter\nmake_value second using helper_second from right\nparameter : Unit -> Int\nparameter () = 10\nright : Unit -> Int\nright () = 20\nmain : Unit -> Int\nmain () = first(()) * 100 + second(())\n",
         ),
     ] {
         fs::write(fixture.0.join(name), text).unwrap();
