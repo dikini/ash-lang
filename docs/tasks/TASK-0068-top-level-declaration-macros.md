@@ -194,7 +194,7 @@ slice 1 behavior, stop it and return the concrete finding for a decision.
 
 The expression/pattern inventory found that raw pattern projection can repeat
 origin walks and frame comparisons for grouped wrappers, including diagnostics
-later discarded by projection. Account for the operations actually retained
+later discarded by projection. Account for the operations actually performed
 before activating that path, or review a narrow removal of the redundant work.
 
 The separate local D5 candidate `273b5ec012254d5bdb06f6db4e4f8f104193207a`
