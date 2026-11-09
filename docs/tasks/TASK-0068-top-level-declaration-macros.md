@@ -18,8 +18,8 @@
 The retained [expression-syntax specification](../../spec/syntax-expansion.md)
 is the slice 1 baseline. CP-0034 is accepted, and the C1–C4 contract and corpus
 checks are recorded in the delivery plan. On 2026-11-09, the verified retaining
-commit is `3613a863a7a2870b0906fd20925bd641d0598ea2`, tree
-`7c5c3802e0793e5fe396be68abcfc9e388e40189`. Recheck refs and worker ownership
+commit is `3a30b75307cb9c4208b71ddc15efb7fa0ecc1bb2`, tree
+`94420e402b5bec57099f94a33e0a9c15b70a6133`. Recheck refs and worker ownership
 before dispatch. The plan records the earlier retained squash commits, their
 partial criteria and the remaining producer/consumer interfaces.
 
@@ -101,6 +101,15 @@ retained by [PR #276](https://github.com/dikini/ash-lang/pull/276) at
 - [PR #281](https://github.com/dikini/ash-lang/pull/281) retains the accepted
   inline escape amendment and its planning record at `3613a863`. Quote and
   escape implementation remains open.
+- [PR #282](https://github.com/dikini/ash-lang/pull/282) retains the direct
+  protected expression and pattern path at
+  `3a30b75307cb9c4208b71ddc15efb7fa0ecc1bb2`, with tree
+  `94420e402b5bec57099f94a33e0a9c15b70a6133`. The partial records for
+  [D3](https://github.com/dikini/ash-lang/issues/218#issuecomment-6748440248),
+  [D4](https://github.com/dikini/ash-lang/issues/222#issuecomment-6748443693),
+  [D6](https://github.com/dikini/ash-lang/issues/219#issuecomment-6748447094)
+  and [H3](https://github.com/dikini/ash-lang/issues/229#issuecomment-6748450548)
+  have been applied and read back.
 
 For the original I15 `type_error.ash`, a fresh human and JSON driver readback
 at `9e89ac12` reports the ordinary expected-Int/found-Bool cause with the
@@ -112,17 +121,19 @@ links the bounded readback; its receipt SHA-256 is
 Independent QA and Sol checked these focused deliveries and readbacks; the
 orchestrator confirmed them. Their original issue criteria remain unchecked.
 
-### Local expression and pattern candidate
+### Retained expression and pattern path
 
-**Delivered in the local candidate:** The unretained candidate for
+**Delivered:** The reviewed source candidate for
 [D3 #218](https://github.com/dikini/ash-lang/issues/218),
 [D4 #222](https://github.com/dikini/ash-lang/issues/222),
 [D6 #219](https://github.com/dikini/ash-lang/issues/219) and
 [H3 #229](https://github.com/dikini/ash-lang/issues/229) is
 `f2ff93084c2f064695eb2b1faa2522725d8aabf8`, tree
-`0d8c6c7bd710dcf68f5df371dad2b4850504bbff`. It connects protected expression
-and pattern captures through direct declaration templates, using the existing
-shared syntax budget for capture, substitution, staging and projection. D6
+`0d8c6c7bd710dcf68f5df371dad2b4850504bbff`. PR #282 retained this source
+through its TASK-only successor and the verified `3a30b753` squash. It connects
+protected expression and pattern captures through direct declaration templates,
+using the existing shared syntax budget for capture, substitution, staging and
+projection. D6
 uses its existing admission budget through placeholder creation, parsing and
 validation. The retained Type path remains active. Protected fragments in
 generated expression-syntax arguments and protected expressions containing
@@ -140,9 +151,10 @@ focused regression set. The original I01–I22 fixtures are unchanged.
 The focused receipt at
 `/tmp/ash-task0068-retained-evidence/expr-pattern-3613/complete-f2ff9308/receipt.json`
 has SHA-256 `95a88e0d99e70857797b6799749b5ec3988fc838ba867ecc50f75f7a9830a9f3`.
-This TASK-only record carries that evidence from `f2ff9308`: product source,
-tests, specification, tool configuration and fixed corpus inputs are unchanged.
-The focused gate was run on `f2ff9308`, not rerun on this record commit.
+The earlier TASK-only candidate `d6d41373` carried this evidence from
+`f2ff9308` through unchanged product source, tests, specification, tool
+configuration and fixed corpus inputs. The retained `3a30b753` tree equals
+that reviewed TASK-only candidate. The focused gate ran on `f2ff9308`.
 It records 396 distinct passing test names and one ignored original no-import
 nominal case, tracked separately by [#277](https://github.com/dikini/ash-lang/issues/277).
 Both protected expression/pattern and Type paths have actual 512 KiB
@@ -171,15 +183,92 @@ needs D5 and G1. No original criterion for these issues is closed by this
 candidate. Full V4 specification and tool documentation follows its reviewed
 V3 prerequisite; accepted but unimplemented forms remain outside current Ash.
 
-**Awaiting:** Independent QA and Sol have cleared the focused source and
-receipt. Independent checks of this record are pending. The candidate still
-needs a published PR, independent PR review, verified retention and partial
-issue-record readback. Full D8, E4, V3 and V7 gates remain open.
+**Awaiting:** Independent QA and Sol cleared the focused source and receipt, and
+checked the PR and applied partial issue records. Full D8, E4, V3 and V7
+gates remain open.
 
-**Owner:** The developer owns this candidate, its evidence and the eventual
-partial issue records. Independent QA and Sol own their checks; the orchestrator
-owns publication, retaining integration and acceptance confirmation. Main is
-a separate integration boundary.
+**Owner:** The developer owns subsequent changes and their evidence.
+Independent QA and Sol own their checks; the orchestrator owns retaining
+integration and acceptance confirmation. Main is a separate boundary.
+
+### Local declaration-capture candidate
+
+**Delivered in the local candidate:** The source-only D5 candidate for
+[#223](https://github.com/dikini/ash-lang/issues/223) is
+`aabaf99455762b36ffd6cc4ab6942bed24669589`, tree
+`de0c2e1aef89ac4e416f8b0a39ed76c6ce18c570`, based on retained `3a30b753`.
+A real imported empty-output declaration template accepts each of eight ordinary
+source declaration categories through the public driver. Component checks retain
+the I19 signature and equation excerpt, introduction-zero source names and
+source origins. The packet retains the ordinary declaration child's token order
+and omits the capture braces and boundary line ends.
+Incomplete, multiple and excluded source forms report parser failures at their
+observed caller locations. These checks do not establish the complete I19
+graph or declaration-fragment consumption.
+
+The existing syntax budget covers source packet construction, including nested
+groups, payloads and retained copies. Packet-phase checks use exact, short and
+retry allowances. On a 512 KiB stack, the component constructs, converts and
+drops a 128-layer packet and refuses a 129-layer packet before construction.
+The test-constructed host component pairs supported nested-expression
+construction and drop with first and later Declaration refusals on the same
+stack. The injected request control is a separate invalid-state component; it
+is not a host-transfer or macro-owner provenance claim.
+
+The focused receipt is
+`/tmp/ash-task0068-retained-evidence/d5-3a30/final-aabaf994/receipt.json`
+(SHA-256 `18dcd05e196e39ebc1b0fb339921f6340148d828dae90e65be34e254af10abfc`).
+It records 429 distinct passes, including 47 architecture tests, with equal
+before/after input snapshots. Two separate tests are ignored: the existing
+[#277](https://github.com/dikini/ash-lang/issues/277) nominal-context case and
+a supplemental valid nonempty-template positive awaiting D5/D6. Repeated stack
+runs are not additional distinct tests. Independent QA and Sol have cleared the
+focused candidate and evidence. This TASK-only record changes no product source
+or tests from `aabaf994`; its focused gate ran at that source pin and was not
+rerun on this record. This record does not establish retained delivery.
+
+The initial public red pin `400652b2` failed at the declaration capture header
+before the port. At preliminary pin `7ad738ae`, an inherited host refusal test
+used an empty effect registry and could fail before the capture guard. The
+separate red receipt
+`/tmp/ash-task0068-retained-evidence/d5-3a30/host-red-f53a8acd/receipt.json`
+(SHA-256 `41048c12ab2259dcc8fdd36e482fe6610c56b9867a727f483b70e2241b3495ed`)
+preserves that observation. The corrected component first proves that its
+test-constructed entry, validated program and matching effect registry construct
+a host with the supported capture. The existing selection and definition clone
+precede standalone matcher refusal;
+the corrected interface removes the proposed extra matcher scan and refuses a
+Declaration before constructing its packet. Supported prefix work may already
+have happened. A constructed nested Declaration is refused by the singleton
+entry's original-token scan and by composed projection; its packet count is
+supplemental evidence. The existing generic `Invalid` mapping for temporarily
+unsupported nonempty/procedural definitions is not a required diagnostic.
+
+An earlier independent candidate `72b5bed1` overflowed a 512 KiB stack. The
+separate `abda1098` phase witness localized the failure to packet construction
+after parsing and preflight; the D5-only iterative builder repaired that phase
+without changing the shared limit. Candidate `079cbdbc` then exposed three
+missing physical carrier inventory entries; its successor added those entries
+and the necessary transient profile without changing scanner rules. The earlier
+failed-gate receipt is
+`/tmp/ash-task0068-d5-evidence/repair-079c/architecture-failure-receipt.json`
+(SHA-256 `db86b92c7cc5a140753c00734f90956b251fff7eae09bfc215497d60d6b992dd`).
+Those observations belong to the earlier candidate; the current combined gate
+checks the integrated source independently.
+
+**Remaining:** The full D5/I19 criteria, declaration splices and host transfer,
+generated or structured recapture, procedural declarations, deriving and the
+connected consumers remain open. A valid unused nonempty template remains a
+positive obligation, not a language rejection.
+
+**Awaiting:** Independent checks of this record, a published PR and PR review,
+verified retention and a partial #223 issue-record readback. D8, E4, V3, V7 and
+the fresh full-workspace gate remain open; D8 is the next full checkpoint once
+its required connected paths are ready.
+
+**Owner:** The developer owns candidate changes, evidence and the partial issue
+record. Independent QA and Sol own their checks; the orchestrator owns
+publication, integration and acceptance confirmation.
 
 **Remaining:** Complete protected-fragment accounting/consumption, declaration
 captures, repetition, host transfer and procedural declarations, quotes/escapes,
@@ -189,8 +278,8 @@ criterion awaits D5/G1; D6's procedural-output import refusal awaits S3/S4.
 Prior partial H1/H2/H3 tests do not close their original criteria. No TASK-0068
 fresh full-workspace receipt or completed D8/E4/V3/final gate is established.
 
-**Awaiting:** Retain the independently reviewed expression/pattern candidate
-before treating its direct-template lane as delivered on the retaining branch.
+**Awaiting:** Retain the independently reviewed declaration-capture candidate
+before treating its source-only path as delivered on the retaining branch.
 Each delivery also requires independent QA, Sol PR review, retained-result
 verification and acceptance readback. Keep every
 incomplete original criterion unchecked with Delivered/Remaining/Awaiting/Owner
@@ -247,17 +336,17 @@ The original full-module graphs remain required integration evidence.
 The preserved `/home/dikini/Projects/ash-lang-task-0068` worktree remains at the
 verified base on `codex/task-0068-protected`, with the inspected untracked
 `tests/declaration_type_capture.rs` preserved. Its hash and existing type-first
-working evidence are recorded in the plan. Resume using the existing syntax
-budget/shared accounting; keep expression/pattern/procedural activation guarded
-until their required accounting and consumers are independently verified.
+working evidence are recorded in the plan. The retaining path uses the
+existing syntax budget for the reviewed direct expression/pattern consumers;
+unaccounted consumers and procedural declaration execution remain guarded.
 
 The plan names the
 [protected type-to-expression accounting and release gate](../design/macros/slice2-delivery-plan.md#protected-type-to-expression-accounting-and-release-gate).
 It requires separate independent review. The retained Type delivery established
 the narrow refusal for protected types in generated expression-macro invocation
 arguments, then activated its accounted Type path. The retaining branch at
-`3613a863` still guards Expression and Pattern declaration captures; the local
-candidate above connects the direct-template lane with shared accounting.
+`3613a863` still guarded Expression and Pattern declaration captures; PR #282
+subsequently connected the direct-template lane with shared accounting.
 Keep the Type-to-expression refusal and guards on unaccounted consumers.
 Required real imported
 consumer, repeated-copy, exact/short allowance, depth, late-failure,

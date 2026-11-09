@@ -9,18 +9,19 @@ use crate::{
     surface::{
         ApplicationExpr, BinaryExpr, EquationalGlobal, FunctionExpr, FunctionType,
         InlineOperationalGlobal, SurfaceBinder, SurfaceBinding, SurfaceBlock,
-        SurfaceConstructorDeclaration, SurfaceDeclarationIndex, SurfaceDefinition,
-        SurfaceDefinitionKind, SurfaceDeterminationSide, SurfaceEffectDeclaration,
-        SurfaceEffectInstance, SurfaceEffectOperation, SurfaceEffectRow, SurfaceEquation,
-        SurfaceExpr, SurfaceExprKind, SurfaceExpressionCapture, SurfaceExternalInterface,
-        SurfaceHandleExpr, SurfaceHandlerClause, SurfaceIdentifierCapture, SurfaceImplementation,
-        SurfaceImport, SurfaceImportItem, SurfaceImportSelection, SurfaceInlineOperationalHeader,
-        SurfaceInterfaceDeclaration, SurfaceInterfaceDetermination, SurfaceInterfaceMethod,
-        SurfaceKind, SurfaceKindKind, SurfaceLocalDeclaration, SurfaceMatchArm, SurfaceMatchExpr,
-        SurfaceModule, SurfaceModulePath, SurfaceName, SurfaceNominalDeclarationKind,
-        SurfacePattern, SurfacePatternCapture, SurfacePatternKind, SurfacePerformExpr,
-        SurfaceQualifiedName, SurfaceRecursiveGroup, SurfaceRecursiveMember, SurfaceReference,
-        SurfaceRequirement, SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind, SurfaceSyntaxCategory,
+        SurfaceConstructorDeclaration, SurfaceDeclarationCapture, SurfaceDeclarationIndex,
+        SurfaceDefinition, SurfaceDefinitionKind, SurfaceDeterminationSide,
+        SurfaceEffectDeclaration, SurfaceEffectInstance, SurfaceEffectOperation, SurfaceEffectRow,
+        SurfaceEquation, SurfaceExpr, SurfaceExprKind, SurfaceExpressionCapture,
+        SurfaceExternalInterface, SurfaceHandleExpr, SurfaceHandlerClause,
+        SurfaceIdentifierCapture, SurfaceImplementation, SurfaceImport, SurfaceImportItem,
+        SurfaceImportSelection, SurfaceInlineOperationalHeader, SurfaceInterfaceDeclaration,
+        SurfaceInterfaceDetermination, SurfaceInterfaceMethod, SurfaceKind, SurfaceKindKind,
+        SurfaceLocalDeclaration, SurfaceMatchArm, SurfaceMatchExpr, SurfaceModule,
+        SurfaceModulePath, SurfaceName, SurfaceNominalDeclarationKind, SurfacePattern,
+        SurfacePatternCapture, SurfacePatternKind, SurfacePerformExpr, SurfaceQualifiedName,
+        SurfaceRecursiveGroup, SurfaceRecursiveMember, SurfaceReference, SurfaceRequirement,
+        SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind, SurfaceSyntaxCategory,
         SurfaceSyntaxDeclaration, SurfaceSyntaxImplementation, SurfaceSyntaxMatcherPart,
         SurfaceType, SurfaceTypeCapture, SurfaceTypeDeclaration, SurfaceTypeKind,
         SurfaceTypeParameter, SurfaceTypeVisibility, SurfaceTypedPattern,
@@ -577,7 +578,7 @@ fn validate_shallow_shape(
                             direct_tokens(capture, tokens).any(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
                                 || direct_tokens(capture, tokens).last().is_some_and(|token| {
                                     matches!(&token.kind, TokenKind::Type)
-                                        || matches!(&token.kind, TokenKind::Identifier(name) if name == "pattern")
+                                        || matches!(&token.kind, TokenKind::Identifier(name) if name == "pattern" || name == "declaration")
                                 })
                         })
                     {
@@ -659,7 +660,7 @@ fn validate_shallow_shape(
             shape.token(&TokenKind::Colon)?;
             shape.token_matching(
                 |kind| matches!(kind, TokenKind::Type)
-                    || matches!(kind, TokenKind::Identifier(name) if name == "expr" || name == "ident" || name == "pattern"),
+                    || matches!(kind, TokenKind::Identifier(name) if name == "expr" || name == "ident" || name == "pattern" || name == "declaration"),
             )?;
         }
         NodeKind::SyntaxInvocation | NodeKind::DeclarationSyntaxInvocation => {
@@ -670,6 +671,7 @@ fn validate_shallow_shape(
                         && shape.peek_node().is_some_and(|argument| {
                             child_nodes(argument).any(|child| {
                                 matches!(child.kind, NodeKind::Type | NodeKind::Pattern)
+                                    || is_capturable_declaration(child.kind)
                             })
                         })
                     {
@@ -684,7 +686,23 @@ fn validate_shallow_shape(
             }
         }
         NodeKind::SyntaxArgument => {
-            if shape.peek_node_is(NodeKind::Type) {
+            if shape.peek_token_is(&TokenKind::LeftBrace) {
+                shape.token(&TokenKind::LeftBrace)?;
+                while shape.peek_token_is(&TokenKind::LineEnd) {
+                    shape.token(&TokenKind::LineEnd)?;
+                }
+                if !shape
+                    .peek_node()
+                    .is_some_and(|child| is_capturable_declaration(child.kind))
+                {
+                    return malformed(InternalReason::UnexpectedShape);
+                }
+                shape.any_node()?;
+                while shape.peek_token_is(&TokenKind::LineEnd) {
+                    shape.token(&TokenKind::LineEnd)?;
+                }
+                shape.token(&TokenKind::RightBrace)?;
+            } else if shape.peek_node_is(NodeKind::Type) {
                 shape.node(NodeKind::Type)?;
             } else if shape.peek_node_is(NodeKind::Pattern) {
                 shape.node(NodeKind::Pattern)?;
@@ -1823,6 +1841,11 @@ impl ModuleProjection {
                                 TokenKind::Identifier(kind) if declaration && kind == "pattern" => {
                                     SurfaceSyntaxCaptureKind::Pattern
                                 }
+                                TokenKind::Identifier(kind)
+                                    if declaration && kind == "declaration" =>
+                                {
+                                    SurfaceSyntaxCaptureKind::Declaration
+                                }
                                 _ => return malformed(InternalReason::UnexpectedShape),
                             };
                             matcher.push(SurfaceSyntaxMatcherPart::Capture {
@@ -2147,9 +2170,9 @@ pub(crate) fn project_declaration_expansions(
             .into());
         }
         let expression_pattern =
-            charge_declaration_invocation(child, &tokens, &current.contexts, true, budget)?;
+            charge_declaration_invocation(source, child, &tokens, &current.contexts, true, budget)?;
         let invocation =
-            project_declaration_invocation_node(source, child, &tokens, &current.contexts)?;
+            project_declaration_invocation_node(source, child, &tokens, &current.contexts, true)?;
         // Reserve the owner and frame before retaining either one.
         budget.charge_units(2)?;
         staged_owners.push(crate::syntax::SyntaxOwner {
@@ -2268,6 +2291,7 @@ fn charge_staged_name_frames(
 
 /// Reserve supported captures before the shared invocation projector can copy them.
 fn charge_declaration_invocation(
+    source: &SourceFile,
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
     contexts: &crate::syntax::SyntaxContexts,
@@ -2310,10 +2334,19 @@ fn charge_declaration_invocation(
                 InternalReason::UnexpectedShape,
             ))?;
     budget.charge_units(selection.declaration.matcher.len())?;
+    let mut has_declaration = false;
+    let mut has_other_capture = false;
     for part in &selection.declaration.matcher {
-        if let SurfaceSyntaxMatcherPart::Literal { spelling, .. } = part {
-            budget.charge_units(spelling.len())?;
-            budget.charge_units(spelling.len())?;
+        match part {
+            SurfaceSyntaxMatcherPart::Literal { spelling, .. } => {
+                budget.charge_units(spelling.len())?;
+                budget.charge_units(spelling.len())?;
+            }
+            SurfaceSyntaxMatcherPart::Capture { kind, .. } => match kind {
+                SurfaceSyntaxCaptureKind::Declaration => has_declaration = true,
+                SurfaceSyntaxCaptureKind::Identifier => {}
+                _ => has_other_capture = true,
+            },
         }
     }
     budget.charge_units(selection.declaration.matcher.len())?;
@@ -2323,6 +2356,15 @@ fn charge_declaration_invocation(
                 selection.declaration.implementation,
                 SurfaceSyntaxImplementation::Template
             ))
+        || (has_declaration
+            && (!executing
+                || has_other_capture
+                || !source_projection_tokens(tokens)
+                || !selection
+                    .declaration
+                    .template_contents
+                    .as_deref()
+                    .is_some_and(<[_]>::is_empty)))
     {
         return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
     }
@@ -2342,6 +2384,12 @@ fn charge_declaration_invocation(
         let kind = kinds.next().ok_or(ProjectionError::MalformedTree(
             InternalReason::UnexpectedShape,
         ))?;
+        if *kind == SurfaceSyntaxCaptureKind::Declaration {
+            budget.charge()?;
+            let declaration = capture_declaration_node(argument)?;
+            charge_declaration_contents(source, declaration, tokens, budget)?;
+            continue;
+        }
         if *kind == SurfaceSyntaxCaptureKind::Type {
             let ty = only_child_of_kind(argument, NodeKind::Type)?;
             // Both the eventual projected type and the temporary contents
@@ -2558,8 +2606,13 @@ fn charge_capture_contents(
                     depth,
                     false,
                     budget,
+                )?
+                .ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                bridge |= crate::syntax::charge_expression_retention(capture, 0, budget)?.ok_or(
+                    ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
                 )?;
-                bridge |= crate::syntax::charge_expression_retention(capture, 0, budget)?;
             }
             Some(crate::syntax::MacroOutputNode::ForwardedPattern(..)) => {
                 budget.charge()?; // the final capture retains the existing Arc
@@ -2981,7 +3034,10 @@ fn charge_composed_projection(
                                 depth,
                                 false,
                                 budget,
-                            )?;
+                            )?
+                            .ok_or(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            ))?;
                             if tokens.frame.is_some() {
                                 let frames = tokens.staging_frames.map_or(1, |frames| frames.len());
                                 let existing = capture
@@ -3005,7 +3061,10 @@ fn charge_composed_projection(
                                 depth,
                                 tokens.frame.is_some(),
                                 budget,
-                            )?;
+                            )?
+                            .ok_or(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            ))?;
                             if scheduled_pattern {
                                 // Match/handler finish tasks clone the projected
                                 // pattern after its first frame inheritance.
@@ -3014,6 +3073,9 @@ fn charge_composed_projection(
                                     depth,
                                     tokens.frame,
                                     budget,
+                                )?
+                                .ok_or(
+                                    ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
                                 )?;
                             }
                         }
@@ -3884,6 +3946,226 @@ fn project_syntax_expression_capture(
     }
 }
 
+fn source_projection_tokens(tokens: &ProjectionTokens<'_>) -> bool {
+    tokens.originals.is_none()
+        && tokens.occurrence.is_none()
+        && tokens.construction.is_none()
+        && !tokens.construction_extents
+        && tokens.admission_identifiers.is_none()
+        && tokens.frame.is_none()
+        && tokens.name_frame.is_none()
+        && tokens.staging_frames.is_none()
+        && !tokens.preserve_name_diagnostic
+}
+
+fn capture_declaration_node(argument: &ConcreteNode) -> Result<&ConcreteNode, ProjectionError> {
+    let mut children = child_nodes(argument);
+    let declaration = children.next().ok_or(ProjectionError::MalformedTree(
+        InternalReason::UnexpectedShape,
+    ))?;
+    if !is_capturable_declaration(declaration.kind) || children.next().is_some() {
+        return malformed(InternalReason::UnexpectedShape);
+    }
+    Ok(declaration)
+}
+
+/// Reserve the source-only packet and check its retained delimiter depth.
+fn charge_declaration_contents(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), DeclarationExpansionFailure> {
+    // The packet's Arc is one retained structural layer. The capture braces
+    // are outside `node`, so only groups inside the declaration add layers.
+    let mut depth = 1usize;
+    budget.charge()?;
+    // This preflight and packet construction each retain their own pending list.
+    budget.charge_units(node.children.len())?;
+    budget.charge_units(node.children.len())?;
+    let mut pending = node.children.iter().rev().collect::<Vec<_>>();
+    while let Some(element) = pending.pop() {
+        // One visit here and one in the flattened-index pass.
+        budget.charge_units(2)?;
+        match element {
+            ConcreteElement::Node(child) => {
+                budget.charge_units(child.children.len())?;
+                budget.charge_units(child.children.len())?;
+                pending.extend(child.children.iter().rev());
+            }
+            ConcreteElement::Token(index) => {
+                // The flattened index and its later sequence visit.
+                budget.charge_units(2)?;
+                let token = tokens.get(*index).ok_or(ProjectionError::MalformedTree(
+                    InternalReason::TokenOutOfRange,
+                ))?;
+                match &token.kind {
+                    TokenKind::LeftParen | TokenKind::LeftBrace => {
+                        depth = depth
+                            .checked_add(1)
+                            .ok_or(ResourceFailure::StructuralDepth {
+                                limit: super::STRUCTURAL_DEPTH_LIMIT,
+                            })?;
+                        if depth > super::STRUCTURAL_DEPTH_LIMIT {
+                            return Err(ResourceFailure::StructuralDepth {
+                                limit: super::STRUCTURAL_DEPTH_LIMIT,
+                            }
+                            .into());
+                        }
+                        // Group, output slot, Arc entry, child vector, and frame.
+                        budget.charge_units(5)?;
+                    }
+                    TokenKind::RightParen | TokenKind::RightBrace => {
+                        depth = depth.checked_sub(1).filter(|depth| *depth >= 1).ok_or(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+                        )?;
+                    }
+                    TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => {
+                        // Output slot, retained Arc entry, and SurfaceName/string copy.
+                        budget.charge_units(3)?;
+                        budget.charge_units(text.len())?;
+                    }
+                    kind => {
+                        // Output slot, retained Arc entry, and token/origin retention.
+                        budget.charge_units(3)?;
+                        match kind {
+                            TokenKind::Integer(value) => budget.charge_units(
+                                usize::try_from(value.magnitude_byte_length())
+                                    .unwrap_or(usize::MAX),
+                            )?,
+                            TokenKind::StringLiteral(value) => budget.charge_units(value.len())?,
+                            _ => {}
+                        }
+                        let range = token.span.range();
+                        let start = usize::try_from(range.start()).map_err(|_| {
+                            ProjectionError::MalformedTree(InternalReason::InvalidSpan)
+                        })?;
+                        let end = usize::try_from(range.end()).map_err(|_| {
+                            ProjectionError::MalformedTree(InternalReason::InvalidSpan)
+                        })?;
+                        let spelling = source
+                            .text()
+                            .get(start..end)
+                            .ok_or(ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
+                        budget.charge_units(spelling.len())?;
+                    }
+                }
+            }
+            ConcreteElement::Missing { .. } | ConcreteElement::Error(_) => {
+                return Err(ProjectionError::RecoveryNodesPresent.into());
+            }
+        }
+    }
+    if depth != 1 {
+        return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+    }
+    Ok(())
+}
+
+/// Build a source-only declaration packet without recursive group traversal.
+fn capture_source_declaration_contents(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+) -> Result<Vec<crate::syntax::MacroOutputNode>, ProjectionError> {
+    use crate::syntax::{MacroDelimiter, MacroOutputNode};
+
+    struct GroupFrame {
+        delimiter: MacroDelimiter,
+        opening: Span,
+        children: Vec<MacroOutputNode>,
+    }
+
+    let mut indices = Vec::new();
+    let mut pending = node.children.iter().rev().collect::<Vec<_>>();
+    while let Some(element) = pending.pop() {
+        match element {
+            ConcreteElement::Node(child) => pending.extend(child.children.iter().rev()),
+            ConcreteElement::Token(index) => indices.push(*index),
+            ConcreteElement::Missing { .. } | ConcreteElement::Error(_) => {
+                return Err(ProjectionError::RecoveryNodesPresent);
+            }
+        }
+    }
+    let mut output = Vec::new();
+    let mut frames: Vec<GroupFrame> = Vec::new();
+    let mut position = 0;
+    while let Some(&index) = indices.get(position) {
+        let token = tokens.get(index).ok_or(ProjectionError::MalformedTree(
+            InternalReason::TokenOutOfRange,
+        ))?;
+        position += 1;
+        let node = match &token.kind {
+            TokenKind::LeftParen | TokenKind::LeftBrace => {
+                let delimiter = if matches!(token.kind, TokenKind::LeftParen) {
+                    MacroDelimiter::Parentheses
+                } else {
+                    MacroDelimiter::Braces
+                };
+                frames.push(GroupFrame {
+                    delimiter,
+                    opening: token.span,
+                    children: Vec::new(),
+                });
+                continue;
+            }
+            TokenKind::RightParen | TokenKind::RightBrace => {
+                let frame = frames.pop().ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                if !matches!(
+                    (&frame.delimiter, &token.kind),
+                    (MacroDelimiter::Parentheses, TokenKind::RightParen)
+                        | (MacroDelimiter::Braces, TokenKind::RightBrace)
+                ) {
+                    return malformed(InternalReason::UnexpectedShape);
+                }
+                MacroOutputNode::Group(
+                    frame.delimiter,
+                    frame.children,
+                    join_spans(source, frame.opening, token.span)?.into(),
+                )
+            }
+            TokenKind::Dollar => {
+                let next = indices
+                    .get(position)
+                    .and_then(|index| tokens.projection_token(*index))
+                    .ok_or(ProjectionError::MalformedTree(
+                        InternalReason::UnexpectedShape,
+                    ))?;
+                position += 1;
+                MacroOutputNode::Splice(surface_name(next)?)
+            }
+            TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_) => {
+                let name = surface_name(tokens.projection_token(index).ok_or(
+                    ProjectionError::MalformedTree(InternalReason::TokenOutOfRange),
+                )?)?;
+                MacroOutputNode::Identifier(name, token.span.into())
+            }
+            _ => {
+                let start = usize::try_from(token.span.range().start())
+                    .map_err(|_| ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
+                let end = usize::try_from(token.span.range().end())
+                    .map_err(|_| ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
+                let spelling = source
+                    .text()
+                    .get(start..end)
+                    .ok_or(ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
+                MacroOutputNode::Token(token.kind.clone(), spelling.into(), token.span.into())
+            }
+        };
+        if let Some(frame) = frames.last_mut() {
+            frame.children.push(node);
+        } else {
+            output.push(node);
+        }
+    }
+    if !frames.is_empty() {
+        return malformed(InternalReason::UnexpectedShape);
+    }
+    Ok(output)
+}
+
 fn capture_contents(
     source: &SourceFile,
     node: &ConcreteNode,
@@ -4083,7 +4365,7 @@ fn project_declaration_invocation_from_tokens(
     {
         return malformed(InternalReason::UnexpectedShape);
     }
-    project_declaration_invocation_node(source, node, tokens, contexts)
+    project_declaration_invocation_node(source, node, tokens, contexts, false)
 }
 
 fn project_declaration_invocation_node(
@@ -4091,6 +4373,7 @@ fn project_declaration_invocation_node(
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
     contexts: &crate::syntax::SyntaxContexts,
+    allow_declaration: bool,
 ) -> Result<ProjectedDeclarationInvocation, ProjectionError> {
     let mut children = node.children.iter();
     let Some(ConcreteElement::Token(index)) = children.next() else {
@@ -4186,6 +4469,19 @@ fn project_declaration_invocation_node(
                         contents,
                     }));
                 }
+                SurfaceSyntaxCaptureKind::Declaration => {
+                    if !allow_declaration {
+                        return malformed(InternalReason::UnexpectedShape);
+                    }
+                    let declaration = capture_declaration_node(argument)?;
+                    let contents =
+                        capture_source_declaration_contents(source, declaration, tokens)?;
+                    captures.push(SurfaceSyntaxCapture::Declaration(
+                        SurfaceDeclarationCapture {
+                            contents: contents.into(),
+                        },
+                    ));
+                }
             },
             _ => return malformed(InternalReason::UnexpectedShape),
         }
@@ -4234,7 +4530,7 @@ pub(super) fn validate_declaration_template(
     };
     for child in child_nodes(root) {
         if child.kind == NodeKind::DeclarationSyntaxInvocation {
-            charge_declaration_invocation(child, &tokens, contexts, false, budget)?;
+            charge_declaration_invocation(source, child, &tokens, contexts, false, budget)?;
         } else {
             charge_projection_preflight(child, &tokens, true, budget)?;
         }
@@ -4242,7 +4538,7 @@ pub(super) fn validate_declaration_template(
             NodeKind::DeclarationSyntaxInvocation => {
                 // This child comes directly from the already-validated root;
                 // avoid rescanning that root for each nested invocation.
-                project_declaration_invocation_node(source, child, &tokens, contexts)?;
+                project_declaration_invocation_node(source, child, &tokens, contexts, false)?;
             }
             NodeKind::ForeignLibrary => {
                 foreign::library(source, child, &tokens)?;
@@ -6583,6 +6879,20 @@ fn expression_child(node: &ConcreteNode) -> Result<&ConcreteNode, ProjectionErro
     ))
 }
 
+const fn is_capturable_declaration(kind: NodeKind) -> bool {
+    matches!(
+        kind,
+        NodeKind::TypeDeclaration
+            | NodeKind::NewtypeDeclaration
+            | NodeKind::InterfaceDeclaration
+            | NodeKind::ImplementationDeclaration
+            | NodeKind::EffectDeclaration
+            | NodeKind::ForeignLibrary
+            | NodeKind::EquationalGlobal
+            | NodeKind::InlineOperationalGlobal
+    )
+}
+
 const fn is_expression_kind(kind: NodeKind) -> bool {
     matches!(
         kind,
@@ -6935,6 +7245,871 @@ mod tests {
         tree
     }
 
+    fn d5_source_tree(
+        source: &SourceFile,
+        selected: &[crate::syntax::SelectedSyntax],
+    ) -> (ConcreteTree, crate::syntax_resource::SyntaxBudget) {
+        let (tokens, diagnostics, budget, failure) = lex(source).unwrap().into_parts();
+        assert!(failure.is_none());
+        let (checkpoint, budget) = super::super::parse_module_header(tokens, diagnostics, budget);
+        let (tree, budget) = super::super::finish_module_from_checkpoint_with_syntax(
+            checkpoint,
+            budget,
+            Some(source),
+            selected,
+        );
+        assert!(
+            tree.parse_diagnostics().is_empty(),
+            "{:?}",
+            tree.parse_diagnostics()
+        );
+        (tree, budget)
+    }
+
+    fn d5_selection() -> crate::syntax::SelectedSyntax {
+        let forms = SourceFile::new(
+            "forms.ash",
+            include_str!("../../tests/fixtures/surface-macros/declaration-capture/forms.ash"),
+        )
+        .unwrap();
+        h1_selection(&forms, 0, None)
+    }
+
+    fn d5_packet_spellings(
+        source: &SourceFile,
+        nodes: &[crate::syntax::MacroOutputNode],
+        result: &mut Vec<String>,
+    ) {
+        use crate::syntax::{MacroDelimiter, MacroOrigin, MacroOutputNode};
+        for node in nodes {
+            match node {
+                MacroOutputNode::Identifier(name, origin) => {
+                    assert_eq!(*origin, MacroOrigin::Source(name.span));
+                    assert_eq!(name.introduction, 0);
+                    assert!(
+                        name.written && name.introduced_at.is_none() && name.diagnostic.is_none()
+                    );
+                    let range = name.span.range();
+                    assert_eq!(
+                        &source.text()[range.start() as usize..range.end() as usize],
+                        name.text
+                    );
+                    result.push(name.text.clone());
+                }
+                MacroOutputNode::Token(_, spelling, MacroOrigin::Source(span)) => {
+                    let range = span.range();
+                    assert_eq!(
+                        &source.text()[range.start() as usize..range.end() as usize],
+                        spelling.as_ref()
+                    );
+                    result.push(spelling.to_string());
+                }
+                MacroOutputNode::Group(delimiter, children, MacroOrigin::Source(span)) => {
+                    let (open, close) = match delimiter {
+                        MacroDelimiter::Parentheses => ("(", ")"),
+                        MacroDelimiter::Braces => ("{", "}"),
+                    };
+                    let range = span.range();
+                    let text = &source.text()[range.start() as usize..range.end() as usize];
+                    assert!(text.starts_with(open) && text.ends_with(close), "{text:?}");
+                    result.push(open.into());
+                    d5_packet_spellings(source, children, result);
+                    result.push(close.into());
+                }
+                other => panic!("unexpected source packet node: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn d5_production_precharge_and_projection_retain_eight_source_categories() {
+        let i19 = include_str!("../../docs/design/macros/fixtures/captures/main.ash");
+        let start = i19.find("    passed : Unit -> Int\n").unwrap();
+        let end = start + i19[start..].find("\n}").unwrap();
+        let cases = [
+            (NodeKind::TypeDeclaration, "type Color = Red(Int)"),
+            (NodeKind::NewtypeDeclaration, "newtype Box = Box(Int)"),
+            (
+                NodeKind::InterfaceDeclaration,
+                "interface Marker<A> {\n    mark : A -> Bool\n}",
+            ),
+            (
+                NodeKind::ImplementationDeclaration,
+                "impl Marker<Int> {\n    mark _ = true\n}",
+            ),
+            (
+                NodeKind::EffectDeclaration,
+                "effect Ask {\n    ask : Unit -> Int\n}",
+            ),
+            (
+                NodeKind::ForeignLibrary,
+                "foreign library Fixture {\n    profile \"x86_64-unknown-linux-gnu\"\n    symbol Make : Unit -> F.Address { name \"fixture_make\" }\n}",
+            ),
+            (NodeKind::EquationalGlobal, &i19[start..end]),
+            (
+                NodeKind::InlineOperationalGlobal,
+                "fn same(value: Int) -> Int {\n    value\n}",
+            ),
+        ];
+        for (kind, declaration) in cases {
+            let selected = [d5_selection()];
+            let source = SourceFile::new(
+                "caller.ash",
+                format!("sink {{\n{declaration}\n}}\nmain : Unit -> Int\nmain () = 42\n"),
+            )
+            .unwrap();
+            let (tree, budget) = d5_source_tree(&source, &selected);
+            let root = tree.root().unwrap();
+            let node = child_nodes(root)
+                .find(|node| node.kind == NodeKind::DeclarationSyntaxInvocation)
+                .unwrap();
+            let argument = child_nodes(node)
+                .find(|node| node.kind == NodeKind::SyntaxArgument)
+                .unwrap();
+            let captured = capture_declaration_node(argument).unwrap();
+            assert_eq!(captured.kind, kind);
+            let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+            let tokens = ProjectionTokens::source(tree.tokens());
+            let mut precharge = budget.clone();
+            charge_declaration_invocation(&source, node, &tokens, &contexts, true, &mut precharge)
+                .unwrap();
+            let invocation =
+                project_declaration_invocation_node(&source, node, &tokens, &contexts, true)
+                    .unwrap();
+            let [SurfaceSyntaxCapture::Declaration(packet)] = invocation.captures.as_slice() else {
+                panic!("expected a retained declaration packet");
+            };
+            let mut actual = Vec::new();
+            d5_packet_spellings(&source, &packet.contents, &mut actual);
+            let first = descendant_edge_index(captured, false).unwrap();
+            let last = descendant_edge_index(captured, true).unwrap();
+            let expected = tree.tokens()[first..=last]
+                .iter()
+                .map(|token| {
+                    let range = token.span.range();
+                    source.text()[range.start() as usize..range.end() as usize].to_owned()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "{kind:?}");
+            let mut staged_budget = budget;
+            let mut owners = Vec::new();
+            let module = project_declaration_expansions(
+                &source,
+                &tree,
+                &selected,
+                &[],
+                &mut owners,
+                &mut staged_budget,
+            )
+            .unwrap();
+            assert_eq!(module.definitions.len(), 1);
+            assert_eq!(owners.len(), 1);
+        }
+    }
+
+    fn d5_grouped_type(inner: usize) -> (SourceFile, ConcreteTree) {
+        let source = SourceFile::new(
+            "grouped.ash",
+            format!(
+                "type Deep = Deep({}Int{})\n",
+                "(".repeat(inner),
+                ")".repeat(inner)
+            ),
+        )
+        .unwrap();
+        if std::env::var_os("ASH_D5_STACK_TRACE").is_some() {
+            eprintln!("before lex");
+        }
+        let lexed = lex(&source).unwrap();
+        if std::env::var_os("ASH_D5_STACK_TRACE").is_some() {
+            eprintln!("before parse");
+        }
+        let tree = parse(lexed);
+        if std::env::var_os("ASH_D5_STACK_TRACE").is_some() {
+            eprintln!("after parse");
+        }
+        assert_eq!(tree.resource_failure(), None);
+        assert!(
+            tree.parse_diagnostics().is_empty(),
+            "{:?}",
+            tree.parse_diagnostics()
+        );
+        validated_root(&source, &tree).expect("the ordinary declaration passed CST validation");
+        if std::env::var_os("ASH_D5_STACK_TRACE").is_some() {
+            eprintln!("after CST validation");
+        }
+        (source, tree)
+    }
+
+    #[test]
+    fn d5_packet_preflight_counts_arc_and_constructor_groups_at_128_and_129() {
+        use crate::syntax_resource::SyntaxBudget;
+        for (inner, accepted) in [(126, true), (127, false)] {
+            let (source, tree) = d5_grouped_type(inner);
+            let declaration = child_nodes(tree.root().unwrap()).next().unwrap();
+            let tokens = ProjectionTokens::source(tree.tokens());
+            let mut budget = SyntaxBudget::default();
+            let result = charge_declaration_contents(&source, declaration, &tokens, &mut budget);
+            if accepted {
+                result.expect("Arc + constructor + 126 inner groups is 128");
+                let output =
+                    capture_source_declaration_contents(&source, declaration, &tokens).unwrap();
+                let packet: std::sync::Arc<[crate::syntax::MacroOutputNode]> = output.into();
+                drop(packet);
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Err(DeclarationExpansionFailure::Syntax {
+                            resource: Some(ResourceFailure::StructuralDepth {
+                                limit: STRUCTURAL_DEPTH_LIMIT
+                            }),
+                            ..
+                        })
+                    ),
+                    "the 129-layer packet must fail at preflight: {result:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn d5_packet_work_is_exact_short_and_retryable() {
+        use crate::syntax_resource::SyntaxBudget;
+        let (source, tree) = d5_grouped_type(8);
+        let declaration = child_nodes(tree.root().unwrap()).next().unwrap();
+        let tokens = ProjectionTokens::source(tree.tokens());
+        let mut ample = SyntaxBudget::with_limit(100_000);
+        charge_declaration_contents(&source, declaration, &tokens, &mut ample).unwrap();
+        let used = ample.consumed();
+        let mut exact = SyntaxBudget::with_limit(used);
+        charge_declaration_contents(&source, declaration, &tokens, &mut exact).unwrap();
+        assert_eq!(exact.consumed(), used);
+        let mut short = SyntaxBudget::with_limit(used - 1);
+        assert!(matches!(
+            charge_declaration_contents(&source, declaration, &tokens, &mut short),
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        let mut retry = SyntaxBudget::with_limit(used);
+        charge_declaration_contents(&source, declaration, &tokens, &mut retry).unwrap();
+        assert_eq!(retry.consumed(), exact.consumed());
+        let first = capture_contents(&source, declaration, &tokens, &Default::default()).unwrap();
+        let second = capture_source_declaration_contents(&source, declaration, &tokens).unwrap();
+        assert_eq!(first, second);
+    }
+
+    fn d5_stage_with_limit(
+        source: &SourceFile,
+        selected: &[crate::syntax::SelectedSyntax],
+        limit: usize,
+    ) -> (
+        Result<SurfaceModule, DeclarationExpansionFailure>,
+        usize,
+        usize,
+        usize,
+    ) {
+        let mut initial = crate::syntax_resource::SyntaxBudget::with_limit(limit);
+        let lexed = crate::lexer::lex_with_budget(source, &mut initial).unwrap();
+        let (tokens, diagnostics, budget, failure) = lexed.into_parts();
+        assert!(failure.is_none());
+        let (checkpoint, budget) = super::super::parse_module_header(tokens, diagnostics, budget);
+        let (tree, mut budget) = super::super::finish_module_from_checkpoint_with_syntax(
+            checkpoint,
+            budget,
+            Some(source),
+            selected,
+        );
+        assert_eq!(tree.resource_failure(), None);
+        assert!(
+            tree.parse_diagnostics().is_empty(),
+            "{:?}",
+            tree.parse_diagnostics()
+        );
+        let parsed = budget.consumed();
+        let mut owners = Vec::new();
+        let result =
+            project_declaration_expansions(source, &tree, selected, &[], &mut owners, &mut budget);
+        (result, budget.consumed(), parsed, owners.len())
+    }
+
+    #[test]
+    fn d5_source_staging_uses_one_ledger_and_publishes_nothing_on_late_shortage() {
+        let selected = [d5_selection()];
+        let entry = "sink { type Item = Item(Int) }\n";
+        let source = SourceFile::new(
+            "caller.ash",
+            format!("{}main : Unit -> Int\nmain () = 42\n", entry.repeat(3)),
+        )
+        .unwrap();
+        let single = SourceFile::new(
+            "single.ash",
+            format!("{entry}main : Unit -> Int\nmain () = 42\n"),
+        )
+        .unwrap();
+        let (one, one_total, one_parse, one_owners) =
+            d5_stage_with_limit(&single, &selected, 100_000);
+        one.unwrap();
+        assert_eq!(one_owners, 1);
+        let (baseline, used, parsed, owners) = d5_stage_with_limit(&source, &selected, 100_000);
+        let baseline = baseline.unwrap();
+        assert_eq!(owners, 3);
+        let (exact, exact_used, _, exact_owners) = d5_stage_with_limit(&source, &selected, used);
+        assert_eq!(exact.unwrap(), baseline);
+        assert_eq!(exact_used, used);
+        assert_eq!(exact_owners, 3);
+        let (short, short_used, short_parse, short_owners) =
+            d5_stage_with_limit(&source, &selected, used - 1);
+        assert!(matches!(
+            short,
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        assert_eq!(short_parse, parsed);
+        assert!(short_used - short_parse > one_total - one_parse);
+        assert_eq!(short_owners, 0);
+        let (retry, retry_used, _, retry_owners) = d5_stage_with_limit(&source, &selected, used);
+        assert_eq!(retry.unwrap(), baseline);
+        assert_eq!(retry_used, used);
+        assert_eq!(retry_owners, 3);
+    }
+
+    #[test]
+    fn d5_packet_counts_integer_string_and_spelling_growth() {
+        use crate::syntax_resource::SyntaxBudget;
+        fn cost(text: String) -> usize {
+            let source = SourceFile::new("payload.ash", text).unwrap();
+            let tree = parse(lex(&source).unwrap());
+            let (root, tokens) = validated_root(&source, &tree).unwrap();
+            let declaration = child_nodes(root).next().unwrap();
+            let mut budget = SyntaxBudget::with_limit(100_000);
+            charge_declaration_contents(
+                &source,
+                declaration,
+                &ProjectionTokens::source(tokens),
+                &mut budget,
+            )
+            .unwrap();
+            budget.consumed()
+        }
+        let integer =
+            |digits: usize| format!("value : Unit -> Int\nvalue () = {}\n", "9".repeat(digits));
+        let string = |size: usize| {
+            format!(
+                "value : Unit -> String\nvalue () = \"{}\"\n",
+                "a".repeat(size)
+            )
+        };
+        assert!(cost(integer(200)) > cost(integer(2)) + 198);
+        assert!(cost(string(200)) >= cost(string(2)) + 396);
+    }
+
+    #[test]
+    fn d5_packet_depth_success_failure_and_drop_fit_a_small_stack() {
+        if std::env::var_os("ASH_D5_STACK_CHILD").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "parser::project::tests::d5_packet_depth_success_failure_and_drop_fit_a_small_stack",
+                    "--exact",
+                    "--nocapture",
+                ])
+                .env("ASH_D5_STACK_CHILD", "1")
+                .env("ASH_D5_STACK_TRACE", "1")
+                .output()
+                .unwrap();
+            eprint!("{}", String::from_utf8_lossy(&output.stdout));
+            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+            assert!(
+                output.status.success(),
+                "isolated small-stack witness failed"
+            );
+            return;
+        }
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                for (inner, accepted) in [(126, true), (127, false)] {
+                    eprintln!("before source and tree: {inner}");
+                    let (source, tree) = d5_grouped_type(inner);
+                    let declaration = child_nodes(tree.root().unwrap()).next().unwrap();
+                    let tokens = ProjectionTokens::source(tree.tokens());
+                    let mut budget = crate::syntax_resource::SyntaxBudget::default();
+                    eprintln!("before packet preflight");
+                    let result =
+                        charge_declaration_contents(&source, declaration, &tokens, &mut budget);
+                    eprintln!("after packet preflight");
+                    if accepted {
+                        result.unwrap();
+                        eprintln!("before packet sequence");
+                        let output =
+                            capture_source_declaration_contents(&source, declaration, &tokens)
+                                .unwrap();
+                        eprintln!("after packet sequence");
+                        let packet: std::sync::Arc<[crate::syntax::MacroOutputNode]> =
+                            output.into();
+                        eprintln!("packet accepted");
+                        drop(packet);
+                        eprintln!("packet dropped");
+                    } else {
+                        assert!(matches!(
+                            result,
+                            Err(DeclarationExpansionFailure::Syntax {
+                                resource: Some(ResourceFailure::StructuralDepth { .. }),
+                                ..
+                            })
+                        ));
+                        eprintln!("over-depth refused");
+                    }
+                    drop(tree);
+                    eprintln!("source tree dropped");
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn d5_prebuilt_packet_drop_phase_fits_a_small_stack() {
+        if std::env::var_os("ASH_D5_DROP_CHILD").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "parser::project::tests::d5_prebuilt_packet_drop_phase_fits_a_small_stack",
+                    "--exact",
+                    "--nocapture",
+                ])
+                .env("ASH_D5_DROP_CHILD", "1")
+                .output()
+                .unwrap();
+            eprint!("{}", String::from_utf8_lossy(&output.stdout));
+            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+            assert!(output.status.success(), "isolated packet drop failed");
+            return;
+        }
+        let (source, tree) = d5_grouped_type(126);
+        let declaration = child_nodes(tree.root().unwrap()).next().unwrap();
+        let tokens = ProjectionTokens::source(tree.tokens());
+        let mut budget = crate::syntax_resource::SyntaxBudget::default();
+        charge_declaration_contents(&source, declaration, &tokens, &mut budget).unwrap();
+        let output = capture_source_declaration_contents(&source, declaration, &tokens).unwrap();
+        let packet: std::sync::Arc<[crate::syntax::MacroOutputNode]> = output.into();
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(move || {
+                eprintln!("before prebuilt packet drop");
+                drop(packet);
+                eprintln!("after prebuilt packet drop");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    fn d5_structured_tree(
+        source: &SourceFile,
+        tree: &ConcreteTree,
+        contexts: &crate::syntax::SyntaxContexts,
+    ) -> super::super::ParsedMacroTree {
+        let invocation = child_nodes(tree.root().unwrap())
+            .find(|node| node.kind == NodeKind::DeclarationSyntaxInvocation)
+            .unwrap();
+        let tokens = ProjectionTokens::source(tree.tokens());
+        let span = node_span(source, invocation, &tokens).unwrap();
+        let output = capture_contents(source, invocation, &tokens, &Default::default()).unwrap();
+        super::super::parse_macro_tree(
+            source,
+            span,
+            output,
+            contexts,
+            &[],
+            super::super::MacroOutputPosition::Declarations,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn d5_unbudgeted_and_structured_entries_refuse_before_packet_construction() {
+        for (header, invocation, prefix) in [
+            (
+                "pub syntax declaration: (sink) $item:declaration => {}\n",
+                "sink { type Item = Item }\n",
+                false,
+            ),
+            (
+                "pub syntax declaration: (sink) $name:ident then $item:declaration => {}\n",
+                "sink label then { type Item = Item }\n",
+                true,
+            ),
+        ] {
+            let forms = SourceFile::new("forms.ash", header).unwrap();
+            let selected = [h1_selection(&forms, 0, None)];
+            let source = SourceFile::new("caller.ash", invocation).unwrap();
+            let (tree, mut source_budget) = d5_source_tree(&source, &selected);
+            let node = child_nodes(tree.root().unwrap()).next().unwrap();
+            let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+            let source_tokens = ProjectionTokens::source(tree.tokens());
+            charge_declaration_invocation(
+                &source,
+                node,
+                &source_tokens,
+                &contexts,
+                true,
+                &mut source_budget,
+            )
+            .unwrap();
+            let projected =
+                project_declaration_invocation_node(&source, node, &source_tokens, &contexts, true)
+                    .unwrap();
+            if prefix {
+                assert!(matches!(
+                    projected.captures.as_slice(),
+                    [
+                        SurfaceSyntaxCapture::Identifier(_),
+                        SurfaceSyntaxCapture::Declaration(_)
+                    ]
+                ));
+            } else {
+                assert!(matches!(
+                    projected.captures.as_slice(),
+                    [SurfaceSyntaxCapture::Declaration(_)]
+                ));
+            }
+            assert!(matches!(
+                project_declaration_invocation(&source, &tree, node, &contexts),
+                Err(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape
+                ))
+            ));
+            let span = node_span(&source, node, &ProjectionTokens::source(tree.tokens())).unwrap();
+            let parsed = d5_structured_tree(&source, &tree, &contexts);
+            let structured = child_nodes(parsed.tree.root().unwrap()).next().unwrap();
+            assert!(matches!(
+                project_macro_declaration_invocation(
+                    &source, span, None, &parsed, structured, &contexts, None
+                ),
+                Err(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape
+                ))
+            ));
+            assert!(matches!(
+                validate_declaration_template(
+                    &source,
+                    span,
+                    &parsed,
+                    &contexts,
+                    &mut crate::syntax_resource::SyntaxBudget::default()
+                ),
+                Err(DeclarationExpansionFailure::Projection(
+                    ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                ))
+            ));
+            let tokens = ProjectionTokens {
+                tokens: parsed.tree.tokens(),
+                originals: Some(&parsed.original_nodes),
+                occurrence: Some(span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: Some(&parsed.admission_identifiers),
+                frame: None,
+                name_frame: None,
+                staging_frames: None,
+                preserve_name_diagnostic: true,
+            };
+            let mut budget = crate::syntax_resource::SyntaxBudget::default();
+            assert!(matches!(
+                charge_declaration_invocation(
+                    &source,
+                    structured,
+                    &tokens,
+                    &contexts,
+                    true,
+                    &mut budget
+                ),
+                Err(DeclarationExpansionFailure::Projection(
+                    ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                ))
+            ));
+        }
+    }
+
+    #[test]
+    fn d5_nested_declaration_original_refuses_each_projection_preflight() {
+        use crate::surface::SurfaceDeclarationCapture;
+        use crate::syntax::{MacroOutputNode, SyntaxContexts};
+        use crate::syntax_resource::SyntaxBudget;
+        use std::sync::Arc;
+
+        let forms = SourceFile::new(
+            "forms.ash",
+            "pub syntax declaration: (accept) $body:expr => {}\n",
+        )
+        .unwrap();
+        let selected = [h1_selection(&forms, 0, None)];
+        let contexts = SyntaxContexts::new(&selected, &[], &[]);
+        let source = SourceFile::new("caller.ash", "accept probe\n").unwrap();
+        let (tree, _) = d5_source_tree(&source, &selected);
+        let invocation = child_nodes(tree.root().unwrap()).next().unwrap();
+        let tokens = ProjectionTokens::source(tree.tokens());
+        let span = node_span(&source, invocation, &tokens).unwrap();
+        let mut output =
+            capture_contents(&source, invocation, &tokens, &Default::default()).unwrap();
+        let probe_offset = source.text().find("probe").unwrap() as u32;
+        let probe_span = source
+            .span(ByteRange::new(probe_offset, probe_offset + 5).unwrap())
+            .unwrap();
+        let name = SurfaceName {
+            text: "probe".into(),
+            span: probe_span,
+            introduction: 0,
+            introduced_at: None,
+            written: true,
+            diagnostic: None,
+        };
+        let ordinary = SurfaceExpressionCapture {
+            expression: SurfaceExpr {
+                kind: SurfaceExprKind::Unit,
+                span: probe_span,
+                diagnostic: None,
+            },
+            contents: Arc::from([]),
+        };
+        assert!(replace_output_name(
+            &mut output,
+            "probe",
+            &MacroOutputNode::ForwardedExpression(ordinary, probe_span.into()),
+        ));
+        let mut parsed = super::super::parse_macro_tree(
+            &source,
+            span,
+            output,
+            &contexts,
+            &[],
+            super::super::MacroOutputPosition::StagedDeclarations,
+        )
+        .expect("the adapter produces an actual protected-expression token and CST");
+        let index = parsed
+            .original_nodes
+            .iter()
+            .find_map(|(index, original)| {
+                matches!(original, MacroOutputNode::ForwardedExpression(..)).then_some(*index)
+            })
+            .unwrap();
+        let packet: Arc<[MacroOutputNode]> = Arc::from([]);
+        for invalid in [false, true] {
+            if invalid {
+                let Some(MacroOutputNode::ForwardedExpression(capture, _)) =
+                    parsed.original_nodes.get_mut(&index)
+                else {
+                    panic!("the adapter-retained original must exist");
+                };
+                // Inject only the unreachable nested Declaration; the CST and original token came from the adapter.
+                capture.expression.kind = SurfaceExprKind::SyntaxInvocation {
+                    name: name.clone(),
+                    captures: vec![SurfaceSyntaxCapture::Declaration(
+                        SurfaceDeclarationCapture {
+                            contents: Arc::clone(&packet),
+                        },
+                    )],
+                };
+            }
+            let root = validated_macro_root(&source, &parsed.tree).unwrap();
+            let invocation = child_nodes(root).next().unwrap();
+            let argument = only_child_of_kind(invocation, NodeKind::SyntaxArgument).unwrap();
+            let expression = child_nodes(argument)
+                .find(|child| is_expression_kind(child.kind))
+                .unwrap();
+            let tokens = ProjectionTokens {
+                tokens: parsed.tree.tokens(),
+                originals: Some(&parsed.original_nodes),
+                occurrence: Some(span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: Some(&parsed.admission_identifiers),
+                frame: None,
+                name_frame: None,
+                staging_frames: None,
+                preserve_name_diagnostic: true,
+            };
+            let retained = Arc::strong_count(&packet);
+            let check = |operation: &mut dyn FnMut(
+                &mut SyntaxBudget,
+            )
+                -> Result<bool, DeclarationExpansionFailure>| {
+                let mut measured = SyntaxBudget::default();
+                let result = operation(&mut measured);
+                if invalid {
+                    assert!(matches!(
+                        result,
+                        Err(DeclarationExpansionFailure::Projection(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                        ))
+                    ));
+                    let cost = measured.consumed();
+                    assert!(matches!(
+                        operation(&mut SyntaxBudget::with_limit(cost - 1)),
+                        Err(DeclarationExpansionFailure::Syntax {
+                            resource: Some(ResourceFailure::SyntaxWork { .. }),
+                            ..
+                        })
+                    ));
+                    assert!(matches!(
+                        operation(&mut SyntaxBudget::with_limit(cost)),
+                        Err(DeclarationExpansionFailure::Projection(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                        ))
+                    ));
+                } else {
+                    assert!(result.is_ok());
+                }
+            };
+            check(&mut |budget| {
+                charge_capture_contents(
+                    expression,
+                    &tokens,
+                    SurfaceSyntaxCaptureKind::Expression,
+                    budget,
+                )
+            });
+            check(&mut |budget| charge_composed_projection(expression, &tokens, true, budget));
+            check(&mut |budget| {
+                charge_declaration_invocation(
+                    &source, invocation, &tokens, &contexts, false, budget,
+                )
+            });
+            assert_eq!(Arc::strong_count(&packet), retained);
+        }
+    }
+
+    #[test]
+    fn d5_source_carrier_guard_covers_each_structured_field() {
+        let selected = [d5_selection()];
+        let source = SourceFile::new("caller.ash", "sink { type Item = Item }\n").unwrap();
+        let (tree, _) = d5_source_tree(&source, &selected);
+        let node = child_nodes(tree.root().unwrap()).next().unwrap();
+        let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+        let span = node_span(&source, node, &ProjectionTokens::source(tree.tokens())).unwrap();
+        let originals = std::collections::HashMap::new();
+        let admission = std::collections::HashSet::new();
+        let frame = std::sync::Arc::new(crate::syntax::ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let frames = [std::sync::Arc::clone(&frame)];
+        let cases = [
+            ProjectionTokens {
+                originals: Some(&originals),
+                ..ProjectionTokens::source(tree.tokens())
+            },
+            ProjectionTokens {
+                occurrence: Some(span),
+                ..ProjectionTokens::source(tree.tokens())
+            },
+            ProjectionTokens {
+                construction: Some((span, 0)),
+                ..ProjectionTokens::source(tree.tokens())
+            },
+            ProjectionTokens {
+                construction_extents: true,
+                ..ProjectionTokens::source(tree.tokens())
+            },
+            ProjectionTokens {
+                admission_identifiers: Some(&admission),
+                ..ProjectionTokens::source(tree.tokens())
+            },
+            ProjectionTokens {
+                frame: Some(&frame),
+                ..ProjectionTokens::source(tree.tokens())
+            },
+            ProjectionTokens {
+                name_frame: Some(&frame),
+                ..ProjectionTokens::source(tree.tokens())
+            },
+            ProjectionTokens {
+                staging_frames: Some(&frames),
+                ..ProjectionTokens::source(tree.tokens())
+            },
+            ProjectionTokens {
+                preserve_name_diagnostic: true,
+                ..ProjectionTokens::source(tree.tokens())
+            },
+        ];
+        assert!(source_projection_tokens(&ProjectionTokens::source(
+            tree.tokens()
+        )));
+        for tokens in cases {
+            assert!(!source_projection_tokens(&tokens));
+            let mut budget = crate::syntax_resource::SyntaxBudget::default();
+            assert!(
+                charge_declaration_invocation(&source, node, &tokens, &contexts, true, &mut budget)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn d5_unbudgeted_lookup_preserves_non_d5_structured_token_fallback() {
+        use crate::syntax::MacroOutputNode;
+        let forms = SourceFile::new(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident => {}\n",
+        )
+        .unwrap();
+        let selected = [h1_selection(&forms, 0, None)];
+        let source = SourceFile::new("caller.ash", "emit value\n").unwrap();
+        let (tree, _) = d5_source_tree(&source, &selected);
+        let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+        let source_node = child_nodes(tree.root().unwrap()).next().unwrap();
+        let span = node_span(
+            &source,
+            source_node,
+            &ProjectionTokens::source(tree.tokens()),
+        )
+        .unwrap();
+        let mut parsed = d5_structured_tree(&source, &tree, &contexts);
+        let node = child_nodes(parsed.tree.root().unwrap()).next().unwrap();
+        let Some(ConcreteElement::Token(index)) = node.children.first() else {
+            panic!("missing name")
+        };
+        let index = *index;
+        let origin = span.into();
+        // Synthetic post-parse original: the real adapter selected an Identifier.
+        parsed.original_nodes.insert(
+            index,
+            MacroOutputNode::Token(TokenKind::Identifier("emit".into()), "emit".into(), origin),
+        );
+        let node = child_nodes(parsed.tree.root().unwrap()).next().unwrap();
+        let projected = project_macro_declaration_invocation(
+            &source, span, None, &parsed, node, &contexts, None,
+        )
+        .unwrap();
+        assert_eq!(projected.selection.name, "emit");
+        assert!(matches!(
+            projected.captures.as_slice(),
+            [SurfaceSyntaxCapture::Identifier(_)]
+        ));
+        let tokens = ProjectionTokens {
+            tokens: parsed.tree.tokens(),
+            originals: Some(&parsed.original_nodes),
+            occurrence: Some(span),
+            construction: None,
+            construction_extents: false,
+            admission_identifiers: Some(&parsed.admission_identifiers),
+            frame: None,
+            name_frame: None,
+            staging_frames: None,
+            preserve_name_diagnostic: true,
+        };
+        let mut budget = crate::syntax_resource::SyntaxBudget::default();
+        assert!(
+            charge_declaration_invocation(&source, node, &tokens, &contexts, true, &mut budget)
+                .is_err()
+        );
+    }
+
     #[test]
     fn declaration_ep_invocation_preflight_uses_one_retryable_budget() {
         let owner = SourceFile::new(
@@ -6954,12 +8129,20 @@ mod tests {
         let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
         let mut budget = crate::syntax_resource::SyntaxBudget::default();
         assert!(
-            charge_declaration_invocation(invocation, &tokens, &contexts, false, &mut budget,)
-                .unwrap()
+            charge_declaration_invocation(
+                &source,
+                invocation,
+                &tokens,
+                &contexts,
+                false,
+                &mut budget,
+            )
+            .unwrap()
         );
         let cost = budget.consumed();
         assert!(matches!(
             charge_declaration_invocation(
+                &source,
                 invocation,
                 &tokens,
                 &contexts,
@@ -6972,6 +8155,7 @@ mod tests {
             })
         ));
         charge_declaration_invocation(
+            &source,
             invocation,
             &tokens,
             &contexts,
@@ -6980,7 +8164,8 @@ mod tests {
         )
         .expect("the exact allowance succeeds on retry");
         let projected =
-            project_declaration_invocation_node(&source, invocation, &tokens, &contexts).unwrap();
+            project_declaration_invocation_node(&source, invocation, &tokens, &contexts, false)
+                .unwrap();
         assert!(matches!(
             projected.captures.as_slice(),
             [
@@ -7088,6 +8273,7 @@ mod tests {
             assert!(
                 !crate::syntax::charge_expression_copy(expression, 0, false, &mut measured)
                     .unwrap()
+                    .unwrap()
             );
             let used = measured.consumed();
             assert!(used > 0);
@@ -7110,6 +8296,7 @@ mod tests {
                     false,
                     &mut SyntaxBudget::with_limit(used),
                 )
+                .unwrap()
                 .unwrap()
             );
             assert_eq!(expression.clone(), *expression);
@@ -7138,6 +8325,7 @@ mod tests {
             assert!(
                 !crate::syntax::charge_expression_copy(expression, 0, false, &mut measured)
                     .unwrap()
+                    .unwrap()
             );
             let used = measured.consumed();
             assert!(
@@ -7158,6 +8346,7 @@ mod tests {
                 false,
                 &mut SyntaxBudget::with_limit(used),
             )
+            .unwrap()
             .unwrap();
             assert_eq!(expression.clone(), *expression);
         }
@@ -7428,7 +8617,11 @@ mod tests {
                     | (SurfacePatternKind::Constructor { .. }, "constructor")
             ));
             let mut measured = SyntaxBudget::default();
-            assert!(!crate::syntax::charge_pattern_copy(pattern, 0, false, &mut measured).unwrap());
+            assert!(
+                !crate::syntax::charge_pattern_copy(pattern, 0, false, &mut measured)
+                    .unwrap()
+                    .unwrap()
+            );
             let used = measured.consumed();
             assert!(
                 matches!(
@@ -7449,6 +8642,7 @@ mod tests {
                     false,
                     &mut SyntaxBudget::with_limit(used),
                 )
+                .unwrap()
                 .unwrap()
             );
             assert_eq!(pattern.clone(), *pattern);
@@ -7485,7 +8679,9 @@ mod tests {
         assert_eq!(original_order.parameters().len(), 2);
         let mut measured = SyntaxBudget::default();
         assert!(
-            !crate::syntax::charge_expression_copy(expression, 0, false, &mut measured).unwrap()
+            !crate::syntax::charge_expression_copy(expression, 0, false, &mut measured)
+                .unwrap()
+                .unwrap()
         );
         let used = measured.consumed();
         assert!(matches!(
@@ -7503,6 +8699,7 @@ mod tests {
             false,
             &mut SyntaxBudget::with_limit(used),
         )
+        .unwrap()
         .unwrap();
         let copied = expression.clone();
         let SurfaceExprKind::Block(copied_block) = &copied.kind else {
@@ -8166,7 +9363,11 @@ mod tests {
                 diagnostic: None,
             };
             let mut one_copy = SyntaxBudget::default();
-            assert!(!crate::syntax::charge_pattern_copy(&wide, 40, false, &mut one_copy).unwrap());
+            assert!(
+                !crate::syntax::charge_pattern_copy(&wide, 40, false, &mut one_copy)
+                    .unwrap()
+                    .unwrap()
+            );
             let originals = HashMap::from([(
                 *index,
                 MacroOutputNode::ForwardedPattern(
@@ -8462,6 +9663,7 @@ mod tests {
                     &mut measured,
                 )
                 .unwrap()
+                .unwrap()
             );
             let cost = measured.consumed();
             costs.push(cost);
@@ -8469,6 +9671,7 @@ mod tests {
             exact.charge_units(5).unwrap();
             assert!(
                 !crate::syntax::charge_scheduled_pattern_copy(&pattern, 40, inherited, &mut exact,)
+                    .unwrap()
                     .unwrap()
             );
             assert_eq!(exact.consumed(), cost + 5);
@@ -8481,6 +9684,7 @@ mod tests {
             let mut retry = SyntaxBudget::with_limit(cost);
             assert!(
                 !crate::syntax::charge_scheduled_pattern_copy(&pattern, 40, inherited, &mut retry,)
+                    .unwrap()
                     .unwrap()
             );
         }
@@ -9363,6 +10567,7 @@ mod tests {
                     let result =
                         charge_capture_contents(value, &tokens, kind, &mut SyntaxBudget::default());
                     let invocation_result = charge_declaration_invocation(
+                        &source,
                         invocation,
                         &tokens,
                         &contexts,
@@ -9378,7 +10583,7 @@ mod tests {
                         assert!(!result.unwrap());
                         assert!(invocation_result.unwrap());
                         let projected = project_declaration_invocation_node(
-                            &source, invocation, &tokens, &contexts,
+                            &source, invocation, &tokens, &contexts, false,
                         )
                         .unwrap();
                         let retained = match &projected.captures[..] {
@@ -12867,7 +14072,7 @@ mod tests {
                 assert!(!capture.unwrap());
                 admission.unwrap();
                 let projected =
-                    project_declaration_invocation_node(&source, nested, &tokens, &contexts)
+                    project_declaration_invocation_node(&source, nested, &tokens, &contexts, false)
                         .unwrap();
                 assert!(matches!(
                     &projected.captures[..],
@@ -12883,8 +14088,15 @@ mod tests {
                 prefix.charge_units(parsed.tree.tokens.len()).unwrap();
                 charge_projection_preflight(prior, &tokens, true, &mut prefix).unwrap();
                 let after_prior = prefix.consumed();
-                charge_declaration_invocation(nested, &tokens, &contexts, false, &mut prefix)
-                    .unwrap();
+                charge_declaration_invocation(
+                    &source,
+                    nested,
+                    &tokens,
+                    &contexts,
+                    false,
+                    &mut prefix,
+                )
+                .unwrap();
                 assert_eq!(whole.consumed(), parse_cost + prefix.consumed());
                 let cost = whole.consumed();
                 let mut short = SyntaxBudget::with_limit(cost - 1);

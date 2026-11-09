@@ -97,6 +97,8 @@ pub enum SurfaceSyntaxCaptureKind {
     Type,
     /// A complete pattern fragment.
     Pattern,
+    /// One complete ordinary module declaration.
+    Declaration,
 }
 
 /// One source declaration's category and category-local position.
@@ -519,6 +521,8 @@ pub enum SurfaceSyntaxCapture {
     Type(SurfaceTypeCapture),
     /// A protected, unresolved pattern.
     Pattern(SurfacePatternCapture),
+    /// A complete declaration's retained source syntax.
+    Declaration(SurfaceDeclarationCapture),
 }
 
 /// An identifier and its retained syntax origin.
@@ -546,6 +550,12 @@ pub struct SurfaceTypeCapture {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfacePatternCapture {
     pub(crate) pattern: SurfacePattern,
+    pub(crate) contents: Arc<[crate::syntax::MacroOutputNode]>,
+}
+
+/// One complete declaration's immutable syntax contents.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceDeclarationCapture {
     pub(crate) contents: Arc<[crate::syntax::MacroOutputNode]>,
 }
 

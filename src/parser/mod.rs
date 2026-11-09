@@ -1132,14 +1132,16 @@ fn charge_staged_output(
                 crate::syntax::charge_type_origin(origin, child, budget)
                     .map_err(macro_resource_failure)?;
                 crate::syntax::charge_expression_retention(capture, depth, budget)
-                    .map_err(macro_resource_failure)?;
+                    .map_err(macro_resource_failure)?
+                    .ok_or(MacroParseFailure::Invalid)?;
             }
             MacroOutputNode::ForwardedPattern(capture, origin) => {
                 let child = crate::syntax::type_depth(depth, 1).map_err(macro_resource_failure)?;
                 crate::syntax::charge_type_origin(origin, child, budget)
                     .map_err(macro_resource_failure)?;
                 crate::syntax::charge_pattern_retention(capture, depth, budget)
-                    .map_err(macro_resource_failure)?;
+                    .map_err(macro_resource_failure)?
+                    .ok_or(MacroParseFailure::Invalid)?;
             }
             MacroOutputNode::Expression(_, _) | MacroOutputNode::Splice(_) => {
                 return Err(MacroParseFailure::Invalid);

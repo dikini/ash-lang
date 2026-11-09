@@ -581,7 +581,7 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
             let _ = parser.expect(&TokenKind::Colon, ExpectedForm::Colon);
             final_expression =
                 matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "expr");
-            if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "expr" || name == "ident" || declaration && name == "pattern")
+            if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "expr" || name == "ident" || declaration && (name == "pattern" || name == "declaration"))
                 || declaration && parser.at(&TokenKind::Type)
             {
                 let _ = parser.bump();
@@ -1890,7 +1890,8 @@ fn syntax_invocation(
                                         pattern(parser);
                                     }
                                 }
-                                crate::surface::SurfaceSyntaxCaptureKind::Identifier => {
+                                crate::surface::SurfaceSyntaxCaptureKind::Identifier
+                                | crate::surface::SurfaceSyntaxCaptureKind::Declaration => {
                                     unreachable!()
                                 }
                             }
@@ -1908,6 +1909,9 @@ fn syntax_invocation(
                                 parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
                             }
                         }
+                        crate::surface::SurfaceSyntaxCaptureKind::Declaration => {
+                            declaration_capture(parser);
+                        }
                     }
                     parser.finish();
                 }
@@ -1921,6 +1925,34 @@ fn syntax_invocation(
         parser.consume_rest();
     }
     parser.finish();
+}
+
+fn declaration_capture(parser: &mut Parser<'_>) {
+    if !parser.expect(&TokenKind::LeftBrace, ExpectedForm::LeftBrace) {
+        return;
+    }
+    if !parser.enter_structure() {
+        parser.consume_rest();
+        return;
+    }
+    while parser.at(&TokenKind::LineEnd) {
+        let _ = parser.bump();
+    }
+    if parser.selected_declaration_syntax().is_some()
+        || starts_syntax_declaration(parser)
+        || parser.at(&TokenKind::Resource)
+        || parser.at(&TokenKind::Pub) && parser.nth(1) == Some(&TokenKind::Resource)
+        || !starts_module_declaration(parser)
+    {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    } else {
+        let _ = module_declaration(parser);
+    }
+    while parser.at(&TokenKind::LineEnd) {
+        let _ = parser.bump();
+    }
+    let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+    parser.leave_structure();
 }
 
 fn expression_prefix_form(parser: &Parser<'_>) -> Option<ExpressionPrefixForm> {
