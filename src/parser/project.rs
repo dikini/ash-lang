@@ -7800,6 +7800,117 @@ mod tests {
     }
 
     #[test]
+    fn raw_grouped_pattern_diagnostics_use_the_actual_frame_branch() {
+        use crate::syntax::{ExpansionFrame, MacroOutputNode};
+        use crate::syntax_resource::SyntaxBudget;
+        use std::{collections::HashMap, sync::Arc};
+
+        let (source, tree) = parsed("fn((Pair(left, right))) {\n42\n}");
+        let (root, raw) = validated_root(&source, &tree).unwrap();
+        let mut pending = vec![root];
+        let function = loop {
+            let node = pending.pop().expect("function exists");
+            if node.kind == NodeKind::FunctionExpression {
+                break node;
+            }
+            pending.extend(child_nodes(node));
+        };
+        let parameter = only_child_of_kind(function, NodeKind::Pattern).unwrap();
+        let mut pending = vec![parameter];
+        let inner = loop {
+            let node = pending.pop().expect("constructor pattern exists");
+            if node.kind == NodeKind::Pattern
+                && child_nodes(node).any(|child| child.kind == NodeKind::ConstructorPattern)
+            {
+                break node;
+            }
+            pending.extend(child_nodes(node));
+        };
+        let first = descendant_edge_index(inner, false).unwrap();
+        assert!(matches!(&raw[first].kind, TokenKind::UpperIdentifier(name) if name == "Pair"));
+        let origin = raw[first].span;
+        let originals = raw
+            .iter()
+            .enumerate()
+            .map(|(index, token)| {
+                (
+                    index,
+                    MacroOutputNode::Token(token.kind.clone(), Arc::from(""), token.span.into()),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let current = Arc::new(ExpansionFrame {
+            invocation: origin,
+            definition: origin,
+        });
+        let prior = Arc::new(ExpansionFrame {
+            invocation: node_span(&source, parameter, &ProjectionTokens::source(raw)).unwrap(),
+            definition: origin,
+        });
+        let frames = [
+            Arc::clone(&current),
+            Arc::clone(&current),
+            Arc::clone(&prior),
+        ];
+        let empty = [];
+        for (frame, staging, expected) in [
+            (None, None, 0),
+            (Some(&current), None, 1),
+            (Some(&current), Some(&empty[..]), 0),
+            (Some(&current), Some(&frames[..]), 2),
+        ] {
+            let tokens = ProjectionTokens {
+                tokens: raw,
+                originals: Some(&originals),
+                occurrence: Some(origin),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: None,
+                frame,
+                name_frame: frame,
+                staging_frames: staging,
+                preserve_name_diagnostic: true,
+            };
+            let mut measured = SyntaxBudget::default();
+            assert!(!charge_composed_projection(function, &tokens, true, &mut measured).unwrap());
+            let used = measured.consumed();
+            assert!(matches!(
+                charge_composed_projection(
+                    function,
+                    &tokens,
+                    true,
+                    &mut SyntaxBudget::with_limit(used - 1)
+                ),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { .. }),
+                    ..
+                })
+            ));
+            charge_composed_projection(
+                function,
+                &tokens,
+                true,
+                &mut SyntaxBudget::with_limit(used),
+            )
+            .unwrap();
+            let projected = project_pattern(&source, parameter, &tokens).unwrap();
+            if frame.is_none() {
+                assert!(projected.diagnostic.is_none());
+            } else {
+                let diagnostic = projected.diagnostic.as_ref().unwrap();
+                assert_eq!(diagnostic.primary.primary(), origin);
+                assert_eq!(diagnostic.frames.len(), expected);
+                if expected > 0 {
+                    assert!(Arc::ptr_eq(&diagnostic.frames[0], &current));
+                }
+                if expected == 2 {
+                    assert!(Arc::ptr_eq(&diagnostic.frames[1], &prior));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn scheduled_pattern_copy_accounts_for_the_actual_inherited_frames() {
         use crate::syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin};
         use crate::syntax_resource::SyntaxBudget;
@@ -9119,6 +9230,85 @@ mod tests {
         assert_eq!(retried, module);
         assert_eq!(retry_owners.len(), 3);
         assert_eq!(exact.consumed(), used);
+    }
+
+    #[test]
+    fn late_grouped_pattern_depth_failure_keeps_original_owners() {
+        for (count, succeeds) in [(42, true), (43, false)] {
+            let mut sources = Vec::new();
+            for index in 0..=count {
+                let body = if index == count {
+                    "$name : Int -> Int\n$name $pattern = $body + 2\n".to_owned()
+                } else {
+                    format!(
+                        "step{} $name matching ($pattern) yields ($body)\n",
+                        index + 1
+                    )
+                };
+                sources.push(
+                    SourceFile::new(
+                        format!("layer{index}.ash"),
+                        format!(
+                            "pub syntax declaration: (step{index}) $name:ident matching $pattern:pattern yields $body:expr => {{\n{body}}}\n"
+                        ),
+                    )
+                    .unwrap(),
+                );
+            }
+            let steps = sources
+                .iter()
+                .enumerate()
+                .map(|(owner, source)| h1_selection(source, owner, None))
+                .collect::<Vec<_>>();
+            let prior = SourceFile::new(
+                "prior.ash",
+                "pub syntax declaration: (before) $name:ident => {\n$name : Unit -> Int\n$name () = 0\n}\n",
+            )
+            .unwrap();
+            let before = h1_selection(&prior, count + 1, None);
+            let selected = [before.clone(), steps[0].clone()];
+            let mut imports = vec![Vec::new(); count + 2];
+            for index in 0..count {
+                imports[index].push(steps[index + 1].clone());
+            }
+            let caller = SourceFile::new(
+                "caller.ash",
+                "before earlier\nstep0 answer matching value yields 40\n",
+            )
+            .unwrap();
+            let tree = h1_tree(&caller, &selected);
+            let existing = crate::syntax::SyntaxOwner {
+                owner: Some(9),
+                declaration: before.declaration.span,
+                import_span: before.import_span,
+            };
+            let mut owners = vec![existing];
+            let result = project_declaration_expansions(
+                &caller,
+                &tree,
+                &selected,
+                &imports,
+                &mut owners,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            );
+            if succeeds {
+                let module = result.expect("the last grouped chain succeeds");
+                assert_eq!(module.definitions.len(), 2);
+                assert_eq!(owners.len(), count + 3);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(DeclarationExpansionFailure::Syntax {
+                        resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
+                        ..
+                    })
+                ));
+                assert_eq!(owners.len(), 1);
+                assert_eq!(owners[0].owner, existing.owner);
+                assert_eq!(owners[0].declaration, existing.declaration);
+                assert_eq!(owners[0].import_span, existing.import_span);
+            }
+        }
     }
 
     #[test]
