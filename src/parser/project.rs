@@ -9225,6 +9225,194 @@ mod tests {
     }
 
     #[test]
+    fn expression_and_pattern_capture_contents_count_arcs_and_groups() {
+        use crate::syntax::{MacroDelimiter, MacroOutputNode};
+        use crate::syntax_resource::SyntaxBudget;
+        use std::{collections::HashMap, sync::Arc};
+
+        for kind in [
+            SurfaceSyntaxCaptureKind::Expression,
+            SurfaceSyntaxCaptureKind::Pattern,
+        ] {
+            for grouped in [false, true] {
+                let at_limit = if grouped { 124 } else { 126 };
+                for (retained_groups, succeeds) in [(at_limit, true), (at_limit + 1, false)] {
+                    let marker = if kind == SurfaceSyntaxCaptureKind::Pattern {
+                        "_"
+                    } else {
+                        "marker"
+                    };
+                    let written = if grouped {
+                        format!("({marker})")
+                    } else {
+                        marker.into()
+                    };
+                    let (pattern, body) = if kind == SurfaceSyntaxCaptureKind::Pattern {
+                        (written.as_str(), "42")
+                    } else {
+                        ("()", written.as_str())
+                    };
+                    let source = SourceFile::new(
+                        "capture.ash",
+                        format!("value : Unit -> Int\nvalue {pattern} = {body}\n"),
+                    )
+                    .unwrap();
+                    let tree = parse(lex(&source).unwrap());
+                    let (root, raw) = validated_root(&source, &tree).unwrap();
+                    let global = only_child_of_kind(root, NodeKind::EquationalGlobal).unwrap();
+                    let equation = only_child_of_kind(global, NodeKind::Equation).unwrap();
+                    let value = if kind == SurfaceSyntaxCaptureKind::Pattern {
+                        only_child_of_kind(equation, NodeKind::Pattern).unwrap()
+                    } else {
+                        expression_child(equation).unwrap()
+                    };
+                    let mut pending = vec![value];
+                    let mut marker_index = None;
+                    let mut open_groups = 0;
+                    while let Some(node) = pending.pop() {
+                        for child in &node.children {
+                            match child {
+                                ConcreteElement::Node(child) => pending.push(child),
+                                ConcreteElement::Token(index) => {
+                                    open_groups += usize::from(matches!(
+                                        raw[*index].kind,
+                                        TokenKind::LeftParen
+                                    ));
+                                    let is_marker = match &raw[*index].kind {
+                                        TokenKind::Wildcard => {
+                                            kind == SurfaceSyntaxCaptureKind::Pattern
+                                        }
+                                        TokenKind::Identifier(name) => {
+                                            name == marker
+                                                && kind == SurfaceSyntaxCaptureKind::Expression
+                                        }
+                                        _ => false,
+                                    };
+                                    if is_marker {
+                                        assert!(marker_index.replace(*index).is_none());
+                                    }
+                                }
+                                _ => panic!("recovery-free marker required"),
+                            }
+                        }
+                    }
+                    assert_eq!(open_groups, usize::from(grouped));
+                    let index = marker_index.unwrap();
+                    let span = raw[index].span;
+                    let mut nested =
+                        MacroOutputNode::Token(TokenKind::IntType, "Int".into(), span.into());
+                    for _ in 0..retained_groups {
+                        nested = MacroOutputNode::Group(
+                            MacroDelimiter::Parentheses,
+                            vec![nested],
+                            span.into(),
+                        );
+                    }
+                    let contents: Arc<[MacroOutputNode]> = Arc::from([nested]);
+                    let original = if kind == SurfaceSyntaxCaptureKind::Pattern {
+                        MacroOutputNode::ForwardedPattern(
+                            SurfacePatternCapture {
+                                pattern: SurfacePattern {
+                                    kind: SurfacePatternKind::Wildcard,
+                                    span,
+                                    diagnostic: None,
+                                },
+                                contents: Arc::clone(&contents),
+                            },
+                            span.into(),
+                        )
+                    } else {
+                        MacroOutputNode::ForwardedExpression(
+                            SurfaceExpressionCapture {
+                                expression: SurfaceExpr {
+                                    kind: SurfaceExprKind::Unit,
+                                    span,
+                                    diagnostic: None,
+                                },
+                                contents: Arc::clone(&contents),
+                            },
+                            span.into(),
+                        )
+                    };
+                    let originals = HashMap::from([(index, original)]);
+                    let tokens = ProjectionTokens {
+                        tokens: raw,
+                        originals: Some(&originals),
+                        occurrence: None,
+                        construction: None,
+                        construction_extents: false,
+                        admission_identifiers: None,
+                        frame: None,
+                        name_frame: None,
+                        staging_frames: None,
+                        preserve_name_diagnostic: true,
+                    };
+                    let references = Arc::strong_count(&contents);
+                    assert_eq!(
+                        retained_groups + if grouped { 4 } else { 2 },
+                        if succeeds { 128 } else { 129 }
+                    );
+                    let result =
+                        charge_capture_contents(value, &tokens, kind, &mut SyntaxBudget::default());
+                    assert_eq!(
+                        Arc::strong_count(&contents),
+                        references,
+                        "preflight must not construct the capture"
+                    );
+                    if succeeds {
+                        assert!(!result.unwrap());
+                        let rebuilt =
+                            capture_contents(&source, value, &tokens, &originals).unwrap();
+                        let forwarded = if grouped {
+                            let [MacroOutputNode::Group(MacroDelimiter::Parentheses, children, _)] =
+                                &rebuilt[..]
+                            else {
+                                panic!("the written group must remain")
+                            };
+                            let [forwarded] = &children[..] else {
+                                panic!("one forwarded value required")
+                            };
+                            forwarded
+                        } else {
+                            let [forwarded] = &rebuilt[..] else {
+                                panic!("singleton forward required")
+                            };
+                            forwarded
+                        };
+                        match forwarded {
+                            MacroOutputNode::ForwardedExpression(capture, _) => {
+                                assert_eq!(kind, SurfaceSyntaxCaptureKind::Expression);
+                                assert!(Arc::ptr_eq(&capture.contents, &contents));
+                                assert!(matches!(
+                                    project_expression(&source, value, &tokens).unwrap().kind,
+                                    SurfaceExprKind::Unit
+                                ));
+                            }
+                            MacroOutputNode::ForwardedPattern(capture, _) => {
+                                assert_eq!(kind, SurfaceSyntaxCaptureKind::Pattern);
+                                assert!(Arc::ptr_eq(&capture.contents, &contents));
+                                assert!(matches!(
+                                    project_pattern(&source, value, &tokens).unwrap().kind,
+                                    SurfacePatternKind::Wildcard
+                                ));
+                            }
+                            _ => panic!("protected forward required"),
+                        }
+                    } else {
+                        assert!(matches!(
+                            result,
+                            Err(DeclarationExpansionFailure::Syntax {
+                                resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
+                                ..
+                            })
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn authored_type_capture_preflight_counts_its_new_contents_arc() {
         let check = |groups: usize| {
             let source = SourceFile::new(
@@ -12474,6 +12662,247 @@ mod tests {
             &mut crate::syntax_resource::SyntaxBudget::with_limit(cost),
         )
         .expect("the complete measured allowance succeeds on retry");
+    }
+
+    #[test]
+    fn nested_ep_admission_reaches_capture_preflight_on_the_parser_ledger() {
+        use crate::syntax::{MacroOutputNode, SyntaxContexts};
+        use crate::syntax_resource::SyntaxBudget;
+
+        let inner = SourceFile::new(
+            "inner.ash",
+            "pub syntax declaration: (inner) $pattern:pattern yields $body:expr => {}\n",
+        )
+        .unwrap();
+        let selected = [h1_selection(&inner, 0, None)];
+        let contexts = SyntaxContexts::new(&selected, &[], &[]);
+        for groups in [125, 126] {
+            let source = SourceFile::new(
+                "outer.ash",
+                format!(
+                    "pub syntax declaration: (outer) $pattern:pattern yields $body:expr => {{\nprior : Unit -> Int\nprior () = 42\ninner $pattern yields {}$body{}\n}}\n",
+                    "(".repeat(groups), ")".repeat(groups),
+                ),
+            )
+            .unwrap();
+            let tree = parse(lex(&source).unwrap());
+            let outer = project_module_retaining_templates(&source, &tree)
+                .unwrap()
+                .syntax_declarations
+                .remove(0);
+            let captures = outer
+                .matcher
+                .iter()
+                .filter_map(|part| match part {
+                    SurfaceSyntaxMatcherPart::Capture {
+                        name,
+                        kind: SurfaceSyntaxCaptureKind::Pattern,
+                    } => Some(SurfaceSyntaxCapture::Pattern(SurfacePatternCapture {
+                        pattern: SurfacePattern {
+                            kind: SurfacePatternKind::Wildcard,
+                            span: name.span,
+                            diagnostic: None,
+                        },
+                        contents: std::sync::Arc::from([]),
+                    })),
+                    SurfaceSyntaxMatcherPart::Capture {
+                        name,
+                        kind: SurfaceSyntaxCaptureKind::Expression,
+                    } => Some(SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
+                        expression: SurfaceExpr {
+                            kind: SurfaceExprKind::Unit,
+                            span: name.span,
+                            diagnostic: None,
+                        },
+                        contents: std::sync::Arc::from([]),
+                    })),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(captures.len(), 2);
+            let mut output = outer.template_contents.as_ref().unwrap().to_vec();
+            crate::syntax::substitute_contents(
+                &mut output,
+                &outer.matcher,
+                &captures,
+                0,
+                outer.span,
+            )
+            .unwrap();
+            let mut parse_budget = SyntaxBudget::default();
+            let parsed = super::super::parse_macro_tree_inner(
+                &source,
+                outer.span,
+                output.clone(),
+                &contexts,
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                &mut parse_budget,
+            )
+            .expect("the adapter and parser must complete before capture preflight");
+            let parse_cost = parse_budget.consumed();
+            let root = validated_macro_root(&source, &parsed.tree).unwrap();
+            let children = child_nodes(root).collect::<Vec<_>>();
+            let [prior, nested] = &children[..] else {
+                panic!("prior output and final nested invocation required")
+            };
+            assert_eq!(prior.kind, NodeKind::EquationalGlobal);
+            assert_eq!(nested.kind, NodeKind::DeclarationSyntaxInvocation);
+            let arguments = child_nodes(nested)
+                .filter(|node| node.kind == NodeKind::SyntaxArgument)
+                .collect::<Vec<_>>();
+            let [pattern_argument, expression_argument] = &arguments[..] else {
+                panic!("pattern and expression captures required")
+            };
+            let pattern = only_child_of_kind(pattern_argument, NodeKind::Pattern).unwrap();
+            let expression = child_nodes(expression_argument)
+                .find(|node| is_expression_kind(node.kind))
+                .unwrap();
+            let mut pending = vec![expression];
+            let mut group_count = 0;
+            let mut forwarded = 0;
+            while let Some(node) = pending.pop() {
+                group_count += usize::from(node.kind == NodeKind::ParenthesizedExpression);
+                for child in &node.children {
+                    match child {
+                        ConcreteElement::Node(child) => pending.push(child),
+                        ConcreteElement::Token(index)
+                            if matches!(
+                                parsed.original_nodes.get(index),
+                                Some(MacroOutputNode::ForwardedExpression(..))
+                            ) =>
+                        {
+                            forwarded += 1
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            assert_eq!((group_count, forwarded), (groups, 1));
+            assert!(
+                parsed
+                    .original_nodes
+                    .values()
+                    .any(|node| matches!(node, MacroOutputNode::ForwardedPattern(..)))
+            );
+            let tokens = ProjectionTokens {
+                tokens: &parsed.tree.tokens,
+                originals: Some(&parsed.original_nodes),
+                occurrence: Some(outer.span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: Some(&parsed.admission_identifiers),
+                frame: None,
+                name_frame: None,
+                staging_frames: None,
+                preserve_name_diagnostic: true,
+            };
+            assert!(
+                !charge_projection_preflight(pattern, &tokens, true, &mut SyntaxBudget::default())
+                    .unwrap()
+            );
+            assert!(
+                !charge_projection_preflight(
+                    expression,
+                    &tokens,
+                    true,
+                    &mut SyntaxBudget::default()
+                )
+                .unwrap()
+            );
+            assert!(
+                !charge_capture_contents(
+                    pattern,
+                    &tokens,
+                    SurfaceSyntaxCaptureKind::Pattern,
+                    &mut SyntaxBudget::default()
+                )
+                .unwrap()
+            );
+            let capture = charge_capture_contents(
+                expression,
+                &tokens,
+                SurfaceSyntaxCaptureKind::Expression,
+                &mut SyntaxBudget::default(),
+            );
+            let mut whole = SyntaxBudget::default();
+            let admission = super::super::parse_declaration_template_admission(
+                &source,
+                outer.span,
+                output.clone(),
+                &contexts,
+                &[],
+                &mut whole,
+            );
+            if groups == 125 {
+                assert!(!capture.unwrap());
+                admission.unwrap();
+                let projected =
+                    project_declaration_invocation_node(&source, nested, &tokens, &contexts)
+                        .unwrap();
+                assert!(matches!(
+                    &projected.captures[..],
+                    [
+                        SurfaceSyntaxCapture::Pattern(_),
+                        SurfaceSyntaxCapture::Expression(_)
+                    ]
+                ));
+                let mut prefix = SyntaxBudget::default();
+                for _ in 0..4 {
+                    prefix.charge_units(parsed.tree.events.len()).unwrap();
+                }
+                prefix.charge_units(parsed.tree.tokens.len()).unwrap();
+                charge_projection_preflight(prior, &tokens, true, &mut prefix).unwrap();
+                let after_prior = prefix.consumed();
+                charge_declaration_invocation(nested, &tokens, &contexts, false, &mut prefix)
+                    .unwrap();
+                assert_eq!(whole.consumed(), parse_cost + prefix.consumed());
+                let cost = whole.consumed();
+                let mut short = SyntaxBudget::with_limit(cost - 1);
+                assert!(matches!(
+                    super::super::parse_declaration_template_admission(
+                        &source,
+                        outer.span,
+                        output.clone(),
+                        &contexts,
+                        &[],
+                        &mut short
+                    ),
+                    Err(super::super::MacroParseFailure::Syntax {
+                        resource: Some(ResourceFailure::SyntaxWork { .. }),
+                        ..
+                    })
+                ));
+                assert!(
+                    short.consumed() >= parse_cost + after_prior,
+                    "the prior child was preflighted before the final nested invocation"
+                );
+                super::super::parse_declaration_template_admission(
+                    &source,
+                    outer.span,
+                    output,
+                    &contexts,
+                    &[],
+                    &mut SyntaxBudget::with_limit(cost),
+                )
+                .unwrap();
+            } else {
+                assert!(matches!(
+                    capture,
+                    Err(DeclarationExpansionFailure::Syntax {
+                        resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
+                        ..
+                    })
+                ));
+                assert!(matches!(
+                    admission,
+                    Err(super::super::MacroParseFailure::Syntax {
+                        resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
+                        ..
+                    })
+                ));
+            }
+        }
     }
 
     #[test]

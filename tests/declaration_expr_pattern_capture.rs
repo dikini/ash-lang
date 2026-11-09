@@ -64,6 +64,49 @@ fn i19_imported_pattern_binder_and_expression_keep_the_caller_context() {
     assert_eq!(execute(&program).unwrap().value_display(), "42");
 }
 
+#[test]
+fn nested_declaration_admission_reports_its_depth_failure_through_the_driver() {
+    use ash::{
+        driver::{FileFailure, PipelineFailure},
+        parser::ResourceFailure,
+    };
+
+    let fixture = Fixture::new();
+    fixture.write(
+        "inner.ash",
+        "pub syntax declaration: (inner) $pattern:pattern yields $body:expr => {}\n",
+    );
+    fixture.write(
+        "entry.ash",
+        "import outer (syntax outer)\nmain : Unit -> Int\nmain () = 42\n",
+    );
+    let outer = |groups: usize| {
+        format!(
+            "import inner (syntax inner)\npub syntax declaration: (outer) $pattern:pattern yields $body:expr => {{\nprior : Unit -> Int\nprior () = 42\ninner $pattern yields {}$body{}\n}}\n",
+            "(".repeat(groups),
+            ")".repeat(groups),
+        )
+    };
+    fixture.write("outer.ash", &outer(125));
+    let program =
+        compile_path(fixture.configuration()).expect("the at-limit nested template is admitted");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+    fixture.write("outer.ash", &outer(126));
+    let failure = compile_path(fixture.configuration())
+        .expect_err("the over-limit nested capture is refused");
+    assert_eq!(failure.reason_code(), "internal.resource.structural-depth");
+    let FileFailure::Pipeline(context) = failure else {
+        panic!("template admission must retain the pipeline failure");
+    };
+    let PipelineFailure::Syntax(syntax) = context.failure() else {
+        panic!("template admission must retain the syntax resource failure");
+    };
+    assert_eq!(
+        syntax.resource,
+        Some(ResourceFailure::StructuralDepth { limit: 128 })
+    );
+}
+
 fn write_forwarding_chain(fixture: &Fixture, count: usize, duplicate: bool) {
     fixture.write(
         "prior.ash",

@@ -2588,6 +2588,59 @@ mod tests {
     }
 
     #[test]
+    fn nested_ep_admission_uses_the_same_exact_retryable_ledger() {
+        use crate::parser::MacroParseFailure;
+
+        let inner_source = SourceFile::new(
+            "inner.ash",
+            "pub syntax declaration: (inner) $pattern:pattern yields $body:expr => {}\n",
+        )
+        .unwrap();
+        let inner_tree = crate::parser::parse(crate::lexer::lex(&inner_source).unwrap());
+        let inner = crate::parser::project_module_retaining_templates(&inner_source, &inner_tree)
+            .unwrap()
+            .syntax_declarations
+            .remove(0);
+        let selected = [SelectedSyntax {
+            name: inner.name.text.clone(),
+            owner: 0,
+            import_span: inner.span,
+            declaration: inner,
+        }];
+        let contexts = SyntaxContexts::new(&selected, &[], &[]);
+        let outer_source = SourceFile::new(
+            "outer.ash",
+            format!(
+                "pub syntax declaration: (outer) $pattern:pattern yields $body:expr => {{\nprior : Unit -> Int\nprior () = 42\ninner $pattern yields {}$body{}\n}}\n",
+                "(".repeat(125),
+                ")".repeat(125),
+            ),
+        )
+        .unwrap();
+        let tree = crate::parser::parse(crate::lexer::lex(&outer_source).unwrap());
+        let outer = crate::parser::project_module_retaining_templates(&outer_source, &tree)
+            .unwrap()
+            .syntax_declarations
+            .remove(0);
+        let mut measured = SyntaxBudget::default();
+        validate_template_syntax_inner(&outer, &outer_source, &contexts, Some(&mut measured))
+            .expect("the prior declaration and grouped nested captures are admitted");
+        let cost = measured.consumed();
+        let mut short = SyntaxBudget::with_limit(cost - 1);
+        assert!(matches!(
+            validate_template_syntax_inner(&outer, &outer_source, &contexts, Some(&mut short)),
+            Err(MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        let mut exact = SyntaxBudget::with_limit(cost);
+        validate_template_syntax_inner(&outer, &outer_source, &contexts, Some(&mut exact))
+            .expect("a fresh exact ledger retries the same nested admission");
+        assert_eq!(exact.consumed(), cost);
+    }
+
+    #[test]
     fn nested_declaration_template_rejects_malformed_siblings_and_matchers() {
         for body in [
             "bad : Int ->\n    inner $name",
