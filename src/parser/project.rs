@@ -7182,6 +7182,78 @@ mod tests {
                     | ([SurfaceLocalDeclaration::Newtype(_)], "newtype")
                     | ([SurfaceLocalDeclaration::Evidence(_)], "evidence")
             ));
+            match &block.declarations[0] {
+                SurfaceLocalDeclaration::Binding(binding) => {
+                    let Some(SurfaceType {
+                        kind: SurfaceTypeKind::Function(function),
+                        ..
+                    }) = &binding.annotation
+                    else {
+                        panic!("function annotation required");
+                    };
+                    assert!(matches!(function.domain.kind, SurfaceTypeKind::Unit));
+                    assert!(matches!(function.codomain.kind, SurfaceTypeKind::Int));
+                    let row = function.effects.as_ref().expect("effect row required");
+                    assert_eq!(row.tail.as_ref().unwrap().text, "R");
+                    let [effect] = &row.effects[..] else {
+                        panic!("one effect required");
+                    };
+                    assert!(matches!(
+                        &effect.effect,
+                        SurfaceReference::Unqualified(name) if name.text == "Event"
+                    ));
+                    assert!(matches!(
+                        &effect.arguments[..],
+                        [SurfaceType {
+                            kind: SurfaceTypeKind::Int,
+                            ..
+                        }]
+                    ));
+                }
+                SurfaceLocalDeclaration::Newtype(declaration) => {
+                    let [first, second] = &declaration.parameters[..] else {
+                        panic!("two type parameters required");
+                    };
+                    assert_eq!(first.name.text, "F");
+                    assert_eq!(second.name.text, "A");
+                    let Some(SurfaceKind {
+                        kind: SurfaceKindKind::Function { domain, codomain },
+                        ..
+                    }) = &first.kind
+                    else {
+                        panic!("function kind required");
+                    };
+                    assert!(matches!(domain.kind, SurfaceKindKind::Type));
+                    assert!(matches!(codomain.kind, SurfaceKindKind::Type));
+                    let [constructor] = &declaration.constructors[..] else {
+                        panic!("one constructor required");
+                    };
+                    assert!(matches!(
+                        &constructor.fields[..],
+                        [SurfaceType {
+                            kind: SurfaceTypeKind::Application { constructor: SurfaceReference::Unqualified(name), arguments },
+                            ..
+                        }] if name.text == "F" && matches!(
+                            &arguments[..],
+                            [SurfaceType { kind: SurfaceTypeKind::Named(SurfaceReference::Unqualified(name)), .. }] if name.text == "A"
+                        )
+                    ));
+                }
+                SurfaceLocalDeclaration::Recursive(_) | SurfaceLocalDeclaration::Evidence(_) => {}
+            }
+        }
+        fn check_long_value(expression: &SurfaceExpr, text: &str) {
+            if text.len() < 256 {
+                return;
+            }
+            match &expression.kind {
+                SurfaceExprKind::Integer(value) => assert_eq!(value.to_string(), text),
+                SurfaceExprKind::String(value) => assert_eq!(value, &text[1..text.len() - 1]),
+                SurfaceExprKind::Name(SurfaceReference::Unqualified(name)) => {
+                    assert_eq!(name.text, text)
+                }
+                _ => panic!("long literal or identifier required"),
+            }
         }
         let capture_forms = SourceFile::new(
             "capture.ash",
@@ -7226,6 +7298,7 @@ mod tests {
                 protected_expression_family(expression(&captured, 0)),
                 expected
             );
+            check_long_value(expression(&captured, 0), &text);
             if let Some(local) = local {
                 check_local(expression(&captured, 0), local);
             }
@@ -7258,6 +7331,7 @@ mod tests {
                 protected_expression_family(expression(&generated, 0)),
                 expected
             );
+            check_long_value(expression(&generated, 0), &text);
             if let Some(local) = local {
                 check_local(expression(&generated, 0), local);
             }
