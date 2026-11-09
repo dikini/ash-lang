@@ -2519,19 +2519,15 @@ fn charge_composed_type_projection(
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(), DeclarationExpansionFailure> {
     budget.charge()?;
-    let mut pending = vec![(root, 0usize, None)];
-    while let Some((node, parent_structural, parent_type)) = pending.pop() {
+    let mut pending = vec![(root, 0usize, false)];
+    while let Some((node, parent_depth, parent_type)) = pending.pop() {
         budget.charge()?;
         // Both weight calculations may scan the node's child list.
         budget.charge_units(node.children.len())?;
         budget.charge_units(node.children.len())?;
-        let structural = crate::syntax::type_depth(parent_structural, structural_weight(node))?;
-        let mut projected = parent_type.or_else(|| {
-            matches!(node.kind, NodeKind::Type | NodeKind::EffectRow)
-                .then_some(parent_structural)
-        });
-        if let Some(depth) = projected {
-            let step = match node.kind {
+        let in_type = parent_type || matches!(node.kind, NodeKind::Type | NodeKind::EffectRow);
+        let owned_step = if in_type {
+            match node.kind {
                 NodeKind::Type if child_nodes(node).any(|child| child.kind == NodeKind::Type) => 1,
                 NodeKind::AtomicType
                     if child_nodes(node)
@@ -2539,28 +2535,38 @@ fn charge_composed_type_projection(
                 {
                     1
                 }
-                NodeKind::TupleType => 1,
+                // TupleType is inside ParenthesizedType, whose structural
+                // edge already counts the resulting owned tuple edge.
+                NodeKind::TupleType => 0,
                 // project_type first constructs a RowArgument even when a
                 // function later moves its row out of that temporary wrapper.
                 NodeKind::EffectRow => 2,
                 _ => 0,
-            };
-            projected = Some(crate::syntax::type_depth(depth, step)?);
-        }
+            }
+        } else {
+            0
+        };
+        let depth = crate::syntax::type_depth(
+            parent_depth,
+            structural_weight(node).max(owned_step),
+        )?;
         for child in &node.children {
             budget.charge()?;
             match child {
-                ConcreteElement::Node(child) => pending.push((child, structural, projected)),
+                ConcreteElement::Node(child) => pending.push((child, depth, in_type)),
                 ConcreteElement::Token(index) => {
                     if let Some(crate::syntax::MacroOutputNode::ForwardedType(capture, _)) =
                         tokens.originals.and_then(|originals| originals.get(index))
                     {
-                        let projected = projected.ok_or(ProjectionError::MalformedTree(
-                            InternalReason::UnexpectedShape,
-                        ))?;
+                        if !in_type {
+                            return Err(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            )
+                            .into());
+                        }
                         crate::syntax::charge_type_copy(
                             &capture.ty,
-                            structural.max(projected),
+                            depth,
                             tokens.frame.is_some(),
                             budget,
                         )?;
@@ -6512,19 +6518,42 @@ mod tests {
     fn generated_projection_checks_type_application_and_forwarded_type_together() {
         use crate::syntax::{MacroOutputNode, SyntaxContexts};
 
-        let source_text = format!(
-            "value : {}Int{} -> Int\nvalue input = 42\n",
-            "F<".repeat(64),
-            ">".repeat(64),
-        );
-        let (source, _, output) = structured_declarations(&source_text);
-        let span = source.span(ByteRange::new(0, 0).unwrap()).unwrap();
-        let leaf = SurfaceType {
-            kind: SurfaceTypeKind::Int,
-            span,
-            diagnostic: None,
-        };
-        let check = |height: usize| {
+        fn replace_first_type(
+            nodes: &mut [MacroOutputNode],
+            capture: &mut Option<SurfaceTypeCapture>,
+            span: Span,
+        ) -> bool {
+            for node in nodes {
+                match node {
+                    MacroOutputNode::Group(_, children, _) => {
+                        if replace_first_type(children, capture, span) {
+                            return true;
+                        }
+                    }
+                    MacroOutputNode::Token(TokenKind::IntType, _, _) => {
+                        *node = MacroOutputNode::ForwardedType(capture.take().unwrap(), span.into());
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
+            false
+        }
+
+        let check = |applications: usize, grouped: bool, height: usize| {
+            let (open, close) = if grouped { ("F<(", ")>") } else { ("F<", ">") };
+            let source_text = format!(
+                "value : {}Int{} -> Int\nvalue input = 42\n",
+                open.repeat(applications),
+                close.repeat(applications),
+            );
+            let (source, _, mut output) = structured_declarations(&source_text);
+            let span = source.span(ByteRange::new(0, 0).unwrap()).unwrap();
+            let leaf = SurfaceType {
+                kind: SurfaceTypeKind::Int,
+                span,
+                diagnostic: None,
+            };
             let mut ty = leaf.clone();
             for _ in 0..height {
                 ty = SurfaceType {
@@ -6537,12 +6566,7 @@ mod tests {
                 ty,
                 contents: std::sync::Arc::from([]),
             };
-            let mut output = output.clone();
-            let position = output
-                .iter()
-                .position(|node| matches!(node, MacroOutputNode::Token(TokenKind::IntType, _, _)))
-                .unwrap();
-            output[position] = MacroOutputNode::ForwardedType(capture, span.into());
+            assert!(replace_first_type(&mut output, &mut Some(capture), span));
             let parsed = super::super::parse_macro_tree_inner(
                 &source,
                 span,
@@ -6554,6 +6578,43 @@ mod tests {
             )
             .unwrap();
             let root = validated_macro_root(&source, &parsed.tree).unwrap();
+            let mut pending = vec![(root, 0usize, 0usize, 0usize)];
+            let mut forwarded_path = None;
+            while let Some((node, applications, groups, functions)) = pending.pop() {
+                let applications = applications
+                    + usize::from(
+                        node.kind == NodeKind::AtomicType
+                            && child_nodes(node).any(|child| child.kind == NodeKind::Type),
+                    );
+                let groups = groups + usize::from(node.kind == NodeKind::ParenthesizedType);
+                let functions = functions
+                    + usize::from(
+                        node.kind == NodeKind::Type
+                            && child_nodes(node).any(|child| child.kind == NodeKind::Type),
+                    );
+                for child in &node.children {
+                    match child {
+                        ConcreteElement::Node(child) => {
+                            pending.push((child, applications, groups, functions));
+                        }
+                        ConcreteElement::Token(index)
+                            if matches!(
+                                parsed.original_nodes.get(index),
+                                Some(MacroOutputNode::ForwardedType(_, _))
+                            ) =>
+                        {
+                            assert!(forwarded_path.is_none());
+                            forwarded_path = Some((applications, groups, functions));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            assert_eq!(
+                forwarded_path,
+                Some((applications, if grouped { applications } else { 0 }, 1)),
+                "the protected type must occur inside every generated wrapper"
+            );
             let tokens = ProjectionTokens {
                 tokens: &parsed.tree.tokens,
                 originals: Some(&parsed.original_nodes),
@@ -6573,9 +6634,20 @@ mod tests {
             )
         };
         // One function edge, 64 applications and the forwarded tuple edges.
-        assert!(check(63).is_ok());
+        assert!(check(64, false, 63).is_ok());
         assert!(matches!(
-            check(64),
+            check(64, false, 64),
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::StructuralDepth {
+                    limit: STRUCTURAL_DEPTH_LIMIT
+                }),
+                ..
+            })
+        ));
+        // Grouping contributes independently when interleaved with applications.
+        assert!(check(40, true, 47).is_ok());
+        assert!(matches!(
+            check(40, true, 48),
             Err(DeclarationExpansionFailure::Syntax {
                 resource: Some(ResourceFailure::StructuralDepth {
                     limit: STRUCTURAL_DEPTH_LIMIT
