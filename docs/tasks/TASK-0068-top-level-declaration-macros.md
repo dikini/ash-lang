@@ -18,8 +18,8 @@
 The retained [expression-syntax specification](../../spec/syntax-expansion.md)
 is the slice 1 baseline. CP-0034 is accepted, and the C1–C4 contract and corpus
 checks are recorded in the delivery plan. On 2026-11-09, the verified retaining
-commit is `3613a863a7a2870b0906fd20925bd641d0598ea2`, tree
-`7c5c3802e0793e5fe396be68abcfc9e388e40189`. Recheck refs and worker ownership
+commit is `3a30b75307cb9c4208b71ddc15efb7fa0ecc1bb2`, tree
+`94420e402b5bec57099f94a33e0a9c15b70a6133`. Recheck refs and worker ownership
 before dispatch. The plan records the earlier retained squash commits, their
 partial criteria and the remaining producer/consumer interfaces.
 
