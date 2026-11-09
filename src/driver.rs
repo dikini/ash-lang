@@ -3349,6 +3349,63 @@ mod tests {
         );
         assert_eq!(matched.selection.owner, selected[0].owner);
         assert_eq!(matched.selection.import_span, selected[0].import_span);
+
+        // Follow the loader-selected import through the actual declaration
+        // collector and inspect the generated consumer's original context.
+        let owner_imports = vec![Vec::new(); selected[0].owner + 1];
+        let mut owners = Vec::new();
+        let surface = crate::parser::project_declaration_expansions(
+            &source,
+            &tree,
+            &selected,
+            &owner_imports,
+            &mut owners,
+            &mut crate::syntax_resource::SyntaxBudget::default(),
+        )
+        .unwrap();
+        assert_eq!(owners.len(), 1);
+        assert_eq!(owners[0].owner, Some(selected[0].owner));
+        assert_eq!(owners[0].declaration, selected[0].declaration.span);
+        assert_eq!(owners[0].import_span, selected[0].import_span);
+        let generated = surface
+            .definitions
+            .iter()
+            .find_map(|definition| {
+                let crate::surface::SurfaceDefinitionKind::Equational(global) = &definition.kind
+                else {
+                    return None;
+                };
+                (global.interface.name.text == "identity").then_some(global)
+            })
+            .unwrap();
+        let crate::surface::SurfacePatternKind::Binder(generated_binder) =
+            &generated.equations[0].patterns[0].kind
+        else {
+            panic!("the generated equation keeps the caller binder");
+        };
+        assert_eq!(generated_binder.name.span, binder.name.span);
+        assert_eq!(generated_binder.name.span.source(), source.id());
+        assert_eq!(generated_binder.name.introduction, 0);
+        let binder_location = generated_binder.name.diagnostic.as_ref().unwrap();
+        assert_eq!(binder_location.primary.primary(), binder.name.span);
+        assert!(binder_location.frames.iter().any(|frame| {
+            frame.invocation == matched.span && frame.definition == selected[0].declaration.span
+        }));
+        let generated_body = &generated.equations[0].body;
+        let crate::surface::SurfaceExprKind::Name(crate::surface::SurfaceReference::Unqualified(
+            generated_name,
+        )) = &generated_body.kind
+        else {
+            panic!("the generated body keeps the caller name");
+        };
+        assert_eq!(generated_name.span, body.expression.span);
+        assert_eq!(generated_name.span.source(), source.id());
+        assert_eq!(generated_name.introduction, 0);
+        let body_location = generated_body.diagnostic.as_ref().unwrap();
+        assert_eq!(body_location.primary.primary(), body.expression.span);
+        assert!(body_location.frames.iter().any(|frame| {
+            frame.invocation == matched.span && frame.definition == selected[0].declaration.span
+        }));
     }
 
     #[test]

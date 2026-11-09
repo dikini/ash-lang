@@ -7566,6 +7566,165 @@ mod tests {
     }
 
     #[test]
+    fn staged_selected_expression_arguments_refuse_protected_originals_before_projection() {
+        use crate::syntax::{ExpansionFrame, MacroOutputNode, SyntaxContexts};
+        use crate::syntax_resource::SyntaxBudget;
+        use std::sync::Arc;
+
+        let helper = SourceFile::new(
+            "helpers.ash",
+            "pub syntax keep $body:expr => {\n $body\n}\n",
+        )
+        .unwrap();
+        let keep = h1_selection(&helper, 0, None);
+        let contexts = SyntaxContexts::new(&[], &[vec![keep.clone()]], &[Some(0)]);
+        for (text, is_pattern) in [
+            ("answer : Unit -> Int\nanswer () = keep (probe)\n", false),
+            (
+                "answer : Unit -> Int\nanswer () = keep ({\nlet probe = 42\n42\n})\n",
+                true,
+            ),
+        ] {
+            let (source, _, mut output) = structured_declarations(text);
+            let invocation = source.span(ByteRange::new(0, 0).unwrap()).unwrap();
+            let start = text.find("probe").unwrap() as u32;
+            let span = source
+                .span(ByteRange::new(start, start + 5).unwrap())
+                .unwrap();
+            let keep_start = text.find("keep").unwrap() as u32;
+            let keep_span = source
+                .span(ByteRange::new(keep_start, keep_start + 4).unwrap())
+                .unwrap();
+            let introduced_keep = SurfaceName {
+                text: "keep".into(),
+                span: keep_span,
+                introduction: 1,
+                introduced_at: Some(invocation),
+                written: false,
+                diagnostic: None,
+            };
+            assert!(replace_output_name(
+                &mut output,
+                "keep",
+                &MacroOutputNode::Identifier(introduced_keep, keep_span.into()),
+            ));
+            let protected = if is_pattern {
+                MacroOutputNode::ForwardedPattern(
+                    SurfacePatternCapture {
+                        pattern: SurfacePattern {
+                            kind: SurfacePatternKind::Wildcard,
+                            span,
+                            diagnostic: None,
+                        },
+                        contents: Arc::from([]),
+                    },
+                    span.into(),
+                )
+            } else {
+                MacroOutputNode::ForwardedExpression(
+                    SurfaceExpressionCapture {
+                        expression: SurfaceExpr {
+                            kind: SurfaceExprKind::Unit,
+                            span,
+                            diagnostic: None,
+                        },
+                        contents: Arc::from([]),
+                    },
+                    span.into(),
+                )
+            };
+            assert!(replace_output_name(&mut output, "probe", &protected));
+            let parsed = super::super::parse_macro_tree(
+                &source,
+                invocation,
+                output,
+                &contexts,
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+            )
+            .unwrap();
+            let root = validated_macro_root(&source, &parsed.tree).unwrap();
+            validate_node_shape_with_admission(
+                root,
+                &parsed.tree.tokens,
+                Some(&parsed.admission_identifiers),
+            )
+            .unwrap();
+            let global = child_nodes(root)
+                .find(|node| node.kind == NodeKind::EquationalGlobal)
+                .unwrap();
+            let mut pending = vec![global];
+            let selected_invocation = loop {
+                let node = pending
+                    .pop()
+                    .expect("selected expression invocation exists");
+                if node.kind == NodeKind::SyntaxInvocation {
+                    break node;
+                }
+                pending.extend(child_nodes(node));
+            };
+            let frame = Arc::new(ExpansionFrame {
+                invocation,
+                definition: keep.declaration.span,
+            });
+            let frames = [Arc::clone(&frame)];
+            let tokens = ProjectionTokens {
+                tokens: &parsed.tree.tokens,
+                originals: Some(&parsed.original_nodes),
+                occurrence: Some(invocation),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: Some(&parsed.admission_identifiers),
+                frame: Some(&frame),
+                name_frame: Some(&frame),
+                staging_frames: Some(&frames),
+                preserve_name_diagnostic: true,
+            };
+            let selected_name = direct_tokens(selected_invocation, &tokens).next().unwrap();
+            let MacroOutputNode::Identifier(name, _) = selected_name.original.unwrap() else {
+                panic!("the selected syntax name retains its introduced original");
+            };
+            assert_eq!(name.introduction, 1);
+            assert_eq!(contexts.select(name).unwrap().owner, keep.owner);
+            let argument =
+                only_child_of_kind(selected_invocation, NodeKind::SyntaxArgument).unwrap();
+            let mut argument_nodes = vec![argument];
+            let mut protected_count = 0;
+            while let Some(node) = argument_nodes.pop() {
+                for child in &node.children {
+                    match child {
+                        ConcreteElement::Node(child) => argument_nodes.push(child),
+                        ConcreteElement::Token(index) => {
+                            protected_count += usize::from(matches!(
+                                (parsed.original_nodes.get(index), is_pattern),
+                                (Some(MacroOutputNode::ForwardedPattern(..)), true)
+                                    | (Some(MacroOutputNode::ForwardedExpression(..)), false)
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            assert_eq!(
+                protected_count, 1,
+                "the selected argument contains the protected original"
+            );
+            assert!(matches!(
+                check_narrow_protected_refusal(global, &tokens, &mut SyntaxBudget::default()),
+                Err(DeclarationExpansionFailure::Projection(
+                    ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                ))
+            ));
+            assert!(matches!(
+                charge_generated_ep_projection(global, &tokens, &mut SyntaxBudget::default()),
+                Err(DeclarationExpansionFailure::Projection(
+                    ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                ))
+            ));
+        }
+    }
+
+    #[test]
     fn generated_expression_arguments_refuse_forwarded_expressions_and_patterns() {
         use crate::syntax::MacroOutputNode;
 
