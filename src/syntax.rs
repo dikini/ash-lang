@@ -520,6 +520,570 @@ pub(crate) fn charge_type_copy(
     charge_type_value(ty, prefix, TypeWork::Copy { inherit_frame }, budget)
 }
 
+/// Borrowed entries used to reserve protected expression and pattern copies.
+enum OwnedSyntax<'a> {
+    Expression(&'a SurfaceExpr),
+    Pattern(&'a SurfacePattern),
+    Block(&'a crate::surface::SurfaceBlock),
+    Local(&'a crate::surface::SurfaceLocalDeclaration),
+    Equation(&'a crate::surface::SurfaceEquation),
+    Kind(&'a crate::surface::SurfaceKind),
+    Contents(&'a MacroOutputNode),
+}
+
+/// Reserve actual owned edges and inspect shared contents before copying.
+/// The result reports an expression-syntax/host bridge found in the value;
+/// callers decide whether that bridge is an execution boundary or admission.
+fn charge_owned_syntax(
+    root: OwnedSyntax<'_>,
+    prefix: usize,
+    work: TypeWork,
+    budget: &mut SyntaxBudget,
+) -> Result<bool, ResourceFailure> {
+    use crate::surface::{SurfaceKindKind, SurfaceLocalDeclaration};
+
+    type_depth(prefix, 0)?;
+    budget.charge()?;
+    let mut pending = vec![(root, prefix, work)];
+    let mut bridge = false;
+    macro_rules! push {
+        ($item:expr, $depth:expr, $work:expr) => {{
+            budget.charge()?;
+            pending.push(($item, $depth, $work));
+        }};
+    }
+    macro_rules! copy_entries {
+        ($count:expr, $work:expr) => {
+            if matches!($work, TypeWork::Copy { .. }) {
+                budget.charge_units($count)?;
+            }
+        };
+    }
+    macro_rules! contents {
+        ($contents:expr, $depth:expr) => {{
+            let depth = type_depth($depth, 1)?;
+            budget.charge()?; // retained Arc
+            for node in $contents.iter() {
+                push!(OwnedSyntax::Contents(node), depth, TypeWork::Inspect);
+            }
+        }};
+    }
+    macro_rules! effect {
+        ($effect:expr, $depth:expr, $work:expr) => {{
+            charge_type_reference(&$effect.effect, $depth, $work, budget)?;
+            copy_entries!($effect.arguments.len(), $work);
+            if !$effect.arguments.is_empty() {
+                let child = type_depth($depth, 1)?;
+                for argument in &$effect.arguments {
+                    charge_type_value(argument, child, $work, budget)?;
+                }
+            }
+        }};
+    }
+
+    while let Some((value, depth, work)) = pending.pop() {
+        budget.charge()?;
+        let inner_work = match work {
+            TypeWork::Inspect => TypeWork::Inspect,
+            TypeWork::Copy { .. } => TypeWork::Copy {
+                inherit_frame: false,
+            },
+        };
+        match value {
+            OwnedSyntax::Expression(expression) => {
+                copy_entries!(1, work);
+                charge_type_location(expression.diagnostic.as_deref(), depth, work, budget)?;
+                match &expression.kind {
+                    SurfaceExprKind::TemplateSplice(name) => {
+                        charge_type_name(name, depth, inner_work, budget)?;
+                    }
+                    SurfaceExprKind::Name(reference) => {
+                        charge_type_reference(reference, depth, inner_work, budget)?;
+                    }
+                    SurfaceExprKind::Integer(value) => {
+                        if matches!(work, TypeWork::Copy { .. }) {
+                            budget.charge_units(
+                                usize::try_from(value.magnitude_byte_length())
+                                    .unwrap_or(usize::MAX),
+                            )?;
+                        }
+                    }
+                    SurfaceExprKind::String(value) => {
+                        if matches!(work, TypeWork::Copy { .. }) {
+                            budget.charge_units(value.len())?;
+                        }
+                    }
+                    SurfaceExprKind::Boolean(_)
+                    | SurfaceExprKind::Unit
+                    | SurfaceExprKind::Discard
+                    | SurfaceExprKind::Retain => {}
+                    SurfaceExprKind::Tuple(elements) => {
+                        copy_entries!(elements.len(), work);
+                        if !elements.is_empty() {
+                            let child = type_depth(depth, 1)?;
+                            for element in elements {
+                                push!(OwnedSyntax::Expression(element), child, inner_work);
+                            }
+                        }
+                    }
+                    SurfaceExprKind::Apply(application) => {
+                        let child = type_depth(depth, 1)?;
+                        copy_entries!(2, work);
+                        push!(
+                            OwnedSyntax::Expression(&application.function),
+                            child,
+                            inner_work
+                        );
+                        push!(
+                            OwnedSyntax::Expression(&application.argument),
+                            child,
+                            inner_work
+                        );
+                    }
+                    SurfaceExprKind::Multiply(binary)
+                    | SurfaceExprKind::Add(binary)
+                    | SurfaceExprKind::Equal(binary) => {
+                        let child = type_depth(depth, 1)?;
+                        copy_entries!(2, work);
+                        push!(OwnedSyntax::Expression(&binary.left), child, inner_work);
+                        push!(OwnedSyntax::Expression(&binary.right), child, inner_work);
+                    }
+                    SurfaceExprKind::Block(block) => {
+                        push!(OwnedSyntax::Block(block), depth, inner_work);
+                    }
+                    SurfaceExprKind::Function(function) => {
+                        push!(OwnedSyntax::Pattern(&function.parameter), depth, inner_work);
+                        push!(OwnedSyntax::Block(&function.body), depth, inner_work);
+                    }
+                    SurfaceExprKind::Match(value) => {
+                        let child = type_depth(depth, 1)?;
+                        copy_entries!(1 + value.arms.len(), work);
+                        push!(OwnedSyntax::Expression(&value.scrutinee), child, inner_work);
+                        for arm in &value.arms {
+                            push!(OwnedSyntax::Pattern(&arm.pattern), child, inner_work);
+                            push!(OwnedSyntax::Expression(&arm.body), child, inner_work);
+                        }
+                    }
+                    SurfaceExprKind::Perform(value) => {
+                        charge_type_reference(&value.effect, depth, inner_work, budget)?;
+                        charge_type_name(&value.operation, depth, inner_work, budget)?;
+                        let child = type_depth(depth, 1)?;
+                        copy_entries!(1 + value.arguments.len(), work);
+                        push!(OwnedSyntax::Expression(&value.operand), child, inner_work);
+                        for argument in &value.arguments {
+                            charge_type_value(argument, child, inner_work, budget)?;
+                        }
+                    }
+                    SurfaceExprKind::Handle(value) => {
+                        effect!(value.effect, depth, inner_work);
+                        let child = type_depth(depth, 1)?;
+                        copy_entries!(
+                            1 + usize::from(value.store.is_some()) + value.clauses.len(),
+                            work
+                        );
+                        push!(OwnedSyntax::Expression(&value.body), child, inner_work);
+                        if let Some(store) = &value.store {
+                            push!(OwnedSyntax::Expression(store), child, inner_work);
+                        }
+                        for clause in &value.clauses {
+                            charge_type_name(&clause.operation, child, inner_work, budget)?;
+                            push!(OwnedSyntax::Pattern(&clause.pattern), child, inner_work);
+                            push!(OwnedSyntax::Expression(&clause.body), child, inner_work);
+                        }
+                    }
+                    SurfaceExprKind::Resume(value) => {
+                        let child = type_depth(depth, 1)?;
+                        copy_entries!(1, work);
+                        push!(OwnedSyntax::Expression(value), child, inner_work);
+                    }
+                    SurfaceExprKind::Resource(value) => {
+                        let child = type_depth(depth, 1)?;
+                        copy_entries!(1, work);
+                        charge_type_name(&value.identity, child, inner_work, budget)?;
+                        charge_type_name(&value.handle, child, inner_work, budget)?;
+                        push!(
+                            OwnedSyntax::Expression(&value.initializer),
+                            child,
+                            inner_work
+                        );
+                        push!(OwnedSyntax::Block(&value.body), child, inner_work);
+                    }
+                    SurfaceExprKind::Region(value) => {
+                        let child = type_depth(depth, 1)?;
+                        copy_entries!(1, work);
+                        charge_type_name(&value.identity, child, inner_work, budget)?;
+                        charge_type_name(&value.handle, child, inner_work, budget)?;
+                        if let Some(provider) = &value.provider {
+                            push!(OwnedSyntax::Expression(provider), child, inner_work);
+                        }
+                        push!(OwnedSyntax::Block(&value.body), child, inner_work);
+                    }
+                    SurfaceExprKind::RegionSelection(value) => {
+                        let child = type_depth(depth, 1)?;
+                        copy_entries!(1, work);
+                        push!(OwnedSyntax::Expression(&value.region), child, inner_work);
+                        push!(OwnedSyntax::Block(&value.body), child, inner_work);
+                    }
+                    SurfaceExprKind::ProviderResource(value) => {
+                        let child = type_depth(depth, 1)?;
+                        copy_entries!(1 + value.arguments.len(), work);
+                        charge_type_reference(&value.family, child, inner_work, budget)?;
+                        charge_type_name(&value.handle, child, inner_work, budget)?;
+                        if !value.arguments.is_empty() {
+                            let argument_depth = type_depth(child, 1)?;
+                            for argument in &value.arguments {
+                                charge_type_value(argument, argument_depth, inner_work, budget)?;
+                            }
+                        }
+                        push!(
+                            OwnedSyntax::Expression(&value.initializer),
+                            child,
+                            inner_work
+                        );
+                        push!(OwnedSyntax::Block(&value.body), child, inner_work);
+                    }
+                    SurfaceExprKind::Hook(value) => {
+                        let child = type_depth(depth, 1)?;
+                        copy_entries!(1, work);
+                        effect!(value.effect, child, inner_work);
+                        push!(OwnedSyntax::Block(&value.body), child, inner_work);
+                    }
+                    SurfaceExprKind::Registration(value) => {
+                        let child = type_depth(depth, 1)?;
+                        copy_entries!(1, work);
+                        effect!(value.effect, child, inner_work);
+                        push!(
+                            OwnedSyntax::Expression(&value.transformer),
+                            child,
+                            inner_work
+                        );
+                        push!(OwnedSyntax::Block(&value.body), child, inner_work);
+                    }
+                    SurfaceExprKind::Cleanup(value) => {
+                        let child = type_depth(depth, 1)?;
+                        copy_entries!(1, work);
+                        push!(OwnedSyntax::Expression(&value.action), child, inner_work);
+                        push!(OwnedSyntax::Block(&value.body), child, inner_work);
+                    }
+                    SurfaceExprKind::SyntaxInvocation { name, captures } => {
+                        bridge = true;
+                        charge_type_name(name, depth, inner_work, budget)?;
+                        copy_entries!(captures.len(), work);
+                        if !captures.is_empty() {
+                            let child = type_depth(depth, 1)?;
+                            for capture in captures {
+                                match capture {
+                                    SurfaceSyntaxCapture::Identifier(capture) => {
+                                        charge_type_name(&capture.name, child, inner_work, budget)?;
+                                        charge_type_origin(&capture.origin, child, budget)?;
+                                    }
+                                    SurfaceSyntaxCapture::Expression(capture) => {
+                                        push!(
+                                            OwnedSyntax::Expression(&capture.expression),
+                                            child,
+                                            inner_work
+                                        );
+                                        contents!(capture.contents, child);
+                                    }
+                                    SurfaceSyntaxCapture::Pattern(capture) => {
+                                        push!(
+                                            OwnedSyntax::Pattern(&capture.pattern),
+                                            child,
+                                            inner_work
+                                        );
+                                        contents!(capture.contents, child);
+                                    }
+                                    SurfaceSyntaxCapture::Type(capture) => {
+                                        charge_type_value(&capture.ty, child, inner_work, budget)?;
+                                        contents!(capture.contents, child);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            OwnedSyntax::Pattern(pattern) => {
+                copy_entries!(1, work);
+                if matches!(
+                    work,
+                    TypeWork::Copy {
+                        inherit_frame: true
+                    }
+                ) {
+                    budget.charge_units(2)?;
+                }
+                charge_type_location(pattern.diagnostic.as_deref(), depth, work, budget)?;
+                match &pattern.kind {
+                    SurfacePatternKind::TemplateSplice(name) => {
+                        charge_type_name(name, depth, work, budget)?;
+                    }
+                    SurfacePatternKind::Binder(binder) => {
+                        charge_type_name(&binder.name, depth, work, budget)?;
+                    }
+                    SurfacePatternKind::Tuple(elements) => {
+                        copy_entries!(elements.len(), work);
+                        if !elements.is_empty() {
+                            let child = type_depth(depth, 1)?;
+                            for element in elements {
+                                push!(OwnedSyntax::Pattern(element), child, work);
+                            }
+                        }
+                    }
+                    SurfacePatternKind::Constructor { name, payload } => {
+                        charge_type_reference(name, depth, work, budget)?;
+                        if let Some(payload) = payload {
+                            let child = type_depth(depth, 1)?;
+                            copy_entries!(1, work);
+                            push!(OwnedSyntax::Pattern(payload), child, work);
+                        }
+                    }
+                    SurfacePatternKind::Wildcard
+                    | SurfacePatternKind::Boolean(_)
+                    | SurfacePatternKind::Unit => {}
+                }
+            }
+            OwnedSyntax::Block(block) => {
+                let child = type_depth(depth, 1)?;
+                copy_entries!(1 + block.declarations.len(), work);
+                push!(OwnedSyntax::Expression(&block.result), child, work);
+                for declaration in &block.declarations {
+                    push!(OwnedSyntax::Local(declaration), child, work);
+                }
+            }
+            OwnedSyntax::Local(local) => match local {
+                SurfaceLocalDeclaration::Binding(binding) => {
+                    let child = type_depth(depth, 1)?;
+                    copy_entries!(1, work);
+                    push!(OwnedSyntax::Pattern(&binding.pattern), child, work);
+                    if let Some(annotation) = &binding.annotation {
+                        charge_type_value(annotation, child, work, budget)?;
+                    }
+                    push!(OwnedSyntax::Expression(&binding.initializer), child, work);
+                }
+                SurfaceLocalDeclaration::Evidence(evidence) => {
+                    let child = type_depth(depth, 1)?;
+                    copy_entries!(1, work);
+                    charge_type_reference(&evidence.application.interface, child, work, budget)?;
+                    copy_entries!(
+                        evidence.application.arguments.len() + evidence.equations.len(),
+                        work
+                    );
+                    if !evidence.application.arguments.is_empty() || !evidence.equations.is_empty()
+                    {
+                        let item = type_depth(child, 1)?;
+                        for argument in &evidence.application.arguments {
+                            charge_type_value(argument, item, work, budget)?;
+                        }
+                        for equation in &evidence.equations {
+                            push!(OwnedSyntax::Equation(equation), item, work);
+                        }
+                    }
+                }
+                SurfaceLocalDeclaration::Recursive(group) => {
+                    copy_entries!(group.members.len(), work);
+                    if !group.members.is_empty() {
+                        let child = type_depth(depth, 1)?;
+                        for member in &group.members {
+                            charge_type_name(&member.binder.name, child, work, budget)?;
+                            charge_type_value(&member.annotation, child, work, budget)?;
+                            push!(OwnedSyntax::Expression(&member.initializer), child, work);
+                        }
+                    }
+                }
+                SurfaceLocalDeclaration::Newtype(declaration) => {
+                    charge_type_name(&declaration.name, depth, work, budget)?;
+                    copy_entries!(
+                        declaration.parameters.len() + declaration.constructors.len(),
+                        work
+                    );
+                    if !declaration.parameters.is_empty() || !declaration.constructors.is_empty() {
+                        let child = type_depth(depth, 1)?;
+                        for parameter in &declaration.parameters {
+                            charge_type_name(&parameter.name, child, work, budget)?;
+                            if let Some(kind) = &parameter.kind {
+                                push!(OwnedSyntax::Kind(kind), child, work);
+                            }
+                        }
+                        for constructor in &declaration.constructors {
+                            charge_type_name(&constructor.name, child, work, budget)?;
+                            copy_entries!(constructor.fields.len(), work);
+                            if !constructor.fields.is_empty() {
+                                let field = type_depth(child, 1)?;
+                                for ty in &constructor.fields {
+                                    charge_type_value(ty, field, work, budget)?;
+                                }
+                            }
+                        }
+                    }
+                    if let Some(order) = &declaration.generated_parameters {
+                        let child = type_depth(depth, 1)?;
+                        budget.charge()?; // retained Arc
+                        charge_type_name(order.name(), child, TypeWork::Inspect, budget)?;
+                        if !order.parameters().is_empty() {
+                            let item = type_depth(child, 1)?;
+                            for occurrence in order.parameters() {
+                                charge_type_name(
+                                    occurrence.name(),
+                                    item,
+                                    TypeWork::Inspect,
+                                    budget,
+                                )?;
+                            }
+                        }
+                    }
+                }
+            },
+            OwnedSyntax::Equation(equation) => {
+                charge_type_name(&equation.name, depth, work, budget)?;
+                copy_entries!(equation.patterns.len(), work);
+                if !equation.patterns.is_empty() {
+                    let child = type_depth(depth, 1)?;
+                    for pattern in &equation.patterns {
+                        push!(OwnedSyntax::Pattern(pattern), child, work);
+                    }
+                }
+                push!(OwnedSyntax::Expression(&equation.body), depth, work);
+            }
+            OwnedSyntax::Kind(kind) => match &kind.kind {
+                SurfaceKindKind::Type | SurfaceKindKind::EffectRow => {}
+                SurfaceKindKind::Function { domain, codomain } => {
+                    let child = type_depth(depth, 1)?;
+                    copy_entries!(2, work);
+                    push!(OwnedSyntax::Kind(domain), child, work);
+                    push!(OwnedSyntax::Kind(codomain), child, work);
+                }
+            },
+            OwnedSyntax::Contents(node) => match node {
+                MacroOutputNode::Expression(capture, origin)
+                | MacroOutputNode::ForwardedExpression(capture, origin) => {
+                    if matches!(node, MacroOutputNode::Expression(..)) {
+                        bridge = true;
+                    }
+                    let child = type_depth(depth, 1)?;
+                    charge_type_origin(origin, child, budget)?;
+                    push!(
+                        OwnedSyntax::Expression(&capture.expression),
+                        child,
+                        TypeWork::Inspect
+                    );
+                    contents!(capture.contents, child);
+                }
+                MacroOutputNode::ForwardedPattern(capture, origin) => {
+                    let child = type_depth(depth, 1)?;
+                    charge_type_origin(origin, child, budget)?;
+                    push!(
+                        OwnedSyntax::Pattern(&capture.pattern),
+                        child,
+                        TypeWork::Inspect
+                    );
+                    contents!(capture.contents, child);
+                }
+                MacroOutputNode::ForwardedType(capture, origin) => {
+                    let child = type_depth(depth, 1)?;
+                    charge_type_origin(origin, child, budget)?;
+                    charge_type_value(&capture.ty, child, TypeWork::Inspect, budget)?;
+                    contents!(capture.contents, child);
+                }
+                MacroOutputNode::Group(_, children, origin) => {
+                    let child = type_depth(depth, 1)?;
+                    charge_type_origin(origin, child, budget)?;
+                    for node in children {
+                        push!(OwnedSyntax::Contents(node), child, TypeWork::Inspect);
+                    }
+                }
+                MacroOutputNode::Identifier(name, origin) => {
+                    charge_type_name(name, depth, TypeWork::Inspect, budget)?;
+                    charge_type_origin(origin, depth, budget)?;
+                }
+                MacroOutputNode::Token(_, _, origin) => {
+                    charge_type_origin(origin, depth, budget)?;
+                }
+                MacroOutputNode::Splice(name) => {
+                    bridge = true;
+                    charge_type_name(name, depth, TypeWork::Inspect, budget)?;
+                }
+            },
+        }
+    }
+    Ok(bridge)
+}
+
+pub(crate) fn charge_expression_copy(
+    expression: &SurfaceExpr,
+    prefix: usize,
+    inherit_frame: bool,
+    budget: &mut SyntaxBudget,
+) -> Result<bool, ResourceFailure> {
+    charge_owned_syntax(
+        OwnedSyntax::Expression(expression),
+        prefix,
+        TypeWork::Copy { inherit_frame },
+        budget,
+    )
+}
+
+pub(crate) fn charge_pattern_copy(
+    pattern: &SurfacePattern,
+    prefix: usize,
+    inherit_frame: bool,
+    budget: &mut SyntaxBudget,
+) -> Result<bool, ResourceFailure> {
+    charge_owned_syntax(
+        OwnedSyntax::Pattern(pattern),
+        prefix,
+        TypeWork::Copy { inherit_frame },
+        budget,
+    )
+}
+
+fn charge_owned_retention(
+    root: OwnedSyntax<'_>,
+    contents: &[MacroOutputNode],
+    prefix: usize,
+    budget: &mut SyntaxBudget,
+) -> Result<bool, ResourceFailure> {
+    let depth = type_depth(prefix, 1)?;
+    let mut bridge = charge_owned_syntax(root, depth, TypeWork::Inspect, budget)?;
+    let contents_depth = type_depth(depth, 1)?;
+    budget.charge()?; // retained contents Arc
+    for node in contents {
+        bridge |= charge_owned_syntax(
+            OwnedSyntax::Contents(node),
+            contents_depth,
+            TypeWork::Inspect,
+            budget,
+        )?;
+    }
+    Ok(bridge)
+}
+
+pub(crate) fn charge_expression_retention(
+    capture: &SurfaceExpressionCapture,
+    prefix: usize,
+    budget: &mut SyntaxBudget,
+) -> Result<bool, ResourceFailure> {
+    charge_owned_retention(
+        OwnedSyntax::Expression(&capture.expression),
+        &capture.contents,
+        prefix,
+        budget,
+    )
+}
+
+pub(crate) fn charge_pattern_retention(
+    capture: &SurfacePatternCapture,
+    prefix: usize,
+    budget: &mut SyntaxBudget,
+) -> Result<bool, ResourceFailure> {
+    charge_owned_retention(
+        OwnedSyntax::Pattern(&capture.pattern),
+        &capture.contents,
+        prefix,
+        budget,
+    )
+}
+
 /// Inspect the ownership path that remains behind a copied type capture.
 pub(crate) fn charge_type_retention(
     capture: &SurfaceTypeCapture,
@@ -1264,7 +1828,7 @@ fn capture_by_name<'a>(
     captures.get(index).ok_or(name.span)
 }
 
-/// Instantiate only identifier captures before the existing declaration parser.
+/// Instantiate supported captures before the existing declaration parser.
 pub(crate) fn instantiate_declaration_template(
     selection: &SelectedSyntax,
     captures: &[SurfaceSyntaxCapture],
@@ -1334,6 +1898,28 @@ pub(crate) fn instantiate_declaration_template(
                         charge_type_copy(&capture.ty, type_prefix, false, budget)
                             .map_err(resource)?;
                         charge_type_retention(capture, depth, budget)?;
+                    }
+                    Ok(SurfaceSyntaxCapture::Expression(capture)) => {
+                        let prefix = type_depth(depth, 1).map_err(resource)?;
+                        let mut bridge =
+                            charge_expression_copy(&capture.expression, prefix, false, budget)
+                                .map_err(resource)?;
+                        bridge |= charge_expression_retention(capture, depth, budget)
+                            .map_err(resource)?;
+                        if bridge {
+                            return Err(MacroParseFailure::Invalid);
+                        }
+                    }
+                    Ok(SurfaceSyntaxCapture::Pattern(capture)) => {
+                        let prefix = type_depth(depth, 1).map_err(resource)?;
+                        let mut bridge =
+                            charge_pattern_copy(&capture.pattern, prefix, false, budget)
+                                .map_err(resource)?;
+                        bridge |=
+                            charge_pattern_retention(capture, depth, budget).map_err(resource)?;
+                        if bridge {
+                            return Err(MacroParseFailure::Invalid);
+                        }
                     }
                     _ => return Err(MacroParseFailure::Invalid),
                 }
@@ -1816,10 +2402,19 @@ mod tests {
             }),
         ];
         let mut measured = SyntaxBudget::default();
-        let output = instantiate_declaration_template(&selection, &captures, 1, span, &mut measured)
-            .expect("protected pattern and expression splices are admitted");
-        assert!(output.iter().any(|node| matches!(node, MacroOutputNode::ForwardedPattern(..))));
-        assert!(output.iter().any(|node| matches!(node, MacroOutputNode::ForwardedExpression(..))));
+        let output =
+            instantiate_declaration_template(&selection, &captures, 1, span, &mut measured)
+                .expect("protected pattern and expression splices are admitted");
+        assert!(
+            output
+                .iter()
+                .any(|node| matches!(node, MacroOutputNode::ForwardedPattern(..)))
+        );
+        assert!(
+            output
+                .iter()
+                .any(|node| matches!(node, MacroOutputNode::ForwardedExpression(..)))
+        );
         let cost = measured.consumed();
         assert!(matches!(
             instantiate_declaration_template(
