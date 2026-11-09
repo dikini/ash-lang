@@ -1781,6 +1781,15 @@ pub(crate) fn validate_template_syntax(
     source: &crate::source::SourceFile,
     contexts: &SyntaxContexts,
 ) -> Result<(), crate::parser::MacroParseFailure> {
+    use crate::parser::MacroParseFailure;
+
+    fn resource(error: ResourceFailure) -> MacroParseFailure {
+        MacroParseFailure::Syntax {
+            diagnostics: Vec::new(),
+            resource: Some(error),
+        }
+    }
+
     let SurfaceSyntaxImplementation::Template = &declaration.implementation else {
         return if declaration.category == crate::surface::SurfaceSyntaxCategory::Declaration {
             Err(crate::parser::MacroParseFailure::Invalid)
@@ -1788,12 +1797,53 @@ pub(crate) fn validate_template_syntax(
             Ok(())
         };
     };
-    let mut captures = Vec::new();
-    let mut identifiers = Vec::new();
+    let mut admission_budget = (declaration.category
+        == crate::surface::SurfaceSyntaxCategory::Declaration)
+        .then(SyntaxBudget::default);
+    let (capture_count, identifier_count) = if let Some(budget) = &mut admission_budget {
+        budget
+            .charge_units(declaration.matcher.len())
+            .map_err(resource)?;
+        let (captures, identifiers) =
+            declaration
+                .matcher
+                .iter()
+                .fold((0usize, 0usize), |counts, part| match part {
+                    SurfaceSyntaxMatcherPart::Capture { kind, .. } => (
+                        counts.0 + 1,
+                        counts.1 + usize::from(*kind == SurfaceSyntaxCaptureKind::Identifier),
+                    ),
+                    SurfaceSyntaxMatcherPart::Literal { .. } => counts,
+                });
+        budget.charge_units(captures).map_err(resource)?;
+        budget.charge_units(identifiers).map_err(resource)?;
+        (captures, identifiers)
+    } else {
+        (0, 0)
+    };
+    let mut captures = Vec::with_capacity(capture_count);
+    let mut identifiers = Vec::with_capacity(identifier_count);
     for part in &declaration.matcher {
         let SurfaceSyntaxMatcherPart::Capture { name, kind } = part else {
             continue;
         };
+        if let Some(budget) = &mut admission_budget {
+            budget.charge().map_err(resource)?;
+            if *kind == SurfaceSyntaxCaptureKind::Identifier {
+                let digits = captures
+                    .len()
+                    .checked_ilog10()
+                    .map_or(1, |n| n as usize + 1);
+                let bytes = "__ash_template_capture_".len().saturating_add(digits);
+                budget
+                    .charge_units(bytes.saturating_mul(2))
+                    .map_err(resource)?;
+                budget.charge_units(2).map_err(resource)?;
+            } else {
+                // A placeholder value and its shared empty contents are built here.
+                budget.charge_units(2).map_err(resource)?;
+            }
+        }
         let capture = match kind {
             SurfaceSyntaxCaptureKind::Expression => {
                 SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
@@ -1841,11 +1891,15 @@ pub(crate) fn validate_template_syntax(
         };
         captures.push(capture);
     }
-    let mut contents = declaration
+    let template = declaration
         .template_contents
-        .as_ref()
-        .ok_or(crate::parser::MacroParseFailure::Invalid)?
-        .to_vec();
+        .as_deref()
+        .ok_or(MacroParseFailure::Invalid)?;
+    if let Some(budget) = &mut admission_budget {
+        // Admission validates structure without executing protected captures.
+        charge_declaration_template(template, &declaration.matcher, &captures, budget)?;
+    }
+    let mut contents = template.to_vec();
     substitute_contents(
         &mut contents,
         &declaration.matcher,
@@ -1871,6 +1925,9 @@ pub(crate) fn validate_template_syntax(
                 contents,
                 contexts,
                 &identifiers,
+                admission_budget
+                    .as_mut()
+                    .expect("declaration admission owns its budget"),
             )?;
         }
     }
@@ -2145,6 +2202,48 @@ mod tests {
                 transformer,
             )
             .expect("each nested invocation and ordinary sibling is admitted");
+        }
+    }
+
+    #[test]
+    fn nested_declaration_admission_keeps_pattern_and_expression_placeholders() {
+        let inner_source = SourceFile::new(
+            "inner.ash",
+            "pub syntax declaration: (inner) $pattern:pattern yields $body:expr => {}\n",
+        )
+        .unwrap();
+        let inner_tree = crate::parser::parse(crate::lexer::lex(&inner_source).unwrap());
+        let original =
+            crate::parser::project_module_retaining_templates(&inner_source, &inner_tree)
+                .unwrap()
+                .syntax_declarations
+                .remove(0);
+        let outer_source = SourceFile::new(
+            "outer.ash",
+            "pub syntax declaration: (outer) $pattern:pattern yields $body:expr => {\n    inner $pattern yields $body\n}\n",
+        )
+        .unwrap();
+        let outer_tree = crate::parser::parse(crate::lexer::lex(&outer_source).unwrap());
+        let outer = crate::parser::project_module_retaining_templates(&outer_source, &outer_tree)
+            .unwrap()
+            .syntax_declarations
+            .remove(0);
+        for transformer in [false, true] {
+            let mut declaration = original.clone();
+            if transformer {
+                declaration.implementation =
+                    SurfaceSyntaxImplementation::Transformer(declaration.name.clone());
+                declaration.template_contents = None;
+            }
+            let selected = [SelectedSyntax {
+                name: declaration.name.text.clone(),
+                owner: 0,
+                import_span: declaration.span,
+                declaration,
+            }];
+            let contexts = SyntaxContexts::new(&selected, &[], &[]);
+            validate_template_syntax(&outer, &outer_source, &contexts)
+                .expect("shape admission does not execute a nested selection");
         }
     }
 
