@@ -985,7 +985,7 @@ mod tests {
             .collect(),
         };
         let mut host = make_host();
-        let foreign = make_host();
+        let mut foreign = make_host();
         let foreign_input = foreign.input();
         let stale_input = {
             let finished = make_host();
@@ -1082,6 +1082,90 @@ mod tests {
                 HeapCell::Constructor(foreign_expanded, Some(syntax)),
             )
             .unwrap(),
+        );
+        assert!(matches!(
+            host.transfer(&foreign_result, &heap, &mut TypeWorkBudget::unbounded()),
+            Err(RuntimeFailure::InvalidControlState)
+        ));
+
+        fn two_identifier_result(
+            host: &SyntaxHost,
+            heap: &mut Vec<HeapCell>,
+            first: Value,
+            second: Value,
+            origin: Value,
+        ) -> Value {
+            let empty = host.construct(heap, "NoNodes", None).unwrap();
+            let second_fields = Value::Location(
+                allocate_heap(heap, HeapCell::Tuple(vec![second, origin.clone()].into())).unwrap(),
+            );
+            let second_node = host
+                .construct(heap, "IdentifierNode", Some(second_fields))
+                .unwrap();
+            let second_pair = Value::Location(
+                allocate_heap(heap, HeapCell::Tuple(vec![second_node, empty].into())).unwrap(),
+            );
+            let tail = host
+                .construct(heap, "MoreNodes", Some(second_pair))
+                .unwrap();
+            let first_fields = Value::Location(
+                allocate_heap(heap, HeapCell::Tuple(vec![first, origin].into())).unwrap(),
+            );
+            let first_node = host
+                .construct(heap, "IdentifierNode", Some(first_fields))
+                .unwrap();
+            let first_pair = Value::Location(
+                allocate_heap(heap, HeapCell::Tuple(vec![first_node, tail].into())).unwrap(),
+            );
+            let nodes = host.construct(heap, "MoreNodes", Some(first_pair)).unwrap();
+            let syntax = host.construct(heap, "Syntax", Some(nodes)).unwrap();
+            host.construct(heap, "Expanded", Some(syntax)).unwrap()
+        }
+
+        let foreign_input = foreign.input();
+        let foreign_capture = request(&mut foreign, foreign_input, 0, &mut heap).unwrap();
+        let (_, foreign_capture) = constructor_fields(&foreign_capture, &heap).unwrap();
+        let (_, foreign_fields) = constructor_fields(foreign_capture.unwrap(), &heap).unwrap();
+        let (foreign_identifier, _) = super::pair(foreign_fields.unwrap(), &heap).unwrap();
+        let foreign_identifier = foreign_identifier.clone();
+        let local_identifier = host.handle(CompilerSyntaxHandleKind::Identifier(0));
+        assert!(matches!(
+            host.admitted_handle(&local_identifier),
+            Ok(CompilerSyntaxHandleKind::Identifier(0))
+        ));
+        assert!(matches!(
+            foreign.admitted_handle(&foreign_identifier),
+            Ok(CompilerSyntaxHandleKind::Identifier(0))
+        ));
+        assert_eq!(host.identifiers.len(), 1);
+        assert_eq!(foreign.identifiers.len(), 1);
+        let local_origin = host.issue_origin(span.into());
+        let valid = two_identifier_result(
+            &host,
+            &mut heap,
+            local_identifier.clone(),
+            local_identifier.clone(),
+            local_origin.clone(),
+        );
+        let TransformerOutput::Expanded(valid_output) = host
+            .transfer(&valid, &heap, &mut TypeWorkBudget::unbounded())
+            .unwrap()
+        else {
+            panic!("the local identifier output should transfer");
+        };
+        assert_eq!(
+            valid_output,
+            vec![
+                MacroOutputNode::Identifier(name.clone(), span.into()),
+                MacroOutputNode::Identifier(name.clone(), span.into()),
+            ]
+        );
+        let foreign_result = two_identifier_result(
+            &host,
+            &mut heap,
+            local_identifier,
+            foreign_identifier,
+            local_origin,
         );
         assert!(matches!(
             host.transfer(&foreign_result, &heap, &mut TypeWorkBudget::unbounded()),
@@ -1202,6 +1286,61 @@ mod tests {
             panic!("the original capture is retained")
         };
         assert!(Arc::ptr_eq(&retained.contents, &original.contents));
+    }
+
+    fn s3_overflow(entry: &str) -> crate::driver::FileFailure {
+        use crate::{
+            driver::{RunConfiguration, compile_path},
+            module::ModuleRoots,
+        };
+
+        compile_path(RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/s3-transfer")
+                .join(entry),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("over-depth structured output must not be published")
+    }
+
+    #[test]
+    fn s3_final_transfer_depth_failure_closes_the_host_root() {
+        use super::super::machine_test_hooks as hooks;
+        use crate::driver::PipelineFailure;
+
+        hooks::reset();
+        let failure = s3_overflow("entry_overflow.ash");
+        let Some(PipelineFailure::SyntaxRuntime(error)) = failure.pipeline_failure() else {
+            panic!("expected the final transfer failure: {failure:?}");
+        };
+        assert_eq!(error.cause().reason_code(), "runtime.resource-capacity");
+        assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+        assert_eq!(hooks::TRANSFER_FAILURES.get(), 1);
+        assert_eq!(hooks::TRANSFER_GROUPS_COMPLETED.get(), 5);
+        assert_eq!(hooks::ROOT_CLOSES.get(), 1);
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+        assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+        hooks::reset();
+    }
+
+    #[test]
+    fn s3_parse_service_depth_failure_disposes_the_active_host_root() {
+        use super::super::machine_test_hooks as hooks;
+        use crate::driver::PipelineFailure;
+
+        hooks::reset();
+        let failure = s3_overflow("entry_parse_overflow.ash");
+        let Some(PipelineFailure::SyntaxRuntime(error)) = failure.pipeline_failure() else {
+            panic!("expected the parse-service transfer failure: {failure:?}");
+        };
+        assert_eq!(error.cause().reason_code(), "runtime.resource-capacity");
+        assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 0);
+        assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+        assert_eq!(hooks::TRANSFER_GROUPS_COMPLETED.get(), 4);
+        assert_eq!(hooks::ROOT_CLOSES.get(), 0);
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 1);
+        assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+        hooks::reset();
     }
 
     #[test]
