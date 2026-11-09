@@ -2258,7 +2258,7 @@ fn charge_staged_name_frames(
     charge_frame_additions(frames.len(), previous, budget)
 }
 
-/// Refuse unsupported captures before the shared invocation projector can copy them.
+/// Reserve supported captures before the shared invocation projector can copy them.
 fn charge_identifier_invocation(
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
@@ -2307,17 +2307,39 @@ fn charge_identifier_invocation(
             budget.charge_units(spelling.len())?;
         }
     }
+    budget.charge_units(selection.declaration.matcher.len())?;
     if selection.declaration.category != SurfaceSyntaxCategory::Declaration
         || !matches!(selection.declaration.implementation, SurfaceSyntaxImplementation::Template)
         || selection.declaration.matcher.iter().any(|part| {
-            matches!(part, SurfaceSyntaxMatcherPart::Capture { kind, .. } if *kind != SurfaceSyntaxCaptureKind::Identifier)
+            matches!(part, SurfaceSyntaxMatcherPart::Capture { kind, .. } if !matches!(kind, SurfaceSyntaxCaptureKind::Identifier | SurfaceSyntaxCaptureKind::Type))
         })
     {
         return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
     }
     crate::syntax::charge_selected(selection, budget)?;
+    budget.charge_units(selection.declaration.matcher.len())?;
+    let mut kinds = selection
+        .declaration
+        .matcher
+        .iter()
+        .filter_map(|part| match part {
+            SurfaceSyntaxMatcherPart::Capture { kind, .. } => Some(kind),
+            SurfaceSyntaxMatcherPart::Literal { .. } => None,
+        });
     for argument in child_nodes(node).filter(|child| child.kind == NodeKind::SyntaxArgument) {
         budget.charge()?;
+        let kind = kinds.next().ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?;
+        if *kind == SurfaceSyntaxCaptureKind::Type {
+            let ty = only_child_of_kind(argument, NodeKind::Type)?;
+            // Both the eventual projected type and the temporary contents
+            // capture are reserved before the shared projector runs.
+            charge_composed_type_projection(ty, tokens, budget)?;
+            charge_projection_subtree(ty, tokens, budget)?;
+            charge_type_capture_contents(ty, tokens, budget)?;
+            continue;
+        }
         let index = argument
             .children
             .iter()
@@ -2353,6 +2375,106 @@ fn charge_identifier_invocation(
             }
         }
     }
+    if kinds.next().is_some() {
+        return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+    }
+    Ok(())
+}
+
+/// Precharge the token order and groups that capture_contents reconstructs.
+fn charge_type_capture_contents(
+    root: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), DeclarationExpansionFailure> {
+    // A lone forwarded node reuses its old contents Arc. Every other
+    // reconstructed sequence gets a new enclosing Arc before it is retained.
+    let mut singleton = root;
+    let reuses_contents = loop {
+        budget.charge()?;
+        match singleton.children.as_slice() {
+            [ConcreteElement::Node(child)] => singleton = child,
+            [ConcreteElement::Token(index)] => {
+                break matches!(
+                    tokens.originals.and_then(|originals| originals.get(index)),
+                    Some(crate::syntax::MacroOutputNode::ForwardedType(_, _))
+                );
+            }
+            _ => break false,
+        }
+    };
+    let contents_prefix = usize::from(!reuses_contents);
+    // Reserve this scan's pending elements and capture_contents' separate
+    // pending elements before either worklist can grow.
+    budget.charge_units(root.children.len())?;
+    budget.charge_units(root.children.len())?;
+    let mut pending = root.children.iter().rev().collect::<Vec<_>>();
+    let mut groups = contents_prefix;
+    while let Some(element) = pending.pop() {
+        budget.charge_units(2)?;
+        match element {
+            ConcreteElement::Node(node) => {
+                budget.charge_units(node.children.len())?;
+                budget.charge_units(node.children.len())?;
+                pending.extend(node.children.iter().rev());
+            }
+            ConcreteElement::Token(index) => {
+                // Flattened index, reconstructed output entry and contents
+                // storage are each retained after this preflight.
+                budget.charge_units(3)?;
+                let token = tokens.get(*index).ok_or(ProjectionError::MalformedTree(
+                    InternalReason::TokenOutOfRange,
+                ))?;
+                match &token.kind {
+                    TokenKind::LeftParen | TokenKind::LeftBrace => {
+                        groups = crate::syntax::type_depth(groups, 1)?;
+                        if let Some(original) = tokens.originals.and_then(|nodes| nodes.get(index))
+                        {
+                            crate::syntax::charge_captured_type_original(original, groups, budget)?;
+                        }
+                    }
+                    TokenKind::RightParen | TokenKind::RightBrace => {
+                        groups = groups.checked_sub(1).ok_or(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        ))?;
+                    }
+                    TokenKind::Dollar => {
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
+                    }
+                    kind => {
+                        if let Some(original) = tokens.originals.and_then(|nodes| nodes.get(index))
+                        {
+                            crate::syntax::charge_captured_type_original(original, groups, budget)?;
+                        } else if let TokenKind::Identifier(text)
+                        | TokenKind::UpperIdentifier(text) = kind
+                        {
+                            budget.charge()?;
+                            budget.charge_units(text.len())?;
+                            if let Some(token) = tokens.projection_token(*index) {
+                                charge_staged_name_frames(token, budget)?;
+                            }
+                        } else {
+                            crate::syntax::charge_type_token_copy(kind, budget)?;
+                            let range = token.span.range();
+                            budget.charge_units(
+                                usize::try_from(range.end().saturating_sub(range.start()))
+                                    .unwrap_or(usize::MAX),
+                            )?;
+                        }
+                    }
+                }
+            }
+            ConcreteElement::Missing { .. } | ConcreteElement::Error(_) => {
+                return Err(ProjectionError::RecoveryNodesPresent.into());
+            }
+        }
+    }
+    if groups != contents_prefix {
+        return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+    }
     Ok(())
 }
 
@@ -2362,6 +2484,8 @@ fn charge_generated_projection(
     tokens: &ProjectionTokens<'_>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(), DeclarationExpansionFailure> {
+    check_narrow_type_refusal(root, tokens, budget)?;
+    charge_composed_type_projection(root, tokens, budget)?;
     charge_projection_subtree(root, tokens, budget)?;
     budget.charge()?;
     let mut pending = vec![root];
@@ -2414,6 +2538,188 @@ fn charge_generated_projection(
     Ok(())
 }
 
+/// Combine the enclosing concrete shape with each type that projection owns.
+fn charge_composed_type_projection(
+    root: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), DeclarationExpansionFailure> {
+    budget.charge()?;
+    let source_spans = tokens.occurrence.is_none();
+    // The source invocation itself also finds its first and last token.
+    let mut pending = vec![(root, 0usize, false, usize::from(source_spans), false)];
+    while let Some((node, parent_depth, parent_type, parent_spans, parent_nominal)) = pending.pop()
+    {
+        budget.charge()?;
+        // Both weight calculations may scan the node's child list.
+        budget.charge_units(node.children.len())?;
+        budget.charge_units(node.children.len())?;
+        let in_type = parent_type || matches!(node.kind, NodeKind::Type | NodeKind::EffectRow);
+        let owned_step = if in_type {
+            match node.kind {
+                NodeKind::Type if child_nodes(node).any(|child| child.kind == NodeKind::Type) => 1,
+                NodeKind::AtomicType
+                    if child_nodes(node).any(|child| {
+                        matches!(child.kind, NodeKind::Type | NodeKind::EffectRow)
+                    }) =>
+                {
+                    1
+                }
+                // TupleType is inside ParenthesizedType, whose structural
+                // edge already counts the resulting owned tuple edge.
+                NodeKind::TupleType => 0,
+                // project_type first constructs a RowArgument even when a
+                // function later moves its row out of that temporary wrapper.
+                NodeKind::EffectRow => 2,
+                _ => 0,
+            }
+        } else {
+            0
+        };
+        let depth =
+            crate::syntax::type_depth(parent_depth, structural_weight(node).max(owned_step))?;
+        let nominal_root = tokens.construction.is_some()
+            && matches!(
+                node.kind,
+                NodeKind::TypeDeclaration | NodeKind::NewtypeDeclaration
+            );
+        let nominal = parent_nominal || nominal_root;
+        let mut span_walks = usize::from(
+            nominal
+                || (source_spans
+                    && in_type
+                    && matches!(
+                        node.kind,
+                        NodeKind::Type
+                            | NodeKind::AtomicType
+                            | NodeKind::ParenthesizedType
+                            | NodeKind::EffectRow
+                            | NodeKind::EffectInstance
+                            | NodeKind::QualifiedName
+                    )),
+        );
+        if nominal_root {
+            // Construction proof plus the two declaration metadata edge walks.
+            span_walks += 3;
+        }
+        if nominal && node.kind == NodeKind::TypeParameter {
+            // Parameter metadata finds both edge indices as well as its span.
+            span_walks += 2;
+        }
+        let span_walks = parent_spans.saturating_add(span_walks);
+        for child in &node.children {
+            budget.charge()?;
+            // Each possible ancestor span walk visits at most this subtree;
+            // cover worklist growth, visits, token lookups and extent updates.
+            budget.charge_units(span_walks.saturating_mul(6))?;
+            match child {
+                ConcreteElement::Node(child) => {
+                    pending.push((child, depth, in_type, span_walks, nominal));
+                }
+                ConcreteElement::Token(index) => {
+                    match tokens.originals.and_then(|originals| originals.get(index)) {
+                        Some(crate::syntax::MacroOutputNode::ForwardedType(capture, _)) => {
+                            if !in_type {
+                                return Err(ProjectionError::MalformedTree(
+                                    InternalReason::UnexpectedShape,
+                                )
+                                .into());
+                            }
+                            crate::syntax::charge_type_copy(
+                                &capture.ty,
+                                depth,
+                                tokens.frame.is_some(),
+                                budget,
+                            )?;
+                        }
+                        Some(crate::syntax::MacroOutputNode::Identifier(name, origin))
+                            if in_type =>
+                        {
+                            let location_depth = crate::syntax::type_depth(depth, 1)?;
+                            crate::syntax::charge_type_origin(origin, location_depth, budget)?;
+                            if tokens.preserve_name_diagnostic
+                                && let Some(previous) = &name.diagnostic
+                            {
+                                crate::syntax::charge_type_origin(
+                                    &previous.primary,
+                                    location_depth,
+                                    budget,
+                                )?;
+                                for related in &previous.related {
+                                    crate::syntax::charge_type_origin(
+                                        related,
+                                        location_depth,
+                                        budget,
+                                    )?;
+                                }
+                            }
+                        }
+                        Some(crate::syntax::MacroOutputNode::Token(kind, _, origin))
+                            if in_type
+                                && tokens.frame.is_some()
+                                && matches!(
+                                    kind,
+                                    TokenKind::IntType
+                                        | TokenKind::BytesType
+                                        | TokenKind::StringType
+                                        | TokenKind::BoolType
+                                        | TokenKind::UnitType
+                                ) =>
+                        {
+                            let location_depth = crate::syntax::type_depth(depth, 1)?;
+                            crate::syntax::charge_type_origin(origin, location_depth, budget)?;
+                        }
+                        _ => {}
+                    }
+                }
+                ConcreteElement::Missing { .. } | ConcreteElement::Error(_) => {
+                    return Err(ProjectionError::RecoveryNodesPresent.into());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Keep forwarded types out of expression-syntax captures until their copies
+/// are covered by the same cumulative accounting as declaration staging.
+fn check_narrow_type_refusal(
+    root: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), DeclarationExpansionFailure> {
+    budget.charge()?;
+    let mut pending = vec![(root, false)];
+    while let Some((node, expression_argument)) = pending.pop() {
+        for child in &node.children {
+            budget.charge()?;
+            match child {
+                ConcreteElement::Node(child) => {
+                    let expression_argument = expression_argument
+                        || (node.kind == NodeKind::SyntaxInvocation
+                            && child.kind == NodeKind::SyntaxArgument);
+                    pending.push((child, expression_argument));
+                }
+                ConcreteElement::Token(index)
+                    if expression_argument
+                        && matches!(
+                            tokens.originals.and_then(|originals| originals.get(index)),
+                            Some(crate::syntax::MacroOutputNode::ForwardedType(_, _))
+                        ) =>
+                {
+                    return Err(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                    );
+                }
+                ConcreteElement::Token(_)
+                | ConcreteElement::Missing { .. }
+                | ConcreteElement::Error(_) => {}
+            }
+        }
+    }
+    Ok(())
+}
+
 fn charge_projection_subtree(
     root: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
@@ -2451,6 +2757,7 @@ fn charge_projection_subtree(
                                 budget.charge_units(spelling.len())?;
                             }
                             crate::syntax::MacroOutputNode::Group(_, _, _) => {}
+                            crate::syntax::MacroOutputNode::ForwardedType(_, _) => {}
                             _ => {
                                 return Err(ProjectionError::MalformedTree(
                                     InternalReason::UnexpectedShape,
@@ -2458,6 +2765,12 @@ fn charge_projection_subtree(
                                 .into());
                             }
                         }
+                    } else if let Some(token) = tokens.get(*index)
+                        && let TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) =
+                            &token.kind
+                    {
+                        budget.charge()?;
+                        budget.charge_units(text.len())?;
                     }
                 }
                 ConcreteElement::Missing { .. } | ConcreteElement::Error(_) => {
@@ -6178,6 +6491,884 @@ mod tests {
     }
 
     #[test]
+    fn generated_expression_arguments_refuse_forwarded_types_only_within_the_argument() {
+        use crate::syntax::MacroOutputNode;
+
+        fn node(kind: NodeKind, children: Vec<ConcreteElement>) -> ConcreteNode {
+            ConcreteNode { kind, children }
+        }
+        let source = SourceFile::new("type.ash", "Int").unwrap();
+        let span = source.span(ByteRange::new(0, 3).unwrap()).unwrap();
+        let capture = SurfaceTypeCapture {
+            ty: SurfaceType {
+                kind: SurfaceTypeKind::Int,
+                span,
+                diagnostic: None,
+            },
+            contents: std::sync::Arc::from([]),
+        };
+        let originals = std::collections::HashMap::from([(
+            0,
+            MacroOutputNode::ForwardedType(capture, span.into()),
+        )]);
+        let tokens = ProjectionTokens {
+            tokens: &[],
+            originals: Some(&originals),
+            occurrence: None,
+            construction: None,
+            construction_extents: false,
+            admission_identifiers: None,
+            frame: None,
+            name_frame: None,
+            staging_frames: None,
+            preserve_name_diagnostic: false,
+        };
+        let argument = || {
+            ConcreteElement::Node(node(
+                NodeKind::SyntaxArgument,
+                vec![ConcreteElement::Node(node(
+                    NodeKind::ParenthesizedExpression,
+                    vec![ConcreteElement::Token(0)],
+                ))],
+            ))
+        };
+        let expression = node(NodeKind::SyntaxInvocation, vec![argument()]);
+        let declaration = node(NodeKind::DeclarationSyntaxInvocation, vec![argument()]);
+        let ordinary = node(NodeKind::InlineOperationalGlobal, vec![argument()]);
+        let unprotected = node(
+            NodeKind::SyntaxInvocation,
+            vec![ConcreteElement::Node(node(
+                NodeKind::SyntaxArgument,
+                vec![],
+            ))],
+        );
+        for allowed in [&declaration, &ordinary, &unprotected] {
+            assert!(
+                check_narrow_type_refusal(
+                    allowed,
+                    &tokens,
+                    &mut crate::syntax_resource::SyntaxBudget::default(),
+                )
+                .is_ok()
+            );
+        }
+        assert!(matches!(
+            check_narrow_type_refusal(
+                &expression,
+                &tokens,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            ),
+            Err(DeclarationExpansionFailure::Projection(
+                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+            ))
+        ));
+    }
+
+    #[test]
+    fn staged_declaration_adapter_moves_a_forwarded_type_into_original_nodes() {
+        use crate::syntax::{MacroOutputNode, SyntaxContexts};
+
+        let (source, _, mut output) =
+            structured_declarations("value : Int -> Int\nvalue input = input\n");
+        let span = source.span(ByteRange::new(0, 0).unwrap()).unwrap();
+        let contents = std::sync::Arc::from([MacroOutputNode::Token(
+            TokenKind::IntType,
+            std::sync::Arc::from("Int"),
+            span.into(),
+        )]);
+        let capture = SurfaceTypeCapture {
+            ty: SurfaceType {
+                kind: SurfaceTypeKind::Int,
+                span,
+                diagnostic: None,
+            },
+            contents: std::sync::Arc::clone(&contents),
+        };
+        let position = output
+            .iter()
+            .position(|node| matches!(node, MacroOutputNode::Token(TokenKind::IntType, _, _)))
+            .unwrap();
+        output[position] = MacroOutputNode::ForwardedType(capture, span.into());
+        let parsed = super::super::parse_macro_tree_inner(
+            &source,
+            span,
+            output,
+            &SyntaxContexts::new(&[], &[], &[]),
+            &[],
+            super::super::MacroOutputPosition::StagedDeclarations,
+            &mut crate::syntax_resource::SyntaxBudget::default(),
+        )
+        .expect("a preflighted forwarded type can cross the staged adapter");
+        let retained = parsed.original_nodes.values().find_map(|node| match node {
+            MacroOutputNode::ForwardedType(capture, _) => Some(capture),
+            _ => None,
+        });
+        assert!(std::sync::Arc::ptr_eq(
+            &retained.expect("the original type is retained").contents,
+            &contents,
+        ));
+    }
+
+    #[test]
+    fn generated_projection_checks_type_application_and_forwarded_type_together() {
+        use crate::syntax::{MacroOutputNode, SyntaxContexts};
+
+        fn replace_first_type(
+            nodes: &mut [MacroOutputNode],
+            capture: &mut Option<SurfaceTypeCapture>,
+            span: Span,
+        ) -> bool {
+            for node in nodes {
+                match node {
+                    MacroOutputNode::Group(_, children, _) => {
+                        if replace_first_type(children, capture, span) {
+                            return true;
+                        }
+                    }
+                    MacroOutputNode::Token(TokenKind::IntType, _, _) => {
+                        *node =
+                            MacroOutputNode::ForwardedType(capture.take().unwrap(), span.into());
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
+            false
+        }
+
+        let check = |applications: usize, grouped: bool, height: usize| {
+            let (open, close) = if grouped { ("F<(", ")>") } else { ("F<", ">") };
+            let source_text = format!(
+                "value : {}Int{} -> Int\nvalue input = 42\n",
+                open.repeat(applications),
+                close.repeat(applications),
+            );
+            let (source, _, mut output) = structured_declarations(&source_text);
+            let span = source.span(ByteRange::new(0, 0).unwrap()).unwrap();
+            let leaf = SurfaceType {
+                kind: SurfaceTypeKind::Int,
+                span,
+                diagnostic: None,
+            };
+            let mut ty = leaf.clone();
+            for _ in 0..height {
+                ty = SurfaceType {
+                    kind: SurfaceTypeKind::Tuple(vec![ty, leaf.clone()]),
+                    span,
+                    diagnostic: None,
+                };
+            }
+            let capture = SurfaceTypeCapture {
+                ty,
+                contents: std::sync::Arc::from([]),
+            };
+            assert!(replace_first_type(&mut output, &mut Some(capture), span));
+            let parsed = super::super::parse_macro_tree_inner(
+                &source,
+                span,
+                output,
+                &SyntaxContexts::new(&[], &[], &[]),
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+            .unwrap();
+            let root = validated_macro_root(&source, &parsed.tree).unwrap();
+            let mut pending = vec![(root, 0usize, 0usize, 0usize)];
+            let mut forwarded_path = None;
+            while let Some((node, applications, groups, functions)) = pending.pop() {
+                let applications = applications
+                    + usize::from(
+                        node.kind == NodeKind::AtomicType
+                            && child_nodes(node).any(|child| child.kind == NodeKind::Type),
+                    );
+                let groups = groups + usize::from(node.kind == NodeKind::ParenthesizedType);
+                let functions = functions
+                    + usize::from(
+                        node.kind == NodeKind::Type
+                            && child_nodes(node).any(|child| child.kind == NodeKind::Type),
+                    );
+                for child in &node.children {
+                    match child {
+                        ConcreteElement::Node(child) => {
+                            pending.push((child, applications, groups, functions));
+                        }
+                        ConcreteElement::Token(index)
+                            if matches!(
+                                parsed.original_nodes.get(index),
+                                Some(MacroOutputNode::ForwardedType(_, _))
+                            ) =>
+                        {
+                            assert!(forwarded_path.is_none());
+                            forwarded_path = Some((applications, groups, functions));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            assert_eq!(
+                forwarded_path,
+                Some((applications, if grouped { applications } else { 0 }, 1)),
+                "the protected type must occur inside every generated wrapper"
+            );
+            let tokens = ProjectionTokens {
+                tokens: &parsed.tree.tokens,
+                originals: Some(&parsed.original_nodes),
+                occurrence: Some(span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: Some(&parsed.admission_identifiers),
+                frame: None,
+                name_frame: None,
+                staging_frames: None,
+                preserve_name_diagnostic: true,
+            };
+            charge_generated_projection(
+                child_nodes(root).next().unwrap(),
+                &tokens,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+        };
+        // One function edge, 64 applications and the forwarded tuple edges.
+        assert!(check(64, false, 63).is_ok());
+        assert!(matches!(
+            check(64, false, 64),
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::StructuralDepth {
+                    limit: STRUCTURAL_DEPTH_LIMIT
+                }),
+                ..
+            })
+        ));
+        // Grouping contributes independently when interleaved with applications.
+        assert!(check(40, true, 47).is_ok());
+        assert!(matches!(
+            check(40, true, 48),
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::StructuralDepth {
+                    limit: STRUCTURAL_DEPTH_LIMIT
+                }),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn generated_projection_checks_raw_type_leaf_diagnostic_depth() {
+        use crate::syntax::{ExpansionFrame, MacroOutputNode, SyntaxContexts};
+
+        let check = |leaf: &str, extra_group: bool| {
+            let raw = if extra_group {
+                format!("({leaf})")
+            } else {
+                leaf.to_owned()
+            };
+            let nested = format!("{}{raw}{}", "F<(".repeat(63), ")>".repeat(63));
+            let (source, _, mut output) =
+                structured_declarations(&format!("value : {nested} -> Marker\nvalue _ = 42\n"));
+            let span = source.span(ByteRange::new(0, 0).unwrap()).unwrap();
+            let capture = SurfaceTypeCapture {
+                ty: SurfaceType {
+                    kind: SurfaceTypeKind::Int,
+                    span,
+                    diagnostic: None,
+                },
+                contents: std::sync::Arc::from([]),
+            };
+            assert!(replace_output_name(
+                &mut output,
+                "Marker",
+                &MacroOutputNode::ForwardedType(capture, span.into()),
+            ));
+            let parsed = super::super::parse_macro_tree_inner(
+                &source,
+                span,
+                output,
+                &SyntaxContexts::new(&[], &[], &[]),
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+            .unwrap();
+            let root = validated_macro_root(&source, &parsed.tree).unwrap();
+            let mut pending = vec![(root, 0usize, 0usize, 0usize)];
+            let mut forwarded_path = None;
+            let mut raw_path = None;
+            while let Some((node, applications, groups, functions)) = pending.pop() {
+                let applications = applications
+                    + usize::from(
+                        node.kind == NodeKind::AtomicType
+                            && child_nodes(node).any(|child| child.kind == NodeKind::Type),
+                    );
+                let groups = groups + usize::from(node.kind == NodeKind::ParenthesizedType);
+                let functions = functions
+                    + usize::from(
+                        node.kind == NodeKind::Type
+                            && child_nodes(node).any(|child| child.kind == NodeKind::Type),
+                    );
+                for child in &node.children {
+                    match child {
+                        ConcreteElement::Node(child) => {
+                            pending.push((child, applications, groups, functions))
+                        }
+                        ConcreteElement::Token(index) => {
+                            let original = parsed.original_nodes.get(index);
+                            if matches!(original, Some(MacroOutputNode::ForwardedType(_, _))) {
+                                assert!(
+                                    forwarded_path
+                                        .replace((applications, groups, functions))
+                                        .is_none()
+                                );
+                            }
+                            let target = match original {
+                                Some(MacroOutputNode::Token(TokenKind::IntType, _, _)) => {
+                                    leaf == "Int"
+                                }
+                                Some(MacroOutputNode::Identifier(name, _)) => {
+                                    leaf == "Leaf" && name.text == "Leaf"
+                                }
+                                _ => false,
+                            };
+                            if target {
+                                assert!(
+                                    raw_path
+                                        .replace((applications, groups, functions))
+                                        .is_none()
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            assert_eq!(
+                forwarded_path,
+                Some((0, 0, 1)),
+                "the protected type remains shallow"
+            );
+            assert_eq!(
+                raw_path,
+                Some((63, 63 + usize::from(extra_group), 1)),
+                "the raw leaf is the actual deep target"
+            );
+            let frame = std::sync::Arc::new(ExpansionFrame {
+                invocation: span,
+                definition: span,
+            });
+            let frames = [std::sync::Arc::clone(&frame)];
+            let tokens = ProjectionTokens {
+                tokens: &parsed.tree.tokens,
+                originals: Some(&parsed.original_nodes),
+                occurrence: Some(span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: Some(&parsed.admission_identifiers),
+                frame: Some(&frame),
+                name_frame: Some(&frame),
+                staging_frames: Some(&frames),
+                preserve_name_diagnostic: true,
+            };
+            charge_generated_projection(
+                child_nodes(root).next().unwrap(),
+                &tokens,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+        };
+        let mut accepted_over_depth = Vec::new();
+        for leaf in ["Int", "Leaf"] {
+            assert!(check(leaf, false).is_ok());
+            if !matches!(
+                check(leaf, true),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::StructuralDepth {
+                        limit: STRUCTURAL_DEPTH_LIMIT
+                    }),
+                    ..
+                })
+            ) {
+                accepted_over_depth.push(leaf);
+            }
+        }
+        assert!(
+            accepted_over_depth.is_empty(),
+            "over-depth raw leaves: {accepted_over_depth:?}"
+        );
+    }
+
+    #[test]
+    fn type_capture_preflight_counts_new_contents_arc_before_reconstruction() {
+        use crate::syntax::{MacroDelimiter, MacroOutputNode, SyntaxContexts};
+
+        let check = |grouped: bool, retained_groups: usize| {
+            let ty = if grouped { "(Marker)" } else { "Marker" };
+            let (source, _, mut output) =
+                structured_declarations(&format!("value : {ty}\nvalue _ = 42\n"));
+            let span = source.span(ByteRange::new(0, 0).unwrap()).unwrap();
+            let mut retained =
+                MacroOutputNode::Token(TokenKind::IntType, "Int".into(), span.into());
+            for _ in 0..retained_groups {
+                retained = MacroOutputNode::Group(
+                    MacroDelimiter::Parentheses,
+                    vec![retained],
+                    span.into(),
+                );
+            }
+            let capture = SurfaceTypeCapture {
+                ty: SurfaceType {
+                    kind: SurfaceTypeKind::Int,
+                    span,
+                    diagnostic: None,
+                },
+                contents: std::sync::Arc::from([retained]),
+            };
+            assert!(replace_output_name(
+                &mut output,
+                "Marker",
+                &MacroOutputNode::ForwardedType(capture, span.into()),
+            ));
+            let parsed = super::super::parse_macro_tree_inner(
+                &source,
+                span,
+                output,
+                &SyntaxContexts::new(&[], &[], &[]),
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+            .unwrap();
+            let root = validated_macro_root(&source, &parsed.tree).unwrap();
+            let mut pending = vec![root];
+            let type_node = loop {
+                let node = pending.pop().expect("the generated annotation exists");
+                if node.kind == NodeKind::Type {
+                    break node;
+                }
+                pending.extend(child_nodes(node));
+            };
+            let tokens = ProjectionTokens {
+                tokens: &parsed.tree.tokens,
+                originals: Some(&parsed.original_nodes),
+                occurrence: Some(span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: Some(&parsed.admission_identifiers),
+                frame: None,
+                name_frame: None,
+                staging_frames: None,
+                preserve_name_diagnostic: true,
+            };
+            charge_type_capture_contents(
+                type_node,
+                &tokens,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+        };
+        assert!(
+            check(false, 125).is_ok(),
+            "singleton forwarding reuses its old Arc"
+        );
+        assert!(
+            check(true, 124).is_ok(),
+            "the newly wrapped path at 128 fits"
+        );
+        assert!(
+            matches!(
+                check(true, 125),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::StructuralDepth {
+                        limit: STRUCTURAL_DEPTH_LIMIT
+                    }),
+                    ..
+                })
+            ),
+            "the new Arc must be counted before the grouped contents are reconstructed"
+        );
+    }
+
+    #[test]
+    fn authored_type_capture_preflight_counts_its_new_contents_arc() {
+        let check = |groups: usize| {
+            let source = SourceFile::new(
+                "authored.ash",
+                format!(
+                    "value : {}Int{}\nvalue _ = 42\n",
+                    "(".repeat(groups),
+                    ")".repeat(groups)
+                ),
+            )
+            .unwrap();
+            let tree = parse(lex(&source).unwrap());
+            let (root, raw) = validated_root(&source, &tree).unwrap_or_else(|error| {
+                panic!(
+                    "{groups} groups must reach preflight: {error:?}: {:?}",
+                    tree.parse_diagnostics()
+                )
+            });
+            let mut pending = vec![root];
+            let ty = loop {
+                let node = pending.pop().expect("the authored annotation exists");
+                if node.kind == NodeKind::Type {
+                    break node;
+                }
+                pending.extend(child_nodes(node));
+            };
+            let mut pending = vec![ty];
+            let mut actual_groups = 0;
+            while let Some(node) = pending.pop() {
+                actual_groups += usize::from(node.kind == NodeKind::ParenthesizedType);
+                pending.extend(child_nodes(node));
+            }
+            assert_eq!(actual_groups, groups);
+            charge_type_capture_contents(
+                ty,
+                &ProjectionTokens::source(raw),
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+        };
+        assert!(check(127).is_ok(), "the new Arc and 127 groups fit");
+        assert!(
+            matches!(
+                check(128),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::StructuralDepth {
+                        limit: STRUCTURAL_DEPTH_LIMIT
+                    }),
+                    ..
+                })
+            ),
+            "the new Arc above 128 groups must be refused before reconstruction"
+        );
+    }
+
+    #[test]
+    fn type_capture_preflight_reserves_source_span_walks() {
+        let measure = |depth: usize, occurrence: bool| {
+            let source = SourceFile::new(
+                "source-spans.ash",
+                format!("value : {}Int\nvalue _ = 42\n", "Int -> ".repeat(depth)),
+            )
+            .unwrap();
+            let tree = parse(lex(&source).unwrap());
+            let (root, raw) = validated_root(&source, &tree).unwrap();
+            let mut pending = vec![root];
+            let ty = loop {
+                let node = pending.pop().expect("the type is present");
+                if node.kind == NodeKind::Type {
+                    break node;
+                }
+                pending.extend(child_nodes(node));
+            };
+            let mut tokens = ProjectionTokens::source(raw);
+            if occurrence {
+                tokens.occurrence = Some(source.span(ByteRange::new(0, 0).unwrap()).unwrap());
+            }
+            let mut budget = crate::syntax_resource::SyntaxBudget::default();
+            charge_composed_type_projection(ty, &tokens, &mut budget).unwrap();
+            let used = budget.consumed();
+            let mut exact = crate::syntax_resource::SyntaxBudget::with_limit(used);
+            charge_composed_type_projection(ty, &tokens, &mut exact).unwrap();
+            let mut short = crate::syntax_resource::SyntaxBudget::with_limit(used - 1);
+            assert!(matches!(
+                charge_composed_type_projection(ty, &tokens, &mut short),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { .. }),
+                    ..
+                })
+            ));
+            let projected = project_type(&source, ty, &tokens).unwrap();
+            assert_eq!(projected.span.source(), source.id());
+            used
+        };
+        let shallow = measure(4, false) - measure(4, true);
+        let deep = measure(40, false) - measure(40, true);
+        assert!(
+            shallow > 0 && deep > shallow,
+            "source span walks must be reserved: {shallow}, {deep}"
+        );
+    }
+
+    #[test]
+    fn generated_nominal_preflight_reserves_construction_span_walks() {
+        use crate::syntax::SyntaxContexts;
+
+        let measure = |depth: usize, construction: bool| {
+            let text = format!(
+                "type Example = Example({}Int{})\n",
+                "F<".repeat(depth),
+                ">".repeat(depth)
+            );
+            let (source, _, output) = structured_declarations(&text);
+            let invocation = source.span(ByteRange::new(0, 0).unwrap()).unwrap();
+            let bound = source
+                .span(ByteRange::new(0, text.len() as u32).unwrap())
+                .unwrap();
+            let parsed = super::super::parse_macro_tree_inner(
+                &source,
+                invocation,
+                output,
+                &SyntaxContexts::new(&[], &[], &[]),
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+            .unwrap();
+            let root = validated_macro_root(&source, &parsed.tree).unwrap();
+            let nominal = child_nodes(root).next().unwrap();
+            assert_eq!(nominal.kind, NodeKind::TypeDeclaration);
+            let tokens = ProjectionTokens {
+                tokens: &parsed.tree.tokens,
+                originals: Some(&parsed.original_nodes),
+                occurrence: Some(invocation),
+                construction: construction.then_some((bound, 0)),
+                construction_extents: false,
+                admission_identifiers: Some(&parsed.admission_identifiers),
+                frame: None,
+                name_frame: None,
+                staging_frames: None,
+                preserve_name_diagnostic: true,
+            };
+            if construction {
+                assert!(tokens.for_node_construction(nominal).construction.is_some());
+            }
+            let mut budget = crate::syntax_resource::SyntaxBudget::default();
+            charge_generated_projection(nominal, &tokens, &mut budget).unwrap();
+            let used = budget.consumed();
+            let mut exact = crate::syntax_resource::SyntaxBudget::with_limit(used);
+            charge_generated_projection(nominal, &tokens, &mut exact).unwrap();
+            let mut short = crate::syntax_resource::SyntaxBudget::with_limit(used - 1);
+            assert!(matches!(
+                charge_generated_projection(nominal, &tokens, &mut short),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { .. }),
+                    ..
+                })
+            ));
+            let projected = project_type_declaration(&source, nominal, &tokens).unwrap();
+            assert_eq!(projected.span.source(), source.id());
+            used
+        };
+        let shallow = measure(4, true) - measure(4, false);
+        let deep = measure(40, true) - measure(40, false);
+        assert!(
+            shallow > 0 && deep > shallow,
+            "construction span walks must be reserved: {shallow}, {deep}"
+        );
+    }
+
+    #[test]
+    fn declaration_type_capture_uses_the_shared_budget_and_publishes_atomically() {
+        let forms = SourceFile::new(
+            "forms.ash",
+            "pub syntax declaration: (make) $name:ident for $T:type => {\n    $name : $T -> $T\n    $name value = value\n}\n",
+        )
+        .unwrap();
+        let selected = [h1_selection(&forms, 0, None)];
+        let source = SourceFile::new("caller.ash", "make identity for (Int, Int)\n").unwrap();
+        let tree = h1_tree(&source, &selected);
+        let mut owners = Vec::new();
+        let mut measured = crate::syntax_resource::SyntaxBudget::default();
+        let module = project_declaration_expansions(
+            &source,
+            &tree,
+            &selected,
+            &[vec![]],
+            &mut owners,
+            &mut measured,
+        )
+        .expect("a type-only declaration reaches the ordinary collector");
+        assert_eq!(module.definitions.len(), 1);
+        assert_eq!(owners.len(), 1);
+        let used = measured.consumed();
+
+        let mut short_owners = Vec::new();
+        let mut short = crate::syntax_resource::SyntaxBudget::with_limit(used - 1);
+        assert!(matches!(
+            project_declaration_expansions(
+                &source,
+                &tree,
+                &selected,
+                &[vec![]],
+                &mut short_owners,
+                &mut short,
+            ),
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        assert!(short_owners.is_empty());
+        let mut exact_owners = Vec::new();
+        let mut exact = crate::syntax_resource::SyntaxBudget::with_limit(used);
+        let retried = project_declaration_expansions(
+            &source,
+            &tree,
+            &selected,
+            &[vec![]],
+            &mut exact_owners,
+            &mut exact,
+        )
+        .expect("the measured allowance retains the complete declaration");
+        assert_eq!(retried.definitions.len(), 1);
+        assert_eq!(exact_owners.len(), 1);
+    }
+
+    #[test]
+    fn type_forwarding_preserves_the_caller_name_and_both_imported_frames() {
+        let outer_source = SourceFile::new(
+            "outer.ash",
+            "pub syntax declaration: (outer) $name:ident for $T:type => {\ninner $name for $T\n}\n",
+        )
+        .unwrap();
+        let inner_source = SourceFile::new(
+            "inner.ash",
+            "pub syntax declaration: (inner) $name:ident for $T:type => {\n$name : $T -> $T\n$name value = value\n}\n",
+        )
+        .unwrap();
+        let outer = h1_selection(&outer_source, 0, None);
+        let inner = h1_selection(&inner_source, 1, None);
+        let caller = SourceFile::new("caller.ash", "outer answer for (Marker, Int)\n").unwrap();
+        let selected = [outer.clone()];
+        let imports = [vec![inner.clone()], vec![]];
+        let tree = h1_tree(&caller, &selected);
+        let mut owners = Vec::new();
+        let module = project_declaration_expansions(
+            &caller,
+            &tree,
+            &selected,
+            &imports,
+            &mut owners,
+            &mut crate::syntax_resource::SyntaxBudget::default(),
+        )
+        .expect("both imported declaration frames forward the type");
+        assert_eq!(owners.len(), 2);
+        assert_eq!(owners[0].owner, Some(outer.owner));
+        assert_eq!(owners[1].owner, Some(inner.owner));
+        let SurfaceDefinitionKind::Equational(global) = &module.definitions[0].kind else {
+            panic!("expected the generated global")
+        };
+        let SurfaceTypeKind::Function(function) = &global.interface.annotation.kind else {
+            panic!("expected the generated function type")
+        };
+        for ty in [&*function.domain, &*function.codomain] {
+            let SurfaceTypeKind::Tuple(elements) = &ty.kind else {
+                panic!("expected the forwarded caller tuple")
+            };
+            let SurfaceTypeKind::Named(SurfaceReference::Unqualified(name)) = &elements[0].kind
+            else {
+                panic!("expected the caller's Marker type")
+            };
+            assert_eq!(name.text, "Marker");
+            assert_eq!(name.introduction, 0);
+            assert!(name.written);
+            assert_eq!(name.span.source(), caller.id());
+            for location in [ty.diagnostic.as_deref(), name.diagnostic.as_deref()] {
+                let frames = &location.expect("the copied type retains its frames").frames;
+                assert!(
+                    frames
+                        .iter()
+                        .any(|frame| frame.definition == outer.declaration.span)
+                );
+                assert!(
+                    frames
+                        .iter()
+                        .any(|frame| frame.definition == inner.declaration.span)
+                );
+                assert!(
+                    frames
+                        .iter()
+                        .all(|frame| frame.invocation.source() == caller.id())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn late_type_work_failure_discards_prior_output_and_keeps_original_owners() {
+        let forms = SourceFile::new(
+            "forms.ash",
+            "pub syntax declaration: (make) $name:ident for $T:type => {\n$name : $T -> $T\n$name value = value\n}\n",
+        )
+        .unwrap();
+        let selected = [h1_selection(&forms, 0, None)];
+        let first = SourceFile::new("first.ash", "make first for Int\n").unwrap();
+        let source = SourceFile::new(
+            "caller.ash",
+            "make first for Int\nmake second for ((Int, Int), Int)\n",
+        )
+        .unwrap();
+        let first_tree = h1_tree(&first, &selected);
+        let tree = h1_tree(&source, &selected);
+        let existing = crate::syntax::SyntaxOwner {
+            owner: Some(9),
+            declaration: selected[0].declaration.span,
+            import_span: selected[0].import_span,
+        };
+        let mut prefix_owners = vec![existing];
+        let mut prefix = crate::syntax_resource::SyntaxBudget::default();
+        let first_module = project_declaration_expansions(
+            &first,
+            &first_tree,
+            &selected,
+            &[vec![]],
+            &mut prefix_owners,
+            &mut prefix,
+        )
+        .unwrap();
+        assert_eq!(first_module.definitions.len(), 1);
+        drop(first_module);
+        let mut measured_owners = vec![existing];
+        let mut measured = crate::syntax_resource::SyntaxBudget::default();
+        let module = project_declaration_expansions(
+            &source,
+            &tree,
+            &selected,
+            &[vec![]],
+            &mut measured_owners,
+            &mut measured,
+        )
+        .unwrap();
+        assert_eq!(module.definitions.len(), 2);
+        assert_eq!(measured_owners.len(), 3);
+        let used = measured.consumed();
+        assert!(prefix.consumed() < used - 1);
+        drop(module);
+
+        let mut owners = vec![existing];
+        let mut short = crate::syntax_resource::SyntaxBudget::with_limit(used - 1);
+        assert!(matches!(
+            project_declaration_expansions(
+                &source,
+                &tree,
+                &selected,
+                &[vec![]],
+                &mut owners,
+                &mut short,
+            ),
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        assert_eq!(owners.len(), 1);
+        assert_eq!(owners[0].owner, existing.owner);
+        assert_eq!(owners[0].declaration, existing.declaration);
+        assert_eq!(owners[0].import_span, existing.import_span);
+        let mut exact_owners = vec![existing];
+        let mut exact = crate::syntax_resource::SyntaxBudget::with_limit(used);
+        let module = project_declaration_expansions(
+            &source,
+            &tree,
+            &selected,
+            &[vec![]],
+            &mut exact_owners,
+            &mut exact,
+        )
+        .expect("the exact measured allowance publishes both declarations");
+        assert_eq!(module.definitions.len(), 2);
+        assert_eq!(exact_owners.len(), 3);
+    }
+
+    #[test]
     fn h1_fixed_nested_caller_retains_the_selected_owner_and_import() {
         let outer = SourceFile::new(
             "outer_forms.ash",
@@ -6914,15 +8105,15 @@ mod tests {
     }
 
     #[test]
-    fn h1_rejects_non_identifier_captures_and_transformers_before_staging() {
+    fn h1_rejects_expression_pattern_and_transformers_before_staging() {
         for (definition, invocation) in [
             (
                 "pub syntax declaration: (need) $x:expr => {}\n",
                 "need 42\n",
             ),
             (
-                "pub syntax declaration: (need) $x:type => {}\n",
-                "need Int\n",
+                "pub syntax declaration: (need) $T:type yields $x:expr => {}\n",
+                "need Int yields 42\n",
             ),
             (
                 "pub syntax declaration: (need) $x:pattern => {}\n",
@@ -6931,6 +8122,22 @@ mod tests {
             (
                 "pub syntax declaration: (need) $x:ident => using transform\n",
                 "need item\n",
+            ),
+            (
+                "pub syntax declaration: (need) $x:expr typed $T:type => {}\n",
+                "need 42 typed Int\n",
+            ),
+            (
+                "pub syntax declaration: (need) $T:type matching $p:pattern => {}\n",
+                "need Int matching _\n",
+            ),
+            (
+                "pub syntax declaration: (need) $p:pattern typed $T:type => {}\n",
+                "need _ typed Int\n",
+            ),
+            (
+                "pub syntax declaration: (need) $T:type => using transform\n",
+                "need Int\n",
             ),
         ] {
             let definition = SourceFile::new("definition.ash", definition).unwrap();
