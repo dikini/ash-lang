@@ -290,16 +290,16 @@ Its test checks all eight escape positions and their capture operands, including
 the final declaration capture. This is parser evidence; it does not establish
 the full categories graph's admission or execution. The unchanged I17
 `malformed_helper.ash` reaches its missing-operand parser failure through the
-public driver. The `unbound_outer.ash` component preserves the outer splice;
-its required definition-time rejection remains open.
+public driver. The `unbound_outer_forms.ash` component preserves the outer
+splice; its required definition-time rejection remains open.
 
 The focused receipt at
 `/home/dikini/Projects/ash-lang/.worktrees/task-0068-handoff/evidence/e1-final-74f5/receipt.json`
 has SHA-256
 `b442345aff25ce4dc1d169b9bbef63efa0300ed5484540e2f4efbd87f3fc43d7`.
 It records 465 distinct passing tests and two retained ignores: the #277
-nominal-context case and a valid nonempty declaration-template positive. The
-source and structured quote controls cover exact/short/retry work and composed
+nominal-context case and a valid nonempty template using a Declaration capture.
+The source and structured quote controls cover exact/short/retry work and composed
 depth 128/129. A constructed structured input uses the existing D6 admission
 wrapper and its pre-spent ledger: successful quote parsing reaches the
 intentional `Invalid` projection refusal, while insufficient work and excess
