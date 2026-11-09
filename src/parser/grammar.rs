@@ -4003,6 +4003,97 @@ mod tests {
     }
 
     #[test]
+    fn quote_declaration_admission_uses_the_existing_budget_and_resource_channel() {
+        let text = |outer: usize| {
+            format!(
+                "probe : Unit -> Int\nprobe () = (syntax {{ $part{} }}){}\n",
+                " + 1".repeat(60),
+                " + 1".repeat(outer)
+            )
+        };
+        let source = SourceFile::new("quote-admission.ash", text(66)).unwrap();
+        let end = u32::try_from(source.text().len()).unwrap();
+        let invocation = source.span(ByteRange::new(0, end).unwrap()).unwrap();
+        let output = structured_quote_fixture(&source);
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        let admit = |limit| {
+            let mut budget = SyntaxBudget::with_limit(limit);
+            budget.charge_units(7).unwrap();
+            let result = super::super::parse_declaration_template_admission(
+                &source,
+                invocation,
+                output.clone(),
+                &contexts,
+                &[],
+                &mut budget,
+            );
+            (result, budget.consumed())
+        };
+
+        let mut parse_budget = SyntaxBudget::with_limit(100_000);
+        parse_budget.charge_units(7).unwrap();
+        let parsed = super::super::parse_macro_tree_inner(
+            &source,
+            invocation,
+            output.clone(),
+            &contexts,
+            &[],
+            super::super::MacroOutputPosition::StagedDeclarations,
+            &mut parse_budget,
+        )
+        .expect("the boundary quote is parsed before admission refuses it");
+        assert!(
+            parsed
+                .tree
+                .events()
+                .iter()
+                .any(|event| matches!(event, Event::Start(NodeKind::SyntaxQuote)))
+        );
+        let (result, used) = admit(100_000);
+        assert!(matches!(
+            result,
+            Err(super::super::MacroParseFailure::Invalid)
+        ));
+        assert!(used > parse_budget.consumed());
+        assert!(matches!(
+            admit(used - 1).0,
+            Err(super::super::MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        for _ in 0..2 {
+            let (result, consumed) = admit(used);
+            assert!(matches!(
+                result,
+                Err(super::super::MacroParseFailure::Invalid)
+            ));
+            assert_eq!(consumed, used);
+        }
+
+        let over = SourceFile::new("quote-admission-over.ash", text(67)).unwrap();
+        let end = u32::try_from(over.text().len()).unwrap();
+        let span = over.span(ByteRange::new(0, end).unwrap()).unwrap();
+        let mut budget = SyntaxBudget::with_limit(100_000);
+        assert!(matches!(
+            super::super::parse_declaration_template_admission(
+                &over,
+                span,
+                structured_quote_fixture(&over),
+                &contexts,
+                &[],
+                &mut budget,
+            ),
+            Err(super::super::MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::StructuralDepth {
+                    limit: super::super::STRUCTURAL_DEPTH_LIMIT
+                }),
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn quote_tree_keeps_a_protected_expression_on_the_existing_declaration_path() {
         let source = SourceFile::new(
             "protected-quote.ash",

@@ -340,7 +340,7 @@ fn fixed_early_categories_prefix_parses_before_d5() {
 
 #[test]
 fn fixed_early_categories_forms_parse_in_full() {
-    let (_, tree) = parse_source(include_str!(
+    let (source, tree) = parse_source(include_str!(
         "../docs/design/macros/fixtures/escapes/early_categories_forms.ash"
     ));
     assert!(tree.lexical_diagnostics().is_empty());
@@ -351,6 +351,136 @@ fn fixed_early_categories_forms_parse_in_full() {
         tree.parse_diagnostics()
     );
     assert_eq!(nodes_of_kind(&tree, NodeKind::SyntaxEscape).len(), 8);
+
+    let mut pending = vec![tree.root().expect("the complete fixture has a root")];
+    while let Some(node) = pending.pop() {
+        for child in &node.children {
+            match child {
+                ConcreteElement::Node(child) => pending.push(child),
+                ConcreteElement::Token(_) => {}
+                ConcreteElement::Missing { .. } | ConcreteElement::Error(_) => {
+                    panic!("the complete fixture contains a recovery element")
+                }
+            }
+        }
+    }
+
+    let escape_offset = |line: &str, occurrence: usize| {
+        source.text().find(line).expect("the fixed line exists")
+            + line
+                .match_indices("${")
+                .nth(occurrence)
+                .expect("the fixed escape exists")
+                .0
+    };
+    let expected = [
+        (
+            "make_expr",
+            "$value:expr",
+            vec![(
+                escape_offset("$name () = ${ add_hundred($value) }", 0),
+                "$value",
+            )],
+        ),
+        (
+            "local_capture",
+            "$value:expr",
+            vec![(escape_offset("$name () = ${\n", 0), "$value")],
+        ),
+        (
+            "make_ident",
+            "$name:ident",
+            vec![
+                (escape_offset("pub ${ $name } : Unit -> Int", 0), "$name"),
+                (escape_offset("${ $name } () = 42", 0), "$name"),
+            ],
+        ),
+        (
+            "make_type",
+            "$T:type",
+            vec![
+                (escape_offset("pub $name : ${ $T } -> ${ $T }", 0), "$T"),
+                (escape_offset("pub $name : ${ $T } -> ${ $T }", 1), "$T"),
+            ],
+        ),
+        (
+            "make_pattern",
+            "$pattern:pattern",
+            vec![(escape_offset("$name ${ $pattern } = 42", 0), "$pattern")],
+        ),
+        (
+            "pass_declaration",
+            "$item:declaration",
+            vec![(escape_offset("    ${ $item }\n", 0), "$item")],
+        ),
+    ];
+    let declarations = nodes_of_kind(&tree, NodeKind::SyntaxDeclaration);
+    for (name, capture, offsets) in expected {
+        let matching: Vec<_> = declarations
+            .iter()
+            .copied()
+            .filter(|node| direct_token_texts(&source, &tree, node).contains(&name))
+            .collect();
+        let [declaration] = matching.as_slice() else {
+            panic!("expected one {name} declaration");
+        };
+        assert!(declaration.children.iter().any(|child| match child {
+            ConcreteElement::Node(node) if node.kind == NodeKind::SyntaxCapture => {
+                direct_token_texts(&source, &tree, node).concat() == capture
+            }
+            _ => false,
+        }));
+        let templates: Vec<_> = declaration
+            .children
+            .iter()
+            .filter_map(|child| match child {
+                ConcreteElement::Node(node) if node.kind == NodeKind::TemplateBody => Some(node),
+                _ => None,
+            })
+            .collect();
+        let [template] = templates.as_slice() else {
+            panic!("expected one {name} template");
+        };
+        let escapes: Vec<_> = template
+            .children
+            .iter()
+            .filter_map(|child| match child {
+                ConcreteElement::Node(node) if node.kind == NodeKind::SyntaxEscape => Some(node),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(escapes.len(), offsets.len(), "{name}");
+        for (escape, (offset, operand)) in escapes.into_iter().zip(offsets) {
+            let Some(ConcreteElement::Token(index)) = escape.children.first() else {
+                panic!("{name} escape must begin with its dollar token");
+            };
+            assert_eq!(tree.tokens()[*index].span.range().start() as usize, offset);
+            let mut pending = vec![escape];
+            let mut reads = Vec::new();
+            let mut holes = Vec::new();
+            while let Some(node) = pending.pop() {
+                if node.kind == NodeKind::EscapeCaptureRead {
+                    reads.push(direct_token_texts(&source, &tree, node).concat());
+                }
+                if node.kind == NodeKind::QuoteHole {
+                    holes.push(direct_token_texts(&source, &tree, node).concat());
+                }
+                pending.extend(node.children.iter().rev().filter_map(|child| match child {
+                    ConcreteElement::Node(node) => Some(node),
+                    _ => None,
+                }));
+            }
+            assert_eq!(reads, [operand], "{name}");
+            if name == "local_capture" {
+                assert!(escape.children.iter().any(
+                    |child| matches!(child, ConcreteElement::Node(node) if node.kind == NodeKind::Block)
+                ));
+                assert_eq!(holes, ["$value", "$captured"]);
+            } else {
+                assert!(holes.is_empty(), "{name}");
+            }
+        }
+    }
 }
 
 #[test]
