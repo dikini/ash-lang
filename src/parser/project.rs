@@ -7125,12 +7125,12 @@ mod tests {
 
         for (text, expression_kind, clause_kind) in [
             (
-                "match value {\n_ => 42\n}",
+                "match value {\nPair(_, other) => 42\n}",
                 NodeKind::MatchExpression,
                 NodeKind::MatchArm,
             ),
             (
-                "handle value with State {\nread _ => 42\n}",
+                "handle value with State {\nread Pair(_, other) => 42\n}",
                 NodeKind::HandlerExpression,
                 NodeKind::HandlerClause,
             ),
@@ -7149,7 +7149,16 @@ mod tests {
             let clause = only_child_of_kind(expression, clause_kind).unwrap();
             let pattern = only_child_of_kind(clause, NodeKind::Pattern).unwrap();
             assert_eq!(structural_weight(pattern), 8);
-            let wildcard = only_child_of_kind(pattern, NodeKind::WildcardPattern).unwrap();
+            let constructor = only_child_of_kind(pattern, NodeKind::ConstructorPattern).unwrap();
+            let tuple = only_child_of_kind(constructor, NodeKind::TuplePattern).unwrap();
+            let elements = child_nodes(tuple)
+                .filter(|node| node.kind == NodeKind::Pattern)
+                .collect::<Vec<_>>();
+            assert_eq!(elements.len(), 2);
+            assert_eq!(structural_weight(constructor), 0);
+            assert_eq!(structural_weight(tuple), 0);
+            assert_eq!(structural_weight(elements[0]), 0);
+            let wildcard = only_child_of_kind(elements[0], NodeKind::WildcardPattern).unwrap();
             let [ConcreteElement::Token(index)] = wildcard.children.as_slice() else {
                 panic!("the scheduled pattern must contain the unique wildcard token");
             };
