@@ -6991,72 +6991,90 @@ mod tests {
         ));
     }
 
+    fn protected_expression_family(expression: &SurfaceExpr) -> &'static str {
+        match &expression.kind {
+            SurfaceExprKind::TemplateSplice(_) => "splice",
+            SurfaceExprKind::SyntaxInvocation { .. } => "syntax",
+            SurfaceExprKind::Integer(_) => "integer",
+            SurfaceExprKind::String(_) => "string",
+            SurfaceExprKind::Boolean(_) => "boolean",
+            SurfaceExprKind::Unit => "unit",
+            SurfaceExprKind::Name(_) => "name",
+            SurfaceExprKind::Tuple(_) => "tuple",
+            SurfaceExprKind::Apply(_) => "apply",
+            SurfaceExprKind::Multiply(_) => "multiply",
+            SurfaceExprKind::Add(_) => "add",
+            SurfaceExprKind::Equal(_) => "equal",
+            SurfaceExprKind::Block(_) => "block",
+            SurfaceExprKind::Function(_) => "function",
+            SurfaceExprKind::Match(_) => "match",
+            SurfaceExprKind::Perform(_) => "perform",
+            SurfaceExprKind::Handle(_) => "handle",
+            SurfaceExprKind::Resume(_) => "resume",
+            SurfaceExprKind::Resource(_) => "resource",
+            SurfaceExprKind::Region(_) => "region",
+            SurfaceExprKind::RegionSelection(_) => "using",
+            SurfaceExprKind::ProviderResource(_) => "provider",
+            SurfaceExprKind::Hook(_) => "hook",
+            SurfaceExprKind::Registration(_) => "register",
+            SurfaceExprKind::Cleanup(_) => "cleanup",
+            SurfaceExprKind::Discard => "discard",
+            SurfaceExprKind::Retain => "retain",
+        }
+    }
+
+    const PROTECTED_EXPRESSION_CASES: &[(&str, &str)] = &[
+        ("integer", "123456789012345678901234567890"),
+        ("string", "\"protected bytes\""),
+        ("boolean", "true"),
+        ("unit", "()"),
+        ("name", "Module.member"),
+        ("tuple", "(1, 2)"),
+        ("apply", "function(42)"),
+        ("multiply", "6 * 7"),
+        ("add", "40 + 2"),
+        ("equal", "1 == 2"),
+        ("block", "{\nlet value : Int = 42\nvalue\n}"),
+        ("function", "fn(value) {\nvalue\n}"),
+        ("match", "match value {\nPair(left, right) => left\n}"),
+        ("perform", "perform State<Int>.read ()"),
+        (
+            "handle",
+            "handle value with State<Int> {\nread value => resume value\n}",
+        ),
+        ("resume", "resume 42"),
+        ("resource", "resource cell<R> cell = 42 {\ncell\n}"),
+        ("region", "region<R> owner = provider {\n42\n}"),
+        ("using", "using owner {\n42\n}"),
+        ("provider", "resource Family<Int> slot = seed {\n42\n}"),
+        ("hook", "hook Event<Int> {\n42\n}"),
+        ("register", "register Event<Int> callback {\n42\n}"),
+        ("cleanup", "cleanup action {\n42\n}"),
+        ("discard", "discard"),
+        ("retain", "retain"),
+    ];
+
+    const PROTECTED_LOCAL_CASES: &[(&str, &str)] = &[
+        (
+            "binding",
+            "{\nlet value : Unit -> Int ! {Event<Int> | R} = fn(ignored) {\n42\n}\nvalue\n}",
+        ),
+        ("recursive", "{\nlet rec value : Int = 42\nvalue\n}"),
+        (
+            "newtype",
+            "{\nnewtype Local<F : Type -> Type, A> = Local(F<A>)\n42\n}",
+        ),
+        (
+            "evidence",
+            "{\nwith Read<Int> {\nread ignored = 42\n}\n42\n}",
+        ),
+    ];
+
     #[test]
     fn protected_expression_walker_covers_the_closed_source_families() {
         use crate::syntax_resource::SyntaxBudget;
 
-        fn family(expression: &SurfaceExpr) -> &'static str {
-            match &expression.kind {
-                SurfaceExprKind::TemplateSplice(_) => "splice",
-                SurfaceExprKind::SyntaxInvocation { .. } => "syntax",
-                SurfaceExprKind::Integer(_) => "integer",
-                SurfaceExprKind::String(_) => "string",
-                SurfaceExprKind::Boolean(_) => "boolean",
-                SurfaceExprKind::Unit => "unit",
-                SurfaceExprKind::Name(_) => "name",
-                SurfaceExprKind::Tuple(_) => "tuple",
-                SurfaceExprKind::Apply(_) => "apply",
-                SurfaceExprKind::Multiply(_) => "multiply",
-                SurfaceExprKind::Add(_) => "add",
-                SurfaceExprKind::Equal(_) => "equal",
-                SurfaceExprKind::Block(_) => "block",
-                SurfaceExprKind::Function(_) => "function",
-                SurfaceExprKind::Match(_) => "match",
-                SurfaceExprKind::Perform(_) => "perform",
-                SurfaceExprKind::Handle(_) => "handle",
-                SurfaceExprKind::Resume(_) => "resume",
-                SurfaceExprKind::Resource(_) => "resource",
-                SurfaceExprKind::Region(_) => "region",
-                SurfaceExprKind::RegionSelection(_) => "using",
-                SurfaceExprKind::ProviderResource(_) => "provider",
-                SurfaceExprKind::Hook(_) => "hook",
-                SurfaceExprKind::Registration(_) => "register",
-                SurfaceExprKind::Cleanup(_) => "cleanup",
-                SurfaceExprKind::Discard => "discard",
-                SurfaceExprKind::Retain => "retain",
-            }
-        }
-        let samples = [
-            ("integer", "123456789012345678901234567890"),
-            ("string", "\"protected bytes\""),
-            ("boolean", "true"),
-            ("unit", "()"),
-            ("name", "Module.member"),
-            ("tuple", "(1, 2)"),
-            ("apply", "function(42)"),
-            ("multiply", "6 * 7"),
-            ("add", "40 + 2"),
-            ("equal", "1 == 2"),
-            ("block", "{\nlet value : Int = 42\nvalue\n}"),
-            ("function", "fn(value) {\nvalue\n}"),
-            ("match", "match value {\nPair(left, right) => left\n}"),
-            ("perform", "perform State<Int>.read ()"),
-            (
-                "handle",
-                "handle value with State<Int> {\nread value => resume value\n}",
-            ),
-            ("resume", "resume 42"),
-            ("resource", "resource cell<R> cell = 42 {\ncell\n}"),
-            ("region", "region<R> owner = provider {\n42\n}"),
-            ("using", "using owner {\n42\n}"),
-            ("provider", "resource Family<Int> slot = seed {\n42\n}"),
-            ("hook", "hook Event<Int> {\n42\n}"),
-            ("register", "register Event<Int> callback {\n42\n}"),
-            ("cleanup", "cleanup action {\n42\n}"),
-            ("discard", "discard"),
-            ("retain", "retain"),
-        ];
-        for (expected, text) in samples {
+        for &(expected, text) in PROTECTED_EXPRESSION_CASES {
             let (source, tree) = parsed(text);
             let module = project_module(&source, &tree).unwrap_or_else(|error| {
                 panic!("{expected}: {error:?}: {:?}", tree.parse_diagnostics())
@@ -7065,7 +7083,7 @@ mod tests {
                 panic!("{expected}: expected an equation");
             };
             let expression = &global.equations[0].body;
-            assert_eq!(family(expression), expected, "{text}");
+            assert_eq!(protected_expression_family(expression), expected, "{text}");
             let mut measured = SyntaxBudget::default();
             assert!(
                 !crate::syntax::charge_expression_copy(expression, 0, false, &mut measured)
@@ -7097,15 +7115,7 @@ mod tests {
             assert_eq!(expression.clone(), *expression);
         }
 
-        for (expected, text) in [
-            ("binding", "{\nlet value : Int = 42\nvalue\n}"),
-            ("recursive", "{\nlet rec value : Int = 42\nvalue\n}"),
-            ("newtype", "{\nnewtype Token = Token(Int)\n42\n}"),
-            (
-                "evidence",
-                "{\nwith Read<Int> {\nread ignored = 42\n}\n42\n}",
-            ),
-        ] {
+        for &(expected, text) in PROTECTED_LOCAL_CASES {
             let (source, tree) = parsed(text);
             let module = project_module(&source, &tree).unwrap_or_else(|error| {
                 panic!("{expected}: {error:?}: {:?}", tree.parse_diagnostics())
@@ -7150,6 +7160,166 @@ mod tests {
             )
             .unwrap();
             assert_eq!(expression.clone(), *expression);
+        }
+    }
+
+    #[test]
+    fn protected_expression_families_cross_real_declaration_staging() {
+        fn expression(module: &SurfaceModule, index: usize) -> &SurfaceExpr {
+            let SurfaceDefinitionKind::Equational(global) = &module.definitions[index].kind else {
+                panic!("generated equation required");
+            };
+            &global.equations[0].body
+        }
+        fn check_local(expression: &SurfaceExpr, expected: &str) {
+            let SurfaceExprKind::Block(block) = &expression.kind else {
+                panic!("{expected}: block required");
+            };
+            assert!(matches!(
+                (&block.declarations[..], expected),
+                ([SurfaceLocalDeclaration::Binding(_)], "binding")
+                    | ([SurfaceLocalDeclaration::Recursive(_)], "recursive")
+                    | ([SurfaceLocalDeclaration::Newtype(_)], "newtype")
+                    | ([SurfaceLocalDeclaration::Evidence(_)], "evidence")
+            ));
+        }
+        let capture_forms = SourceFile::new(
+            "capture.ash",
+            "pub syntax declaration: (emit) $body:expr => {\nsink : Unit -> Int\nsink () = $body\n}\n",
+        )
+        .unwrap();
+        let capture_selection = [h1_selection(&capture_forms, 0, None)];
+        let long_identifier = "caller_name_".repeat(64);
+        let long_string = format!("\"{}\"", "text".repeat(256));
+        let long_integer = "1234567890".repeat(128);
+        let mut cases = PROTECTED_EXPRESSION_CASES
+            .iter()
+            .map(|(family, text)| (*family, (*text).to_owned(), None))
+            .collect::<Vec<_>>();
+        cases.extend(
+            PROTECTED_LOCAL_CASES
+                .iter()
+                .map(|(local, text)| ("block", (*text).to_owned(), Some(*local))),
+        );
+        cases.extend([
+            ("name", long_identifier, None),
+            ("string", long_string, None),
+            ("integer", long_integer, None),
+        ]);
+        for (expected, text, local) in cases {
+            // This path captures authored syntax, then substitutes and
+            // projects the protected value through the declaration collector.
+            let caller = SourceFile::new("caller.ash", format!("emit {text}\n")).unwrap();
+            let tree = h1_tree(&caller, &capture_selection);
+            let mut owners = Vec::new();
+            let captured = project_declaration_expansions(
+                &caller,
+                &tree,
+                &capture_selection,
+                &[vec![]],
+                &mut owners,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+            .unwrap_or_else(|error| panic!("captured {expected}: {error:?}"));
+            assert_eq!(owners.len(), 1);
+            assert_eq!(
+                protected_expression_family(expression(&captured, 0)),
+                expected
+            );
+            if let Some(local) = local {
+                check_local(expression(&captured, 0), local);
+            }
+
+            // This path projects the same family as raw generated syntax in
+            // a frame whose sibling also carries a protected expression.
+            let forms = SourceFile::new(
+                "generated.ash",
+                format!(
+                    "pub syntax declaration: (emit) $body:expr => {{\nraw : Unit -> Int\nraw () = {text}\nsink : Unit -> Int\nsink () = $body\n}}\n"
+                ),
+            )
+            .unwrap();
+            let selected = [h1_selection(&forms, 0, None)];
+            let caller = SourceFile::new("caller.ash", "emit 42\n").unwrap();
+            let tree = h1_tree(&caller, &selected);
+            let mut owners = Vec::new();
+            let generated = project_declaration_expansions(
+                &caller,
+                &tree,
+                &selected,
+                &[vec![]],
+                &mut owners,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+            .unwrap_or_else(|error| panic!("generated {expected}: {error:?}"));
+            assert_eq!(owners.len(), 1);
+            assert_eq!(generated.definitions.len(), 2);
+            assert_eq!(
+                protected_expression_family(expression(&generated, 0)),
+                expected
+            );
+            if let Some(local) = local {
+                check_local(expression(&generated, 0), local);
+            }
+        }
+    }
+
+    #[test]
+    fn tuple_and_constructor_patterns_cross_real_declaration_staging() {
+        for (pattern, constructor) in [("(left, right)", false), ("Pair((left, right))", true)] {
+            for raw_generated in [false, true] {
+                let (forms, caller) = if raw_generated {
+                    (
+                        format!(
+                            "pub syntax declaration: (emit) $body:expr => {{\nvalue : Unit -> Int\nvalue {pattern} = $body\n}}\n"
+                        ),
+                        "emit 42\n".to_owned(),
+                    )
+                } else {
+                    (
+                        "pub syntax declaration: (emit) matching $pattern:pattern yields $body:expr => {\nvalue : Unit -> Int\nvalue $pattern = $body\n}\n".to_owned(),
+                        format!("emit matching {pattern} yields 42\n"),
+                    )
+                };
+                let forms = SourceFile::new("forms.ash", forms).unwrap();
+                let selected = [h1_selection(&forms, 0, None)];
+                let caller = SourceFile::new("caller.ash", caller).unwrap();
+                let tree = h1_tree(&caller, &selected);
+                let module = project_declaration_expansions(
+                    &caller,
+                    &tree,
+                    &selected,
+                    &[vec![]],
+                    &mut Vec::new(),
+                    &mut crate::syntax_resource::SyntaxBudget::default(),
+                )
+                .unwrap_or_else(|error| panic!("{pattern}, raw={raw_generated}: {error:?}"));
+                let SurfaceDefinitionKind::Equational(global) = &module.definitions[0].kind else {
+                    panic!("generated equation required");
+                };
+                let actual = &global.equations[0].patterns[0];
+                let tuple = if constructor {
+                    let SurfacePatternKind::Constructor {
+                        payload: Some(payload),
+                        ..
+                    } = &actual.kind
+                    else {
+                        panic!("constructor payload required");
+                    };
+                    payload.as_ref()
+                } else {
+                    actual
+                };
+                let SurfacePatternKind::Tuple(items) = &tuple.kind else {
+                    panic!("tuple required");
+                };
+                assert_eq!(items.len(), 2);
+                assert!(
+                    items
+                        .iter()
+                        .all(|item| matches!(item.kind, SurfacePatternKind::Binder(_)))
+                );
+            }
         }
     }
 
