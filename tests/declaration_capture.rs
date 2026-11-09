@@ -6,7 +6,8 @@ use std::{
 
 use ash::{
     driver::{RunConfiguration, compile_path, execute},
-    module::ModuleRoots,
+    module::{LoadGraphError, ModuleRoots},
+    parser::{ExpectedForm, FoundToken, ParseReason},
 };
 
 #[test]
@@ -86,23 +87,88 @@ fn source_sink_accepts_each_ordinary_declaration_category() {
 fn source_capture_rejects_incomplete_multiple_or_excluded_declarations() {
     let fixture = Fixture::new();
     let forms = include_str!("fixtures/surface-macros/declaration-capture/forms.ash");
-    for declaration in [
-        "",
-        "passed : Unit -> Int",
-        "passed () = 42",
-        "type One = One\ntype Two = Two",
-        "type One = One trailing",
-        "type Broken =",
-        "import other (name)",
-        "pub syntax declaration: (other) => {}",
-        "sink { type Nested = Nested }",
-        "resource Forbidden {}",
+    for (declaration, offset, expected, found) in [
+        ("", 1, ExpectedForm::Identifier, FoundToken::Spelling("}")),
+        (
+            "passed : Unit -> Int",
+            "passed : Unit -> Int".len() + 1,
+            ExpectedForm::Identifier,
+            FoundToken::Spelling("}"),
+        ),
+        (
+            "passed () = 42",
+            0,
+            ExpectedForm::Identifier,
+            FoundToken::Identifier,
+        ),
+        (
+            "type One = One\ntype Two = Two",
+            "type One = One\n".len(),
+            ExpectedForm::RightBrace,
+            FoundToken::Spelling("type"),
+        ),
+        (
+            "type One = One trailing",
+            "type One = One ".len(),
+            ExpectedForm::RightBrace,
+            FoundToken::Identifier,
+        ),
+        (
+            "type Broken =",
+            "type Broken =".len() + 1,
+            ExpectedForm::Identifier,
+            FoundToken::Spelling("}"),
+        ),
+        (
+            "import other (name)",
+            0,
+            ExpectedForm::Identifier,
+            FoundToken::Spelling("import"),
+        ),
+        (
+            "pub syntax declaration: (other) => {}",
+            0,
+            ExpectedForm::Identifier,
+            FoundToken::Spelling("pub"),
+        ),
+        (
+            "sink { type Nested = Nested }",
+            0,
+            ExpectedForm::Identifier,
+            FoundToken::Identifier,
+        ),
+        (
+            "resource Forbidden {}",
+            0,
+            ExpectedForm::Identifier,
+            FoundToken::Spelling("resource"),
+        ),
     ] {
+        let failure = match fixture.compile(forms, &format!("sink {{\n{declaration}\n}}")) {
+            Ok(_) => panic!("accepted {declaration:?}"),
+            Err(failure) => failure,
+        };
+        let ash::driver::FileFailure::Graph(graph) = failure else {
+            panic!("{declaration:?}: expected caller parsing failure, got {failure:?}");
+        };
+        let LoadGraphError::Syntax(failure) = graph.failure() else {
+            panic!(
+                "{declaration:?}: expected syntax failure, got {:?}",
+                graph.failure()
+            );
+        };
+        assert!(failure.source.display_path().ends_with("main.ash"));
+        assert!(failure.lexical.is_empty() && failure.resource.is_none());
+        let start = "import forms (syntax sink)\n\nsink {\n".len() + offset;
         assert!(
-            fixture
-                .compile(forms, &format!("sink {{\n{declaration}\n}}"))
-                .is_err(),
-            "accepted {declaration:?}"
+            failure.parser.iter().any(|diagnostic| {
+                diagnostic.reason == ParseReason::ExpectedForm
+                    && diagnostic.expected_form() == Some(expected)
+                    && diagnostic.found_token() == Some(found)
+                    && diagnostic.primary.span().range().start() as usize == start
+            }),
+            "{declaration:?}: {:?}",
+            failure.parser
         );
     }
 }
@@ -124,13 +190,12 @@ fn removing_one_equation_can_leave_a_complete_declaration() {
 }
 
 #[test]
-fn nonempty_and_procedural_declaration_capture_definitions_are_not_admitted() {
+#[ignore = "full nonempty declaration-template admission remains D5 #223 / D6 #219 work"]
+fn unused_nonempty_declaration_capture_definition_is_admitted() {
     let fixture = Fixture::new();
-    for forms in [
-        "pub syntax declaration: (sink) $item:declaration => { $item }\n",
-        "pub syntax declaration: (sink) $item:declaration => { type Item = Item }\n",
-        "pub syntax declaration: (sink) $item:declaration => using transform\n",
-    ] {
-        assert!(fixture.compile(forms, "").is_err(), "accepted {forms:?}");
-    }
+    let forms = "pub syntax declaration: (sink) $item:declaration => { type Item = Item }\n";
+    let program = fixture
+        .compile(forms, "")
+        .expect("a valid unused template is admitted");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
 }

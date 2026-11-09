@@ -901,114 +901,177 @@ mod tests {
     use super::{token_from_spelling, token_kind_name};
 
     #[test]
-    fn d5_host_refuses_declaration_before_constructor_and_request_clones() {
+    fn d5_host_refuses_declaration_before_its_constructor_and_request_clone() {
         use super::{HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap};
         use crate::{
             core::{EffectCoreBuilder, validate::ValidatedMacroEntry, validate_effect},
             integer::Integer,
             module::ModuleId,
-            resolved::BinderId,
+            resolved::{
+                BinderId, ResolvedEffectDeclaration, ResolvedEffectOperation, ResolvedRegistry,
+                ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
+            },
             source::{ByteRange, Origin, SourceFile},
-            surface::{SurfaceDeclarationCapture, SurfaceName, SurfaceSyntaxCapture},
+            surface::{
+                SurfaceDeclarationCapture, SurfaceExpr, SurfaceExprKind, SurfaceExpressionCapture,
+                SurfaceName, SurfaceSyntaxCapture,
+            },
             syntax::{ExpansionFrame, MacroOutputNode, SyntaxContexts},
             types::{EffectId, OperationId, Type, TypeWorkBudget},
         };
         use std::{collections::HashMap, sync::Arc};
 
-        let source = SourceFile::new("host.ash", "name").unwrap();
-        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
-        let mut builder = EffectCoreBuilder::with_effect_registry(Arc::new(Default::default()));
-        let occurrence = builder.unit(Type::Unit, Origin::Source(span)).unwrap();
-        let program = validate_effect(builder.finish(occurrence).unwrap(), &[&source]).unwrap();
-        let module = ModuleId::new(0);
-        let ops = EffectId::new(module, 0);
-        let entry = ValidatedMacroEntry {
-            program,
-            occurrence,
-            binder: BinderId::new(0),
-            syntax_module: module,
-            ops,
-        };
-        let name = SurfaceName {
-            text: "name".into(),
-            span,
-            introduction: 0,
-            introduced_at: None,
-            written: true,
-            diagnostic: None,
-        };
-        let frame = Arc::new(ExpansionFrame {
-            invocation: span,
-            definition: span,
-        });
-        let contexts = Arc::new(SyntaxContexts::new(&[], &[], &[]));
-        assert!(
-            SyntaxHost::new(
-                &entry,
-                &[],
-                &source,
-                &name,
-                0,
-                Arc::clone(&contexts),
-                Arc::clone(&frame)
-            )
-            .is_ok(),
-            "the same entry must construct a host with supported captures"
-        );
-        let contents: Arc<[MacroOutputNode]> = Arc::from([]);
-        let captures = vec![SurfaceSyntaxCapture::Declaration(
-            SurfaceDeclarationCapture { contents },
-        )];
-        assert!(matches!(
-            SyntaxHost::new(
-                &entry,
-                &captures,
-                &source,
-                &name,
-                0,
-                Arc::clone(&contexts),
-                Arc::clone(&frame)
-            ),
-            Err(RuntimeFailure::InvalidControlState)
-        ));
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("host.ash", "name").unwrap();
+                let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+                let module = ModuleId::new(0);
+                let ops = EffectId::new(module, 0);
+                let operation = OperationId::new(ops, 0);
+                let registry =
+                    ResolvedRegistry::default().with_effects(vec![ResolvedEffectDeclaration {
+                        id: ops,
+                        public: false,
+                        spelling: "Ops".into(),
+                        parameters: Box::new([]),
+                        operations: Box::new([ResolvedEffectOperation {
+                            id: operation,
+                            spelling: "capture".into(),
+                            annotation: ResolvedType {
+                                ty: Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
+                                provenance: ResolvedTypeProvenance::new(
+                                    vec![ResolvedTypeProvenanceNode::Fact(span)],
+                                    0,
+                                ),
+                                origin: Origin::Source(span),
+                                span,
+                            },
+                            origin: Origin::Source(span),
+                            span,
+                        }]),
+                        native_contract: None,
+                        origin: Origin::Source(span),
+                        span,
+                    }]);
+                let mut builder = EffectCoreBuilder::with_effect_registry(Arc::new(registry));
+                let occurrence = builder.unit(Type::Unit, Origin::Source(span)).unwrap();
+                let program =
+                    validate_effect(builder.finish(occurrence).unwrap(), &[&source]).unwrap();
+                let entry = ValidatedMacroEntry {
+                    program,
+                    occurrence,
+                    binder: BinderId::new(0),
+                    syntax_module: module,
+                    ops,
+                };
+                let name = SurfaceName {
+                    text: "name".into(),
+                    span,
+                    introduction: 0,
+                    introduced_at: None,
+                    written: true,
+                    diagnostic: None,
+                };
+                let frame = Arc::new(ExpansionFrame {
+                    invocation: span,
+                    definition: span,
+                });
+                let contexts = Arc::new(SyntaxContexts::new(&[], &[], &[]));
+                let mut expression = SurfaceExpr {
+                    kind: SurfaceExprKind::Unit,
+                    span,
+                    diagnostic: None,
+                };
+                for _ in 0..48 {
+                    expression = SurfaceExpr {
+                        kind: SurfaceExprKind::Resume(Box::new(expression)),
+                        span,
+                        diagnostic: None,
+                    };
+                }
+                let supported = SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
+                    expression,
+                    contents: Arc::from([]),
+                });
+                let contents: Arc<[MacroOutputNode]> = Arc::from([]);
+                let declaration = SurfaceSyntaxCapture::Declaration(SurfaceDeclarationCapture {
+                    contents: Arc::clone(&contents),
+                });
+                let captures = vec![supported, declaration];
+                let retained = Arc::strong_count(&contents);
+                let host = SyntaxHost::new(
+                    &entry,
+                    &captures[..1],
+                    &source,
+                    &name,
+                    0,
+                    Arc::clone(&contexts),
+                    Arc::clone(&frame),
+                )
+                .expect("the same entry constructs a host with the supported nested expression");
+                eprintln!("D5 host nested-prefix constructed on 512 KiB");
+                drop(host);
+                eprintln!("D5 host nested-prefix dropped on 512 KiB");
+                for slice in [&captures[1..], &captures[..]] {
+                    assert!(matches!(
+                        SyntaxHost::new(
+                            &entry,
+                            slice,
+                            &source,
+                            &name,
+                            0,
+                            Arc::clone(&contexts),
+                            Arc::clone(&frame)
+                        ),
+                        Err(RuntimeFailure::InvalidControlState)
+                    ));
+                }
+                eprintln!("D5 host late Declaration refused and prefix dropped on 512 KiB");
+                assert_eq!(Arc::strong_count(&contents), retained);
 
-        // Constructor admission makes this state unreachable in the ordinary host.
-        let operation = OperationId::new(ops, 0);
-        let mut host = SyntaxHost {
-            occurrence,
-            binder: BinderId::new(0),
-            ops,
-            started: false,
-            steps_left: 100,
-            invocation: Arc::new(()),
-            frame,
-            source,
-            caller: name,
-            introduction: 0,
-            contexts,
-            fresh_count: 0,
-            captures,
-            expressions: Vec::new(),
-            identifiers: Vec::new(),
-            origins: Vec::new(),
-            parse_failures: Vec::new(),
-            tokens: Vec::new(),
-            constructors: HashMap::new(),
-            operations: [(operation, "capture".into())].into_iter().collect(),
-        };
-        let input = host.input();
-        let mut heap = Vec::new();
-        let fields = vec![input, Value::integer(Integer::from_i64(0))].into_boxed_slice();
-        let argument = Value::Location(allocate_heap(&mut heap, HeapCell::Tuple(fields)).unwrap());
-        assert!(matches!(
-            host.request(
-                operation,
-                argument,
-                &mut heap,
-                &mut TypeWorkBudget::unbounded()
-            ),
-            Err(RuntimeFailure::InvalidControlState)
-        ));
+                // Constructor admission makes this state unreachable in the ordinary host.
+                let captures = vec![captures.into_iter().last().unwrap()];
+                let mut host = SyntaxHost {
+                    occurrence,
+                    binder: BinderId::new(0),
+                    ops,
+                    started: false,
+                    steps_left: 100,
+                    invocation: Arc::new(()),
+                    frame,
+                    source,
+                    caller: name,
+                    introduction: 0,
+                    contexts,
+                    fresh_count: 0,
+                    captures,
+                    expressions: Vec::new(),
+                    identifiers: Vec::new(),
+                    origins: Vec::new(),
+                    parse_failures: Vec::new(),
+                    tokens: Vec::new(),
+                    constructors: HashMap::new(),
+                    operations: [(operation, "capture".into())].into_iter().collect(),
+                };
+                let input = host.input();
+                let mut heap = Vec::new();
+                let fields = vec![input, Value::integer(Integer::from_i64(0))].into_boxed_slice();
+                let argument =
+                    Value::Location(allocate_heap(&mut heap, HeapCell::Tuple(fields)).unwrap());
+                assert!(matches!(
+                    host.request(
+                        operation,
+                        argument,
+                        &mut heap,
+                        &mut TypeWorkBudget::unbounded()
+                    ),
+                    Err(RuntimeFailure::InvalidControlState)
+                ));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]
