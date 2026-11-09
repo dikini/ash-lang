@@ -66,11 +66,23 @@ fn i19_imported_pattern_binder_and_expression_keep_the_caller_context() {
 
 fn write_forwarding_chain(fixture: &Fixture, count: usize, duplicate: bool) {
     fixture.write(
+        "prior.ash",
+        "pub syntax declaration: (before) $name:ident => {\n\
+             pub $name : Unit -> Int\n\
+             $name () = 0\n\
+         }\n",
+    );
+    let initial = if duplicate { "10" } else { "40" };
+    fixture.write(
         "entry.ash",
-        "import layer0 (syntax step0)\n\
-         step0 answer matching value yields 10\n\
-         main : Unit -> Int\n\
-         main () = answer(0)\n",
+        &format!(
+            "import layer0 (syntax step0)\n\
+             import prior (syntax before)\n\
+             before earlier\n\
+             step0 answer matching value yields {initial}\n\
+             main : Unit -> Int\n\
+             main () = answer(0)\n"
+        ),
     );
     for index in 0..count {
         let body = if duplicate {
@@ -102,12 +114,141 @@ fn write_forwarding_chain(fixture: &Fixture, count: usize, duplicate: bool) {
     );
 }
 
+fn group_boundary(fixture: &Fixture) -> usize {
+    let mut succeeds = 0;
+    let mut fails = 48;
+    write_forwarding_chain(fixture, succeeds, false);
+    let program = compile_path(fixture.configuration()).expect("the ungrouped chain compiles");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+    drop(program);
+    write_forwarding_chain(fixture, fails, false);
+    let failure = compile_path(fixture.configuration()).expect_err("deep groups are bounded");
+    assert_eq!(failure.reason_code(), "internal.resource.structural-depth");
+    drop(failure);
+    while fails - succeeds > 1 {
+        let middle = (succeeds + fails) / 2;
+        write_forwarding_chain(fixture, middle, false);
+        match compile_path(fixture.configuration()) {
+            Ok(program) => {
+                assert_eq!(execute(&program).unwrap().value_display(), "42");
+                succeeds = middle;
+            }
+            Err(failure) => {
+                assert_eq!(failure.reason_code(), "internal.resource.structural-depth");
+                fails = middle;
+            }
+        }
+    }
+    eprintln!("EP_GROUP_SUCCESS={succeeds} EP_GROUP_FAILURE={fails}");
+    succeeds
+}
+
+#[test]
+fn imported_grouped_forwarding_and_doubling_obey_the_shared_limits() {
+    let fixture = Fixture::new();
+    let boundary = group_boundary(&fixture);
+    write_forwarding_chain(&fixture, boundary, false);
+    let program = compile_path(fixture.configuration()).expect("the last grouped chain compiles");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+    drop(program);
+    write_forwarding_chain(&fixture, boundary + 1, false);
+    let failure = compile_path(fixture.configuration()).expect_err("the next grouped chain fails");
+    assert_eq!(failure.reason_code(), "internal.resource.structural-depth");
+    drop(failure);
+
+    write_forwarding_chain(&fixture, 25, true);
+    let failure = compile_path(fixture.configuration()).expect_err("doubling exhausts shared work");
+    assert_eq!(failure.reason_code(), "internal.resource.syntax-work");
+}
+
+#[test]
+fn protected_expr_pattern_small_stack_child() {
+    if std::env::var_os("ASH_TASK_0068_EP_SMALL_STACK_CHILD").is_none() {
+        return;
+    }
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(|| {
+            let fixture = Fixture::new();
+            let boundary = group_boundary(&fixture);
+            write_forwarding_chain(&fixture, boundary, false);
+            let program = compile_path(fixture.configuration()).expect("grouped chain succeeds");
+            let result = execute(&program).unwrap();
+            assert_eq!(result.value_display(), "42");
+            drop(result);
+            drop(program);
+            eprintln!("EP_SMALL_STACK_SUCCESS_AND_DROP");
+
+            write_forwarding_chain(&fixture, boundary + 1, false);
+            let failure = compile_path(fixture.configuration()).expect_err("late depth failure");
+            assert_eq!(failure.reason_code(), "internal.resource.structural-depth");
+            drop(failure);
+            eprintln!("EP_SMALL_STACK_LATE_DEPTH_DROP");
+
+            write_forwarding_chain(&fixture, 25, true);
+            let failure = compile_path(fixture.configuration()).expect_err("late work failure");
+            assert_eq!(failure.reason_code(), "internal.resource.syntax-work");
+            drop(failure);
+            eprintln!("EP_SMALL_STACK_LATE_WORK_DROP");
+        })
+        .expect("the small-stack worker starts")
+        .join()
+        .expect("success and failures clean up on the small stack");
+}
+
+#[test]
+fn protected_expr_pattern_survives_small_stack_success_and_failures() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "protected_expr_pattern_small_stack_child",
+            "--nocapture",
+        ])
+        .env("ASH_TASK_0068_EP_SMALL_STACK_CHILD", "1")
+        .output()
+        .expect("the isolated small-stack child starts");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "{}\n{stdout}\n{stderr}",
+        output.status
+    );
+    assert!(stdout.contains("test protected_expr_pattern_small_stack_child ... ok"));
+    for marker in [
+        "EP_SMALL_STACK_SUCCESS_AND_DROP",
+        "EP_SMALL_STACK_LATE_DEPTH_DROP",
+        "EP_SMALL_STACK_LATE_WORK_DROP",
+    ] {
+        assert!(stderr.contains(marker), "missing {marker}: {stderr}");
+        eprintln!("{marker}");
+    }
+}
+
 #[test]
 fn imported_pattern_and_expression_forwarding_duplicates_the_caller_expression() {
     let fixture = Fixture::new();
     write_forwarding_chain(&fixture, 2, true);
     let program =
         compile_path(fixture.configuration()).expect("the imported forwarding chain compiles");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
+#[test]
+fn ordinary_expression_syntax_remains_available() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "helpers.ash",
+        "pub syntax keep $body:expr => {\n $body\n}\n",
+    );
+    fixture.write(
+        "entry.ash",
+        "import helpers (syntax keep)\n\
+         main : Unit -> Int\n\
+         main () = keep 42\n",
+    );
+    let program =
+        compile_path(fixture.configuration()).expect("ordinary expression syntax compiles");
     assert_eq!(execute(&program).unwrap().value_display(), "42");
 }
 

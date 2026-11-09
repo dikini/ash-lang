@@ -8365,6 +8365,127 @@ mod tests {
     }
 
     #[test]
+    fn late_expr_pattern_work_failure_discards_prior_output_and_keeps_original_owners() {
+        use crate::syntax_resource::SyntaxBudget;
+
+        let forms = SourceFile::new(
+            "forms.ash",
+            "pub syntax declaration: (make) $name:ident matching $pattern:pattern yields $body:expr => {\n$name : Int -> Int\n$name $pattern = $body\n}\n",
+        )
+        .unwrap();
+        let selected = [h1_selection(&forms, 0, None)];
+        let first =
+            SourceFile::new("first.ash", "make first matching value yields value\n").unwrap();
+        let source = SourceFile::new(
+            "caller.ash",
+            "make first matching value yields value\nmake second matching (left, right) yields left\n",
+        )
+        .unwrap();
+        let first_tree = h1_tree(&first, &selected);
+        let tree = h1_tree(&source, &selected);
+        let existing = crate::syntax::SyntaxOwner {
+            owner: Some(9),
+            declaration: selected[0].declaration.span,
+            import_span: selected[0].import_span,
+        };
+        let mut prefix_owners = vec![existing];
+        let mut prefix = SyntaxBudget::default();
+        let first_module = project_declaration_expansions(
+            &first,
+            &first_tree,
+            &selected,
+            &[vec![]],
+            &mut prefix_owners,
+            &mut prefix,
+        )
+        .unwrap();
+        assert_eq!(first_module.definitions.len(), 1);
+        drop(first_module);
+
+        let mut measured_owners = vec![existing];
+        let mut measured = SyntaxBudget::default();
+        let module = project_declaration_expansions(
+            &source,
+            &tree,
+            &selected,
+            &[vec![]],
+            &mut measured_owners,
+            &mut measured,
+        )
+        .unwrap();
+        assert_eq!(module.definitions.len(), 2);
+        assert_eq!(measured_owners.len(), 3);
+        for owner in &measured_owners[1..] {
+            assert_eq!(owner.owner, Some(selected[0].owner));
+            assert_eq!(owner.declaration, selected[0].declaration.span);
+            assert_eq!(owner.import_span, selected[0].import_span);
+        }
+        let SurfaceDefinitionKind::Equational(second) = &module.definitions[1].kind else {
+            panic!("the second generated declaration is equational");
+        };
+        let SurfacePatternKind::Tuple(items) = &second.equations[0].patterns[0].kind else {
+            panic!("the second caller pattern retains its tuple");
+        };
+        let SurfacePatternKind::Binder(first_binder) = &items[0].kind else {
+            panic!("the first tuple component remains a binder");
+        };
+        assert_eq!(first_binder.name.text, "left");
+        assert_eq!(first_binder.name.introduction, 0);
+        let SurfaceExprKind::Name(SurfaceReference::Unqualified(body_name)) =
+            &second.equations[0].body.kind
+        else {
+            panic!("the caller body remains a name");
+        };
+        assert_eq!(body_name.text, "left");
+        assert_eq!(body_name.introduction, 0);
+        assert_eq!(body_name.span.source(), source.id());
+        let binder_location = first_binder.name.diagnostic.as_ref().unwrap();
+        assert_eq!(binder_location.primary.primary(), first_binder.name.span);
+        assert!(binder_location.frames.iter().any(|frame| {
+            frame.definition == selected[0].declaration.span
+                && frame.invocation.source() == source.id()
+        }));
+        let used = measured.consumed();
+        assert!(prefix.consumed() < used - 1);
+
+        let mut owners = vec![existing];
+        let mut short = SyntaxBudget::with_limit(used - 1);
+        assert!(matches!(
+            project_declaration_expansions(
+                &source,
+                &tree,
+                &selected,
+                &[vec![]],
+                &mut owners,
+                &mut short,
+            ),
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        assert_eq!(owners.len(), 1);
+        assert_eq!(owners[0].owner, existing.owner);
+        assert_eq!(owners[0].declaration, existing.declaration);
+        assert_eq!(owners[0].import_span, existing.import_span);
+
+        let mut retry_owners = vec![existing];
+        let mut exact = SyntaxBudget::with_limit(used);
+        let retried = project_declaration_expansions(
+            &source,
+            &tree,
+            &selected,
+            &[vec![]],
+            &mut retry_owners,
+            &mut exact,
+        )
+        .expect("the exact allowance publishes both declarations after the short failure");
+        assert_eq!(retried, module);
+        assert_eq!(retry_owners.len(), 3);
+        assert_eq!(exact.consumed(), used);
+    }
+
+    #[test]
     fn late_type_work_failure_discards_prior_output_and_keeps_original_owners() {
         let forms = SourceFile::new(
             "forms.ash",
