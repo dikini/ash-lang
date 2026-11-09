@@ -1764,6 +1764,88 @@ mod tests {
     }
 
     #[test]
+    fn declaration_pattern_and_expression_splices_share_a_retryable_budget() {
+        let source = SourceFile::new(
+            "binder_forms.ash",
+            include_str!("../docs/design/macros/fixtures/captures/binder_forms.ash"),
+        )
+        .unwrap();
+        let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+        let declaration = crate::parser::project_module_retaining_templates(&source, &tree)
+            .unwrap()
+            .syntax_declarations
+            .remove(0);
+        let span = declaration.span;
+        let selection = SelectedSyntax {
+            name: declaration.name.text.clone(),
+            import_span: span,
+            declaration,
+            owner: 0,
+        };
+        let name = SurfaceName {
+            text: "value".into(),
+            span,
+            introduction: 0,
+            introduced_at: None,
+            written: true,
+            diagnostic: None,
+        };
+        let captures = [
+            SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+                name: name.clone(),
+                origin: span.into(),
+            }),
+            SurfaceSyntaxCapture::Pattern(SurfacePatternCapture {
+                pattern: SurfacePattern {
+                    kind: SurfacePatternKind::Binder(crate::surface::SurfaceBinder {
+                        name: name.clone(),
+                        span,
+                    }),
+                    span,
+                    diagnostic: None,
+                },
+                contents: Arc::from([]),
+            }),
+            SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
+                expression: SurfaceExpr {
+                    kind: SurfaceExprKind::Name(SurfaceReference::Unqualified(name)),
+                    span,
+                    diagnostic: None,
+                },
+                contents: Arc::from([]),
+            }),
+        ];
+        let mut measured = SyntaxBudget::default();
+        let output = instantiate_declaration_template(&selection, &captures, 1, span, &mut measured)
+            .expect("protected pattern and expression splices are admitted");
+        assert!(output.iter().any(|node| matches!(node, MacroOutputNode::ForwardedPattern(..))));
+        assert!(output.iter().any(|node| matches!(node, MacroOutputNode::ForwardedExpression(..))));
+        let cost = measured.consumed();
+        assert!(matches!(
+            instantiate_declaration_template(
+                &selection,
+                &captures,
+                1,
+                span,
+                &mut SyntaxBudget::with_limit(cost - 1),
+            ),
+            Err(crate::parser::MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        let retry = instantiate_declaration_template(
+            &selection,
+            &captures,
+            1,
+            span,
+            &mut SyntaxBudget::with_limit(cost),
+        )
+        .expect("the measured allowance covers both copies on retry");
+        assert_eq!(output, retry);
+    }
+
+    #[test]
     fn protected_type_work_counts_names_frames_and_each_shared_visit() {
         let source = SourceFile::new("protected.ash", "Type").unwrap();
         let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
