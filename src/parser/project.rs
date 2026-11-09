@@ -6947,6 +6947,406 @@ mod tests {
     }
 
     #[test]
+    fn protected_expression_walker_covers_the_closed_source_families() {
+        use crate::syntax_resource::SyntaxBudget;
+
+        fn family(expression: &SurfaceExpr) -> &'static str {
+            match &expression.kind {
+                SurfaceExprKind::TemplateSplice(_) => "splice",
+                SurfaceExprKind::SyntaxInvocation { .. } => "syntax",
+                SurfaceExprKind::Integer(_) => "integer",
+                SurfaceExprKind::String(_) => "string",
+                SurfaceExprKind::Boolean(_) => "boolean",
+                SurfaceExprKind::Unit => "unit",
+                SurfaceExprKind::Name(_) => "name",
+                SurfaceExprKind::Tuple(_) => "tuple",
+                SurfaceExprKind::Apply(_) => "apply",
+                SurfaceExprKind::Multiply(_) => "multiply",
+                SurfaceExprKind::Add(_) => "add",
+                SurfaceExprKind::Equal(_) => "equal",
+                SurfaceExprKind::Block(_) => "block",
+                SurfaceExprKind::Function(_) => "function",
+                SurfaceExprKind::Match(_) => "match",
+                SurfaceExprKind::Perform(_) => "perform",
+                SurfaceExprKind::Handle(_) => "handle",
+                SurfaceExprKind::Resume(_) => "resume",
+                SurfaceExprKind::Resource(_) => "resource",
+                SurfaceExprKind::Region(_) => "region",
+                SurfaceExprKind::RegionSelection(_) => "using",
+                SurfaceExprKind::ProviderResource(_) => "provider",
+                SurfaceExprKind::Hook(_) => "hook",
+                SurfaceExprKind::Registration(_) => "register",
+                SurfaceExprKind::Cleanup(_) => "cleanup",
+                SurfaceExprKind::Discard => "discard",
+                SurfaceExprKind::Retain => "retain",
+            }
+        }
+        let samples = [
+            ("integer", "123456789012345678901234567890"),
+            ("string", "\"protected bytes\""),
+            ("boolean", "true"),
+            ("unit", "()"),
+            ("name", "Module.member"),
+            ("tuple", "(1, 2)"),
+            ("apply", "function(42)"),
+            ("multiply", "6 * 7"),
+            ("add", "40 + 2"),
+            ("equal", "1 == 2"),
+            ("block", "{\nlet value : Int = 42\nvalue\n}"),
+            ("function", "fn(value) {\nvalue\n}"),
+            ("match", "match value {\nPair(left, right) => left\n}"),
+            ("perform", "perform State<Int>.read ()"),
+            (
+                "handle",
+                "handle value with State<Int> {\nread value => resume value\n}",
+            ),
+            ("resume", "resume 42"),
+            ("resource", "resource cell<R> cell = 42 {\ncell\n}"),
+            ("region", "region<R> owner = provider {\n42\n}"),
+            ("using", "using owner {\n42\n}"),
+            ("provider", "resource Family<Int> slot = seed {\n42\n}"),
+            ("hook", "hook Event<Int> {\n42\n}"),
+            ("register", "register Event<Int> callback {\n42\n}"),
+            ("cleanup", "cleanup action {\n42\n}"),
+            ("discard", "discard"),
+            ("retain", "retain"),
+        ];
+        for (expected, text) in samples {
+            let (source, tree) = parsed(text);
+            let module = project_module(&source, &tree).unwrap_or_else(|error| {
+                panic!("{expected}: {error:?}: {:?}", tree.parse_diagnostics())
+            });
+            let SurfaceDefinitionKind::Equational(global) = &module.definitions[0].kind else {
+                panic!("{expected}: expected an equation");
+            };
+            let expression = &global.equations[0].body;
+            assert_eq!(family(expression), expected, "{text}");
+            let mut measured = SyntaxBudget::default();
+            assert!(
+                !crate::syntax::charge_expression_copy(expression, 0, false, &mut measured)
+                    .unwrap()
+            );
+            let used = measured.consumed();
+            assert!(used > 0);
+            assert!(
+                matches!(
+                    crate::syntax::charge_expression_copy(
+                        expression,
+                        0,
+                        false,
+                        &mut SyntaxBudget::with_limit(used - 1),
+                    ),
+                    Err(ResourceFailure::SyntaxWork { .. })
+                ),
+                "{expected}"
+            );
+            assert!(
+                !crate::syntax::charge_expression_copy(
+                    expression,
+                    0,
+                    false,
+                    &mut SyntaxBudget::with_limit(used),
+                )
+                .unwrap()
+            );
+            assert_eq!(expression.clone(), *expression);
+        }
+
+        for (expected, text) in [
+            ("binding", "{\nlet value : Int = 42\nvalue\n}"),
+            ("recursive", "{\nlet rec value : Int = 42\nvalue\n}"),
+            ("newtype", "{\nnewtype Token = Token(Int)\n42\n}"),
+            (
+                "evidence",
+                "{\nwith Read<Int> {\nread ignored = 42\n}\n42\n}",
+            ),
+        ] {
+            let (source, tree) = parsed(text);
+            let module = project_module(&source, &tree).unwrap_or_else(|error| {
+                panic!("{expected}: {error:?}: {:?}", tree.parse_diagnostics())
+            });
+            let SurfaceDefinitionKind::Equational(global) = &module.definitions[0].kind else {
+                panic!("equation required");
+            };
+            let expression = &global.equations[0].body;
+            let SurfaceExprKind::Block(block) = &expression.kind else {
+                panic!("block required");
+            };
+            assert!(matches!(
+                (&block.declarations[..], expected),
+                ([SurfaceLocalDeclaration::Binding(_)], "binding")
+                    | ([SurfaceLocalDeclaration::Recursive(_)], "recursive")
+                    | ([SurfaceLocalDeclaration::Newtype(_)], "newtype")
+                    | ([SurfaceLocalDeclaration::Evidence(_)], "evidence")
+            ));
+            let mut measured = SyntaxBudget::default();
+            assert!(
+                !crate::syntax::charge_expression_copy(expression, 0, false, &mut measured)
+                    .unwrap()
+            );
+            let used = measured.consumed();
+            assert!(
+                matches!(
+                    crate::syntax::charge_expression_copy(
+                        expression,
+                        0,
+                        false,
+                        &mut SyntaxBudget::with_limit(used - 1),
+                    ),
+                    Err(ResourceFailure::SyntaxWork { .. })
+                ),
+                "{expected}"
+            );
+            crate::syntax::charge_expression_copy(
+                expression,
+                0,
+                false,
+                &mut SyntaxBudget::with_limit(used),
+            )
+            .unwrap();
+            assert_eq!(expression.clone(), *expression);
+        }
+    }
+
+    #[test]
+    fn protected_pattern_walker_covers_the_closed_source_families() {
+        use crate::syntax_resource::SyntaxBudget;
+
+        for (expected, pattern) in [
+            ("wildcard", "_"),
+            ("boolean", "true"),
+            ("unit", "()"),
+            ("binder", "value"),
+            ("tuple", "(left, right)"),
+            ("constructor", "Pair(left, right)"),
+        ] {
+            let (source, tree) = parsed(&format!("fn({pattern}) {{\n42\n}}"));
+            let module = project_module(&source, &tree).unwrap();
+            let SurfaceDefinitionKind::Equational(global) = &module.definitions[0].kind else {
+                panic!("equation required");
+            };
+            let SurfaceExprKind::Function(function) = &global.equations[0].body.kind else {
+                panic!("function required");
+            };
+            let pattern = &function.parameter;
+            assert!(matches!(
+                (&pattern.kind, expected),
+                (SurfacePatternKind::Wildcard, "wildcard")
+                    | (SurfacePatternKind::Boolean(_), "boolean")
+                    | (SurfacePatternKind::Unit, "unit")
+                    | (SurfacePatternKind::Binder(_), "binder")
+                    | (SurfacePatternKind::Tuple(_), "tuple")
+                    | (SurfacePatternKind::Constructor { .. }, "constructor")
+            ));
+            let mut measured = SyntaxBudget::default();
+            assert!(!crate::syntax::charge_pattern_copy(pattern, 0, false, &mut measured).unwrap());
+            let used = measured.consumed();
+            assert!(
+                matches!(
+                    crate::syntax::charge_pattern_copy(
+                        pattern,
+                        0,
+                        false,
+                        &mut SyntaxBudget::with_limit(used - 1),
+                    ),
+                    Err(ResourceFailure::SyntaxWork { .. })
+                ),
+                "{expected}"
+            );
+            assert!(
+                !crate::syntax::charge_pattern_copy(
+                    pattern,
+                    0,
+                    false,
+                    &mut SyntaxBudget::with_limit(used),
+                )
+                .unwrap()
+            );
+            assert_eq!(pattern.clone(), *pattern);
+        }
+    }
+
+    #[test]
+    fn protected_local_newtype_copy_retains_generated_parameter_order() {
+        use crate::syntax::SyntaxContexts;
+        use crate::syntax_resource::SyntaxBudget;
+        use std::sync::Arc;
+
+        let (source, _, output) = structured_declarations(
+            "answer : Unit -> Int\nanswer () = {\nnewtype Local<F : Type -> Type, A> = Local(F<A>)\n42\n}\n",
+        );
+        let invocation = source.span(ByteRange::new(0, 0).unwrap()).unwrap();
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        let module = super::super::parse_macro_declarations(
+            &source, invocation, None, output, &contexts, None,
+        )
+        .unwrap();
+        let SurfaceDefinitionKind::Equational(global) = &module.definitions[0].kind else {
+            panic!("equation required");
+        };
+        let expression = &global.equations[0].body;
+        let SurfaceExprKind::Block(block) = &expression.kind else {
+            panic!("block required");
+        };
+        let [SurfaceLocalDeclaration::Newtype(nominal)] = block.declarations.as_slice() else {
+            panic!("local newtype required");
+        };
+        let original_order = nominal.generated_parameters.as_ref().unwrap();
+        assert_eq!(original_order.name().text, "Local");
+        assert_eq!(original_order.parameters().len(), 2);
+        let mut measured = SyntaxBudget::default();
+        assert!(
+            !crate::syntax::charge_expression_copy(expression, 0, false, &mut measured).unwrap()
+        );
+        let used = measured.consumed();
+        assert!(matches!(
+            crate::syntax::charge_expression_copy(
+                expression,
+                0,
+                false,
+                &mut SyntaxBudget::with_limit(used - 1),
+            ),
+            Err(ResourceFailure::SyntaxWork { .. })
+        ));
+        crate::syntax::charge_expression_copy(
+            expression,
+            0,
+            false,
+            &mut SyntaxBudget::with_limit(used),
+        )
+        .unwrap();
+        let copied = expression.clone();
+        let SurfaceExprKind::Block(copied_block) = &copied.kind else {
+            panic!("copied block required");
+        };
+        let [SurfaceLocalDeclaration::Newtype(copied_nominal)] =
+            copied_block.declarations.as_slice()
+        else {
+            panic!("copied local newtype required");
+        };
+        assert!(Arc::ptr_eq(
+            original_order,
+            copied_nominal.generated_parameters.as_ref().unwrap(),
+        ));
+    }
+
+    #[test]
+    fn generated_local_parameter_order_checks_its_own_retained_depth() {
+        use crate::syntax::MacroOutputNode;
+        use crate::syntax_resource::SyntaxBudget;
+        use std::collections::HashMap;
+
+        for (groups, succeeds) in [(124, true), (125, false)] {
+            let text = format!(
+                "{}{{\nnewtype Local<A> = Local(Int)\n42\n}}{}",
+                "(".repeat(groups),
+                ")".repeat(groups),
+            );
+            let (source, tree) = parsed(&text);
+            let (root, raw_tokens) = validated_root(&source, &tree).unwrap();
+            let global = child_nodes(root)
+                .find(|child| child.kind == NodeKind::EquationalGlobal)
+                .unwrap();
+            let equation = child_nodes(global)
+                .find(|child| child.kind == NodeKind::Equation)
+                .unwrap();
+            let expression = expression_child(equation).unwrap();
+            let mut pending = vec![(expression, 0usize, 0usize)];
+            let (nominal, depth, actual_groups) = loop {
+                let (node, prefix, count) = pending.pop().expect("local newtype exists");
+                let depth = prefix + structural_weight(node);
+                let count = count + usize::from(node.kind == NodeKind::ParenthesizedExpression);
+                if node.kind == NodeKind::NewtypeDeclaration {
+                    break (node, depth, count);
+                }
+                pending.extend(child_nodes(node).map(|child| (child, depth, count)));
+            };
+            assert_eq!(actual_groups, groups);
+            assert_eq!(depth, groups + 1, "the block owns one additional edge");
+            let parameters = only_child_of_kind(nominal, NodeKind::TypeParameters).unwrap();
+            let parameter = only_child_of_kind(parameters, NodeKind::TypeParameter).unwrap();
+            let parameter_token = direct_tokens(parameter, raw_tokens)
+                .find(
+                    |token| matches!(&token.kind, TokenKind::UpperIdentifier(name) if name == "A"),
+                )
+                .unwrap();
+            assert_eq!(parameter_token.token.span.source(), source.id());
+            let originals = raw_tokens
+                .iter()
+                .enumerate()
+                .filter_map(|(index, token)| match &token.kind {
+                    TokenKind::UpperIdentifier(text) if text == "Local" || text == "A" => Some((
+                        index,
+                        MacroOutputNode::Identifier(
+                            SurfaceName {
+                                text: text.clone(),
+                                span: token.span,
+                                introduction: 1,
+                                introduced_at: Some(token.span),
+                                written: false,
+                                diagnostic: None,
+                            },
+                            token.span.into(),
+                        ),
+                    )),
+                    _ => None,
+                })
+                .collect::<HashMap<_, _>>();
+            let invocation = source.span(ByteRange::new(0, 0).unwrap()).unwrap();
+            let tokens = ProjectionTokens {
+                tokens: raw_tokens,
+                originals: Some(&originals),
+                occurrence: Some(invocation),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: None,
+                frame: None,
+                name_frame: None,
+                staging_frames: None,
+                preserve_name_diagnostic: true,
+            };
+            let result =
+                charge_composed_projection(expression, &tokens, true, &mut SyntaxBudget::default());
+            if succeeds {
+                assert!(!result.unwrap());
+                let projected =
+                    project_expression_with_fragments(&source, expression, &tokens, &originals)
+                        .unwrap();
+                let SurfaceExprKind::Block(block) = &projected.kind else {
+                    panic!("grouping preserves the local block");
+                };
+                let [SurfaceLocalDeclaration::Newtype(nominal)] = block.declarations.as_slice()
+                else {
+                    panic!("generated local newtype required");
+                };
+                let order = nominal.generated_parameters.as_ref().unwrap();
+                let occurrence = &order.parameters()[0];
+                assert_eq!(occurrence.name().text, "A");
+                assert_eq!(
+                    occurrence
+                        .name()
+                        .diagnostic
+                        .as_ref()
+                        .unwrap()
+                        .primary
+                        .primary(),
+                    parameter_token.token.span
+                );
+                assert_eq!(depth + 3, 128, "Arc, boxed occurrence and location");
+            } else {
+                assert_eq!(depth + 3, 129, "Arc, boxed occurrence and location");
+                assert!(matches!(
+                    result,
+                    Err(DeclarationExpansionFailure::Syntax {
+                        resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
+                        ..
+                    })
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn protected_expression_preflight_finds_nested_expression_syntax_before_capture() {
         let declaration = SourceFile::new(
             "declarations.ash",
