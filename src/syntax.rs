@@ -1219,6 +1219,71 @@ pub(crate) fn charge_captured_type_original(
     Ok(())
 }
 
+/// Reserve one original cloned while rebuilding expression or pattern contents.
+/// Return whether its retained graph crosses an expression-syntax/host bridge.
+pub(crate) fn charge_captured_ep_original(
+    node: &MacroOutputNode,
+    prefix: usize,
+    budget: &mut SyntaxBudget,
+) -> Result<bool, crate::parser::MacroParseFailure> {
+    use crate::parser::MacroParseFailure;
+
+    fn resource(error: ResourceFailure) -> MacroParseFailure {
+        MacroParseFailure::Syntax {
+            diagnostics: Vec::new(),
+            resource: Some(error),
+        }
+    }
+
+    let mut bridge = false;
+    match node {
+        MacroOutputNode::ForwardedExpression(capture, origin) => {
+            let depth = type_depth(prefix, 1).map_err(resource)?;
+            charge_type_origin(origin, depth, budget).map_err(resource)?;
+            bridge |= charge_expression_copy(&capture.expression, depth, false, budget)
+                .map_err(resource)?;
+            bridge |= charge_expression_retention(capture, prefix, budget).map_err(resource)?;
+        }
+        MacroOutputNode::ForwardedPattern(capture, origin) => {
+            let depth = type_depth(prefix, 1).map_err(resource)?;
+            charge_type_origin(origin, depth, budget).map_err(resource)?;
+            bridge |=
+                charge_pattern_copy(&capture.pattern, depth, false, budget).map_err(resource)?;
+            bridge |= charge_pattern_retention(capture, prefix, budget).map_err(resource)?;
+        }
+        MacroOutputNode::ForwardedType(capture, origin) => {
+            let depth = type_depth(prefix, 1).map_err(resource)?;
+            charge_type_origin(origin, depth, budget).map_err(resource)?;
+            charge_type_copy(&capture.ty, depth, false, budget).map_err(resource)?;
+            charge_type_retention(capture, prefix, budget)?;
+        }
+        MacroOutputNode::Identifier(name, origin) => {
+            charge_type_name(
+                name,
+                prefix,
+                TypeWork::Copy {
+                    inherit_frame: false,
+                },
+                budget,
+            )
+            .map_err(resource)?;
+            charge_type_origin(origin, prefix, budget).map_err(resource)?;
+        }
+        MacroOutputNode::Token(kind, _, origin) => {
+            charge_type_token_copy(kind, budget).map_err(resource)?;
+            budget.charge().map_err(resource)?; // retained spelling Arc
+            charge_type_origin(origin, prefix, budget).map_err(resource)?;
+        }
+        MacroOutputNode::Group(_, _, origin) => {
+            charge_type_origin(origin, prefix, budget).map_err(resource)?;
+        }
+        MacroOutputNode::Expression(_, _) | MacroOutputNode::Splice(_) => {
+            return Err(MacroParseFailure::Invalid);
+        }
+    }
+    Ok(bridge)
+}
+
 pub(crate) fn charge_selected(
     selection: &SelectedSyntax,
     budget: &mut crate::syntax_resource::SyntaxBudget,

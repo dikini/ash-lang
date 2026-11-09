@@ -2387,23 +2387,45 @@ fn charge_type_capture_contents(
     tokens: &ProjectionTokens<'_>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(), DeclarationExpansionFailure> {
+    charge_capture_contents(root, tokens, SurfaceSyntaxCaptureKind::Type, budget)?;
+    Ok(())
+}
+
+fn charge_capture_contents(
+    root: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    kind: SurfaceSyntaxCaptureKind,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<bool, DeclarationExpansionFailure> {
     // A lone forwarded node reuses its old contents Arc. Every other
     // reconstructed sequence gets a new enclosing Arc before it is retained.
     let mut singleton = root;
-    let reuses_contents = loop {
+    let singleton_original = loop {
         budget.charge()?;
         match singleton.children.as_slice() {
             [ConcreteElement::Node(child)] => singleton = child,
             [ConcreteElement::Token(index)] => {
-                break matches!(
-                    tokens.originals.and_then(|originals| originals.get(index)),
-                    Some(crate::syntax::MacroOutputNode::ForwardedType(_, _))
-                );
+                break tokens.originals.and_then(|originals| originals.get(index));
             }
-            _ => break false,
+            _ => break None,
         }
     };
+    let reuses_contents = matches!(
+        (kind, singleton_original),
+        (
+            SurfaceSyntaxCaptureKind::Type,
+            Some(crate::syntax::MacroOutputNode::ForwardedType(..))
+        ) | (
+            SurfaceSyntaxCaptureKind::Expression,
+            Some(crate::syntax::MacroOutputNode::ForwardedExpression(..))
+        ) | (
+            SurfaceSyntaxCaptureKind::Pattern,
+            Some(crate::syntax::MacroOutputNode::ForwardedPattern(..))
+        )
+    );
     let contents_prefix = usize::from(!reuses_contents);
+    let mut bridge =
+        kind == SurfaceSyntaxCaptureKind::Expression && root.kind == NodeKind::SyntaxInvocation;
     // Reserve this scan's pending elements and capture_contents' separate
     // pending elements before either worklist can grow.
     budget.charge_units(root.children.len())?;
@@ -2414,6 +2436,10 @@ fn charge_type_capture_contents(
         budget.charge_units(2)?;
         match element {
             ConcreteElement::Node(node) => {
+                if kind != SurfaceSyntaxCaptureKind::Type && node.kind == NodeKind::SyntaxInvocation
+                {
+                    bridge = true;
+                }
                 budget.charge_units(node.children.len())?;
                 budget.charge_units(node.children.len())?;
                 pending.extend(node.children.iter().rev());
@@ -2430,7 +2456,15 @@ fn charge_type_capture_contents(
                         groups = crate::syntax::type_depth(groups, 1)?;
                         if let Some(original) = tokens.originals.and_then(|nodes| nodes.get(index))
                         {
-                            crate::syntax::charge_captured_type_original(original, groups, budget)?;
+                            if kind == SurfaceSyntaxCaptureKind::Type {
+                                crate::syntax::charge_captured_type_original(
+                                    original, groups, budget,
+                                )?;
+                            } else {
+                                bridge |= crate::syntax::charge_captured_ep_original(
+                                    original, groups, budget,
+                                )?;
+                            }
                         }
                     }
                     TokenKind::RightParen | TokenKind::RightBrace => {
@@ -2444,12 +2478,20 @@ fn charge_type_capture_contents(
                         )
                         .into());
                     }
-                    kind => {
+                    token_kind => {
                         if let Some(original) = tokens.originals.and_then(|nodes| nodes.get(index))
                         {
-                            crate::syntax::charge_captured_type_original(original, groups, budget)?;
+                            if kind == SurfaceSyntaxCaptureKind::Type {
+                                crate::syntax::charge_captured_type_original(
+                                    original, groups, budget,
+                                )?;
+                            } else {
+                                bridge |= crate::syntax::charge_captured_ep_original(
+                                    original, groups, budget,
+                                )?;
+                            }
                         } else if let TokenKind::Identifier(text)
-                        | TokenKind::UpperIdentifier(text) = kind
+                        | TokenKind::UpperIdentifier(text) = token_kind
                         {
                             budget.charge()?;
                             budget.charge_units(text.len())?;
@@ -2457,7 +2499,7 @@ fn charge_type_capture_contents(
                                 charge_staged_name_frames(token, budget)?;
                             }
                         } else {
-                            crate::syntax::charge_type_token_copy(kind, budget)?;
+                            crate::syntax::charge_type_token_copy(token_kind, budget)?;
                             let range = token.span.range();
                             budget.charge_units(
                                 usize::try_from(range.end().saturating_sub(range.start()))
@@ -2475,7 +2517,25 @@ fn charge_type_capture_contents(
     if groups != contents_prefix {
         return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
     }
-    Ok(())
+    if reuses_contents {
+        match singleton_original {
+            Some(crate::syntax::MacroOutputNode::ForwardedExpression(capture, _)) => {
+                let depth = crate::syntax::type_depth(0, 1)?;
+                bridge |= crate::syntax::charge_expression_copy(
+                    &capture.expression,
+                    depth,
+                    false,
+                    budget,
+                )?;
+                bridge |= crate::syntax::charge_expression_retention(capture, 0, budget)?;
+            }
+            Some(crate::syntax::MacroOutputNode::ForwardedPattern(..)) => {
+                budget.charge()?; // the final capture retains the existing Arc
+            }
+            _ => {}
+        }
+    }
+    Ok(bridge)
 }
 
 /// Precharge generated projection and its overlapping capture/pattern copies.
