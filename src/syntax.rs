@@ -10,11 +10,12 @@ use crate::{
     },
     source::Span,
     surface::{
-        SurfaceExpr, SurfaceExprKind, SurfaceExpressionCapture, SurfaceIdentifierCapture,
-        SurfaceEffectRow, SurfaceImportItem, SurfaceImportSelection, SurfaceName, SurfacePattern,
-        SurfacePatternCapture, SurfacePatternKind, SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind,
-        SurfaceReference, SurfaceSyntaxDeclaration, SurfaceSyntaxImplementation,
-        SurfaceSyntaxMatcherPart, SurfaceType, SurfaceTypeCapture, SurfaceTypeKind,
+        SurfaceEffectRow, SurfaceExpr, SurfaceExprKind, SurfaceExpressionCapture,
+        SurfaceIdentifierCapture, SurfaceImportItem, SurfaceImportSelection, SurfaceName,
+        SurfacePattern, SurfacePatternCapture, SurfacePatternKind, SurfaceReference,
+        SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind, SurfaceSyntaxDeclaration,
+        SurfaceSyntaxImplementation, SurfaceSyntaxMatcherPart, SurfaceType, SurfaceTypeCapture,
+        SurfaceTypeKind,
     },
     syntax_resource::{ResourceFailure, SyntaxBudget},
     types::TypeWorkBudget,
@@ -352,7 +353,12 @@ fn charge_type_location(
             charge_type_origin(origin, depth, budget)?;
         }
     }
-    if matches!(work, TypeWork::Copy { inherit_frame: true }) {
+    if matches!(
+        work,
+        TypeWork::Copy {
+            inherit_frame: true
+        }
+    ) {
         type_depth(depth, 1)?;
         // A new location or frame entry, plus the real deduplication scan.
         budget.charge_units(2)?;
@@ -534,7 +540,9 @@ pub(crate) fn charge_type_retention(
     let contents_depth = type_depth(depth, 1).map_err(resource)?;
     // Cloning the capture retains one shared contents handle.
     budget.charge().map_err(resource)?;
-    budget.charge_units(capture.contents.len()).map_err(resource)?;
+    budget
+        .charge_units(capture.contents.len())
+        .map_err(resource)?;
     let mut pending = capture
         .contents
         .iter()
@@ -555,13 +563,10 @@ pub(crate) fn charge_type_retention(
                 charge_type_value(&capture.ty, depth, TypeWork::Inspect, budget)
                     .map_err(resource)?;
                 let contents_depth = type_depth(depth, 1).map_err(resource)?;
-                budget.charge_units(capture.contents.len()).map_err(resource)?;
-                pending.extend(
-                    capture
-                        .contents
-                        .iter()
-                        .map(|child| (child, contents_depth)),
-                );
+                budget
+                    .charge_units(capture.contents.len())
+                    .map_err(resource)?;
+                pending.extend(capture.contents.iter().map(|child| (child, contents_depth)));
             }
             MacroOutputNode::Identifier(name, origin) => {
                 charge_type_name(name, prefix, TypeWork::Inspect, budget).map_err(resource)?;
@@ -589,9 +594,8 @@ pub(crate) fn charge_type_token_copy(
         TokenKind::Identifier(text)
         | TokenKind::UpperIdentifier(text)
         | TokenKind::StringLiteral(text) => budget.charge_units(text.len()),
-        TokenKind::Integer(value) => budget.charge_units(
-            usize::try_from(value.magnitude_byte_length()).unwrap_or(usize::MAX),
-        ),
+        TokenKind::Integer(value) => budget
+            .charge_units(usize::try_from(value.magnitude_byte_length()).unwrap_or(usize::MAX)),
         _ => Ok(()),
     }
 }
@@ -1755,13 +1759,7 @@ mod tests {
             })
         ));
         let mut exact = crate::syntax_resource::SyntaxBudget::with_limit(large_cost);
-        instantiate_declaration_template(
-            &selection,
-            &[large],
-            1,
-            span,
-            &mut exact,
-        )
-        .expect("the measured allowance covers both copies");
+        instantiate_declaration_template(&selection, &[large], 1, span, &mut exact)
+            .expect("the measured allowance covers both copies");
     }
 }

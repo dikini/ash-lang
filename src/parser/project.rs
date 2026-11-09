@@ -2318,10 +2318,14 @@ fn charge_identifier_invocation(
     }
     crate::syntax::charge_selected(selection, budget)?;
     budget.charge_units(selection.declaration.matcher.len())?;
-    let mut kinds = selection.declaration.matcher.iter().filter_map(|part| match part {
-        SurfaceSyntaxMatcherPart::Capture { kind, .. } => Some(kind),
-        SurfaceSyntaxMatcherPart::Literal { .. } => None,
-    });
+    let mut kinds = selection
+        .declaration
+        .matcher
+        .iter()
+        .filter_map(|part| match part {
+            SurfaceSyntaxMatcherPart::Capture { kind, .. } => Some(kind),
+            SurfaceSyntaxMatcherPart::Literal { .. } => None,
+        });
     for argument in child_nodes(node).filter(|child| child.kind == NodeKind::SyntaxArgument) {
         budget.charge()?;
         let kind = kinds.next().ok_or(ProjectionError::MalformedTree(
@@ -2422,8 +2426,8 @@ fn charge_type_capture_contents(
                         if let Some(original) = tokens.originals.and_then(|nodes| nodes.get(index))
                         {
                             crate::syntax::charge_captured_type_original(original, groups, budget)?;
-                        } else if let TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) =
-                            kind
+                        } else if let TokenKind::Identifier(text)
+                        | TokenKind::UpperIdentifier(text) = kind
                         {
                             budget.charge()?;
                             budget.charge_units(text.len())?;
@@ -2530,8 +2534,9 @@ fn charge_composed_type_projection(
             match node.kind {
                 NodeKind::Type if child_nodes(node).any(|child| child.kind == NodeKind::Type) => 1,
                 NodeKind::AtomicType
-                    if child_nodes(node)
-                        .any(|child| matches!(child.kind, NodeKind::Type | NodeKind::EffectRow)) =>
+                    if child_nodes(node).any(|child| {
+                        matches!(child.kind, NodeKind::Type | NodeKind::EffectRow)
+                    }) =>
                 {
                     1
                 }
@@ -2546,10 +2551,8 @@ fn charge_composed_type_projection(
         } else {
             0
         };
-        let depth = crate::syntax::type_depth(
-            parent_depth,
-            structural_weight(node).max(owned_step),
-        )?;
+        let depth =
+            crate::syntax::type_depth(parent_depth, structural_weight(node).max(owned_step))?;
         for child in &node.children {
             budget.charge()?;
             match child {
@@ -6447,15 +6450,20 @@ mod tests {
         let ordinary = node(NodeKind::InlineOperationalGlobal, vec![argument()]);
         let unprotected = node(
             NodeKind::SyntaxInvocation,
-            vec![ConcreteElement::Node(node(NodeKind::SyntaxArgument, vec![]))],
+            vec![ConcreteElement::Node(node(
+                NodeKind::SyntaxArgument,
+                vec![],
+            ))],
         );
         for allowed in [&declaration, &ordinary, &unprotected] {
-            assert!(check_narrow_type_refusal(
-                allowed,
-                &tokens,
-                &mut crate::syntax_resource::SyntaxBudget::default(),
-            )
-            .is_ok());
+            assert!(
+                check_narrow_type_refusal(
+                    allowed,
+                    &tokens,
+                    &mut crate::syntax_resource::SyntaxBudget::default(),
+                )
+                .is_ok()
+            );
         }
         assert!(matches!(
             check_narrow_type_refusal(
@@ -6531,7 +6539,8 @@ mod tests {
                         }
                     }
                     MacroOutputNode::Token(TokenKind::IntType, _, _) => {
-                        *node = MacroOutputNode::ForwardedType(capture.take().unwrap(), span.into());
+                        *node =
+                            MacroOutputNode::ForwardedType(capture.take().unwrap(), span.into());
                         return true;
                     }
                     _ => {}
@@ -6712,6 +6721,162 @@ mod tests {
         .expect("the measured allowance retains the complete declaration");
         assert_eq!(retried.definitions.len(), 1);
         assert_eq!(exact_owners.len(), 1);
+    }
+
+    #[test]
+    fn type_forwarding_preserves_the_caller_name_and_both_imported_frames() {
+        let outer_source = SourceFile::new(
+            "outer.ash",
+            "pub syntax declaration: (outer) $name:ident for $T:type => {\ninner $name for $T\n}\n",
+        )
+        .unwrap();
+        let inner_source = SourceFile::new(
+            "inner.ash",
+            "pub syntax declaration: (inner) $name:ident for $T:type => {\n$name : $T -> $T\n$name value = value\n}\n",
+        )
+        .unwrap();
+        let outer = h1_selection(&outer_source, 0, None);
+        let inner = h1_selection(&inner_source, 1, None);
+        let caller = SourceFile::new("caller.ash", "outer answer for (Marker, Int)\n").unwrap();
+        let selected = [outer.clone()];
+        let imports = [vec![inner.clone()], vec![]];
+        let tree = h1_tree(&caller, &selected);
+        let mut owners = Vec::new();
+        let module = project_declaration_expansions(
+            &caller,
+            &tree,
+            &selected,
+            &imports,
+            &mut owners,
+            &mut crate::syntax_resource::SyntaxBudget::default(),
+        )
+        .expect("both imported declaration frames forward the type");
+        assert_eq!(owners.len(), 2);
+        assert_eq!(owners[0].owner, Some(outer.owner));
+        assert_eq!(owners[1].owner, Some(inner.owner));
+        let SurfaceDefinitionKind::Equational(global) = &module.definitions[0].kind else {
+            panic!("expected the generated global")
+        };
+        let SurfaceTypeKind::Function(function) = &global.interface.annotation.kind else {
+            panic!("expected the generated function type")
+        };
+        for ty in [&*function.domain, &*function.codomain] {
+            let SurfaceTypeKind::Tuple(elements) = &ty.kind else {
+                panic!("expected the forwarded caller tuple")
+            };
+            let SurfaceTypeKind::Named(SurfaceReference::Unqualified(name)) = &elements[0].kind
+            else {
+                panic!("expected the caller's Marker type")
+            };
+            assert_eq!(name.text, "Marker");
+            assert_eq!(name.introduction, 0);
+            assert!(name.written);
+            assert_eq!(name.span.source(), caller.id());
+            for location in [ty.diagnostic.as_deref(), name.diagnostic.as_deref()] {
+                let frames = &location.expect("the copied type retains its frames").frames;
+                assert!(
+                    frames
+                        .iter()
+                        .any(|frame| frame.definition == outer.declaration.span)
+                );
+                assert!(
+                    frames
+                        .iter()
+                        .any(|frame| frame.definition == inner.declaration.span)
+                );
+                assert!(
+                    frames
+                        .iter()
+                        .all(|frame| frame.invocation.source() == caller.id())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn late_type_work_failure_discards_prior_output_and_keeps_original_owners() {
+        let forms = SourceFile::new(
+            "forms.ash",
+            "pub syntax declaration: (make) $name:ident for $T:type => {\n$name : $T -> $T\n$name value = value\n}\n",
+        )
+        .unwrap();
+        let selected = [h1_selection(&forms, 0, None)];
+        let first = SourceFile::new("first.ash", "make first for Int\n").unwrap();
+        let source = SourceFile::new(
+            "caller.ash",
+            "make first for Int\nmake second for ((Int, Int), Int)\n",
+        )
+        .unwrap();
+        let first_tree = h1_tree(&first, &selected);
+        let tree = h1_tree(&source, &selected);
+        let existing = crate::syntax::SyntaxOwner {
+            owner: Some(9),
+            declaration: selected[0].declaration.span,
+            import_span: selected[0].import_span,
+        };
+        let mut prefix_owners = vec![existing];
+        let mut prefix = crate::syntax_resource::SyntaxBudget::default();
+        let first_module = project_declaration_expansions(
+            &first,
+            &first_tree,
+            &selected,
+            &[vec![]],
+            &mut prefix_owners,
+            &mut prefix,
+        )
+        .unwrap();
+        assert_eq!(first_module.definitions.len(), 1);
+        drop(first_module);
+        let mut measured_owners = vec![existing];
+        let mut measured = crate::syntax_resource::SyntaxBudget::default();
+        let module = project_declaration_expansions(
+            &source,
+            &tree,
+            &selected,
+            &[vec![]],
+            &mut measured_owners,
+            &mut measured,
+        )
+        .unwrap();
+        assert_eq!(module.definitions.len(), 2);
+        assert_eq!(measured_owners.len(), 3);
+        let used = measured.consumed();
+        assert!(prefix.consumed() < used - 1);
+        drop(module);
+
+        let mut owners = vec![existing];
+        let mut short = crate::syntax_resource::SyntaxBudget::with_limit(used - 1);
+        assert!(matches!(
+            project_declaration_expansions(
+                &source,
+                &tree,
+                &selected,
+                &[vec![]],
+                &mut owners,
+                &mut short,
+            ),
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        assert_eq!(owners.len(), 1);
+        assert_eq!(owners[0].owner, existing.owner);
+        assert_eq!(owners[0].declaration, existing.declaration);
+        assert_eq!(owners[0].import_span, existing.import_span);
+        let mut exact_owners = vec![existing];
+        let mut exact = crate::syntax_resource::SyntaxBudget::with_limit(used);
+        let module = project_declaration_expansions(
+            &source,
+            &tree,
+            &selected,
+            &[vec![]],
+            &mut exact_owners,
+            &mut exact,
+        )
+        .expect("the exact measured allowance publishes both declarations");
+        assert_eq!(module.definitions.len(), 2);
+        assert_eq!(exact_owners.len(), 3);
     }
 
     #[test]
@@ -7451,15 +7616,15 @@ mod tests {
     }
 
     #[test]
-    fn h1_rejects_non_identifier_captures_and_transformers_before_staging() {
+    fn h1_rejects_expression_pattern_and_transformers_before_staging() {
         for (definition, invocation) in [
             (
                 "pub syntax declaration: (need) $x:expr => {}\n",
                 "need 42\n",
             ),
             (
-                "pub syntax declaration: (need) $x:type => {}\n",
-                "need Int\n",
+                "pub syntax declaration: (need) $T:type yields $x:expr => {}\n",
+                "need Int yields 42\n",
             ),
             (
                 "pub syntax declaration: (need) $x:pattern => {}\n",
@@ -7468,6 +7633,22 @@ mod tests {
             (
                 "pub syntax declaration: (need) $x:ident => using transform\n",
                 "need item\n",
+            ),
+            (
+                "pub syntax declaration: (need) $x:expr typed $T:type => {}\n",
+                "need 42 typed Int\n",
+            ),
+            (
+                "pub syntax declaration: (need) $T:type matching $p:pattern => {}\n",
+                "need Int matching _\n",
+            ),
+            (
+                "pub syntax declaration: (need) $p:pattern typed $T:type => {}\n",
+                "need _ typed Int\n",
+            ),
+            (
+                "pub syntax declaration: (need) $T:type => using transform\n",
+                "need Int\n",
             ),
         ] {
             let definition = SourceFile::new("definition.ash", definition).unwrap();
