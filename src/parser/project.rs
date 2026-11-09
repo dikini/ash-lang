@@ -7807,9 +7807,10 @@ mod tests {
                     assert!(
                         matches!(&effect.effect, SurfaceReference::Unqualified(name) if name.text == "Event")
                     );
-                    let [mut actual] = &effect.arguments[..] else {
+                    let [actual] = &effect.arguments[..] else {
                         panic!("one effect argument required")
                     };
+                    let mut actual = actual;
                     for _ in 0..height {
                         let SurfaceTypeKind::Tuple(items) = &actual.kind else {
                             panic!("forwarded tuple required")
