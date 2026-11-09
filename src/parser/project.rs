@@ -7277,11 +7277,18 @@ mod tests {
 
     #[test]
     fn generated_local_parameter_order_checks_its_own_retained_depth() {
-        use crate::syntax::MacroOutputNode;
+        use crate::syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin, MacroOutputNode};
         use crate::syntax_resource::SyntaxBudget;
-        use std::collections::HashMap;
+        use std::{collections::HashMap, sync::Arc};
 
-        for (groups, succeeds) in [(124, true), (125, false)] {
+        // Combined related origins are constructed component controls; the
+        // public direct-template route remains Source-only.
+        for (groups, origin_depth, succeeds) in [
+            (124, 0, true),
+            (125, 0, false),
+            (123, 1, true),
+            (124, 1, false),
+        ] {
             let text = format!(
                 "{}{{\nnewtype Local<A> = Local(Int)\n42\n}}{}",
                 "(".repeat(groups),
@@ -7320,20 +7327,33 @@ mod tests {
                 .iter()
                 .enumerate()
                 .filter_map(|(index, token)| match &token.kind {
-                    TokenKind::UpperIdentifier(text) if text == "Local" || text == "A" => Some((
-                        index,
-                        MacroOutputNode::Identifier(
-                            SurfaceName {
-                                text: text.clone(),
-                                span: token.span,
-                                introduction: 1,
-                                introduced_at: Some(token.span),
-                                written: false,
-                                diagnostic: None,
-                            },
-                            token.span.into(),
-                        ),
-                    )),
+                    TokenKind::UpperIdentifier(text) if text == "Local" || text == "A" => {
+                        let diagnostic = (origin_depth == 1 && text == "A").then(|| {
+                            let mut location = DiagnosticLocation::new(token.span.into());
+                            let frame = Arc::new(ExpansionFrame {
+                                invocation: token.span,
+                                definition: token.span,
+                            });
+                            location.related.push(
+                                MacroOrigin::combined(vec![token.span.into()], frame).unwrap(),
+                            );
+                            Box::new(location)
+                        });
+                        Some((
+                            index,
+                            MacroOutputNode::Identifier(
+                                SurfaceName {
+                                    text: text.clone(),
+                                    span: token.span,
+                                    introduction: 1,
+                                    introduced_at: Some(token.span),
+                                    written: false,
+                                    diagnostic,
+                                },
+                                token.span.into(),
+                            ),
+                        ))
+                    }
                     _ => None,
                 })
                 .collect::<HashMap<_, _>>();
@@ -7377,9 +7397,21 @@ mod tests {
                         .primary(),
                     parameter_token.token.span
                 );
-                assert_eq!(depth + 3, 128, "Arc, boxed occurrence and location");
+                assert_eq!(
+                    occurrence.name().diagnostic.as_ref().unwrap().related.len(),
+                    origin_depth
+                );
+                assert_eq!(
+                    depth + 3 + origin_depth,
+                    128,
+                    "Arc, boxed occurrence, location and origin"
+                );
             } else {
-                assert_eq!(depth + 3, 129, "Arc, boxed occurrence and location");
+                assert_eq!(
+                    depth + 3 + origin_depth,
+                    129,
+                    "Arc, boxed occurrence, location and origin"
+                );
                 assert!(matches!(
                     result,
                     Err(DeclarationExpansionFailure::Syntax {
@@ -9912,39 +9944,47 @@ mod tests {
     }
 
     #[test]
-    fn h1_rejects_expression_pattern_and_transformers_before_staging() {
-        for (definition, invocation) in [
+    fn h1_stages_direct_captures_and_still_refuses_transformers() {
+        for (definition, invocation, direct) in [
             (
                 "pub syntax declaration: (need) $x:expr => {}\n",
                 "need 42\n",
+                true,
             ),
             (
                 "pub syntax declaration: (need) $T:type yields $x:expr => {}\n",
                 "need Int yields 42\n",
+                true,
             ),
             (
                 "pub syntax declaration: (need) $x:pattern => {}\n",
                 "need _\n",
+                true,
             ),
             (
                 "pub syntax declaration: (need) $x:ident => using transform\n",
                 "need item\n",
+                false,
             ),
             (
                 "pub syntax declaration: (need) $x:expr typed $T:type => {}\n",
                 "need 42 typed Int\n",
+                true,
             ),
             (
                 "pub syntax declaration: (need) $T:type matching $p:pattern => {}\n",
                 "need Int matching _\n",
+                true,
             ),
             (
                 "pub syntax declaration: (need) $p:pattern typed $T:type => {}\n",
                 "need _ typed Int\n",
+                true,
             ),
             (
                 "pub syntax declaration: (need) $T:type => using transform\n",
                 "need Int\n",
+                false,
             ),
         ] {
             let definition = SourceFile::new("definition.ash", definition).unwrap();
@@ -9952,18 +9992,25 @@ mod tests {
             let caller = SourceFile::new("caller.ash", invocation).unwrap();
             let tree = h1_tree(&caller, &selected);
             let mut owners = Vec::new();
-            assert!(matches!(
-                project_declaration_expansions(
-                    &caller,
-                    &tree,
-                    &selected,
-                    &[],
-                    &mut owners,
-                    &mut crate::syntax_resource::SyntaxBudget::default(),
-                ),
-                Err(DeclarationExpansionFailure::Projection(_))
-            ));
-            assert!(owners.is_empty());
+            let result = project_declaration_expansions(
+                &caller,
+                &tree,
+                &selected,
+                &[],
+                &mut owners,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            );
+            if direct {
+                let module = result.expect("the direct empty template is staged");
+                assert!(module.declaration_order.is_empty());
+                assert_eq!(owners.len(), 1);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(DeclarationExpansionFailure::Projection(_))
+                ));
+                assert!(owners.is_empty());
+            }
         }
     }
 

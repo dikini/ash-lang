@@ -2402,6 +2402,103 @@ mod tests {
         assert_eq!(fresh.consumed(), used);
     }
 
+    #[test]
+    fn declaration_admission_refuses_before_placeholder_and_template_copy() {
+        use crate::parser::MacroParseFailure;
+
+        let source = SourceFile::new(
+            "template.ash",
+            "pub syntax declaration: (emit) gate $value:expr => {\nanswer : Unit -> Int\nanswer () = $value\n}\n",
+        )
+        .unwrap();
+        let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+        let declaration = crate::parser::project_module_retaining_templates(&source, &tree)
+            .unwrap()
+            .syntax_declarations
+            .remove(0);
+        assert!(declaration.matcher.len() > 1);
+        let template = Arc::clone(declaration.template_contents.as_ref().unwrap());
+        assert!(!template.is_empty());
+        let references = Arc::strong_count(&template);
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        let mut short = SyntaxBudget::with_limit(declaration.matcher.len() - 1);
+        assert!(matches!(
+            validate_template_syntax_inner(&declaration, &source, &contexts, Some(&mut short)),
+            Err(MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        assert_eq!(short.consumed(), 0);
+        assert!(Arc::ptr_eq(
+            &template,
+            declaration.template_contents.as_ref().unwrap()
+        ));
+        assert_eq!(Arc::strong_count(&template), references);
+    }
+
+    #[test]
+    fn protected_template_splice_names_use_the_owned_walkers() {
+        let source = SourceFile::new("splice.ash", "value").unwrap();
+        let span = source.span(ByteRange::new(0, 5).unwrap()).unwrap();
+        let name = SurfaceName {
+            text: "value".repeat(32),
+            span,
+            introduction: 0,
+            introduced_at: None,
+            written: true,
+            diagnostic: None,
+        };
+        let expression = SurfaceExpr {
+            kind: SurfaceExprKind::TemplateSplice(name.clone()),
+            span,
+            diagnostic: None,
+        };
+        let pattern = SurfacePattern {
+            kind: SurfacePatternKind::TemplateSplice(name),
+            span,
+            diagnostic: None,
+        };
+        let mut expression_budget = SyntaxBudget::default();
+        assert!(!charge_expression_copy(&expression, 0, false, &mut expression_budget).unwrap());
+        let expression_cost = expression_budget.consumed();
+        assert!(matches!(
+            charge_expression_copy(
+                &expression,
+                0,
+                false,
+                &mut SyntaxBudget::with_limit(expression_cost - 1)
+            ),
+            Err(ResourceFailure::SyntaxWork { .. })
+        ));
+        charge_expression_copy(
+            &expression,
+            0,
+            false,
+            &mut SyntaxBudget::with_limit(expression_cost),
+        )
+        .unwrap();
+        let mut pattern_budget = SyntaxBudget::default();
+        assert!(!charge_pattern_copy(&pattern, 0, false, &mut pattern_budget).unwrap());
+        let pattern_cost = pattern_budget.consumed();
+        assert!(matches!(
+            charge_pattern_copy(
+                &pattern,
+                0,
+                false,
+                &mut SyntaxBudget::with_limit(pattern_cost - 1)
+            ),
+            Err(ResourceFailure::SyntaxWork { .. })
+        ));
+        charge_pattern_copy(
+            &pattern,
+            0,
+            false,
+            &mut SyntaxBudget::with_limit(pattern_cost),
+        )
+        .unwrap();
+    }
+
     fn nested_template(
         text: &str,
         transformer: bool,
