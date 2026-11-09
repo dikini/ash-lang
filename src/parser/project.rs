@@ -9226,7 +9226,7 @@ mod tests {
 
     #[test]
     fn expression_and_pattern_capture_contents_count_arcs_and_groups() {
-        use crate::syntax::{MacroDelimiter, MacroOutputNode};
+        use crate::syntax::{MacroDelimiter, MacroOutputNode, SyntaxContexts};
         use crate::syntax_resource::SyntaxBudget;
         use std::{collections::HashMap, sync::Arc};
 
@@ -9234,6 +9234,18 @@ mod tests {
             SurfaceSyntaxCaptureKind::Expression,
             SurfaceSyntaxCaptureKind::Pattern,
         ] {
+            let category = if kind == SurfaceSyntaxCaptureKind::Pattern {
+                "pattern"
+            } else {
+                "expr"
+            };
+            let forms = SourceFile::new(
+                "forms.ash",
+                format!("pub syntax declaration: (accept) $value:{category} => {{}}\n"),
+            )
+            .unwrap();
+            let selected = [h1_selection(&forms, 0, None)];
+            let contexts = SyntaxContexts::new(&selected, &[], &[]);
             for grouped in [false, true] {
                 let at_limit = if grouped { 124 } else { 126 };
                 for (retained_groups, succeeds) in [(at_limit, true), (at_limit + 1, false)] {
@@ -9247,24 +9259,20 @@ mod tests {
                     } else {
                         marker.into()
                     };
-                    let (pattern, body) = if kind == SurfaceSyntaxCaptureKind::Pattern {
-                        (written.as_str(), "42")
-                    } else {
-                        ("()", written.as_str())
-                    };
-                    let source = SourceFile::new(
-                        "capture.ash",
-                        format!("value : Unit -> Int\nvalue {pattern} = {body}\n"),
-                    )
-                    .unwrap();
-                    let tree = parse(lex(&source).unwrap());
+                    let source =
+                        SourceFile::new("capture.ash", format!("accept {written}\n")).unwrap();
+                    let tree = h1_tree(&source, &selected);
                     let (root, raw) = validated_root(&source, &tree).unwrap();
-                    let global = only_child_of_kind(root, NodeKind::EquationalGlobal).unwrap();
-                    let equation = only_child_of_kind(global, NodeKind::Equation).unwrap();
+                    let invocation =
+                        only_child_of_kind(root, NodeKind::DeclarationSyntaxInvocation).unwrap();
+                    let argument =
+                        only_child_of_kind(invocation, NodeKind::SyntaxArgument).unwrap();
                     let value = if kind == SurfaceSyntaxCaptureKind::Pattern {
-                        only_child_of_kind(equation, NodeKind::Pattern).unwrap()
+                        only_child_of_kind(argument, NodeKind::Pattern).unwrap()
                     } else {
-                        expression_child(equation).unwrap()
+                        child_nodes(argument)
+                            .find(|node| is_expression_kind(node.kind))
+                            .unwrap()
                     };
                     let mut pending = vec![value];
                     let mut marker_index = None;
@@ -9354,6 +9362,13 @@ mod tests {
                     );
                     let result =
                         charge_capture_contents(value, &tokens, kind, &mut SyntaxBudget::default());
+                    let invocation_result = charge_declaration_invocation(
+                        invocation,
+                        &tokens,
+                        &contexts,
+                        true,
+                        &mut SyntaxBudget::default(),
+                    );
                     assert_eq!(
                         Arc::strong_count(&contents),
                         references,
@@ -9361,46 +9376,60 @@ mod tests {
                     );
                     if succeeds {
                         assert!(!result.unwrap());
-                        let rebuilt =
-                            capture_contents(&source, value, &tokens, &originals).unwrap();
-                        let forwarded = if grouped {
-                            let [MacroOutputNode::Group(MacroDelimiter::Parentheses, children, _)] =
-                                &rebuilt[..]
-                            else {
-                                panic!("the written group must remain")
-                            };
-                            let [forwarded] = &children[..] else {
-                                panic!("one forwarded value required")
-                            };
-                            forwarded
-                        } else {
-                            let [forwarded] = &rebuilt[..] else {
-                                panic!("singleton forward required")
-                            };
-                            forwarded
+                        assert!(invocation_result.unwrap());
+                        let projected = project_declaration_invocation_node(
+                            &source, invocation, &tokens, &contexts,
+                        )
+                        .unwrap();
+                        let retained = match &projected.captures[..] {
+                            [SurfaceSyntaxCapture::Expression(capture)] => {
+                                assert_eq!(kind, SurfaceSyntaxCaptureKind::Expression);
+                                assert!(matches!(capture.expression.kind, SurfaceExprKind::Unit));
+                                &capture.contents
+                            }
+                            [SurfaceSyntaxCapture::Pattern(capture)] => {
+                                assert_eq!(kind, SurfaceSyntaxCaptureKind::Pattern);
+                                assert!(matches!(
+                                    capture.pattern.kind,
+                                    SurfacePatternKind::Wildcard
+                                ));
+                                &capture.contents
+                            }
+                            _ => panic!("one protected capture required"),
+                        };
+                        assert_eq!(Arc::ptr_eq(retained, &contents), !grouped);
+                        if !grouped {
+                            continue;
+                        }
+                        let [MacroOutputNode::Group(MacroDelimiter::Parentheses, children, _)] =
+                            &retained[..]
+                        else {
+                            panic!("the written group must remain")
+                        };
+                        let [forwarded] = &children[..] else {
+                            panic!("one forwarded value required")
                         };
                         match forwarded {
                             MacroOutputNode::ForwardedExpression(capture, _) => {
                                 assert_eq!(kind, SurfaceSyntaxCaptureKind::Expression);
                                 assert!(Arc::ptr_eq(&capture.contents, &contents));
-                                assert!(matches!(
-                                    project_expression(&source, value, &tokens).unwrap().kind,
-                                    SurfaceExprKind::Unit
-                                ));
                             }
                             MacroOutputNode::ForwardedPattern(capture, _) => {
                                 assert_eq!(kind, SurfaceSyntaxCaptureKind::Pattern);
                                 assert!(Arc::ptr_eq(&capture.contents, &contents));
-                                assert!(matches!(
-                                    project_pattern(&source, value, &tokens).unwrap().kind,
-                                    SurfacePatternKind::Wildcard
-                                ));
                             }
                             _ => panic!("protected forward required"),
                         }
                     } else {
                         assert!(matches!(
                             result,
+                            Err(DeclarationExpansionFailure::Syntax {
+                                resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
+                                ..
+                            })
+                        ));
+                        assert!(matches!(
+                            invocation_result,
                             Err(DeclarationExpansionFailure::Syntax {
                                 resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
                                 ..
