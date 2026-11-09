@@ -2318,10 +2318,11 @@ fn charge_declaration_invocation(
     }
     budget.charge_units(selection.declaration.matcher.len())?;
     if selection.declaration.category != SurfaceSyntaxCategory::Declaration
-        || (executing && !matches!(selection.declaration.implementation, SurfaceSyntaxImplementation::Template))
-        || (executing && selection.declaration.matcher.iter().any(|part| {
-            matches!(part, SurfaceSyntaxMatcherPart::Capture { kind, .. } if !matches!(kind, SurfaceSyntaxCaptureKind::Identifier | SurfaceSyntaxCaptureKind::Type))
-        }))
+        || (executing
+            && !matches!(
+                selection.declaration.implementation,
+                SurfaceSyntaxImplementation::Template
+            ))
     {
         return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
     }
