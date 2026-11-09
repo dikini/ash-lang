@@ -5,7 +5,9 @@ mod foreign;
 
 use crate::lexer::TokenKind;
 
-use super::{ExpectedForm, NodeKind, ParseReason, Parser, SynchronizationBoundary, expression};
+use super::{
+    ExpectedForm, NodeKind, ParseReason, Parser, QuoteMode, SynchronizationBoundary, expression,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum GlobalDefinitionForm {
@@ -34,6 +36,7 @@ pub(super) enum PrimaryForm {
     Qualified,
     UpperIdentifier,
     Parenthesized,
+    SyntaxQuote,
     Perform,
     Discard,
     Retain,
@@ -161,6 +164,7 @@ const CURRENT_ASH_DIALECT: ParserDialect = ParserDialect {
             PrimaryForm::Qualified,
             PrimaryForm::UpperIdentifier,
             PrimaryForm::Parenthesized,
+            PrimaryForm::SyntaxQuote,
             PrimaryForm::Perform,
             PrimaryForm::Discard,
             PrimaryForm::Retain,
@@ -631,9 +635,14 @@ fn template_body(parser: &mut Parser<'_>) {
         parser.finish();
         return;
     }
+    let previous_mode = std::mem::replace(&mut parser.quote_mode, QuoteMode::Template);
     let mut closing = vec![TokenKind::RightBrace];
     while let Some(expected) = closing.last() {
-        if parser.at(expected) {
+        if parser.at(&TokenKind::SyntaxKeyword) && parser.nth(1) == Some(&TokenKind::LeftBrace) {
+            syntax_quote(parser);
+        } else if parser.at(&TokenKind::Dollar) && parser.nth(1) == Some(&TokenKind::LeftBrace) {
+            syntax_escape(parser);
+        } else if parser.at(expected) {
             let _ = parser.bump();
             closing.pop();
             parser.leave_structure();
@@ -671,6 +680,84 @@ fn template_body(parser: &mut Parser<'_>) {
     }
     while closing.pop().is_some() {
         parser.leave_structure();
+    }
+    parser.quote_mode = previous_mode;
+    parser.finish();
+}
+
+pub(super) fn syntax_quote(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::SyntaxQuote);
+    let _ = parser.bump(); // syntax
+    if !parser.expect(&TokenKind::LeftBrace, ExpectedForm::LeftBrace) {
+        parser.finish();
+        return;
+    }
+    if !parser.enter_structure() {
+        parser.consume_rest();
+        parser.finish();
+        return;
+    }
+    let mode = match parser.quote_mode {
+        QuoteMode::Template => QuoteMode::Template,
+        QuoteMode::Ordinary | QuoteMode::Escape | QuoteMode::Quote => QuoteMode::Quote,
+    };
+    let previous_mode = std::mem::replace(&mut parser.quote_mode, mode);
+    if parser.at(&TokenKind::LineEnd) {
+        let _ = parser.bump();
+    }
+    expression(parser);
+    if parser.at(&TokenKind::LineEnd) {
+        let _ = parser.bump();
+    }
+    let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+    parser.quote_mode = previous_mode;
+    parser.leave_structure();
+    parser.finish();
+}
+
+pub(super) fn syntax_escape(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::SyntaxEscape);
+    let _ = parser.bump(); // $
+    let previous_mode = std::mem::replace(&mut parser.quote_mode, QuoteMode::Escape);
+    if parser.nth(1) == Some(&TokenKind::LineEnd) {
+        block(parser);
+    } else if parser.enter_structure() {
+        let _ = parser.bump(); // {
+        let recovery_start = parser.pending_recovery_count();
+        expression(parser);
+        if parser.at(&TokenKind::RightBrace) {
+            parser.resolve_pending_at_current(
+                recovery_start,
+                SynchronizationBoundary::BlockClosingBrace,
+            );
+        } else if parser.at(&TokenKind::EndOfFile) {
+            parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::EndOfFile);
+        }
+        let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+        parser.leave_structure();
+    } else {
+        parser.consume_rest();
+    }
+    parser.quote_mode = previous_mode;
+    parser.finish();
+}
+
+pub(super) fn quote_hole(parser: &mut Parser<'_>) {
+    let kind = match parser.quote_mode {
+        QuoteMode::Template => NodeKind::TemplateSplice,
+        QuoteMode::Escape => NodeKind::EscapeCaptureRead,
+        QuoteMode::Quote => NodeKind::QuoteHole,
+        QuoteMode::Ordinary => unreachable!("ordinary Ash has no quote holes"),
+    };
+    parser.start(kind);
+    let _ = parser.bump(); // $
+    if matches!(parser.current(), Some(TokenKind::Identifier(_)))
+        || parser.quote_mode != QuoteMode::Quote
+            && matches!(parser.current(), Some(TokenKind::UpperIdentifier(_)))
+    {
+        let _ = parser.bump();
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
     }
     parser.finish();
 }
@@ -3265,7 +3352,12 @@ mod tests {
     use crate::{
         lexer::{lex, lex_with_budget},
         parser::{Event, ResourceFailure, parse_with_budget},
-        source::SourceFile,
+        source::{ByteRange, SourceFile},
+        surface::{SurfaceExpr, SurfaceExprKind, SurfaceExpressionCapture, SurfaceName},
+        syntax::{
+            DiagnosticLocation, ExpansionFrame, MacroDelimiter, MacroOrigin, MacroOutputNode,
+            SyntaxContexts,
+        },
         syntax_resource::SyntaxBudget,
     };
 
@@ -3446,6 +3538,623 @@ mod tests {
         let mut budget = SyntaxBudget::with_limit(limit);
         let lexed = lex_with_budget(source, &mut budget).expect("limited lexing should fit spans");
         parse_with_budget(lexed, &mut budget)
+    }
+
+    #[test]
+    fn quote_tree_work_is_charged_before_return_and_retries_at_the_exact_limit() {
+        let source = SourceFile::new(
+            "quote-resource.ash",
+            "main : Unit -> Int\nmain () = syntax { 0 + 1 }\n",
+        )
+        .unwrap();
+        let parse_at = |limit| {
+            let mut budget = SyntaxBudget::with_limit(limit);
+            let lexed = lex_with_budget(&source, &mut budget).unwrap();
+            let tree = parse_with_budget(lexed, &mut budget);
+            (tree, budget.consumed())
+        };
+        let (baseline, used) = parse_at(10_000);
+        assert_eq!(baseline.resource_failure(), None);
+        assert!(baseline.parse_diagnostics().is_empty());
+        // The completed-tree walk reserves a conservative child-scan bound.
+        assert!(used > baseline.tokens().len() + baseline.events().len());
+
+        let (short, _) = parse_at(used - 1);
+        assert_eq!(
+            short.resource_failure(),
+            Some(ResourceFailure::SyntaxWork { limit: used - 1 })
+        );
+        assert!(short.root().is_none());
+        for _ in 0..2 {
+            let (exact, consumed) = parse_at(used);
+            assert_eq!(exact, baseline);
+            assert_eq!(consumed, used);
+        }
+    }
+
+    #[test]
+    fn quote_free_template_keeps_its_flat_shape_and_work_cost() {
+        let source = SourceFile::new(
+            "ordinary-template.ash",
+            "pub syntax repeat $value:expr => {\n$( $value ),*\n}\n",
+        )
+        .unwrap();
+        let mut budget = SyntaxBudget::with_limit(10_000);
+        let lexed = lex_with_budget(&source, &mut budget).unwrap();
+        let tree = parse_with_budget(lexed, &mut budget);
+        assert_eq!(tree.resource_failure(), None);
+        assert!(tree.parse_diagnostics().is_empty());
+        assert_eq!(budget.consumed(), tree.tokens().len() + tree.events().len());
+        assert!(!tree.events().iter().any(|event| matches!(
+            event,
+            Event::Start(
+                NodeKind::SyntaxQuote
+                    | NodeKind::SyntaxEscape
+                    | NodeKind::TemplateSplice
+                    | NodeKind::EscapeCaptureRead
+                    | NodeKind::QuoteHole
+            )
+        )));
+    }
+
+    #[test]
+    fn quote_tree_check_reserves_its_walk_and_fails_before_a_pending_push() {
+        let source = SourceFile::new(
+            "quote-walk.ash",
+            "main : Unit -> Int\nmain () = syntax { 0 + 1 }\n",
+        )
+        .unwrap();
+        let tree = super::super::parse(lex(&source).unwrap());
+        let mut nodes = vec![tree.root().unwrap()];
+        let mut expected = 1; // Initial worklist entry.
+        while let Some(node) = nodes.pop() {
+            let children = node.children.iter().filter_map(|child| match child {
+                super::super::ConcreteElement::Node(child) => Some(child),
+                _ => None,
+            });
+            expected += 1 + node.children.len() + children.clone().count();
+            if matches!(
+                node.kind,
+                NodeKind::Pattern
+                    | NodeKind::AtomicType
+                    | NodeKind::EffectInstance
+                    | NodeKind::InterfaceApplication
+                    | NodeKind::OperationReference
+                    | NodeKind::Type
+                    | NodeKind::Kind
+            ) {
+                expected += node.children.len();
+            }
+            nodes.extend(children);
+        }
+        let mut exact = SyntaxBudget::with_limit(expected);
+        assert_eq!(
+            super::super::check_completed_quote_depth(&tree, &mut exact),
+            Ok(())
+        );
+        assert_eq!(exact.consumed(), expected);
+        let mut short = SyntaxBudget::with_limit(expected - 1);
+        assert_eq!(
+            super::super::check_completed_quote_depth(&tree, &mut short),
+            Err(ResourceFailure::SyntaxWork {
+                limit: expected - 1
+            })
+        );
+
+        let tiny = super::super::cst::build(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![
+                Event::Start(NodeKind::SyntaxQuote),
+                Event::Start(NodeKind::QuoteHole),
+                Event::Finish,
+                Event::Finish,
+            ],
+            None,
+        );
+        let mut before_push = SyntaxBudget::with_limit(3);
+        assert_eq!(
+            super::super::check_completed_quote_depth(&tiny, &mut before_push),
+            Err(ResourceFailure::SyntaxWork { limit: 3 })
+        );
+        assert_eq!(before_push.consumed(), 3);
+        let mut enough = SyntaxBudget::with_limit(5);
+        assert_eq!(
+            super::super::check_completed_quote_depth(&tiny, &mut enough),
+            Ok(())
+        );
+        assert_eq!(enough.consumed(), 5);
+    }
+
+    #[test]
+    fn inline_escape_shape_weight_is_reserved_before_inspection() {
+        use super::super::{ConcreteElement, ConcreteNode, ConcreteTree};
+
+        let block = || ConcreteNode {
+            kind: NodeKind::Block,
+            children: Vec::new(),
+        };
+        let multiline = ConcreteNode {
+            kind: NodeKind::SyntaxEscape,
+            children: vec![ConcreteElement::Token(0), ConcreteElement::Node(block())],
+        };
+        assert_eq!(super::super::source_structural_weight(&multiline), 0);
+        let inline = ConcreteNode {
+            kind: NodeKind::SyntaxEscape,
+            children: vec![
+                ConcreteElement::Token(0),
+                ConcreteElement::Token(1),
+                ConcreteElement::Node(block()),
+                ConcreteElement::Token(2),
+            ],
+        };
+        assert_eq!(super::super::source_structural_weight(&inline), 1);
+        assert_eq!(super::super::source_structural_weight(&block()), 1);
+        let unknown = ConcreteNode {
+            kind: NodeKind::SyntaxEscape,
+            children: Vec::new(),
+        };
+        assert_eq!(super::super::source_structural_weight(&unknown), 1);
+
+        let tree = ConcreteTree {
+            root: Some(inline),
+            tokens: Vec::new(),
+            events: Vec::new(),
+            lexical_diagnostics: Vec::new(),
+            parse_diagnostics: Vec::new(),
+            malformed: None,
+            resource_failure: None,
+        };
+        let mut before_inspection = SyntaxBudget::with_limit(3);
+        assert_eq!(
+            super::super::check_completed_quote_depth(&tree, &mut before_inspection),
+            Err(ResourceFailure::SyntaxWork { limit: 3 })
+        );
+        assert_eq!(before_inspection.consumed(), 2);
+        let mut exact = SyntaxBudget::with_limit(10);
+        assert_eq!(
+            super::super::check_completed_quote_depth(&tree, &mut exact),
+            Ok(())
+        );
+        assert_eq!(exact.consumed(), 10);
+    }
+
+    #[test]
+    fn inline_escape_source_uses_one_shared_budget_and_retries() {
+        let source = SourceFile::new(
+            "inline-resource.ash",
+            "main : Unit -> Int\nmain () = syntax { ${ 0 + 1 } }\n",
+        )
+        .unwrap();
+        let parse_at = |limit| {
+            let mut budget = SyntaxBudget::with_limit(limit);
+            let lexed = lex_with_budget(&source, &mut budget).unwrap();
+            let tree = parse_with_budget(lexed, &mut budget);
+            (tree, budget.consumed())
+        };
+        let (baseline, used) = parse_at(10_000);
+        assert_eq!(baseline.resource_failure(), None);
+        assert!(
+            baseline.parse_diagnostics().is_empty(),
+            "{:?}",
+            baseline.parse_diagnostics()
+        );
+        assert!(
+            baseline
+                .events()
+                .iter()
+                .any(|event| { matches!(event, Event::Start(NodeKind::SyntaxEscape)) })
+        );
+        let (short, _) = parse_at(used - 1);
+        assert_eq!(
+            short.resource_failure(),
+            Some(ResourceFailure::SyntaxWork { limit: used - 1 })
+        );
+        assert!(short.root().is_none());
+        let (retry, consumed) = parse_at(used);
+        assert_eq!(consumed, used);
+        assert_eq!(retry, baseline);
+    }
+
+    fn structured_quote_fixture(source: &SourceFile) -> Vec<MacroOutputNode> {
+        let lexed = lex(source).unwrap();
+        let mut groups = vec![(None, Vec::new())];
+        for token in &lexed.tokens {
+            match &token.kind {
+                TokenKind::LeftParen | TokenKind::LeftBrace => {
+                    let delimiter = if token.kind == TokenKind::LeftParen {
+                        MacroDelimiter::Parentheses
+                    } else {
+                        MacroDelimiter::Braces
+                    };
+                    groups.push((Some((delimiter, token.span)), Vec::new()));
+                }
+                TokenKind::RightParen | TokenKind::RightBrace => {
+                    let (opening, children) = groups.pop().unwrap();
+                    let (delimiter, start) = opening.unwrap();
+                    let origin = start.cover(token.span).unwrap().into();
+                    groups
+                        .last_mut()
+                        .unwrap()
+                        .1
+                        .push(MacroOutputNode::Group(delimiter, children, origin));
+                }
+                TokenKind::EndOfFile => {}
+                TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => {
+                    let name = SurfaceName {
+                        text: text.clone(),
+                        span: token.span,
+                        introduction: 0,
+                        introduced_at: None,
+                        written: true,
+                        diagnostic: None,
+                    };
+                    groups
+                        .last_mut()
+                        .unwrap()
+                        .1
+                        .push(MacroOutputNode::Identifier(name, token.span.into()));
+                }
+                _ => {
+                    let range = token.span.range();
+                    let spelling = &source.text()[range.start() as usize..range.end() as usize];
+                    groups.last_mut().unwrap().1.push(MacroOutputNode::Token(
+                        token.kind.clone(),
+                        spelling.into(),
+                        token.span.into(),
+                    ));
+                }
+            }
+        }
+        assert_eq!(groups.len(), 1);
+        groups.pop().unwrap().1
+    }
+
+    #[test]
+    fn structured_quote_tree_uses_the_staging_budget_and_composed_depth() {
+        let text = |outer: usize| {
+            format!(
+                "probe : Unit -> Int\nprobe () = (syntax {{ $part{} }}){}\n",
+                " + 1".repeat(60),
+                " + 1".repeat(outer)
+            )
+        };
+        for (outer, expected_depth_failure) in [(66, false), (67, true)] {
+            let source = SourceFile::new("structured-quote.ash", text(outer)).unwrap();
+            let end = u32::try_from(source.text().len()).unwrap();
+            let invocation = source.span(ByteRange::new(0, end).unwrap()).unwrap();
+            let mut output = structured_quote_fixture(&source);
+            let quote_start = u32::try_from(source.text().find("syntax").unwrap()).unwrap();
+            let definition = source
+                .span(ByteRange::new(quote_start, quote_start + 6).unwrap())
+                .unwrap();
+            let frame = std::sync::Arc::new(ExpansionFrame {
+                invocation,
+                definition,
+            });
+            let mut expected = None;
+            let mut pending = vec![output.as_mut_slice()];
+            while let Some(nodes) = pending.pop() {
+                for node in nodes {
+                    match node {
+                        MacroOutputNode::Group(_, children, _) => pending.push(children),
+                        MacroOutputNode::Identifier(name, origin) if name.text == "part" => {
+                            let combined = MacroOrigin::combined(
+                                vec![name.span.into(), definition.into()],
+                                std::sync::Arc::clone(&frame),
+                            )
+                            .unwrap();
+                            let mut diagnostic = DiagnosticLocation::new(combined.clone());
+                            diagnostic.add_frame(&frame);
+                            name.introduction = 1;
+                            name.introduced_at = Some(invocation);
+                            name.written = false;
+                            name.diagnostic = Some(Box::new(diagnostic));
+                            *origin = combined.clone();
+                            expected = Some((name.clone(), combined));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let (expected_name, expected_origin) = expected.expect("one quote hole is present");
+            let contexts = SyntaxContexts::new(&[], &[vec![]], &[Some(0)]);
+            let parse_at = |limit| {
+                let mut budget = SyntaxBudget::with_limit(limit);
+                let parsed = super::super::parse_macro_tree_inner(
+                    &source,
+                    invocation,
+                    output.clone(),
+                    &contexts,
+                    &[],
+                    super::super::MacroOutputPosition::StagedDeclarations,
+                    &mut budget,
+                );
+                (parsed, budget.consumed())
+            };
+            let (parsed, used) = parse_at(100_000);
+            if expected_depth_failure {
+                assert!(matches!(
+                    parsed,
+                    Err(super::super::MacroParseFailure::Syntax {
+                        resource: Some(ResourceFailure::StructuralDepth { .. }),
+                        ..
+                    })
+                ));
+                continue;
+            }
+            let parsed = parsed.expect("the structured quote at the boundary parses");
+            assert!(
+                parsed
+                    .tree
+                    .events()
+                    .iter()
+                    .any(|event| { matches!(event, Event::Start(NodeKind::SyntaxQuote)) })
+            );
+            let assert_hole = |tree: &super::super::ParsedMacroTree| {
+                let (name, origin) = tree
+                    .original_nodes
+                    .values()
+                    .find_map(|node| match node {
+                        MacroOutputNode::Identifier(name, origin) if name.text == "part" => {
+                            Some((name, origin))
+                        }
+                        _ => None,
+                    })
+                    .expect("the quote hole identifier must retain its original node");
+                assert_eq!(name, &expected_name);
+                assert_eq!(name.diagnostic, expected_name.diagnostic);
+                assert_eq!(origin, &expected_origin);
+                assert_eq!(origin.primary(), name.span);
+            };
+            assert_hole(&parsed);
+            assert!(matches!(
+                parse_at(used - 1).0,
+                Err(super::super::MacroParseFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { .. }),
+                    ..
+                })
+            ));
+            let (retry, consumed) = parse_at(used);
+            let retry = retry.expect("the same exact budget succeeds after a short attempt");
+            assert_eq!(consumed, used);
+            assert_eq!(retry.tree, parsed.tree);
+            assert_eq!(retry.original_nodes, parsed.original_nodes);
+            assert_eq!(retry.admission_identifiers, parsed.admission_identifiers);
+            assert_hole(&retry);
+        }
+    }
+
+    #[test]
+    fn inline_escape_structured_nested_block_uses_shared_budget_and_depth() {
+        for (inner, over) in [(123, false), (124, true)] {
+            let text = format!(
+                "probe : Unit -> Int\nprobe () = (syntax {{ ${{ {{\n1{}\n}} }} }}) + 1\n",
+                " + 1".repeat(inner)
+            );
+            let source = SourceFile::new("structured-inline-block.ash", text).unwrap();
+            let end = u32::try_from(source.text().len()).unwrap();
+            let invocation = source.span(ByteRange::new(0, end).unwrap()).unwrap();
+            let output = structured_quote_fixture(&source);
+            let contexts = SyntaxContexts::new(&[], &[], &[]);
+            let parse_at = |limit| {
+                let mut budget = SyntaxBudget::with_limit(limit);
+                let result = super::super::parse_macro_tree_inner(
+                    &source,
+                    invocation,
+                    output.clone(),
+                    &contexts,
+                    &[],
+                    super::super::MacroOutputPosition::StagedDeclarations,
+                    &mut budget,
+                );
+                (result, budget.consumed())
+            };
+            let (parsed, used) = parse_at(100_000);
+            if over {
+                assert!(matches!(
+                    parsed,
+                    Err(super::super::MacroParseFailure::Syntax {
+                        resource: Some(ResourceFailure::StructuralDepth {
+                            limit: super::super::STRUCTURAL_DEPTH_LIMIT
+                        }),
+                        ..
+                    })
+                ));
+                continue;
+            }
+            let parsed = parsed.expect("the structured inline tree at depth 128 must parse");
+            let mut pending = vec![parsed.tree.root().unwrap()];
+            let mut quotes = 0;
+            let mut escapes = 0;
+            let mut blocks = 0;
+            let mut additions = 0;
+            while let Some(node) = pending.pop() {
+                quotes += usize::from(node.kind == NodeKind::SyntaxQuote);
+                escapes += usize::from(node.kind == NodeKind::SyntaxEscape);
+                blocks += usize::from(node.kind == NodeKind::Block);
+                additions += usize::from(node.kind == NodeKind::AdditiveExpression);
+                pending.extend(node.children.iter().filter_map(|child| match child {
+                    super::super::ConcreteElement::Node(child) => Some(child),
+                    _ => None,
+                }));
+            }
+            assert_eq!((quotes, escapes, blocks, additions), (1, 1, 1, 124));
+            assert!(
+                parsed
+                    .original_nodes
+                    .values()
+                    .any(|node| matches!(node, MacroOutputNode::Token(TokenKind::Dollar, _, _)))
+            );
+            assert!(matches!(
+                parse_at(used - 1).0,
+                Err(super::super::MacroParseFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { .. }),
+                    ..
+                })
+            ));
+            let (retry, consumed) = parse_at(used);
+            let retry = retry.expect("the same exact budget must retry successfully");
+            assert_eq!(consumed, used);
+            assert_eq!(retry.tree, parsed.tree);
+            assert_eq!(retry.original_nodes, parsed.original_nodes);
+        }
+    }
+
+    #[test]
+    fn quote_declaration_admission_uses_the_existing_budget_and_resource_channel() {
+        let text = |outer: usize| {
+            format!(
+                "probe : Unit -> Int\nprobe () = (syntax {{ $part{} }}){}\n",
+                " + 1".repeat(60),
+                " + 1".repeat(outer)
+            )
+        };
+        let source = SourceFile::new("quote-admission.ash", text(66)).unwrap();
+        let end = u32::try_from(source.text().len()).unwrap();
+        let invocation = source.span(ByteRange::new(0, end).unwrap()).unwrap();
+        let output = structured_quote_fixture(&source);
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        let admit = |limit| {
+            let mut budget = SyntaxBudget::with_limit(limit);
+            budget.charge_units(7).unwrap();
+            let result = super::super::parse_declaration_template_admission(
+                &source,
+                invocation,
+                output.clone(),
+                &contexts,
+                &[],
+                &mut budget,
+            );
+            (result, budget.consumed())
+        };
+
+        let mut parse_budget = SyntaxBudget::with_limit(100_000);
+        parse_budget.charge_units(7).unwrap();
+        let parsed = super::super::parse_macro_tree_inner(
+            &source,
+            invocation,
+            output.clone(),
+            &contexts,
+            &[],
+            super::super::MacroOutputPosition::StagedDeclarations,
+            &mut parse_budget,
+        )
+        .expect("the boundary quote is parsed before admission refuses it");
+        assert!(
+            parsed
+                .tree
+                .events()
+                .iter()
+                .any(|event| matches!(event, Event::Start(NodeKind::SyntaxQuote)))
+        );
+        let (result, used) = admit(100_000);
+        assert!(matches!(
+            result,
+            Err(super::super::MacroParseFailure::Invalid)
+        ));
+        assert!(used > parse_budget.consumed());
+        assert!(matches!(
+            admit(used - 1).0,
+            Err(super::super::MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        for _ in 0..2 {
+            let (result, consumed) = admit(used);
+            assert!(matches!(
+                result,
+                Err(super::super::MacroParseFailure::Invalid)
+            ));
+            assert_eq!(consumed, used);
+        }
+
+        let over = SourceFile::new("quote-admission-over.ash", text(67)).unwrap();
+        let end = u32::try_from(over.text().len()).unwrap();
+        let span = over.span(ByteRange::new(0, end).unwrap()).unwrap();
+        let mut budget = SyntaxBudget::with_limit(100_000);
+        assert!(matches!(
+            super::super::parse_declaration_template_admission(
+                &over,
+                span,
+                structured_quote_fixture(&over),
+                &contexts,
+                &[],
+                &mut budget,
+            ),
+            Err(super::super::MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::StructuralDepth {
+                    limit: super::super::STRUCTURAL_DEPTH_LIMIT
+                }),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn quote_tree_keeps_a_protected_expression_on_the_existing_declaration_path() {
+        let source = SourceFile::new(
+            "protected-quote.ash",
+            "probe : Unit -> Int\nprobe () = syntax { 1 }\n",
+        )
+        .unwrap();
+        let end = u32::try_from(source.text().len()).unwrap();
+        let invocation = source.span(ByteRange::new(0, end).unwrap()).unwrap();
+        let mut output = structured_quote_fixture(&source);
+        let mut expected = None;
+        let mut pending = vec![output.as_mut_slice()];
+        while let Some(nodes) = pending.pop() {
+            for node in nodes {
+                match node {
+                    MacroOutputNode::Group(_, children, _) => pending.push(children),
+                    MacroOutputNode::Token(TokenKind::Integer(value), spelling, origin) => {
+                        let token = MacroOutputNode::Token(
+                            TokenKind::Integer(value.clone()),
+                            std::sync::Arc::clone(spelling),
+                            origin.clone(),
+                        );
+                        let protected = MacroOutputNode::ForwardedExpression(
+                            SurfaceExpressionCapture {
+                                expression: SurfaceExpr {
+                                    kind: SurfaceExprKind::Integer(value.clone()),
+                                    span: origin.primary(),
+                                    diagnostic: Some(Box::new(DiagnosticLocation::new(
+                                        origin.clone(),
+                                    ))),
+                                },
+                                contents: std::sync::Arc::from([token]),
+                            },
+                            origin.clone(),
+                        );
+                        *node = protected.clone();
+                        expected = Some(protected);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let expected = expected.expect("one protected expression is present");
+        let mut budget = SyntaxBudget::with_limit(10_000);
+        let parsed = super::super::parse_macro_tree_inner(
+            &source,
+            invocation,
+            output,
+            &SyntaxContexts::new(&[], &[], &[]),
+            &[],
+            super::super::MacroOutputPosition::Declarations,
+            &mut budget,
+        )
+        .expect("the existing declaration path accepts a protected expression");
+        assert!(
+            parsed
+                .tree
+                .events()
+                .iter()
+                .any(|event| { matches!(event, Event::Start(NodeKind::SyntaxQuote)) })
+        );
+        assert!(parsed.original_nodes.values().any(|node| node == &expected));
     }
 
     #[test]
