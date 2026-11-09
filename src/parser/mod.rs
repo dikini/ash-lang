@@ -1109,9 +1109,11 @@ fn charge_staged_output(
                     .map_err(macro_resource_failure)?;
                 pending.extend(children.iter().map(|child| (child, depth + 1)));
             }
+            // The adapter moves this preflighted capture into original_nodes;
+            // the piece, placeholder token and map entry are reserved above.
+            MacroOutputNode::ForwardedType(_, _) => {}
             MacroOutputNode::Expression(_, _)
             | MacroOutputNode::ForwardedExpression(_, _)
-            | MacroOutputNode::ForwardedType(_, _)
             | MacroOutputNode::ForwardedPattern(_, _)
             | MacroOutputNode::Splice(_) => return Err(MacroParseFailure::Invalid),
         }
