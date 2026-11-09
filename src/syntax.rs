@@ -2248,6 +2248,85 @@ mod tests {
         },
     };
 
+    #[test]
+    fn protected_retention_finds_nested_syntax_and_host_bridges() {
+        let source = SourceFile::new("bridge.ash", "keep").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        let name = SurfaceName {
+            text: "keep".into(),
+            span,
+            introduction: 0,
+            introduced_at: None,
+            written: true,
+            diagnostic: None,
+        };
+        let ordinary = SurfaceExpr {
+            kind: SurfaceExprKind::Unit,
+            span,
+            diagnostic: None,
+        };
+        let nested = SurfaceExpressionCapture {
+            expression: SurfaceExpr {
+                kind: SurfaceExprKind::SyntaxInvocation {
+                    name,
+                    captures: Vec::new(),
+                },
+                span,
+                diagnostic: None,
+            },
+            contents: Arc::from([]),
+        };
+        assert!(
+            charge_expression_copy(&nested.expression, 0, false, &mut SyntaxBudget::default(),)
+                .unwrap()
+        );
+        let retained = Arc::from([MacroOutputNode::Group(
+            MacroDelimiter::Parentheses,
+            vec![MacroOutputNode::ForwardedExpression(nested, span.into())],
+            span.into(),
+        )]);
+        let expression = SurfaceExpressionCapture {
+            expression: ordinary.clone(),
+            contents: Arc::clone(&retained),
+        };
+        let pattern = SurfacePatternCapture {
+            pattern: SurfacePattern {
+                kind: SurfacePatternKind::Wildcard,
+                span,
+                diagnostic: None,
+            },
+            contents: Arc::clone(&retained),
+        };
+        assert!(charge_expression_retention(&expression, 0, &mut SyntaxBudget::default()).unwrap());
+        assert!(charge_pattern_retention(&pattern, 0, &mut SyntaxBudget::default()).unwrap());
+        for original in [
+            MacroOutputNode::ForwardedExpression(expression, span.into()),
+            MacroOutputNode::ForwardedPattern(pattern, span.into()),
+        ] {
+            assert!(
+                charge_captured_ep_original(&original, 0, &mut SyntaxBudget::default()).unwrap()
+            );
+        }
+        let host = SurfaceExpressionCapture {
+            expression: ordinary,
+            contents: Arc::from([]),
+        };
+        let host_original = MacroOutputNode::Expression(host.clone(), span.into());
+        assert!(matches!(
+            charge_captured_ep_original(&host_original, 0, &mut SyntaxBudget::default()),
+            Err(crate::parser::MacroParseFailure::Invalid)
+        ));
+        let protected = SurfaceExpressionCapture {
+            expression: host.expression,
+            contents: Arc::from([MacroOutputNode::Group(
+                MacroDelimiter::Parentheses,
+                vec![host_original],
+                span.into(),
+            )]),
+        };
+        assert!(charge_expression_retention(&protected, 0, &mut SyntaxBudget::default()).unwrap());
+    }
+
     fn nested_template(
         text: &str,
         transformer: bool,
