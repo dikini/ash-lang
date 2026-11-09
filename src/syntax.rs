@@ -531,6 +531,57 @@ enum OwnedSyntax<'a> {
     Contents(&'a MacroOutputNode),
 }
 
+/// Reserve copying the location/frame produced by the first pattern projection.
+fn charge_inherited_frame_copy(
+    location: Option<&DiagnosticLocation>,
+    depth: usize,
+    frame: &Arc<ExpansionFrame>,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    if let Some(location) = location {
+        budget.charge_units(location.frames.len())?;
+        if !location
+            .frames
+            .iter()
+            .any(|existing| Arc::ptr_eq(existing, frame))
+        {
+            budget.charge()?;
+        }
+    } else {
+        type_depth(depth, 1)?;
+        // The first projection created a location, source origin and frame;
+        // the scheduled clone copies all three.
+        budget.charge_units(3)?;
+    }
+    Ok(())
+}
+
+fn charge_inherited_name_copy(
+    name: &SurfaceName,
+    depth: usize,
+    frame: &Arc<ExpansionFrame>,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    charge_inherited_frame_copy(name.diagnostic.as_deref(), depth, frame, budget)
+}
+
+fn charge_inherited_reference_copy(
+    reference: &SurfaceReference,
+    depth: usize,
+    frame: &Arc<ExpansionFrame>,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    match reference {
+        SurfaceReference::Unqualified(name) => {
+            charge_inherited_name_copy(name, depth, frame, budget)
+        }
+        SurfaceReference::Qualified(name) => {
+            charge_inherited_name_copy(&name.qualifier, depth, frame, budget)?;
+            charge_inherited_name_copy(&name.member, depth, frame, budget)
+        }
+    }
+}
+
 /// Reserve actual owned edges and inspect shared contents before copying.
 /// The result reports an expression-syntax/host bridge found in the value;
 /// callers decide whether that bridge is an execution boundary or admission.
@@ -538,6 +589,7 @@ fn charge_owned_syntax(
     root: OwnedSyntax<'_>,
     prefix: usize,
     work: TypeWork,
+    copied_frame: Option<&Arc<ExpansionFrame>>,
     budget: &mut SyntaxBudget,
 ) -> Result<bool, ResourceFailure> {
     use crate::surface::{SurfaceKindKind, SurfaceLocalDeclaration};
@@ -814,12 +866,26 @@ fn charge_owned_syntax(
                     budget.charge_units(2)?;
                 }
                 charge_type_location(pattern.diagnostic.as_deref(), depth, work, budget)?;
+                if let Some(frame) = copied_frame {
+                    charge_inherited_frame_copy(
+                        pattern.diagnostic.as_deref(),
+                        depth,
+                        frame,
+                        budget,
+                    )?;
+                }
                 match &pattern.kind {
                     SurfacePatternKind::TemplateSplice(name) => {
                         charge_type_name(name, depth, work, budget)?;
+                        if let Some(frame) = copied_frame {
+                            charge_inherited_name_copy(name, depth, frame, budget)?;
+                        }
                     }
                     SurfacePatternKind::Binder(binder) => {
                         charge_type_name(&binder.name, depth, work, budget)?;
+                        if let Some(frame) = copied_frame {
+                            charge_inherited_name_copy(&binder.name, depth, frame, budget)?;
+                        }
                     }
                     SurfacePatternKind::Tuple(elements) => {
                         copy_entries!(elements.len(), work);
@@ -832,6 +898,9 @@ fn charge_owned_syntax(
                     }
                     SurfacePatternKind::Constructor { name, payload } => {
                         charge_type_reference(name, depth, work, budget)?;
+                        if let Some(frame) = copied_frame {
+                            charge_inherited_reference_copy(name, depth, frame, budget)?;
+                        }
                         if let Some(payload) = payload {
                             let child = type_depth(depth, 1)?;
                             copy_entries!(1, work);
@@ -1019,6 +1088,7 @@ pub(crate) fn charge_expression_copy(
         OwnedSyntax::Expression(expression),
         prefix,
         TypeWork::Copy { inherit_frame },
+        None,
         budget,
     )
 }
@@ -1033,6 +1103,24 @@ pub(crate) fn charge_pattern_copy(
         OwnedSyntax::Pattern(pattern),
         prefix,
         TypeWork::Copy { inherit_frame },
+        None,
+        budget,
+    )
+}
+
+pub(crate) fn charge_scheduled_pattern_copy(
+    pattern: &SurfacePattern,
+    prefix: usize,
+    frame: Option<&Arc<ExpansionFrame>>,
+    budget: &mut SyntaxBudget,
+) -> Result<bool, ResourceFailure> {
+    charge_owned_syntax(
+        OwnedSyntax::Pattern(pattern),
+        prefix,
+        TypeWork::Copy {
+            inherit_frame: false,
+        },
+        frame,
         budget,
     )
 }
@@ -1044,7 +1132,7 @@ fn charge_owned_retention(
     budget: &mut SyntaxBudget,
 ) -> Result<bool, ResourceFailure> {
     let depth = type_depth(prefix, 1)?;
-    let mut bridge = charge_owned_syntax(root, depth, TypeWork::Inspect, budget)?;
+    let mut bridge = charge_owned_syntax(root, depth, TypeWork::Inspect, None, budget)?;
     let contents_depth = type_depth(depth, 1)?;
     budget.charge()?; // retained contents Arc
     for node in contents {
@@ -1052,6 +1140,7 @@ fn charge_owned_retention(
             OwnedSyntax::Contents(node),
             contents_depth,
             TypeWork::Inspect,
+            None,
             budget,
         )?;
     }

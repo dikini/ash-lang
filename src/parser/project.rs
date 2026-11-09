@@ -2693,6 +2693,7 @@ fn charge_composed_projection(
         usize::from(source_spans),
         false,
         0usize,
+        false,
     )];
     let mut raw_patterns = Vec::new();
     let mut bridge = false;
@@ -2704,6 +2705,7 @@ fn charge_composed_projection(
         parent_spans,
         parent_nominal,
         parent_wrappers,
+        scheduled_pattern,
     )) = pending.pop()
     {
         budget.charge()?;
@@ -2905,6 +2907,9 @@ fn charge_composed_projection(
                         span_walks,
                         nominal,
                         wrappers,
+                        scheduled_pattern
+                            || (matches!(node.kind, NodeKind::MatchArm | NodeKind::HandlerClause)
+                                && child.kind == NodeKind::Pattern),
                     ));
                 }
                 ConcreteElement::Token(index) => {
@@ -2967,6 +2972,16 @@ fn charge_composed_projection(
                                 tokens.frame.is_some(),
                                 budget,
                             )?;
+                            if scheduled_pattern {
+                                // Match/handler finish tasks clone the projected
+                                // pattern after its first frame inheritance.
+                                bridge |= crate::syntax::charge_scheduled_pattern_copy(
+                                    &capture.pattern,
+                                    depth,
+                                    tokens.frame,
+                                    budget,
+                                )?;
+                            }
                         }
                         Some(crate::syntax::MacroOutputNode::Identifier(name, origin))
                             if in_type
