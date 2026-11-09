@@ -18,8 +18,8 @@
 The retained [expression-syntax specification](../../spec/syntax-expansion.md)
 is the slice 1 baseline. CP-0034 is accepted, and the C1–C4 contract and corpus
 checks are recorded in the delivery plan. On 2026-11-09, the verified retaining
-commit is `3a30b75307cb9c4208b71ddc15efb7fa0ecc1bb2`, tree
-`94420e402b5bec57099f94a33e0a9c15b70a6133`. Recheck refs and worker ownership
+commit is `3dc43762930eda907e6a75c6d78123019833f5c6`, tree
+`854af3aa615906f56ee905ba32951dfaec72d902`. Recheck refs and worker ownership
 before dispatch. The plan records the earlier retained squash commits, their
 partial criteria and the remaining producer/consumer interfaces.
 
@@ -110,6 +110,10 @@ retained by [PR #276](https://github.com/dikini/ash-lang/pull/276) at
   [D6](https://github.com/dikini/ash-lang/issues/219#issuecomment-6748447094)
   and [H3](https://github.com/dikini/ash-lang/issues/229#issuecomment-6748450548)
   have been applied and read back.
+- [PR #283](https://github.com/dikini/ash-lang/pull/283) retains the bounded
+  source declaration-capture path at `3dc43762`. The checked
+  [D5 record](https://github.com/dikini/ash-lang/issues/223#issuecomment-6750107621)
+  leaves the full D5 and I19 criteria open.
 
 For the original I15 `type_error.ash`, a fresh human and JSON driver readback
 at `9e89ac12` reports the ordinary expected-Int/found-Bool cause with the
@@ -191,9 +195,9 @@ gates remain open.
 Independent QA and Sol own their checks; the orchestrator owns retaining
 integration and acceptance confirmation. Main is a separate boundary.
 
-### Local declaration-capture candidate
+### Retained declaration-capture path
 
-**Delivered in the local candidate:** The source-only D5 candidate for
+**Delivered:** The source-only D5 candidate for
 [#223](https://github.com/dikini/ash-lang/issues/223) is
 `aabaf99455762b36ffd6cc4ab6942bed24669589`, tree
 `de0c2e1aef89ac4e416f8b0a39ed76c6ce18c570`, based on retained `3a30b753`.
@@ -222,10 +226,11 @@ It records 429 distinct passes, including 47 architecture tests, with equal
 before/after input snapshots. Two separate tests are ignored: the existing
 [#277](https://github.com/dikini/ash-lang/issues/277) nominal-context case and
 a supplemental valid nonempty-template positive awaiting D5/D6. Repeated stack
-runs are not additional distinct tests. Independent QA and Sol have cleared the
-focused candidate and evidence. This TASK-only record changes no product source
-or tests from `aabaf994`; its focused gate ran at that source pin and was not
-rerun on this record. This record does not establish retained delivery.
+runs are not additional distinct tests. Independent QA and Sol cleared the
+focused candidate and evidence. The gate ran at `aabaf994`; the TASK-only
+successor `15c3f8ce` retained identical product source and tests, and PR #283
+retained its exact tree at `3dc43762`. The checked #223 record reports this
+bounded delivery; its original criteria remain unchecked.
 
 The initial public red pin `400652b2` failed at the declaration capture header
 before the port. At preliminary pin `7ad738ae`, an inherited host refusal test
@@ -261,14 +266,68 @@ generated or structured recapture, procedural declarations, deriving and the
 connected consumers remain open. A valid unused nonempty template remains a
 positive obligation, not a language rejection.
 
-**Awaiting:** Independent checks of this record, a published PR and PR review,
-verified retention and a partial #223 issue-record readback. D8, E4, V3, V7 and
-the fresh full-workspace gate remain open; D8 is the next full checkpoint once
-its required connected paths are ready.
+**Awaiting:** D8, E4, V3, V7 and the fresh full-workspace gate remain open;
+D8 is the next full checkpoint once its required connected paths are ready.
 
-**Owner:** The developer owns candidate changes, evidence and the partial issue
-record. Independent QA and Sol own their checks; the orchestrator owns
-publication, integration and acceptance confirmation.
+**Owner:** The developer owns subsequent changes and evidence. Independent QA
+and Sol own their checks; the orchestrator owns integration and acceptance
+confirmation.
+
+### Local quote and escape parser candidate
+
+**Delivered in the local candidate:** The parser-only E1 candidate for
+[#226](https://github.com/dikini/ash-lang/issues/226) is
+`74f5e024faf67db185ba97f3c75f00cd9aa93c58`, tree
+`b669b3b00a537cdb4bd955d15249e712e23dddad`, based on retained `3dc43762`.
+It parses expression quotes, multiline escapes and the accepted inline
+result-expression form while preserving ordinary Block grammar and the distinct
+template-splice, escape-capture and quote-hole scopes. The ordinary and staged
+projection paths refuse unconsumed quote and escape nodes; this candidate does
+not admit or execute them.
+
+The unchanged full `early_categories_forms.ash` now parses without recovery.
+Its test checks all eight escape positions and their capture operands, including
+the final declaration capture. This is parser evidence; it does not establish
+the full categories graph's admission or execution. The unchanged I17
+`malformed_helper.ash` reaches its missing-operand parser failure through the
+public driver. The `unbound_outer.ash` component preserves the outer splice;
+its required definition-time rejection remains open.
+
+The focused receipt at
+`/home/dikini/Projects/ash-lang/.worktrees/task-0068-handoff/evidence/e1-final-74f5/receipt.json`
+has SHA-256
+`b442345aff25ce4dc1d169b9bbef63efa0300ed5484540e2f4efbd87f3fc43d7`.
+It records 465 distinct passing tests and two retained ignores: the #277
+nominal-context case and a valid nonempty declaration-template positive. The
+source and structured quote controls cover exact/short/retry work and composed
+depth 128/129. A constructed structured input uses the existing D6 admission
+wrapper and its pre-spent ledger: successful quote parsing reaches the
+intentional `Invalid` projection refusal, while insufficient work and excess
+depth retain their separate resource failures. This is a component check, not
+quote admission. Nested quote and inline-escape tests each observe success,
+refusal and drop on a 512 KiB stack; repeated runs are not additional tests.
+The fixed I15 human and JSON diagnostics and retained D5, Type, expression,
+pattern, slice 1, S3, H5, parser and architecture controls also pass.
+
+The red test at `e9ae8c6d` failed at `syntax` before this port. Independent QA
+and Sol cleared the focused source and evidence. The focused gate ran at
+`74f5e024`; this TASK-only record preserves identical product, test,
+configuration and fixed-corpus inputs. The gate was not rerun on this record.
+The constructed quote metadata and nonstaged protected-expression tests remain
+component evidence, not public host or quote-transfer results.
+
+**Remaining:** Full E1 quote admission and unknown-outer rejection, the E2
+checked-host quote consumer, E4 escape execution and the original I17/I22
+connected and diagnostic criteria remain open. No original criterion is closed
+by parser-only evidence.
+
+**Awaiting:** Independent TASK-record checks, PR review, verified retention and
+the partial #226 issue record. D8, E4, V3, V7 and the fresh full-workspace gate
+remain open.
+
+**Owner:** The developer owns the candidate, evidence and acceptance record.
+Independent QA and Sol own their checks; the orchestrator owns publication,
+retaining integration and acceptance confirmation.
 
 **Remaining:** Complete protected-fragment accounting/consumption, declaration
 captures, repetition, host transfer and procedural declarations, quotes/escapes,
@@ -278,9 +337,9 @@ criterion awaits D5/G1; D6's procedural-output import refusal awaits S3/S4.
 Prior partial H1/H2/H3 tests do not close their original criteria. No TASK-0068
 fresh full-workspace receipt or completed D8/E4/V3/final gate is established.
 
-**Awaiting:** Retain the independently reviewed declaration-capture candidate
-before treating its source-only path as delivered on the retaining branch.
-Each delivery also requires independent QA, Sol PR review, retained-result
+**Awaiting:** Retain the independently reviewed E1 parser candidate before
+treating its source changes as delivered on the retaining branch. Each delivery
+also requires independent QA, Sol PR review, retained-result
 verification and acceptance readback. Keep every
 incomplete original criterion unchecked with Delivered/Remaining/Awaiting/Owner
 and its PR, commit and evidence. The next fresh full checkpoint is D8, after the
