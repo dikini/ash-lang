@@ -2695,6 +2695,7 @@ fn charge_composed_projection(
         false,
         0usize,
         false,
+        None,
     )];
     let mut raw_patterns = Vec::new();
     let mut bridge = false;
@@ -2707,6 +2708,7 @@ fn charge_composed_projection(
         parent_nominal,
         parent_wrappers,
         scheduled_pattern,
+        parameter_order,
     )) = pending.pop()
     {
         budget.charge()?;
@@ -2791,6 +2793,28 @@ fn charge_composed_projection(
                 .max(expression_step)
                 .saturating_add(owner_edge),
         )?;
+        let generated_order = if tokens.occurrence.is_some()
+            && matches!(
+                node.kind,
+                NodeKind::TypeDeclaration | NodeKind::NewtypeDeclaration
+            ) {
+            budget.charge_units(node.children.len())?;
+            if let Some(parameters) =
+                child_nodes(node).find(|child| child.kind == NodeKind::TypeParameters)
+            {
+                budget.charge_units(parameters.children.len())?;
+                child_nodes(parameters).any(|child| child.kind == NodeKind::TypeParameter)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if generated_order {
+            // The order Arc and its boxed occurrence array retain their own
+            // paths even when the names have no diagnostic locations.
+            crate::syntax::type_depth(depth, 2)?;
+        }
         let wrappers = if expression_pattern && node.kind == NodeKind::PrimaryExpression {
             parent_wrappers.saturating_add(1)
         } else if expression_pattern && node.kind == NodeKind::ParenthesizedExpression {
@@ -2911,6 +2935,15 @@ fn charge_composed_projection(
                         scheduled_pattern
                             || (matches!(node.kind, NodeKind::MatchArm | NodeKind::HandlerClause)
                                 && child.kind == NodeKind::Pattern),
+                        if generated_order && child.kind == NodeKind::TypeParameters {
+                            Some(depth)
+                        } else if node.kind == NodeKind::TypeParameters
+                            && child.kind == NodeKind::TypeParameter
+                        {
+                            parameter_order
+                        } else {
+                            None
+                        },
                     ));
                 }
                 ConcreteElement::Token(index) => {
@@ -2986,6 +3019,9 @@ fn charge_composed_projection(
                         }
                         Some(crate::syntax::MacroOutputNode::Identifier(name, origin))
                             if in_type
+                                || generated_order
+                                || (node.kind == NodeKind::TypeParameter
+                                    && parameter_order.is_some())
                                 || (expression_pattern
                                     && matches!(
                                         node.kind,
@@ -3007,7 +3043,16 @@ fn charge_composed_projection(
                                             | NodeKind::RegionExpression
                                     )) =>
                         {
-                            let location_depth = crate::syntax::type_depth(depth, 1)?;
+                            let mut location_depth = crate::syntax::type_depth(depth, 1)?;
+                            if generated_order {
+                                location_depth =
+                                    location_depth.max(crate::syntax::type_depth(depth, 2)?);
+                            } else if node.kind == NodeKind::TypeParameter
+                                && let Some(nominal_depth) = parameter_order
+                            {
+                                location_depth = location_depth
+                                    .max(crate::syntax::type_depth(nominal_depth, 3)?);
+                            }
                             crate::syntax::charge_type_origin(origin, location_depth, budget)?;
                             if tokens.preserve_name_diagnostic
                                 && let Some(previous) = &name.diagnostic
