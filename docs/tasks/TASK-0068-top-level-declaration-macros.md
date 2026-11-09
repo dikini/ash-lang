@@ -1,7 +1,7 @@
 # TASK-0068: Top-Level Declaration and Derive Macros
 
 - ID: `TASK-0068`
-- Status: active; partial delivery retained; refreshed plan awaiting re-review
+- Status: active; partial deliveries retained
 - Related: [GitHub parent issue #206](https://github.com/dikini/ash-lang/issues/206),
   [CP-0034](../proposals/CP-0034-top-level-declaration-macros.md),
   [DN-0062](../design/DN-0062-hygienic-surface-macros.md),
@@ -17,18 +17,17 @@
 
 The retained [expression-syntax specification](../../spec/syntax-expansion.md)
 is the slice 1 baseline. CP-0034 is accepted, and the C1–C4 contract and corpus
-checks are recorded in the delivery plan. On 2026-11-09, local and live remote
-`codex/task-0068-integration` identify
-`476b5ca9e4b4c7fdfacf7baa27e43094d8551d9b`, tree
-`7087eb1cbdd4e8a9ffd331011b3560c136cd9395`. Recheck refs and worker ownership
-before dispatch. The plan records the 13 retained squash commits, their partial
-criteria and the remaining producer/consumer interfaces.
+checks are recorded in the delivery plan. On 2026-11-09, the verified retaining
+commit is `9e89ac126c1f67b1cd7bb83bc2245c7dd0c8c5e9`, tree
+`7dbc823a86669a13c38b89c4826a1535d985c5b4`. Recheck refs and worker ownership
+before dispatch. The plan records the earlier retained squash commits, their
+partial criteria and the remaining producer/consumer interfaces.
 
 The reviewed work structure is filed under [issue #206](https://github.com/dikini/ash-lang/issues/206)
 as seven workstreams and 45 child issues. All 112 native blocking links still
 match the reviewed graph. D1 #214 and S1 #215 are closed; 43 child issues remain
-open, and no repository PR was open at inspection. The user has authorized
-delivery and squash merges into the retaining branch; Main remains separate.
+open. The user has authorized delivery and squash merges into the retaining
+branch; Main remains separate.
 
 The active `/root` orchestrator inherits its launching model/effort and owns
 integration. Planning uses GPT 6.1 Sol Max; development uses GPT 6.1 Terra Max;
@@ -78,12 +77,37 @@ D1/S1 account for seven fully closed predicted points; the 43 open units total
 135 original points and include retained partial work. These figures do not
 measure remaining effort or grant partial acceptance credit.
 
-**Delivered:** Thirteen reviewed squash deliveries are retained at the base
-above. They establish D1/S1, partial declaration selection/matching/admission,
-type/pattern capture producers and identifier-only declaration collection and
-H2/H3 tests. Every retained squash tree matches its reviewed candidate. The
-[plan's retention inventory](../design/macros/slice2-delivery-plan.md#retained-deliveries)
-links each PR and exact retained commit; issue records retain focused receipts.
+**Delivered:** Thirteen earlier reviewed squash deliveries establish D1/S1,
+partial declaration selection/matching/admission, type/pattern capture producers,
+identifier-only declaration collection and H2/H3 tests. The refreshed plan is
+retained by [PR #276](https://github.com/dikini/ash-lang/pull/276) at
+`ea76717de64934244b7626f96c720a1c01f63ab2`.
+
+- [PR #278](https://github.com/dikini/ash-lang/pull/278) retains two early I13
+  public-driver controls at `6e75b6a03a5ea95b693cadb3f8a6949ff5e31d32`.
+  The [H5 record](https://github.com/dikini/ash-lang/issues/225#issuecomment-6743017228)
+  covers their bounded hygiene and direct-private-access assertions.
+- [PR #279](https://github.com/dikini/ash-lang/pull/279) retains focused S3
+  host and parser-handoff controls at `c2b6c5fbdf5d2fd75a59e236e03639b6d909b552`.
+  The [S3 record](https://github.com/dikini/ash-lang/issues/221#issuecomment-6743274210)
+  identifies the constructed D7 frame and the remaining host consumers.
+- [PR #280](https://github.com/dikini/ash-lang/pull/280) retains protected Type
+  capture accounting at `9e89ac126c1f67b1cd7bb83bc2245c7dd0c8c5e9`. Its
+  [D4 record](https://github.com/dikini/ash-lang/issues/222#issuecomment-6744016005)
+  reports 357 distinct focused passes and one ignored nominal-context case.
+  The original I01 and I07 graphs and handwritten controls compile and execute
+  to 42 through the public driver; the I07 missing-Type mutation reports its
+  ordinary parser cause and invocation location.
+
+For the original I15 `type_error.ash`, a fresh human and JSON driver readback
+at `9e89ac12` reports the ordinary expected-Int/found-Bool cause with the
+generated body, invocation and definition locations. The selected name is
+traceable within the invocation source; no separate name-specific label is
+claimed. The [D8 record](https://github.com/dikini/ash-lang/issues/232#issuecomment-6744362138)
+links the bounded readback; its receipt SHA-256 is
+`24245017679e2f8d417036813d6b10cfa88331f4046bf7ded4b081737a63cdf5`.
+Independent QA and Sol checked these focused deliveries and readbacks; the
+orchestrator confirmed them. Their original issue criteria remain unchecked.
 
 **Remaining:** Complete protected-fragment accounting/consumption, declaration
 captures, repetition, host transfer and procedural declarations, quotes/escapes,
@@ -93,9 +117,10 @@ criterion awaits D5/G1; D6's procedural-output import refusal awaits S3/S4.
 Prior partial H1/H2/H3 tests do not close their original criteria. No TASK-0068
 fresh full-workspace receipt or completed D8/E4/V3/final gate is established.
 
-**Awaiting:** Independent re-review of the refreshed full chain and interfaces
-before substantial implementation, followed by each delivery's independent QA,
-Sol PR review, retained-result verification and acceptance readback. Keep every
+**Awaiting:** Complete the expression/pattern ownership, depth and consumer
+inventory and obtain the same Sol review before activating that source lane.
+Each delivery also requires independent QA, Sol PR review, retained-result
+verification and acceptance readback. Keep every
 incomplete original criterion unchecked with Delivered/Remaining/Awaiting/Owner
 and its PR, commit and evidence. The next fresh full checkpoint is D8, after the
 first declaration path, integrated H2/H3 and protected-copy/composed-depth gates
@@ -109,7 +134,8 @@ these separate downstream issues:
 [#263](https://github.com/dikini/ash-lang/issues/263),
 [#265](https://github.com/dikini/ash-lang/issues/265),
 [#272](https://github.com/dikini/ash-lang/issues/272) and
-[#274](https://github.com/dikini/ash-lang/issues/274). All were open and unassigned
+[#274](https://github.com/dikini/ash-lang/issues/274) and
+[#277](https://github.com/dikini/ash-lang/issues/277). All were open and unassigned
 at inspection; active repair owners and timing are unverified. Verify live
 owner/status before reporting further progress. Dependent criteria remain
 blocked, and repairs stay outside this task; continue independent authorized
@@ -155,12 +181,10 @@ until their required accounting and consumers are independently verified.
 
 The plan names the
 [protected type-to-expression accounting and release gate](../design/macros/slice2-delivery-plan.md#protected-type-to-expression-accounting-and-release-gate).
-It requires separate independent review. The retained base has broader
-protected-capture guards; v3's narrower refusal is proposed, not implemented.
-The type-only delivery must first establish and verify that narrow refusal on
-protected types in generated expression-macro invocation arguments while
-retaining the broader guards, then relax the broader type guard only after its
-accounting evidence passes. Keep the narrow refusal until all subsequent
+It requires separate independent review. The retained Type delivery established
+the narrow refusal for protected types in generated expression-macro invocation
+arguments, then activated its accounted Type path. Expression and Pattern paths
+remain guarded. Keep the narrow refusal until all subsequent
 copying, traversal and composed depth are charged by the same existing
 `SyntaxBudget` and shared accounting. Required real imported
 consumer, repeated-copy, exact/short allowance, depth, late-failure,
@@ -168,10 +192,27 @@ small-stack/drop/cleanup and slice 1 regression evidence cannot be replaced by
 an isolated projector check. If that connection cannot preserve language and
 slice 1 behavior, stop it and return the concrete finding for a decision.
 
+The expression/pattern inventory found that raw pattern projection can repeat
+origin walks and frame comparisons for grouped wrappers, including diagnostics
+later discarded by projection. Account for the operations actually performed
+before activating that path, or review a narrow removal of the redundant work.
+
+The separate local D5 candidate `273b5ec012254d5bdb06f6db4e4f8f104193207a`
+passed 298 focused checks. A 512 KiB construction overflow was localized and
+repaired with a precharged iterative packet builder; its packet control reaches
+depth 128 and refuses 129 before construction. An earlier 297-pass, one-failure
+gate exposed three missing ownership inventory fields; the candidate records
+their repair without changing scanner rules. These receipts apply to that local
+candidate, not an integrated tree. Full D5 and I19 remain open.
+
 ## Deviations
 
-No semantic or scope change is authorized by this refresh. The resource and
-diagnostic findings above preserve the reviewed boundaries and original
-criteria. Return semantic gaps to CP-0034 or design work; retain separately
-owned downstream repairs outside macro machinery. Preserve main's unrelated
-effects work. Main integration remains outside this task's current permission.
+On 2026-11-09, the user accepted one inline result-expression alternative for
+escapes and requested the explicit CP-0034 amendment. It does not add inline
+outer local declarations or change ordinary block grammar. Quote and escape
+implementation and their specification update remain open; this decision is not
+current Ash. The resource and diagnostic findings above preserve the reviewed
+boundaries and original criteria. Return other semantic gaps to CP-0034 or
+design work; retain separately owned downstream repairs outside macro machinery.
+Preserve main's unrelated effects work. Main integration remains outside this
+task's current permission.
