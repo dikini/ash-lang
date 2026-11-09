@@ -99,7 +99,16 @@ impl SyntaxHost {
             introduction,
             contexts,
             fresh_count: 0,
-            captures: captures.to_vec(),
+            captures: {
+                let mut copied = Vec::with_capacity(captures.len());
+                for capture in captures {
+                    if matches!(capture, SurfaceSyntaxCapture::Declaration(_)) {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    copied.push(capture.clone());
+                }
+                copied
+            },
             expressions: Vec::new(),
             identifiers: Vec::new(),
             origins: Vec::new(),
@@ -236,7 +245,11 @@ impl SyntaxHost {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
                 let index = read_integer(index, heap, work)?.to_usize();
-                match index.and_then(|index| self.captures.get(index)).cloned() {
+                let capture = index.and_then(|index| self.captures.get(index));
+                if matches!(capture, Some(SurfaceSyntaxCapture::Declaration(_))) {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                match capture.cloned() {
                     Some(SurfaceSyntaxCapture::Expression(expression)) => {
                         let index = self.expressions.len();
                         self.expressions.push(expression);
@@ -254,9 +267,11 @@ impl SyntaxHost {
                         let capture = self.construct(heap, "IdentifierCapture", Some(fields))?;
                         self.construct(heap, "Captured", Some(capture))
                     }
-                    Some(SurfaceSyntaxCapture::Type(_) | SurfaceSyntaxCapture::Pattern(_)) => {
-                        Err(RuntimeFailure::InvalidControlState)
-                    }
+                    Some(
+                        SurfaceSyntaxCapture::Type(_)
+                        | SurfaceSyntaxCapture::Pattern(_)
+                        | SurfaceSyntaxCapture::Declaration(_),
+                    ) => Err(RuntimeFailure::InvalidControlState),
                     None => self.construct(heap, "MissingCapture", None),
                 }
             }
@@ -884,6 +899,104 @@ fn pair<'a>(
 #[cfg(test)]
 mod tests {
     use super::{token_from_spelling, token_kind_name};
+
+    #[test]
+    fn d5_host_refuses_declaration_before_constructor_and_request_clones() {
+        use super::{HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap};
+        use crate::{
+            core::{EffectCoreBuilder, validate::ValidatedMacroEntry, validate_effect},
+            integer::Integer,
+            module::ModuleId,
+            resolved::BinderId,
+            source::{ByteRange, Origin, SourceFile},
+            surface::{SurfaceDeclarationCapture, SurfaceName, SurfaceSyntaxCapture},
+            syntax::{ExpansionFrame, MacroOutputNode, SyntaxContexts},
+            types::{EffectId, OperationId, Type, TypeWorkBudget},
+        };
+        use std::{collections::HashMap, sync::Arc};
+
+        let source = SourceFile::new("host.ash", "name").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        let mut builder = EffectCoreBuilder::with_effect_registry(Arc::new(Default::default()));
+        let occurrence = builder.unit(Type::Unit, Origin::Source(span)).unwrap();
+        let program = validate_effect(builder.finish(occurrence).unwrap(), &[&source]).unwrap();
+        let module = ModuleId::new(0);
+        let ops = EffectId::new(module, 0);
+        let entry = ValidatedMacroEntry {
+            program,
+            occurrence,
+            binder: BinderId::new(0),
+            syntax_module: module,
+            ops,
+        };
+        let name = SurfaceName {
+            text: "name".into(),
+            span,
+            introduction: 0,
+            introduced_at: None,
+            written: true,
+            diagnostic: None,
+        };
+        let frame = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let contexts = Arc::new(SyntaxContexts::new(&[], &[], &[]));
+        let contents: Arc<[MacroOutputNode]> = Arc::from([]);
+        let captures = vec![SurfaceSyntaxCapture::Declaration(
+            SurfaceDeclarationCapture { contents },
+        )];
+        assert!(matches!(
+            SyntaxHost::new(
+                &entry,
+                &captures,
+                &source,
+                &name,
+                0,
+                Arc::clone(&contexts),
+                Arc::clone(&frame)
+            ),
+            Err(RuntimeFailure::InvalidControlState)
+        ));
+
+        // Constructor admission makes this state unreachable in the ordinary host.
+        let operation = OperationId::new(ops, 0);
+        let mut host = SyntaxHost {
+            occurrence,
+            binder: BinderId::new(0),
+            ops,
+            started: false,
+            steps_left: 100,
+            invocation: Arc::new(()),
+            frame,
+            source,
+            caller: name,
+            introduction: 0,
+            contexts,
+            fresh_count: 0,
+            captures,
+            expressions: Vec::new(),
+            identifiers: Vec::new(),
+            origins: Vec::new(),
+            parse_failures: Vec::new(),
+            tokens: Vec::new(),
+            constructors: HashMap::new(),
+            operations: [(operation, "capture".into())].into_iter().collect(),
+        };
+        let input = host.input();
+        let mut heap = Vec::new();
+        let fields = vec![input, Value::integer(Integer::from_i64(0))].into_boxed_slice();
+        let argument = Value::Location(allocate_heap(&mut heap, HeapCell::Tuple(fields)).unwrap());
+        assert!(matches!(
+            host.request(
+                operation,
+                argument,
+                &mut heap,
+                &mut TypeWorkBudget::unbounded()
+            ),
+            Err(RuntimeFailure::InvalidControlState)
+        ));
+    }
 
     #[test]
     fn syntax_host_checks_invocation_and_nominal_identity() {

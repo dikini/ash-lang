@@ -591,7 +591,7 @@ fn charge_owned_syntax(
     work: TypeWork,
     copied_frame: Option<&Arc<ExpansionFrame>>,
     budget: &mut SyntaxBudget,
-) -> Result<bool, ResourceFailure> {
+) -> Result<Option<bool>, ResourceFailure> {
     use crate::surface::{SurfaceKindKind, SurfaceLocalDeclaration};
 
     type_depth(prefix, 0)?;
@@ -849,6 +849,10 @@ fn charge_owned_syntax(
                                         charge_type_value(&capture.ty, child, inner_work, budget)?;
                                         contents!(capture.contents, child);
                                     }
+                                    SurfaceSyntaxCapture::Declaration(_) => {
+                                        budget.charge()?;
+                                        return Ok(None);
+                                    }
                                 }
                             }
                         }
@@ -1075,7 +1079,7 @@ fn charge_owned_syntax(
             },
         }
     }
-    Ok(bridge)
+    Ok(Some(bridge))
 }
 
 pub(crate) fn charge_expression_copy(
@@ -1083,7 +1087,7 @@ pub(crate) fn charge_expression_copy(
     prefix: usize,
     inherit_frame: bool,
     budget: &mut SyntaxBudget,
-) -> Result<bool, ResourceFailure> {
+) -> Result<Option<bool>, ResourceFailure> {
     charge_owned_syntax(
         OwnedSyntax::Expression(expression),
         prefix,
@@ -1098,7 +1102,7 @@ pub(crate) fn charge_pattern_copy(
     prefix: usize,
     inherit_frame: bool,
     budget: &mut SyntaxBudget,
-) -> Result<bool, ResourceFailure> {
+) -> Result<Option<bool>, ResourceFailure> {
     charge_owned_syntax(
         OwnedSyntax::Pattern(pattern),
         prefix,
@@ -1113,7 +1117,7 @@ pub(crate) fn charge_scheduled_pattern_copy(
     prefix: usize,
     frame: Option<&Arc<ExpansionFrame>>,
     budget: &mut SyntaxBudget,
-) -> Result<bool, ResourceFailure> {
+) -> Result<Option<bool>, ResourceFailure> {
     charge_owned_syntax(
         OwnedSyntax::Pattern(pattern),
         prefix,
@@ -1130,28 +1134,33 @@ fn charge_owned_retention(
     contents: &[MacroOutputNode],
     prefix: usize,
     budget: &mut SyntaxBudget,
-) -> Result<bool, ResourceFailure> {
+) -> Result<Option<bool>, ResourceFailure> {
     let depth = type_depth(prefix, 1)?;
-    let mut bridge = charge_owned_syntax(root, depth, TypeWork::Inspect, None, budget)?;
+    let Some(mut bridge) = charge_owned_syntax(root, depth, TypeWork::Inspect, None, budget)? else {
+        return Ok(None);
+    };
     let contents_depth = type_depth(depth, 1)?;
     budget.charge()?; // retained contents Arc
     for node in contents {
-        bridge |= charge_owned_syntax(
+        let Some(contents_bridge) = charge_owned_syntax(
             OwnedSyntax::Contents(node),
             contents_depth,
             TypeWork::Inspect,
             None,
             budget,
-        )?;
+        )? else {
+            return Ok(None);
+        };
+        bridge |= contents_bridge;
     }
-    Ok(bridge)
+    Ok(Some(bridge))
 }
 
 pub(crate) fn charge_expression_retention(
     capture: &SurfaceExpressionCapture,
     prefix: usize,
     budget: &mut SyntaxBudget,
-) -> Result<bool, ResourceFailure> {
+) -> Result<Option<bool>, ResourceFailure> {
     charge_owned_retention(
         OwnedSyntax::Expression(&capture.expression),
         &capture.contents,
@@ -1164,7 +1173,7 @@ pub(crate) fn charge_pattern_retention(
     capture: &SurfacePatternCapture,
     prefix: usize,
     budget: &mut SyntaxBudget,
-) -> Result<bool, ResourceFailure> {
+) -> Result<Option<bool>, ResourceFailure> {
     charge_owned_retention(
         OwnedSyntax::Pattern(&capture.pattern),
         &capture.contents,
@@ -1330,15 +1339,21 @@ pub(crate) fn charge_captured_ep_original(
             let depth = type_depth(prefix, 1).map_err(resource)?;
             charge_type_origin(origin, depth, budget).map_err(resource)?;
             bridge |= charge_expression_copy(&capture.expression, depth, false, budget)
-                .map_err(resource)?;
-            bridge |= charge_expression_retention(capture, prefix, budget).map_err(resource)?;
+                .map_err(resource)?
+                .ok_or(MacroParseFailure::Invalid)?;
+            bridge |= charge_expression_retention(capture, prefix, budget)
+                .map_err(resource)?
+                .ok_or(MacroParseFailure::Invalid)?;
         }
         MacroOutputNode::ForwardedPattern(capture, origin) => {
             let depth = type_depth(prefix, 1).map_err(resource)?;
             charge_type_origin(origin, depth, budget).map_err(resource)?;
-            bridge |=
-                charge_pattern_copy(&capture.pattern, depth, false, budget).map_err(resource)?;
-            bridge |= charge_pattern_retention(capture, prefix, budget).map_err(resource)?;
+            bridge |= charge_pattern_copy(&capture.pattern, depth, false, budget)
+                .map_err(resource)?
+                .ok_or(MacroParseFailure::Invalid)?;
+            bridge |= charge_pattern_retention(capture, prefix, budget)
+                .map_err(resource)?
+                .ok_or(MacroParseFailure::Invalid)?;
         }
         MacroOutputNode::ForwardedType(capture, origin) => {
             let depth = type_depth(prefix, 1).map_err(resource)?;
@@ -1902,17 +1917,35 @@ fn validate_template_syntax_inner(
         budget
             .charge_units(declaration.matcher.len())
             .map_err(resource)?;
-        let (captures, identifiers) =
+        let (captures, identifiers, has_declaration) =
             declaration
                 .matcher
                 .iter()
-                .fold((0usize, 0usize), |counts, part| match part {
+                .fold((0usize, 0usize, false), |counts, part| match part {
                     SurfaceSyntaxMatcherPart::Capture { kind, .. } => (
                         counts.0 + 1,
                         counts.1 + usize::from(*kind == SurfaceSyntaxCaptureKind::Identifier),
+                        counts.2 || *kind == SurfaceSyntaxCaptureKind::Declaration,
                     ),
                     SurfaceSyntaxMatcherPart::Literal { .. } => counts,
                 });
+        if has_declaration {
+            if !declaration
+                .template_contents
+                .as_deref()
+                .is_some_and(<[_]>::is_empty)
+            {
+                return Err(MacroParseFailure::Invalid);
+            }
+            return crate::parser::parse_declaration_template_admission(
+                source,
+                declaration.span,
+                Vec::new(),
+                contexts,
+                &[],
+                budget,
+            );
+        }
         budget.charge_units(captures).map_err(resource)?;
         budget.charge_units(identifiers).map_err(resource)?;
         (captures, identifiers)
@@ -1939,7 +1972,7 @@ fn validate_template_syntax_inner(
                     .charge_units(bytes.saturating_mul(2))
                     .map_err(resource)?;
                 budget.charge_units(2).map_err(resource)?;
-            } else {
+            } else if *kind != SurfaceSyntaxCaptureKind::Declaration {
                 // A placeholder value and its shared empty contents are built here.
                 budget.charge_units(2).map_err(resource)?;
             }
@@ -1987,6 +2020,9 @@ fn validate_template_syntax_inner(
                     },
                     contents: Arc::from([]),
                 })
+            }
+            SurfaceSyntaxCaptureKind::Declaration => {
+                return Err(crate::parser::MacroParseFailure::Invalid);
             }
         };
         captures.push(capture);
@@ -2120,18 +2156,23 @@ fn charge_declaration_template(
                         let prefix = type_depth(depth, 1).map_err(resource)?;
                         let mut capture_bridge =
                             charge_expression_copy(&capture.expression, prefix, false, budget)
-                                .map_err(resource)?;
+                                .map_err(resource)?
+                                .ok_or(MacroParseFailure::Invalid)?;
                         capture_bridge |= charge_expression_retention(capture, depth, budget)
-                            .map_err(resource)?;
+                            .map_err(resource)?
+                            .ok_or(MacroParseFailure::Invalid)?;
                         bridge |= capture_bridge;
                     }
                     Ok(SurfaceSyntaxCapture::Pattern(capture)) => {
                         let prefix = type_depth(depth, 1).map_err(resource)?;
                         let mut capture_bridge =
                             charge_pattern_copy(&capture.pattern, prefix, false, budget)
-                                .map_err(resource)?;
+                                .map_err(resource)?
+                                .ok_or(MacroParseFailure::Invalid)?;
                         capture_bridge |=
-                            charge_pattern_retention(capture, depth, budget).map_err(resource)?;
+                            charge_pattern_retention(capture, depth, budget)
+                                .map_err(resource)?
+                                .ok_or(MacroParseFailure::Invalid)?;
                         bridge |= capture_bridge;
                     }
                     _ => return Err(MacroParseFailure::Invalid),
@@ -2226,6 +2267,7 @@ pub(crate) fn substitute_contents(
                             |location| location.primary.clone(),
                         ),
                     ),
+                    SurfaceSyntaxCapture::Declaration(_) => return Err(name.span),
                 };
             }
             MacroOutputNode::Identifier(name, _) => {
@@ -2289,7 +2331,7 @@ mod tests {
         };
         assert!(
             charge_expression_copy(&nested.expression, 0, false, &mut SyntaxBudget::default(),)
-                .unwrap()
+                .unwrap().unwrap()
         );
         let retained = Arc::from([MacroOutputNode::Group(
             MacroDelimiter::Parentheses,
@@ -2308,8 +2350,8 @@ mod tests {
             },
             contents: Arc::clone(&retained),
         };
-        assert!(charge_expression_retention(&expression, 0, &mut SyntaxBudget::default()).unwrap());
-        assert!(charge_pattern_retention(&pattern, 0, &mut SyntaxBudget::default()).unwrap());
+        assert!(charge_expression_retention(&expression, 0, &mut SyntaxBudget::default()).unwrap().unwrap());
+        assert!(charge_pattern_retention(&pattern, 0, &mut SyntaxBudget::default()).unwrap().unwrap());
         for original in [
             MacroOutputNode::ForwardedExpression(expression, span.into()),
             MacroOutputNode::ForwardedPattern(pattern, span.into()),
@@ -2335,7 +2377,7 @@ mod tests {
                 span.into(),
             )]),
         };
-        assert!(charge_expression_retention(&protected, 0, &mut SyntaxBudget::default()).unwrap());
+        assert!(charge_expression_retention(&protected, 0, &mut SyntaxBudget::default()).unwrap().unwrap());
     }
 
     #[test]
@@ -2460,7 +2502,7 @@ mod tests {
             diagnostic: None,
         };
         let mut expression_budget = SyntaxBudget::default();
-        assert!(!charge_expression_copy(&expression, 0, false, &mut expression_budget).unwrap());
+        assert!(!charge_expression_copy(&expression, 0, false, &mut expression_budget).unwrap().unwrap());
         let expression_cost = expression_budget.consumed();
         assert!(matches!(
             charge_expression_copy(
@@ -2477,9 +2519,9 @@ mod tests {
             false,
             &mut SyntaxBudget::with_limit(expression_cost),
         )
-        .unwrap();
+        .unwrap().unwrap();
         let mut pattern_budget = SyntaxBudget::default();
-        assert!(!charge_pattern_copy(&pattern, 0, false, &mut pattern_budget).unwrap());
+        assert!(!charge_pattern_copy(&pattern, 0, false, &mut pattern_budget).unwrap().unwrap());
         let pattern_cost = pattern_budget.consumed();
         assert!(matches!(
             charge_pattern_copy(
@@ -2496,7 +2538,7 @@ mod tests {
             false,
             &mut SyntaxBudget::with_limit(pattern_cost),
         )
-        .unwrap();
+        .unwrap().unwrap();
     }
 
     fn nested_template(
@@ -3088,5 +3130,77 @@ mod tests {
             })
         ));
         charge_type_retention(&twice, 0, &mut SyntaxBudget::with_limit(cost)).unwrap();
+    }
+
+    #[test]
+    fn d5_only_zero_retained_template_nodes_are_admitted() {
+        let source = SourceFile::new(
+            "forms.ash",
+            include_str!("../tests/fixtures/surface-macros/declaration-capture/forms.ash"),
+        )
+        .unwrap();
+        let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+        let mut declaration = crate::parser::project_module_retaining_templates(&source, &tree)
+            .unwrap()
+            .syntax_declarations
+            .remove(0);
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        validate_template_syntax(&declaration, &source, &contexts).unwrap();
+        let span = declaration.span;
+        declaration.template_contents = Some(Arc::from([MacroOutputNode::Token(
+            crate::lexer::TokenKind::LineEnd,
+            Arc::from("\n"),
+            span.into(),
+        )]));
+        assert!(matches!(
+            validate_template_syntax(&declaration, &source, &contexts),
+            Err(crate::parser::MacroParseFailure::Invalid)
+        ));
+        declaration.template_contents = Some(Arc::from([]));
+        declaration.implementation =
+            SurfaceSyntaxImplementation::Transformer(declaration.name.clone());
+        assert!(matches!(
+            validate_template_syntax(&declaration, &source, &contexts),
+            Err(crate::parser::MacroParseFailure::Invalid)
+        ));
+        declaration.implementation = SurfaceSyntaxImplementation::Template;
+        declaration.category = crate::surface::SurfaceSyntaxCategory::Expression;
+        assert!(matches!(
+            validate_template_syntax(&declaration, &source, &contexts),
+            Err(crate::parser::MacroParseFailure::Invalid)
+        ));
+    }
+
+    #[test]
+    fn d5_used_splice_is_refused_without_constructing_output() {
+        let source = SourceFile::new("capture.ash", "item").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        let name = SurfaceName {
+            text: "item".into(),
+            span,
+            introduction: 0,
+            introduced_at: None,
+            written: true,
+            diagnostic: None,
+        };
+        let matcher = [SurfaceSyntaxMatcherPart::Capture {
+            name: name.clone(),
+            kind: SurfaceSyntaxCaptureKind::Declaration,
+        }];
+        let captures = [SurfaceSyntaxCapture::Declaration(
+            crate::surface::SurfaceDeclarationCapture {
+                contents: Arc::from([MacroOutputNode::Token(
+                    crate::lexer::TokenKind::IntType,
+                    Arc::from("Int"),
+                    span.into(),
+                )]),
+            },
+        )];
+        let mut output = vec![MacroOutputNode::Splice(name)];
+        assert_eq!(
+            substitute_contents(&mut output, &matcher, &captures, 0, span),
+            Err(span)
+        );
+        assert!(matches!(output.as_slice(), [MacroOutputNode::Splice(_)]));
     }
 }
