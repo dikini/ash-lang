@@ -4495,6 +4495,147 @@ mod tests {
         }
     }
 
+    std::thread_local! {
+        static S3_TRANSFERRED: RefCell<Option<(Vec<crate::syntax::MacroOutputNode>, Vec<crate::surface::SurfaceSyntaxCapture>)>> = const { RefCell::new(None) };
+    }
+
+    fn observe_s3_transfer(
+        selection: &crate::syntax::SelectedSyntax,
+        captures: &[crate::surface::SurfaceSyntaxCapture],
+        output: &[crate::syntax::MacroOutputNode],
+    ) {
+        if selection.declaration.name.text != "declaration_output" {
+            return;
+        }
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        S3_TRANSFERRED.with(|slot| {
+            assert!(slot.borrow().is_none());
+            *slot.borrow_mut() = Some((output.to_vec(), captures.to_vec()));
+        });
+    }
+
+    #[test]
+    fn s3_checked_host_output_reaches_declaration_parser_after_teardown() {
+        use crate::{
+            lexer::TokenKind,
+            surface::{SurfaceDefinitionKind, SurfaceSyntaxCapture},
+            syntax::{
+                ExpansionFrame, MacroDelimiter, MacroOrigin, MacroOutputNode, SyntaxContexts,
+            },
+        };
+
+        S3_TRANSFERRED.with(|slot| assert!(slot.borrow().is_none()));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_s3_transfer));
+        let failure = compile_path(RunConfiguration {
+            entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/s3-transfer/entry.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("declaration output cannot be admitted as an expression");
+        assert!(TRANSFORMER_OUTPUT_OBSERVER.get().is_none());
+        let Some(PipelineFailure::SyntaxParse(parse)) = failure.pipeline_failure() else {
+            panic!("expected expression admission to reject: {failure:?}");
+        };
+        assert!(!parse.diagnostics().is_empty());
+        assert!(parse.teardown().is_none());
+        let (output, captures) = S3_TRANSFERRED.with(|slot| {
+            slot.borrow_mut()
+                .take()
+                .expect("the checked host transferred its output before expression admission")
+        });
+        let [
+            SurfaceSyntaxCapture::Identifier(captured_name),
+            SurfaceSyntaxCapture::Expression(captured_value),
+        ] = captures.as_slice()
+        else {
+            panic!("the transformer receives the caller's identifier and expression");
+        };
+        let [
+            MacroOutputNode::Identifier(first_name, first_origin),
+            MacroOutputNode::Token(TokenKind::Colon, _, _),
+            MacroOutputNode::Token(TokenKind::UnitType, _, _),
+            MacroOutputNode::Token(TokenKind::Arrow, _, _),
+            MacroOutputNode::Token(TokenKind::IntType, _, _),
+            MacroOutputNode::Token(TokenKind::LineEnd, _, _),
+            MacroOutputNode::Identifier(second_name, second_origin),
+            MacroOutputNode::Group(MacroDelimiter::Parentheses, parameter, _),
+            MacroOutputNode::Token(TokenKind::Equal, _, _),
+            MacroOutputNode::Group(MacroDelimiter::Parentheses, middle, group_origin),
+            MacroOutputNode::Token(TokenKind::Plus, _, _),
+            MacroOutputNode::Expression(last_value, _),
+        ] = output.as_slice()
+        else {
+            panic!("the host must return a complete structured declaration");
+        };
+        assert_eq!(first_name, &captured_name.name);
+        assert_eq!(second_name, &captured_name.name);
+        assert_eq!(first_origin, &captured_name.origin);
+        assert_eq!(second_origin, &captured_name.origin);
+        assert!(parameter.is_empty());
+        assert_eq!(group_origin, &MacroOrigin::Source(parse.invocation));
+        assert_eq!(last_value, captured_value);
+        let [
+            MacroOutputNode::Expression(middle_value, _),
+            MacroOutputNode::Token(TokenKind::Plus, _, _),
+            MacroOutputNode::Group(MacroDelimiter::Parentheses, inner, _),
+        ] = middle.as_slice()
+        else {
+            panic!("the outer group's siblings must survive both transfers");
+        };
+        assert_eq!(middle_value, captured_value);
+        let [
+            MacroOutputNode::Expression(left_value, _),
+            MacroOutputNode::Token(TokenKind::Plus, _, _),
+            MacroOutputNode::Expression(right_value, _),
+        ] = inner.as_slice()
+        else {
+            panic!("the nested group's siblings must survive both transfers");
+        };
+        assert_eq!(left_value, captured_value);
+        assert_eq!(right_value, captured_value);
+
+        let source = failure
+            .sources()
+            .iter()
+            .find(|source| source.id() == parse.invocation.source())
+            .expect("the actual invocation source is retained");
+        let frame = Arc::new(ExpansionFrame {
+            invocation: parse.invocation,
+            definition: parse.definition,
+        });
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        let module = crate::parser::parse_macro_declarations(
+            source,
+            parse.invocation,
+            None,
+            output,
+            &contexts,
+            Some(&frame),
+        )
+        .expect("the transferred output is a complete declaration");
+        let [definition] = module.definitions.as_slice() else {
+            panic!("the output contains one declaration");
+        };
+        let SurfaceDefinitionKind::Equational(global) = &definition.kind else {
+            panic!("the output is an equational global");
+        };
+        assert_eq!(global.interface.name, captured_name.name);
+        assert_eq!(global.equations[0].name, captured_name.name);
+        let diagnostic = global
+            .interface
+            .name
+            .diagnostic
+            .as_ref()
+            .expect("the caller name retains its origin");
+        assert_eq!(diagnostic.primary, captured_name.origin);
+        assert!(
+            diagnostic
+                .frames
+                .iter()
+                .any(|item| Arc::ptr_eq(item, &frame))
+        );
+    }
+
     #[test]
     fn ash_identity_transformer_round_trips_mixed_capture() {
         use crate::{
