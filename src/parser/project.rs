@@ -6931,6 +6931,178 @@ mod tests {
     }
 
     #[test]
+    fn protected_expression_preflight_finds_nested_expression_syntax_before_capture() {
+        let declaration = SourceFile::new(
+            "declarations.ash",
+            "pub syntax declaration: (accept) $body:expr => {}\n",
+        )
+        .unwrap();
+        let expression = SourceFile::new(
+            "expressions.ash",
+            "pub syntax reveal $value:expr => {\n$value\n}\n",
+        )
+        .unwrap();
+        let selected = [
+            h1_selection(&declaration, 0, None),
+            h1_selection(&expression, 1, None),
+        ];
+        for (text, expected) in [("accept (reveal 42)\n", true), ("accept (40 + 2)\n", false)] {
+            let source = SourceFile::new("caller.ash", text).unwrap();
+            let tree = h1_tree(&source, &selected);
+            let (root, raw_tokens) = validated_root(&source, &tree).unwrap();
+            let invocation = child_nodes(root)
+                .find(|node| node.kind == NodeKind::DeclarationSyntaxInvocation)
+                .unwrap();
+            let argument = only_child_of_kind(invocation, NodeKind::SyntaxArgument).unwrap();
+            let value = child_nodes(argument)
+                .find(|child| is_expression_kind(child.kind))
+                .unwrap();
+            let mut pending = vec![value];
+            let mut selected_expression_syntax = false;
+            while let Some(node) = pending.pop() {
+                selected_expression_syntax |= node.kind == NodeKind::SyntaxInvocation;
+                pending.extend(child_nodes(node));
+            }
+            assert_eq!(selected_expression_syntax, expected, "{text}");
+            assert_eq!(
+                charge_capture_contents(
+                    value,
+                    &ProjectionTokens::source(raw_tokens),
+                    SurfaceSyntaxCaptureKind::Expression,
+                    &mut crate::syntax_resource::SyntaxBudget::default(),
+                )
+                .unwrap(),
+                expected,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn constructor_tuple_and_function_parameter_depths_are_counted_once() {
+        use crate::syntax::{ExpansionFrame, MacroOutputNode};
+
+        let (source, tree) = parsed("fn(Pair(_, right), other) {\n42\n}");
+        let root = tree.root().unwrap();
+        let mut pending = vec![root];
+        let function = loop {
+            let node = pending.pop().expect("function expression exists");
+            if node.kind == NodeKind::FunctionExpression {
+                break node;
+            }
+            pending.extend(child_nodes(node));
+        };
+        let parameters = child_nodes(function)
+            .filter(|node| node.kind == NodeKind::Pattern)
+            .collect::<Vec<_>>();
+        assert_eq!(parameters.len(), 2);
+        let constructor = only_child_of_kind(parameters[0], NodeKind::ConstructorPattern).unwrap();
+        let tuple = only_child_of_kind(constructor, NodeKind::TuplePattern).unwrap();
+        let patterns = child_nodes(tuple)
+            .filter(|node| node.kind == NodeKind::Pattern)
+            .collect::<Vec<_>>();
+        assert_eq!(patterns.len(), 2);
+        let wildcard = only_child_of_kind(patterns[0], NodeKind::WildcardPattern).unwrap();
+        let [ConcreteElement::Token(index)] = wildcard.children.as_slice() else {
+            panic!("the intended tuple element must be the unique wildcard token");
+        };
+        assert_eq!(tree.tokens[*index].kind, TokenKind::Wildcard);
+        assert_eq!(structural_weight(function), 1);
+        assert_eq!(structural_weight(parameters[0]), 8);
+        assert_eq!(structural_weight(constructor), 0);
+        assert_eq!(structural_weight(tuple), 0);
+        let span = tree.tokens[*index].span;
+        let frame = std::sync::Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        for generated in [false, true] {
+            let at_limit = if generated { 118 } else { 119 };
+            for (height, succeeds) in [(at_limit, true), (at_limit + 1, false)] {
+                let mut pattern = SurfacePattern {
+                    kind: SurfacePatternKind::Wildcard,
+                    span,
+                    diagnostic: None,
+                };
+                for _ in 0..height {
+                    pattern = SurfacePattern {
+                        kind: SurfacePatternKind::Constructor {
+                            name: SurfaceReference::Unqualified(SurfaceName {
+                                text: "Node".into(),
+                                span,
+                                introduction: 0,
+                                introduced_at: None,
+                                written: true,
+                                diagnostic: None,
+                            }),
+                            payload: Some(Box::new(pattern)),
+                        },
+                        span,
+                        diagnostic: None,
+                    };
+                }
+                let originals = std::collections::HashMap::from([(
+                    *index,
+                    MacroOutputNode::ForwardedPattern(
+                        SurfacePatternCapture {
+                            pattern,
+                            contents: std::sync::Arc::from([]),
+                        },
+                        span.into(),
+                    ),
+                )]);
+                let tokens = ProjectionTokens {
+                    tokens: &tree.tokens,
+                    originals: Some(&originals),
+                    occurrence: generated.then_some(span),
+                    construction: None,
+                    construction_extents: false,
+                    admission_identifiers: None,
+                    frame: generated.then_some(&frame),
+                    name_frame: generated.then_some(&frame),
+                    staging_frames: None,
+                    preserve_name_diagnostic: true,
+                };
+                let result = charge_composed_projection(
+                    function,
+                    &tokens,
+                    true,
+                    &mut crate::syntax_resource::SyntaxBudget::default(),
+                );
+                if succeeds {
+                    assert!(!result.unwrap());
+                    let projected =
+                        project_expression_with_fragments(&source, function, &tokens, &originals)
+                            .unwrap();
+                    let SurfaceExprKind::Function(function) = projected.kind else {
+                        panic!("the source must project a function");
+                    };
+                    let SurfacePatternKind::Tuple(parameters) = function.parameter.kind else {
+                        panic!("two source parameters produce the implicit tuple");
+                    };
+                    assert_eq!(parameters.len(), 2);
+                    let SurfacePatternKind::Constructor {
+                        payload: Some(payload),
+                        ..
+                    } = &parameters[0].kind
+                    else {
+                        panic!("the first parameter is the Pair constructor");
+                    };
+                    assert!(matches!(payload.kind, SurfacePatternKind::Tuple(_)));
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(DeclarationExpansionFailure::Syntax {
+                            resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
+                            ..
+                        })
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn generated_expression_arguments_refuse_forwarded_types_only_within_the_argument() {
         use crate::syntax::MacroOutputNode;
 
