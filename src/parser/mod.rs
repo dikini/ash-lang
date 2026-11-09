@@ -650,17 +650,32 @@ pub(crate) fn parse_declaration_template_admission(
     output: Vec<crate::syntax::MacroOutputNode>,
     contexts: &crate::syntax::SyntaxContexts,
     placeholders: &[crate::surface::SurfaceName],
+    budget: &mut SyntaxBudget,
 ) -> Result<(), MacroParseFailure> {
-    let parsed = parse_macro_tree(
+    let parsed = parse_macro_tree_inner(
         source,
         invocation,
         output,
         contexts,
         placeholders,
-        MacroOutputPosition::Declarations,
+        MacroOutputPosition::StagedDeclarations,
+        budget,
     )?;
-    project::validate_declaration_template(source, invocation, &parsed, contexts)
-        .map_err(|_| MacroParseFailure::Invalid)
+    project::validate_declaration_template(source, invocation, &parsed, contexts, budget).map_err(
+        |failure| match failure {
+            project::DeclarationExpansionFailure::Syntax {
+                diagnostics,
+                resource,
+            } => MacroParseFailure::Syntax {
+                diagnostics,
+                resource,
+            },
+            project::DeclarationExpansionFailure::Projection(ProjectionError::ResourceLimit(
+                resource,
+            )) => macro_resource_failure(resource),
+            project::DeclarationExpansionFailure::Projection(_) => MacroParseFailure::Invalid,
+        },
+    )
 }
 
 fn parse_macro_declarations_inner(
@@ -1112,10 +1127,23 @@ fn charge_staged_output(
             // The adapter moves this preflighted capture into original_nodes;
             // the piece, placeholder token and map entry are reserved above.
             MacroOutputNode::ForwardedType(_, _) => {}
-            MacroOutputNode::Expression(_, _)
-            | MacroOutputNode::ForwardedExpression(_, _)
-            | MacroOutputNode::ForwardedPattern(_, _)
-            | MacroOutputNode::Splice(_) => return Err(MacroParseFailure::Invalid),
+            MacroOutputNode::ForwardedExpression(capture, origin) => {
+                let child = crate::syntax::type_depth(depth, 1).map_err(macro_resource_failure)?;
+                crate::syntax::charge_type_origin(origin, child, budget)
+                    .map_err(macro_resource_failure)?;
+                crate::syntax::charge_expression_retention(capture, depth, budget)
+                    .map_err(macro_resource_failure)?;
+            }
+            MacroOutputNode::ForwardedPattern(capture, origin) => {
+                let child = crate::syntax::type_depth(depth, 1).map_err(macro_resource_failure)?;
+                crate::syntax::charge_type_origin(origin, child, budget)
+                    .map_err(macro_resource_failure)?;
+                crate::syntax::charge_pattern_retention(capture, depth, budget)
+                    .map_err(macro_resource_failure)?;
+            }
+            MacroOutputNode::Expression(_, _) | MacroOutputNode::Splice(_) => {
+                return Err(MacroParseFailure::Invalid);
+            }
         }
     }
     // Declaration line end, EOF, and their diagnostic entries.

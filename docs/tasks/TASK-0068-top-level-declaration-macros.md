@@ -18,8 +18,8 @@
 The retained [expression-syntax specification](../../spec/syntax-expansion.md)
 is the slice 1 baseline. CP-0034 is accepted, and the C1–C4 contract and corpus
 checks are recorded in the delivery plan. On 2026-11-09, the verified retaining
-commit is `9e89ac126c1f67b1cd7bb83bc2245c7dd0c8c5e9`, tree
-`7dbc823a86669a13c38b89c4826a1535d985c5b4`. Recheck refs and worker ownership
+commit is `3613a863a7a2870b0906fd20925bd641d0598ea2`, tree
+`7c5c3802e0793e5fe396be68abcfc9e388e40189`. Recheck refs and worker ownership
 before dispatch. The plan records the earlier retained squash commits, their
 partial criteria and the remaining producer/consumer interfaces.
 
@@ -98,6 +98,9 @@ retained by [PR #276](https://github.com/dikini/ash-lang/pull/276) at
   The original I01 and I07 graphs and handwritten controls compile and execute
   to 42 through the public driver; the I07 missing-Type mutation reports its
   ordinary parser cause and invocation location.
+- [PR #281](https://github.com/dikini/ash-lang/pull/281) retains the accepted
+  inline escape amendment and its planning record at `3613a863`. Quote and
+  escape implementation remains open.
 
 For the original I15 `type_error.ash`, a fresh human and JSON driver readback
 at `9e89ac12` reports the ordinary expected-Int/found-Bool cause with the
@@ -109,6 +112,75 @@ links the bounded readback; its receipt SHA-256 is
 Independent QA and Sol checked these focused deliveries and readbacks; the
 orchestrator confirmed them. Their original issue criteria remain unchecked.
 
+### Local expression and pattern candidate
+
+**Delivered in the local candidate:** The unretained candidate for
+[D3 #218](https://github.com/dikini/ash-lang/issues/218),
+[D4 #222](https://github.com/dikini/ash-lang/issues/222),
+[D6 #219](https://github.com/dikini/ash-lang/issues/219) and
+[H3 #229](https://github.com/dikini/ash-lang/issues/229) is
+`f2ff93084c2f064695eb2b1faa2522725d8aabf8`, tree
+`0d8c6c7bd710dcf68f5df371dad2b4850504bbff`. It connects protected expression
+and pattern captures through direct declaration templates, using the existing
+shared syntax budget for capture, substitution, staging and projection. D6
+uses its existing admission budget through placeholder creation, parsing and
+validation. The retained Type path remains active. Protected fragments in
+generated expression-syntax arguments and protected expressions containing
+nested expression syntax remain refused before their unbudgeted expression
+consumers; procedural declaration execution remains guarded.
+
+The unchanged I19 binder graph and handwritten control execute to 42 through
+the public driver. Imported forwarding and a duplicated expression also execute
+to 42. A driver-level selection and collector check observes caller binder and
+body contexts, origins and invocation frames. Other path and depth checks use
+constructed protected originals or metadata and are component evidence. The
+unchanged I01 and I07 driver controls and missing-Type refusal remain in the
+focused regression set. The original I01–I22 fixtures are unchanged.
+
+The focused receipt at
+`/tmp/ash-task0068-retained-evidence/expr-pattern-3613/complete-f2ff9308/receipt.json`
+has SHA-256 `95a88e0d99e70857797b6799749b5ec3988fc838ba867ecc50f75f7a9830a9f3`.
+This TASK-only record carries that evidence from `f2ff9308`: product source,
+tests, specification, tool configuration and fixed corpus inputs are unchanged.
+The focused gate was run on `f2ff9308`, not rerun on this record commit.
+It records 396 distinct passing test names and one ignored original no-import
+nominal case, tracked separately by [#277](https://github.com/dikini/ash-lang/issues/277).
+Both protected expression/pattern and Type paths have actual 512 KiB
+success/drop, late-depth and late-work cleanup runs. The fresh I15 human and
+JSON readback retains the ordinary expected-Int/found-Bool cause, generated
+body, annotation, invocation and definition locations. The selected name is
+traceable within the invocation source; there is no separate name-specific
+label claim. The caller-import control does not replace #277's ignored graph.
+
+The candidate repairs three accounting findings: the second pattern copy in
+match and handler projection, the generated parameter-order Arc and boxed
+occurrence diagnostic depth, and the second D6 matcher traversal's literal
+visits. An early architecture check also exposed six missing borrowed-field
+inventory entries; the candidate adds those entries without changing scanner
+rules. The receipt preserves the failed checks and subsequent repairs. A
+temporary `b6b8e9fa` test-only trace observed earlier output in the same short
+failure run; `e4cc9b5b` restored the preceding tree. That trace is supplemental
+evidence, not an input to the final uninstrumented gate.
+
+**Remaining:** D3 still needs its full capture and missing-input criteria; D4
+still needs its full category and connected-corpus criteria. D6 retains its
+full definition-admission criteria and procedural-output import refusal for
+the S3/S4 consumer. H3 retains its full nominal, constructor, interface and
+pattern context and duplicate-source criteria. The complete I19 graph still
+needs D5 and G1. No original criterion for these issues is closed by this
+candidate. Full V4 specification and tool documentation follows its reviewed
+V3 prerequisite; accepted but unimplemented forms remain outside current Ash.
+
+**Awaiting:** Independent QA and Sol have cleared the focused source and
+receipt. Independent checks of this record are pending. The candidate still
+needs a published PR, independent PR review, verified retention and partial
+issue-record readback. Full D8, E4, V3 and V7 gates remain open.
+
+**Owner:** The developer owns this candidate, its evidence and the eventual
+partial issue records. Independent QA and Sol own their checks; the orchestrator
+owns publication, retaining integration and acceptance confirmation. Main is
+a separate integration boundary.
+
 **Remaining:** Complete protected-fragment accounting/consumption, declaration
 captures, repetition, host transfer and procedural declarations, quotes/escapes,
 derives, generators, publication handoffs, full corpus/diagnostics,
@@ -117,8 +189,8 @@ criterion awaits D5/G1; D6's procedural-output import refusal awaits S3/S4.
 Prior partial H1/H2/H3 tests do not close their original criteria. No TASK-0068
 fresh full-workspace receipt or completed D8/E4/V3/final gate is established.
 
-**Awaiting:** Complete the expression/pattern ownership, depth and consumer
-inventory and obtain the same Sol review before activating that source lane.
+**Awaiting:** Retain the independently reviewed expression/pattern candidate
+before treating its direct-template lane as delivered on the retaining branch.
 Each delivery also requires independent QA, Sol PR review, retained-result
 verification and acceptance readback. Keep every
 incomplete original criterion unchecked with Delivered/Remaining/Awaiting/Owner
@@ -183,10 +255,11 @@ The plan names the
 [protected type-to-expression accounting and release gate](../design/macros/slice2-delivery-plan.md#protected-type-to-expression-accounting-and-release-gate).
 It requires separate independent review. The retained Type delivery established
 the narrow refusal for protected types in generated expression-macro invocation
-arguments, then activated its accounted Type path. Expression and Pattern paths
-remain guarded. Keep the narrow refusal until all subsequent
-copying, traversal and composed depth are charged by the same existing
-`SyntaxBudget` and shared accounting. Required real imported
+arguments, then activated its accounted Type path. The retaining branch at
+`3613a863` still guards Expression and Pattern declaration captures; the local
+candidate above connects the direct-template lane with shared accounting.
+Keep the Type-to-expression refusal and guards on unaccounted consumers.
+Required real imported
 consumer, repeated-copy, exact/short allowance, depth, late-failure,
 small-stack/drop/cleanup and slice 1 regression evidence cannot be replaced by
 an isolated projector check. If that connection cannot preserve language and
@@ -208,7 +281,7 @@ candidate, not an integrated tree. Full D5 and I19 remain open.
 ## Deviations
 
 On 2026-11-09, the user accepted one inline result-expression alternative for
-escapes and requested the explicit CP-0034 amendment. It does not add inline
+escapes; PR #281 retained the explicit CP-0034 amendment. It does not add inline
 outer local declarations or change ordinary block grammar. Quote and escape
 implementation and their specification update remain open; this decision is not
 current Ash. The resource and diagnostic findings above preserve the reviewed
