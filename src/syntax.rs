@@ -1870,6 +1870,18 @@ pub(crate) fn validate_template_syntax(
     source: &crate::source::SourceFile,
     contexts: &SyntaxContexts,
 ) -> Result<(), crate::parser::MacroParseFailure> {
+    let mut admission_budget = (declaration.category
+        == crate::surface::SurfaceSyntaxCategory::Declaration)
+        .then(SyntaxBudget::default);
+    validate_template_syntax_inner(declaration, source, contexts, admission_budget.as_mut())
+}
+
+fn validate_template_syntax_inner(
+    declaration: &SurfaceSyntaxDeclaration,
+    source: &crate::source::SourceFile,
+    contexts: &SyntaxContexts,
+    mut admission_budget: Option<&mut SyntaxBudget>,
+) -> Result<(), crate::parser::MacroParseFailure> {
     use crate::parser::MacroParseFailure;
 
     fn resource(error: ResourceFailure) -> MacroParseFailure {
@@ -1886,9 +1898,6 @@ pub(crate) fn validate_template_syntax(
             Ok(())
         };
     };
-    let mut admission_budget = (declaration.category
-        == crate::surface::SurfaceSyntaxCategory::Declaration)
-        .then(SyntaxBudget::default);
     let (capture_count, identifier_count) = if let Some(budget) = &mut admission_budget {
         budget
             .charge_units(declaration.matcher.len())
@@ -2325,6 +2334,70 @@ mod tests {
             )]),
         };
         assert!(charge_expression_retention(&protected, 0, &mut SyntaxBudget::default()).unwrap());
+    }
+
+    #[test]
+    fn declaration_admission_charges_both_literal_matcher_traversals() {
+        use crate::lexer::TokenKind;
+        use crate::parser::MacroParseFailure;
+
+        let source =
+            SourceFile::new("empty.ash", "pub syntax declaration: (empty) => {}\n").unwrap();
+        let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+        let baseline = crate::parser::project_module_retaining_templates(&source, &tree)
+            .unwrap()
+            .syntax_declarations
+            .remove(0);
+        assert!(baseline.matcher.is_empty());
+        assert!(baseline.template_contents.as_ref().unwrap().is_empty());
+        let count = 128;
+        let mut literal_heavy = baseline.clone();
+        literal_heavy.matcher = (0..count)
+            .map(|_| SurfaceSyntaxMatcherPart::Literal {
+                kind: TokenKind::Identifier("tag".into()),
+                spelling: "tag".into(),
+            })
+            .collect();
+        assert_eq!(literal_heavy.matcher.len(), count);
+        assert!(
+            literal_heavy
+                .matcher
+                .iter()
+                .all(|part| matches!(part, SurfaceSyntaxMatcherPart::Literal { .. }))
+        );
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        let measure = |declaration: &SurfaceSyntaxDeclaration| {
+            let mut budget = SyntaxBudget::default();
+            validate_template_syntax_inner(declaration, &source, &contexts, Some(&mut budget))
+                .expect("the unused empty declaration template is admitted");
+            budget.consumed()
+        };
+        let baseline_cost = measure(&baseline);
+        let used = measure(&literal_heavy);
+        // The capacity fold and placeholder-building loop each visit all
+        // literals; the empty output leaves all later work unchanged.
+        assert_eq!(used - baseline_cost, 2 * count);
+        let mut short = SyntaxBudget::with_limit(used - 1);
+        assert!(matches!(
+            validate_template_syntax_inner(&literal_heavy, &source, &contexts, Some(&mut short)),
+            Err(MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        let mut spent = SyntaxBudget::with_limit(used);
+        spent.charge().unwrap();
+        assert!(matches!(
+            validate_template_syntax_inner(&literal_heavy, &source, &contexts, Some(&mut spent)),
+            Err(MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        let mut fresh = SyntaxBudget::with_limit(used);
+        validate_template_syntax_inner(&literal_heavy, &source, &contexts, Some(&mut fresh))
+            .expect("the exact fresh admission ledger covers both traversals and validation");
+        assert_eq!(fresh.consumed(), used);
     }
 
     fn nested_template(
