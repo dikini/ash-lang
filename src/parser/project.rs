@@ -447,9 +447,18 @@ pub(crate) fn structural_weight(node: &ConcreteNode) -> usize {
         | NodeKind::AdditiveExpression
         | NodeKind::MultiplicativeExpression
         | NodeKind::ApplicationExpression
+        | NodeKind::SyntaxQuote
         | NodeKind::ParenthesizedExpression
         | NodeKind::ParenthesizedType
         | NodeKind::ParenthesizedKind => 1,
+        NodeKind::SyntaxEscape => match node.children.as_slice() {
+            [ConcreteElement::Token(_), ConcreteElement::Node(body)]
+                if body.kind == NodeKind::Block =>
+            {
+                0
+            }
+            _ => 1,
+        },
         NodeKind::Pattern
             if child_nodes(node).any(|child| {
                 matches!(
@@ -1582,7 +1591,12 @@ fn validate_shallow_shape(
                 )
             })?;
         }
-        NodeKind::Error => return malformed(InternalReason::UnexpectedShape),
+        NodeKind::SyntaxQuote
+        | NodeKind::SyntaxEscape
+        | NodeKind::TemplateSplice
+        | NodeKind::EscapeCaptureRead
+        | NodeKind::QuoteHole
+        | NodeKind::Error => return malformed(InternalReason::UnexpectedShape),
     }
     shape.finish()
 }

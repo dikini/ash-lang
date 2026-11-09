@@ -166,6 +166,16 @@ pub enum NodeKind {
     ParenthesizedExpression,
     /// A structural tuple expression.
     TupleExpression,
+    /// One expression quote and its delimited expression syntax.
+    SyntaxQuote,
+    /// One executable escape and its ordinary Ash block.
+    SyntaxEscape,
+    /// A splice owned by the enclosing macro template.
+    TemplateSplice,
+    /// A lexical macro-capture read inside escaped code.
+    EscapeCaptureRead,
+    /// An ordinary variable hole inside an expression quote.
+    QuoteHole,
     /// A typed or untyped binding pattern.
     Pattern,
     /// A parenthesized structural tuple pattern.
@@ -985,6 +995,8 @@ fn parse_macro_tree_inner(
         syntax_budget: budget.clone(),
         syntax_work_exhausted: false,
         in_template: false,
+        quote_mode: QuoteMode::Ordinary,
+        saw_quote_or_escape: false,
         syntax: &[],
         syntax_source: Some(source),
         syntax_selections: Some(&syntax_selections),
@@ -1030,10 +1042,15 @@ fn parse_macro_tree_inner(
         events,
         diagnostics,
         resource_failure,
+        saw_quote_or_escape,
         ..
     } = parser;
+    let tree = cst::build(tokens, Vec::new(), diagnostics, events, resource_failure);
+    if saw_quote_or_escape {
+        check_completed_quote_depth(&tree, budget).map_err(macro_resource_failure)?;
+    }
     Ok(ParsedMacroTree {
-        tree: cst::build(tokens, Vec::new(), diagnostics, events, resource_failure),
+        tree,
         original_nodes,
         admission_identifiers,
     })
@@ -1230,6 +1247,8 @@ pub(crate) fn parse_module_header(
             syntax_budget,
             syntax_work_exhausted: false,
             in_template: false,
+            quote_mode: QuoteMode::Ordinary,
+            saw_quote_or_escape: false,
             syntax: &[],
             syntax_source: None,
             syntax_selections: None,
@@ -1304,6 +1323,8 @@ pub(crate) fn finish_module_from_checkpoint_with_syntax(
         syntax_budget,
         syntax_work_exhausted,
         in_template: false,
+        quote_mode: QuoteMode::Ordinary,
+        saw_quote_or_escape: false,
         syntax,
         syntax_source: source,
         syntax_selections: None,
@@ -1319,7 +1340,8 @@ pub(crate) fn finish_module_from_checkpoint_with_syntax(
         diagnostics,
         resource_failure,
         syntax_work_exhausted,
-        syntax_budget,
+        mut syntax_budget,
+        saw_quote_or_escape,
         ..
     } = parser;
     if syntax_work_exhausted {
@@ -1333,16 +1355,83 @@ pub(crate) fn finish_module_from_checkpoint_with_syntax(
             syntax_budget,
         );
     }
-    (
-        cst::build(
-            tokens,
-            lexical_diagnostics,
-            diagnostics,
-            events,
-            resource_failure,
-        ),
-        syntax_budget,
-    )
+    let mut tree = cst::build(
+        tokens,
+        lexical_diagnostics,
+        diagnostics,
+        events,
+        resource_failure,
+    );
+    if saw_quote_or_escape {
+        if let Err(failure) = check_completed_quote_depth(&tree, &mut syntax_budget) {
+            drop(tree.root.take());
+            tree.events.clear();
+            tree.resource_failure = Some(failure);
+        }
+    }
+    (tree, syntax_budget)
+}
+
+// Quote depth must compose with its surrounding tree before that tree is
+// exposed. Projection independently validates trees at its own boundary.
+fn check_completed_quote_depth(
+    tree: &ConcreteTree,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    if !tree.lexical_diagnostics.is_empty()
+        || !tree.parse_diagnostics.is_empty()
+        || tree.malformed.is_some()
+        || tree.resource_failure.is_some()
+    {
+        return Ok(());
+    }
+    let Some(root) = tree.root.as_ref() else {
+        return Ok(());
+    };
+    budget.charge()?;
+    let mut pending = vec![(root, 0_usize)];
+    while let Some((node, depth)) = pending.pop() {
+        budget.charge()?;
+        if node.kind == NodeKind::SyntaxEscape {
+            // Reserve both immediate children before the shape classification.
+            budget.charge_units(2)?;
+        }
+        if matches!(
+            node.kind,
+            NodeKind::Pattern
+                | NodeKind::AtomicType
+                | NodeKind::EffectInstance
+                | NodeKind::InterfaceApplication
+                | NodeKind::OperationReference
+                | NodeKind::Type
+                | NodeKind::Kind
+        ) {
+            // structural_weight may stop early; reserve its worst-case child scan.
+            budget.charge_units(node.children.len())?;
+        }
+        let depth = depth.saturating_add(source_structural_weight(node));
+        if depth > STRUCTURAL_DEPTH_LIMIT {
+            return Err(ResourceFailure::StructuralDepth {
+                limit: STRUCTURAL_DEPTH_LIMIT,
+            });
+        }
+        for child in &node.children {
+            budget.charge()?;
+            if let ConcreteElement::Node(child) = child {
+                budget.charge()?;
+                pending.push((child, depth));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum QuoteMode {
+    Ordinary,
+    Template,
+    Escape,
+    Quote,
 }
 
 pub(crate) struct Parser<'tokens> {
@@ -1357,6 +1446,8 @@ pub(crate) struct Parser<'tokens> {
     syntax_budget: SyntaxBudget,
     syntax_work_exhausted: bool,
     in_template: bool,
+    quote_mode: QuoteMode,
+    saw_quote_or_escape: bool,
     syntax: &'tokens [crate::syntax::SelectedSyntax],
     syntax_source: Option<&'tokens SourceFile>,
     syntax_selections:
@@ -1456,6 +1547,7 @@ impl Parser<'_> {
         })
     }
     fn start(&mut self, kind: NodeKind) {
+        self.saw_quote_or_escape |= matches!(kind, NodeKind::SyntaxQuote | NodeKind::SyntaxEscape);
         let _ = self.retain_event(Event::Start(kind));
     }
 
