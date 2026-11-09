@@ -2137,6 +2137,15 @@ pub(crate) fn project_declaration_expansions(
                 }
             }
             module.project_child(source, child, &tokens)?;
+            #[cfg(test)]
+            if current.invocation.is_some() && std::env::var_os("ASH_TASK_0068_EP_TRACE").is_some()
+            {
+                eprintln!(
+                    "EP_TRACE_GENERATED_OUTPUT {:?} {}",
+                    child.kind,
+                    budget.consumed()
+                );
+            }
             continue;
         }
 
@@ -8609,6 +8618,9 @@ mod tests {
 
         let mut owners = vec![existing];
         let mut short = SyntaxBudget::with_limit(used - 1);
+        if std::env::var_os("ASH_TASK_0068_EP_TRACE").is_some() {
+            eprintln!("EP_TRACE_SHORT_BEGIN");
+        }
         assert!(matches!(
             project_declaration_expansions(
                 &source,
@@ -8623,6 +8635,9 @@ mod tests {
                 ..
             })
         ));
+        if std::env::var_os("ASH_TASK_0068_EP_TRACE").is_some() {
+            eprintln!("EP_TRACE_SHORT_REJECTED");
+        }
         assert_eq!(owners.len(), 1);
         assert_eq!(owners[0].owner, existing.owner);
         assert_eq!(owners[0].declaration, existing.declaration);
