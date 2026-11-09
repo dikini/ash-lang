@@ -1,16 +1,19 @@
 # CP-0034: local work structure and issue drafts
 
-This is a local planning draft for [CP-0034](../../proposals/CP-0034-top-level-declaration-macros.md),
-the [delivery plan](slice2-delivery-plan.md) and the
-[predefined integration corpus](fixtures/README.md). It is not an active
-Ash task, a GitHub issue, or authorization to implement. The accepted proposal
-is unimplemented; [TASK-0068](../../tasks/TASK-0068-top-level-declaration-macros.md)
-owns the planned delivery. Create no GitHub issues until explicitly requested.
+This records the reviewed work structure and issue drafts for
+[CP-0034](../../proposals/CP-0034-top-level-declaration-macros.md), filed under
+[issue #206](https://github.com/dikini/ash-lang/issues/206). The accepted proposal
+is partially implemented on the retaining branch;
+[TASK-0068](../../tasks/TASK-0068-top-level-declaration-macros.md) owns active
+delivery. Use the [delivery plan](slice2-delivery-plan.md) and live issues for
+current status. This document preserves the reviewed units and
+[predefined integration corpus](fixtures/README.md); it does not itself
+authorize implementation or define Ash semantics.
 
-The parent and workstream entries below organize the 45 remaining work units.
+The parent and workstream entries below organize the original 45 delivery units.
 They do not carry extra points. C1–C4 are completed planning prerequisites:
 their 8 predicted points are recorded in the delivery plan, not assigned to
-new work. The 45 remaining units total **142 points**; together with those
+new work. The original 45 units total **142 points**; together with those
 8 historical planning points, the scope prediction is **150 points**. These
 are fixed difficulty predictions, not elapsed time or measured actual effort.
 
@@ -30,10 +33,12 @@ separate downstream gap, stop the dependent work and continue independent work.
 **Acceptance:** the integrated candidate satisfies the linked I01–I22 corpus,
 retained slice 1 regression, the public driver and supported consumers,
 independent QA and review, the fresh gate and authorized retaining-branch
-readback. No fixture or planning result claims that implementation exists.
+readback. A fixture or planning result alone does not establish implementation
+or acceptance; current partial delivery is recorded in the task and plan.
 
-**Prerequisites:** accepted CP-0034, recorded C1–C4 and TASK-0068; agree the
-retaining branch, roles, integration owner and delivery permissions before
+**Prerequisites:** accepted CP-0034, recorded C1–C4 and active TASK-0068. The
+retaining branch, roles, integration owner and delivery permissions are recorded
+in the task and delivery plan; recheck their current refs and assignments at
 dispatch. Main integration is a separate gate.
 
 ## Workstream hierarchy
@@ -50,7 +55,7 @@ The workstream totals are sums of their children, not additional estimates.
 | Derives | R1, R2, R3, R4, R5, R6 | 17 |
 | Repetition and generators | G1, G2, G3, G7, G4, G5, G6 | 23 |
 | Connected evidence and delivery | V1, V2, V3, V4, V5, V6, V7, V8 | 24 |
-| **Remaining work** | **45 units** | **142** |
+| **Original delivery scope** | **45 units** | **142** |
 
 ### Workstream drafts
 
