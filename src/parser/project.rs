@@ -7837,6 +7837,154 @@ mod tests {
     }
 
     #[test]
+    fn d5_nested_declaration_original_refuses_each_projection_preflight() {
+        use crate::surface::SurfaceDeclarationCapture;
+        use crate::syntax::{MacroOutputNode, SyntaxContexts};
+        use crate::syntax_resource::SyntaxBudget;
+        use std::sync::Arc;
+
+        let forms = SourceFile::new(
+            "forms.ash",
+            "pub syntax declaration: (accept) $body:expr => {}\n",
+        )
+        .unwrap();
+        let selected = [h1_selection(&forms, 0, None)];
+        let contexts = SyntaxContexts::new(&selected, &[], &[]);
+        let source = SourceFile::new("caller.ash", "accept probe\n").unwrap();
+        let (tree, _) = d5_source_tree(&source, &selected);
+        let invocation = child_nodes(tree.root().unwrap()).next().unwrap();
+        let tokens = ProjectionTokens::source(tree.tokens());
+        let span = node_span(&source, invocation, &tokens).unwrap();
+        let mut output =
+            capture_contents(&source, invocation, &tokens, &Default::default()).unwrap();
+        let probe_offset = source.text().find("probe").unwrap() as u32;
+        let probe_span = source
+            .span(ByteRange::new(probe_offset, probe_offset + 5).unwrap())
+            .unwrap();
+        let name = SurfaceName {
+            text: "probe".into(),
+            span: probe_span,
+            introduction: 0,
+            introduced_at: None,
+            written: true,
+            diagnostic: None,
+        };
+        let ordinary = SurfaceExpressionCapture {
+            expression: SurfaceExpr {
+                kind: SurfaceExprKind::Unit,
+                span: probe_span,
+                diagnostic: None,
+            },
+            contents: Arc::from([]),
+        };
+        assert!(replace_output_name(
+            &mut output,
+            "probe",
+            &MacroOutputNode::ForwardedExpression(ordinary, probe_span.into()),
+        ));
+        let mut parsed = super::super::parse_macro_tree(
+            &source,
+            span,
+            output,
+            &contexts,
+            &[],
+            super::super::MacroOutputPosition::StagedDeclarations,
+        )
+        .expect("the adapter produces an actual protected-expression token and CST");
+        let index = parsed
+            .original_nodes
+            .iter()
+            .find_map(|(index, original)| {
+                matches!(original, MacroOutputNode::ForwardedExpression(..)).then_some(*index)
+            })
+            .unwrap();
+        let packet: Arc<[MacroOutputNode]> = Arc::from([]);
+        for invalid in [false, true] {
+            if invalid {
+                let Some(MacroOutputNode::ForwardedExpression(capture, _)) =
+                    parsed.original_nodes.get_mut(&index)
+                else {
+                    panic!("the adapter-retained original must exist");
+                };
+                // Inject only the unreachable nested Declaration; the CST and original token came from the adapter.
+                capture.expression.kind = SurfaceExprKind::SyntaxInvocation {
+                    name: name.clone(),
+                    captures: vec![SurfaceSyntaxCapture::Declaration(
+                        SurfaceDeclarationCapture {
+                            contents: Arc::clone(&packet),
+                        },
+                    )],
+                };
+            }
+            let root = validated_macro_root(&source, &parsed.tree).unwrap();
+            let invocation = child_nodes(root).next().unwrap();
+            let argument = only_child_of_kind(invocation, NodeKind::SyntaxArgument).unwrap();
+            let expression = child_nodes(argument)
+                .find(|child| is_expression_kind(child.kind))
+                .unwrap();
+            let tokens = ProjectionTokens {
+                tokens: parsed.tree.tokens(),
+                originals: Some(&parsed.original_nodes),
+                occurrence: Some(span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: Some(&parsed.admission_identifiers),
+                frame: None,
+                name_frame: None,
+                staging_frames: None,
+                preserve_name_diagnostic: true,
+            };
+            let retained = Arc::strong_count(&packet);
+            let check = |operation: &mut dyn FnMut(
+                &mut SyntaxBudget,
+            )
+                -> Result<bool, DeclarationExpansionFailure>| {
+                let mut measured = SyntaxBudget::default();
+                let result = operation(&mut measured);
+                if invalid {
+                    assert!(matches!(
+                        result,
+                        Err(DeclarationExpansionFailure::Projection(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                        ))
+                    ));
+                    let cost = measured.consumed();
+                    assert!(matches!(
+                        operation(&mut SyntaxBudget::with_limit(cost - 1)),
+                        Err(DeclarationExpansionFailure::Syntax {
+                            resource: Some(ResourceFailure::SyntaxWork { .. }),
+                            ..
+                        })
+                    ));
+                    assert!(matches!(
+                        operation(&mut SyntaxBudget::with_limit(cost)),
+                        Err(DeclarationExpansionFailure::Projection(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                        ))
+                    ));
+                } else {
+                    assert!(result.is_ok());
+                }
+            };
+            check(&mut |budget| {
+                charge_capture_contents(
+                    expression,
+                    &tokens,
+                    SurfaceSyntaxCaptureKind::Expression,
+                    budget,
+                )
+            });
+            check(&mut |budget| charge_composed_projection(expression, &tokens, true, budget));
+            check(&mut |budget| {
+                charge_declaration_invocation(
+                    &source, invocation, &tokens, &contexts, false, budget,
+                )
+            });
+            assert_eq!(Arc::strong_count(&packet), retained);
+        }
+    }
+
+    #[test]
     fn d5_source_carrier_guard_covers_each_structured_field() {
         let selected = [d5_selection()];
         let source = SourceFile::new("caller.ash", "sink { type Item = Item }\n").unwrap();
