@@ -165,6 +165,42 @@ fn forwarded_type_in_generated_expression_invocation_is_refused() {
     fixture.write(
         "entry.ash",
         "import forms (syntax emit)\n\
+         import helpers (syntax keep)\n\
+         emit answer through keep for Int\n\
+         main : Unit -> Int\n\
+         main () = answer(0)\n",
+    );
+    fixture.write("helpers.ash", "pub syntax keep $body:expr => {\n $body\n}\n");
+    let forms = |expression: &str| {
+        format!(
+            "pub syntax declaration: (emit) $name:ident through $macro:ident for $T:type => {{\n\
+                 pub fn $name(value: $T) -> Int {{\n\
+                     {expression}\n\
+                 }}\n\
+             }}\n"
+        )
+    };
+    fixture.write("forms.ash", &forms("$macro 42"));
+    let program = compile_path(fixture.configuration())
+        .expect("a type capture and an ordinary generated expression both work");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+    drop(program);
+
+    fixture.write(
+        "forms.ash",
+        &forms("$macro ({\n let copy : ($T) = value\n copy\n })"),
+    );
+    let failure = compile_path(fixture.configuration())
+        .expect_err("a forwarded type inside a nested expression argument is guarded");
+    assert_eq!(failure.reason_code(), "internal.projection.malformed-tree", "{failure:?}");
+}
+
+#[test]
+fn imported_expression_syntax_refuses_a_nested_forwarded_type() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "entry.ash",
+        "import forms (syntax emit)\n\
          emit answer for Int\n\
          main : Unit -> Int\n\
          main () = answer(0)\n",
@@ -182,17 +218,17 @@ fn forwarded_type_in_generated_expression_invocation_is_refused() {
     };
     fixture.write("forms.ash", &forms("keep 42"));
     let program = compile_path(fixture.configuration())
-        .expect("a type capture and an ordinary generated expression both work");
+        .expect("the imported expression syntax executes in generated code");
     assert_eq!(execute(&program).unwrap().value_display(), "42");
     drop(program);
 
     fixture.write(
         "forms.ash",
-        &forms("keep { ({ let copy : $T = value\n copy }) }"),
+        &forms("keep ({\n let copy : ($T) = value\n copy\n })"),
     );
     let failure = compile_path(fixture.configuration())
         .expect_err("a forwarded type inside a nested expression argument is guarded");
-    assert_eq!(failure.reason_code(), "internal.projection.malformed-tree");
+    assert_eq!(failure.reason_code(), "internal.projection.malformed-tree", "{failure:?}");
 }
 
 #[test]
@@ -234,22 +270,23 @@ fn imported_doubling_stops_at_the_shared_work_limit() {
 #[test]
 fn investigate_mixed_consumer() {
     let fixture = Fixture::new();
-    for (applications, height) in [(0, 0), (1, 1), (10, 10), (20, 20), (40, 46)] {
+    for (applications, height) in [(0, 0), (1, 0), (0, 1), (1, 1), (10, 10), (20, 20), (40, 46)] {
         let capture = format!("{}Int{}", "(".repeat(height), ", Int)".repeat(height));
-        for mode in ["generated_function", "handwritten_function", "generated_type"] {
+        for mode in ["generated_function", "generated_function_imported", "handwritten_function", "generated_type"] {
             let protected = if mode == "handwritten_function" { capture.as_str() } else { "$T" };
             let generated = format!("{}{protected}{}", "Layer<(".repeat(applications), ")>".repeat(applications));
             let declaration = if mode == "generated_type" {
                 format!("pub type Subject = Subject({generated})\n")
-            } else if mode == "generated_function" {
+            } else if mode.starts_with("generated_function") {
                 format!("pub $name : {generated} -> Int\n$name _ = 42\n")
             } else {
                 format!("pub answer : {generated} -> Int\nanswer _ = 42\n")
             };
             let (forms, entry) = if mode == "handwritten_function" {
                 ("pub type Layer<A> = Layer(A)\n".to_owned(), format!("import forms (Layer)\n{declaration}main : Unit -> Int\nmain () = 42\n"))
-            } else if mode == "generated_function" {
-                (format!("pub type Layer<A> = Layer(A)\npub syntax declaration: (emit) $name:ident for $T:type => {{\n{declaration}}}\n"), format!("import forms (syntax emit)\nemit answer for {capture}\nmain : Unit -> Int\nmain () = 42\n"))
+            } else if mode.starts_with("generated_function") {
+                let imports = if mode == "generated_function_imported" { "Layer, syntax emit" } else { "syntax emit" };
+                (format!("pub type Layer<A> = Layer(A)\npub syntax declaration: (emit) $name:ident for $T:type => {{\n{declaration}}}\n"), format!("import forms ({imports})\nemit answer for {capture}\nmain : Unit -> Int\nmain () = 42\n"))
             } else {
                 (format!("pub type Layer<A> = Layer(A)\npub syntax declaration: (emit) $T:type => {{\n{declaration}}}\n"), format!("import forms (syntax emit)\nemit {capture}\nmain : Unit -> Int\nmain () = 42\n"))
             };
