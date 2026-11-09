@@ -324,7 +324,7 @@ pub(crate) fn type_depth(depth: usize, extra: usize) -> Result<usize, ResourceFa
     Ok(depth)
 }
 
-fn charge_type_origin(
+pub(crate) fn charge_type_origin(
     origin: &MacroOrigin,
     depth: usize,
     budget: &mut SyntaxBudget,
@@ -1761,5 +1761,86 @@ mod tests {
         let mut exact = crate::syntax_resource::SyntaxBudget::with_limit(large_cost);
         instantiate_declaration_template(&selection, &[large], 1, span, &mut exact)
             .expect("the measured allowance covers both copies");
+    }
+
+    #[test]
+    fn protected_type_work_counts_names_frames_and_each_shared_visit() {
+        let source = SourceFile::new("protected.ash", "Type").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        let name = |text: &str, diagnostic| SurfaceName {
+            text: text.into(),
+            span,
+            introduction: 0,
+            introduced_at: None,
+            written: true,
+            diagnostic,
+        };
+        let named_type = |name| SurfaceType {
+            kind: SurfaceTypeKind::Named(SurfaceReference::Unqualified(name)),
+            span,
+            diagnostic: None,
+        };
+        let mut location = DiagnosticLocation::new(span.into());
+        location.related.extend((0..4).map(|_| span.into()));
+        location.frames.extend((0..3).map(|_| {
+            Arc::new(ExpansionFrame {
+                invocation: span,
+                definition: span,
+            })
+        }));
+        let short_name = named_type(name("T", None));
+        let long_name = named_type(name("LongCallerType", Some(Box::new(location))));
+        let copy_cost = |ty: &SurfaceType| {
+            let mut budget = SyntaxBudget::default();
+            charge_type_copy(ty, 0, true, &mut budget).unwrap();
+            budget.consumed()
+        };
+        let cost = copy_cost(&long_name);
+        assert!(cost > copy_cost(&short_name));
+        assert!(matches!(
+            charge_type_copy(&long_name, 0, true, &mut SyntaxBudget::with_limit(cost - 1)),
+            Err(ResourceFailure::SyntaxWork { .. })
+        ));
+        charge_type_copy(&long_name, 0, true, &mut SyntaxBudget::with_limit(cost)).unwrap();
+
+        let inner = SurfaceTypeCapture {
+            ty: short_name.clone(),
+            contents: Arc::from([MacroOutputNode::Token(
+                crate::lexer::TokenKind::IntType,
+                Arc::from("Int"),
+                span.into(),
+            )]),
+        };
+        let outer = |copies: usize| SurfaceTypeCapture {
+            ty: short_name.clone(),
+            contents: (0..copies)
+                .map(|_| MacroOutputNode::ForwardedType(inner.clone(), span.into()))
+                .collect::<Vec<_>>()
+                .into(),
+        };
+        let twice = outer(2);
+        let [
+            MacroOutputNode::ForwardedType(left, _),
+            MacroOutputNode::ForwardedType(right, _),
+        ] = twice.contents.as_ref()
+        else {
+            panic!("two forwarded captures must be retained");
+        };
+        assert!(Arc::ptr_eq(&left.contents, &right.contents));
+        let retention_cost = |capture: &SurfaceTypeCapture| {
+            let mut budget = SyntaxBudget::default();
+            charge_type_retention(capture, 0, &mut budget).unwrap();
+            budget.consumed()
+        };
+        let cost = retention_cost(&twice);
+        assert!(cost > retention_cost(&outer(1)));
+        assert!(matches!(
+            charge_type_retention(&twice, 0, &mut SyntaxBudget::with_limit(cost - 1)),
+            Err(crate::parser::MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        charge_type_retention(&twice, 0, &mut SyntaxBudget::with_limit(cost)).unwrap();
     }
 }

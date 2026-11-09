@@ -51,6 +51,15 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn i01_identifier_captures_reach_the_ordinary_driver() {
+    for name in ["control_01.ash", "case_01.ash"] {
+        let program = compile_path(declaration_fixture(name))
+            .expect("the fixed I01 declaration and its control compile");
+        assert_eq!(execute(&program).unwrap().value_display(), "42");
+    }
+}
+
+#[test]
 fn i07_type_captures_reach_the_ordinary_driver() {
     let control = compile_path(declaration_fixture("control_07.ash"))
         .expect("the handwritten I07 control compiles");
@@ -230,6 +239,56 @@ fn imported_effect_row_combines_all_type_depth_edges() {
     let failure = compile_path(fixture.configuration())
         .expect_err("one more captured tuple exceeds the effect-row depth");
     assert_eq!(failure.reason_code(), "internal.resource.structural-depth");
+}
+
+#[test]
+fn generated_raw_type_leaves_respect_the_composed_depth() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "entry.ash",
+        "import forms (Layer, Leaf, syntax emit)\n\
+         emit answer for Int\n\
+         main : Unit -> Int\n\
+         main () = 42\n",
+    );
+    let mut unexpected = Vec::new();
+    for leaf in ["Int", "Leaf"] {
+        for extra_group in [false, true] {
+            let raw = if extra_group {
+                format!("({leaf})")
+            } else {
+                leaf.to_owned()
+            };
+            let nested = format!("{}{raw}{}", "Layer<(".repeat(63), ")>".repeat(63));
+            fixture.write(
+                "forms.ash",
+                &format!(
+                    "pub type Layer<A> = Layer(A)\n\
+                     pub type Leaf = Leaf\n\
+                     pub syntax declaration: (emit) $name:ident for $T:type => {{\n\
+                         pub $name : {nested} -> $T\n\
+                         $name _ = 42\n\
+                     }}\n"
+                ),
+            );
+            match (extra_group, compile_path(fixture.configuration())) {
+                (false, Ok(program)) => {
+                    assert_eq!(execute(&program).unwrap().value_display(), "42");
+                }
+                (true, Err(failure))
+                    if failure.reason_code() == "internal.resource.structural-depth" => {}
+                (extra, result) => unexpected.push((
+                    leaf,
+                    extra,
+                    result.err().map(|failure| failure.reason_code()),
+                )),
+            }
+        }
+    }
+    assert!(
+        unexpected.is_empty(),
+        "unexpected raw-leaf outcomes: {unexpected:?}"
+    );
 }
 
 #[test]

@@ -2336,7 +2336,7 @@ fn charge_identifier_invocation(
             // Both the eventual projected type and the temporary contents
             // capture are reserved before the shared projector runs.
             charge_composed_type_projection(ty, tokens, budget)?;
-            charge_projection_subtree(ty, tokens, false, budget)?;
+            charge_projection_subtree(ty, tokens, budget)?;
             charge_type_capture_contents(ty, tokens, budget)?;
             continue;
         }
@@ -2387,12 +2387,34 @@ fn charge_type_capture_contents(
     tokens: &ProjectionTokens<'_>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(), DeclarationExpansionFailure> {
+    // A lone forwarded node reuses its old contents Arc. Every other
+    // reconstructed sequence gets a new enclosing Arc before it is retained.
+    let mut singleton = root;
+    let reuses_contents = loop {
+        budget.charge()?;
+        match singleton.children.as_slice() {
+            [ConcreteElement::Node(child)] => singleton = child,
+            [ConcreteElement::Token(index)] => {
+                break matches!(
+                    tokens.originals.and_then(|originals| originals.get(index)),
+                    Some(crate::syntax::MacroOutputNode::ForwardedType(_, _))
+                );
+            }
+            _ => break false,
+        }
+    };
+    let contents_prefix = usize::from(!reuses_contents);
+    // Reserve this scan's pending elements and capture_contents' separate
+    // pending elements before either worklist can grow.
+    budget.charge_units(root.children.len())?;
     budget.charge_units(root.children.len())?;
     let mut pending = root.children.iter().rev().collect::<Vec<_>>();
-    let mut groups = 0usize;
+    let mut groups = contents_prefix;
     while let Some(element) = pending.pop() {
+        budget.charge_units(2)?;
         match element {
             ConcreteElement::Node(node) => {
+                budget.charge_units(node.children.len())?;
                 budget.charge_units(node.children.len())?;
                 pending.extend(node.children.iter().rev());
             }
@@ -2450,7 +2472,7 @@ fn charge_type_capture_contents(
             }
         }
     }
-    if groups != 0 {
+    if groups != contents_prefix {
         return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
     }
     Ok(())
@@ -2464,7 +2486,7 @@ fn charge_generated_projection(
 ) -> Result<(), DeclarationExpansionFailure> {
     check_narrow_type_refusal(root, tokens, budget)?;
     charge_composed_type_projection(root, tokens, budget)?;
-    charge_projection_subtree(root, tokens, false, budget)?;
+    charge_projection_subtree(root, tokens, budget)?;
     budget.charge()?;
     let mut pending = vec![root];
     while let Some(node) = pending.pop() {
@@ -2476,7 +2498,7 @@ fn charge_generated_projection(
                 | NodeKind::ResourceDefinition
                 | NodeKind::ResourceFamily
         ) {
-            charge_projection_subtree(node, tokens, true, budget)?;
+            charge_projection_subtree(node, tokens, budget)?;
         }
         if node.kind == NodeKind::SyntaxInvocation {
             for argument in child_nodes(node).filter(|child| child.kind == NodeKind::SyntaxArgument)
@@ -2484,7 +2506,7 @@ fn charge_generated_projection(
                 if let Some(expression) =
                     child_nodes(argument).find(|child| is_expression_kind(child.kind))
                 {
-                    charge_projection_subtree(expression, tokens, true, budget)?;
+                    charge_projection_subtree(expression, tokens, budget)?;
                 }
             }
         }
@@ -2499,12 +2521,12 @@ fn charge_generated_projection(
                     && let Some(operation) =
                         child_nodes(clause).find(|child| child.kind == NodeKind::Binder)
                 {
-                    charge_projection_subtree(operation, tokens, true, budget)?;
+                    charge_projection_subtree(operation, tokens, budget)?;
                 }
                 if let Some(pattern) =
                     child_nodes(clause).find(|child| child.kind == NodeKind::Pattern)
                 {
-                    charge_projection_subtree(pattern, tokens, true, budget)?;
+                    charge_projection_subtree(pattern, tokens, budget)?;
                 }
             }
         }
@@ -2523,8 +2545,11 @@ fn charge_composed_type_projection(
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(), DeclarationExpansionFailure> {
     budget.charge()?;
-    let mut pending = vec![(root, 0usize, false)];
-    while let Some((node, parent_depth, parent_type)) = pending.pop() {
+    let source_spans = tokens.occurrence.is_none();
+    // The source invocation itself also finds its first and last token.
+    let mut pending = vec![(root, 0usize, false, usize::from(source_spans), false)];
+    while let Some((node, parent_depth, parent_type, parent_spans, parent_nominal)) = pending.pop()
+    {
         budget.charge()?;
         // Both weight calculations may scan the node's child list.
         budget.charge_units(node.children.len())?;
@@ -2553,26 +2578,98 @@ fn charge_composed_type_projection(
         };
         let depth =
             crate::syntax::type_depth(parent_depth, structural_weight(node).max(owned_step))?;
+        let nominal_root = tokens.construction.is_some()
+            && matches!(
+                node.kind,
+                NodeKind::TypeDeclaration | NodeKind::NewtypeDeclaration
+            );
+        let nominal = parent_nominal || nominal_root;
+        let mut span_walks = usize::from(
+            nominal
+                || (source_spans
+                    && in_type
+                    && matches!(
+                        node.kind,
+                        NodeKind::Type
+                            | NodeKind::AtomicType
+                            | NodeKind::ParenthesizedType
+                            | NodeKind::EffectRow
+                            | NodeKind::EffectInstance
+                            | NodeKind::QualifiedName
+                    )),
+        );
+        if nominal_root {
+            // Construction proof plus the two declaration metadata edge walks.
+            span_walks += 3;
+        }
+        if nominal && node.kind == NodeKind::TypeParameter {
+            // Parameter metadata finds both edge indices as well as its span.
+            span_walks += 2;
+        }
+        let span_walks = parent_spans.saturating_add(span_walks);
         for child in &node.children {
             budget.charge()?;
+            // Each possible ancestor span walk visits at most this subtree;
+            // cover worklist growth, visits, token lookups and extent updates.
+            budget.charge_units(span_walks.saturating_mul(6))?;
             match child {
-                ConcreteElement::Node(child) => pending.push((child, depth, in_type)),
+                ConcreteElement::Node(child) => {
+                    pending.push((child, depth, in_type, span_walks, nominal));
+                }
                 ConcreteElement::Token(index) => {
-                    if let Some(crate::syntax::MacroOutputNode::ForwardedType(capture, _)) =
-                        tokens.originals.and_then(|originals| originals.get(index))
-                    {
-                        if !in_type {
-                            return Err(ProjectionError::MalformedTree(
-                                InternalReason::UnexpectedShape,
-                            )
-                            .into());
+                    match tokens.originals.and_then(|originals| originals.get(index)) {
+                        Some(crate::syntax::MacroOutputNode::ForwardedType(capture, _)) => {
+                            if !in_type {
+                                return Err(ProjectionError::MalformedTree(
+                                    InternalReason::UnexpectedShape,
+                                )
+                                .into());
+                            }
+                            crate::syntax::charge_type_copy(
+                                &capture.ty,
+                                depth,
+                                tokens.frame.is_some(),
+                                budget,
+                            )?;
                         }
-                        crate::syntax::charge_type_copy(
-                            &capture.ty,
-                            depth,
-                            tokens.frame.is_some(),
-                            budget,
-                        )?;
+                        Some(crate::syntax::MacroOutputNode::Identifier(name, origin))
+                            if in_type =>
+                        {
+                            let location_depth = crate::syntax::type_depth(depth, 1)?;
+                            crate::syntax::charge_type_origin(origin, location_depth, budget)?;
+                            if tokens.preserve_name_diagnostic
+                                && let Some(previous) = &name.diagnostic
+                            {
+                                crate::syntax::charge_type_origin(
+                                    &previous.primary,
+                                    location_depth,
+                                    budget,
+                                )?;
+                                for related in &previous.related {
+                                    crate::syntax::charge_type_origin(
+                                        related,
+                                        location_depth,
+                                        budget,
+                                    )?;
+                                }
+                            }
+                        }
+                        Some(crate::syntax::MacroOutputNode::Token(kind, _, origin))
+                            if in_type
+                                && tokens.frame.is_some()
+                                && matches!(
+                                    kind,
+                                    TokenKind::IntType
+                                        | TokenKind::BytesType
+                                        | TokenKind::StringType
+                                        | TokenKind::BoolType
+                                        | TokenKind::UnitType
+                                ) =>
+                        {
+                            let location_depth = crate::syntax::type_depth(depth, 1)?;
+                            crate::syntax::charge_type_origin(origin, location_depth, budget)?;
+                        }
+                        _ => {}
                     }
                 }
                 ConcreteElement::Missing { .. } | ConcreteElement::Error(_) => {
@@ -2626,7 +2723,6 @@ fn check_narrow_type_refusal(
 fn charge_projection_subtree(
     root: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
-    charge_type_copies: bool,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(), DeclarationExpansionFailure> {
     budget.charge()?;
@@ -2661,16 +2757,7 @@ fn charge_projection_subtree(
                                 budget.charge_units(spelling.len())?;
                             }
                             crate::syntax::MacroOutputNode::Group(_, _, _) => {}
-                            crate::syntax::MacroOutputNode::ForwardedType(capture, _) => {
-                                if charge_type_copies {
-                                    crate::syntax::charge_type_copy(
-                                        &capture.ty,
-                                        0,
-                                        tokens.frame.is_some(),
-                                        budget,
-                                    )?;
-                                }
-                            }
+                            crate::syntax::MacroOutputNode::ForwardedType(_, _) => {}
                             _ => {
                                 return Err(ProjectionError::MalformedTree(
                                     InternalReason::UnexpectedShape,
@@ -6664,6 +6751,408 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn generated_projection_checks_raw_type_leaf_diagnostic_depth() {
+        use crate::syntax::{ExpansionFrame, MacroOutputNode, SyntaxContexts};
+
+        let check = |leaf: &str, extra_group: bool| {
+            let raw = if extra_group {
+                format!("({leaf})")
+            } else {
+                leaf.to_owned()
+            };
+            let nested = format!("{}{raw}{}", "F<(".repeat(63), ")>".repeat(63));
+            let (source, _, mut output) =
+                structured_declarations(&format!("value : {nested} -> Marker\nvalue _ = 42\n"));
+            let span = source.span(ByteRange::new(0, 0).unwrap()).unwrap();
+            let capture = SurfaceTypeCapture {
+                ty: SurfaceType {
+                    kind: SurfaceTypeKind::Int,
+                    span,
+                    diagnostic: None,
+                },
+                contents: std::sync::Arc::from([]),
+            };
+            assert!(replace_output_name(
+                &mut output,
+                "Marker",
+                &MacroOutputNode::ForwardedType(capture, span.into()),
+            ));
+            let parsed = super::super::parse_macro_tree_inner(
+                &source,
+                span,
+                output,
+                &SyntaxContexts::new(&[], &[], &[]),
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+            .unwrap();
+            let root = validated_macro_root(&source, &parsed.tree).unwrap();
+            let mut pending = vec![(root, 0usize, 0usize, 0usize)];
+            let mut forwarded_path = None;
+            let mut raw_path = None;
+            while let Some((node, applications, groups, functions)) = pending.pop() {
+                let applications = applications
+                    + usize::from(
+                        node.kind == NodeKind::AtomicType
+                            && child_nodes(node).any(|child| child.kind == NodeKind::Type),
+                    );
+                let groups = groups + usize::from(node.kind == NodeKind::ParenthesizedType);
+                let functions = functions
+                    + usize::from(
+                        node.kind == NodeKind::Type
+                            && child_nodes(node).any(|child| child.kind == NodeKind::Type),
+                    );
+                for child in &node.children {
+                    match child {
+                        ConcreteElement::Node(child) => {
+                            pending.push((child, applications, groups, functions))
+                        }
+                        ConcreteElement::Token(index) => {
+                            let original = parsed.original_nodes.get(index);
+                            if matches!(original, Some(MacroOutputNode::ForwardedType(_, _))) {
+                                assert!(
+                                    forwarded_path
+                                        .replace((applications, groups, functions))
+                                        .is_none()
+                                );
+                            }
+                            let target = match original {
+                                Some(MacroOutputNode::Token(TokenKind::IntType, _, _)) => {
+                                    leaf == "Int"
+                                }
+                                Some(MacroOutputNode::Identifier(name, _)) => {
+                                    leaf == "Leaf" && name.text == "Leaf"
+                                }
+                                _ => false,
+                            };
+                            if target {
+                                assert!(
+                                    raw_path
+                                        .replace((applications, groups, functions))
+                                        .is_none()
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            assert_eq!(
+                forwarded_path,
+                Some((0, 0, 1)),
+                "the protected type remains shallow"
+            );
+            assert_eq!(
+                raw_path,
+                Some((63, 63 + usize::from(extra_group), 1)),
+                "the raw leaf is the actual deep target"
+            );
+            let frame = std::sync::Arc::new(ExpansionFrame {
+                invocation: span,
+                definition: span,
+            });
+            let frames = [std::sync::Arc::clone(&frame)];
+            let tokens = ProjectionTokens {
+                tokens: &parsed.tree.tokens,
+                originals: Some(&parsed.original_nodes),
+                occurrence: Some(span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: Some(&parsed.admission_identifiers),
+                frame: Some(&frame),
+                name_frame: Some(&frame),
+                staging_frames: Some(&frames),
+                preserve_name_diagnostic: true,
+            };
+            charge_generated_projection(
+                child_nodes(root).next().unwrap(),
+                &tokens,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+        };
+        let mut accepted_over_depth = Vec::new();
+        for leaf in ["Int", "Leaf"] {
+            assert!(check(leaf, false).is_ok());
+            if !matches!(
+                check(leaf, true),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::StructuralDepth {
+                        limit: STRUCTURAL_DEPTH_LIMIT
+                    }),
+                    ..
+                })
+            ) {
+                accepted_over_depth.push(leaf);
+            }
+        }
+        assert!(
+            accepted_over_depth.is_empty(),
+            "over-depth raw leaves: {accepted_over_depth:?}"
+        );
+    }
+
+    #[test]
+    fn type_capture_preflight_counts_new_contents_arc_before_reconstruction() {
+        use crate::syntax::{MacroDelimiter, MacroOutputNode, SyntaxContexts};
+
+        let check = |grouped: bool, retained_groups: usize| {
+            let ty = if grouped { "(Marker)" } else { "Marker" };
+            let (source, _, mut output) =
+                structured_declarations(&format!("value : {ty}\nvalue _ = 42\n"));
+            let span = source.span(ByteRange::new(0, 0).unwrap()).unwrap();
+            let mut retained =
+                MacroOutputNode::Token(TokenKind::IntType, "Int".into(), span.into());
+            for _ in 0..retained_groups {
+                retained = MacroOutputNode::Group(
+                    MacroDelimiter::Parentheses,
+                    vec![retained],
+                    span.into(),
+                );
+            }
+            let capture = SurfaceTypeCapture {
+                ty: SurfaceType {
+                    kind: SurfaceTypeKind::Int,
+                    span,
+                    diagnostic: None,
+                },
+                contents: std::sync::Arc::from([retained]),
+            };
+            assert!(replace_output_name(
+                &mut output,
+                "Marker",
+                &MacroOutputNode::ForwardedType(capture, span.into()),
+            ));
+            let parsed = super::super::parse_macro_tree_inner(
+                &source,
+                span,
+                output,
+                &SyntaxContexts::new(&[], &[], &[]),
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+            .unwrap();
+            let root = validated_macro_root(&source, &parsed.tree).unwrap();
+            let mut pending = vec![root];
+            let type_node = loop {
+                let node = pending.pop().expect("the generated annotation exists");
+                if node.kind == NodeKind::Type {
+                    break node;
+                }
+                pending.extend(child_nodes(node));
+            };
+            let tokens = ProjectionTokens {
+                tokens: &parsed.tree.tokens,
+                originals: Some(&parsed.original_nodes),
+                occurrence: Some(span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: Some(&parsed.admission_identifiers),
+                frame: None,
+                name_frame: None,
+                staging_frames: None,
+                preserve_name_diagnostic: true,
+            };
+            charge_type_capture_contents(
+                type_node,
+                &tokens,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+        };
+        assert!(
+            check(false, 125).is_ok(),
+            "singleton forwarding reuses its old Arc"
+        );
+        assert!(
+            check(true, 124).is_ok(),
+            "the newly wrapped path at 128 fits"
+        );
+        assert!(
+            matches!(
+                check(true, 125),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::StructuralDepth {
+                        limit: STRUCTURAL_DEPTH_LIMIT
+                    }),
+                    ..
+                })
+            ),
+            "the new Arc must be counted before the grouped contents are reconstructed"
+        );
+    }
+
+    #[test]
+    fn authored_type_capture_preflight_counts_its_new_contents_arc() {
+        let check = |groups: usize| {
+            let source = SourceFile::new(
+                "authored.ash",
+                format!(
+                    "value : {}Int{}\nvalue _ = 42\n",
+                    "(".repeat(groups),
+                    ")".repeat(groups)
+                ),
+            )
+            .unwrap();
+            let tree = parse(lex(&source).unwrap());
+            let (root, raw) = validated_root(&source, &tree).unwrap_or_else(|error| {
+                panic!(
+                    "{groups} groups must reach preflight: {error:?}: {:?}",
+                    tree.parse_diagnostics()
+                )
+            });
+            let mut pending = vec![root];
+            let ty = loop {
+                let node = pending.pop().expect("the authored annotation exists");
+                if node.kind == NodeKind::Type {
+                    break node;
+                }
+                pending.extend(child_nodes(node));
+            };
+            let mut pending = vec![ty];
+            let mut actual_groups = 0;
+            while let Some(node) = pending.pop() {
+                actual_groups += usize::from(node.kind == NodeKind::ParenthesizedType);
+                pending.extend(child_nodes(node));
+            }
+            assert_eq!(actual_groups, groups);
+            charge_type_capture_contents(
+                ty,
+                &ProjectionTokens::source(raw),
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+        };
+        assert!(check(127).is_ok(), "the new Arc and 127 groups fit");
+        assert!(
+            matches!(
+                check(128),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::StructuralDepth {
+                        limit: STRUCTURAL_DEPTH_LIMIT
+                    }),
+                    ..
+                })
+            ),
+            "the new Arc above 128 groups must be refused before reconstruction"
+        );
+    }
+
+    #[test]
+    fn type_capture_preflight_reserves_source_span_walks() {
+        let measure = |depth: usize, occurrence: bool| {
+            let source = SourceFile::new(
+                "source-spans.ash",
+                format!("value : {}Int\nvalue _ = 42\n", "Int -> ".repeat(depth)),
+            )
+            .unwrap();
+            let tree = parse(lex(&source).unwrap());
+            let (root, raw) = validated_root(&source, &tree).unwrap();
+            let mut pending = vec![root];
+            let ty = loop {
+                let node = pending.pop().expect("the type is present");
+                if node.kind == NodeKind::Type {
+                    break node;
+                }
+                pending.extend(child_nodes(node));
+            };
+            let mut tokens = ProjectionTokens::source(raw);
+            if occurrence {
+                tokens.occurrence = Some(source.span(ByteRange::new(0, 0).unwrap()).unwrap());
+            }
+            let mut budget = crate::syntax_resource::SyntaxBudget::default();
+            charge_composed_type_projection(ty, &tokens, &mut budget).unwrap();
+            let used = budget.consumed();
+            let mut exact = crate::syntax_resource::SyntaxBudget::with_limit(used);
+            charge_composed_type_projection(ty, &tokens, &mut exact).unwrap();
+            let mut short = crate::syntax_resource::SyntaxBudget::with_limit(used - 1);
+            assert!(matches!(
+                charge_composed_type_projection(ty, &tokens, &mut short),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { .. }),
+                    ..
+                })
+            ));
+            let projected = project_type(&source, ty, &tokens).unwrap();
+            assert_eq!(projected.span.source(), source.id());
+            used
+        };
+        let shallow = measure(4, false) - measure(4, true);
+        let deep = measure(40, false) - measure(40, true);
+        assert!(
+            shallow > 0 && deep > shallow,
+            "source span walks must be reserved: {shallow}, {deep}"
+        );
+    }
+
+    #[test]
+    fn generated_nominal_preflight_reserves_construction_span_walks() {
+        use crate::syntax::SyntaxContexts;
+
+        let measure = |depth: usize, construction: bool| {
+            let text = format!(
+                "type Example = Example({}Int{})\n",
+                "F<".repeat(depth),
+                ">".repeat(depth)
+            );
+            let (source, _, output) = structured_declarations(&text);
+            let invocation = source.span(ByteRange::new(0, 0).unwrap()).unwrap();
+            let bound = source
+                .span(ByteRange::new(0, text.len() as u32).unwrap())
+                .unwrap();
+            let parsed = super::super::parse_macro_tree_inner(
+                &source,
+                invocation,
+                output,
+                &SyntaxContexts::new(&[], &[], &[]),
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+            .unwrap();
+            let root = validated_macro_root(&source, &parsed.tree).unwrap();
+            let nominal = child_nodes(root).next().unwrap();
+            assert_eq!(nominal.kind, NodeKind::TypeDeclaration);
+            let tokens = ProjectionTokens {
+                tokens: &parsed.tree.tokens,
+                originals: Some(&parsed.original_nodes),
+                occurrence: Some(invocation),
+                construction: construction.then_some((bound, 0)),
+                construction_extents: false,
+                admission_identifiers: Some(&parsed.admission_identifiers),
+                frame: None,
+                name_frame: None,
+                staging_frames: None,
+                preserve_name_diagnostic: true,
+            };
+            if construction {
+                assert!(tokens.for_node_construction(nominal).construction.is_some());
+            }
+            let mut budget = crate::syntax_resource::SyntaxBudget::default();
+            charge_generated_projection(nominal, &tokens, &mut budget).unwrap();
+            let used = budget.consumed();
+            let mut exact = crate::syntax_resource::SyntaxBudget::with_limit(used);
+            charge_generated_projection(nominal, &tokens, &mut exact).unwrap();
+            let mut short = crate::syntax_resource::SyntaxBudget::with_limit(used - 1);
+            assert!(matches!(
+                charge_generated_projection(nominal, &tokens, &mut short),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { .. }),
+                    ..
+                })
+            ));
+            let projected = project_type_declaration(&source, nominal, &tokens).unwrap();
+            assert_eq!(projected.span.source(), source.id());
+            used
+        };
+        let shallow = measure(4, true) - measure(4, false);
+        let deep = measure(40, true) - measure(40, false);
+        assert!(
+            shallow > 0 && deep > shallow,
+            "construction span walks must be reserved: {shallow}, {deep}"
+        );
     }
 
     #[test]
