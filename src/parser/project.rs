@@ -7118,6 +7118,370 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_match_and_handler_patterns_reserve_the_second_copy() {
+        use crate::syntax::{ExpansionFrame, MacroOutputNode};
+        use crate::syntax_resource::SyntaxBudget;
+        use std::{collections::HashMap, sync::Arc};
+
+        for (text, expression_kind, clause_kind) in [
+            (
+                "match value {\n_ => 42\n}",
+                NodeKind::MatchExpression,
+                NodeKind::MatchArm,
+            ),
+            (
+                "handle value with State {\nread _ => 42\n}",
+                NodeKind::HandlerExpression,
+                NodeKind::HandlerClause,
+            ),
+        ] {
+            let (source, tree) = parsed(text);
+            let (root, _) = validated_root(&source, &tree).unwrap();
+            let mut pending = vec![root];
+            let expression = loop {
+                let node = pending.pop().expect("expression exists");
+                if node.kind == expression_kind {
+                    break node;
+                }
+                pending.extend(child_nodes(node));
+            };
+            assert_eq!(structural_weight(expression), 32);
+            let clause = only_child_of_kind(expression, clause_kind).unwrap();
+            let pattern = only_child_of_kind(clause, NodeKind::Pattern).unwrap();
+            assert_eq!(structural_weight(pattern), 8);
+            let wildcard = only_child_of_kind(pattern, NodeKind::WildcardPattern).unwrap();
+            let [ConcreteElement::Token(index)] = wildcard.children.as_slice() else {
+                panic!("the scheduled pattern must contain the unique wildcard token");
+            };
+            assert_eq!(tree.tokens[*index].kind, TokenKind::Wildcard);
+            let span = tree.tokens[*index].span;
+            let frame = Arc::new(ExpansionFrame {
+                invocation: span,
+                definition: span,
+            });
+            let raw_tokens = ProjectionTokens::source(&tree.tokens);
+            assert!(
+                !charge_composed_projection(
+                    expression,
+                    &raw_tokens,
+                    true,
+                    &mut SyntaxBudget::default(),
+                )
+                .unwrap()
+            );
+            project_expression_with_fragments(&source, expression, &raw_tokens, &HashMap::new())
+                .unwrap();
+            let nested = |height| {
+                let mut pattern = SurfacePattern {
+                    kind: SurfacePatternKind::Wildcard,
+                    span,
+                    diagnostic: None,
+                };
+                for _ in 0..height {
+                    pattern = SurfacePattern {
+                        kind: SurfacePatternKind::Constructor {
+                            name: SurfaceReference::Unqualified(SurfaceName {
+                                text: "Node".into(),
+                                span,
+                                introduction: 0,
+                                introduced_at: None,
+                                written: true,
+                                diagnostic: None,
+                            }),
+                            payload: Some(Box::new(pattern)),
+                        },
+                        span,
+                        diagnostic: None,
+                    };
+                }
+                pattern
+            };
+            for generated in [false, true] {
+                let at_limit = if generated { 87 } else { 88 };
+                for (height, succeeds) in [(at_limit, true), (at_limit + 1, false)] {
+                    let originals = HashMap::from([(
+                        *index,
+                        MacroOutputNode::ForwardedPattern(
+                            SurfacePatternCapture {
+                                pattern: nested(height),
+                                contents: Arc::from([]),
+                            },
+                            span.into(),
+                        ),
+                    )]);
+                    let tokens = ProjectionTokens {
+                        tokens: &tree.tokens,
+                        originals: Some(&originals),
+                        occurrence: generated.then_some(span),
+                        construction: None,
+                        construction_extents: false,
+                        admission_identifiers: None,
+                        frame: generated.then_some(&frame),
+                        name_frame: generated.then_some(&frame),
+                        staging_frames: None,
+                        preserve_name_diagnostic: true,
+                    };
+                    let result = charge_composed_projection(
+                        expression,
+                        &tokens,
+                        true,
+                        &mut SyntaxBudget::default(),
+                    );
+                    if succeeds {
+                        assert!(!result.unwrap(), "{text}");
+                        project_expression_with_fragments(&source, expression, &tokens, &originals)
+                            .unwrap();
+                    } else {
+                        assert!(matches!(
+                            result,
+                            Err(DeclarationExpansionFailure::Syntax {
+                                resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
+                                ..
+                            })
+                        ));
+                    }
+                }
+            }
+
+            // The wide owned payload makes both real copies measurable above
+            // fixed CST traversal costs. This is a constructed capture.
+            let wide = SurfacePattern {
+                kind: SurfacePatternKind::Tuple(
+                    (0..80)
+                        .map(|_| SurfacePattern {
+                            kind: SurfacePatternKind::Binder(SurfaceBinder {
+                                name: SurfaceName {
+                                    text: "wide".repeat(256),
+                                    span,
+                                    introduction: 0,
+                                    introduced_at: None,
+                                    written: true,
+                                    diagnostic: None,
+                                },
+                                span,
+                            }),
+                            span,
+                            diagnostic: None,
+                        })
+                        .collect(),
+                ),
+                span,
+                diagnostic: None,
+            };
+            let mut one_copy = SyntaxBudget::default();
+            assert!(!crate::syntax::charge_pattern_copy(&wide, 40, false, &mut one_copy).unwrap());
+            let originals = HashMap::from([(
+                *index,
+                MacroOutputNode::ForwardedPattern(
+                    SurfacePatternCapture {
+                        pattern: wide,
+                        contents: Arc::from([]),
+                    },
+                    span.into(),
+                ),
+            )]);
+            let tokens = ProjectionTokens {
+                tokens: &tree.tokens,
+                originals: Some(&originals),
+                occurrence: None,
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: None,
+                frame: None,
+                name_frame: None,
+                staging_frames: None,
+                preserve_name_diagnostic: true,
+            };
+            let mut measured = SyntaxBudget::default();
+            assert!(!charge_composed_projection(expression, &tokens, true, &mut measured).unwrap());
+            assert!(measured.consumed() >= 2 * one_copy.consumed(), "{text}");
+            let allowance = measured.consumed();
+            let mut exact = SyntaxBudget::with_limit(allowance);
+            assert!(!charge_composed_projection(expression, &tokens, true, &mut exact).unwrap());
+            assert_eq!(exact.consumed(), allowance);
+            let mut short = SyntaxBudget::with_limit(allowance - 1);
+            assert!(matches!(
+                charge_composed_projection(expression, &tokens, true, &mut short),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { .. }),
+                    ..
+                })
+            ));
+            let mut retry = SyntaxBudget::with_limit(allowance);
+            assert!(!charge_composed_projection(expression, &tokens, true, &mut retry).unwrap());
+        }
+    }
+
+    #[test]
+    fn scheduled_pattern_copy_accounts_for_the_actual_inherited_frames() {
+        use crate::syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin};
+        use crate::syntax_resource::SyntaxBudget;
+        use std::sync::Arc;
+
+        let source = SourceFile::new("frames.ash", "Type.member binder splice").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        let frame = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let equal_frame = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        assert_eq!(frame, equal_frame);
+        assert!(!Arc::ptr_eq(&frame, &equal_frame));
+        let make_pattern = |existing: bool| {
+            let location = || {
+                existing.then(|| {
+                    let mut location = DiagnosticLocation::new(span.into());
+                    location.related.push(span.into());
+                    location.frames.push(Arc::clone(&frame));
+                    Box::new(location)
+                })
+            };
+            let name = |text: &str| SurfaceName {
+                text: text.into(),
+                span,
+                introduction: 0,
+                introduced_at: None,
+                written: true,
+                diagnostic: location(),
+            };
+            SurfacePattern {
+                kind: SurfacePatternKind::Constructor {
+                    name: SurfaceReference::Qualified(SurfaceQualifiedName {
+                        qualifier: name("Type"),
+                        member: name("member"),
+                        span,
+                    }),
+                    payload: Some(Box::new(SurfacePattern {
+                        kind: SurfacePatternKind::Tuple(vec![
+                            SurfacePattern {
+                                kind: SurfacePatternKind::Binder(SurfaceBinder {
+                                    name: name("binder"),
+                                    span,
+                                }),
+                                span,
+                                diagnostic: location(),
+                            },
+                            SurfacePattern {
+                                kind: SurfacePatternKind::TemplateSplice(name("splice")),
+                                span,
+                                diagnostic: location(),
+                            },
+                        ]),
+                        span,
+                        diagnostic: location(),
+                    })),
+                },
+                span,
+                diagnostic: location(),
+            }
+        };
+        fn locations(pattern: &SurfacePattern) -> Vec<(Span, Option<&DiagnosticLocation>)> {
+            let SurfacePatternKind::Constructor {
+                name: SurfaceReference::Qualified(reference),
+                payload: Some(payload),
+            } = &pattern.kind
+            else {
+                panic!("qualified constructor pattern required");
+            };
+            let SurfacePatternKind::Tuple(items) = &payload.kind else {
+                panic!("tuple payload required");
+            };
+            let SurfacePatternKind::Binder(binder) = &items[0].kind else {
+                panic!("binder required");
+            };
+            let SurfacePatternKind::TemplateSplice(splice) = &items[1].kind else {
+                panic!("splice required");
+            };
+            vec![
+                (pattern.span, pattern.diagnostic.as_deref()),
+                (
+                    reference.qualifier.span,
+                    reference.qualifier.diagnostic.as_deref(),
+                ),
+                (
+                    reference.member.span,
+                    reference.member.diagnostic.as_deref(),
+                ),
+                (payload.span, payload.diagnostic.as_deref()),
+                (items[0].span, items[0].diagnostic.as_deref()),
+                (binder.name.span, binder.name.diagnostic.as_deref()),
+                (items[1].span, items[1].diagnostic.as_deref()),
+                (splice.span, splice.diagnostic.as_deref()),
+            ]
+        }
+        let mut costs = Vec::new();
+        for (existing, inherited) in [
+            (false, None),
+            (false, Some(&frame)),
+            (true, Some(&frame)),
+            (true, Some(&equal_frame)),
+        ] {
+            let pattern = make_pattern(existing);
+            let mut first = pattern.clone();
+            if let Some(inherited) = inherited {
+                inherit_pattern_frame(&mut first, inherited);
+            }
+            let second = first.clone();
+            for (own_span, location) in locations(&second) {
+                match inherited {
+                    None => assert!(location.is_none()),
+                    Some(inherited) => {
+                        let location = location.unwrap();
+                        assert_eq!(location.primary, MacroOrigin::Source(own_span));
+                        assert_eq!(location.related.len(), usize::from(existing));
+                        assert!(
+                            location
+                                .frames
+                                .iter()
+                                .any(|actual| Arc::ptr_eq(actual, inherited))
+                        );
+                        assert_eq!(
+                            location.frames.len(),
+                            1 + usize::from(existing && !Arc::ptr_eq(inherited, &frame))
+                        );
+                    }
+                }
+            }
+            let mut measured = SyntaxBudget::default();
+            assert!(
+                !crate::syntax::charge_scheduled_pattern_copy(
+                    &pattern,
+                    40,
+                    inherited,
+                    &mut measured,
+                )
+                .unwrap()
+            );
+            let cost = measured.consumed();
+            costs.push(cost);
+            let mut exact = SyntaxBudget::with_limit(cost + 5);
+            exact.charge_units(5).unwrap();
+            assert!(
+                !crate::syntax::charge_scheduled_pattern_copy(&pattern, 40, inherited, &mut exact,)
+                    .unwrap()
+            );
+            assert_eq!(exact.consumed(), cost + 5);
+            let mut short = SyntaxBudget::with_limit(cost + 4);
+            short.charge_units(5).unwrap();
+            assert!(matches!(
+                crate::syntax::charge_scheduled_pattern_copy(&pattern, 40, inherited, &mut short),
+                Err(ResourceFailure::SyntaxWork { .. })
+            ));
+            let mut retry = SyntaxBudget::with_limit(cost);
+            assert!(
+                !crate::syntax::charge_scheduled_pattern_copy(&pattern, 40, inherited, &mut retry,)
+                    .unwrap()
+            );
+        }
+        // The equal-valued distinct Arc adds one copied frame to each of the
+        // eight pattern/name locations; pointer-identical frames add none.
+        assert_eq!(costs[3], costs[2] + 8);
+    }
+
+    #[test]
     fn generated_expression_arguments_refuse_forwarded_types_only_within_the_argument() {
         use crate::syntax::MacroOutputNode;
 
