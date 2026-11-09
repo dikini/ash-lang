@@ -942,6 +942,19 @@ mod tests {
             definition: span,
         });
         let contexts = Arc::new(SyntaxContexts::new(&[], &[], &[]));
+        assert!(
+            SyntaxHost::new(
+                &entry,
+                &[],
+                &source,
+                &name,
+                0,
+                Arc::clone(&contexts),
+                Arc::clone(&frame)
+            )
+            .is_ok(),
+            "the same entry must construct a host with supported captures"
+        );
         let contents: Arc<[MacroOutputNode]> = Arc::from([]);
         let captures = vec![SurfaceSyntaxCapture::Declaration(
             SurfaceDeclarationCapture { contents },
