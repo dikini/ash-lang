@@ -199,8 +199,9 @@ integration and acceptance confirmation. Main is a separate boundary.
 `de0c2e1aef89ac4e416f8b0a39ed76c6ce18c570`, based on retained `3a30b753`.
 A real imported empty-output declaration template accepts each of eight ordinary
 source declaration categories through the public driver. Component checks retain
-source order, the I19 signature and equation excerpt, introduction-zero source
-names and source origins, and remove only the capture's outer braces.
+the I19 signature and equation excerpt, introduction-zero source names and
+source origins. The packet retains the ordinary declaration child's token order
+and omits the capture braces and boundary line ends.
 Incomplete, multiple and excluded source forms report parser failures at their
 observed caller locations. These checks do not establish the complete I19
 graph or declaration-fragment consumption.
