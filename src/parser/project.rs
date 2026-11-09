@@ -7668,6 +7668,171 @@ mod tests {
     }
 
     #[test]
+    fn local_annotation_effect_argument_composes_with_forwarded_type_depth() {
+        use crate::syntax::{ExpansionFrame, MacroOutputNode};
+        use crate::syntax_resource::SyntaxBudget;
+        use std::{collections::HashMap, sync::Arc};
+
+        // The CST is parsed from source; the forwarded type and optional frame
+        // are constructed controls for the source and generated projector paths.
+        let groups = 60;
+        let text = format!(
+            "{}{{\nlet value : Unit -> Int ! {{Event<Int> | R}} = 42\nvalue\n}}{}",
+            "(".repeat(groups),
+            ")".repeat(groups),
+        );
+        let (source, tree) = parsed(&text);
+        let (root, raw) = validated_root(&source, &tree).unwrap();
+        let global = only_child_of_kind(root, NodeKind::EquationalGlobal).unwrap();
+        let equation = only_child_of_kind(global, NodeKind::Equation).unwrap();
+        let expression = expression_child(equation).unwrap();
+        let mut pending = vec![(expression, Vec::new())];
+        let mut target = None;
+        while let Some((node, mut path)) = pending.pop() {
+            path.push(node.kind);
+            if node.kind == NodeKind::EffectInstance {
+                let argument = only_child_of_kind(node, NodeKind::Type).unwrap();
+                let mut descendants = vec![argument];
+                while let Some(child) = descendants.pop() {
+                    for item in &child.children {
+                        match item {
+                            ConcreteElement::Node(child) => descendants.push(child),
+                            ConcreteElement::Token(index)
+                                if matches!(raw[*index].kind, TokenKind::IntType) =>
+                            {
+                                assert!(target.replace((*index, path.clone())).is_none());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            pending.extend(child_nodes(node).map(|child| (child, path.clone())));
+        }
+        let (index, path) = target.expect("the unique effect argument exists");
+        assert_eq!(
+            path.iter()
+                .filter(|kind| **kind == NodeKind::ParenthesizedExpression)
+                .count(),
+            groups
+        );
+        for kind in [
+            NodeKind::Block,
+            NodeKind::LocalBinding,
+            NodeKind::Type,
+            NodeKind::EffectRow,
+            NodeKind::EffectInstance,
+        ] {
+            assert!(path.contains(&kind), "missing {kind:?} from {path:?}");
+        }
+        let span = raw[index].span;
+        let frame = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        for generated in [false, true] {
+            let limit_height = if generated { 61 } else { 62 };
+            for (height, succeeds) in [(limit_height, true), (limit_height + 1, false)] {
+                let leaf = SurfaceType {
+                    kind: SurfaceTypeKind::Int,
+                    span,
+                    diagnostic: None,
+                };
+                let mut ty = leaf.clone();
+                for _ in 0..height {
+                    ty = SurfaceType {
+                        kind: SurfaceTypeKind::Tuple(vec![ty, leaf.clone()]),
+                        span,
+                        diagnostic: None,
+                    };
+                }
+                let originals = HashMap::from([(
+                    index,
+                    MacroOutputNode::ForwardedType(
+                        SurfaceTypeCapture {
+                            ty,
+                            contents: Arc::from([]),
+                        },
+                        span.into(),
+                    ),
+                )]);
+                let tokens = ProjectionTokens {
+                    tokens: raw,
+                    originals: Some(&originals),
+                    occurrence: generated.then_some(span),
+                    construction: None,
+                    construction_extents: false,
+                    admission_identifiers: None,
+                    frame: generated.then_some(&frame),
+                    name_frame: generated.then_some(&frame),
+                    staging_frames: None,
+                    preserve_name_diagnostic: true,
+                };
+                // Block + binding + function + row(2) + effect argument = 6.
+                // A generated forwarded type inherits a location at each node.
+                assert_eq!(
+                    groups + 6 + height + usize::from(generated),
+                    if succeeds { 128 } else { 129 }
+                );
+                let result = charge_composed_projection(
+                    expression,
+                    &tokens,
+                    true,
+                    &mut SyntaxBudget::default(),
+                );
+                if succeeds {
+                    assert!(!result.unwrap());
+                    let projected =
+                        project_expression_with_fragments(&source, expression, &tokens, &originals)
+                            .unwrap();
+                    let SurfaceExprKind::Block(block) = projected.kind else {
+                        panic!("block required")
+                    };
+                    let [SurfaceLocalDeclaration::Binding(binding)] = &block.declarations[..]
+                    else {
+                        panic!("local binding required")
+                    };
+                    let Some(SurfaceType {
+                        kind: SurfaceTypeKind::Function(function),
+                        ..
+                    }) = &binding.annotation
+                    else {
+                        panic!("function annotation required")
+                    };
+                    let row = function.effects.as_ref().unwrap();
+                    assert_eq!(row.tail.as_ref().unwrap().text, "R");
+                    let [effect] = &row.effects[..] else {
+                        panic!("one effect required")
+                    };
+                    assert!(
+                        matches!(&effect.effect, SurfaceReference::Unqualified(name) if name.text == "Event")
+                    );
+                    let [mut actual] = &effect.arguments[..] else {
+                        panic!("one effect argument required")
+                    };
+                    for _ in 0..height {
+                        let SurfaceTypeKind::Tuple(items) = &actual.kind else {
+                            panic!("forwarded tuple required")
+                        };
+                        assert_eq!(items.len(), 2);
+                        actual = &items[0];
+                    }
+                    assert!(matches!(actual.kind, SurfaceTypeKind::Int));
+                    assert_eq!(actual.diagnostic.is_some(), generated);
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(DeclarationExpansionFailure::Syntax {
+                            resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
+                            ..
+                        })
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn protected_expression_preflight_finds_nested_expression_syntax_before_capture() {
         let declaration = SourceFile::new(
             "declarations.ash",
