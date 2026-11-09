@@ -29,10 +29,7 @@ make_output (input, overflow) = {
             match Syntax.parse_expression(input, expression) {
                 Syntax.Parsed(parsed) => match Syntax.expression_syntax(parsed) {
                     Syntax.Syntax(body) => {
-                        let tail = match overflow {
-                            true => Syntax.MoreNodes(Syntax.TokenNode(line, origin), Syntax.MoreNodes(group(0, origin), Syntax.NoNodes))
-                            false => Syntax.NoNodes
-                        }
+                        let tail = overflow_tail(overflow, line, origin)
                         let body = append(body, tail)
                         let equation_body = Syntax.MoreNodes(Syntax.TokenNode(equal, origin), body)
                         let parameter = Syntax.GroupNode(Syntax.Parentheses, Syntax.Syntax(Syntax.NoNodes), origin)
@@ -52,6 +49,12 @@ make_output (input, overflow) = {
         }
         _ => Syntax.Rejected(Syntax.MacroDiagnostic("missing output input", origin, Syntax.NoOrigins))
     }
+}
+
+overflow_tail : (Bool, Syntax.Token, Syntax.Origin) -> Syntax.Nodes
+overflow_tail (overflow, line, origin) = match overflow {
+    true => Syntax.MoreNodes(Syntax.TokenNode(line, origin), Syntax.MoreNodes(group(0, origin), Syntax.NoNodes))
+    false => Syntax.NoNodes
 }
 
 append : (Syntax.Nodes, Syntax.Nodes) -> Syntax.Nodes

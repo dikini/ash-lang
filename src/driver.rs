@@ -4526,16 +4526,17 @@ mod tests {
 
         S3_TRANSFERRED.with(|slot| assert!(slot.borrow().is_none()));
         TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_s3_transfer));
-        let failure = compile_path(RunConfiguration {
+        let result = compile_path(RunConfiguration {
             entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures/surface-macros/s3-transfer/entry.ash"),
             roots: ModuleRoots::empty(),
-        })
-        .expect_err("declaration output cannot be admitted as an expression");
-        assert!(TRANSFORMER_OUTPUT_OBSERVER.get().is_none());
+        });
+        let observed = TRANSFORMER_OUTPUT_OBSERVER.replace(None).is_none();
+        let failure = result.expect_err("declaration output cannot be admitted as an expression");
         let Some(PipelineFailure::SyntaxParse(parse)) = failure.pipeline_failure() else {
             panic!("expected expression admission to reject: {failure:?}");
         };
+        assert!(observed, "the checked host output observer was not reached");
         assert!(!parse.diagnostics().is_empty());
         assert!(parse.teardown().is_none());
         let (output, captures) = S3_TRANSFERRED.with(|slot| {
