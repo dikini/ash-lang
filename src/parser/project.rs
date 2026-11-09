@@ -2362,6 +2362,7 @@ fn charge_generated_projection(
     tokens: &ProjectionTokens<'_>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(), DeclarationExpansionFailure> {
+    check_narrow_type_refusal(root, tokens, budget)?;
     charge_projection_subtree(root, tokens, budget)?;
     budget.charge()?;
     let mut pending = vec![root];
@@ -2409,6 +2410,45 @@ fn charge_generated_projection(
         for child in child_nodes(node) {
             budget.charge()?;
             pending.push(child);
+        }
+    }
+    Ok(())
+}
+
+/// Keep forwarded types out of expression-syntax captures until their copies
+/// are covered by the same cumulative accounting as declaration staging.
+fn check_narrow_type_refusal(
+    root: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), DeclarationExpansionFailure> {
+    budget.charge()?;
+    let mut pending = vec![(root, false)];
+    while let Some((node, expression_argument)) = pending.pop() {
+        for child in &node.children {
+            budget.charge()?;
+            match child {
+                ConcreteElement::Node(child) => {
+                    let expression_argument = expression_argument
+                        || (node.kind == NodeKind::SyntaxInvocation
+                            && child.kind == NodeKind::SyntaxArgument);
+                    pending.push((child, expression_argument));
+                }
+                ConcreteElement::Token(index)
+                    if expression_argument
+                        && matches!(
+                            tokens.originals.and_then(|originals| originals.get(index)),
+                            Some(crate::syntax::MacroOutputNode::ForwardedType(_, _))
+                        ) =>
+                {
+                    return Err(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                    );
+                }
+                ConcreteElement::Token(_)
+                | ConcreteElement::Missing { .. }
+                | ConcreteElement::Error(_) => {}
+            }
         }
     }
     Ok(())
@@ -6175,6 +6215,75 @@ mod tests {
             tree.parse_diagnostics()
         );
         tree
+    }
+
+    #[test]
+    fn generated_expression_arguments_refuse_forwarded_types_only_within_the_argument() {
+        use crate::syntax::MacroOutputNode;
+
+        fn node(kind: NodeKind, children: Vec<ConcreteElement>) -> ConcreteNode {
+            ConcreteNode { kind, children }
+        }
+        let source = SourceFile::new("type.ash", "Int").unwrap();
+        let span = source.span(ByteRange::new(0, 3).unwrap()).unwrap();
+        let capture = SurfaceTypeCapture {
+            ty: SurfaceType {
+                kind: SurfaceTypeKind::Int,
+                span,
+                diagnostic: None,
+            },
+            contents: std::sync::Arc::from([]),
+        };
+        let originals = std::collections::HashMap::from([(
+            0,
+            MacroOutputNode::ForwardedType(capture, span.into()),
+        )]);
+        let tokens = ProjectionTokens {
+            tokens: &[],
+            originals: Some(&originals),
+            occurrence: None,
+            construction: None,
+            construction_extents: false,
+            admission_identifiers: None,
+            frame: None,
+            name_frame: None,
+            staging_frames: None,
+            preserve_name_diagnostic: false,
+        };
+        let argument = || {
+            ConcreteElement::Node(node(
+                NodeKind::SyntaxArgument,
+                vec![ConcreteElement::Node(node(
+                    NodeKind::ParenthesizedExpression,
+                    vec![ConcreteElement::Token(0)],
+                ))],
+            ))
+        };
+        let expression = node(NodeKind::SyntaxInvocation, vec![argument()]);
+        let declaration = node(NodeKind::DeclarationSyntaxInvocation, vec![argument()]);
+        let ordinary = node(NodeKind::InlineOperationalGlobal, vec![argument()]);
+        let unprotected = node(
+            NodeKind::SyntaxInvocation,
+            vec![ConcreteElement::Node(node(NodeKind::SyntaxArgument, vec![]))],
+        );
+        for allowed in [&declaration, &ordinary, &unprotected] {
+            assert!(check_narrow_type_refusal(
+                allowed,
+                &tokens,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+            .is_ok());
+        }
+        assert!(matches!(
+            check_narrow_type_refusal(
+                &expression,
+                &tokens,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            ),
+            Err(DeclarationExpansionFailure::Projection(
+                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+            ))
+        ));
     }
 
     #[test]
