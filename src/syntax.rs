@@ -1828,14 +1828,13 @@ fn capture_by_name<'a>(
     captures.get(index).ok_or(name.span)
 }
 
-/// Instantiate supported captures before the existing declaration parser.
-pub(crate) fn instantiate_declaration_template(
-    selection: &SelectedSyntax,
+/// Reserve the copies performed by declaration-template substitution.
+fn charge_declaration_template(
+    template: &[MacroOutputNode],
+    matcher: &[SurfaceSyntaxMatcherPart],
     captures: &[SurfaceSyntaxCapture],
-    introduction: usize,
-    invocation: Span,
-    budget: &mut crate::syntax_resource::SyntaxBudget,
-) -> Result<Vec<MacroOutputNode>, crate::parser::MacroParseFailure> {
+    budget: &mut SyntaxBudget,
+) -> Result<bool, crate::parser::MacroParseFailure> {
     use crate::parser::{MacroParseFailure, STRUCTURAL_DEPTH_LIMIT};
     use crate::syntax_resource::ResourceFailure;
 
@@ -1846,11 +1845,7 @@ pub(crate) fn instantiate_declaration_template(
         }
     }
 
-    let template = selection
-        .declaration
-        .template_contents
-        .as_deref()
-        .ok_or(MacroParseFailure::Invalid)?;
+    let mut bridge = false;
     budget.charge_units(template.len()).map_err(resource)?;
     budget.charge_units(template.len()).map_err(resource)?;
     let mut pending = template
@@ -1876,7 +1871,7 @@ pub(crate) fn instantiate_declaration_template(
             }
             MacroOutputNode::Splice(name) => {
                 charge_name(name, budget).map_err(resource)?;
-                for part in &selection.declaration.matcher {
+                for part in matcher {
                     // This scan, the preflight lookup, and substitution lookup.
                     budget.charge_units(3).map_err(resource)?;
                     if let SurfaceSyntaxMatcherPart::Capture { name: capture, .. } = part {
@@ -1889,7 +1884,7 @@ pub(crate) fn instantiate_declaration_template(
                         }
                     }
                 }
-                match capture_by_name(name, &selection.declaration.matcher, captures) {
+                match capture_by_name(name, matcher, captures) {
                     Ok(SurfaceSyntaxCapture::Identifier(capture)) => {
                         charge_name(&capture.name, budget).map_err(resource)?;
                     }
@@ -1901,25 +1896,21 @@ pub(crate) fn instantiate_declaration_template(
                     }
                     Ok(SurfaceSyntaxCapture::Expression(capture)) => {
                         let prefix = type_depth(depth, 1).map_err(resource)?;
-                        let mut bridge =
+                        let mut capture_bridge =
                             charge_expression_copy(&capture.expression, prefix, false, budget)
                                 .map_err(resource)?;
-                        bridge |= charge_expression_retention(capture, depth, budget)
+                        capture_bridge |= charge_expression_retention(capture, depth, budget)
                             .map_err(resource)?;
-                        if bridge {
-                            return Err(MacroParseFailure::Invalid);
-                        }
+                        bridge |= capture_bridge;
                     }
                     Ok(SurfaceSyntaxCapture::Pattern(capture)) => {
                         let prefix = type_depth(depth, 1).map_err(resource)?;
-                        let mut bridge =
+                        let mut capture_bridge =
                             charge_pattern_copy(&capture.pattern, prefix, false, budget)
                                 .map_err(resource)?;
-                        bridge |=
+                        capture_bridge |=
                             charge_pattern_retention(capture, depth, budget).map_err(resource)?;
-                        if bridge {
-                            return Err(MacroParseFailure::Invalid);
-                        }
+                        bridge |= capture_bridge;
                     }
                     _ => return Err(MacroParseFailure::Invalid),
                 }
@@ -1929,6 +1920,27 @@ pub(crate) fn instantiate_declaration_template(
             | MacroOutputNode::ForwardedType(_, _)
             | MacroOutputNode::ForwardedPattern(_, _) => return Err(MacroParseFailure::Invalid),
         }
+    }
+    Ok(bridge)
+}
+
+/// Instantiate supported captures before the existing declaration parser.
+pub(crate) fn instantiate_declaration_template(
+    selection: &SelectedSyntax,
+    captures: &[SurfaceSyntaxCapture],
+    introduction: usize,
+    invocation: Span,
+    budget: &mut SyntaxBudget,
+) -> Result<Vec<MacroOutputNode>, crate::parser::MacroParseFailure> {
+    use crate::parser::MacroParseFailure;
+
+    let template = selection
+        .declaration
+        .template_contents
+        .as_deref()
+        .ok_or(MacroParseFailure::Invalid)?;
+    if charge_declaration_template(template, &selection.declaration.matcher, captures, budget)? {
+        return Err(MacroParseFailure::Invalid);
     }
     let mut output = template.to_vec();
     substitute_contents(

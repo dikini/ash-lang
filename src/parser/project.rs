@@ -9968,6 +9968,31 @@ mod tests {
     }
 
     #[test]
+    fn declaration_template_validation_uses_the_parser_budget() {
+        let (source, _, output) =
+            structured_declarations("value : Int -> Int\nvalue input = input\n");
+        let invocation = source.span(ByteRange::new(0, 0).unwrap()).unwrap();
+        let contexts = crate::syntax::SyntaxContexts::new(&[], &[], &[]);
+        let mut budget = crate::syntax_resource::SyntaxBudget::default();
+        let parsed = super::super::parse_macro_tree_inner(
+            &source,
+            invocation,
+            output,
+            &contexts,
+            &[],
+            super::super::MacroOutputPosition::StagedDeclarations,
+            &mut budget,
+        )
+        .unwrap();
+        let parse_cost = budget.consumed();
+        validate_declaration_template(&source, invocation, &parsed, &contexts).unwrap();
+        assert!(
+            budget.consumed() > parse_cost,
+            "template validation must debit the same parser budget"
+        );
+    }
+
+    #[test]
     fn declaration_template_admission_uses_the_parse_time_owner_mapping() {
         use crate::syntax::{MacroOutputNode, SelectedSyntax, SyntaxContexts};
 
