@@ -340,16 +340,16 @@ selected implementations, compiler IR, or unchecked private declarations.
 
 The escape and subtemplate design in this section is accepted with CP-0034;
 this syntax is not yet current Ash. A template describes the syntax it emits.
-`${ ... }` marks an ordinary
-Ash block to run while filling that template; the resulting syntax value is
-inserted at the escape's position.
+`${ ... }` marks ordinary Ash code to run while filling that template. It
+contains either an ordinary block or one inline result expression; the
+resulting syntax value is inserted at the escape's position.
 The initial form admits the already specified protected fragment categories:
 `Syntax.ExpressionFragment`, `Syntax.TypeFragment`, `Syntax.PatternFragment`,
 `Syntax.DeclarationFragment`, and an identifier together with its
 `Syntax.Origin`. It introduces no implicit conversion or new syntax-value
 interface. The existing output parser admits or rejects the resulting syntax
 at its position; for example an expression fragment in a type position fails
-syntax admission. Ordinary Ash checking handles the escaped block and its
+syntax admission. Ordinary Ash checking handles the escaped code and its
 result. Other result categories and raw declaration sequences are not added by
 this form.
 
@@ -373,11 +373,18 @@ the existing checked host and syntax-handle boundaries. It may use internal
 syntax transformation helpers; the function needs no compiler `Input` argument
 or special function category. Inside the quote, `$input` splices the fragment
 held by the ordinary Ash variable `input`. A quote can contain another
-`${ ... }` escape, whose block can construct another quote. Protected fragment
+`${ ... }` escape, whose code can construct another quote. Protected fragment
 boundaries preserve precedence across insertions.
 
-An escape uses an ordinary Ash block: `${` opens the escape, the block uses
-normal balanced braces, parentheses and logical-line rules, and `}` ends it.
+On 2026-11-09, the user accepted the inline result-expression alternative in
+this proposal. An escape is `$` followed either by an ordinary Ash block or by
+braces containing exactly one expression. If the next token after `{` is a
+logical line end, parse the ordinary block. Otherwise, parse one expression
+and require the matching `}` without a logical line end at the escape's own
+level. Nested parentheses, braces and blocks follow the existing expression
+and logical-line rules. The inline form has no outer local-declaration list;
+ordinary block syntax is unchanged.
+
 A quote is a `primary_expression` of the form `syntax { ... }` containing
 exactly one expression with fragment-valued `$name` holes and `${ ... }`
 escapes; it can occur wherever an ordinary primary expression is admitted. The
@@ -423,9 +430,9 @@ An outer macro template processes its `$name` splices recursively through
 ordinary nested groups and quotes, as in slice 1. A quote simply written as
 part of that outer template does not establish a new splice scope, and an
 unknown outer splice still fails. A `${ ... }` encountered there executes as
-an escape of that outer template. Entering an escape changes mode: its block is
+an escape of that outer template. Entering an escape changes mode: its code is
 ordinary Ash with lexical capture-value reads. A `syntax { ... }` evaluated in
-that block constructs a subtemplate with its own ordinary-Ash-variable holes.
+that code constructs a subtemplate with its own ordinary-Ash-variable holes.
 An escape in that subtemplate executes when the subtemplate is constructed and
 can construct another subtemplate. Thus the escape boundary, not mere nested
 braces, separates the stages.

@@ -18,10 +18,10 @@ and does not change the accepted expression-macro matcher grammar. The
 `matcher_literal`, `template_literal` and `repetition_separator` lexical
 classes are defined immediately below.
 
-In an escape block only, the ordinary expression grammar additionally admits
-`$` followed by a capture or generator name as a primary expression. It reads
-that syntax value as specified by CP-0034; quotation holes use ordinary Ash
-variables. This does not change `from` seed expressions.
+In an escape block or inline escape expression only, the ordinary expression
+grammar additionally admits `$` followed by a capture or generator name as a
+primary expression. It reads that syntax value as specified by CP-0034;
+quotation holes use ordinary Ash variables. This does not change `from` seed expressions.
 
 ```ebnf
 declaration_syntax_definition ::=
@@ -44,7 +44,8 @@ declaration_template ::= "{" { template_item } "}" ;
 template_item ::= template_splice | template_escape | template_repeat | template_group
   | template_literal | line_end ;
 template_splice ::= "$" macro_name ;
-template_escape ::= "$" block ;
+template_escape ::= "$" ( block | inline_escape_body ) ;
+inline_escape_body ::= "{" expression "}" ;
 template_repeat ::=
   "$" "(" { template_item } ")" [ repetition_separator ]
   repetition_operator [ generator_clause ] ;
@@ -72,6 +73,13 @@ captured expression is checked by ordinary Ash rules in the compile-time
 environment. The seed
 ends before the first `step` token at its current syntactic level. Parenthesize
 an expression that needs that spelling as an ordinary name at that level.
+
+For `template_escape`, a logical line end immediately after the opening `{`
+selects `block`; otherwise the braces contain exactly one expression, followed
+by `}` without a logical line end at the escape's own level. Nested expression
+forms follow their existing balancing and logical-line rules. Inline escape
+bodies have no outer local-declaration list; the ordinary `block` production is
+unchanged. The same escape forms apply inside expression quotes.
 
 The matcher header ends at `=>` on its logical line; parentheses follow the
 existing logical-line rules, and braced groups contain their own line ends.
