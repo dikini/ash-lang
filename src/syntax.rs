@@ -1922,11 +1922,13 @@ fn validate_template_syntax_inner(
     let mut captures = Vec::with_capacity(capture_count);
     let mut identifiers = Vec::with_capacity(identifier_count);
     for part in &declaration.matcher {
+        if let Some(budget) = &mut admission_budget {
+            budget.charge().map_err(resource)?;
+        }
         let SurfaceSyntaxMatcherPart::Capture { name, kind } = part else {
             continue;
         };
         if let Some(budget) = &mut admission_budget {
-            budget.charge().map_err(resource)?;
             if *kind == SurfaceSyntaxCaptureKind::Identifier {
                 let digits = captures
                     .len()
