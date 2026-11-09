@@ -1,12 +1,14 @@
-# Declaration and derive macros: first delivery plan
+# Declaration and derive macros: delivery plan
 
-This is a **local draft**, not an active task, a set of GitHub issues, an
-accepted change proposal, or authority to implement. It develops
-[CP-0034](../../proposals/CP-0034-top-level-declaration-macros.md) using the
-[working planning rules](../../project/issue-planning.md) and the initial
-[integration corpus](fixtures/README.md). The units below are planning units;
-their local [issue drafts and hierarchy](slice2-work-structure.md) are not
-GitHub issues, and assignments are not yet selected.
+This execution plan belongs to
+[TASK-0068](../../tasks/TASK-0068-top-level-declaration-macros.md) and tracks
+the authorized remaining delivery of accepted
+[CP-0034](../../proposals/CP-0034-top-level-declaration-macros.md). It does not
+define Ash semantics or expand the task's authority. The reviewed
+[work structure](slice2-work-structure.md), original unit dependencies,
+difficulty predictions and fixed [I01–I22 corpus](fixtures/README.md) remain
+unchanged. The refresh below records the inspected state on 2026-11-09 and
+the remaining connections; recheck live refs before dispatch or integration.
 
 ## Baseline and outcome
 
@@ -16,19 +18,79 @@ and state-threaded generators. Generated declarations go through ordinary Ash
 parsing, resolution and checking. Include the actual public compiler path,
 diagnostics, supported runtime/build consumers and final delivery evidence.
 
-Slice 1 is QA-confirmed and was retained at `e58aea09`; local `main` now
-contains it through merge `5852a977`. The current
-[syntax expansion specification](../../../spec/syntax-expansion.md) is the
-expression-macro baseline. The merge changes no `src/`, `spec/` or `tests/`
-content relative to that retained commit. Recheck the actual implementation
-base and required gates before delivery. The original
-slice 1 task and QA record can be read from Git at
+Slice 1 was retained at `e58aea09` and integrated through merge `5852a977`.
+The current [syntax expansion specification](../../../spec/syntax-expansion.md)
+is the expression-macro baseline. The original slice 1 task and QA record can
+be read from Git at
 `d0b1bf68:docs/tasks/TASK-0067-expression-macros.md`.
 
-CP-0034 is accepted but unimplemented. [TASK-0068](../../tasks/TASK-0068-top-level-declaration-macros.md)
-owns the delivery. Before product implementation, agree on the retaining branch,
-roles and delivery permissions. This plan does not make those decisions on the
-user's behalf.
+The verified retaining branch is `codex/task-0068-integration` at
+`476b5ca9e4b4c7fdfacf7baa27e43094d8551d9b`, tree
+`7087eb1cbdd4e8a9ffd331011b3560c136cd9395`; the inspected live remote ref
+matches. CP-0034 has partial implementation on that branch. D1 and S1 are
+closed; the other 43 child issues remain open across seven workstreams. All
+112 native blocking links match the reviewed dependency graph. No repository
+PR was open at inspection. Retained focused evidence does not establish D8,
+E4, V3, a fresh full-workspace checkpoint or final acceptance.
+
+The user authorized delivery branches, implementation of the accepted scope,
+required verification, issues and PR updates, independent reviews and GitHub
+squash merges into the retaining branch. Do not GPG-sign locally authored
+commits; GitHub's automatically signed squash commits are acceptable. Main
+integration requires a separate instruction.
+
+### Retained deliveries
+
+Each squash tree below equals its reviewed candidate tree. The issue records
+and linked PR reviews retain the focused receipts and remaining obligations;
+the table is a retention inventory, not acceptance of incomplete criteria.
+
+| PR | Retained squash commit | Status |
+| --- | --- | --- |
+| [#259](https://github.com/dikini/ash-lang/pull/259) | `16b5acf7fbc80b2dfd7d9c55976f88ac4e64888e` | D1 header/reservation scope; completed after #266's uppercase-capture repair. |
+| [#260](https://github.com/dikini/ash-lang/pull/260) | `f1d02fcdf95cde4a096b3717d6aa7294a480eebc` | S1 closed sums and token kinds complete; later connected migration remains with S5/E2/E4/V3. |
+| [#261](https://github.com/dikini/ash-lang/pull/261) | `0b70a56ffdb575238a5877a6745d600fbd68fc8f` | Partial D2 selection; original public-driver criteria remain open. |
+| [#262](https://github.com/dikini/ash-lang/pull/262) | `0fd179a972715e34396aa9ae0aac745ddf898af4` | Partial D7 structured parser; connected output assertions remain open. |
+| [#264](https://github.com/dikini/ash-lang/pull/264) | `5ab3ebef1fd1d451e768839070202614f64a0344` | Partial D6 template admission; procedural-output and diagnostic obligations remain open. |
+| [#266](https://github.com/dikini/ash-lang/pull/266) | `5e2a68bc814016581a2ced5ddc2713d603f924c3` | Partial D3 matcher and completed D1 capture-name repair; full I19 and diagnostics remain open. |
+| [#267](https://github.com/dikini/ash-lang/pull/267) | `8106ec33e59ea32ca1538678a85c67e9068c3456` | Partial D4 type/pattern captures; public protected-fragment consumption remains guarded. |
+| [#268](https://github.com/dikini/ash-lang/pull/268) | `a741c85b53d8aa8156f5502fa5c35e508a29ff52` | Partial D6/D7 foreign admission metadata repair. |
+| [#269](https://github.com/dikini/ash-lang/pull/269) | `eea3dbc86b731f85993b6f02370172751b78cdd3` | Partial D4/D6 protected template admission and substitution. |
+| [#270](https://github.com/dikini/ash-lang/pull/270) | `091639de8e493e8fc05da9bef46d21227f5176e8` | Partial D6/D7 nested-template admission without execution. |
+| [#271](https://github.com/dikini/ash-lang/pull/271) | `199bf28484380742a775ef0b709b12b5c0f1fe86` | Partial H1 identifier-only collection; protected/procedural paths and original criteria remain open. |
+| [#273](https://github.com/dikini/ash-lang/pull/273) | `d19f36f5cdeb34940fe0b130209006020e6729d9` | Partial H2 identifier-only term-context tests; origins, recursion and full criteria remain open. |
+| [#275](https://github.com/dikini/ash-lang/pull/275) | `476b5ca9e4b4c7fdfacf7baa27e43094d8551d9b` | Partial H3 identifier-only nominal-context tests; pattern/interface and diagnostic criteria remain open. |
+
+The preserved product worktree
+`/home/dikini/Projects/ash-lang-task-0068` is on
+`codex/task-0068-protected` at the retaining base. Its untracked
+`tests/declaration_type_capture.rs` was inspected and preserved before this
+refresh. SHA-256:
+`a252ebaffc5125934d51c88511d998c4cc8308c6650a26a20570bc2b0c663841`.
+It contains I07 and imported type-forwarding tests, not a retained delivery.
+The documentation candidate uses `/tmp/ash-task0068-delivery` on
+`codex/task-0068-plan-refresh`; neither this checkout nor a later branch switch
+may discard the protected work or main's unrelated effects work.
+
+### Roles and shared ownership
+
+| Role | Setting and responsibility |
+| --- | --- |
+| Orchestrator | Inherit the launching agent's model and effort. The active `/root` orchestrator owns eligibility, assignments, closure and **integration**. |
+| Planning | GPT 6.1 Sol Max; refresh the remaining chain and interfaces. |
+| Development | GPT 6.1 Terra Max; assigned product writer, focused evidence, repairs and acceptance updates. |
+| Independent QA | Terra 6.1 Medium; check each pinned delivery and the integrated corpus. |
+| Independent review | Sol 6.1 Max; challenge this plan, post every PR review, re-review repairs and independently check the acceptance record. The developer applies the checked record and performs readback; the orchestrator confirms. |
+
+Keep development, QA and review independent, including replacements. A developer
+cannot approve their own change. The orchestrator names each active worker in
+its assignment and assigns one heavy-build operator. One owner controls shared
+grammar, projection, surface, syntax and driver files. Use isolated delivery
+branches; parallel edits require agreed interfaces and disjoint file ownership.
+Keep one sequential product checkout and compatible target cache, with one
+Cargo job. Reviewers inspect immutable pins and request reruns from the operator.
+Freeze and release readers and preserve owned uncommitted work before switching
+branches. QA/review on one unit may overlap development on a different unit.
 
 ## Hard boundaries
 
@@ -92,18 +154,21 @@ and derive expansion may have different entry forms while following the same
 source order. There is one integration owner for this entire path. Component
 tests do not replace its acceptance check.
 
-The following are contracts to agree before parallel producers and consumers
-start; they are not mandates for particular Rust types or new public APIs.
+These interface agreements constrain remaining assignments. The developer owns
+each producer/consumer implementation; the orchestrator assigns shared files,
+QA checks the evidence and Sol reviews the handoff. They do not mandate new
+Rust types or public APIs. A changed interface returns for independent review
+before substantial dependent implementation.
 
 | Boundary | Producer -> consumer | Required agreement |
 | --- | --- | --- |
-| Selection | Import discovery -> parser and expander | Local syntax name, category, owner context and rename; expression compatibility and collision behavior. |
-| Captures | Matcher -> template or transformer | Category, repetition nesting, source order, contexts and origins; incomplete/recovery-bearing input does not cross projection. |
-| Output | Template/host -> declaration parser and collector | Ordered structured syntax and protected fragments; category, origin and failure handling, without text re-lexing or partial publication. |
-| Module staging | Collector/derive entry -> ordinary resolver | Source-order expansion, original derive subject, generated declarations, forward references, scope and export spelling. |
-| Generator | Matcher/seed/step -> template repetition | Seed environment; `State -> (State, Syntax.ExpressionFragment)` state threading, per-iteration reuse and nesting; both selected construction paths, ordinary Ash checking and retained host rules. |
-| Quote and escape | Template/ordinary Ash -> checked host -> syntax admission | Lexical capture values, quote holes, contexts and origins; one reached escape per expansion position, existing host limits, and atomic publication. Escape reads participate in the existing repetition driver rules. |
-| Provenance and host | Syntax services -> parser, resolver, diagnostics and linker | Context versus origin, valid handle lifetime, checked-host effects, bounds, output transfer and teardown. |
+| Selection | Import discovery -> parser and expander | Preserve local syntax name, category, selected owner and rename, including introduction-to-import mapping. Keep expression compatibility and collision causes; retain H1's equal-matcher/different-owner and later expression-introduction checks. |
+| Captures | Matcher -> template or transformer | Preserve category, repetition nesting, order, owned AST, shared contents, contexts and origins. Charge real copies, traversal, frame work and composed depth before allocation through the existing shared accounting. Incomplete/recovery-bearing input does not cross projection. Unsupported paths stay guarded until their real consumers pass. |
+| Output | Template/host -> declaration parser and collector | Transfer ordered structured syntax and protected fragments with authentic origins. Reuse ordinary category parsing without text re-lexing. Refuse forbidden/recovery-bearing output and publish no partial module on failure. |
+| Module staging | Collector/derive entry -> ordinary resolver | Preserve source-order expansion, the original derive subject once, generated declarations, forward references, scope and export spelling. Ordinary resolution/publication owns access, conflicts and nominal identity; exercise real callers and importers. |
+| Generator | Matcher/seed/step -> template repetition | Definition-site seeds and steps use the already checked defining-module environment. Caller-supplied seeds use the caller's available compile-time environment: inline expressions and checked imports, excluding the caller module's own globals. Preserve these contexts and ordinary checking/staging failures. Use ordinary `State -> (State, Syntax.ExpressionFragment)` calls, one state advance and cached value per iteration, and nested ownership. Prove both selected construction paths and state/handle lifetime in the retained checked host before dependent generator work. |
+| Quote and escape | Template/ordinary Ash -> checked host -> syntax admission | Pass lexical capture values and quote holes with contexts/origins. Execute one reached escape per expansion position under existing limits and atomic failure. Reads participate in repetition driver rules; ordinary checking/admission owns type/category failure. |
+| Provenance and host | Syntax services -> parser, resolver, diagnostics and linker | Preserve contexts separately from origins, authenticated handle provenance and lifetime, checked-host effects and work/depth/stack bounds. Transfer final output before root teardown. Check valid output after closure, foreign-handle refusal and both exact I16 controls at V3. Stop an affected path at a concrete downstream consumer gap. |
 
 Likely implementation areas on the retained baseline are `src/parser/grammar.rs`,
 `src/parser/project.rs`, `src/surface.rs`, `src/syntax.rs`, `src/driver.rs`,
@@ -114,6 +179,134 @@ ownership follows the agreed interfaces and actual diff; these are not
 permission to refactor an entire file. Use `tests/surface_macros.rs`, `tests/macro_host.rs`,
 `tests/modules_syntax.rs`, `tests/module_loading.rs`, `tests/diagnostic_json.rs`
 and the relevant existing image/build tests where they own the boundary.
+
+## Remaining delivery sequence
+
+The sequence refines implementation order without adding unit dependencies,
+changing original acceptance criteria or allocating new difficulty points.
+Retained, independently reviewed producer handoffs may unblock focused
+consumers while the producer's full connected criterion remains open. This
+does not remove native blocking links or authorize premature issue closure.
+
+| Step | Delivery and prerequisites | Required result and next owner |
+| --- | --- | --- |
+| 1 | Resume #232's type-only protected-fragment resource work at the verified retaining tip. | Developer first establishes and verifies v3's proposed narrow type-to-expression refusal while retaining the existing broader protected-capture guards. Then precharge capture construction, substitution, staged adaptation and generated projection through the existing `SyntaxBudget` before relaxing the type guard for the intended declaration path. Unchanged I07 returns 42; the missing type keeps its parser cause. Real imported doubling/grouping chains, exact/short allowances, composed type/application/row depth, late failure and small-stack cleanup pass before type activation. Expression/pattern/procedural matchers and the newly established narrow refusal remain guarded. QA and Sol check the pin. |
+| 2 | Complete protected expression/pattern accounting and consumption. | Developer extends the same shared accounting to every owned expression/pattern/local-declaration/recursive-capture copy and traversal, retained contents and composed depth. Unchanged I19 `binder.ash` reaches the ordinary driver for 42 with contexts and origins; refusal and failure cleanup remain bounded. QA and Sol check the actual consumer. |
+| 3 | Review connected D2/D3/D4/D6/D7/H1/H2/H3 assertions on the available paths. | Close only an original criterion whose complete required evidence is retained. Defer D3's full I19 criterion to D5 and G1; defer D6's procedural-output import refusal to S3 and S4. Prior partial H1/H2/H3 tests do not close their original criteria. Keep diagnostic and protected-path obligations open; Sol checks the developer's partial record, the developer applies it and reads it back, and the orchestrator confirms and schedules D8 when its complete inputs are ready. |
+| 4 | D5, G1 and H5 consume the retained D3/D6/H1 handoffs as applicable. | Developer supplies one complete braced declaration, ordered nested repetition captures and definition-private/facade context evidence. H5 exercises unchanged resolution and private-access refusal. These paths may prepare in parallel only with disjoint assigned files; shared grammar/projection edits are serialized. |
+| 5 | S2 consumes S1/D4/D5; S3 consumes S1/D7; S4 consumes S2/S3/H1; S5 consumes S2/S4. | Developer establishes authenticated category/handle transfer, root lifetime and teardown together. S4 runs the supplemental procedural declaration graph for 42 and its authored refusal with no publication. S5 completes connected I18 migration. Valid output survives root closure; foreign handles reject. |
+| 6 | E1 consumes D6/S1; E2 consumes E1/S2/S4; E4 consumes E1/E2/S4/D8. | Developer connects ordinary checked quote construction and early escapes. Supplemental I22 `early_nested.ash` returns 44; category/code/primitive refusals and bounded atomic failure pass. Integration owner pins the E4 full checkpoint; the assigned operator runs it. |
+| 7 | R1 -> R2 -> R3 -> R4/R5 -> R6, retaining the original S2/H1/D7/H2/H5/S4/H3 joins. | Developer establishes original-subject capture, one retained subject, complete source-order derive lists, declarative/procedural output and generated-subject expansion. Preserve all I09–I11 and I20 ordering/failure assertions. QA and Sol review each connected increment. |
+| 8 | G1 -> G2 -> G3 -> G7 -> G4 -> G5 -> G6; G7 additionally consumes S4/E2. | Developer proves both fixed fragment construction paths with state-only steps before initialization/caching/nesting. Preserve I17's 310/3210/1010/546210 results and ordinary-checking, category and bound failures. A helper alone does not establish a whole caller. |
+| 9 | H4 consumes H2/H3; H6 consumes H4. E3 consumes E4/S2/H2/H3/H5/G1; E5 consumes E3/G2/G6. | Developer connects public spelling/context and importer visibility to unchanged publication, then lexical escape captures and repetition/cached generator reads, including zero iterations. Complete the separately reviewed protected type-to-expression gate before activating that combination. |
+| 10 | V1 consumes D8/D4/D5/H3; V2 consumes D8/R4/R5/G6/G7/H5/E5; V3 retains all original joins. | Developer and integration owner join the fixed real macro library, caller and importer through public driver, interpreter and supported build/image consumers. Original full graphs remain mandatory alongside early supplements. Both exact I16 mutations, host limits, transfer and teardown are required. |
+| 11 | V4 -> V5/V6 -> V7 -> V8 after V3, preserving every original edge. | Developer updates specification/tool documentation for the implemented delta. Independent QA and Sol audit the exact integrated pin; developer repairs findings and Sol re-reviews. Integration owner obtains the fresh full gate and native/image receipts, squash-merges into the retaining branch and verifies the retained result. Sol independently checks the acceptance record; the developer applies it and performs readback; the orchestrator confirms. Main remains a separate gate. |
+
+For each partial result, the developer records **Delivered**, **Remaining**,
+**Awaiting** and **Owner**, with its PR, retained commit and evidence. Keep the
+original checkbox unchecked until its whole criterion passes, including any
+deferred consumer or checkpoint obligation. Sol independently checks the
+acceptance record, the developer applies the checked record and performs
+readback, and the orchestrator confirms before advancing. The latest H1/H2/H3
+issue records still request this acceptance check/application/readback; equal
+trees and a clear PR review do not establish that it occurred.
+
+### Protected type-to-expression accounting and release gate
+
+This is a named acceptance obligation within the existing H1/D8 protected
+fragment work, not a new language feature, work unit or budget protocol. When
+the broader declaration-staging guards are relaxed, a forwarded type can reach
+a generated expression macro invocation argument. That argument becomes a `SurfaceExpressionCapture`
+and later reaches slice 1's `SyntaxExpansion::expand` and
+`substitute_contents`, outside the currently charged declaration-staging work.
+The retained base's broader protected-capture guards prevent a public
+reproducer. The narrower refusal proposed in v3 is not implemented on that
+base; this is a source-audit finding, not evidence of a demonstrated slice 1
+failure.
+
+The type-only delivery must first establish and verify v3's proposed temporary
+refusal of a forwarded type anywhere inside such a generated expression
+invocation argument, with the existing broader guards retained. Only then,
+after the type-only accounting evidence passes, may it relax the broader type
+guard for the intended declaration path. Keep the established narrow refusal
+until this release gate passes. The narrow refusal excludes ordinary
+non-protected expression syntax and declaration-invocation type forwarding.
+Before releasing the guard, have Sol separately review the complete copy and
+consumer inventory. Every subsequent owned copy, traversal, retained frame or
+contents operation and composed-depth check must use the same existing
+`SyntaxBudget` and shared accounting. Do not fix the path by changing language
+rules, slice 1 behavior, limits or an error protocol.
+
+The developer supplies a real imported declaration-template -> expression
+invocation -> ordinary consumer graph, not a direct-projector substitute.
+Required evidence covers repeated protected copies, exact-allowance success
+and one-less refusal, composed depth, late failure after earlier output,
+small-stack success and failure, normal/failure drop and cleanup, authentic
+contexts/origins, no partial publication and unchanged slice 1 regressions.
+QA checks the pin independently and Sol reviews/re-reviews before activation.
+If complete shared accounting cannot be achieved within these boundaries,
+keep the guard, stop that affected path and return the concrete finding for a
+decision. Do not claim full connected acceptance while it remains guarded.
+
+The existing type-first plan and v3 refinement are working evidence under
+`/home/dikini/Projects/ash-lang-task-0068-evidence/protected-plan-476b5ca9/`.
+Their type-copy, retained-contents/drop and forwarding analysis transfers only
+within the inspected scope. Expression/pattern activation still needs its
+exhaustive inventory; the type-only analysis does not prove those families.
+
+### Connected checkpoints and final gate
+
+| Gate | Completion condition and owner |
+| --- | --- |
+| D8 first declaration path | I01/I07 execute for 42 through the public driver; generated ordinary errors retain cause and macro origins; integrated H2/H3 and protected-copy/composed-depth evidence is complete. Integration owner pins the candidate and assigns the fresh full-workspace checkpoint. Type-only I07 success is partial progress. |
+| E4 early quote/escape path | Supplemental `early_nested.ash` executes for 44 through the public driver with its negative, atomicity and bound cases. Integration owner pins the second fresh full-workspace checkpoint. Original shared-module I22 graphs remain required at V3. |
+| V3 complete public path | All original producer/consumer joins, I01–I22 full graphs, both exact I16 controls, interpreter and supported build/image evidence are present. Integration owner freezes the candidate for documentation and integrated QA/review. V3 is a connected acceptance gate; the final fresh full-workspace gate remains V7. |
+| V7/V8 retaining acceptance | After independent V5/V6 and repairs/re-review, the assigned operator runs fresh `cargo xtask verify` and required native/image checks with exact input receipts. Integration owner verifies the actual retained squash result. Sol independently checks the acceptance record; the developer applies the checked record and performs readback; the orchestrator confirms. |
+
+Follow the [verification guide](../../project/verification.md): one Cargo job,
+compatible cache, source/configuration/tool/external-input pins and unchanged
+inputs before/after each required gate. A focused or reused receipt never
+becomes a fresh full gate by description. At every delivery handoff, name the
+last full-gate pin/receipt, intervening deliveries, remaining regression scope
+and next checkpoint owner/trigger. No TASK-0068 full-gate receipt is established
+at this refresh.
+
+### Downstream blockers and forecast
+
+The following separate downstream issues were all open and unassigned at
+inspection. Active repair owners and timing are unverified; dependent criteria
+remain blocked and repairs stay outside this task:
+
+- [#263](https://github.com/dikini/ash-lang/issues/263): unbound-splice syntax
+  cause/location is erased before presentation.
+- [#265](https://github.com/dikini/ash-lang/issues/265): human/JSON parser
+  diagnostics omit authentic invocation/selected-definition roles.
+- [#272](https://github.com/dikini/ash-lang/issues/272): ordinary duplicate-global
+  diagnostics lose generated locations already present on names.
+- [#274](https://github.com/dikini/ash-lang/issues/274): ordinary duplicate-type
+  and constructor diagnostics lose those generated locations.
+
+The integration owner verifies their live owner/status before reporting further
+progress and tracks these downstream dependencies; their repair is outside this
+macro assignment. Required H2/H3/D8/V2 and final
+diagnostic acceptance remains open until the real consumers supply its evidence.
+Re-pin their concrete reproducers to the relevant retained inputs; do not add
+macro-side checks, fake origins, expected-missing-origin assertions or a
+downstream patch to make acceptance appear complete. Continue eligible
+independent work and return any needed scope decision explicitly.
+
+Preserve the **150-point** total and **142-point** initial remaining prediction
+below. D1/S1 account for seven fully closed predicted points; the 43 open units
+sum to 135 original points and include retained partial work. This is an
+inventory of original estimates, not a measured effort remainder or earned
+credit. No point prediction or DAG edge changes in this refresh. Historical
+bounded retention intervals range from about 18–44 minutes to roughly four
+hours for H1 and do not establish a rate for the remaining host, escape and
+generator work. A whole-delivery elapsed forecast must include that entire
+chain, builds, QA/review, repairs, three full checkpoints, acceptance and the
+unresolved downstream wait; time to the next type repair is not time to final
+acceptance. A bounded completion ETA is unavailable while downstream ownership
+and repair timing remain unresolved.
 
 ## Pre-implementation contract checks
 
@@ -134,21 +327,22 @@ cases; the author and independent Sol 6.1 Max reviewer found no remaining
 findings. The
 [fixture record](fixtures/generators/README.md#construction-details-needed-for-transcription)
 records the procedural graph's raw-syntax construction coverage limit. These
-are proposed acceptance inputs, not passing macro tests; G7 implements and
-exercises them. CP-0034 is accepted but unimplemented. The 130-point forecast
-predates the approved executable-escape design and token changes; the
+are fixed acceptance inputs; G7's implementation and connected evidence remain
+open. CP-0034 is accepted and partially implemented on the retaining branch.
+The 130-point forecast predates the approved executable-escape design and token changes; the
 recalibration below accounts for both.
 
 Implementation units below require **accepted CP-0034, C3, an owning task and
-an authorized implementation base**. C1 and C2 can be investigated in parallel;
-one owner reconciles their changes to shared proposal text.
+an authorized implementation base**. C1–C4 are recorded planning work; this
+refresh changes neither their contract nor the accepted proposal.
 
 ## Planned work units
 
 Points are fixed predictions of relative difficulty, including each unit's
 focused verification and review. They are not elapsed time or earned credit.
-Each unit is at most four points in this draft; the sum is checked below.
-The current total-scope prediction is 150 points, of which 142 are remaining.
+Each unit was assigned at most four points; the sum is retained below.
+The total-scope prediction is 150 points, with 142 predicted delivery points
+at the original launch. The inspected partial state is recorded above.
 Preserve the earlier 65-, 95-, 126-, 128- and 130-point predictions as
 historical records. These are not measured results or arithmetic conversions
 from slice 1.
@@ -463,7 +657,7 @@ functionality or implementation authority.
 | Recorded C1–C4 planning scope | 8 | Four estimated planning units now recorded; not measured actual difficulty. |
 | Original product and delivery allocations | 122 | D, H, S, R, G and V in the earlier 130-point prediction. |
 | Current total-scope prediction | 150 | 130 + 18 for E1–E5 + 1 each for D1, S1 and V2 − 1 moved out of G7. |
-| **Current remaining-work forecast** | **142** | **150 − 8** recorded C1–C4 planning scope; excludes separately owned downstream repairs and Main integration. |
+| **Initial remaining-work forecast** | **142** | **150 − 8** recorded C1–C4 planning scope; excludes separately owned downstream repairs and Main integration. |
 
 The earlier totals are predictions for their recorded scopes, not performance
 measures. This revision includes the syntax-only restriction and the ordinary
@@ -542,7 +736,8 @@ driver path at D8, then the full path at V3. QA and review begin on each pinned
 unit as it becomes available; V5/V6 are the integrated audit, not the first
 time either role participates.
 
-The [local issue drafts](slice2-work-structure.md) group these units; exact
-owner assignments remain for a later planning decision. This is a difficulty
-forecast for the current accepted scope, not implementation authority. No
-GitHub issues are created by this document.
+The [reviewed work structure](slice2-work-structure.md) groups the units filed
+under #206. Current role, shared-file, integration and acceptance ownership is
+recorded above; active assignments identify the actual workers. The retained
+difficulty forecast has no semantic authority, and this refresh changes no
+GitHub issue or dependency.
