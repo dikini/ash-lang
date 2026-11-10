@@ -2294,6 +2294,7 @@ mod tests {
                 "type AST stack: unwrapped and transferred parsed AST",
                 "type AST stack: host and final contents alias dropped",
                 "type AST stack: captured and restored composed-128 AST",
+                "type AST stack: returned capture retention reaches composed-129",
                 "type AST stack: pre-copy and post-copy shortages cleaned up",
                 "type AST stack: refused composed-129 AST",
                 "type AST stack: capture and protected final aliases dropped",
@@ -2572,6 +2573,18 @@ mod tests {
                             current = &function.codomain;
                         }
                         assert!(current.diagnostic.is_some());
+                        let mut retained = SyntaxBudget::default();
+                        retained.charge_units(17).unwrap();
+                        assert!(matches!(
+                            crate::syntax::charge_new_type_retention(&restored, 0, &mut retained),
+                            Err(MacroParseFailure::Syntax {
+                                resource: Some(ResourceFailure::StructuralDepth {
+                                    limit: STRUCTURAL_DEPTH_LIMIT
+                                }),
+                                ..
+                            })
+                        ));
+                        eprintln!("type AST stack: returned capture retention reaches composed-129");
                         drop(restored);
                         assert_eq!(Arc::strong_count(&alias), baseline);
                         eprintln!("type AST stack: captured and restored composed-128 AST");
