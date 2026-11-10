@@ -117,6 +117,7 @@ pub effect Ops {
     definition_identifier : (Input, String, Origin) -> IdentifierResult
     caller_identifier : (Input, String, Origin) -> IdentifierResult
     combine_origins : (Input, Origins) -> OriginsResult
+    declaration_syntax : DeclarationFragment -> Syntax
 }
 
 pub capture : (Input, Int) -> CaptureResult ! {Ops}
@@ -145,3 +146,5 @@ pub caller_identifier : (Input, String, Origin) -> IdentifierResult ! {Ops}
 caller_identifier value = perform Ops.caller_identifier value
 pub combine_origins : (Input, Origins) -> OriginsResult ! {Ops}
 combine_origins value = perform Ops.combine_origins value
+pub declaration_syntax : DeclarationFragment -> Syntax ! {Ops}
+declaration_syntax value = perform Ops.declaration_syntax value

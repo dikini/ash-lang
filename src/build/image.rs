@@ -4477,6 +4477,12 @@ mod tests {
 
     #[test]
     fn syntax_builtin_image_reconstructs_and_refuses_changed_or_duplicate_roles() {
+        let syntax_source = crate::module::compiler_syntax_builtin_source_text();
+        assert!(syntax_source.contains("declaration_syntax : DeclarationFragment -> Syntax"));
+        assert!(
+            syntax_source
+                .contains("declaration_syntax value = perform Ops.declaration_syntax value")
+        );
         let tree = SourceTree::new();
         for (name, source) in [
             (
