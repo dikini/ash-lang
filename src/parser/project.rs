@@ -2616,8 +2616,14 @@ pub(crate) fn project_declaration_expansions(
         }
         let expression_pattern =
             charge_declaration_invocation(source, child, &tokens, &current.contexts, true, budget)?;
-        let invocation =
-            project_declaration_invocation_node(source, child, &tokens, &current.contexts, true)?;
+        let invocation = project_declaration_invocation_node_inner(
+            source,
+            child,
+            &tokens,
+            &current.contexts,
+            true,
+            Some(budget),
+        )?;
         #[cfg(test)]
         G1_CAPTURE_OBSERVER.with(|observer| {
             if let Some(observe) = observer.get() {
@@ -3381,7 +3387,17 @@ fn charge_declaration_invocation(
             // capture are reserved before the shared projector runs.
             charge_composed_type_projection(ty, tokens, budget)?;
             charge_projection_subtree(ty, tokens, budget)?;
-            charge_type_capture_contents(ty, tokens, budget)?;
+            if declaration_transformer {
+                charge_capture_contents_inner(
+                    ty,
+                    tokens,
+                    SurfaceSyntaxCaptureKind::Type,
+                    true,
+                    budget,
+                )?;
+            } else {
+                charge_type_capture_contents(ty, tokens, budget)?;
+            }
             continue;
         }
         if matches!(
@@ -3462,6 +3478,16 @@ fn charge_capture_contents(
     kind: SurfaceSyntaxCaptureKind,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<bool, DeclarationExpansionFailure> {
+    charge_capture_contents_inner(root, tokens, kind, false, budget)
+}
+
+fn charge_capture_contents_inner(
+    root: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    kind: SurfaceSyntaxCaptureKind,
+    new_type_scratch: bool,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<bool, DeclarationExpansionFailure> {
     // A lone forwarded node reuses its old contents Arc. Every other
     // reconstructed sequence gets a new enclosing Arc before it is retained.
     let mut singleton = root;
@@ -3495,7 +3521,14 @@ fn charge_capture_contents(
     // pending elements before either worklist can grow.
     budget.charge_units(root.children.len())?;
     budget.charge_units(root.children.len())?;
-    let mut pending = root.children.iter().rev().collect::<Vec<_>>();
+    let mut pending = if new_type_scratch {
+        budget.charge_units(root.children.len())?;
+        let mut pending = Vec::with_capacity(root.children.len());
+        pending.extend(root.children.iter().rev());
+        pending
+    } else {
+        root.children.iter().rev().collect::<Vec<_>>()
+    };
     let mut groups = contents_prefix;
     while let Some(element) = pending.pop() {
         budget.charge_units(2)?;
@@ -3507,6 +3540,14 @@ fn charge_capture_contents(
                 }
                 budget.charge_units(node.children.len())?;
                 budget.charge_units(node.children.len())?;
+                if new_type_scratch {
+                    let live = pending.len();
+                    let requested = live.checked_add(node.children.len()).unwrap_or(usize::MAX);
+                    if requested > pending.capacity() {
+                        budget.charge_units(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                        pending.reserve_exact(node.children.len());
+                    }
+                }
                 pending.extend(node.children.iter().rev());
             }
             ConcreteElement::Token(index) => {
@@ -5213,6 +5254,15 @@ fn capture_source_declaration_contents(
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
 ) -> Result<Vec<crate::syntax::MacroOutputNode>, ProjectionError> {
+    capture_source_declaration_contents_inner(source, node, tokens, None)
+}
+
+fn capture_source_declaration_contents_inner(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    mut budget: Option<&mut crate::syntax_resource::SyntaxBudget>,
+) -> Result<Vec<crate::syntax::MacroOutputNode>, ProjectionError> {
     use crate::syntax::{MacroDelimiter, MacroOutputNode};
 
     struct GroupFrame {
@@ -5221,12 +5271,46 @@ fn capture_source_declaration_contents(
         children: Vec<MacroOutputNode>,
     }
 
+    macro_rules! reserve_growth {
+        ($items:expr, $count:expr) => {{
+            let items = &mut $items;
+            let count = $count;
+            if let Some(budget) = budget.as_deref_mut()
+                && count != 0
+            {
+                let live = items.len();
+                let requested = live.checked_add(count).unwrap_or(usize::MAX);
+                if requested > items.capacity() {
+                    budget
+                        .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                        .map_err(ProjectionError::ResourceLimit)?;
+                    items.reserve_exact(count);
+                }
+            }
+        }};
+    }
+
     let mut indices = Vec::new();
-    let mut pending = node.children.iter().rev().collect::<Vec<_>>();
+    let mut pending = if let Some(budget) = budget.as_deref_mut() {
+        budget
+            .charge_units(node.children.len())
+            .map_err(ProjectionError::ResourceLimit)?;
+        let mut pending = Vec::with_capacity(node.children.len());
+        pending.extend(node.children.iter().rev());
+        pending
+    } else {
+        node.children.iter().rev().collect::<Vec<_>>()
+    };
     while let Some(element) = pending.pop() {
         match element {
-            ConcreteElement::Node(child) => pending.extend(child.children.iter().rev()),
-            ConcreteElement::Token(index) => indices.push(*index),
+            ConcreteElement::Node(child) => {
+                reserve_growth!(pending, child.children.len());
+                pending.extend(child.children.iter().rev());
+            }
+            ConcreteElement::Token(index) => {
+                reserve_growth!(indices, 1);
+                indices.push(*index);
+            }
             ConcreteElement::Missing { .. } | ConcreteElement::Error(_) => {
                 return Err(ProjectionError::RecoveryNodesPresent);
             }
@@ -5247,6 +5331,10 @@ fn capture_source_declaration_contents(
                 } else {
                     MacroDelimiter::Braces
                 };
+                reserve_growth!(frames, 1);
+                if let Some(budget) = budget.as_deref_mut() {
+                    budget.charge().map_err(ProjectionError::ResourceLimit)?;
+                }
                 frames.push(GroupFrame {
                     delimiter,
                     opening: token.span,
@@ -5254,7 +5342,16 @@ fn capture_source_declaration_contents(
                 });
                 continue;
             }
-            TokenKind::RightParen | TokenKind::RightBrace => {
+            TokenKind::RightParen | TokenKind::RightBrace
+                if budget.is_none()
+                    || frames.last().is_some_and(|frame| {
+                        matches!(
+                            (&frame.delimiter, &token.kind),
+                            (MacroDelimiter::Parentheses, TokenKind::RightParen)
+                                | (MacroDelimiter::Braces, TokenKind::RightBrace)
+                        )
+                    }) =>
+            {
                 let frame = frames.pop().ok_or(ProjectionError::MalformedTree(
                     InternalReason::UnexpectedShape,
                 ))?;
@@ -5300,8 +5397,10 @@ fn capture_source_declaration_contents(
             }
         };
         if let Some(frame) = frames.last_mut() {
+            reserve_growth!(frame.children, 1);
             frame.children.push(node);
         } else {
+            reserve_growth!(output, 1);
             output.push(node);
         }
     }
@@ -5558,6 +5657,24 @@ fn project_declaration_invocation_node(
     contexts: &crate::syntax::SyntaxContexts,
     allow_declaration: bool,
 ) -> Result<ProjectedDeclarationInvocation, ProjectionError> {
+    project_declaration_invocation_node_inner(
+        source,
+        node,
+        tokens,
+        contexts,
+        allow_declaration,
+        None,
+    )
+}
+
+fn project_declaration_invocation_node_inner(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    contexts: &crate::syntax::SyntaxContexts,
+    allow_declaration: bool,
+    budget: Option<&mut crate::syntax_resource::SyntaxBudget>,
+) -> Result<ProjectedDeclarationInvocation, ProjectionError> {
     let mut children = node.children.iter();
     let Some(ConcreteElement::Token(index)) = children.next() else {
         return malformed(InternalReason::UnexpectedShape);
@@ -5571,13 +5688,14 @@ fn project_declaration_invocation_node(
         .ok_or(ProjectionError::MalformedTree(
             InternalReason::UnexpectedShape,
         ))?;
-    project_selected_declaration_invocation_node(
+    project_selected_declaration_invocation_node_inner(
         source,
         node,
         tokens,
         name,
         selection,
         allow_declaration,
+        budget,
     )
 }
 
@@ -5822,6 +5940,32 @@ fn project_selected_declaration_invocation_node(
     selected: &crate::syntax::SelectedSyntax,
     allow_declaration: bool,
 ) -> Result<ProjectedDeclarationInvocation, ProjectionError> {
+    project_selected_declaration_invocation_node_inner(
+        source,
+        node,
+        tokens,
+        name,
+        selected,
+        allow_declaration,
+        None,
+    )
+}
+
+fn project_selected_declaration_invocation_node_inner(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    name: SurfaceName,
+    selected: &crate::syntax::SelectedSyntax,
+    allow_declaration: bool,
+    mut budget: Option<&mut crate::syntax_resource::SyntaxBudget>,
+) -> Result<ProjectedDeclarationInvocation, ProjectionError> {
+    let source_transformer = allow_declaration
+        && source_projection_tokens(tokens)
+        && matches!(
+            selected.declaration.implementation,
+            SurfaceSyntaxImplementation::Transformer(_)
+        );
     let selection = selected.clone();
     let mut children = node.children.iter();
     let _ = children.next();
@@ -5895,7 +6039,16 @@ fn project_selected_declaration_invocation_node(
                 }
                 SurfaceSyntaxCaptureKind::Type => {
                     let node = only_child_of_kind(argument, NodeKind::Type)?;
-                    let contents = capture_contents(source, node, tokens, originals)?;
+                    let contents = if source_transformer && budget.is_some() {
+                        capture_source_declaration_contents_inner(
+                            source,
+                            node,
+                            tokens,
+                            budget.as_deref_mut(),
+                        )?
+                    } else {
+                        capture_contents(source, node, tokens, originals)?
+                    };
                     let ty = project_type(source, node, tokens)?;
                     let contents = match contents.as_slice() {
                         [crate::syntax::MacroOutputNode::ForwardedType(capture, _)] => {
@@ -10220,6 +10373,85 @@ mod tests {
                     result.push(close.into());
                 }
                 other => panic!("unexpected source packet node: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn source_type_packet_matches_recursive_contents_and_pays_buffer_growth() {
+        use crate::syntax_resource::SyntaxBudget;
+
+        for text in [
+            "Int",
+            "((Int))",
+            "({ Thing } -> (Int))",
+            "}",
+            "(Int} Bool)",
+            "(Int",
+        ] {
+            let source = SourceFile::new("capture-type.ash", text).unwrap();
+            let lexed = lex(&source).unwrap();
+            let node = ConcreteNode {
+                kind: NodeKind::Type,
+                children: lexed
+                    .tokens
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, token)| !matches!(token.kind, TokenKind::EndOfFile))
+                    .map(|(index, _)| ConcreteElement::Token(index))
+                    .collect(),
+            };
+            let tokens = ProjectionTokens::source(&lexed.tokens);
+            let originals = std::collections::HashMap::new();
+            let recursive = capture_contents(&source, &node, &tokens, &originals);
+            let mut measured = SyntaxBudget::default();
+            measured.charge_units(17).unwrap();
+            let iterative = capture_source_declaration_contents_inner(
+                &source,
+                &node,
+                &tokens,
+                Some(&mut measured),
+            );
+            assert_eq!(iterative, recursive, "{text:?}");
+
+            if iterative.is_ok() {
+                let total = measured.consumed();
+                assert!(total > 17);
+                let mut short = SyntaxBudget::with_limit(total - 1);
+                short.charge_units(17).unwrap();
+                assert!(matches!(
+                    capture_source_declaration_contents_inner(
+                        &source,
+                        &node,
+                        &tokens,
+                        Some(&mut short),
+                    ),
+                    Err(ProjectionError::ResourceLimit(ResourceFailure::SyntaxWork { limit }))
+                        if limit == total - 1
+                ));
+                assert!((17..total).contains(&short.consumed()));
+                for _ in 0..2 {
+                    let mut exact = SyntaxBudget::with_limit(total);
+                    exact.charge_units(17).unwrap();
+                    assert_eq!(
+                        capture_source_declaration_contents_inner(
+                            &source,
+                            &node,
+                            &tokens,
+                            Some(&mut exact),
+                        ),
+                        recursive,
+                    );
+                    assert_eq!(exact.consumed(), total);
+                }
+            }
+            if text == "}" {
+                assert!(matches!(
+                    capture_source_declaration_contents(&source, &node, &tokens),
+                    Err(ProjectionError::MalformedTree(
+                        InternalReason::UnexpectedShape
+                    ))
+                ));
             }
         }
     }
