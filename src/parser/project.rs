@@ -11151,7 +11151,8 @@ mod tests {
             let declaration = child_nodes(root)
                 .find(|node| node.kind == NodeKind::EquationalGlobal)
                 .unwrap();
-            let ty = only_child_of_kind(declaration, NodeKind::Type).unwrap();
+            let interface = only_child_of_kind(declaration, NodeKind::ExternalInterface).unwrap();
+            let ty = only_child_of_kind(interface, NodeKind::Type).unwrap();
             let tokens = ProjectionTokens::source(raw);
             let ordinary = project_type(&source, ty, &tokens).unwrap();
 
