@@ -8077,39 +8077,44 @@ fn project_type(
     project_type_inner(source, node, tokens, None)
 }
 
+fn reserve_type_projection_growth<T>(
+    items: &mut Vec<T>,
+    count: usize,
+    budget: &mut Option<&mut crate::syntax_resource::SyntaxBudget>,
+) -> Result<(), ProjectionError> {
+    if let Some(budget) = budget.as_deref_mut()
+        && count != 0
+    {
+        let live = items.len();
+        let requested = live.checked_add(count).unwrap_or(usize::MAX);
+        if requested > items.capacity() {
+            budget
+                .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                .map_err(ProjectionError::ResourceLimit)?;
+            items.reserve_exact(count);
+        }
+    }
+    Ok(())
+}
+
+fn reserve_type_projection_move(
+    count: usize,
+    budget: &mut Option<&mut crate::syntax_resource::SyntaxBudget>,
+) -> Result<(), ProjectionError> {
+    if let Some(budget) = budget.as_deref_mut() {
+        budget
+            .charge_units(count.checked_mul(2).unwrap_or(usize::MAX))
+            .map_err(ProjectionError::ResourceLimit)?;
+    }
+    Ok(())
+}
+
 fn project_type_inner(
     source: &SourceFile,
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
     mut budget: Option<&mut crate::syntax_resource::SyntaxBudget>,
 ) -> Result<SurfaceType, ProjectionError> {
-    macro_rules! reserve_growth {
-        ($items:ident, $count:expr) => {{
-            let count = $count;
-            if let Some(budget) = budget.as_deref_mut()
-                && count != 0
-            {
-                let live = $items.len();
-                let requested = live.checked_add(count).unwrap_or(usize::MAX);
-                if requested > $items.capacity() {
-                    budget
-                        .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
-                        .map_err(ProjectionError::ResourceLimit)?;
-                    $items.reserve_exact(count);
-                }
-            }
-        }};
-    }
-    macro_rules! reserve_moved_buffer {
-        ($count:expr) => {{
-            let count = $count;
-            if let Some(budget) = budget.as_deref_mut() {
-                budget
-                    .charge_units(count.checked_mul(2).unwrap_or(usize::MAX))
-                    .map_err(ProjectionError::ResourceLimit)?;
-            }
-        }};
-    }
     if let Some(budget) = budget.as_deref_mut() {
         budget.charge().map_err(ProjectionError::ResourceLimit)?;
     }
@@ -8124,7 +8129,7 @@ fn project_type_inner(
                         for child in
                             child_nodes(node).filter(|child| child.kind == NodeKind::EffectInstance)
                         {
-                            reserve_growth!(instances, 1);
+                            reserve_type_projection_growth(&mut instances, 1, &mut budget)?;
                             instances.push(child);
                         }
                         instances
@@ -8159,7 +8164,7 @@ fn project_type_inner(
                             for child in child_nodes(instance).filter(|child| {
                                 matches!(child.kind, NodeKind::Type | NodeKind::EffectRow)
                             }) {
-                                reserve_growth!(arguments, 1);
+                                reserve_type_projection_growth(&mut arguments, 1, &mut budget)?;
                                 arguments.push(child);
                             }
                         } else {
@@ -8167,20 +8172,20 @@ fn project_type_inner(
                                 matches!(child.kind, NodeKind::Type | NodeKind::EffectRow)
                             }));
                         }
-                        reserve_growth!(shapes, 1);
+                        reserve_type_projection_growth(&mut shapes, 1, &mut budget)?;
                         shapes.push((
                             effect,
                             arguments.len() - start,
                             node_span(source, instance, tokens)?,
                         ));
                     }
-                    reserve_growth!(tasks, 1);
+                    reserve_type_projection_growth(&mut tasks, 1, &mut budget)?;
                     tasks.push(TypeTask::FinishRow {
                         shapes,
                         tail,
                         span: node_span(source, node, tokens)?,
                     });
-                    reserve_growth!(tasks, arguments.len());
+                    reserve_type_projection_growth(&mut tasks, arguments.len(), &mut budget)?;
                     tasks.extend(arguments.into_iter().rev().map(TypeTask::VisitType));
                     continue;
                 }
@@ -8188,21 +8193,21 @@ fn project_type_inner(
                 let atomic = only_child_of_kind(node, NodeKind::AtomicType)?;
                 if let Some(codomain) = optional_child_of_kind(node, NodeKind::Type)? {
                     let effects = optional_child_of_kind(node, NodeKind::EffectRow)?;
-                    reserve_growth!(tasks, 1);
+                    reserve_type_projection_growth(&mut tasks, 1, &mut budget)?;
                     tasks.push(TypeTask::FinishFunction {
                         span: node_span(source, node, tokens)?,
                         has_effects: effects.is_some(),
                     });
                     if let Some(row) = effects {
-                        reserve_growth!(tasks, 1);
+                        reserve_type_projection_growth(&mut tasks, 1, &mut budget)?;
                         tasks.push(TypeTask::VisitType(row));
                     }
-                    reserve_growth!(tasks, 1);
+                    reserve_type_projection_growth(&mut tasks, 1, &mut budget)?;
                     tasks.push(TypeTask::VisitType(codomain));
-                    reserve_growth!(tasks, 1);
+                    reserve_type_projection_growth(&mut tasks, 1, &mut budget)?;
                     tasks.push(TypeTask::VisitAtomic(atomic));
                 } else {
-                    reserve_growth!(tasks, 1);
+                    reserve_type_projection_growth(&mut tasks, 1, &mut budget)?;
                     tasks.push(TypeTask::VisitAtomic(atomic));
                 }
             }
@@ -8216,7 +8221,7 @@ fn project_type_inner(
                     if let Some(frame) = tokens.frame {
                         inherit_type_frame(&mut ty, frame);
                     }
-                    reserve_growth!(projected, 1);
+                    reserve_type_projection_growth(&mut projected, 1, &mut budget)?;
                     projected.push(ty);
                     continue;
                 }
@@ -8227,7 +8232,7 @@ fn project_type_inner(
                             for child in
                                 child_nodes(tuple).filter(|child| child.kind == NodeKind::Type)
                             {
-                                reserve_growth!(elements, 1);
+                                reserve_type_projection_growth(&mut elements, 1, &mut budget)?;
                                 elements.push(child);
                             }
                             elements
@@ -8239,20 +8244,20 @@ fn project_type_inner(
                         if elements.len() < 2 {
                             return malformed(InternalReason::UnexpectedShape);
                         }
-                        reserve_growth!(tasks, 1);
+                        reserve_type_projection_growth(&mut tasks, 1, &mut budget)?;
                         tasks.push(TypeTask::FinishTuple {
                             count: elements.len(),
                             span: node_span(source, group, tokens)?,
                         });
-                        reserve_growth!(tasks, elements.len());
+                        reserve_type_projection_growth(&mut tasks, elements.len(), &mut budget)?;
                         tasks.extend(elements.into_iter().rev().map(TypeTask::VisitType));
                     } else {
                         let nested = only_child_of_kind(group, NodeKind::Type)?;
-                        reserve_growth!(tasks, 1);
+                        reserve_type_projection_growth(&mut tasks, 1, &mut budget)?;
                         tasks.push(TypeTask::ApplyGroupingSpan(node_span(
                             source, group, tokens,
                         )?));
-                        reserve_growth!(tasks, 1);
+                        reserve_type_projection_growth(&mut tasks, 1, &mut budget)?;
                         tasks.push(TypeTask::VisitType(nested));
                     }
                 } else {
@@ -8261,7 +8266,7 @@ fn project_type_inner(
                         for child in child_nodes(node).filter(|child| {
                             matches!(child.kind, NodeKind::Type | NodeKind::EffectRow)
                         }) {
-                            reserve_growth!(arguments, 1);
+                            reserve_type_projection_growth(&mut arguments, 1, &mut budget)?;
                             arguments.push(child);
                         }
                         arguments
@@ -8277,14 +8282,14 @@ fn project_type_inner(
                         .transpose()?;
                     if arguments.is_empty() {
                         if let Some(name) = qualified {
-                            reserve_growth!(projected, 1);
+                            reserve_type_projection_growth(&mut projected, 1, &mut budget)?;
                             projected.push(SurfaceType {
                                 span: name.span,
                                 kind: SurfaceTypeKind::Named(SurfaceReference::Qualified(name)),
                                 diagnostic: None,
                             });
                         } else {
-                            reserve_growth!(projected, 1);
+                            reserve_type_projection_growth(&mut projected, 1, &mut budget)?;
                             projected.push(project_atomic_primitive(node, tokens)?);
                         }
                     } else {
@@ -8298,13 +8303,13 @@ fn project_type_inner(
                                 ))?;
                             SurfaceReference::Unqualified(surface_name(token)?)
                         };
-                        reserve_growth!(tasks, 1);
+                        reserve_type_projection_growth(&mut tasks, 1, &mut budget)?;
                         tasks.push(TypeTask::FinishApplication {
                             constructor,
                             count: arguments.len(),
                             span: node_span(source, node, tokens)?,
                         });
-                        reserve_growth!(tasks, arguments.len());
+                        reserve_type_projection_growth(&mut tasks, arguments.len(), &mut budget)?;
                         tasks.extend(arguments.into_iter().rev().map(TypeTask::VisitType));
                     }
                 }
@@ -8318,13 +8323,13 @@ fn project_type_inner(
                         .ok_or(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         ))?;
-                reserve_moved_buffer!(count);
+                reserve_type_projection_move(count, &mut budget)?;
                 let mut arguments = projected.split_off(split).into_iter();
                 let effects = if budget.is_some() {
-                    reserve_moved_buffer!(shapes.len());
+                    reserve_type_projection_move(shapes.len(), &mut budget)?;
                     let mut effects = Vec::with_capacity(shapes.len());
                     for (effect, count, span) in shapes {
-                        reserve_moved_buffer!(count);
+                        reserve_type_projection_move(count, &mut budget)?;
                         effects.push(SurfaceEffectInstance {
                             effect,
                             arguments: arguments.by_ref().take(count).collect(),
@@ -8342,7 +8347,7 @@ fn project_type_inner(
                         })
                         .collect()
                 };
-                reserve_growth!(projected, 1);
+                reserve_type_projection_growth(&mut projected, 1, &mut budget)?;
                 projected.push(SurfaceType {
                     kind: SurfaceTypeKind::RowArgument(SurfaceEffectRow {
                         effects,
@@ -8372,7 +8377,7 @@ fn project_type_inner(
                 let domain = projected.pop().ok_or(ProjectionError::MalformedTree(
                     InternalReason::UnexpectedShape,
                 ))?;
-                reserve_growth!(projected, 1);
+                reserve_type_projection_growth(&mut projected, 1, &mut budget)?;
                 projected.push(SurfaceType {
                     kind: SurfaceTypeKind::Function(FunctionType {
                         domain: Box::new(domain),
@@ -8391,9 +8396,9 @@ fn project_type_inner(
                         .ok_or(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         ))?;
-                reserve_moved_buffer!(count);
+                reserve_type_projection_move(count, &mut budget)?;
                 let elements = projected.split_off(split);
-                reserve_growth!(projected, 1);
+                reserve_type_projection_growth(&mut projected, 1, &mut budget)?;
                 projected.push(SurfaceType {
                     kind: SurfaceTypeKind::Tuple(elements),
                     span,
@@ -8418,9 +8423,9 @@ fn project_type_inner(
                         .ok_or(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         ))?;
-                reserve_moved_buffer!(count);
+                reserve_type_projection_move(count, &mut budget)?;
                 let arguments = projected.split_off(split);
-                reserve_growth!(projected, 1);
+                reserve_type_projection_growth(&mut projected, 1, &mut budget)?;
                 projected.push(SurfaceType {
                     kind: SurfaceTypeKind::Application {
                         constructor,
