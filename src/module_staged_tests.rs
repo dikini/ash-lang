@@ -952,6 +952,7 @@ fn type_graph_shares_budget_through_host_staging_and_retry() {
             hooks::reset();
             let failure = compile_staged_graph_for_test(&mut short)
                 .expect_err("one short publishes no compiled program");
+            observe_transfer();
             let FileFailure::Graph(diagnostic) = failure else {
                 panic!("expected a graph refusal: {failure:?}");
             };
@@ -962,6 +963,7 @@ fn type_graph_shares_budget_through_host_staging_and_retry() {
                 failure.resource,
                 Some(ResourceFailure::SyntaxWork { limit: total - 1 })
             );
+            assert!(short.syntax_budget.consumed() >= header_work + 17);
             assert!(short.syntax_budget.consumed() < total);
             assert!(short.pending.is_empty());
             assert!(short.loaded.is_empty());
