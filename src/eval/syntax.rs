@@ -2555,6 +2555,212 @@ mod tests {
     }
 
     #[test]
+    fn pattern_services_keep_declaration_and_none_host_accounting_separate() {
+        use super::{HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap};
+        use crate::{
+            integer::Integer,
+            lexer::TokenKind,
+            module::ModuleId,
+            surface::{SurfaceDeclarationCapture, SurfaceIdentifierCapture, SurfaceSyntaxCapture},
+            syntax::{MacroOutputNode, TransformerOutput},
+            syntax_resource::SyntaxBudget,
+            types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
+        };
+        use std::sync::Arc;
+
+        fn trial(
+            fixture: &DeclarationHostFixture,
+            selected: bool,
+            parse_first: bool,
+        ) -> (usize, usize, usize, usize) {
+            let identifier = SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+                name: fixture.caller.clone(),
+                origin: fixture.caller.span.into(),
+            });
+            let captures = if selected {
+                vec![identifier]
+            } else {
+                vec![
+                    SurfaceSyntaxCapture::Declaration(SurfaceDeclarationCapture {
+                        contents: Arc::from([]),
+                    }),
+                    identifier,
+                ]
+            };
+            let mut budget = SyntaxBudget::default();
+            let mut host = fixture.host(&captures, &mut budget).unwrap();
+            let parse = OperationId::new(host.ops, 4);
+            let make_token = OperationId::new(host.ops, 5);
+            host.operations.insert(parse, "parse_pattern".into());
+            host.operations.insert(make_token, "make_token".into());
+            let owner = NominalTypeId::new(ModuleId::new(0), 0);
+            for (index, name) in (100u32..).zip([
+                "ParsedPattern",
+                "ParseRejected",
+                "IntType",
+                "MadeToken",
+                "NoOrigins",
+                "MoreOrigins",
+            ]) {
+                host.constructors
+                    .insert(name.into(), ConstructorId::new(owner, index));
+            }
+            let span = host.frame.invocation;
+            let packet = [MacroOutputNode::Token(
+                TokenKind::Wildcard,
+                "_".into(),
+                span.into(),
+            )];
+            let mut heap = Vec::<HeapCell>::new();
+            let syntax = host.syntax_value(&packet, &mut heap, 0).unwrap();
+            if parse_first {
+                let fields = Value::Location(
+                    allocate_heap(
+                        &mut heap,
+                        HeapCell::Tuple(vec![host.input(), syntax.clone()].into_boxed_slice()),
+                    )
+                    .unwrap(),
+                );
+                host.request(parse, fields, &mut heap, &mut TypeWorkBudget::unbounded())
+                    .unwrap();
+                assert_eq!(host.patterns.len(), 1);
+            }
+
+            let index = if selected { 0 } else { 1 };
+            let fields = Value::Location(
+                allocate_heap(
+                    &mut heap,
+                    HeapCell::Tuple(
+                        vec![host.input(), Value::integer(Integer::from_i64(index))]
+                            .into_boxed_slice(),
+                    ),
+                )
+                .unwrap(),
+            );
+            let start = host.syntax_work.as_deref().unwrap().consumed();
+            host.request(
+                fixture.capture,
+                fields,
+                &mut heap,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+            let capture_cost = host.syntax_work.as_deref().unwrap().consumed() - start;
+
+            let kind = host.construct(&mut heap, "IntType", None).unwrap();
+            let fields = Value::Location(
+                allocate_heap(
+                    &mut heap,
+                    HeapCell::Tuple(vec![kind, Value::String(Arc::from("Int"))].into_boxed_slice()),
+                )
+                .unwrap(),
+            );
+            let start = host.syntax_work.as_deref().unwrap().consumed();
+            host.request(
+                make_token,
+                fields,
+                &mut heap,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+            let token_cost = host.syntax_work.as_deref().unwrap().consumed() - start;
+
+            let first = host.issue_origin(span.into()).unwrap();
+            let second = host.issue_origin(span.into()).unwrap();
+            let mut origins = host.construct(&mut heap, "NoOrigins", None).unwrap();
+            for origin in [first, second] {
+                let fields = Value::Location(
+                    allocate_heap(
+                        &mut heap,
+                        HeapCell::Tuple(vec![origin, origins].into_boxed_slice()),
+                    )
+                    .unwrap(),
+                );
+                origins = host
+                    .construct(&mut heap, "MoreOrigins", Some(fields))
+                    .unwrap();
+            }
+            let start = host.syntax_work.as_deref().unwrap().consumed();
+            assert_eq!(host.read_origins(&origins, &heap, 10).unwrap().len(), 2);
+            let origins_cost = host.syntax_work.as_deref().unwrap().consumed() - start;
+
+            let expanded = host
+                .construct(&mut heap, "Expanded", Some(syntax.clone()))
+                .unwrap();
+            let start = host.syntax_work.as_deref().unwrap().consumed();
+            assert_eq!(host.transfer_syntax(&syntax, &heap, 0).unwrap(), packet);
+            let direct = host.syntax_work.as_deref().unwrap().consumed() - start;
+            let start = host.syntax_work.as_deref().unwrap().consumed();
+            let TransformerOutput::Expanded(output) = host
+                .transfer(&expanded, &heap, &mut TypeWorkBudget::unbounded())
+                .unwrap()
+            else {
+                panic!("expected Expanded");
+            };
+            assert_eq!(output, packet);
+            let expanded_cost = host.syntax_work.as_deref().unwrap().consumed() - start;
+            (
+                capture_cost,
+                token_cost,
+                origins_cost,
+                expanded_cost - direct,
+            )
+        }
+
+        let fixture = DeclarationHostFixture::new();
+        let legacy = trial(&fixture, false, false);
+        let after_pattern = trial(&fixture, false, true);
+        assert_eq!(
+            (legacy.0, legacy.1, legacy.2),
+            (after_pattern.0, after_pattern.1, after_pattern.2)
+        );
+        assert_eq!(legacy.3, 0);
+        assert_eq!(after_pattern.3, 1);
+        let selected = trial(&fixture, true, false);
+        assert_eq!(selected.0 - legacy.0, 4); // Origin growth 2+1 and Identifier initial slot.
+        assert_eq!(selected.1 - legacy.1, 3); // Token growth 2+1.
+        assert_eq!(selected.2 - legacy.2, 4); // Related-origin buffer 1, then 2+1.
+        assert_eq!(selected.3, 0);
+
+        let captures = [SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+            name: fixture.caller.clone(),
+            origin: fixture.caller.span.into(),
+        })];
+        let mut host = SyntaxHost::new(
+            &fixture.entry,
+            &captures,
+            &fixture.source,
+            &fixture.caller,
+            0,
+            Arc::clone(&fixture.contexts),
+            Arc::clone(&fixture.frame),
+            None,
+        )
+        .unwrap();
+        let parse = OperationId::new(host.ops, 4);
+        host.operations.insert(parse, "parse_pattern".into());
+        let packet = [MacroOutputNode::Token(
+            TokenKind::Wildcard,
+            "_".into(),
+            fixture.frame.invocation.into(),
+        )];
+        let mut heap = Vec::new();
+        let syntax = host.syntax_value(&packet, &mut heap, 0).unwrap();
+        assert_eq!(host.transfer_syntax(&syntax, &heap, 0).unwrap(), packet);
+        let fields = Value::Location(
+            allocate_heap(
+                &mut heap,
+                HeapCell::Tuple(vec![host.input(), syntax].into_boxed_slice()),
+            )
+            .unwrap(),
+        );
+        assert!(matches!(
+            host.request(parse, fields, &mut heap, &mut TypeWorkBudget::unbounded()),
+            Err(RuntimeFailure::InvalidControlState)
+        ));
+    }
+
+    #[test]
     fn pattern_host_nested_issued_fragments_obey_retained_depth_on_a_512k_stack() {
         const CHILD: &str = "ASH_PATTERN_AST_512K_CHILD";
         if std::env::var_os(CHILD).is_none() {

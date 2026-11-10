@@ -13902,6 +13902,168 @@ mod tests {
     }
 
     #[test]
+    fn transformer_pattern_presence_keeps_raw_and_type_metadata_paths_distinct() {
+        use crate::{
+            syntax::{MacroDelimiter, MacroOutputNode},
+            syntax_resource::SyntaxBudget,
+        };
+        use std::sync::Arc;
+
+        let source = SourceFile::new("presence.ash", "Int").unwrap();
+        let span = source.span(ByteRange::new(0, 3).unwrap()).unwrap();
+        let raw = MacroOutputNode::Token(TokenKind::IntType, "Int".into(), span.into());
+        let ty = MacroOutputNode::ForwardedType(
+            SurfaceTypeCapture {
+                ty: SurfaceType {
+                    kind: SurfaceTypeKind::Int,
+                    span,
+                    diagnostic: None,
+                },
+                contents: Arc::from([]),
+            },
+            span.into(),
+        );
+        let pattern = MacroOutputNode::ForwardedPattern(
+            SurfacePatternCapture {
+                pattern: SurfacePattern {
+                    kind: SurfacePatternKind::Wildcard,
+                    span,
+                    diagnostic: None,
+                },
+                contents: Arc::from([]),
+            },
+            span.into(),
+        );
+        let group = |children| {
+            vec![MacroOutputNode::Group(
+                MacroDelimiter::Parentheses,
+                children,
+                span.into(),
+            )]
+        };
+        let mut raw_work = SyntaxBudget::default();
+        assert!(
+            !charge_transformer_type_metadata_copies(&group(vec![raw]), &mut raw_work).unwrap()
+        );
+        let mut type_work = SyntaxBudget::default();
+        assert!(
+            !charge_transformer_type_metadata_copies(&group(vec![ty.clone()]), &mut type_work)
+                .unwrap()
+        );
+        let mut mixed_work = SyntaxBudget::default();
+        assert!(
+            charge_transformer_type_metadata_copies(&group(vec![ty, pattern]), &mut mixed_work)
+                .unwrap()
+        );
+        // The extra Pattern adds one child entry, one visit and a 2-slot
+        // pending-buffer growth; the existing Type metadata walk is unchanged.
+        assert_eq!(mixed_work.consumed(), type_work.consumed() + 4);
+    }
+
+    #[test]
+    fn selected_pattern_preflights_charge_repeated_wide_subtree_buffers() {
+        use crate::syntax_resource::{ResourceFailure, SyntaxBudget};
+
+        // Each borrowed traversal owns its own pending Vec. The eight live
+        // siblings require 3+5+7+9+11+13+15 units after the initial slot.
+        let pattern = ConcreteNode {
+            kind: NodeKind::Pattern,
+            children: (0..8)
+                .map(|_| {
+                    ConcreteElement::Node(ConcreteNode {
+                        kind: NodeKind::Binder,
+                        children: Vec::new(),
+                    })
+                })
+                .collect(),
+        };
+        let root = ConcreteNode {
+            kind: NodeKind::MatchExpression,
+            children: vec![ConcreteElement::Node(ConcreteNode {
+                kind: NodeKind::MatchArm,
+                children: vec![ConcreteElement::Node(pattern.clone())],
+            })],
+        };
+        let tokens = ProjectionTokens::source(&[]);
+        let mut legacy = SyntaxBudget::default();
+        charge_projection_subtree_inner(&pattern, &tokens, false, &mut legacy).unwrap();
+        let mut selected = SyntaxBudget::default();
+        charge_projection_subtree_inner(&pattern, &tokens, true, &mut selected).unwrap();
+        assert_eq!(selected.consumed(), legacy.consumed() + 64);
+
+        // With 17 units already spent, the second child reaches a three-unit
+        // reservation with only two left. The charge fails before growth.
+        let mut short = SyntaxBudget::with_limit(26);
+        short.charge_units(17).unwrap();
+        assert!(matches!(
+            charge_projection_subtree_inner(&pattern, &tokens, true, &mut short),
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { limit: 26 }),
+                ..
+            })
+        ));
+        assert_eq!(short.consumed(), 24);
+        assert_eq!(pattern.children.len(), 8);
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(17 + selected.consumed());
+            exact.charge_units(17).unwrap();
+            charge_projection_subtree_inner(&pattern, &tokens, true, &mut exact).unwrap();
+            assert_eq!(exact.consumed(), 17 + selected.consumed());
+        }
+
+        let mut composed = SyntaxBudget::default();
+        assert!(
+            !charge_composed_projection_selected(
+                &root,
+                &tokens,
+                true,
+                false,
+                true,
+                0,
+                &mut composed,
+            )
+            .unwrap()
+        );
+        let mut root_subtree = SyntaxBudget::default();
+        charge_projection_subtree_inner(&root, &tokens, true, &mut root_subtree).unwrap();
+        let mut all = SyntaxBudget::default();
+        assert!(
+            !charge_projection_preflight_selected(&root, &tokens, true, true, &mut all).unwrap()
+        );
+        // The outer preflight has its own initial slot, ten node entries and
+        // the same 63-unit growth, in addition to the repeated Pattern walk.
+        assert_eq!(
+            all.consumed(),
+            composed.consumed() + root_subtree.consumed() + selected.consumed() + 75
+        );
+
+        let mut composed_old = SyntaxBudget::default();
+        assert!(
+            !charge_composed_projection_selected(
+                &root,
+                &tokens,
+                true,
+                false,
+                false,
+                0,
+                &mut composed_old,
+            )
+            .unwrap()
+        );
+        let mut root_old = SyntaxBudget::default();
+        charge_projection_subtree_inner(&root, &tokens, false, &mut root_old).unwrap();
+        let mut all_old = SyntaxBudget::default();
+        assert!(
+            !charge_projection_preflight_selected(&root, &tokens, true, false, &mut all_old)
+                .unwrap()
+        );
+        assert_eq!(
+            all_old.consumed(),
+            composed_old.consumed() + root_old.consumed() + legacy.consumed() + 11
+        );
+    }
+
+    #[test]
     fn staged_pattern_adapter_prepays_pending_and_pieces_growth() {
         use crate::{
             parser::MacroParseFailure,

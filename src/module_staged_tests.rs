@@ -601,6 +601,96 @@ fn pattern_real_source_capture_roundtrips_on_a_512k_stack() {
 }
 
 #[test]
+fn identifier_and_type_captures_can_return_pattern_nodes() {
+    use crate::{
+        driver::{RunConfiguration, compile_path, execute},
+        parser::G1_CAPTURE_OBSERVER,
+        surface::SurfaceSyntaxCapture,
+    };
+    use std::cell::Cell;
+
+    std::thread_local! {
+        static EXPECT_TYPE: Cell<bool> = const { Cell::new(false) };
+        static OBSERVED: Cell<bool> = const { Cell::new(false) };
+    }
+    fn observe(_: &SourceFile, captures: &[SurfaceSyntaxCapture], _: &SyntaxBudget) {
+        assert!(captures.iter().all(|capture| matches!(
+            capture,
+            SurfaceSyntaxCapture::Identifier(_) | SurfaceSyntaxCapture::Type(_)
+        )));
+        let [_, SurfaceSyntaxCapture::Identifier(binder), _, ..] = captures else {
+            panic!("expected the captured binder identifier");
+        };
+        assert_eq!(binder.name.text, "value");
+        assert_eq!(
+            captures
+                .iter()
+                .any(|capture| matches!(capture, SurfaceSyntaxCapture::Type(_))),
+            EXPECT_TYPE.with(Cell::get)
+        );
+        OBSERVED.with(|observed| assert!(!observed.replace(true)));
+    }
+
+    for (has_type, forms, main, forms_path) in [
+        (
+            false,
+            include_str!("../tests/fixtures/surface-macros/pattern-host/forms.ash"),
+            include_str!("../tests/fixtures/surface-macros/pattern-host/main.ash"),
+            "forms.ash",
+        ),
+        (
+            true,
+            include_str!("../tests/fixtures/surface-macros/pattern-host/mixed_forms.ash"),
+            include_str!("../tests/fixtures/surface-macros/pattern-host/mixed_main.ash"),
+            "mixed_forms.ash",
+        ),
+    ] {
+        let substitutions = [
+            ("$pattern:pattern", "$pattern:ident"),
+            (
+                "Syntax.Captured(Syntax.PatternCapture(pattern))",
+                "Syntax.Captured(Syntax.IdentifierCapture(pattern, pattern_origin))",
+            ),
+            (
+                "parse_result(input, name, name_origin, pattern, read",
+                "parse_result(input, name, name_origin, pattern, pattern_origin, read",
+            ),
+            (
+                "parse_result : (Syntax.Input, Syntax.Identifier, Syntax.Origin, Syntax.PatternFragment,",
+                "parse_result : (Syntax.Input, Syntax.Identifier, Syntax.Origin, Syntax.Identifier, Syntax.Origin,",
+            ),
+            (
+                "parse_result (input, name, name_origin, pattern, read",
+                "parse_result (input, name, name_origin, pattern, pattern_origin, read",
+            ),
+            (
+                "Syntax.pattern_syntax(pattern)",
+                "Syntax.Syntax(Syntax.MoreNodes(Syntax.IdentifierNode(pattern, pattern_origin), Syntax.NoNodes))",
+            ),
+        ];
+        let mut forms = forms.to_owned();
+        for (old, new) in substitutions {
+            assert_eq!(forms.matches(old).count(), 1, "fixture join {old}");
+            forms = forms.replacen(old, new, 1);
+        }
+        let tree = Tree::new();
+        tree.write(forms_path, &forms);
+        let entry = tree.write("main.ash", main);
+        EXPECT_TYPE.with(|value| value.set(has_type));
+        OBSERVED.with(|value| value.set(false));
+        G1_CAPTURE_OBSERVER.set(Some(observe));
+        let result = compile_path(RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        });
+        G1_CAPTURE_OBSERVER.set(None);
+        let program = result.expect("the identifier-built PatternNode compiles");
+        assert!(OBSERVED.with(Cell::get));
+        assert_eq!(execute(&program).unwrap().value_display(), "42");
+    }
+}
+
+#[test]
 fn pattern_source_capture_keeps_binder_and_read_context() {
     use crate::{
         driver::{RunConfiguration, compile_path, execute},
