@@ -2849,6 +2849,25 @@ mod tests {
         types::{InferenceVariableId, NominalTypeId, TypeVariableId},
     };
 
+    #[test]
+    fn parsed_input_has_no_syntax_ledger_loan() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/surface-macros/type-host/control.ash");
+        let graph = load_module_graph(&path, &ModuleRoots::empty()).unwrap();
+        let mut input = CompilationInput::Parsed {
+            graph: &graph,
+            next: 0,
+        };
+        assert!(input.current_with_syntax_budget().is_none());
+        let mut input = CompilationInput::Parsed {
+            graph: &graph,
+            next: 1,
+        };
+        let (module, budget) = input.current_with_syntax_budget().unwrap();
+        assert_eq!(module.id(), graph.modules()[0].id());
+        assert!(budget.is_none());
+    }
+
     fn i21_graph(name: &str) -> HeaderGraph {
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("docs/design/macros/fixtures/header_compat")

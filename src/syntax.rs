@@ -2096,7 +2096,7 @@ pub(crate) fn charge_selected(
     Ok(())
 }
 
-fn charge_selected_expression(
+pub(crate) fn charge_selected_expression(
     selection: &SelectedSyntax,
     budget: &mut SyntaxBudget,
 ) -> Result<(), ResourceFailure> {

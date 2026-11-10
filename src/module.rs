@@ -3090,6 +3090,29 @@ mod tests {
     }
 
     #[test]
+    fn current_module_borrows_the_same_syntax_ledger_before_and_after_completion() {
+        let (mut graph, selected) = h1_staged_fixture("make good\n");
+        assert!(graph.current_module_with_syntax_budget().is_none());
+        graph
+            .next_module_with_syntax(&[selected], &[], &mut Vec::new(), None)
+            .unwrap()
+            .unwrap();
+        let consumed = graph.syntax_budget.consumed();
+        let loaded_id = {
+            let (module, budget) = graph.current_module_with_syntax_budget().unwrap();
+            budget.charge_units(7).unwrap();
+            module.id()
+        };
+        assert_eq!(graph.syntax_budget.consumed(), consumed + 7);
+        assert!(graph.completed_graph().is_some());
+        let (module, budget) = graph.current_module_with_syntax_budget().unwrap();
+        assert_eq!(module.id(), loaded_id);
+        assert_eq!(budget.consumed(), consumed + 7);
+        budget.charge().unwrap();
+        assert_eq!(graph.syntax_budget.consumed(), consumed + 8);
+    }
+
+    #[test]
     fn h1_late_output_failure_never_reaches_the_loaded_module_boundary() {
         let (mut graph, selected) = h1_staged_fixture("make good\nmake Upper\n");
         let mut owners = Vec::new();

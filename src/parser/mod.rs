@@ -1385,8 +1385,14 @@ fn charge_staged_output_with_expression_scratch(
                     .charge_selection_search(&name.text, name.introduction, budget)
                     .map_err(macro_resource_failure)?;
                 if let Some(selection) = contexts.select(name) {
-                    crate::syntax::charge_selected(selection, budget)
-                        .map_err(macro_resource_failure)?;
+                    let charge_selection = |budget: &mut SyntaxBudget| {
+                        if expression_scratch {
+                            crate::syntax::charge_selected_expression(selection, budget)
+                        } else {
+                            crate::syntax::charge_selected(selection, budget)
+                        }
+                    };
+                    charge_selection(budget).map_err(macro_resource_failure)?;
                     // An invocation's inherited stop indices are depth-bounded.
                     budget
                         .charge_units(STRUCTURAL_DEPTH_LIMIT)
@@ -1396,12 +1402,9 @@ fn charge_staged_output_with_expression_scratch(
                     if selection.declaration.category
                         == crate::surface::SurfaceSyntaxCategory::Expression
                     {
-                        crate::syntax::charge_selected(selection, budget)
-                            .map_err(macro_resource_failure)?;
-                        crate::syntax::charge_selected(selection, budget)
-                            .map_err(macro_resource_failure)?;
-                        crate::syntax::charge_selected(selection, budget)
-                            .map_err(macro_resource_failure)?;
+                        charge_selection(budget).map_err(macro_resource_failure)?;
+                        charge_selection(budget).map_err(macro_resource_failure)?;
+                        charge_selection(budget).map_err(macro_resource_failure)?;
                     }
                 }
             }
