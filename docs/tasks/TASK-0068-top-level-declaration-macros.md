@@ -501,9 +501,11 @@ current Ash semantics or close that verification item.
 integration and checked issue readback. The developer owns the candidate and
 acceptance record; the orchestrator owns integration and acceptance confirmation.
 
-### Protected Type host candidate
+### Protected Type host retained contribution
 
-**Delivered in the local candidate:** The bounded Type host source for
+**Delivered:** [PR #290](https://github.com/dikini/ash-lang/pull/290) retained
+the bounded Type contribution at `b1a93e041826991d8d2f0a8edde267696e4d8f52`,
+tree `9080fb533f5a7be423d178244933b4532f589cc8`. The tested Type source for
 [S2 #230](https://github.com/dikini/ash-lang/issues/230) is
 `bbe06818dd8eeddaa5b59002374bbd69da7851a7`, tree
 `14b86d01741de83e659bc0ae357ba50cadc778ff`, based on retaining commit
@@ -564,13 +566,60 @@ not yet document this partial candidate. The complete CP-0034 language and tool
 documentation update remains at V4 after V3; this partial record does not make
 unimplemented forms current Ash.
 
-**Awaiting:** TASK-only equality verification, exact-head Sol PR review,
-retaining-branch integration and checked partial issue readback. The focused
-result is not full S2 acceptance.
+**Awaiting:** Full S2 work remains. The bounded Type contribution and its
+[partial issue record](https://github.com/dikini/ash-lang/issues/230#issuecomment-6771823209)
+have independent retention and readback checks; this is not full S2 acceptance.
 
 **Owner:** The developer owns the candidate, evidence and acceptance update;
 independent QA and Sol own their checks, and the orchestrator owns retaining
 integration and acceptance confirmation.
+
+### Protected Pattern host candidate
+
+**Delivered in the local candidate:** [PR #291](https://github.com/dikini/ash-lang/pull/291)
+proposes a bounded Pattern host contribution on retaining base
+`b1a93e041826991d8d2f0a8edde267696e4d8f52`. Source/test candidate
+`1bc3eab32c01364aef0b759db308514c44253ee7` adds `pattern_syntax` and
+`parse_pattern` to the existing checked host. Eligible flat Pattern,
+Identifier and mixed Type/Pattern captures use invocation-owned Pattern handles
+and the existing graph budget. Protected Pattern output uses the existing
+staged projector; generated declaration-invocation arguments containing a
+protected Pattern are refused before recapture.
+
+Separate imported graphs generate an identity function from a caller Pattern
+and from mixed Type/Pattern captures; both execute `42 : Int`. Further actual
+graphs build a Pattern from Identifier-only or Type/Identifier captures and
+execute 42. The capture observer checks the caller binder and read at their
+distinct source spans. A 512 KiB real-source graph reaches identity 42 with 15
+written groups, releases its final observed contents alias, and refuses 16
+groups before capture. Constructed-host controls separately exercise issued
+Pattern contents at retained 128, adjacent refusal, deep unwrap and reparse,
+raw Pattern metadata and final alias release. A separate real graph records
+transfer shortage, graph drain, root close and an injected teardown failure.
+
+The fresh focused gate on `1bc3eab3` records 685 distinct passing tests and
+2 existing ignores. Its receipt SHA-256 is
+`7c36987ecf90c65c4029158cb212481f0b6bef8dc0446e2ed5cebd016882f450`, at
+`evidence/pattern-host/final-gate-1bc3eab3/receipt.json` in the delivery
+handoff. It covers the affected host, parser, staging and public regressions,
+architecture, and the retained Type and G1 stack controls. Independent QA
+audited the receipt, with audit SHA-256
+`df1473704fe0987c632834e2c4e67c0ad16022e8eba1f261c25c30711b5ddf33`. The
+unchanged strict I14 test separately fails 0/1 and is excluded from the
+passing count.
+Its caller location and category cause remain available; missing definition
+origin presentation remains the
+[#265 finding](https://github.com/dikini/ash-lang/issues/265#issuecomment-6766825789).
+This candidate does not close I14 or any original #230 criterion.
+The original fixed I01–I22 corpus remains unchanged. Full S2, used splices,
+Expression and mixed/generated paths, full G1, original I16 derive/teardown/
+build-image paths, D8, E4, V3, V5–V8 and the fresh workspace gate remain open.
+The complete CP-0034 specification and tool update remains at V4 after V3.
+
+**Awaiting:** TASK-only equality, Sol exact-head review, PR retention and
+checked partial issue readback. **Owner:** The developer owns the
+candidate and acceptance record; independent QA and Sol own their checks, and
+the orchestrator owns retaining integration and acceptance confirmation.
 
 **Remaining:** Complete protected-fragment accounting/consumption, declaration
 captures, repetition, host transfer and procedural declarations, quotes/escapes,
