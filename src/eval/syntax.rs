@@ -3559,6 +3559,7 @@ mod tests {
             for marker in [
                 "expression stack: adjacent input refused before issuance",
                 "expression stack: future owner accepts 128 and refuses 129",
+                "expression stack: returned metadata preserved",
                 "expression stack: deep unwrap retained contents",
                 "expression stack: final contents alias dropped",
             ] {
@@ -3718,6 +3719,23 @@ mod tests {
                     else {
                         panic!("expected Expression handle")
                     };
+                    if accepted == 1 {
+                        let location = host.expressions[index]
+                            .expression
+                            .diagnostic
+                            .as_deref()
+                            .expect("the returned capture keeps its diagnostic location");
+                        assert_eq!(location.primary.primary(), span);
+                        assert!(location.related.iter().any(|cause| cause.primary() == span));
+                        assert!(location.captured_expression);
+                        assert!(
+                            location
+                                .frames
+                                .iter()
+                                .any(|frame| Arc::ptr_eq(frame, &host.frame))
+                        );
+                        eprintln!("expression stack: returned metadata preserved");
+                    }
                     assert_eq!(
                         charge_new_expression_retention(
                             &host.expressions[index],
