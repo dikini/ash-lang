@@ -600,6 +600,7 @@ pub(super) enum CompilerSyntaxHandleKind {
     Expression(usize),
     Declaration(usize),
     Type(usize),
+    Pattern(usize),
     Identifier(usize),
     Token(usize),
     ParseFailure(usize),

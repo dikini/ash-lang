@@ -760,7 +760,7 @@ pub(crate) fn parse_macro_type(
     frame: &std::sync::Arc<crate::syntax::ExpansionFrame>,
     budget: &mut SyntaxBudget,
 ) -> Result<crate::surface::SurfaceTypeCapture, MacroParseFailure> {
-    let contents = crate::syntax::copy_type_output(&output, budget)?;
+    let contents = crate::syntax::copy_fragment_output(&output, budget)?;
     let parsed = parse_macro_tree_inner(
         source,
         invocation,
@@ -795,6 +795,51 @@ pub(crate) fn parse_macro_type(
     budget.charge().map_err(macro_resource_failure)?;
     Ok(crate::surface::SurfaceTypeCapture {
         ty,
+        contents: contents.into(),
+    })
+}
+
+pub(crate) fn parse_macro_pattern(
+    source: &SourceFile,
+    invocation: Span,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    frame: &std::sync::Arc<crate::syntax::ExpansionFrame>,
+    budget: &mut SyntaxBudget,
+) -> Result<crate::surface::SurfacePatternCapture, MacroParseFailure> {
+    let contents = crate::syntax::copy_fragment_output(&output, budget)?;
+    let parsed = parse_macro_tree_inner(
+        source,
+        invocation,
+        output,
+        contexts,
+        &[],
+        MacroOutputPosition::Pattern,
+        budget,
+    )?;
+    let pattern = project::project_macro_pattern(source, invocation, &parsed, frame, budget)
+        .map_err(|failure| match failure {
+            project::DeclarationExpansionFailure::Syntax {
+                diagnostics,
+                resource,
+            } => MacroParseFailure::Syntax {
+                diagnostics,
+                resource,
+            },
+            project::DeclarationExpansionFailure::Projection(ProjectionError::ResourceLimit(
+                resource,
+            )) => macro_resource_failure(resource),
+            project::DeclarationExpansionFailure::Projection(_) => MacroParseFailure::Invalid,
+        })?;
+    budget
+        .charge_units(contents.len())
+        .map_err(macro_resource_failure)?;
+    budget
+        .charge_units(contents.len())
+        .map_err(macro_resource_failure)?;
+    budget.charge().map_err(macro_resource_failure)?;
+    Ok(crate::surface::SurfacePatternCapture {
+        pattern,
         contents: contents.into(),
     })
 }
@@ -850,6 +895,7 @@ fn parse_macro_expression_inner(
 enum MacroOutputPosition {
     Expression,
     Type,
+    Pattern,
     Declarations,
     StagedDeclarations,
 }
@@ -895,12 +941,38 @@ fn parse_macro_tree_inner(
     position: MacroOutputPosition,
     budget: &mut SyntaxBudget,
 ) -> Result<ParsedMacroTree, MacroParseFailure> {
+    parse_macro_tree_selected(
+        source,
+        invocation,
+        output,
+        contexts,
+        placeholders,
+        position,
+        false,
+        budget,
+    )
+}
+
+fn parse_macro_tree_selected(
+    source: &SourceFile,
+    invocation: Span,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    placeholders: &[crate::surface::SurfaceName],
+    position: MacroOutputPosition,
+    pattern_scratch: bool,
+    budget: &mut SyntaxBudget,
+) -> Result<ParsedMacroTree, MacroParseFailure> {
     use crate::source::ByteRange;
     use crate::syntax::MacroOutputNode;
-    let type_output = matches!(position, MacroOutputPosition::Type);
+    let type_output = matches!(
+        position,
+        MacroOutputPosition::Type | MacroOutputPosition::Pattern
+    );
+    let fragment_scratch = type_output || pattern_scratch;
     let budgeted = type_output || matches!(position, MacroOutputPosition::StagedDeclarations);
     if budgeted {
-        charge_staged_output(&output, contexts, type_output, budget)?;
+        charge_staged_output(&output, contexts, type_output, pattern_scratch, budget)?;
     }
     let start = invocation.range().start();
     let anchor = source
@@ -916,7 +988,7 @@ fn parse_macro_tree_inner(
     let mut syntax_selections = std::collections::HashMap::new();
     let mut syntax_spellings = std::collections::HashMap::new();
     let mut fragment_count = 0usize;
-    if type_output && !output.is_empty() {
+    if fragment_scratch && !output.is_empty() {
         budget
             .charge_units(output.len())
             .map_err(macro_resource_failure)?;
@@ -925,7 +997,7 @@ fn parse_macro_tree_inner(
     macro_rules! reserve_pieces {
         ($count:expr) => {{
             let count = $count;
-            if type_output && count != 0 {
+            if fragment_scratch && count != 0 {
                 let live = pieces.len();
                 let requested = live.checked_add(count).unwrap_or(usize::MAX);
                 if requested > pieces.capacity() {
@@ -968,7 +1040,7 @@ fn parse_macro_tree_inner(
                 TokenKind::IntType
             }
             MacroOutputNode::ForwardedPattern(capture, origin) => {
-                if !position.is_declarations() {
+                if !position.is_declarations() && !type_output {
                     return Err(MacroParseFailure::Invalid);
                 }
                 original_nodes.insert(
@@ -1093,7 +1165,9 @@ fn parse_macro_tree_inner(
         syntax_spellings: Some(&syntax_spellings),
         diagnostic_spans: Some(&diagnostic_spans),
         admission_identifiers: Some(&admission_identifiers),
-        declaration_output_nodes: position.is_declarations().then_some(&original_nodes),
+        declaration_output_nodes: (position.is_declarations()
+            || matches!(position, MacroOutputPosition::Pattern))
+        .then_some(&original_nodes),
         syntax_stops: Vec::new(),
     };
     parser.start(NodeKind::Module);
@@ -1106,6 +1180,12 @@ fn parse_macro_tree_inner(
         }
         MacroOutputPosition::Type => {
             grammar::type_expression(&mut parser);
+            if !parser.at(&TokenKind::EndOfFile) {
+                parser.error_at_current(ParseReason::UnexpectedToken);
+            }
+        }
+        MacroOutputPosition::Pattern => {
+            grammar::pattern(&mut parser);
             if !parser.at(&TokenKind::EndOfFile) {
                 parser.error_at_current(ParseReason::UnexpectedToken);
             }
@@ -1123,7 +1203,7 @@ fn parse_macro_tree_inner(
     }
     if matches!(
         position,
-        MacroOutputPosition::Expression | MacroOutputPosition::Type
+        MacroOutputPosition::Expression | MacroOutputPosition::Type | MacroOutputPosition::Pattern
     ) {
         let _ = parser.bump();
         parser.finish();
@@ -1167,6 +1247,7 @@ fn charge_staged_output(
     output: &[crate::syntax::MacroOutputNode],
     contexts: &crate::syntax::SyntaxContexts,
     type_scratch: bool,
+    pattern_scratch: bool,
     budget: &mut SyntaxBudget,
 ) -> Result<(), MacroParseFailure> {
     use crate::syntax::MacroOutputNode;
@@ -1176,7 +1257,8 @@ fn charge_staged_output(
     budget
         .charge_units(output.len())
         .map_err(macro_resource_failure)?;
-    if type_scratch && !output.is_empty() {
+    let selected_scratch = type_scratch || pattern_scratch;
+    if selected_scratch && !output.is_empty() {
         budget
             .charge_units(output.len())
             .map_err(macro_resource_failure)?;
@@ -1187,7 +1269,7 @@ fn charge_staged_output(
         budget.charge_units(5).map_err(macro_resource_failure)?;
         match node {
             MacroOutputNode::Identifier(name, _) => {
-                if type_scratch {
+                if selected_scratch {
                     crate::syntax::charge_type_name_copy(name, depth, budget)
                         .map_err(macro_resource_failure)?;
                 } else {
@@ -1240,7 +1322,7 @@ fn charge_staged_output(
                         limit: STRUCTURAL_DEPTH_LIMIT,
                     }));
                 }
-                if type_scratch {
+                if selected_scratch {
                     crate::syntax::charge_type_origin_copy(origin, depth + 1, budget)
                         .map_err(macro_resource_failure)?;
                 }
@@ -1255,7 +1337,7 @@ fn charge_staged_output(
                 budget
                     .charge_units(children.len())
                     .map_err(macro_resource_failure)?;
-                if type_scratch && !children.is_empty() {
+                if selected_scratch && !children.is_empty() {
                     let live = pending.len();
                     let requested = live.checked_add(children.len()).unwrap_or(usize::MAX);
                     if requested > pending.capacity() {
@@ -1282,9 +1364,16 @@ fn charge_staged_output(
                 let child = crate::syntax::type_depth(depth, 1).map_err(macro_resource_failure)?;
                 crate::syntax::charge_type_origin(origin, child, budget)
                     .map_err(macro_resource_failure)?;
-                crate::syntax::charge_pattern_retention(capture, depth, budget)
-                    .map_err(macro_resource_failure)?
-                    .ok_or(MacroParseFailure::Invalid)?;
+                let bridge = if selected_scratch {
+                    crate::syntax::charge_new_pattern_retention(capture, depth, budget)
+                } else {
+                    crate::syntax::charge_pattern_retention(capture, depth, budget)
+                }
+                .map_err(macro_resource_failure)?
+                .ok_or(MacroParseFailure::Invalid)?;
+                if selected_scratch && bridge {
+                    return Err(MacroParseFailure::Invalid);
+                }
             }
             MacroOutputNode::Expression(_, _) | MacroOutputNode::Splice(_) => {
                 return Err(MacroParseFailure::Invalid);

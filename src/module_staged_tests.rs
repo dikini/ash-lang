@@ -507,6 +507,260 @@ fn type_real_capture_roundtrip_on_a_512k_stack() {
 }
 
 #[test]
+fn pattern_real_source_capture_roundtrips_on_a_512k_stack() {
+    const CHILD: &str = "ASH_PATTERN_SOURCE_512K_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "module::staged_tests::pattern_real_source_capture_roundtrips_on_a_512k_stack",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprint!("{stderr}");
+        assert!(
+            output.status.success(),
+            "512 KiB child failed: {}",
+            output.status
+        );
+        for marker in [
+            "pattern source stack: fifteen groups reached identity 42",
+            "pattern source stack: source contents final alias dropped",
+            "pattern source stack: sixteen groups refused at source depth",
+        ] {
+            assert!(stderr.contains(marker), "missing marker {marker}");
+        }
+        return;
+    }
+    std::thread::Builder::new().stack_size(512 * 1024).spawn(|| {
+        use crate::{
+            driver::{RunConfiguration, compile_path, execute},
+            parser::G1_CAPTURE_OBSERVER,
+            surface::{SurfacePatternKind, SurfaceSyntaxCapture},
+            syntax::{MacroDelimiter, MacroOutputNode},
+        };
+        use std::{cell::RefCell, sync::Arc};
+
+        std::thread_local! {
+            static CONTENTS: RefCell<Option<Arc<[MacroOutputNode]>>> = const { RefCell::new(None) };
+        }
+        fn observe(source: &SourceFile, captures: &[SurfaceSyntaxCapture], _: &SyntaxBudget) {
+            let [_, SurfaceSyntaxCapture::Pattern(capture), _, ..] = captures else {
+                panic!("expected the source Pattern capture");
+            };
+            let SurfacePatternKind::Binder(binder) = &capture.pattern.kind else {
+                panic!("expected the captured binder");
+            };
+            assert_eq!(binder.name.text, "value");
+            assert_eq!(binder.name.span.source(), source.id());
+            let mut nodes = capture.contents.as_ref();
+            for _ in 0..15 {
+                let [MacroOutputNode::Group(MacroDelimiter::Parentheses, children, _)] = nodes else {
+                    panic!("expected a source group");
+                };
+                nodes = children;
+            }
+            assert!(matches!(nodes, [MacroOutputNode::Identifier(name, _)] if name.text == "value"));
+            CONTENTS.with(|slot| assert!(slot.borrow_mut().replace(Arc::clone(&capture.contents)).is_none()));
+        }
+
+        for groups in [15usize, 16] {
+            let tree = Tree::new();
+            tree.write("forms.ash", include_str!("../tests/fixtures/surface-macros/pattern-host/forms.ash"));
+            let pattern = format!("{}value{}", "(".repeat(groups), ")".repeat(groups));
+            let entry = tree.write("main.ash", &format!(
+                "import forms (syntax emit_pattern)\nemit_pattern identity matching {pattern} yields value\nmain : Unit -> Int\nmain () = identity(42)\n"
+            ));
+            G1_CAPTURE_OBSERVER.set(Some(observe));
+            let result = compile_path(RunConfiguration { entry, roots: ModuleRoots::empty() });
+            G1_CAPTURE_OBSERVER.set(None);
+            if groups == 15 {
+                let program = result.expect("the real grouped Pattern graph compiles");
+                assert_eq!(execute(&program).unwrap().value_display(), "42");
+                eprintln!("pattern source stack: fifteen groups reached identity 42");
+                let alias = CONTENTS.with(|slot| slot.borrow_mut().take().expect("capture observed"));
+                let weak = Arc::downgrade(&alias);
+                drop(program);
+                assert_eq!(Arc::strong_count(&alias), 1);
+                drop(alias);
+                assert!(weak.upgrade().is_none());
+                eprintln!("pattern source stack: source contents final alias dropped");
+            } else {
+                let failure = result.expect_err("the next source group exceeds structural depth");
+                assert_eq!(failure.reason_code(), "internal.resource.structural-depth");
+                assert!(CONTENTS.with(|slot| slot.borrow().is_none()));
+                eprintln!("pattern source stack: sixteen groups refused at source depth");
+            }
+        }
+    }).unwrap().join().unwrap();
+}
+
+#[test]
+fn identifier_and_type_captures_can_return_pattern_nodes() {
+    use crate::{
+        driver::{RunConfiguration, compile_path, execute},
+        parser::G1_CAPTURE_OBSERVER,
+        surface::SurfaceSyntaxCapture,
+    };
+    use std::cell::Cell;
+
+    std::thread_local! {
+        static EXPECT_TYPE: Cell<bool> = const { Cell::new(false) };
+        static OBSERVED: Cell<bool> = const { Cell::new(false) };
+    }
+    fn observe(_: &SourceFile, captures: &[SurfaceSyntaxCapture], _: &SyntaxBudget) {
+        assert!(captures.iter().all(|capture| matches!(
+            capture,
+            SurfaceSyntaxCapture::Identifier(_) | SurfaceSyntaxCapture::Type(_)
+        )));
+        let [_, SurfaceSyntaxCapture::Identifier(binder), _, ..] = captures else {
+            panic!("expected the captured binder identifier");
+        };
+        assert_eq!(binder.name.text, "value");
+        assert_eq!(
+            captures
+                .iter()
+                .any(|capture| matches!(capture, SurfaceSyntaxCapture::Type(_))),
+            EXPECT_TYPE.with(Cell::get)
+        );
+        OBSERVED.with(|observed| assert!(!observed.replace(true)));
+    }
+
+    for (has_type, forms, main, forms_path) in [
+        (
+            false,
+            include_str!("../tests/fixtures/surface-macros/pattern-host/forms.ash"),
+            include_str!("../tests/fixtures/surface-macros/pattern-host/main.ash"),
+            "forms.ash",
+        ),
+        (
+            true,
+            include_str!("../tests/fixtures/surface-macros/pattern-host/mixed_forms.ash"),
+            include_str!("../tests/fixtures/surface-macros/pattern-host/mixed_main.ash"),
+            "mixed_forms.ash",
+        ),
+    ] {
+        let substitutions = [
+            ("$pattern:pattern", "$pattern:ident"),
+            (
+                "Syntax.Captured(Syntax.PatternCapture(pattern))",
+                "Syntax.Captured(Syntax.IdentifierCapture(pattern, pattern_origin))",
+            ),
+            (
+                "parse_result(input, name, name_origin, pattern, read",
+                "parse_result(input, name, name_origin, pattern, pattern_origin, read",
+            ),
+            (
+                "parse_result : (Syntax.Input, Syntax.Identifier, Syntax.Origin, Syntax.PatternFragment,",
+                "parse_result : (Syntax.Input, Syntax.Identifier, Syntax.Origin, Syntax.Identifier, Syntax.Origin,",
+            ),
+            (
+                "parse_result (input, name, name_origin, pattern, read",
+                "parse_result (input, name, name_origin, pattern, pattern_origin, read",
+            ),
+            (
+                "Syntax.pattern_syntax(pattern)",
+                "Syntax.Syntax(Syntax.MoreNodes(Syntax.IdentifierNode(pattern, pattern_origin), Syntax.NoNodes))",
+            ),
+        ];
+        let mut forms = forms.to_owned();
+        for (old, new) in substitutions {
+            assert_eq!(forms.matches(old).count(), 1, "fixture join {old}");
+            forms = forms.replacen(old, new, 1);
+        }
+        let tree = Tree::new();
+        tree.write(forms_path, &forms);
+        let entry = tree.write("main.ash", main);
+        EXPECT_TYPE.with(|value| value.set(has_type));
+        OBSERVED.with(|value| value.set(false));
+        G1_CAPTURE_OBSERVER.set(Some(observe));
+        let result = compile_path(RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        });
+        G1_CAPTURE_OBSERVER.set(None);
+        let program = result.expect("the identifier-built PatternNode compiles");
+        assert!(OBSERVED.with(Cell::get));
+        assert_eq!(execute(&program).unwrap().value_display(), "42");
+    }
+}
+
+#[test]
+fn pattern_source_capture_keeps_binder_and_read_context() {
+    use crate::{
+        driver::{RunConfiguration, compile_path, execute},
+        parser::G1_CAPTURE_OBSERVER,
+        surface::{SurfacePatternKind, SurfaceSyntaxCapture},
+        syntax::{MacroOrigin, MacroOutputNode},
+    };
+    use std::cell::Cell;
+
+    std::thread_local! {
+        static OBSERVED: Cell<bool> = const { Cell::new(false) };
+    }
+    fn observe(source: &SourceFile, captures: &[SurfaceSyntaxCapture], _: &SyntaxBudget) {
+        let [
+            SurfaceSyntaxCapture::Identifier(_),
+            SurfaceSyntaxCapture::Pattern(pattern),
+            SurfaceSyntaxCapture::Identifier(read),
+            ..,
+        ] = captures
+        else {
+            panic!("expected name, Pattern and read captures");
+        };
+        let SurfacePatternKind::Binder(binder) = &pattern.pattern.kind else {
+            panic!("expected the caller's binder pattern");
+        };
+        assert_eq!(binder.name.text, "value");
+        assert_eq!(binder.name.text, read.name.text);
+        assert_eq!(binder.name.introduction, read.name.introduction);
+        assert_eq!(binder.name.introduced_at, read.name.introduced_at);
+        assert_eq!(binder.name.written, read.name.written);
+        assert_eq!(binder.name.introduction, 0);
+        assert!(binder.name.written);
+        assert_ne!(binder.name.span, read.name.span);
+        for span in [binder.name.span, read.name.span] {
+            assert_eq!(span.source(), source.id());
+            let range = span.range();
+            assert_eq!(
+                &source.text()[range.start() as usize..range.end() as usize],
+                "value"
+            );
+        }
+        let [MacroOutputNode::Identifier(name, MacroOrigin::Source(origin))] =
+            pattern.contents.as_ref()
+        else {
+            panic!("expected the original binder syntax");
+        };
+        assert_eq!(name.span, binder.name.span);
+        assert_eq!(*origin, binder.name.span);
+        assert!(matches!(&read.origin, MacroOrigin::Source(span) if *span == read.name.span));
+        OBSERVED.set(true);
+    }
+
+    for fixture in ["main.ash", "mixed_main.ash"] {
+        OBSERVED.set(false);
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/surface-macros/pattern-host")
+            .join(fixture);
+        G1_CAPTURE_OBSERVER.set(Some(observe));
+        let result = compile_path(RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        });
+        G1_CAPTURE_OBSERVER.set(None);
+        let program = result.expect("the imported Pattern graph compiles");
+        assert!(OBSERVED.get());
+        assert_eq!(execute(&program).unwrap().value_display(), "42");
+    }
+}
+
+#[test]
 fn type_deep_source_capture_reaches_host_on_a_512k_stack() {
     const CHILD: &str = "ASH_TYPE_SOURCE_AST_512K_CHILD";
     if std::env::var_os(CHILD).is_none() {
@@ -1114,6 +1368,96 @@ fn type_graph_shares_budget_through_host_staging_and_retry() {
 }
 
 #[test]
+fn transformer_pattern_recapture_is_refused_before_generated_template_execution() {
+    use crate::{
+        driver::{compile_staged_graph_for_test, execute},
+        eval::machine_test_hooks as hooks,
+    };
+
+    let tree = Tree::new();
+    tree.write(
+        "helpers.ash",
+        "pub syntax declaration: (sink) $name:ident as $pattern:pattern => {\n\
+             pub $name : Int -> Int\n\
+             $name $pattern = 42\n\
+         }\n",
+    );
+    let legacy = tree.write(
+        "legacy.ash",
+        "import helpers (syntax sink)\n\
+         sink answer as value\n\
+         main : Unit -> Int\n\
+         main () = answer(42)\n",
+    );
+    let mut graph = graph_at(&legacy, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    let program = compile_staged_graph_for_test(&mut graph)
+        .expect("legacy Template forwarding of the Pattern compiles");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+    eprintln!("pattern recapture: legacy Template forwarding executed 42");
+
+    let entry = tree.write(
+        "main.ash",
+        "import forms (syntax dispatch)\n\
+         import helpers (syntax sink)\n\
+         dispatch sink as answer for value\n\
+         main : Unit -> Int\n\
+         main () = answer(42)\n",
+    );
+    for protected in [false, true] {
+        let nested = if protected {
+            "Syntax.Syntax(Syntax.MoreNodes(Syntax.PatternNode(item, origin), Syntax.NoNodes))"
+        } else {
+            "Syntax.pattern_syntax(item)"
+        };
+        tree.write(
+            "forms.ash",
+            &format!(
+                "import @builtin.compiler.syntax as Syntax\n\
+                 pub syntax declaration: (dispatch) $target:ident as $name:ident for $pattern:pattern => using expand\n\
+                 expand : Syntax.Input -> Syntax.MacroResult ! {{Syntax.Ops}}\n\
+                 expand input = {{\n\
+                     let origin = Syntax.invocation_origin(input)\n\
+                     match (Syntax.capture(input, 0), Syntax.capture(input, 1), Syntax.capture(input, 2), Syntax.make_token(Syntax.As, \"as\")) {{\n\
+                         (Syntax.Captured(Syntax.IdentifierCapture(target, target_origin)), Syntax.Captured(Syntax.IdentifierCapture(name, name_origin)), Syntax.Captured(Syntax.PatternCapture(item)), Syntax.MadeToken(as_token)) => {{\n\
+                             let nested = {nested}\n\
+                             let inner = Syntax.GroupNode(Syntax.Parentheses, nested, origin)\n\
+                             let inner = Syntax.Syntax(Syntax.MoreNodes(inner, Syntax.NoNodes))\n\
+                             let outer = Syntax.GroupNode(Syntax.Parentheses, inner, origin)\n\
+                             let rest = Syntax.MoreNodes(outer, Syntax.NoNodes)\n\
+                             let rest = Syntax.MoreNodes(Syntax.TokenNode(as_token, origin), rest)\n\
+                             let rest = Syntax.MoreNodes(Syntax.IdentifierNode(name, name_origin), rest)\n\
+                             let rest = Syntax.MoreNodes(Syntax.IdentifierNode(target, target_origin), rest)\n\
+                             Syntax.Expanded(Syntax.Syntax(rest))\n\
+                         }}\n\
+                         _ => Syntax.Rejected(Syntax.MacroDiagnostic(\"capture failed\", origin, Syntax.NoOrigins))\n\
+                     }}\n\
+                 }}\n"
+            ),
+        );
+        let mut graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+        hooks::reset();
+        let result = compile_staged_graph_for_test(&mut graph);
+        assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+        assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+        assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+        assert_eq!(hooks::ROOT_CLOSES.get(), 1);
+        if protected {
+            let failure = result.expect_err("generated PatternNode recapture is refused");
+            assert_eq!(failure.reason_code(), "internal.projection.malformed-tree");
+            assert!(graph.pending.is_empty());
+            assert!(graph.loaded.is_empty());
+            assert!(graph.completed.is_none());
+            eprintln!("pattern recapture: generated PatternNode refused without publication");
+        } else {
+            let program = result.expect("generated raw Pattern reaches the imported Template");
+            assert_eq!(execute(&program).unwrap().value_display(), "42");
+            eprintln!("pattern recapture: generated raw Pattern control executed 42");
+        }
+    }
+    hooks::reset();
+}
+
+#[test]
 fn transformer_type_recapture_is_refused_before_generated_template_execution() {
     use crate::{
         driver::{compile_staged_graph_for_test, execute},
@@ -1202,6 +1546,163 @@ fn transformer_type_recapture_is_refused_before_generated_template_execution() {
         }
     }
     hooks::reset();
+}
+
+#[test]
+fn pattern_graph_transfer_shortage_keeps_injected_teardown_on_a_512k_stack() {
+    const CHILD: &str = "ASH_PATTERN_TEARDOWN_512K_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "module::staged_tests::pattern_graph_transfer_shortage_keeps_injected_teardown_on_a_512k_stack",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprint!("{stderr}");
+        assert!(
+            output.status.success(),
+            "512 KiB child failed: {}",
+            output.status
+        );
+        for marker in [
+            "pattern cleanup: actual graph executed 42",
+            "pattern cleanup: transfer shortage drained the graph",
+            "pattern cleanup: injected teardown retained after primary",
+        ] {
+            assert!(stderr.contains(marker), "missing marker {marker}");
+        }
+        return;
+    }
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(|| {
+            use crate::{
+                driver::{
+                    CompiledProgram, FileFailure, PipelineFailure, compile_staged_graph_for_test,
+                    execute,
+                },
+                eval::{
+                    CleanupStatus, ResourceFailureCause, RuntimeFailure, RuntimePhase,
+                    RuntimeResource, machine_test_hooks as hooks,
+                },
+            };
+
+            fn trial(
+                entry: &Path,
+                limit: usize,
+                inject_close: bool,
+            ) -> (HeaderGraph, Result<CompiledProgram, FileFailure>) {
+                let mut graph = graph_at(entry, BodyMode::Header, limit).unwrap();
+                graph.syntax_budget.charge_units(17).unwrap();
+                hooks::reset();
+                hooks::FAIL_ROOT_CLOSE.set(inject_close);
+                let result = compile_staged_graph_for_test(&mut graph);
+                (graph, result)
+            }
+
+            fn primary(failure: &FileFailure) -> crate::eval::RuntimeFailureReport {
+                let Some(PipelineFailure::SyntaxRuntime(failure)) = failure.pipeline_failure()
+                else {
+                    panic!("expected a syntax runtime failure: {failure:?}");
+                };
+                let RuntimeFailure::Report(report) = failure.cause() else {
+                    panic!("expected structured failure details");
+                };
+                assert_eq!(
+                    report.primary.reason_code(),
+                    "internal.resource.syntax-work"
+                );
+                assert!(report.primary.resource().is_none());
+                report
+            }
+
+            let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/pattern-host/main.ash");
+            let header = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT)
+                .unwrap()
+                .syntax_budget
+                .consumed();
+            let (measured, result) = trial(&entry, SYNTAX_WORK_LIMIT, false);
+            let program = result.expect("the actual Pattern graph compiles");
+            let total = measured.syntax_budget.consumed();
+            assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+            assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+            assert_eq!(hooks::ROOT_CLOSES.get(), 1);
+            assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+            assert_eq!(execute(&program).unwrap().value_display(), "42");
+            drop(program);
+            drop(measured);
+            eprintln!("pattern cleanup: actual graph executed 42");
+
+            let (mut low, mut high) = (header + 17, total);
+            while low < high {
+                let mid = low + (high - low) / 2;
+                let (_graph, _result) = trial(&entry, mid, false);
+                if hooks::TRANSFER_ATTEMPTS.get() == 1 {
+                    high = mid;
+                } else {
+                    low = mid + 1;
+                }
+            }
+            let transfer = low;
+            assert!(header + 17 < transfer && transfer < total);
+
+            let (graph, result) = trial(&entry, transfer, false);
+            let failure = result.expect_err("transfer shortage publishes no program");
+            let native = primary(&failure);
+            assert!(native.teardown.is_none());
+            assert_eq!(native.cleanup, CleanupStatus::Complete);
+            assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+            assert_eq!(hooks::TRANSFER_FAILURES.get(), 1);
+            assert_eq!(hooks::ROOT_CLOSES.get(), 1);
+            assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+            assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+            let native_paid = graph.syntax_budget.consumed();
+            assert!(native_paid > header + 17);
+            assert!(
+                graph.loaded.is_empty() && graph.pending.is_empty() && graph.completed.is_none()
+            );
+            eprintln!("pattern cleanup: transfer shortage drained the graph");
+
+            let (graph, result) = trial(&entry, transfer, true);
+            let failure = result.expect_err("injected teardown shortage publishes no program");
+            let report = primary(&failure);
+            assert_eq!(report.primary, native.primary);
+            let teardown = report
+                .teardown
+                .expect("the root-close failure remains related");
+            assert_eq!(teardown.phase, RuntimePhase::Teardown);
+            assert_eq!(teardown.resource, RuntimeResource::EnvironmentDisposal);
+            assert_eq!(teardown.cause, ResourceFailureCause::ConfiguredCapacity);
+            assert_eq!(report.cleanup, CleanupStatus::Incomplete);
+            assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+            assert_eq!(hooks::TRANSFER_FAILURES.get(), 1);
+            assert_eq!(hooks::ROOT_CLOSES.get(), 1);
+            assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+            assert_eq!(graph.syntax_budget.consumed(), native_paid);
+            assert!(
+                graph.loaded.is_empty() && graph.pending.is_empty() && graph.completed.is_none()
+            );
+            for path in ["main.ash", "forms.ash"] {
+                assert!(
+                    failure
+                        .sources()
+                        .iter()
+                        .any(|source| source.display_path().ends_with(path))
+                );
+            }
+            hooks::reset();
+            eprintln!("pattern cleanup: injected teardown retained after primary");
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[test]

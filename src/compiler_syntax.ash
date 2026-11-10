@@ -120,6 +120,8 @@ pub effect Ops {
     declaration_syntax : DeclarationFragment -> Syntax
     type_syntax : TypeFragment -> Syntax
     parse_type : (Input, Syntax) -> ParseResult
+    pattern_syntax : PatternFragment -> Syntax
+    parse_pattern : (Input, Syntax) -> ParseResult
 }
 
 pub capture : (Input, Int) -> CaptureResult ! {Ops}
@@ -154,3 +156,7 @@ pub type_syntax : TypeFragment -> Syntax ! {Ops}
 type_syntax value = perform Ops.type_syntax value
 pub parse_type : (Input, Syntax) -> ParseResult ! {Ops}
 parse_type value = perform Ops.parse_type value
+pub pattern_syntax : PatternFragment -> Syntax ! {Ops}
+pattern_syntax value = perform Ops.pattern_syntax value
+pub parse_pattern : (Input, Syntax) -> ParseResult ! {Ops}
+parse_pattern value = perform Ops.parse_pattern value

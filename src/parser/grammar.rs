@@ -3496,7 +3496,7 @@ fn report_pending_unclosed_kind_group(
     }
 }
 
-fn pattern(parser: &mut Parser<'_>) {
+pub(super) fn pattern(parser: &mut Parser<'_>) {
     pattern_inner(parser, false);
 }
 

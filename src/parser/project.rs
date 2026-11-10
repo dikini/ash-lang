@@ -2488,6 +2488,7 @@ struct DeclarationFrame<'a> {
     construction: Option<(Span, usize)>,
     frame: Option<std::sync::Arc<crate::syntax::ExpansionFrame>>,
     expression_pattern: bool,
+    pattern_accounting: bool,
 }
 
 impl DeclarationFrame<'_> {
@@ -2557,6 +2558,7 @@ pub(crate) fn project_declaration_expansions(
         construction: None,
         frame: None,
         expression_pattern: false,
+        pattern_accounting: false,
     }];
     let mut staging_frames = Vec::new();
     let mut module = ModuleProjection::default();
@@ -2594,7 +2596,11 @@ pub(crate) fn project_declaration_expansions(
                     );
                 }
                 if current.expression_pattern {
-                    charge_generated_ep_projection(child, &tokens, budget)?;
+                    if current.pattern_accounting {
+                        charge_generated_ep_projection_selected(child, &tokens, true, budget)?;
+                    } else {
+                        charge_generated_ep_projection(child, &tokens, budget)?;
+                    }
                 } else {
                     charge_generated_projection(child, &tokens, budget)?;
                 }
@@ -2614,7 +2620,7 @@ pub(crate) fn project_declaration_expansions(
             }
             .into());
         }
-        let expression_pattern =
+        let mut expression_pattern =
             charge_declaration_invocation(source, child, &tokens, &current.contexts, true, budget)?;
         let invocation = project_declaration_invocation_node_inner(
             source,
@@ -2643,6 +2649,7 @@ pub(crate) fn project_declaration_expansions(
             invocation: anchor,
             definition: invocation.selection.declaration.span,
         });
+        let mut actual_pattern = false;
         let output = match &invocation.selection.declaration.implementation {
             SurfaceSyntaxImplementation::Template => {
                 crate::syntax::instantiate_declaration_template(
@@ -2685,10 +2692,16 @@ pub(crate) fn project_declaration_expansions(
                     declaration: invocation.selection.declaration.span,
                     import_span: invocation.selection.import_span,
                 }));
-                charge_transformer_type_metadata_copies(&output, budget)?;
+                actual_pattern = charge_transformer_type_metadata_copies(&output, budget)?;
                 output
             }
         };
+        expression_pattern |= actual_pattern;
+        let pattern_accounting = expression_pattern
+            && matches!(
+                invocation.selection.declaration.implementation,
+                SurfaceSyntaxImplementation::Transformer(_)
+            );
         let contexts = crate::syntax::SyntaxContexts::new_budgeted(
             selected,
             owner_imports,
@@ -2697,13 +2710,14 @@ pub(crate) fn project_declaration_expansions(
         )?;
         budget.charge_units(2)?;
         staging_frames.push(std::sync::Arc::clone(&frame));
-        let parsed = match super::parse_macro_tree_inner(
+        let parsed = match super::parse_macro_tree_selected(
             source,
             anchor,
             output,
             &contexts,
             &[],
             super::MacroOutputPosition::StagedDeclarations,
+            pattern_accounting,
             budget,
         ) {
             Ok(parsed) => parsed,
@@ -2760,6 +2774,7 @@ pub(crate) fn project_declaration_expansions(
             construction: Some((invocation.selection.declaration.span, introduction)),
             frame: Some(frame),
             expression_pattern,
+            pattern_accounting,
         });
     }
     *owners = staged_owners;
@@ -2769,13 +2784,14 @@ pub(crate) fn project_declaration_expansions(
 fn charge_transformer_type_metadata_copies(
     output: &[crate::syntax::MacroOutputNode],
     budget: &mut crate::syntax_resource::SyntaxBudget,
-) -> Result<(), ResourceFailure> {
+) -> Result<bool, ResourceFailure> {
     use crate::syntax::MacroOutputNode;
 
     // This borrowed walk has its own entries and requested buffer.
     budget.charge_units(output.len())?;
     budget.charge_units(output.len())?;
     let mut pending = output.iter().map(|node| (node, 0usize)).collect::<Vec<_>>();
+    let mut has_pattern = false;
     while let Some((node, depth)) = pending.pop() {
         budget.charge()?;
         match node {
@@ -2794,15 +2810,15 @@ fn charge_transformer_type_metadata_copies(
                 let child_depth = crate::syntax::type_depth(depth, 1)?;
                 crate::syntax::charge_transformer_type_metadata(&capture.ty, child_depth, budget)?;
             }
+            MacroOutputNode::ForwardedPattern(_, _) => has_pattern = true,
             MacroOutputNode::Identifier(_, _)
             | MacroOutputNode::Token(_, _, _)
             | MacroOutputNode::Expression(_, _)
             | MacroOutputNode::ForwardedExpression(_, _)
-            | MacroOutputNode::ForwardedPattern(_, _)
             | MacroOutputNode::Splice(_) => {}
         }
     }
-    Ok(())
+    Ok(has_pattern)
 }
 
 /// Reserve every retained frame and the comparisons needed to deduplicate it.
@@ -3280,7 +3296,7 @@ fn charge_declaration_invocation(
     let mut has_other_capture = false;
     let mut has_structured = false;
     let mut has_type_or_identifier = false;
-    let mut has_expression_or_pattern = false;
+    let mut has_expression = false;
     for part in &selection.declaration.matcher {
         match part {
             SurfaceSyntaxMatcherPart::Literal { spelling, .. } => {
@@ -3294,8 +3310,12 @@ fn charge_declaration_invocation(
                     has_type_or_identifier = true;
                     has_other_capture = true;
                 }
-                SurfaceSyntaxCaptureKind::Expression | SurfaceSyntaxCaptureKind::Pattern => {
-                    has_expression_or_pattern = true;
+                SurfaceSyntaxCaptureKind::Expression => {
+                    has_expression = true;
+                    has_other_capture = true;
+                }
+                SurfaceSyntaxCaptureKind::Pattern => {
+                    has_type_or_identifier = true;
                     has_other_capture = true;
                 }
             },
@@ -3311,7 +3331,7 @@ fn charge_declaration_invocation(
     );
     let declaration_transformer = executing
         && ((has_declaration && !has_other_capture)
-            || (!has_declaration && has_type_or_identifier && !has_expression_or_pattern))
+            || (!has_declaration && has_type_or_identifier && !has_expression))
         && source_projection_tokens(tokens)
         && matches!(
             selection.declaration.implementation,
@@ -3414,8 +3434,10 @@ fn charge_declaration_invocation(
                         InternalReason::UnexpectedShape,
                     ))?
             };
-            let mut bridge = charge_projection_preflight(value, tokens, true, budget)?;
-            bridge |= charge_capture_contents(value, tokens, *kind, budget)?;
+            let new_pattern = declaration_transformer && *kind == SurfaceSyntaxCaptureKind::Pattern;
+            let mut bridge =
+                charge_projection_preflight_selected(value, tokens, true, new_pattern, budget)?;
+            bridge |= charge_capture_contents_inner(value, tokens, *kind, new_pattern, budget)?;
             if executing && bridge {
                 return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
             }
@@ -3665,8 +3687,17 @@ fn charge_generated_ep_projection(
     tokens: &ProjectionTokens<'_>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(), DeclarationExpansionFailure> {
+    charge_generated_ep_projection_selected(root, tokens, false, budget)
+}
+
+fn charge_generated_ep_projection_selected(
+    root: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    new_pattern: bool,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), DeclarationExpansionFailure> {
     check_narrow_protected_refusal(root, tokens.originals, false, budget)?;
-    if charge_projection_preflight(root, tokens, true, budget)? {
+    if charge_projection_preflight_selected(root, tokens, true, new_pattern, budget)? {
         return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
     }
     Ok(())
@@ -3679,15 +3710,32 @@ fn charge_projection_preflight(
     expression_pattern: bool,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<bool, DeclarationExpansionFailure> {
+    charge_projection_preflight_selected(root, tokens, expression_pattern, false, budget)
+}
+
+fn charge_projection_preflight_selected(
+    root: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    expression_pattern: bool,
+    new_pattern: bool,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<bool, DeclarationExpansionFailure> {
     let bridge = if expression_pattern {
-        charge_composed_projection(root, tokens, true, budget)?
+        charge_composed_projection_selected(root, tokens, true, false, new_pattern, 0, budget)?
     } else {
         charge_composed_type_projection(root, tokens, budget)?;
         false
     };
-    charge_projection_subtree(root, tokens, budget)?;
+    charge_projection_subtree_inner(root, tokens, new_pattern, budget)?;
     budget.charge()?;
-    let mut pending = vec![root];
+    let mut pending = if new_pattern {
+        budget.charge()?;
+        let mut pending = Vec::with_capacity(1);
+        pending.push(root);
+        pending
+    } else {
+        vec![root]
+    };
     while let Some(node) = pending.pop() {
         // Nominal and resource projection retain additional parameter/name copies.
         if matches!(
@@ -3697,7 +3745,7 @@ fn charge_projection_preflight(
                 | NodeKind::ResourceDefinition
                 | NodeKind::ResourceFamily
         ) {
-            charge_projection_subtree(node, tokens, budget)?;
+            charge_projection_subtree_inner(node, tokens, new_pattern, budget)?;
         }
         if node.kind == NodeKind::SyntaxInvocation {
             for argument in child_nodes(node).filter(|child| child.kind == NodeKind::SyntaxArgument)
@@ -3705,7 +3753,7 @@ fn charge_projection_preflight(
                 if let Some(expression) =
                     child_nodes(argument).find(|child| is_expression_kind(child.kind))
                 {
-                    charge_projection_subtree(expression, tokens, budget)?;
+                    charge_projection_subtree_inner(expression, tokens, new_pattern, budget)?;
                     if expression_pattern {
                         charge_capture_contents(
                             expression,
@@ -3728,17 +3776,23 @@ fn charge_projection_preflight(
                     && let Some(operation) =
                         child_nodes(clause).find(|child| child.kind == NodeKind::Binder)
                 {
-                    charge_projection_subtree(operation, tokens, budget)?;
+                    charge_projection_subtree_inner(operation, tokens, new_pattern, budget)?;
                 }
                 if let Some(pattern) =
                     child_nodes(clause).find(|child| child.kind == NodeKind::Pattern)
                 {
-                    charge_projection_subtree(pattern, tokens, budget)?;
+                    charge_projection_subtree_inner(pattern, tokens, new_pattern, budget)?;
                 }
             }
         }
         for child in child_nodes(node) {
             budget.charge()?;
+            if new_pattern && pending.len() == pending.capacity() {
+                let live = pending.len();
+                let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                budget.charge_units(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                pending.reserve_exact(1);
+            }
             pending.push(child);
         }
     }
@@ -3772,13 +3826,33 @@ fn charge_composed_projection_inner(
     new_type_copy: bool,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<bool, DeclarationExpansionFailure> {
+    charge_composed_projection_selected(
+        root,
+        tokens,
+        expression_pattern,
+        new_type_copy,
+        false,
+        usize::from(new_type_copy),
+        budget,
+    )
+}
+
+fn charge_composed_projection_selected(
+    root: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    expression_pattern: bool,
+    new_type_copy: bool,
+    new_pattern_copy: bool,
+    owner_prefix: usize,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<bool, DeclarationExpansionFailure> {
     budget.charge()?;
     let source_spans = tokens.occurrence.is_none();
     // The source invocation itself also finds its first and last token.
     let first = (
         root,
         None,
-        usize::from(new_type_copy),
+        owner_prefix,
         false,
         usize::from(source_spans),
         false,
@@ -3786,7 +3860,7 @@ fn charge_composed_projection_inner(
         false,
         None,
     );
-    let mut pending = if new_type_copy {
+    let mut pending = if new_type_copy || new_pattern_copy {
         budget.charge()?;
         let mut pending = Vec::with_capacity(1);
         pending.push(first);
@@ -4008,7 +4082,21 @@ fn charge_composed_projection_inner(
                 budget.charge_units(2)?;
                 let frames = tokens.staging_frames.map_or(1, |frames| frames.len());
                 charge_frame_additions(frames, 0, budget)?;
-                raw_patterns.push((node, location_depth));
+                if new_pattern_copy && raw_patterns.len() == raw_patterns.capacity() {
+                    let live = raw_patterns.len();
+                    let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                    budget.charge_units(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                    raw_patterns.reserve_exact(1);
+                }
+                // The low bit carries the scheduled copy without changing the legacy list.
+                let stored_depth = if new_pattern_copy {
+                    location_depth
+                        .saturating_mul(2)
+                        .saturating_add(usize::from(scheduled_pattern))
+                } else {
+                    location_depth
+                };
+                raw_patterns.push((node, stored_depth));
                 // Reserve both this preflight's and projection's first-edge walks.
                 span_walks += 2;
             }
@@ -4021,7 +4109,13 @@ fn charge_composed_projection_inner(
             budget.charge_units(span_walks.saturating_mul(6))?;
             match child {
                 ConcreteElement::Node(child) => {
-                    if new_type_copy && pending.len() == pending.capacity() {
+                    if new_pattern_copy
+                        && node.kind == NodeKind::TuplePattern
+                        && child.kind == NodeKind::Pattern
+                    {
+                        budget.charge_units(6)?;
+                    }
+                    if (new_type_copy || new_pattern_copy) && pending.len() == pending.capacity() {
                         let live = pending.len();
                         let requested = live.checked_add(1).unwrap_or(usize::MAX);
                         budget.charge_units(requested.checked_add(live).unwrap_or(usize::MAX))?;
@@ -4115,24 +4209,42 @@ fn charge_composed_projection_inner(
                         Some(crate::syntax::MacroOutputNode::ForwardedPattern(capture, _))
                             if expression_pattern =>
                         {
-                            bridge |= crate::syntax::charge_pattern_copy(
-                                &capture.pattern,
-                                depth,
-                                tokens.frame.is_some(),
-                                budget,
-                            )?
+                            bridge |= if new_pattern_copy {
+                                crate::syntax::charge_new_pattern_copy(
+                                    &capture.pattern,
+                                    depth,
+                                    tokens.frame.is_some(),
+                                    budget,
+                                )?
+                            } else {
+                                crate::syntax::charge_pattern_copy(
+                                    &capture.pattern,
+                                    depth,
+                                    tokens.frame.is_some(),
+                                    budget,
+                                )?
+                            }
                             .ok_or(ProjectionError::MalformedTree(
                                 InternalReason::UnexpectedShape,
                             ))?;
                             if scheduled_pattern {
                                 // Match/handler finish tasks clone the projected
                                 // pattern after its first frame inheritance.
-                                bridge |= crate::syntax::charge_scheduled_pattern_copy(
-                                    &capture.pattern,
-                                    depth,
-                                    tokens.frame,
-                                    budget,
-                                )?
+                                bridge |= if new_pattern_copy {
+                                    crate::syntax::charge_new_scheduled_pattern_copy(
+                                        &capture.pattern,
+                                        depth,
+                                        tokens.frame,
+                                        budget,
+                                    )?
+                                } else {
+                                    crate::syntax::charge_scheduled_pattern_copy(
+                                        &capture.pattern,
+                                        depth,
+                                        tokens.frame,
+                                        budget,
+                                    )?
+                                }
                                 .ok_or(
                                     ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
                                 )?;
@@ -4174,6 +4286,11 @@ fn charge_composed_projection_inner(
                                 location_depth = location_depth
                                     .max(crate::syntax::type_depth(nominal_depth, 3)?);
                             }
+                            let new_pattern_name = new_pattern_copy && !in_type;
+                            let scheduled_name = new_pattern_name
+                                && (scheduled_pattern
+                                    || (parent == Some(NodeKind::HandlerClause)
+                                        && node.kind == NodeKind::Binder));
                             if new_type_copy {
                                 crate::syntax::charge_type_origin_copy(
                                     origin,
@@ -4196,13 +4313,47 @@ fn charge_composed_projection_inner(
                                 )?;
                                 charge_frame_additions(previous_frames, 0, budget)?;
                                 charge_frame_additions(1, previous_frames, budget)?;
+                            } else if new_pattern_name {
+                                crate::syntax::charge_type_origin_copy(
+                                    origin,
+                                    location_depth,
+                                    budget,
+                                )?;
+                                let previous = name
+                                    .diagnostic
+                                    .as_ref()
+                                    .map_or(0, |location| location.frames.len());
+                                let added = tokens
+                                    .staging_frames
+                                    .map_or(usize::from(tokens.name_frame.is_some()), |frames| {
+                                        frames.len()
+                                    });
+                                budget.charge_units(
+                                    previous.saturating_add(added).saturating_mul(12),
+                                )?;
+                                if tokens.staging_frames.is_none() {
+                                    charge_frame_additions(previous, 0, budget)?;
+                                    charge_frame_additions(added, previous, budget)?;
+                                }
+                                if scheduled_name {
+                                    // The match/handler finish task clones this name's
+                                    // newly constructed diagnostic once more.
+                                    crate::syntax::charge_type_origin_copy(
+                                        origin,
+                                        location_depth,
+                                        budget,
+                                    )?;
+                                    budget.charge_units(
+                                        previous.saturating_add(added).saturating_add(1),
+                                    )?;
+                                }
                             } else {
                                 crate::syntax::charge_type_origin(origin, location_depth, budget)?;
                             }
                             if tokens.preserve_name_diagnostic
                                 && let Some(previous) = &name.diagnostic
                             {
-                                if new_type_copy {
+                                if new_type_copy || new_pattern_name {
                                     budget.charge_units(
                                         previous
                                             .related
@@ -4238,6 +4389,23 @@ fn charge_composed_projection_inner(
                                                 budget,
                                             )?;
                                         }
+                                    }
+                                    if scheduled_name {
+                                        crate::syntax::charge_type_origin_copy(
+                                            &previous.primary,
+                                            location_depth,
+                                            budget,
+                                        )?;
+                                        for related in &previous.related {
+                                            crate::syntax::charge_type_origin_copy(
+                                                related,
+                                                location_depth,
+                                                budget,
+                                            )?;
+                                        }
+                                        budget.charge_units(
+                                            previous.related.len().saturating_add(1),
+                                        )?;
                                     }
                                 } else {
                                     crate::syntax::charge_type_origin(
@@ -4291,13 +4459,34 @@ fn charge_composed_projection_inner(
             }
         }
     }
-    for (node, depth) in raw_patterns {
+    for (node, stored_depth) in raw_patterns {
+        let (depth, scheduled) = if new_pattern_copy {
+            (stored_depth / 2, stored_depth % 2 != 0)
+        } else {
+            (stored_depth, false)
+        };
+        if new_pattern_copy {
+            let frames = tokens
+                .staging_frames
+                .map_or(usize::from(tokens.frame.is_some()), |frames| frames.len());
+            budget.charge_units(frames.saturating_mul(6))?;
+            if scheduled {
+                budget.charge_units(frames.saturating_add(1))?;
+            }
+        }
         let index = descendant_edge_index(node, false)?;
         match tokens.originals.and_then(|items| items.get(&index)) {
             Some(crate::syntax::MacroOutputNode::Token(_, _, origin))
             | Some(crate::syntax::MacroOutputNode::Identifier(_, origin))
             | Some(crate::syntax::MacroOutputNode::Group(_, _, origin)) => {
-                crate::syntax::charge_type_origin(origin, depth, budget)?;
+                if new_pattern_copy {
+                    crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
+                    if scheduled {
+                        crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
+                    }
+                } else {
+                    crate::syntax::charge_type_origin(origin, depth, budget)?;
+                }
             }
             _ => {}
         }
@@ -4361,7 +4550,10 @@ fn check_narrow_protected_refusal(
                         || (declaration_argument
                             && matches!(
                                 originals.and_then(|originals| originals.get(index)),
-                                Some(crate::syntax::MacroOutputNode::ForwardedType(_, _))
+                                Some(
+                                    crate::syntax::MacroOutputNode::ForwardedType(_, _)
+                                        | crate::syntax::MacroOutputNode::ForwardedPattern(_, _)
+                                )
                             )) =>
                 {
                     return Err(
@@ -6063,7 +6255,16 @@ fn project_selected_declaration_invocation_node_inner(
                 }
                 SurfaceSyntaxCaptureKind::Pattern => {
                     let node = only_child_of_kind(argument, NodeKind::Pattern)?;
-                    let contents = capture_contents(source, node, tokens, originals)?;
+                    let contents = if source_transformer && budget.is_some() {
+                        capture_source_declaration_contents_inner(
+                            source,
+                            node,
+                            tokens,
+                            budget.as_deref_mut(),
+                        )?
+                    } else {
+                        capture_contents(source, node, tokens, originals)?
+                    };
                     let pattern = project_pattern(source, node, tokens)?;
                     let contents = match contents.as_slice() {
                         [crate::syntax::MacroOutputNode::ForwardedPattern(capture, _)] => {
@@ -6278,6 +6479,43 @@ pub(super) fn project_macro_type(
     charge_composed_projection_inner(ty, &tokens, false, true, budget)?;
     charge_projection_subtree_inner(ty, &tokens, true, budget)?;
     Ok(project_type_inner(source, ty, &tokens, Some(budget))?)
+}
+
+pub(super) fn project_macro_pattern(
+    source: &SourceFile,
+    invocation: Span,
+    parsed: &super::ParsedMacroTree,
+    frame: &std::sync::Arc<crate::syntax::ExpansionFrame>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<SurfacePattern, DeclarationExpansionFailure> {
+    for _ in 0..4 {
+        budget.charge_units(parsed.tree.events.len())?;
+    }
+    budget.charge_units(parsed.tree.tokens.len())?;
+    let root = validated_macro_root(source, &parsed.tree)?;
+    let pattern = only_child_of_kind(root, NodeKind::Pattern)?;
+    validate_node_shape_with_admission(
+        pattern,
+        &parsed.tree.tokens,
+        Some(&parsed.admission_identifiers),
+    )?;
+    let tokens = ProjectionTokens {
+        tokens: &parsed.tree.tokens,
+        originals: Some(&parsed.original_nodes),
+        occurrence: Some(invocation),
+        construction: None,
+        construction_extents: false,
+        admission_identifiers: Some(&parsed.admission_identifiers),
+        frame: Some(frame),
+        name_frame: Some(frame),
+        staging_frames: None,
+        preserve_name_diagnostic: true,
+    };
+    if charge_composed_projection_selected(pattern, &tokens, true, false, true, 1, budget)? {
+        return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+    }
+    charge_projection_subtree_inner(pattern, &tokens, true, budget)?;
+    Ok(project_pattern(source, pattern, &tokens)?)
 }
 
 fn project_expression_with_fragments(
@@ -10000,6 +10238,7 @@ mod tests {
             construction: Some((invocation.selection.declaration.span, 1)),
             frame: Some(Arc::clone(&frame)),
             expression_pattern: false,
+            pattern_accounting: false,
         };
         let tokens = frame_state.tokens(&staging_frames);
         assert!(Arc::ptr_eq(tokens.frame.unwrap(), &frame));
@@ -13659,6 +13898,1006 @@ mod tests {
                 &mut crate::syntax_resource::SyntaxBudget::default(),
             )
             .expect("declaration forwarding is a separate accounted path");
+        }
+    }
+
+    #[test]
+    fn protected_pattern_copies_prepay_origins_and_inherited_frames() {
+        use crate::{
+            syntax::{
+                DiagnosticLocation, ExpansionFrame, MacroOrigin, charge_new_pattern_copy,
+                charge_new_scheduled_pattern_copy,
+            },
+            syntax_resource::{ResourceFailure, SyntaxBudget},
+        };
+        use std::sync::Arc;
+
+        let source = SourceFile::new("protected-copy.ash", "value").unwrap();
+        let span = source.span(ByteRange::new(0, 5).unwrap()).unwrap();
+        let previous = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let distinct = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let source_origin = MacroOrigin::Source(span);
+        let combined =
+            MacroOrigin::combined(vec![source_origin.clone()], Arc::clone(&previous)).unwrap();
+        let MacroOrigin::Combined { inputs, .. } = &combined else {
+            unreachable!()
+        };
+        let alias = Arc::clone(inputs);
+        let make_pattern = |origin: &MacroOrigin| {
+            let location = || {
+                let mut location = DiagnosticLocation::new(origin.clone());
+                location.related.push(origin.clone());
+                location.frames.push(Arc::clone(&previous));
+                Some(Box::new(location))
+            };
+            SurfacePattern {
+                kind: SurfacePatternKind::Tuple(
+                    (0..4)
+                        .map(|_| SurfacePattern {
+                            kind: SurfacePatternKind::Binder(SurfaceBinder {
+                                name: SurfaceName {
+                                    text: "value".into(),
+                                    span,
+                                    introduction: 0,
+                                    introduced_at: None,
+                                    written: true,
+                                    diagnostic: location(),
+                                },
+                                span,
+                            }),
+                            span,
+                            diagnostic: location(),
+                        })
+                        .collect(),
+                ),
+                span,
+                diagnostic: location(),
+            }
+        };
+        let measure = |pattern: &SurfacePattern, inherited: &Arc<ExpansionFrame>| {
+            let mut budget = SyntaxBudget::default();
+            assert_eq!(
+                charge_new_pattern_copy(pattern, 40, true, &mut budget).unwrap(),
+                Some(false)
+            );
+            let first = budget.consumed();
+            assert_eq!(
+                charge_new_scheduled_pattern_copy(pattern, 40, Some(inherited), &mut budget)
+                    .unwrap(),
+                Some(false)
+            );
+            (first, budget.consumed())
+        };
+        let source_pattern = make_pattern(&source_origin);
+        let pattern = make_pattern(&combined);
+        let (first, total) = measure(&pattern, &previous);
+        let (_, source_total) = measure(&source_pattern, &previous);
+        // Nine locations each retain primary and related origins in two AST
+        // copies. Each Combined origin retains two additional Arcs per copy.
+        assert_eq!(total - source_total, 9 * 2 * 2 * 2);
+        let (distinct_first, distinct_total) = measure(&pattern, &distinct);
+        assert_eq!(distinct_first, first);
+        assert_eq!(distinct_total, total + 9);
+
+        let retained = Arc::strong_count(&alias);
+        let mut first_short = SyntaxBudget::with_limit(17 + first - 1);
+        first_short.charge_units(17).unwrap();
+        assert!(matches!(
+            charge_new_pattern_copy(&pattern, 40, true, &mut first_short),
+            Err(ResourceFailure::SyntaxWork { .. })
+        ));
+        assert_eq!(Arc::strong_count(&alias), retained);
+        let mut second_short = SyntaxBudget::with_limit(17 + total - 1);
+        second_short.charge_units(17).unwrap();
+        charge_new_pattern_copy(&pattern, 40, true, &mut second_short).unwrap();
+        assert!(matches!(
+            charge_new_scheduled_pattern_copy(&pattern, 40, Some(&previous), &mut second_short),
+            Err(ResourceFailure::SyntaxWork { .. })
+        ));
+        assert_eq!(Arc::strong_count(&alias), retained);
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(17 + total);
+            exact.charge_units(17).unwrap();
+            charge_new_pattern_copy(&pattern, 40, true, &mut exact).unwrap();
+            charge_new_scheduled_pattern_copy(&pattern, 40, Some(&previous), &mut exact).unwrap();
+            assert_eq!(exact.consumed(), 17 + total);
+        }
+
+        let mut first_copy = pattern.clone();
+        inherit_pattern_frame(&mut first_copy, &distinct);
+        let second_copy = first_copy.clone();
+        let SurfacePatternKind::Tuple(elements) = &second_copy.kind else {
+            panic!("expected tuple")
+        };
+        let mut locations = vec![second_copy.diagnostic.as_deref().unwrap()];
+        for element in elements {
+            locations.push(element.diagnostic.as_deref().unwrap());
+            let SurfacePatternKind::Binder(binder) = &element.kind else {
+                panic!("expected binder")
+            };
+            locations.push(binder.name.diagnostic.as_deref().unwrap());
+        }
+        assert_eq!(locations.len(), 9);
+        for location in locations {
+            assert_eq!(location.related, [combined.clone()]);
+            assert_eq!(location.frames.len(), 2);
+            assert!(Arc::ptr_eq(&location.frames[0], &previous));
+            assert!(Arc::ptr_eq(&location.frames[1], &distinct));
+            let MacroOrigin::Combined { inputs, .. } = &location.primary else {
+                panic!("expected Combined")
+            };
+            assert!(Arc::ptr_eq(inputs, &alias));
+        }
+    }
+
+    #[test]
+    fn scheduled_match_and_handler_keep_combined_names_and_frames() {
+        use crate::{
+            syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin, MacroOutputNode},
+            syntax_resource::{ResourceFailure, SyntaxBudget},
+        };
+        use std::{collections::HashMap, sync::Arc};
+
+        fn check_name(
+            name: &SurfaceName,
+            origin: &MacroOrigin,
+            previous: &Arc<ExpansionFrame>,
+            current: &Arc<ExpansionFrame>,
+        ) {
+            let location = name.diagnostic.as_ref().unwrap();
+            assert_eq!(&location.primary, origin);
+            assert_eq!(location.related, [origin.clone()]);
+            assert_eq!(location.frames.len(), 2);
+            assert!(Arc::ptr_eq(&location.frames[0], previous));
+            assert!(Arc::ptr_eq(&location.frames[1], current));
+        }
+
+        for (text, expression_kind) in [
+            (
+                "match value {\nPair(left, right) => 42\n}",
+                NodeKind::MatchExpression,
+            ),
+            (
+                "handle value with State {\nread Pair(left, right) => 42\n}",
+                NodeKind::HandlerExpression,
+            ),
+        ] {
+            let (source, tree) = parsed(text);
+            let (root, raw) = validated_root(&source, &tree).unwrap();
+            let mut pending = vec![root];
+            let expression = loop {
+                let node = pending.pop().expect("scheduled expression exists");
+                if node.kind == expression_kind {
+                    break node;
+                }
+                pending.extend(child_nodes(node));
+            };
+            let span = raw[0].span;
+            let previous = Arc::new(ExpansionFrame {
+                invocation: span,
+                definition: span,
+            });
+            let current = Arc::new(ExpansionFrame {
+                invocation: span,
+                definition: span,
+            });
+            let origin = MacroOrigin::combined(vec![span.into()], Arc::clone(&previous)).unwrap();
+            let MacroOrigin::Combined { inputs, .. } = &origin else {
+                unreachable!()
+            };
+            let alias = Arc::clone(inputs);
+            let originals = raw
+                .iter()
+                .enumerate()
+                .filter_map(|(index, token)| {
+                    let text = match &token.kind {
+                        TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => text,
+                        _ => return None,
+                    };
+                    let mut diagnostic = DiagnosticLocation::new(origin.clone());
+                    diagnostic.related.push(origin.clone());
+                    diagnostic.frames.push(Arc::clone(&previous));
+                    Some((
+                        index,
+                        MacroOutputNode::Identifier(
+                            SurfaceName {
+                                text: text.clone(),
+                                span: token.span,
+                                introduction: 0,
+                                introduced_at: None,
+                                written: true,
+                                diagnostic: Some(Box::new(diagnostic)),
+                            },
+                            origin.clone(),
+                        ),
+                    ))
+                })
+                .collect::<HashMap<_, _>>();
+            let frames = [Arc::clone(&previous), Arc::clone(&current)];
+            let tokens = ProjectionTokens {
+                tokens: raw,
+                originals: Some(&originals),
+                occurrence: Some(span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: None,
+                frame: Some(&current),
+                name_frame: Some(&current),
+                staging_frames: Some(&frames),
+                preserve_name_diagnostic: true,
+            };
+            let mut measured = SyntaxBudget::default();
+            charge_projection_preflight_selected(expression, &tokens, true, true, &mut measured)
+                .unwrap();
+            let total = measured.consumed();
+            let retained = Arc::strong_count(&alias);
+            let mut short = SyntaxBudget::with_limit(17 + total - 1);
+            short.charge_units(17).unwrap();
+            assert!(matches!(
+                charge_projection_preflight_selected(expression, &tokens, true, true, &mut short),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { .. }),
+                    ..
+                })
+            ));
+            assert_eq!(Arc::strong_count(&alias), retained);
+            for _ in 0..2 {
+                let mut exact = SyntaxBudget::with_limit(17 + total);
+                exact.charge_units(17).unwrap();
+                charge_projection_preflight_selected(expression, &tokens, true, true, &mut exact)
+                    .unwrap();
+                assert_eq!(exact.consumed(), 17 + total);
+            }
+            let projected =
+                project_expression_with_fragments(&source, expression, &tokens, &originals)
+                    .unwrap();
+            let pattern = match &projected.kind {
+                SurfaceExprKind::Match(value) => &value.arms[0].pattern,
+                SurfaceExprKind::Handle(value) => {
+                    check_name(&value.clauses[0].operation, &origin, &previous, &current);
+                    &value.clauses[0].pattern
+                }
+                _ => panic!("expected match or handler"),
+            };
+            let SurfacePatternKind::Constructor {
+                name: SurfaceReference::Unqualified(constructor),
+                payload: Some(payload),
+            } = &pattern.kind
+            else {
+                panic!("expected constructor pattern")
+            };
+            check_name(constructor, &origin, &previous, &current);
+            let SurfacePatternKind::Tuple(elements) = &payload.kind else {
+                panic!("expected tuple payload")
+            };
+            assert_eq!(elements.len(), 2);
+            for element in elements {
+                let SurfacePatternKind::Binder(binder) = &element.kind else {
+                    panic!("expected binder")
+                };
+                check_name(&binder.name, &origin, &previous, &current);
+            }
+        }
+    }
+
+    #[test]
+    fn scheduled_raw_pattern_names_pay_each_combined_origin_copy() {
+        use crate::{
+            syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin, MacroOutputNode},
+            syntax_resource::SyntaxBudget,
+        };
+        use std::{collections::HashMap, sync::Arc};
+
+        fn node(kind: NodeKind, children: Vec<ConcreteElement>) -> ConcreteNode {
+            ConcreteNode { kind, children }
+        }
+        fn cost(
+            root: &ConcreteNode,
+            raw: &[crate::lexer::Token],
+            origin: &MacroOrigin,
+            previous: &Arc<ExpansionFrame>,
+            current: &Arc<ExpansionFrame>,
+            selected: bool,
+        ) -> usize {
+            let originals = raw
+                .iter()
+                .enumerate()
+                .filter_map(|(index, token)| {
+                    let text = match &token.kind {
+                        TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => text,
+                        _ => return None,
+                    };
+                    let mut diagnostic = DiagnosticLocation::new(origin.clone());
+                    diagnostic.related.push(origin.clone());
+                    diagnostic.frames.push(Arc::clone(previous));
+                    Some((
+                        index,
+                        MacroOutputNode::Identifier(
+                            SurfaceName {
+                                text: text.clone(),
+                                span: token.span,
+                                introduction: 0,
+                                introduced_at: None,
+                                written: true,
+                                diagnostic: Some(Box::new(diagnostic)),
+                            },
+                            origin.clone(),
+                        ),
+                    ))
+                })
+                .collect::<HashMap<_, _>>();
+            let tokens = ProjectionTokens {
+                tokens: raw,
+                originals: Some(&originals),
+                occurrence: Some(raw[0].span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: None,
+                frame: Some(current),
+                name_frame: Some(current),
+                staging_frames: None,
+                preserve_name_diagnostic: true,
+            };
+            let mut budget = SyntaxBudget::default();
+            assert!(
+                !charge_composed_projection_selected(
+                    root,
+                    &tokens,
+                    true,
+                    false,
+                    selected,
+                    0,
+                    &mut budget
+                )
+                .unwrap()
+            );
+            budget.consumed()
+        }
+
+        let source = SourceFile::new("scheduled-names.ash", "Pair value").unwrap();
+        let raw = lex(&source).unwrap().tokens;
+        let span = raw[0].span;
+        let previous = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let current = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let plain = MacroOrigin::Source(span);
+        let combined = MacroOrigin::combined(vec![plain.clone()], Arc::clone(&previous)).unwrap();
+        let binder = node(
+            NodeKind::Pattern,
+            vec![ConcreteElement::Node(node(
+                NodeKind::Binder,
+                vec![ConcreteElement::Token(1)],
+            ))],
+        );
+        let constructor = node(
+            NodeKind::Pattern,
+            vec![ConcreteElement::Node(node(
+                NodeKind::ConstructorPattern,
+                vec![ConcreteElement::Token(0)],
+            ))],
+        );
+        let qualified = node(
+            NodeKind::Pattern,
+            vec![ConcreteElement::Node(node(
+                NodeKind::ConstructorPattern,
+                vec![ConcreteElement::Node(node(
+                    NodeKind::QualifiedName,
+                    vec![ConcreteElement::Token(0), ConcreteElement::Token(1)],
+                ))],
+            ))],
+        );
+        let operation = node(NodeKind::Binder, vec![ConcreteElement::Token(1)]);
+        for (plain_node, owner, extra) in [
+            (binder, NodeKind::MatchArm, 8),
+            (constructor, NodeKind::MatchArm, 8),
+            (qualified, NodeKind::MatchArm, 14),
+            (operation, NodeKind::HandlerClause, 6),
+        ] {
+            let scheduled = node(owner, vec![ConcreteElement::Node(plain_node.clone())]);
+            let delta = |root: &ConcreteNode, selected| {
+                cost(root, &raw, &combined, &previous, &current, selected)
+                    - cost(root, &raw, &plain, &previous, &current, selected)
+            };
+            assert_eq!(delta(&scheduled, true) - delta(&plain_node, true), extra);
+            assert_eq!(delta(&scheduled, false), delta(&plain_node, false));
+        }
+    }
+
+    #[test]
+    fn selected_constructor_tuple_prepays_each_actual_child() {
+        use crate::syntax_resource::SyntaxBudget;
+
+        let tokens = ProjectionTokens::source(&[]);
+        for count in [0usize, 1, 8] {
+            let tuple = ConcreteNode {
+                kind: NodeKind::TuplePattern,
+                children: (0..count)
+                    .map(|_| {
+                        ConcreteElement::Node(ConcreteNode {
+                            kind: NodeKind::Pattern,
+                            children: Vec::new(),
+                        })
+                    })
+                    .collect(),
+            };
+            let root = ConcreteNode {
+                kind: NodeKind::ConstructorPattern,
+                children: vec![ConcreteElement::Node(tuple)],
+            };
+            let mut legacy = SyntaxBudget::default();
+            charge_composed_projection_selected(&root, &tokens, true, false, false, 0, &mut legacy)
+                .unwrap();
+            let mut selected = SyntaxBudget::default();
+            charge_composed_projection_selected(
+                &root,
+                &tokens,
+                true,
+                false,
+                true,
+                0,
+                &mut selected,
+            )
+            .unwrap();
+            // Selected mode pays the initial slot, N+L continuation growth,
+            // and six units for each actual direct tuple child.
+            let expected = if count == 0 {
+                1
+            } else {
+                count * count + 6 * count
+            };
+            assert_eq!(selected.consumed() - legacy.consumed(), expected);
+            let mut short = SyntaxBudget::with_limit(17 + selected.consumed() - 1);
+            short.charge_units(17).unwrap();
+            assert!(
+                charge_composed_projection_selected(
+                    &root, &tokens, true, false, true, 0, &mut short
+                )
+                .is_err()
+            );
+            for _ in 0..2 {
+                let mut exact = SyntaxBudget::with_limit(17 + selected.consumed());
+                exact.charge_units(17).unwrap();
+                charge_composed_projection_selected(
+                    &root, &tokens, true, false, true, 0, &mut exact,
+                )
+                .unwrap();
+                assert_eq!(exact.consumed(), 17 + selected.consumed());
+            }
+        }
+    }
+
+    #[test]
+    fn pattern_name_frames_are_paid_and_deduplicated_in_both_projection_modes() {
+        use crate::{
+            syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin, MacroOutputNode},
+            syntax_resource::{ResourceFailure, SyntaxBudget},
+        };
+        use std::{collections::HashMap, sync::Arc};
+
+        let (source, tree) = parsed("fn(value) {\n42\n}");
+        let (root, raw) = validated_root(&source, &tree).unwrap();
+        let mut pending = vec![root];
+        let function = loop {
+            let node = pending.pop().expect("function exists");
+            if node.kind == NodeKind::FunctionExpression {
+                break node;
+            }
+            pending.extend(child_nodes(node));
+        };
+        let parameter = only_child_of_kind(function, NodeKind::Pattern).unwrap();
+        let index = descendant_edge_index(parameter, false).unwrap();
+        let span = raw[index].span;
+        let first = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let second = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let current = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let origin = MacroOrigin::combined(vec![span.into()], Arc::clone(&first)).unwrap();
+        let MacroOrigin::Combined { inputs, .. } = &origin else {
+            unreachable!()
+        };
+        let input_alias = Arc::clone(inputs);
+        let mut costs = Vec::new();
+
+        for previous in [
+            Vec::new(),
+            vec![Arc::clone(&first)],
+            vec![Arc::clone(&first), Arc::clone(&second)],
+        ] {
+            let mut diagnostic = DiagnosticLocation::new(origin.clone());
+            diagnostic.related.push(origin.clone());
+            diagnostic.frames = previous.clone();
+            let name = SurfaceName {
+                text: "value".into(),
+                span,
+                introduction: 0,
+                introduced_at: None,
+                written: true,
+                diagnostic: Some(Box::new(diagnostic)),
+            };
+            let originals =
+                HashMap::from([(index, MacroOutputNode::Identifier(name, origin.clone()))]);
+            let tokens = ProjectionTokens {
+                tokens: raw,
+                originals: Some(&originals),
+                occurrence: Some(span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: None,
+                frame: Some(&current),
+                name_frame: Some(&current),
+                staging_frames: None,
+                preserve_name_diagnostic: true,
+            };
+            let mut measured = SyntaxBudget::default();
+            assert!(
+                !charge_composed_projection_selected(
+                    parameter,
+                    &tokens,
+                    true,
+                    false,
+                    true,
+                    1,
+                    &mut measured
+                )
+                .unwrap()
+            );
+            let total = measured.consumed();
+            let retained = Arc::strong_count(&input_alias);
+            let mut short = SyntaxBudget::with_limit(17 + total - 1);
+            short.charge_units(17).unwrap();
+            assert!(matches!(
+                charge_composed_projection_selected(
+                    parameter, &tokens, true, false, true, 1, &mut short
+                ),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { .. }),
+                    ..
+                })
+            ));
+            assert_eq!(Arc::strong_count(&input_alias), retained);
+            for _ in 0..2 {
+                let mut exact = SyntaxBudget::with_limit(17 + total);
+                exact.charge_units(17).unwrap();
+                charge_composed_projection_selected(
+                    parameter, &tokens, true, false, true, 1, &mut exact,
+                )
+                .unwrap();
+                assert_eq!(exact.consumed(), 17 + total);
+            }
+            let projected = project_pattern(&source, parameter, &tokens).unwrap();
+            let SurfacePatternKind::Binder(binder) = projected.kind else {
+                panic!("expected binder")
+            };
+            let actual = binder.name.diagnostic.unwrap();
+            assert_eq!(actual.primary, origin);
+            assert_eq!(actual.related, [origin.clone()]);
+            assert_eq!(actual.frames.len(), previous.len() + 1);
+            for (actual, expected) in actual.frames.iter().zip(&previous) {
+                assert!(Arc::ptr_eq(actual, expected));
+            }
+            assert!(Arc::ptr_eq(actual.frames.last().unwrap(), &current));
+            costs.push(total);
+        }
+        // Each extra prior frame adds twelve storage units, its own entry and
+        // comparisons against the current frame.
+        assert_eq!(costs[1], costs[0] + 15);
+        assert_eq!(costs[2], costs[1] + 16);
+
+        let mut diagnostic = DiagnosticLocation::new(origin.clone());
+        diagnostic.related.push(origin.clone());
+        diagnostic.frames.push(Arc::clone(&first));
+        let originals = HashMap::from([(
+            index,
+            MacroOutputNode::Identifier(
+                SurfaceName {
+                    text: "value".into(),
+                    span,
+                    introduction: 0,
+                    introduced_at: None,
+                    written: true,
+                    diagnostic: Some(Box::new(diagnostic)),
+                },
+                origin.clone(),
+            ),
+        )]);
+        let frames = [Arc::clone(&first), Arc::clone(&current)];
+        let tokens = ProjectionTokens {
+            tokens: raw,
+            originals: Some(&originals),
+            occurrence: Some(span),
+            construction: None,
+            construction_extents: false,
+            admission_identifiers: None,
+            frame: Some(&current),
+            name_frame: Some(&current),
+            staging_frames: Some(&frames),
+            preserve_name_diagnostic: true,
+        };
+        let mut frame_work = SyntaxBudget::default();
+        charge_staged_name_frames(tokens.projection_token(index).unwrap(), &mut frame_work)
+            .unwrap();
+        assert_eq!(frame_work.consumed(), 9); // F=1 then M=2: 2 + 3 + 4.
+        let mut measured = SyntaxBudget::default();
+        charge_projection_preflight_selected(parameter, &tokens, true, true, &mut measured)
+            .unwrap();
+        let total = measured.consumed();
+        let mut short = SyntaxBudget::with_limit(17 + total - 1);
+        short.charge_units(17).unwrap();
+        assert!(
+            charge_projection_preflight_selected(parameter, &tokens, true, true, &mut short)
+                .is_err()
+        );
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(17 + total);
+            exact.charge_units(17).unwrap();
+            charge_projection_preflight_selected(parameter, &tokens, true, true, &mut exact)
+                .unwrap();
+            assert_eq!(exact.consumed(), 17 + total);
+        }
+        let projected = project_pattern(&source, parameter, &tokens).unwrap();
+        let SurfacePatternKind::Binder(binder) = projected.kind else {
+            panic!("expected binder")
+        };
+        let actual = binder.name.diagnostic.unwrap();
+        assert_eq!(actual.frames.len(), 2);
+        assert!(Arc::ptr_eq(&actual.frames[0], &first));
+        assert!(Arc::ptr_eq(&actual.frames[1], &current));
+        let MacroOrigin::Combined { inputs, .. } = &actual.primary else {
+            panic!("expected Combined")
+        };
+        assert!(Arc::ptr_eq(inputs, &input_alias));
+    }
+
+    #[test]
+    fn transformer_pattern_presence_keeps_raw_and_type_metadata_paths_distinct() {
+        use crate::{
+            syntax::{MacroDelimiter, MacroOutputNode},
+            syntax_resource::SyntaxBudget,
+        };
+        use std::sync::Arc;
+
+        let source = SourceFile::new("presence.ash", "Int").unwrap();
+        let span = source.span(ByteRange::new(0, 3).unwrap()).unwrap();
+        let raw = MacroOutputNode::Token(TokenKind::IntType, "Int".into(), span.into());
+        let ty = MacroOutputNode::ForwardedType(
+            SurfaceTypeCapture {
+                ty: SurfaceType {
+                    kind: SurfaceTypeKind::Int,
+                    span,
+                    diagnostic: None,
+                },
+                contents: Arc::from([]),
+            },
+            span.into(),
+        );
+        let pattern = MacroOutputNode::ForwardedPattern(
+            SurfacePatternCapture {
+                pattern: SurfacePattern {
+                    kind: SurfacePatternKind::Wildcard,
+                    span,
+                    diagnostic: None,
+                },
+                contents: Arc::from([]),
+            },
+            span.into(),
+        );
+        let group = |children| {
+            vec![MacroOutputNode::Group(
+                MacroDelimiter::Parentheses,
+                children,
+                span.into(),
+            )]
+        };
+        let mut raw_work = SyntaxBudget::default();
+        assert!(
+            !charge_transformer_type_metadata_copies(&group(vec![raw]), &mut raw_work).unwrap()
+        );
+        let mut type_work = SyntaxBudget::default();
+        assert!(
+            !charge_transformer_type_metadata_copies(&group(vec![ty.clone()]), &mut type_work)
+                .unwrap()
+        );
+        let mut mixed_work = SyntaxBudget::default();
+        assert!(
+            charge_transformer_type_metadata_copies(&group(vec![ty, pattern]), &mut mixed_work)
+                .unwrap()
+        );
+        // The extra Pattern adds one child entry, one visit and a 2-slot
+        // pending-buffer growth; the existing Type metadata walk is unchanged.
+        assert_eq!(mixed_work.consumed(), type_work.consumed() + 4);
+    }
+
+    #[test]
+    fn selected_pattern_preflights_charge_repeated_wide_subtree_buffers() {
+        use crate::syntax_resource::{ResourceFailure, SyntaxBudget};
+
+        // Each borrowed traversal owns its own pending Vec. The eight live
+        // siblings require 3+5+7+9+11+13+15 units after the initial slot.
+        let pattern = ConcreteNode {
+            kind: NodeKind::Pattern,
+            children: (0..8)
+                .map(|_| {
+                    ConcreteElement::Node(ConcreteNode {
+                        kind: NodeKind::Binder,
+                        children: Vec::new(),
+                    })
+                })
+                .collect(),
+        };
+        let root = ConcreteNode {
+            kind: NodeKind::MatchExpression,
+            children: vec![ConcreteElement::Node(ConcreteNode {
+                kind: NodeKind::MatchArm,
+                children: vec![ConcreteElement::Node(pattern.clone())],
+            })],
+        };
+        let tokens = ProjectionTokens::source(&[]);
+        let mut legacy = SyntaxBudget::default();
+        charge_projection_subtree_inner(&pattern, &tokens, false, &mut legacy).unwrap();
+        let mut selected = SyntaxBudget::default();
+        charge_projection_subtree_inner(&pattern, &tokens, true, &mut selected).unwrap();
+        assert_eq!(selected.consumed(), legacy.consumed() + 64);
+
+        // With 17 units already spent, the second child reaches a three-unit
+        // reservation with only two left. The charge fails before growth.
+        let mut short = SyntaxBudget::with_limit(26);
+        short.charge_units(17).unwrap();
+        assert!(matches!(
+            charge_projection_subtree_inner(&pattern, &tokens, true, &mut short),
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { limit: 26 }),
+                ..
+            })
+        ));
+        assert_eq!(short.consumed(), 24);
+        assert_eq!(pattern.children.len(), 8);
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(17 + selected.consumed());
+            exact.charge_units(17).unwrap();
+            charge_projection_subtree_inner(&pattern, &tokens, true, &mut exact).unwrap();
+            assert_eq!(exact.consumed(), 17 + selected.consumed());
+        }
+
+        let mut composed = SyntaxBudget::default();
+        assert!(
+            !charge_composed_projection_selected(
+                &root,
+                &tokens,
+                true,
+                false,
+                true,
+                0,
+                &mut composed,
+            )
+            .unwrap()
+        );
+        let mut root_subtree = SyntaxBudget::default();
+        charge_projection_subtree_inner(&root, &tokens, true, &mut root_subtree).unwrap();
+        let mut all = SyntaxBudget::default();
+        assert!(
+            !charge_projection_preflight_selected(&root, &tokens, true, true, &mut all).unwrap()
+        );
+        // The outer preflight has its own initial slot, ten node entries and
+        // the same 63-unit growth, in addition to the repeated Pattern walk.
+        assert_eq!(
+            all.consumed(),
+            composed.consumed() + root_subtree.consumed() + selected.consumed() + 75
+        );
+
+        let mut composed_old = SyntaxBudget::default();
+        assert!(
+            !charge_composed_projection_selected(
+                &root,
+                &tokens,
+                true,
+                false,
+                false,
+                0,
+                &mut composed_old,
+            )
+            .unwrap()
+        );
+        let mut root_old = SyntaxBudget::default();
+        charge_projection_subtree_inner(&root, &tokens, false, &mut root_old).unwrap();
+        let mut all_old = SyntaxBudget::default();
+        assert!(
+            !charge_projection_preflight_selected(&root, &tokens, true, false, &mut all_old)
+                .unwrap()
+        );
+        assert_eq!(
+            all_old.consumed(),
+            composed_old.consumed() + root_old.consumed() + legacy.consumed() + 11
+        );
+    }
+
+    #[test]
+    fn staged_pattern_adapter_prepays_pending_and_pieces_growth() {
+        use crate::{
+            parser::MacroParseFailure,
+            syntax::{MacroDelimiter, MacroOutputNode, SyntaxContexts},
+            syntax_resource::{ResourceFailure, SyntaxBudget},
+        };
+        use std::sync::Arc;
+
+        let source = SourceFile::new("adapter.ash", "_").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let token = || MacroOutputNode::Token(TokenKind::Wildcard, Arc::from("_"), span.into());
+        let group = || {
+            MacroOutputNode::Group(
+                MacroDelimiter::Parentheses,
+                (0..8).map(|_| token()).collect(),
+                span.into(),
+            )
+        };
+        let probe = vec![group(), group()];
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        // The initial two-entry pending buffer is full. After one pop, adding
+        // eight children requests nine slots and moves one live entry.
+        let mut before_growth = SyntaxBudget::with_limit(170);
+        assert!(matches!(
+            super::super::charge_staged_output(&probe, &contexts, false, true, &mut before_growth),
+            Err(MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { limit: 170 }),
+                ..
+            })
+        ));
+        assert_eq!(before_growth.consumed(), 161);
+        assert_eq!(probe.len(), 2);
+
+        let text = format!(
+            "value : Int -> Int\nvalue ({}) = 42\n",
+            vec!["_"; 20].join(", ")
+        );
+        let (source, _, mut output) = structured_declarations(&text);
+        let span = source.span(ByteRange::new(0, 0).unwrap()).unwrap();
+        let contents: Arc<[MacroOutputNode]> = Arc::from([MacroOutputNode::Token(
+            TokenKind::Wildcard,
+            Arc::from("_"),
+            span.into(),
+        )]);
+        let mut capture = Some(SurfacePatternCapture {
+            pattern: SurfacePattern {
+                kind: SurfacePatternKind::Wildcard,
+                span,
+                diagnostic: None,
+            },
+            contents: Arc::clone(&contents),
+        });
+        fn replace(
+            nodes: &mut [MacroOutputNode],
+            capture: &mut Option<SurfacePatternCapture>,
+            span: Span,
+        ) -> bool {
+            for node in nodes {
+                match node {
+                    MacroOutputNode::Group(_, children, _) => {
+                        if replace(children, capture, span) {
+                            return true;
+                        }
+                    }
+                    MacroOutputNode::Token(TokenKind::Wildcard, _, _) => {
+                        *node =
+                            MacroOutputNode::ForwardedPattern(capture.take().unwrap(), span.into());
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
+            false
+        }
+        assert!(replace(&mut output, &mut capture, span));
+        let (position, children) = output
+            .iter()
+            .enumerate()
+            .find_map(|(index, node)| match node {
+                MacroOutputNode::Group(_, children, _) => Some((index, children.len())),
+                _ => None,
+            })
+            .unwrap();
+        let capacity = output
+            .clone()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .capacity();
+        let live = output.len() - position;
+        let requested = live + children;
+        assert!(requested > capacity);
+        let mut preflight = SyntaxBudget::default();
+        super::super::charge_staged_output(&output, &contexts, false, true, &mut preflight)
+            .unwrap();
+        let before_pieces_growth = preflight.consumed() + output.len();
+        let short_limit = before_pieces_growth + requested + live - 1;
+        let mut short = SyntaxBudget::with_limit(short_limit);
+        assert!(matches!(
+            super::super::parse_macro_tree_selected(
+                &source,
+                span,
+                output.clone(),
+                &contexts,
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                true,
+                &mut short,
+            ),
+            Err(MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        assert_eq!(short.consumed(), before_pieces_growth);
+
+        let mut measured = SyntaxBudget::default();
+        let parsed = super::super::parse_macro_tree_selected(
+            &source,
+            span,
+            output.clone(),
+            &contexts,
+            &[],
+            super::super::MacroOutputPosition::StagedDeclarations,
+            true,
+            &mut measured,
+        )
+        .unwrap();
+        let retained = parsed
+            .original_nodes
+            .values()
+            .find_map(|node| match node {
+                MacroOutputNode::ForwardedPattern(capture, _) => Some(capture),
+                _ => None,
+            })
+            .unwrap();
+        assert!(Arc::ptr_eq(&retained.contents, &contents));
+        let total = measured.consumed();
+        let mut one_short = SyntaxBudget::with_limit(total + 16);
+        one_short.charge_units(17).unwrap();
+        assert!(
+            super::super::parse_macro_tree_selected(
+                &source,
+                span,
+                output.clone(),
+                &contexts,
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                true,
+                &mut one_short,
+            )
+            .is_err()
+        );
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(total + 17);
+            exact.charge_units(17).unwrap();
+            super::super::parse_macro_tree_selected(
+                &source,
+                span,
+                output.clone(),
+                &contexts,
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                true,
+                &mut exact,
+            )
+            .unwrap();
+            assert_eq!(exact.consumed(), total + 17);
         }
     }
 

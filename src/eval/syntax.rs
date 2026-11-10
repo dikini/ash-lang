@@ -12,8 +12,8 @@ use crate::{
     resolved::BinderId,
     source::SourceFile,
     surface::{
-        SurfaceDeclarationCapture, SurfaceExpressionCapture, SurfaceName, SurfaceSyntaxCapture,
-        SurfaceTypeCapture,
+        SurfaceDeclarationCapture, SurfaceExpressionCapture, SurfaceName, SurfacePatternCapture,
+        SurfaceSyntaxCapture, SurfaceTypeCapture,
     },
     syntax::{
         ExpansionFrame, MacroDelimiter, MacroOrigin, MacroOutputNode, SyntaxContexts,
@@ -70,6 +70,16 @@ fn type_retention_failure(failure: crate::parser::MacroParseFailure) -> RuntimeF
             ..
         } => syntax_failure(failure),
         _ => RuntimeFailure::InvalidControlState,
+    }
+}
+
+fn require_pattern_charge(
+    result: Result<Option<bool>, crate::syntax_resource::ResourceFailure>,
+) -> Result<(), RuntimeFailure> {
+    if result.map_err(syntax_failure)? == Some(false) {
+        Ok(())
+    } else {
+        Err(RuntimeFailure::InvalidControlState)
     }
 }
 
@@ -130,6 +140,7 @@ pub(super) struct SyntaxHost<'inv> {
     expressions: Vec<SurfaceExpressionCapture>,
     declarations: Vec<SurfaceDeclarationCapture>,
     types: Vec<SurfaceTypeCapture>,
+    patterns: Vec<SurfacePatternCapture>,
     identifiers: Vec<SurfaceName>,
     origins: Vec<MacroOrigin>,
     parse_failures: Vec<(
@@ -180,6 +191,11 @@ impl<'inv> SyntaxHost<'inv> {
                     SurfaceSyntaxCapture::Type(capture) => {
                         crate::syntax::charge_new_type_retention(capture, 0, budget)
                             .map_err(type_retention_failure)?;
+                    }
+                    SurfaceSyntaxCapture::Pattern(capture) => {
+                        require_pattern_charge(crate::syntax::charge_new_pattern_retention(
+                            capture, 0, budget,
+                        ))?;
                     }
                     _ => return Err(RuntimeFailure::InvalidControlState),
                 }
@@ -290,6 +306,14 @@ impl<'inv> SyntaxHost<'inv> {
                                 crate::syntax::charge_new_type_copy(&capture.ty, 1, false, budget)
                                     .map_err(syntax_failure)?;
                             }
+                            SurfaceSyntaxCapture::Pattern(capture) => {
+                                require_pattern_charge(crate::syntax::charge_new_pattern_copy(
+                                    &capture.pattern,
+                                    1,
+                                    false,
+                                    budget,
+                                ))?;
+                            }
                             _ => return Err(RuntimeFailure::InvalidControlState),
                         }
                     }
@@ -302,6 +326,7 @@ impl<'inv> SyntaxHost<'inv> {
             expressions: Vec::new(),
             declarations: Vec::new(),
             types: Vec::new(),
+            patterns: Vec::new(),
             identifiers: Vec::new(),
             origins: Vec::new(),
             parse_failures: Vec::new(),
@@ -649,6 +674,34 @@ impl<'inv> SyntaxHost<'inv> {
                     let capture = self.construct(heap, "TypeCapture", Some(fragment))?;
                     return self.construct(heap, "Captured", Some(capture));
                 }
+                if let (Some(budget), Some(SurfaceSyntaxCapture::Pattern(capture))) =
+                    (self.syntax_work.as_deref_mut(), capture)
+                {
+                    require_pattern_charge(crate::syntax::charge_new_pattern_retention(
+                        capture, 0, budget,
+                    ))?;
+                    require_pattern_charge(crate::syntax::charge_new_pattern_copy(
+                        &capture.pattern,
+                        1,
+                        false,
+                        budget,
+                    ))?;
+                    budget.charge_units(2).map_err(syntax_failure)?;
+                    let live = self.patterns.len();
+                    if live == self.patterns.capacity() {
+                        let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                        budget
+                            .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                            .map_err(syntax_failure)?;
+                        self.patterns.reserve_exact(1);
+                    }
+                    let capture = capture.clone();
+                    let index = self.patterns.len();
+                    self.patterns.push(capture);
+                    let fragment = self.handle(CompilerSyntaxHandleKind::Pattern(index));
+                    let capture = self.construct(heap, "PatternCapture", Some(fragment))?;
+                    return self.construct(heap, "Captured", Some(capture));
+                }
                 if let (Some(budget), Some(SurfaceSyntaxCapture::Identifier(capture))) =
                     (self.syntax_work.as_deref_mut(), capture)
                 {
@@ -927,6 +980,61 @@ impl<'inv> SyntaxHost<'inv> {
                     }
                 }
             }
+            "parse_pattern" => {
+                let (input, syntax) = pair(&argument, heap)?;
+                if !matches!(
+                    self.admitted_handle(input)?,
+                    CompilerSyntaxHandleKind::Input
+                ) || self.syntax_work.is_none()
+                {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let output = self.transfer_syntax_inner(syntax, heap, 0, true)?;
+                let result = crate::parser::parse_macro_pattern(
+                    &self.source,
+                    self.frame.invocation,
+                    output,
+                    &self.contexts,
+                    &self.frame,
+                    self.syntax_work
+                        .as_deref_mut()
+                        .expect("the Pattern route owns a budget"),
+                );
+                match result {
+                    Ok(capture) => {
+                        self.charge(2)?; // arena slot and issued handle
+                        let live = self.patterns.len();
+                        if live == self.patterns.capacity() {
+                            let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                            self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                            self.patterns.reserve_exact(1);
+                        }
+                        let index = self.patterns.len();
+                        self.patterns.push(capture);
+                        let fragment = self.handle(CompilerSyntaxHandleKind::Pattern(index));
+                        self.construct(heap, "ParsedPattern", Some(fragment))
+                    }
+                    Err(crate::parser::MacroParseFailure::Syntax {
+                        diagnostics,
+                        resource,
+                    }) => {
+                        self.charge(2)?; // failure slot and issued handle
+                        let live = self.parse_failures.len();
+                        if live == self.parse_failures.capacity() {
+                            let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                            self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                            self.parse_failures.reserve_exact(1);
+                        }
+                        let index = self.parse_failures.len();
+                        self.parse_failures.push((diagnostics, resource));
+                        let failure = self.handle(CompilerSyntaxHandleKind::ParseFailure(index));
+                        self.construct(heap, "ParseRejected", Some(failure))
+                    }
+                    Err(crate::parser::MacroParseFailure::Invalid) => {
+                        Err(RuntimeFailure::InvalidControlState)
+                    }
+                }
+            }
             "expression_syntax" => {
                 let CompilerSyntaxHandleKind::Expression(index) =
                     self.admitted_handle(&argument)?
@@ -982,6 +1090,22 @@ impl<'inv> SyntaxHost<'inv> {
                 let contents = Arc::clone(&capture.contents);
                 self.syntax_value_inner(&contents, heap, 1, true)
             }
+            "pattern_syntax" => {
+                let CompilerSyntaxHandleKind::Pattern(index) = self.admitted_handle(&argument)?
+                else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                let capture = self
+                    .patterns
+                    .get(index)
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                let Some(budget) = self.syntax_work.as_deref_mut() else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                budget.charge().map_err(syntax_failure)?;
+                let contents = Arc::clone(&capture.contents);
+                self.syntax_value_inner(&contents, heap, 1, true)
+            }
             "token_kind" => {
                 let CompilerSyntaxHandleKind::Token(index) = self.admitted_handle(&argument)?
                 else {
@@ -1021,7 +1145,8 @@ impl<'inv> SyntaxHost<'inv> {
     ) -> Result<TransformerOutput, RuntimeFailure> {
         let (tag, syntax) = constructor_fields(result, heap)?;
         if tag == self.constructor("Expanded")? {
-            let type_accounting = self.type_accounting || !self.types.is_empty();
+            let type_accounting =
+                self.type_accounting || !self.types.is_empty() || !self.patterns.is_empty();
             return self
                 .transfer_syntax_inner(
                     syntax.ok_or(RuntimeFailure::InvalidControlState)?,
@@ -1196,7 +1321,7 @@ impl<'inv> SyntaxHost<'inv> {
             } else {
                 if self.syntax_work.is_some() {
                     self.charge(4)?;
-                    if ["ExpressionNode", "PatternNode", "DeclarationNode"]
+                    if ["ExpressionNode", "DeclarationNode"]
                         .iter()
                         .any(|name| self.constructors.get(*name) == Some(&tag))
                     {
@@ -1230,6 +1355,37 @@ impl<'inv> SyntaxHost<'inv> {
                     budget.charge().map_err(syntax_failure)?; // output slot
                     reserve_type_push(&mut output, Some(budget), type_accounting)?;
                     output.push(MacroOutputNode::ForwardedType(capture.clone(), origin));
+                    nodes = rest;
+                    continue;
+                }
+                if self.syntax_work.is_some() && self.constructors.get("PatternNode") == Some(&tag)
+                {
+                    let CompilerSyntaxHandleKind::Pattern(index) = self.admitted_handle(value)?
+                    else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    if self.patterns.get(index).is_none() {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    let prefix = depth.saturating_add(groups.len());
+                    let origin = self.copy_origin(origin, prefix)?;
+                    let capture = &self.patterns[index];
+                    let budget = self
+                        .syntax_work
+                        .as_deref_mut()
+                        .expect("the Pattern route owns a budget");
+                    require_pattern_charge(crate::syntax::charge_new_pattern_retention(
+                        capture, prefix, budget,
+                    ))?;
+                    require_pattern_charge(crate::syntax::charge_new_pattern_copy(
+                        &capture.pattern,
+                        crate::syntax::type_depth(prefix, 1).map_err(syntax_failure)?,
+                        false,
+                        budget,
+                    ))?;
+                    budget.charge().map_err(syntax_failure)?;
+                    reserve_type_push(&mut output, Some(budget), type_accounting)?;
+                    output.push(MacroOutputNode::ForwardedPattern(capture.clone(), origin));
                     nodes = rest;
                     continue;
                 }
@@ -1409,6 +1565,38 @@ impl<'inv> SyntaxHost<'inv> {
                         ],
                     )
                 }
+                Some(MacroOutputNode::ForwardedPattern(capture, origin)) => {
+                    let prefix = depth.saturating_add(groups.len());
+                    let Some(budget) = self.syntax_work.as_deref_mut() else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    require_pattern_charge(crate::syntax::charge_new_pattern_retention(
+                        capture, prefix, budget,
+                    ))?;
+                    require_pattern_charge(crate::syntax::charge_new_pattern_copy(
+                        &capture.pattern,
+                        crate::syntax::type_depth(prefix, 1).map_err(syntax_failure)?,
+                        false,
+                        budget,
+                    ))?;
+                    budget.charge_units(4).map_err(syntax_failure)?;
+                    self.charge_origin(origin, prefix)?;
+                    let live = self.patterns.len();
+                    if live == self.patterns.capacity() {
+                        let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                        self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                        self.patterns.reserve_exact(1);
+                    }
+                    let index = self.patterns.len();
+                    self.patterns.push(capture.clone());
+                    (
+                        "PatternNode",
+                        vec![
+                            self.handle(CompilerSyntaxHandleKind::Pattern(index)),
+                            self.issue_origin_inner(origin.clone(), type_accounting)?,
+                        ],
+                    )
+                }
                 Some(MacroOutputNode::Token(kind, spelling, origin)) => {
                     if let Some(budget) = self.syntax_work.as_deref_mut() {
                         crate::syntax::charge_type_token_copy(kind, budget)
@@ -1461,7 +1649,7 @@ impl<'inv> SyntaxHost<'inv> {
                     rest = self.construct(heap, "NoNodes", None)?;
                     continue;
                 }
-                Some(MacroOutputNode::Splice(_) | MacroOutputNode::ForwardedPattern(_, _)) => {
+                Some(MacroOutputNode::Splice(_)) => {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
                 None => {
@@ -1878,12 +2066,87 @@ mod tests {
             expressions: Vec::new(),
             declarations: Vec::new(),
             types: Vec::new(),
+            patterns: Vec::new(),
             identifiers: Vec::new(),
             origins: Vec::new(),
             parse_failures: Vec::new(),
             tokens: Vec::new(),
             constructors: HashMap::new(),
             operations: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn pattern_syntax_rejects_foreign_stale_wrong_and_out_of_range_handles() {
+        use super::{RuntimeFailure, Value};
+        use crate::{
+            eval::value::CompilerSyntaxHandleKind,
+            surface::{SurfacePattern, SurfacePatternCapture, SurfacePatternKind},
+            syntax::MacroOutputNode,
+            syntax_resource::SyntaxBudget,
+            types::{OperationId, TypeWorkBudget},
+        };
+        use std::sync::Arc;
+
+        let fixture = DeclarationHostFixture::new();
+        let contents: Arc<[MacroOutputNode]> = Arc::from([]);
+        let capture = SurfacePatternCapture {
+            pattern: SurfacePattern {
+                kind: SurfacePatternKind::Wildcard,
+                span: fixture.caller.span,
+                diagnostic: None,
+            },
+            contents: Arc::clone(&contents),
+        };
+        let mut budget = SyntaxBudget::default();
+        let mut host = fixture.host(&[], &mut budget).unwrap();
+        let operation = OperationId::new(host.ops, 40);
+        host.operations.insert(operation, "pattern_syntax".into());
+        host.patterns.push(capture.clone());
+        let local = host.handle(CompilerSyntaxHandleKind::Pattern(0));
+
+        let mut foreign_budget = SyntaxBudget::default();
+        let mut foreign = fixture.host(&[], &mut foreign_budget).unwrap();
+        foreign.patterns.push(capture.clone());
+        let foreign_handle = foreign.handle(CompilerSyntaxHandleKind::Pattern(0));
+        let stale_handle = {
+            let mut stale_budget = SyntaxBudget::default();
+            let mut stale = fixture.host(&[], &mut stale_budget).unwrap();
+            stale.patterns.push(capture);
+            stale.handle(CompilerSyntaxHandleKind::Pattern(0))
+        };
+        let invalid = [
+            foreign_handle,
+            stale_handle,
+            host.handle(CompilerSyntaxHandleKind::Type(0)),
+            host.handle(CompilerSyntaxHandleKind::Pattern(1)),
+            Value::Unit,
+        ];
+        let mut heap = Vec::new();
+        let retained = Arc::strong_count(&contents);
+        for handle in invalid {
+            assert!(matches!(
+                host.request(
+                    operation,
+                    handle,
+                    &mut heap,
+                    &mut TypeWorkBudget::unbounded()
+                ),
+                Err(RuntimeFailure::InvalidControlState)
+            ));
+            assert_eq!(host.patterns.len(), 1);
+            assert_eq!(Arc::strong_count(&contents), retained);
+            assert!(heap.is_empty());
+        }
+        for _ in 0..2 {
+            host.request(
+                operation,
+                local.clone(),
+                &mut heap,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .expect("a local Pattern handle is reusable");
+            assert_eq!(Arc::strong_count(&contents), retained);
         }
     }
 
@@ -2289,6 +2552,1006 @@ mod tests {
             host.request(parse, fields, &mut heap, &mut TypeWorkBudget::unbounded()),
             Err(RuntimeFailure::InvalidControlState)
         ));
+    }
+
+    #[test]
+    fn pattern_services_keep_declaration_and_none_host_accounting_separate() {
+        use super::{HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap};
+        use crate::{
+            integer::Integer,
+            lexer::TokenKind,
+            module::ModuleId,
+            surface::{SurfaceDeclarationCapture, SurfaceIdentifierCapture, SurfaceSyntaxCapture},
+            syntax::{MacroOutputNode, TransformerOutput},
+            syntax_resource::SyntaxBudget,
+            types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
+        };
+        use std::sync::Arc;
+
+        fn trial(
+            fixture: &DeclarationHostFixture,
+            selected: bool,
+            parse_first: bool,
+        ) -> (usize, usize, usize, usize) {
+            let identifier = SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+                name: fixture.caller.clone(),
+                origin: fixture.caller.span.into(),
+            });
+            let captures = if selected {
+                vec![identifier]
+            } else {
+                vec![
+                    SurfaceSyntaxCapture::Declaration(SurfaceDeclarationCapture {
+                        contents: Arc::from([]),
+                    }),
+                    identifier,
+                ]
+            };
+            let mut budget = SyntaxBudget::default();
+            let mut host = fixture.host(&captures, &mut budget).unwrap();
+            let parse = OperationId::new(host.ops, 4);
+            let make_token = OperationId::new(host.ops, 5);
+            host.operations.insert(parse, "parse_pattern".into());
+            host.operations.insert(make_token, "make_token".into());
+            let owner = NominalTypeId::new(ModuleId::new(0), 0);
+            for (index, name) in (100u32..).zip([
+                "ParsedPattern",
+                "ParseRejected",
+                "IntType",
+                "MadeToken",
+                "NoOrigins",
+                "MoreOrigins",
+            ]) {
+                host.constructors
+                    .insert(name.into(), ConstructorId::new(owner, index));
+            }
+            let span = host.frame.invocation;
+            let packet = [MacroOutputNode::Token(
+                TokenKind::Wildcard,
+                "_".into(),
+                span.into(),
+            )];
+            let mut heap = Vec::<HeapCell>::new();
+            let syntax = host.syntax_value(&packet, &mut heap, 0).unwrap();
+            if parse_first {
+                let fields = Value::Location(
+                    allocate_heap(
+                        &mut heap,
+                        HeapCell::Tuple(vec![host.input(), syntax.clone()].into_boxed_slice()),
+                    )
+                    .unwrap(),
+                );
+                host.request(parse, fields, &mut heap, &mut TypeWorkBudget::unbounded())
+                    .unwrap();
+                assert_eq!(host.patterns.len(), 1);
+            }
+
+            let index = if selected { 0 } else { 1 };
+            let fields = Value::Location(
+                allocate_heap(
+                    &mut heap,
+                    HeapCell::Tuple(
+                        vec![host.input(), Value::integer(Integer::from_i64(index))]
+                            .into_boxed_slice(),
+                    ),
+                )
+                .unwrap(),
+            );
+            let start = host.syntax_work.as_deref().unwrap().consumed();
+            host.request(
+                fixture.capture,
+                fields,
+                &mut heap,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+            let capture_cost = host.syntax_work.as_deref().unwrap().consumed() - start;
+
+            let kind = host.construct(&mut heap, "IntType", None).unwrap();
+            let fields = Value::Location(
+                allocate_heap(
+                    &mut heap,
+                    HeapCell::Tuple(vec![kind, Value::String(Arc::from("Int"))].into_boxed_slice()),
+                )
+                .unwrap(),
+            );
+            let start = host.syntax_work.as_deref().unwrap().consumed();
+            host.request(
+                make_token,
+                fields,
+                &mut heap,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+            let token_cost = host.syntax_work.as_deref().unwrap().consumed() - start;
+
+            let first = host.issue_origin(span.into()).unwrap();
+            let second = host.issue_origin(span.into()).unwrap();
+            let mut origins = host.construct(&mut heap, "NoOrigins", None).unwrap();
+            for origin in [first, second] {
+                let fields = Value::Location(
+                    allocate_heap(
+                        &mut heap,
+                        HeapCell::Tuple(vec![origin, origins].into_boxed_slice()),
+                    )
+                    .unwrap(),
+                );
+                origins = host
+                    .construct(&mut heap, "MoreOrigins", Some(fields))
+                    .unwrap();
+            }
+            let start = host.syntax_work.as_deref().unwrap().consumed();
+            assert_eq!(host.read_origins(&origins, &heap, 10).unwrap().len(), 2);
+            let origins_cost = host.syntax_work.as_deref().unwrap().consumed() - start;
+
+            let expanded = host
+                .construct(&mut heap, "Expanded", Some(syntax.clone()))
+                .unwrap();
+            let start = host.syntax_work.as_deref().unwrap().consumed();
+            assert_eq!(host.transfer_syntax(&syntax, &heap, 0).unwrap(), packet);
+            let direct = host.syntax_work.as_deref().unwrap().consumed() - start;
+            let start = host.syntax_work.as_deref().unwrap().consumed();
+            let TransformerOutput::Expanded(output) = host
+                .transfer(&expanded, &heap, &mut TypeWorkBudget::unbounded())
+                .unwrap()
+            else {
+                panic!("expected Expanded");
+            };
+            assert_eq!(output, packet);
+            let expanded_cost = host.syntax_work.as_deref().unwrap().consumed() - start;
+            (
+                capture_cost,
+                token_cost,
+                origins_cost,
+                expanded_cost - direct,
+            )
+        }
+
+        let fixture = DeclarationHostFixture::new();
+        let legacy = trial(&fixture, false, false);
+        let after_pattern = trial(&fixture, false, true);
+        assert_eq!(
+            (legacy.0, legacy.1, legacy.2),
+            (after_pattern.0, after_pattern.1, after_pattern.2)
+        );
+        assert_eq!(legacy.3, 0);
+        assert_eq!(after_pattern.3, 1);
+        let selected = trial(&fixture, true, false);
+        assert_eq!(selected.0 - legacy.0, 4); // Origin growth 2+1 and Identifier initial slot.
+        assert_eq!(selected.1 - legacy.1, 3); // Token growth 2+1.
+        assert_eq!(selected.2 - legacy.2, 4); // Related-origin buffer 1, then 2+1.
+        assert_eq!(selected.3, 0);
+
+        let captures = [SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+            name: fixture.caller.clone(),
+            origin: fixture.caller.span.into(),
+        })];
+        let mut host = SyntaxHost::new(
+            &fixture.entry,
+            &captures,
+            &fixture.source,
+            &fixture.caller,
+            0,
+            Arc::clone(&fixture.contexts),
+            Arc::clone(&fixture.frame),
+            None,
+        )
+        .unwrap();
+        let parse = OperationId::new(host.ops, 4);
+        host.operations.insert(parse, "parse_pattern".into());
+        let packet = [MacroOutputNode::Token(
+            TokenKind::Wildcard,
+            "_".into(),
+            fixture.frame.invocation.into(),
+        )];
+        let mut heap = Vec::new();
+        let syntax = host.syntax_value(&packet, &mut heap, 0).unwrap();
+        assert_eq!(host.transfer_syntax(&syntax, &heap, 0).unwrap(), packet);
+        let fields = Value::Location(
+            allocate_heap(
+                &mut heap,
+                HeapCell::Tuple(vec![host.input(), syntax].into_boxed_slice()),
+            )
+            .unwrap(),
+        );
+        assert!(matches!(
+            host.request(parse, fields, &mut heap, &mut TypeWorkBudget::unbounded()),
+            Err(RuntimeFailure::InvalidControlState)
+        ));
+    }
+
+    #[test]
+    fn fragment_category_and_end_of_input_failures_keep_their_diagnostics() {
+        use super::{HeapCell, Value, allocate_heap, constructor_fields};
+        use crate::{
+            eval::value::CompilerSyntaxHandleKind,
+            lexer::TokenKind,
+            module::ModuleId,
+            parser::{ExpectedForm, FoundToken, ParseReason},
+            surface::{
+                SurfacePattern, SurfacePatternCapture, SurfacePatternKind, SurfaceType,
+                SurfaceTypeCapture, SurfaceTypeKind,
+            },
+            syntax::{MacroDelimiter, MacroOutputNode},
+            syntax_resource::SyntaxBudget,
+            types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
+        };
+        use std::sync::Arc;
+
+        let mut budget = SyntaxBudget::default();
+        let mut host = scalar_host(&mut budget);
+        let pattern_op = OperationId::new(host.ops, 0);
+        let type_op = OperationId::new(host.ops, 1);
+        host.operations.insert(pattern_op, "parse_pattern".into());
+        host.operations.insert(type_op, "parse_type".into());
+        let owner = NominalTypeId::new(ModuleId::new(0), 0);
+        for (index, name) in (0u32..).zip([
+            "Syntax",
+            "NoNodes",
+            "MoreNodes",
+            "GroupNode",
+            "Parentheses",
+            "PatternNode",
+            "TypeNode",
+            "TokenNode",
+            "IdentifierNode",
+            "ExpressionNode",
+            "ParsedPattern",
+            "ParsedType",
+            "ParseRejected",
+        ]) {
+            host.constructors
+                .insert(name.into(), ConstructorId::new(owner, index));
+        }
+        let span = host.caller.span;
+        let pattern = || {
+            MacroOutputNode::ForwardedPattern(
+                SurfacePatternCapture {
+                    pattern: SurfacePattern {
+                        kind: SurfacePatternKind::Wildcard,
+                        span,
+                        diagnostic: None,
+                    },
+                    contents: Arc::from([]),
+                },
+                span.into(),
+            )
+        };
+        let ty = || {
+            MacroOutputNode::ForwardedType(
+                SurfaceTypeCapture {
+                    ty: SurfaceType {
+                        kind: SurfaceTypeKind::Int,
+                        span,
+                        diagnostic: None,
+                    },
+                    contents: Arc::from([]),
+                },
+                span.into(),
+            )
+        };
+        let grouped =
+            |node| MacroOutputNode::Group(MacroDelimiter::Parentheses, vec![node], span.into());
+        let token =
+            |kind, text: &'static str| MacroOutputNode::Token(kind, Arc::from(text), span.into());
+        let cases = [
+            (
+                type_op,
+                vec![grouped(pattern())],
+                ParseReason::ExpectedForm,
+                Some(ExpectedForm::Type),
+                Some(FoundToken::Spelling("_")),
+            ),
+            (
+                pattern_op,
+                vec![grouped(ty())],
+                ParseReason::ExpectedForm,
+                Some(ExpectedForm::Pattern),
+                Some(FoundToken::Spelling("Int")),
+            ),
+            (
+                pattern_op,
+                vec![
+                    token(TokenKind::Wildcard, "_"),
+                    token(TokenKind::Wildcard, "_"),
+                ],
+                ParseReason::UnexpectedToken,
+                None,
+                Some(FoundToken::Spelling("_")),
+            ),
+            (
+                type_op,
+                vec![
+                    token(TokenKind::IntType, "Int"),
+                    token(TokenKind::IntType, "Int"),
+                ],
+                ParseReason::UnexpectedToken,
+                None,
+                Some(FoundToken::Spelling("Int")),
+            ),
+            (
+                pattern_op,
+                vec![
+                    token(TokenKind::Wildcard, "_"),
+                    token(TokenKind::LineEnd, "\n"),
+                ],
+                ParseReason::UnexpectedToken,
+                None,
+                Some(FoundToken::LineEnd),
+            ),
+            (
+                type_op,
+                vec![
+                    token(TokenKind::IntType, "Int"),
+                    token(TokenKind::LineEnd, "\n"),
+                ],
+                ParseReason::UnexpectedToken,
+                None,
+                Some(FoundToken::LineEnd),
+            ),
+        ];
+        let mut heap = Vec::<HeapCell>::new();
+        for (operation, output, reason, expected, found) in cases {
+            let syntax = host
+                .syntax_value_inner(&output, &mut heap, 0, true)
+                .unwrap();
+            let before = (
+                host.types.len(),
+                host.patterns.len(),
+                host.parse_failures.len(),
+            );
+            let argument = Value::Location(
+                allocate_heap(
+                    &mut heap,
+                    HeapCell::Tuple(vec![host.input(), syntax].into_boxed_slice()),
+                )
+                .unwrap(),
+            );
+            let result = host
+                .request(
+                    operation,
+                    argument,
+                    &mut heap,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .unwrap();
+            let (tag, Some(handle)) = constructor_fields(&result, &heap).unwrap() else {
+                panic!("expected rejection")
+            };
+            assert_eq!(tag, host.constructor("ParseRejected").unwrap());
+            assert_eq!(
+                (
+                    host.types.len(),
+                    host.patterns.len(),
+                    host.parse_failures.len()
+                ),
+                (before.0, before.1, before.2 + 1)
+            );
+            let CompilerSyntaxHandleKind::ParseFailure(index) =
+                host.admitted_handle(handle).unwrap()
+            else {
+                panic!("expected failure handle")
+            };
+            let (diagnostics, resource) = &host.parse_failures[index];
+            assert!(resource.is_none());
+            assert!(!diagnostics.is_empty());
+            let diagnostic = &diagnostics[0];
+            assert_eq!(diagnostic.reason, reason);
+            assert_eq!(diagnostic.expected_form(), expected);
+            assert_eq!(diagnostic.found_token(), found);
+            assert_eq!(diagnostic.primary.span(), span);
+        }
+    }
+
+    #[test]
+    fn pattern_host_nested_issued_fragments_obey_retained_depth_on_a_512k_stack() {
+        const CHILD: &str = "ASH_PATTERN_AST_512K_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "eval::machine::syntax::tests::pattern_host_nested_issued_fragments_obey_retained_depth_on_a_512k_stack",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprint!("{stderr}");
+            assert!(
+                output.status.success(),
+                "512 KiB child failed: {}",
+                output.status
+            );
+            for marker in [
+                "pattern stack: returned owner reaches 128",
+                "pattern stack: adjacent wrapper refused before issuance",
+                "pattern stack: deep unwrap and reparse preserved the binder",
+                "pattern stack: future owner accepts 128 and refuses 129",
+                "pattern stack: final PatternNode transferred",
+                "pattern stack: final contents alias dropped",
+            ] {
+                assert!(stderr.contains(marker), "missing marker {marker}");
+            }
+            return;
+        }
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                use super::{
+                    HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap, constructor_fields,
+                };
+                use crate::{
+                    eval::value::CompilerSyntaxHandleKind,
+                    module::ModuleId,
+                    parser::ResourceFailure,
+                    surface::SurfacePatternKind,
+                    syntax::{MacroOutputNode, TransformerOutput, charge_new_pattern_retention},
+                    syntax_resource::SyntaxBudget,
+                    types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
+                };
+                use std::sync::Arc;
+
+                fn tuple(heap: &mut Vec<HeapCell>, fields: Vec<Value>) -> Value {
+                    Value::Location(
+                        allocate_heap(heap, HeapCell::Tuple(fields.into_boxed_slice())).unwrap(),
+                    )
+                }
+                fn node(
+                    host: &mut SyntaxHost<'_>,
+                    heap: &mut Vec<HeapCell>,
+                    tag: &str,
+                    fields: Vec<Value>,
+                ) -> Value {
+                    let payload = tuple(heap, fields);
+                    host.construct(heap, tag, Some(payload)).unwrap()
+                }
+                fn syntax(
+                    host: &mut SyntaxHost<'_>,
+                    heap: &mut Vec<HeapCell>,
+                    values: Vec<Value>,
+                ) -> Value {
+                    let mut nodes = host.construct(heap, "NoNodes", None).unwrap();
+                    for value in values.into_iter().rev() {
+                        let pair = tuple(heap, vec![value, nodes]);
+                        nodes = host.construct(heap, "MoreNodes", Some(pair)).unwrap();
+                    }
+                    host.construct(heap, "Syntax", Some(nodes)).unwrap()
+                }
+                fn parse(
+                    host: &mut SyntaxHost<'_>,
+                    heap: &mut Vec<HeapCell>,
+                    operation: OperationId,
+                    syntax: Value,
+                ) -> Result<Value, RuntimeFailure> {
+                    let input = tuple(heap, vec![host.input(), syntax]);
+                    host.request(operation, input, heap, &mut TypeWorkBudget::unbounded())
+                }
+
+                let mut budget = SyntaxBudget::default();
+                let mut host = scalar_host(&mut budget);
+                host.type_accounting = true;
+                let parse_op = OperationId::new(host.ops, 0);
+                let unwrap_op = OperationId::new(host.ops, 1);
+                host.operations.insert(parse_op, "parse_pattern".into());
+                host.operations.insert(unwrap_op, "pattern_syntax".into());
+                let owner = NominalTypeId::new(ModuleId::new(0), 0);
+                for (index, name) in (0u32..).zip([
+                    "Syntax",
+                    "NoNodes",
+                    "MoreNodes",
+                    "GroupNode",
+                    "Parentheses",
+                    "PatternNode",
+                    "TypeNode",
+                    "TokenNode",
+                    "IdentifierNode",
+                    "ExpressionNode",
+                    "ParsedPattern",
+                    "ParseRejected",
+                    "Expanded",
+                ]) {
+                    host.constructors
+                        .insert(name.into(), ConstructorId::new(owner, index));
+                }
+                let span = host.caller.span;
+                let mut heap = Vec::new();
+                let binder = MacroOutputNode::Identifier(host.caller.clone(), span.into());
+                let input = host
+                    .syntax_value_inner(&[binder], &mut heap, 0, true)
+                    .unwrap();
+                let seed = parse(&mut host, &mut heap, parse_op, input).unwrap();
+                let (tag, payload) = constructor_fields(&seed, &heap).unwrap();
+                assert_eq!(tag, host.constructor("ParsedPattern").unwrap());
+                let mut last = payload.unwrap().clone();
+                let mut constructor = host.caller.clone();
+                constructor.text = "Wrap".into();
+                let packet = MacroOutputNode::Identifier(constructor, span.into());
+                host.syntax_value_inner(&[packet], &mut heap, 0, true)
+                    .unwrap();
+                let wrap = host.handle(CompilerSyntaxHandleKind::Identifier(
+                    host.identifiers.len() - 1,
+                ));
+                let origin = host.issue_origin(span.into()).unwrap();
+                let mut accepted = 0usize;
+                let mut refused = false;
+                let mut penultimate = None;
+                for layers in 1..=128 {
+                    let before = host.patterns.len();
+                    let protected = node(
+                        &mut host,
+                        &mut heap,
+                        "PatternNode",
+                        vec![last.clone(), origin.clone()],
+                    );
+                    let inner = syntax(&mut host, &mut heap, vec![protected]);
+                    let delimiter = host.construct(&mut heap, "Parentheses", None).unwrap();
+                    let group = node(
+                        &mut host,
+                        &mut heap,
+                        "GroupNode",
+                        vec![delimiter, inner, origin.clone()],
+                    );
+                    let name = node(
+                        &mut host,
+                        &mut heap,
+                        "IdentifierNode",
+                        vec![wrap.clone(), origin.clone()],
+                    );
+                    let input = syntax(&mut host, &mut heap, vec![name, group]);
+                    let result = match parse(&mut host, &mut heap, parse_op, input) {
+                        Ok(result) => result,
+                        Err(RuntimeFailure::Report(report)) => {
+                            assert_eq!(
+                                report.primary.reason_code(),
+                                "internal.resource.structural-depth"
+                            );
+                            assert_eq!(host.patterns.len(), before);
+                            refused = true;
+                            break;
+                        }
+                        Err(error) => panic!("unexpected Pattern request failure: {error:?}"),
+                    };
+                    let (tag, payload) = constructor_fields(&result, &heap).unwrap();
+                    let value = payload.unwrap().clone();
+                    if tag == host.constructor("ParsedPattern").unwrap() {
+                        assert_eq!(host.patterns.len(), before + 1);
+                        penultimate = Some(last.clone());
+                        last = value;
+                        accepted = layers;
+                        let capture = host.patterns.last().unwrap();
+                        assert_eq!(
+                            charge_new_pattern_retention(capture, 0, &mut SyntaxBudget::default())
+                                .unwrap(),
+                            Some(false)
+                        );
+                        let mut current = &capture.pattern;
+                        for _ in 0..layers {
+                            let SurfacePatternKind::Constructor {
+                                payload: Some(child),
+                                ..
+                            } = &current.kind
+                            else {
+                                panic!("missing constructor layer");
+                            };
+                            current = child;
+                        }
+                        assert!(matches!(current.kind, SurfacePatternKind::Binder(_)));
+                        if layers == 1 {
+                            host.request(
+                                unwrap_op,
+                                last.clone(),
+                                &mut heap,
+                                &mut TypeWorkBudget::unbounded(),
+                            )
+                            .unwrap();
+                        }
+                    } else {
+                        assert_eq!(tag, host.constructor("ParseRejected").unwrap());
+                        assert_eq!(host.patterns.len(), before);
+                        let CompilerSyntaxHandleKind::ParseFailure(index) =
+                            host.admitted_handle(&value).unwrap()
+                        else {
+                            panic!("expected failure handle");
+                        };
+                        assert_eq!(
+                            host.parse_failures[index].1,
+                            Some(ResourceFailure::StructuralDepth { limit: 128 })
+                        );
+                        refused = true;
+                        break;
+                    }
+                }
+                assert!(refused);
+                assert_eq!(accepted, 42);
+                let CompilerSyntaxHandleKind::Pattern(last_index) =
+                    host.admitted_handle(&last).unwrap()
+                else {
+                    panic!("expected the last Pattern handle");
+                };
+                let previous = penultimate.unwrap();
+                let CompilerSyntaxHandleKind::Pattern(previous_index) =
+                    host.admitted_handle(&previous).unwrap()
+                else {
+                    panic!("expected the preceding Pattern handle");
+                };
+                let previous_contents = Arc::clone(&host.patterns[previous_index].contents);
+                let unwrapped = host
+                    .request(
+                        unwrap_op,
+                        last.clone(),
+                        &mut heap,
+                        &mut TypeWorkBudget::unbounded(),
+                    )
+                    .unwrap();
+                let returned = host
+                    .transfer_syntax_inner(&unwrapped, &heap, 0, true)
+                    .unwrap();
+                let [
+                    MacroOutputNode::Identifier(_, _),
+                    MacroOutputNode::Group(_, children, _),
+                ] = returned.as_slice()
+                else {
+                    panic!("expected the unwrapped constructor and group");
+                };
+                let [MacroOutputNode::ForwardedPattern(inner, _)] = children.as_slice() else {
+                    panic!("expected the preceding protected Pattern");
+                };
+                assert!(Arc::ptr_eq(&inner.contents, &previous_contents));
+                let reparsed = parse(&mut host, &mut heap, parse_op, unwrapped).unwrap();
+                let (tag, Some(handle)) = constructor_fields(&reparsed, &heap).unwrap() else {
+                    panic!("expected the reparsed Pattern handle");
+                };
+                assert_eq!(tag, host.constructor("ParsedPattern").unwrap());
+                let CompilerSyntaxHandleKind::Pattern(index) =
+                    host.admitted_handle(handle).unwrap()
+                else {
+                    panic!("expected a Pattern handle");
+                };
+                let mut current = &host.patterns[index].pattern;
+                for _ in 0..accepted {
+                    let SurfacePatternKind::Constructor {
+                        payload: Some(child),
+                        ..
+                    } = &current.kind
+                    else {
+                        panic!("missing a reparsed constructor layer");
+                    };
+                    current = child;
+                }
+                let SurfacePatternKind::Binder(binder) = &current.kind else {
+                    panic!("expected the reparsed binder");
+                };
+                assert_eq!(binder.name.text, host.caller.text);
+                assert_eq!(binder.name.span, host.caller.span);
+                assert_eq!(binder.name.introduction, host.caller.introduction);
+                assert_eq!(binder.name.introduced_at, host.caller.introduced_at);
+                assert_eq!(binder.name.written, host.caller.written);
+                let diagnostic = binder.name.diagnostic.as_ref().unwrap();
+                assert_eq!(diagnostic.primary.primary(), host.caller.span);
+                assert!(
+                    diagnostic
+                        .frames
+                        .iter()
+                        .any(|frame| Arc::ptr_eq(frame, &host.frame))
+                );
+                drop(returned);
+                eprintln!("pattern stack: deep unwrap and reparse preserved the binder");
+
+                // The preceding capture's retained path is 125. One group and
+                // the new capture's two owners reach 128; two groups reach 129.
+                for (groups, succeeds) in [(1usize, true), (2, false)] {
+                    let protected = node(
+                        &mut host,
+                        &mut heap,
+                        "PatternNode",
+                        vec![previous.clone(), origin.clone()],
+                    );
+                    let mut input = syntax(&mut host, &mut heap, vec![protected]);
+                    for _ in 0..groups {
+                        let delimiter = host.construct(&mut heap, "Parentheses", None).unwrap();
+                        let group = node(
+                            &mut host,
+                            &mut heap,
+                            "GroupNode",
+                            vec![delimiter, input, origin.clone()],
+                        );
+                        input = syntax(&mut host, &mut heap, vec![group]);
+                    }
+                    // Both inputs pass transfer; the adjacent refusal belongs
+                    // to the subsequent future-contents copy preflight.
+                    let transferred = host.transfer_syntax_inner(&input, &heap, 0, true).unwrap();
+                    let copy = crate::syntax::copy_fragment_output(
+                        &transferred,
+                        &mut SyntaxBudget::default(),
+                    );
+                    if succeeds {
+                        drop(copy.unwrap());
+                    } else {
+                        assert!(matches!(
+                            copy,
+                            Err(crate::parser::MacroParseFailure::Syntax {
+                                resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
+                                ..
+                            })
+                        ));
+                    }
+                    drop(transferred);
+                    let before = host.patterns.len();
+                    let result = parse(&mut host, &mut heap, parse_op, input).unwrap();
+                    let (tag, Some(handle)) = constructor_fields(&result, &heap).unwrap() else {
+                        panic!("expected a Pattern service result");
+                    };
+                    if succeeds {
+                        assert_eq!(tag, host.constructor("ParsedPattern").unwrap());
+                        assert_eq!(host.patterns.len(), before + 1);
+                        let CompilerSyntaxHandleKind::Pattern(index) =
+                            host.admitted_handle(handle).unwrap()
+                        else {
+                            panic!("expected a Pattern handle");
+                        };
+                        assert_eq!(
+                            charge_new_pattern_retention(
+                                &host.patterns[index],
+                                0,
+                                &mut SyntaxBudget::default(),
+                            )
+                            .unwrap(),
+                            Some(false)
+                        );
+                        assert!(matches!(
+                            charge_new_pattern_retention(
+                                &host.patterns[index],
+                                1,
+                                &mut SyntaxBudget::default(),
+                            ),
+                            Err(ResourceFailure::StructuralDepth { limit: 128 })
+                        ));
+                    } else {
+                        assert_eq!(tag, host.constructor("ParseRejected").unwrap());
+                        assert_eq!(host.patterns.len(), before);
+                        let CompilerSyntaxHandleKind::ParseFailure(index) =
+                            host.admitted_handle(handle).unwrap()
+                        else {
+                            panic!("expected a failure handle");
+                        };
+                        assert_eq!(
+                            host.parse_failures[index].1,
+                            Some(ResourceFailure::StructuralDepth { limit: 128 })
+                        );
+                    }
+                }
+                drop(previous_contents);
+                eprintln!("pattern stack: future owner accepts 128 and refuses 129");
+                let capture = &host.patterns[last_index];
+                assert!(matches!(
+                    charge_new_pattern_retention(capture, 1, &mut SyntaxBudget::default()),
+                    Err(ResourceFailure::StructuralDepth { limit: 128 })
+                ));
+                let alias = Arc::clone(&capture.contents);
+                let weak = Arc::downgrade(&alias);
+                eprintln!("pattern stack: returned owner reaches 128");
+                eprintln!(
+                    "pattern stack: adjacent wrapper refused before issuance ({accepted} accepted)"
+                );
+                let protected = node(&mut host, &mut heap, "PatternNode", vec![last, origin]);
+                let output = syntax(&mut host, &mut heap, vec![protected]);
+                let expanded = host.construct(&mut heap, "Expanded", Some(output)).unwrap();
+                let TransformerOutput::Expanded(nodes) = host
+                    .transfer(&expanded, &heap, &mut TypeWorkBudget::unbounded())
+                    .unwrap()
+                else {
+                    panic!("expected Expanded");
+                };
+                let [MacroOutputNode::ForwardedPattern(capture, _)] = nodes.as_slice() else {
+                    panic!("expected forwarded Pattern");
+                };
+                assert!(Arc::ptr_eq(&capture.contents, &alias));
+                eprintln!("pattern stack: final PatternNode transferred");
+                drop(nodes);
+                drop(heap);
+                drop(host);
+                assert_eq!(Arc::strong_count(&alias), 1);
+                drop(alias);
+                assert!(weak.upgrade().is_none());
+                eprintln!("pattern stack: final contents alias dropped");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn pattern_host_raw_result_obeys_composed_depth_on_a_512k_stack() {
+        const CHILD: &str = "ASH_PATTERN_RAW_AST_512K_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "eval::machine::syntax::tests::pattern_host_raw_result_obeys_composed_depth_on_a_512k_stack",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprint!("{stderr}");
+            assert!(
+                output.status.success(),
+                "512 KiB child failed: {}",
+                output.status
+            );
+            for marker in [
+                "raw Pattern stack: 15 groups preserve returned binder metadata",
+                "raw Pattern stack: 16 groups refused without Pattern issuance",
+            ] {
+                assert!(stderr.contains(marker), "missing marker {marker}");
+            }
+            return;
+        }
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                use super::{HeapCell, Value, allocate_heap, constructor_fields};
+                use crate::{
+                    module::ModuleId,
+                    parser::{ResourceFailure, STRUCTURAL_DEPTH_LIMIT},
+                    source::{ByteRange, SourceFile},
+                    surface::SurfacePatternKind,
+                    syntax::{
+                        DiagnosticLocation, ExpansionFrame, MacroDelimiter, MacroOrigin,
+                        MacroOutputNode, charge_new_pattern_retention,
+                    },
+                    syntax_resource::SyntaxBudget,
+                    types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
+                };
+                use std::sync::Arc;
+
+                for layers in [15usize, 16] {
+                    let mut budget = SyntaxBudget::default();
+                    let mut host = scalar_host(&mut budget);
+                    let parse = OperationId::new(host.ops, 0);
+                    host.operations.insert(parse, "parse_pattern".into());
+                    let owner = NominalTypeId::new(ModuleId::new(0), 0);
+                    for (index, name) in (0u32..).zip([
+                        "Syntax",
+                        "NoNodes",
+                        "MoreNodes",
+                        "GroupNode",
+                        "Parentheses",
+                        "PatternNode",
+                        "TypeNode",
+                        "TokenNode",
+                        "IdentifierNode",
+                        "ExpressionNode",
+                        "ParsedPattern",
+                        "ParseRejected",
+                    ]) {
+                        host.constructors
+                            .insert(name.into(), ConstructorId::new(owner, index));
+                    }
+                    let text = format!("{}value{}", "(".repeat(layers), ")".repeat(layers));
+                    let source = SourceFile::new("raw-deep-pattern.ash", text).unwrap();
+                    let whole = source
+                        .span(ByteRange::new(0, source.text().len() as u32).unwrap())
+                        .unwrap();
+                    let leaf = source
+                        .span(ByteRange::new(layers as u32, layers as u32 + 5).unwrap())
+                        .unwrap();
+                    let previous = Arc::new(ExpansionFrame {
+                        invocation: leaf,
+                        definition: whole,
+                    });
+                    let combined = MacroOrigin::combined(
+                        vec![leaf.into(), whole.into()],
+                        Arc::clone(&previous),
+                    )
+                    .unwrap();
+                    let mut name = host.caller.clone();
+                    name.text = "value".into();
+                    name.span = leaf;
+                    let mut prior = DiagnosticLocation::new(combined.clone());
+                    prior.related.push(whole.into());
+                    prior.frames.push(Arc::clone(&previous));
+                    name.diagnostic = Some(Box::new(prior));
+                    let mut raw = vec![MacroOutputNode::Identifier(name, leaf.into())];
+                    for depth in (0..layers).rev() {
+                        let span = source
+                            .span(
+                                ByteRange::new(depth as u32, (source.text().len() - depth) as u32)
+                                    .unwrap(),
+                            )
+                            .unwrap();
+                        raw = vec![MacroOutputNode::Group(
+                            MacroDelimiter::Parentheses,
+                            raw,
+                            span.into(),
+                        )];
+                    }
+                    host.source = source;
+                    host.frame = Arc::new(ExpansionFrame {
+                        invocation: whole,
+                        definition: leaf,
+                    });
+                    host.caller.span = whole;
+                    let mut heap = Vec::<HeapCell>::new();
+                    let syntax = host.syntax_value_inner(&raw, &mut heap, 0, true).unwrap();
+                    let fields = Value::Location(
+                        allocate_heap(
+                            &mut heap,
+                            HeapCell::Tuple(vec![host.input(), syntax].into_boxed_slice()),
+                        )
+                        .unwrap(),
+                    );
+                    let parsed = host
+                        .request(parse, fields, &mut heap, &mut TypeWorkBudget::unbounded())
+                        .unwrap();
+                    let (tag, Some(_)) = constructor_fields(&parsed, &heap).unwrap() else {
+                        panic!("expected a raw Pattern service result");
+                    };
+                    assert_eq!(
+                        1 + layers * 8,
+                        if layers == 15 {
+                            121
+                        } else {
+                            STRUCTURAL_DEPTH_LIMIT + 1
+                        }
+                    );
+                    if layers == 15 {
+                        assert_eq!(tag, host.constructor("ParsedPattern").unwrap());
+                        assert_eq!(host.patterns.len(), 1);
+                        let capture = host.patterns.last().unwrap();
+                        assert_eq!(
+                            charge_new_pattern_retention(capture, 0, &mut SyntaxBudget::default())
+                                .unwrap(),
+                            Some(false)
+                        );
+                        let SurfacePatternKind::Binder(binder) = &capture.pattern.kind else {
+                            panic!("expected the returned binder");
+                        };
+                        assert_eq!(binder.name.text, "value");
+                        assert_eq!(binder.name.span, leaf);
+                        assert_eq!(binder.name.introduction, 0);
+                        assert_eq!(binder.name.introduced_at, None);
+                        assert!(binder.name.written);
+                        let diagnostic = binder.name.diagnostic.as_ref().unwrap();
+                        assert_eq!(diagnostic.primary, MacroOrigin::Source(leaf));
+                        assert_eq!(diagnostic.related, [combined, whole.into()]);
+                        assert_eq!(diagnostic.frames.len(), 2);
+                        assert!(Arc::ptr_eq(&diagnostic.frames[0], &previous));
+                        assert!(Arc::ptr_eq(&diagnostic.frames[1], &host.frame));
+                        let alias = Arc::clone(&capture.contents);
+                        let weak = Arc::downgrade(&alias);
+                        eprintln!("raw Pattern stack: 15 groups preserve returned binder metadata");
+                        drop(heap);
+                        drop(host);
+                        drop(raw);
+                        assert_eq!(Arc::strong_count(&alias), 1);
+                        drop(alias);
+                        assert!(weak.upgrade().is_none());
+                    } else {
+                        assert_eq!(tag, host.constructor("ParseRejected").unwrap());
+                        assert!(host.patterns.is_empty());
+                        assert_eq!(
+                            host.parse_failures.last().unwrap().1,
+                            Some(ResourceFailure::StructuralDepth {
+                                limit: STRUCTURAL_DEPTH_LIMIT
+                            })
+                        );
+                        eprintln!("raw Pattern stack: 16 groups refused without Pattern issuance");
+                        drop(heap);
+                        drop(host);
+                        drop(raw);
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]
@@ -2701,12 +3964,12 @@ mod tests {
                         let nodes = make_output(&mut host);
                         let mut measured = SyntaxBudget::default();
                         let copied =
-                            crate::syntax::copy_type_output(&nodes, &mut measured).unwrap();
+                            crate::syntax::copy_fragment_output(&nodes, &mut measured).unwrap();
                         let copy_cost = measured.consumed();
                         drop(copied);
                         let mut short = SyntaxBudget::with_limit(copy_cost - 1);
                         assert!(matches!(
-                            crate::syntax::copy_type_output(&nodes, &mut short),
+                            crate::syntax::copy_fragment_output(&nodes, &mut short),
                             Err(MacroParseFailure::Syntax {
                                 resource: Some(ResourceFailure::SyntaxWork { .. }),
                                 ..
@@ -2714,7 +3977,7 @@ mod tests {
                         ));
                         for _ in 0..2 {
                             let mut exact = SyntaxBudget::with_limit(copy_cost);
-                            drop(crate::syntax::copy_type_output(&nodes, &mut exact).unwrap());
+                            drop(crate::syntax::copy_fragment_output(&nodes, &mut exact).unwrap());
                             assert_eq!(exact.consumed(), copy_cost);
                         }
                         drop(nodes);
@@ -3304,6 +4567,445 @@ mod tests {
             exact_host.syntax_value(&nodes, &mut heap, 0).unwrap();
             exact_host.syntax_value(&nodes, &mut heap, 0).unwrap();
             assert_eq!(exact_host.types.len(), 2);
+            assert_eq!(exact_host.syntax_work.as_deref().unwrap().consumed(), total);
+        }
+    }
+
+    #[test]
+    fn pattern_capture_arena_reserves_growth_before_clone() {
+        use super::{HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap};
+        use crate::{
+            integer::Integer,
+            module::ModuleId,
+            surface::{
+                SurfacePattern, SurfacePatternCapture, SurfacePatternKind, SurfaceSyntaxCapture,
+            },
+            syntax::MacroOutputNode,
+            syntax_resource::SyntaxBudget,
+            types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
+        };
+        use std::sync::Arc;
+
+        // This synthetic host state isolates arena accounting; the imported
+        // public graph supplies the separate checked-host evidence.
+        fn host<'a>(
+            budget: &'a mut SyntaxBudget,
+        ) -> (SyntaxHost<'a>, Arc<[MacroOutputNode]>, OperationId) {
+            let mut host = scalar_host(budget);
+            let span = host.caller.span;
+            let contents: Arc<[MacroOutputNode]> = Arc::from([]);
+            host.captures
+                .push(SurfaceSyntaxCapture::Pattern(SurfacePatternCapture {
+                    pattern: SurfacePattern {
+                        kind: SurfacePatternKind::Wildcard,
+                        span,
+                        diagnostic: None,
+                    },
+                    contents: Arc::clone(&contents),
+                }));
+            let operation = OperationId::new(host.ops, 0);
+            host.operations.insert(operation, "capture".into());
+            let owner = NominalTypeId::new(ModuleId::new(0), 0);
+            host.constructors
+                .insert("PatternCapture".into(), ConstructorId::new(owner, 0));
+            host.constructors
+                .insert("Captured".into(), ConstructorId::new(owner, 1));
+            (host, contents, operation)
+        }
+
+        fn capture(
+            host: &mut SyntaxHost<'_>,
+            operation: OperationId,
+            heap: &mut Vec<HeapCell>,
+        ) -> Result<Value, RuntimeFailure> {
+            let fields =
+                vec![host.input(), Value::integer(Integer::from_i64(0))].into_boxed_slice();
+            let argument = Value::Location(allocate_heap(heap, HeapCell::Tuple(fields)).unwrap());
+            host.request(operation, argument, heap, &mut TypeWorkBudget::unbounded())
+        }
+
+        let mut measured = SyntaxBudget::default();
+        measured.charge_units(17).unwrap();
+        let (mut measured_host, contents, operation) = host(&mut measured);
+        let base = Arc::strong_count(&contents);
+        let mut heap = Vec::new();
+        capture(&mut measured_host, operation, &mut heap).unwrap();
+        let first = measured_host.syntax_work.as_deref().unwrap().consumed();
+        assert_eq!(measured_host.patterns.len(), 1);
+        assert_eq!(Arc::strong_count(&contents), base + 1);
+        capture(&mut measured_host, operation, &mut heap).unwrap();
+        let total = measured_host.syntax_work.as_deref().unwrap().consumed();
+        assert_eq!(measured_host.patterns.len(), 2);
+        assert_eq!(Arc::strong_count(&contents), base + 2);
+        drop(measured_host);
+
+        // The first insertion needs one arena slot before the two constructors.
+        let mut initial_short = SyntaxBudget::with_limit(first - 3);
+        initial_short.charge_units(17).unwrap();
+        let (mut initial_host, contents, operation) = host(&mut initial_short);
+        let base = Arc::strong_count(&contents);
+        assert!(matches!(
+            capture(&mut initial_host, operation, &mut Vec::new()),
+            Err(RuntimeFailure::Report(report))
+                if report.primary.reason == "internal.resource.syntax-work"
+        ));
+        assert!(initial_host.patterns.is_empty());
+        assert_eq!(Arc::strong_count(&contents), base);
+        assert_eq!(
+            initial_host.syntax_work.as_deref().unwrap().consumed(),
+            first - 3
+        );
+        drop(initial_host);
+
+        // An already allocated two-slot arena omits the initial 1 and the
+        // later 2+1 growth charge, while still copying both captures.
+        let mut spare = SyntaxBudget::default();
+        spare.charge_units(17).unwrap();
+        let (mut spare_host, contents, operation) = host(&mut spare);
+        spare_host.patterns.reserve_exact(2);
+        let base = Arc::strong_count(&contents);
+        let mut heap = Vec::new();
+        capture(&mut spare_host, operation, &mut heap).unwrap();
+        capture(&mut spare_host, operation, &mut heap).unwrap();
+        assert_eq!(spare_host.patterns.len(), 2);
+        assert_eq!(Arc::strong_count(&contents), base + 2);
+        assert_eq!(
+            spare_host.syntax_work.as_deref().unwrap().consumed() + 4,
+            total
+        );
+        drop(spare_host);
+
+        // The second push requests two slots and moves one live entry. Two
+        // later constructor charges occur after that reservation and clone.
+        let growth_limit = total - 3;
+        assert!(growth_limit > first);
+        let mut short = SyntaxBudget::with_limit(growth_limit);
+        short.charge_units(17).unwrap();
+        let (mut short_host, contents, operation) = host(&mut short);
+        let base = Arc::strong_count(&contents);
+        let mut heap = Vec::new();
+        capture(&mut short_host, operation, &mut heap).unwrap();
+        assert!(matches!(
+            capture(&mut short_host, operation, &mut heap),
+            Err(RuntimeFailure::Report(report))
+                if report.primary.reason == "internal.resource.syntax-work"
+        ));
+        assert_eq!(short_host.patterns.len(), 1);
+        assert_eq!(Arc::strong_count(&contents), base + 1);
+        assert_eq!(
+            short_host.syntax_work.as_deref().unwrap().consumed(),
+            total - 5
+        );
+        drop(short_host);
+
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(total);
+            exact.charge_units(17).unwrap();
+            let (mut exact_host, _, operation) = host(&mut exact);
+            let mut heap = Vec::new();
+            capture(&mut exact_host, operation, &mut heap).unwrap();
+            capture(&mut exact_host, operation, &mut heap).unwrap();
+            assert_eq!(exact_host.patterns.len(), 2);
+            assert_eq!(exact_host.syntax_work.as_deref().unwrap().consumed(), total);
+        }
+    }
+
+    #[test]
+    fn pattern_parse_success_and_failure_arenas_pay_before_growth() {
+        use super::{
+            HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap, constructor_fields,
+        };
+        use crate::{
+            module::ModuleId,
+            syntax::MacroOutputNode,
+            syntax_resource::SyntaxBudget,
+            types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
+        };
+
+        fn host(budget: &mut SyntaxBudget) -> (SyntaxHost<'_>, OperationId) {
+            let mut host = scalar_host(budget);
+            let operation = OperationId::new(host.ops, 0);
+            host.operations.insert(operation, "parse_pattern".into());
+            let owner = NominalTypeId::new(ModuleId::new(0), 0);
+            for (index, name) in (0u32..).zip([
+                "Syntax",
+                "NoNodes",
+                "MoreNodes",
+                "GroupNode",
+                "TypeNode",
+                "PatternNode",
+                "ExpressionNode",
+                "IdentifierNode",
+                "TokenNode",
+                "ParsedPattern",
+                "ParseRejected",
+            ]) {
+                host.constructors
+                    .insert(name.into(), ConstructorId::new(owner, index));
+            }
+            (host, operation)
+        }
+
+        fn input_syntax(host: &mut SyntaxHost<'_>, heap: &mut Vec<HeapCell>, valid: bool) -> Value {
+            let nodes = if valid {
+                vec![MacroOutputNode::Token(
+                    crate::lexer::TokenKind::Wildcard,
+                    "_".into(),
+                    host.frame.invocation.into(),
+                )]
+            } else {
+                Vec::new()
+            };
+            host.syntax_value(&nodes, heap, 0).unwrap()
+        }
+
+        fn parse_pattern(
+            host: &mut SyntaxHost<'_>,
+            operation: OperationId,
+            syntax: &Value,
+            heap: &mut Vec<HeapCell>,
+        ) -> Result<Value, RuntimeFailure> {
+            let fields = vec![host.input(), syntax.clone()].into_boxed_slice();
+            let argument = Value::Location(allocate_heap(heap, HeapCell::Tuple(fields)).unwrap());
+            host.request(operation, argument, heap, &mut TypeWorkBudget::unbounded())
+        }
+
+        // Synthetic constructors exercise the real parser and arenas. The
+        // separate imported test checks the validated public host graph.
+        for valid in [true, false] {
+            let mut measured = SyntaxBudget::default();
+            measured.charge_units(17).unwrap();
+            let (mut measured_host, operation) = host(&mut measured);
+            let mut heap = Vec::new();
+            let syntax = input_syntax(&mut measured_host, &mut heap, valid);
+            let mut first = 0;
+            for expected_len in 1..=2 {
+                let result =
+                    parse_pattern(&mut measured_host, operation, &syntax, &mut heap).unwrap();
+                let (tag, _) = constructor_fields(&result, &heap).unwrap();
+                assert_eq!(
+                    tag,
+                    measured_host
+                        .constructor(if valid {
+                            "ParsedPattern"
+                        } else {
+                            "ParseRejected"
+                        })
+                        .unwrap()
+                );
+                assert_eq!(
+                    if valid {
+                        measured_host.patterns.len()
+                    } else {
+                        measured_host.parse_failures.len()
+                    },
+                    expected_len
+                );
+                if expected_len == 1 {
+                    first = measured_host.syntax_work.as_deref().unwrap().consumed();
+                }
+            }
+            let total = measured_host.syntax_work.as_deref().unwrap().consumed();
+            drop(measured_host);
+
+            let mut initial_short = SyntaxBudget::with_limit(first - 2);
+            initial_short.charge_units(17).unwrap();
+            let (mut initial_host, operation) = host(&mut initial_short);
+            let mut heap = Vec::new();
+            let syntax = input_syntax(&mut initial_host, &mut heap, valid);
+            assert!(matches!(
+                parse_pattern(&mut initial_host, operation, &syntax, &mut heap),
+                Err(RuntimeFailure::Report(report))
+                    if report.primary.reason == "internal.resource.syntax-work"
+            ));
+            assert!(initial_host.patterns.is_empty());
+            assert!(initial_host.parse_failures.is_empty());
+            assert_eq!(
+                initial_host.syntax_work.as_deref().unwrap().consumed(),
+                first - 2
+            );
+            drop(initial_host);
+
+            let mut spare = SyntaxBudget::default();
+            spare.charge_units(17).unwrap();
+            let (mut spare_host, operation) = host(&mut spare);
+            if valid {
+                spare_host.patterns.reserve_exact(2);
+            } else {
+                spare_host.parse_failures.reserve_exact(2);
+            }
+            let mut heap = Vec::new();
+            let syntax = input_syntax(&mut spare_host, &mut heap, valid);
+            parse_pattern(&mut spare_host, operation, &syntax, &mut heap).unwrap();
+            parse_pattern(&mut spare_host, operation, &syntax, &mut heap).unwrap();
+            assert_eq!(
+                spare_host.syntax_work.as_deref().unwrap().consumed() + 4,
+                total
+            );
+            drop(spare_host);
+
+            // The second push reserves two requested slots plus one live
+            // move; constructing ParsedPattern/ParseRejected costs one more.
+            let mut short = SyntaxBudget::with_limit(total - 2);
+            short.charge_units(17).unwrap();
+            let (mut short_host, operation) = host(&mut short);
+            let mut heap = Vec::new();
+            let syntax = input_syntax(&mut short_host, &mut heap, valid);
+            parse_pattern(&mut short_host, operation, &syntax, &mut heap).unwrap();
+            assert!(matches!(
+                parse_pattern(&mut short_host, operation, &syntax, &mut heap),
+                Err(RuntimeFailure::Report(report))
+                    if report.primary.reason == "internal.resource.syntax-work"
+            ));
+            assert_eq!(
+                if valid {
+                    short_host.patterns.len()
+                } else {
+                    short_host.parse_failures.len()
+                },
+                1
+            );
+            assert_eq!(
+                short_host.syntax_work.as_deref().unwrap().consumed(),
+                total - 4
+            );
+            drop(short_host);
+
+            for _ in 0..2 {
+                let mut exact = SyntaxBudget::with_limit(total);
+                exact.charge_units(17).unwrap();
+                let (mut exact_host, operation) = host(&mut exact);
+                let mut heap = Vec::new();
+                let syntax = input_syntax(&mut exact_host, &mut heap, valid);
+                parse_pattern(&mut exact_host, operation, &syntax, &mut heap).unwrap();
+                parse_pattern(&mut exact_host, operation, &syntax, &mut heap).unwrap();
+                assert_eq!(exact_host.syntax_work.as_deref().unwrap().consumed(), total);
+            }
+        }
+    }
+
+    #[test]
+    fn pattern_syntax_issuance_arena_refuses_before_copy_and_retries() {
+        use super::{HeapCell, RuntimeFailure, SyntaxHost};
+        use crate::{
+            module::ModuleId,
+            surface::{SurfacePattern, SurfacePatternCapture, SurfacePatternKind},
+            syntax::MacroOutputNode,
+            syntax_resource::SyntaxBudget,
+            types::{ConstructorId, NominalTypeId},
+        };
+        use std::sync::Arc;
+
+        fn host(budget: &mut SyntaxBudget) -> SyntaxHost<'_> {
+            let mut host = scalar_host(budget);
+            let owner = NominalTypeId::new(ModuleId::new(0), 0);
+            for (index, name) in (0u32..).zip(["NoNodes", "Syntax", "PatternNode", "MoreNodes"]) {
+                host.constructors
+                    .insert(name.into(), ConstructorId::new(owner, index));
+            }
+            host
+        }
+
+        fn capture_nodes(host: &SyntaxHost<'_>) -> (Vec<MacroOutputNode>, Arc<[MacroOutputNode]>) {
+            let span = host.frame.invocation;
+            let contents: Arc<[MacroOutputNode]> = Arc::from([]);
+            (
+                vec![MacroOutputNode::ForwardedPattern(
+                    SurfacePatternCapture {
+                        pattern: SurfacePattern {
+                            kind: SurfacePatternKind::Wildcard,
+                            span,
+                            diagnostic: None,
+                        },
+                        contents: Arc::clone(&contents),
+                    },
+                    span.into(),
+                )],
+                contents,
+            )
+        }
+
+        let mut measured = SyntaxBudget::default();
+        measured.charge_units(17).unwrap();
+        let mut measured_host = host(&mut measured);
+        let (nodes, contents) = capture_nodes(&measured_host);
+        let base = Arc::strong_count(&contents);
+        let mut heap: Vec<HeapCell> = Vec::new();
+        measured_host.syntax_value(&nodes, &mut heap, 0).unwrap();
+        let first = measured_host.syntax_work.as_deref().unwrap().consumed();
+        assert_eq!(measured_host.patterns.len(), 1);
+        assert_eq!(Arc::strong_count(&contents), base + 1);
+        measured_host.syntax_value(&nodes, &mut heap, 0).unwrap();
+        assert_eq!(measured_host.patterns.len(), 2);
+        assert_eq!(Arc::strong_count(&contents), base + 2);
+        let total = measured_host.syntax_work.as_deref().unwrap().consumed();
+        drop(measured_host);
+
+        let mut initial_short = SyntaxBudget::with_limit(first - 11);
+        initial_short.charge_units(17).unwrap();
+        let mut initial_host = host(&mut initial_short);
+        let (nodes, contents) = capture_nodes(&initial_host);
+        let base = Arc::strong_count(&contents);
+        assert!(matches!(
+            initial_host.syntax_value(&nodes, &mut Vec::new(), 0),
+            Err(RuntimeFailure::Report(report))
+                if report.primary.reason == "internal.resource.syntax-work"
+        ));
+        assert!(initial_host.patterns.is_empty());
+        assert_eq!(Arc::strong_count(&contents), base);
+        assert_eq!(
+            initial_host.syntax_work.as_deref().unwrap().consumed(),
+            first - 11
+        );
+        drop(initial_host);
+
+        let mut spare = SyntaxBudget::default();
+        spare.charge_units(17).unwrap();
+        let mut spare_host = host(&mut spare);
+        spare_host.patterns.reserve_exact(2);
+        let (nodes, contents) = capture_nodes(&spare_host);
+        let base = Arc::strong_count(&contents);
+        let mut heap = Vec::new();
+        spare_host.syntax_value(&nodes, &mut heap, 0).unwrap();
+        spare_host.syntax_value(&nodes, &mut heap, 0).unwrap();
+        assert_eq!(Arc::strong_count(&contents), base + 2);
+        assert_eq!(
+            spare_host.syntax_work.as_deref().unwrap().consumed() + 4,
+            total
+        );
+        drop(spare_host);
+
+        // Two requested slots plus one live move are paid before the second
+        // capture clone; ten later units build the returned Syntax value.
+        let mut short = SyntaxBudget::with_limit(total - 11);
+        short.charge_units(17).unwrap();
+        let mut short_host = host(&mut short);
+        let (nodes, contents) = capture_nodes(&short_host);
+        let base = Arc::strong_count(&contents);
+        let mut heap = Vec::new();
+        short_host.syntax_value(&nodes, &mut heap, 0).unwrap();
+        assert!(matches!(
+            short_host.syntax_value(&nodes, &mut heap, 0),
+            Err(RuntimeFailure::Report(report))
+                if report.primary.reason == "internal.resource.syntax-work"
+        ));
+        assert_eq!(short_host.patterns.len(), 1);
+        assert_eq!(Arc::strong_count(&contents), base + 1);
+        assert_eq!(
+            short_host.syntax_work.as_deref().unwrap().consumed(),
+            total - 13
+        );
+        drop(short_host);
+
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(total);
+            exact.charge_units(17).unwrap();
+            let mut exact_host = host(&mut exact);
+            let (nodes, _) = capture_nodes(&exact_host);
+            let mut heap = Vec::new();
+            exact_host.syntax_value(&nodes, &mut heap, 0).unwrap();
+            exact_host.syntax_value(&nodes, &mut heap, 0).unwrap();
+            assert_eq!(exact_host.patterns.len(), 2);
             assert_eq!(exact_host.syntax_work.as_deref().unwrap().consumed(), total);
         }
     }
@@ -4028,17 +5730,15 @@ mod tests {
             },
             contents: Arc::clone(&nested),
         };
-        let unsupported = [
-            SurfaceSyntaxCapture::Expression(expression.clone()),
-            SurfaceSyntaxCapture::Pattern(SurfacePatternCapture {
-                pattern: SurfacePattern {
-                    kind: SurfacePatternKind::Wildcard,
-                    span,
-                    diagnostic: None,
-                },
-                contents: Arc::clone(&nested),
-            }),
-        ];
+        let unsupported = [SurfaceSyntaxCapture::Expression(expression.clone())];
+        let pattern = SurfaceSyntaxCapture::Pattern(SurfacePatternCapture {
+            pattern: SurfacePattern {
+                kind: SurfacePatternKind::Wildcard,
+                span,
+                diagnostic: None,
+            },
+            contents: Arc::clone(&nested),
+        });
         let before = Arc::strong_count(&nested);
         for capture in &unsupported {
             let mut budget = SyntaxBudget::default();
@@ -4048,6 +5748,13 @@ mod tests {
             ));
             assert_eq!(Arc::strong_count(&nested), before);
         }
+        let mut pattern_budget = SyntaxBudget::default();
+        let pattern_host = fixture
+            .host(std::slice::from_ref(&pattern), &mut pattern_budget)
+            .expect("the Some host admits a flat Pattern capture");
+        assert_eq!(Arc::strong_count(&nested), before + 1);
+        drop(pattern_host);
+        assert_eq!(Arc::strong_count(&nested), before);
         let nested_packet: Arc<[MacroOutputNode]> =
             Arc::from([MacroOutputNode::Expression(expression, span.into())]);
         let invalid = [SurfaceSyntaxCapture::Declaration(
@@ -4246,7 +5953,7 @@ mod tests {
             assert_eq!(Arc::strong_count(inputs), retained);
         }
         eprintln!(
-            "Some-route protected carriers and bridges refused before copy; foreign/stale/wrong handles refused; valid handle remains reusable"
+            "Some-route expression bridge and invalid handles refused before copy; flat Pattern capture admitted; valid handle remains reusable"
         );
     }
 
@@ -4540,6 +6247,7 @@ mod tests {
                     expressions: Vec::new(),
                     declarations: Vec::new(),
                     types: Vec::new(),
+                    patterns: Vec::new(),
                     identifiers: Vec::new(),
                     origins: Vec::new(),
                     parse_failures: Vec::new(),
@@ -4687,6 +6395,7 @@ mod tests {
             expressions: Vec::new(),
             declarations: Vec::new(),
             types: Vec::new(),
+            patterns: Vec::new(),
             identifiers: Vec::new(),
             origins: Vec::new(),
             parse_failures: Vec::new(),
