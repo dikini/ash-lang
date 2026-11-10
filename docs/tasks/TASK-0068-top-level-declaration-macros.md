@@ -436,12 +436,13 @@ and evidence.
 
 **Remaining:** Full S2 I11/I19 and I14 protected categories and their mixed or
 generated consumers remain open. The two supplemental S4 positive and rejection
-criteria have the focused public-driver evidence above and were checked in the independently read back
+criteria have the focused public-driver evidence above and were checked in the
+independently read back
 [#234 record](https://github.com/dikini/ash-lang/issues/234#issuecomment-6761689308).
 Its other three criteria remain unchecked. All five original S2 criteria remain
 unchecked in the [#230 record](https://github.com/dikini/ash-lang/issues/230#issuecomment-6761681230).
-The original I16 derive and teardown graphs remain at V3. D8, E4, V3, V7 and the fresh full-workspace gate
-remain open.
+The original I16 derive and teardown graphs remain at V3. D8, E4, V3, V7 and
+the fresh full-workspace gate remain open.
 
 **Awaiting:** The S2/S4 retention and issue records have independent readbacks.
 Full S2 and S4 work, original I16 graphs and subsequent checkpoints remain open.
@@ -476,12 +477,14 @@ retained regression targets.
 The fresh focused receipt is
 `/home/dikini/Projects/ash-lang/.worktrees/task-0068-handoff/evidence/g1-source-ident/final-gate-478eb4a4/receipt.json`,
 SHA-256 `1bb4e7a25b84b66bef4a5c66b4f0146f4b4e9fea3fb32eb24ecd2a7ee6bdf8fd`.
-It records 640 distinct passes and two retained ignores: the valid nonempty template with a Declaration matcher capture and no used
-splice, and the #277 nominal-context case. Marker and stack-child reruns are
-not additional passes. Independent QA and Sol cleared the focused source and
-evidence. The four ownership inventory entries were added after the preserved
-architecture failure; scanner rules were not changed. The corrected host test executes under `eval::machine::syntax`; an
-earlier zero-match command is retained as non-execution.
+It records 640 distinct passes and two retained ignores: the valid nonempty
+template with a Declaration matcher capture and no used splice, and the #277
+nominal-context case. Marker and stack-child reruns are not additional passes.
+Independent QA and Sol cleared the focused source and evidence. The four
+ownership inventory entries were added after the preserved architecture failure;
+scanner rules were not changed. The corrected host test executes under
+`eval::machine::syntax`; an earlier zero-match command is retained as
+non-execution.
 
 **Remaining:** Full G1 and I19, repeated output and host consumption,
 generated/protected/mixed paths, literal declaration output and D8 remain open.
