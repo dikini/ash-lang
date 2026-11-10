@@ -1759,6 +1759,70 @@ mod tests {
     }
 
     #[test]
+    fn type_host_origin_arena_prepays_growth_before_issuance() {
+        use crate::{
+            eval::RuntimeFailure,
+            surface::{SurfaceDeclarationCapture, SurfaceIdentifierCapture, SurfaceSyntaxCapture},
+            syntax_resource::SyntaxBudget,
+        };
+        use std::sync::Arc;
+
+        let fixture = DeclarationHostFixture::new();
+        let identifier = SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+            name: fixture.caller.clone(),
+            origin: fixture.caller.span.into(),
+        });
+        let captures = [identifier.clone()];
+        let mut measured = SyntaxBudget::default();
+        measured.charge_units(17).unwrap();
+        let mut host = fixture.host(&captures, &mut measured).unwrap();
+        let before = host.syntax_work.as_deref().unwrap().consumed();
+        assert_eq!(host.origins.capacity(), 0);
+        host.issue_origin(fixture.caller.span.into()).unwrap();
+        assert_eq!(host.syntax_work.as_deref().unwrap().consumed() - before, 3);
+        assert_eq!(host.origins.capacity(), 1);
+        let before = host.syntax_work.as_deref().unwrap().consumed();
+        host.issue_origin(fixture.caller.span.into()).unwrap();
+        assert_eq!(host.syntax_work.as_deref().unwrap().consumed() - before, 5);
+        assert_eq!(host.origins.len(), 2);
+        drop(host);
+
+        let mut short = SyntaxBudget::with_limit(before - 1);
+        short.charge_units(17).unwrap();
+        let mut host = fixture.host(&captures, &mut short).unwrap();
+        assert!(matches!(
+            host.issue_origin(fixture.caller.span.into()),
+            Err(RuntimeFailure::Report(report))
+                if report.primary.reason_code() == "internal.resource.syntax-work"
+        ));
+        assert!(host.origins.is_empty());
+        assert_eq!(host.origins.capacity(), 0);
+        drop(host);
+
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(before);
+            exact.charge_units(17).unwrap();
+            let mut host = fixture.host(&captures, &mut exact).unwrap();
+            host.issue_origin(fixture.caller.span.into()).unwrap();
+            assert_eq!(host.origins.len(), 1);
+            drop(host);
+            assert_eq!(exact.consumed(), before);
+        }
+
+        let declarations = [
+            SurfaceSyntaxCapture::Declaration(SurfaceDeclarationCapture {
+                contents: Arc::from([]),
+            }),
+            identifier,
+        ];
+        let mut legacy = SyntaxBudget::default();
+        let mut host = fixture.host(&declarations, &mut legacy).unwrap();
+        let before = host.syntax_work.as_deref().unwrap().consumed();
+        host.issue_origin(fixture.caller.span.into()).unwrap();
+        assert_eq!(host.syntax_work.as_deref().unwrap().consumed() - before, 2);
+    }
+
+    #[test]
     fn type_capture_arena_reserves_growth_before_clone() {
         use super::{HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap};
         use crate::{
