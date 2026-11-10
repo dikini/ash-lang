@@ -784,6 +784,7 @@ fn type_expression_real_capture_and_alias_on_a_512k_stack() {
                 .count(),
             2
         );
+        assert!(stderr.contains("type expression source: shared loan exact/short/retry"));
         return;
     }
     std::thread::Builder::new()
@@ -819,10 +820,13 @@ fn type_expression_real_capture_and_alias_on_a_512k_stack() {
                     .join("tests/fixtures/surface-macros/type-expression-bridge")
                     .join(entry);
                 let mut graph = graph_at(&path, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+                let header = graph.syntax_budget.consumed();
+                graph.syntax_budget.charge_units(17).unwrap();
                 G1_CAPTURE_OBSERVER.set(Some(observe));
                 let result = compile_staged_graph_for_test(&mut graph);
                 G1_CAPTURE_OBSERVER.set(None);
                 let program = result.unwrap();
+                let total = graph.syntax_budget.consumed();
                 let value = execute(&program).unwrap();
                 assert_eq!(value.value_display(), "42");
                 assert_eq!(value.type_display(), "Int");
@@ -834,6 +838,42 @@ fn type_expression_real_capture_and_alias_on_a_512k_stack() {
                 drop(alias);
                 assert!(weak.upgrade().is_none());
                 eprintln!("type expression source: 42 and final alias dropped");
+                if entry == "keep_main.ash" {
+                    let mut short = graph_at(&path, BodyMode::Header, total - 1).unwrap();
+                    assert_eq!(short.syntax_budget.consumed(), header);
+                    short.syntax_budget.charge_units(17).unwrap();
+                    G1_CAPTURE_OBSERVER.set(Some(observe));
+                    let failure = compile_staged_graph_for_test(&mut short)
+                        .expect_err("one short must publish no program");
+                    G1_CAPTURE_OBSERVER.set(None);
+                    assert_eq!(failure.reason_code(), "internal.resource.syntax-work");
+                    assert!(short.syntax_budget.consumed() < total);
+                    let alias = CAPTURE.with(|slot| slot.borrow_mut().take().unwrap());
+                    let weak = Arc::downgrade(&alias);
+                    drop(failure);
+                    drop(short);
+                    assert_eq!(Arc::strong_count(&alias), 1);
+                    drop(alias);
+                    assert!(weak.upgrade().is_none());
+                    for _ in 0..2 {
+                        let mut exact = graph_at(&path, BodyMode::Header, total).unwrap();
+                        assert_eq!(exact.syntax_budget.consumed(), header);
+                        exact.syntax_budget.charge_units(17).unwrap();
+                        G1_CAPTURE_OBSERVER.set(Some(observe));
+                        let program = compile_staged_graph_for_test(&mut exact).unwrap();
+                        G1_CAPTURE_OBSERVER.set(None);
+                        assert_eq!(exact.syntax_budget.consumed(), total);
+                        assert_eq!(execute(&program).unwrap().value_display(), "42");
+                        let alias = CAPTURE.with(|slot| slot.borrow_mut().take().unwrap());
+                        let weak = Arc::downgrade(&alias);
+                        drop(program);
+                        drop(exact);
+                        assert_eq!(Arc::strong_count(&alias), 1);
+                        drop(alias);
+                        assert!(weak.upgrade().is_none());
+                    }
+                    eprintln!("type expression source: shared loan exact/short/retry");
+                }
             }
         })
         .unwrap()

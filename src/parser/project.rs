@@ -21284,6 +21284,22 @@ usage arena => resume arena
                 ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
             ))
         ));
+        absent.insert(
+            0,
+            MacroOutputNode::Token(TokenKind::IntType, "Int".into(), span.into()),
+        );
+        assert!(matches!(
+            check_narrow_protected_refusal_inner(
+                &root,
+                Some(&absent),
+                false,
+                Some(&contexts),
+                &mut SyntaxBudget::default(),
+            ),
+            Err(DeclarationExpansionFailure::Projection(
+                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+            ))
+        ));
         let mut raw = originals;
         raw.remove(&1);
         let mut old = SyntaxBudget::default();

@@ -3330,10 +3330,14 @@ mod tests {
             let output = output.expect("the selected Template expands");
             assert!(failure.is_none() && !called);
             assert_eq!(owners, 1);
+            let SurfaceExprKind::Block(template) = &output.kind else {
+                panic!("the template returns its expression in a block")
+            };
+            assert!(template.declarations.is_empty());
             if selected.name == "keep" {
-                assert!(matches!(output.kind, SurfaceExprKind::Block(_)));
+                assert!(matches!(template.result.kind, SurfaceExprKind::Block(_)));
             } else {
-                let SurfaceExprKind::Add(binary) = &output.kind else {
+                let SurfaceExprKind::Add(binary) = &template.result.kind else {
                     panic!("twice must return both captured expressions")
                 };
                 assert!(matches!(binary.left.kind, SurfaceExprKind::Block(_)));
