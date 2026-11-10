@@ -765,6 +765,14 @@ fn charge_inherited_reference_copy(
     }
 }
 
+fn charge_pattern_frame_storage(
+    location: Option<&DiagnosticLocation>,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    let frames = location.map_or(0, |location| location.frames.len());
+    budget.charge_units(frames.saturating_add(1).saturating_mul(6))
+}
+
 /// Reserve actual owned edges and inspect shared contents before copying.
 /// The result reports an expression-syntax/host bridge found in the value;
 /// callers decide whether that bridge is an execution boundary or admission.
@@ -773,17 +781,31 @@ fn charge_owned_syntax(
     prefix: usize,
     work: TypeWork,
     copied_frame: Option<&Arc<ExpansionFrame>>,
+    new_pattern: bool,
     budget: &mut SyntaxBudget,
 ) -> Result<Option<bool>, ResourceFailure> {
     use crate::surface::{SurfaceKindKind, SurfaceLocalDeclaration};
 
     type_depth(prefix, 0)?;
     budget.charge()?;
-    let mut pending = vec![(root, prefix, work)];
+    let mut pending = if new_pattern {
+        budget.charge()?;
+        let mut pending = Vec::with_capacity(1);
+        pending.push((root, prefix, work));
+        pending
+    } else {
+        vec![(root, prefix, work)]
+    };
     let mut bridge = false;
     macro_rules! push {
         ($item:expr, $depth:expr, $work:expr) => {{
             budget.charge()?;
+            if new_pattern && pending.len() == pending.capacity() {
+                let live = pending.len();
+                let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                budget.charge_units(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                pending.reserve_exact(1);
+            }
             pending.push(($item, $depth, $work));
         }};
     }
@@ -1052,8 +1074,20 @@ fn charge_owned_syntax(
                     }
                 ) {
                     budget.charge_units(2)?;
+                    if new_pattern {
+                        // The separate mutable inheritance worklist grows at most 6N.
+                        budget.charge_units(6)?;
+                        charge_pattern_frame_storage(pattern.diagnostic.as_deref(), budget)?;
+                    }
                 }
-                charge_type_location(pattern.diagnostic.as_deref(), depth, work, budget)?;
+                let copy_origins = new_pattern && matches!(work, TypeWork::Copy { .. });
+                charge_type_location_inner(
+                    pattern.diagnostic.as_deref(),
+                    depth,
+                    work,
+                    copy_origins,
+                    budget,
+                )?;
                 if let Some(frame) = copied_frame {
                     charge_inherited_frame_copy(
                         pattern.diagnostic.as_deref(),
@@ -1064,13 +1098,36 @@ fn charge_owned_syntax(
                 }
                 match &pattern.kind {
                     SurfacePatternKind::TemplateSplice(name) => {
-                        charge_type_name(name, depth, work, budget)?;
+                        charge_type_name_inner(name, depth, work, copy_origins, budget)?;
+                        if new_pattern
+                            && matches!(
+                                work,
+                                TypeWork::Copy {
+                                    inherit_frame: true
+                                }
+                            )
+                        {
+                            charge_pattern_frame_storage(name.diagnostic.as_deref(), budget)?;
+                        }
                         if let Some(frame) = copied_frame {
                             charge_inherited_name_copy(name, depth, frame, budget)?;
                         }
                     }
                     SurfacePatternKind::Binder(binder) => {
-                        charge_type_name(&binder.name, depth, work, budget)?;
+                        charge_type_name_inner(&binder.name, depth, work, copy_origins, budget)?;
+                        if new_pattern
+                            && matches!(
+                                work,
+                                TypeWork::Copy {
+                                    inherit_frame: true
+                                }
+                            )
+                        {
+                            charge_pattern_frame_storage(
+                                binder.name.diagnostic.as_deref(),
+                                budget,
+                            )?;
+                        }
                         if let Some(frame) = copied_frame {
                             charge_inherited_name_copy(&binder.name, depth, frame, budget)?;
                         }
@@ -1085,7 +1142,34 @@ fn charge_owned_syntax(
                         }
                     }
                     SurfacePatternKind::Constructor { name, payload } => {
-                        charge_type_reference(name, depth, work, budget)?;
+                        charge_type_reference_inner(name, depth, work, copy_origins, budget)?;
+                        if new_pattern
+                            && matches!(
+                                work,
+                                TypeWork::Copy {
+                                    inherit_frame: true
+                                }
+                            )
+                        {
+                            match name {
+                                SurfaceReference::Unqualified(name) => {
+                                    charge_pattern_frame_storage(
+                                        name.diagnostic.as_deref(),
+                                        budget,
+                                    )?
+                                }
+                                SurfaceReference::Qualified(name) => {
+                                    charge_pattern_frame_storage(
+                                        name.qualifier.diagnostic.as_deref(),
+                                        budget,
+                                    )?;
+                                    charge_pattern_frame_storage(
+                                        name.member.diagnostic.as_deref(),
+                                        budget,
+                                    )?;
+                                }
+                            }
+                        }
                         if let Some(frame) = copied_frame {
                             charge_inherited_reference_copy(name, depth, frame, budget)?;
                         }
@@ -1239,7 +1323,14 @@ fn charge_owned_syntax(
                 MacroOutputNode::ForwardedType(capture, origin) => {
                     let child = type_depth(depth, 1)?;
                     charge_type_origin(origin, child, budget)?;
-                    charge_type_value(&capture.ty, child, TypeWork::Inspect, budget)?;
+                    charge_type_value_inner(
+                        &capture.ty,
+                        child,
+                        TypeWork::Inspect,
+                        new_pattern,
+                        false,
+                        budget,
+                    )?;
                     contents!(capture.contents, child);
                 }
                 MacroOutputNode::Group(_, children, origin) => {
@@ -1277,6 +1368,7 @@ pub(crate) fn charge_expression_copy(
         prefix,
         TypeWork::Copy { inherit_frame },
         None,
+        false,
         budget,
     )
 }
@@ -1292,6 +1384,7 @@ pub(crate) fn charge_pattern_copy(
         prefix,
         TypeWork::Copy { inherit_frame },
         None,
+        false,
         budget,
     )
 }
@@ -1309,6 +1402,7 @@ pub(crate) fn charge_scheduled_pattern_copy(
             inherit_frame: false,
         },
         frame,
+        false,
         budget,
     )
 }
@@ -1317,10 +1411,12 @@ fn charge_owned_retention(
     root: OwnedSyntax<'_>,
     contents: &[MacroOutputNode],
     prefix: usize,
+    new_pattern: bool,
     budget: &mut SyntaxBudget,
 ) -> Result<Option<bool>, ResourceFailure> {
     let depth = type_depth(prefix, 1)?;
-    let Some(mut bridge) = charge_owned_syntax(root, depth, TypeWork::Inspect, None, budget)?
+    let Some(mut bridge) =
+        charge_owned_syntax(root, depth, TypeWork::Inspect, None, new_pattern, budget)?
     else {
         return Ok(None);
     };
@@ -1332,6 +1428,7 @@ fn charge_owned_retention(
             contents_depth,
             TypeWork::Inspect,
             None,
+            new_pattern,
             budget,
         )?
         else {
@@ -1351,6 +1448,7 @@ pub(crate) fn charge_expression_retention(
         OwnedSyntax::Expression(&capture.expression),
         &capture.contents,
         prefix,
+        false,
         budget,
     )
 }
@@ -1364,6 +1462,55 @@ pub(crate) fn charge_pattern_retention(
         OwnedSyntax::Pattern(&capture.pattern),
         &capture.contents,
         prefix,
+        false,
+        budget,
+    )
+}
+
+pub(crate) fn charge_new_pattern_copy(
+    pattern: &SurfacePattern,
+    prefix: usize,
+    inherit_frame: bool,
+    budget: &mut SyntaxBudget,
+) -> Result<Option<bool>, ResourceFailure> {
+    charge_owned_syntax(
+        OwnedSyntax::Pattern(pattern),
+        prefix,
+        TypeWork::Copy { inherit_frame },
+        None,
+        true,
+        budget,
+    )
+}
+
+pub(crate) fn charge_new_scheduled_pattern_copy(
+    pattern: &SurfacePattern,
+    prefix: usize,
+    frame: Option<&Arc<ExpansionFrame>>,
+    budget: &mut SyntaxBudget,
+) -> Result<Option<bool>, ResourceFailure> {
+    charge_owned_syntax(
+        OwnedSyntax::Pattern(pattern),
+        prefix,
+        TypeWork::Copy {
+            inherit_frame: false,
+        },
+        frame,
+        true,
+        budget,
+    )
+}
+
+pub(crate) fn charge_new_pattern_retention(
+    capture: &SurfacePatternCapture,
+    prefix: usize,
+    budget: &mut SyntaxBudget,
+) -> Result<Option<bool>, ResourceFailure> {
+    charge_owned_retention(
+        OwnedSyntax::Pattern(&capture.pattern),
+        &capture.contents,
+        prefix,
+        true,
         budget,
     )
 }
@@ -1486,8 +1633,8 @@ fn charge_type_retention_inner(
     Ok(())
 }
 
-/// Preflight and copy the owned contents made by the Type parse service.
-pub(crate) fn copy_type_output(
+/// Preflight and copy the owned contents made by a fragment parse service.
+pub(crate) fn copy_fragment_output(
     output: &[MacroOutputNode],
     budget: &mut SyntaxBudget,
 ) -> Result<Vec<MacroOutputNode>, crate::parser::MacroParseFailure> {
@@ -1504,7 +1651,7 @@ pub(crate) fn copy_type_output(
     for _ in 0..3 {
         budget.charge_units(output.len()).map_err(resource)?;
     }
-    // The returned Type capture owns both its type and this contents Arc.
+    // The returned capture owns both its AST and this contents Arc.
     let mut pending = output.iter().map(|node| (node, 2usize)).collect::<Vec<_>>();
     let mut group_count = 0usize;
     let mut group_depth = 0usize;
@@ -1545,9 +1692,20 @@ pub(crate) fn copy_type_output(
                 charge_new_type_copy(&capture.ty, child, false, budget).map_err(resource)?;
                 charge_new_type_retention(capture, depth, budget)?;
             }
+            MacroOutputNode::ForwardedPattern(capture, origin) => {
+                let child = type_depth(depth, 1).map_err(resource)?;
+                charge_type_origin_copy(origin, child, budget).map_err(resource)?;
+                if charge_new_pattern_copy(&capture.pattern, child, false, budget)
+                    .map_err(resource)?
+                    != Some(false)
+                    || charge_new_pattern_retention(capture, depth, budget).map_err(resource)?
+                        != Some(false)
+                {
+                    return Err(MacroParseFailure::Invalid);
+                }
+            }
             MacroOutputNode::Expression(_, _)
             | MacroOutputNode::ForwardedExpression(_, _)
-            | MacroOutputNode::ForwardedPattern(_, _)
             | MacroOutputNode::Splice(_) => return Err(MacroParseFailure::Invalid),
         }
     }
@@ -2705,7 +2863,7 @@ mod tests {
         let base_frame = Arc::strong_count(&frame);
         let mut measured = SyntaxBudget::default();
         measured.charge_units(17).unwrap();
-        let actual = copy_type_output(&packet, &mut measured).unwrap();
+        let actual = copy_fragment_output(&packet, &mut measured).unwrap();
         let total = measured.consumed();
         assert_eq!(actual, expected);
         let [
@@ -2734,7 +2892,7 @@ mod tests {
         let mut short = SyntaxBudget::with_limit(total - 1);
         short.charge_units(17).unwrap();
         assert!(matches!(
-            copy_type_output(&packet, &mut short),
+            copy_fragment_output(&packet, &mut short),
             Err(MacroParseFailure::Syntax {
                 resource: Some(ResourceFailure::SyntaxWork { limit }), ..
             }) if limit == total - 1
@@ -2747,13 +2905,13 @@ mod tests {
         for _ in 0..2 {
             let mut exact = SyntaxBudget::with_limit(total);
             exact.charge_units(17).unwrap();
-            assert_eq!(copy_type_output(&packet, &mut exact).unwrap(), expected);
+            assert_eq!(copy_fragment_output(&packet, &mut exact).unwrap(), expected);
             assert_eq!(exact.consumed(), total);
             assert_eq!(Arc::strong_count(&contents), base_contents);
             assert_eq!(Arc::strong_count(&frame), base_frame);
         }
         let mut empty = SyntaxBudget::with_limit(0);
-        assert!(copy_type_output(&[], &mut empty).unwrap().is_empty());
+        assert!(copy_fragment_output(&[], &mut empty).unwrap().is_empty());
         assert_eq!(empty.consumed(), 0);
     }
 

@@ -12,8 +12,8 @@ use crate::{
     resolved::BinderId,
     source::SourceFile,
     surface::{
-        SurfaceDeclarationCapture, SurfaceExpressionCapture, SurfaceName, SurfaceSyntaxCapture,
-        SurfaceTypeCapture,
+        SurfaceDeclarationCapture, SurfaceExpressionCapture, SurfaceName, SurfacePatternCapture,
+        SurfaceSyntaxCapture, SurfaceTypeCapture,
     },
     syntax::{
         ExpansionFrame, MacroDelimiter, MacroOrigin, MacroOutputNode, SyntaxContexts,
@@ -70,6 +70,16 @@ fn type_retention_failure(failure: crate::parser::MacroParseFailure) -> RuntimeF
             ..
         } => syntax_failure(failure),
         _ => RuntimeFailure::InvalidControlState,
+    }
+}
+
+fn require_pattern_charge(
+    result: Result<Option<bool>, crate::syntax_resource::ResourceFailure>,
+) -> Result<(), RuntimeFailure> {
+    if result.map_err(syntax_failure)? == Some(false) {
+        Ok(())
+    } else {
+        Err(RuntimeFailure::InvalidControlState)
     }
 }
 
@@ -130,6 +140,7 @@ pub(super) struct SyntaxHost<'inv> {
     expressions: Vec<SurfaceExpressionCapture>,
     declarations: Vec<SurfaceDeclarationCapture>,
     types: Vec<SurfaceTypeCapture>,
+    patterns: Vec<SurfacePatternCapture>,
     identifiers: Vec<SurfaceName>,
     origins: Vec<MacroOrigin>,
     parse_failures: Vec<(
@@ -180,6 +191,11 @@ impl<'inv> SyntaxHost<'inv> {
                     SurfaceSyntaxCapture::Type(capture) => {
                         crate::syntax::charge_new_type_retention(capture, 0, budget)
                             .map_err(type_retention_failure)?;
+                    }
+                    SurfaceSyntaxCapture::Pattern(capture) => {
+                        require_pattern_charge(crate::syntax::charge_new_pattern_retention(
+                            capture, 0, budget,
+                        ))?;
                     }
                     _ => return Err(RuntimeFailure::InvalidControlState),
                 }
@@ -290,6 +306,14 @@ impl<'inv> SyntaxHost<'inv> {
                                 crate::syntax::charge_new_type_copy(&capture.ty, 1, false, budget)
                                     .map_err(syntax_failure)?;
                             }
+                            SurfaceSyntaxCapture::Pattern(capture) => {
+                                require_pattern_charge(crate::syntax::charge_new_pattern_copy(
+                                    &capture.pattern,
+                                    1,
+                                    false,
+                                    budget,
+                                ))?;
+                            }
                             _ => return Err(RuntimeFailure::InvalidControlState),
                         }
                     }
@@ -302,6 +326,7 @@ impl<'inv> SyntaxHost<'inv> {
             expressions: Vec::new(),
             declarations: Vec::new(),
             types: Vec::new(),
+            patterns: Vec::new(),
             identifiers: Vec::new(),
             origins: Vec::new(),
             parse_failures: Vec::new(),
@@ -649,6 +674,34 @@ impl<'inv> SyntaxHost<'inv> {
                     let capture = self.construct(heap, "TypeCapture", Some(fragment))?;
                     return self.construct(heap, "Captured", Some(capture));
                 }
+                if let (Some(budget), Some(SurfaceSyntaxCapture::Pattern(capture))) =
+                    (self.syntax_work.as_deref_mut(), capture)
+                {
+                    require_pattern_charge(crate::syntax::charge_new_pattern_retention(
+                        capture, 0, budget,
+                    ))?;
+                    require_pattern_charge(crate::syntax::charge_new_pattern_copy(
+                        &capture.pattern,
+                        1,
+                        false,
+                        budget,
+                    ))?;
+                    budget.charge_units(2).map_err(syntax_failure)?;
+                    let live = self.patterns.len();
+                    if live == self.patterns.capacity() {
+                        let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                        budget
+                            .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                            .map_err(syntax_failure)?;
+                        self.patterns.reserve_exact(1);
+                    }
+                    let capture = capture.clone();
+                    let index = self.patterns.len();
+                    self.patterns.push(capture);
+                    let fragment = self.handle(CompilerSyntaxHandleKind::Pattern(index));
+                    let capture = self.construct(heap, "PatternCapture", Some(fragment))?;
+                    return self.construct(heap, "Captured", Some(capture));
+                }
                 if let (Some(budget), Some(SurfaceSyntaxCapture::Identifier(capture))) =
                     (self.syntax_work.as_deref_mut(), capture)
                 {
@@ -927,6 +980,61 @@ impl<'inv> SyntaxHost<'inv> {
                     }
                 }
             }
+            "parse_pattern" => {
+                let (input, syntax) = pair(&argument, heap)?;
+                if !matches!(
+                    self.admitted_handle(input)?,
+                    CompilerSyntaxHandleKind::Input
+                ) || self.syntax_work.is_none()
+                {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let output = self.transfer_syntax_inner(syntax, heap, 0, true)?;
+                let result = crate::parser::parse_macro_pattern(
+                    &self.source,
+                    self.frame.invocation,
+                    output,
+                    &self.contexts,
+                    &self.frame,
+                    self.syntax_work
+                        .as_deref_mut()
+                        .expect("the Pattern route owns a budget"),
+                );
+                match result {
+                    Ok(capture) => {
+                        self.charge(2)?; // arena slot and issued handle
+                        let live = self.patterns.len();
+                        if live == self.patterns.capacity() {
+                            let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                            self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                            self.patterns.reserve_exact(1);
+                        }
+                        let index = self.patterns.len();
+                        self.patterns.push(capture);
+                        let fragment = self.handle(CompilerSyntaxHandleKind::Pattern(index));
+                        self.construct(heap, "ParsedPattern", Some(fragment))
+                    }
+                    Err(crate::parser::MacroParseFailure::Syntax {
+                        diagnostics,
+                        resource,
+                    }) => {
+                        self.charge(2)?; // failure slot and issued handle
+                        let live = self.parse_failures.len();
+                        if live == self.parse_failures.capacity() {
+                            let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                            self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                            self.parse_failures.reserve_exact(1);
+                        }
+                        let index = self.parse_failures.len();
+                        self.parse_failures.push((diagnostics, resource));
+                        let failure = self.handle(CompilerSyntaxHandleKind::ParseFailure(index));
+                        self.construct(heap, "ParseRejected", Some(failure))
+                    }
+                    Err(crate::parser::MacroParseFailure::Invalid) => {
+                        Err(RuntimeFailure::InvalidControlState)
+                    }
+                }
+            }
             "expression_syntax" => {
                 let CompilerSyntaxHandleKind::Expression(index) =
                     self.admitted_handle(&argument)?
@@ -982,6 +1090,22 @@ impl<'inv> SyntaxHost<'inv> {
                 let contents = Arc::clone(&capture.contents);
                 self.syntax_value_inner(&contents, heap, 1, true)
             }
+            "pattern_syntax" => {
+                let CompilerSyntaxHandleKind::Pattern(index) = self.admitted_handle(&argument)?
+                else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                let capture = self
+                    .patterns
+                    .get(index)
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                let Some(budget) = self.syntax_work.as_deref_mut() else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                budget.charge().map_err(syntax_failure)?;
+                let contents = Arc::clone(&capture.contents);
+                self.syntax_value_inner(&contents, heap, 1, true)
+            }
             "token_kind" => {
                 let CompilerSyntaxHandleKind::Token(index) = self.admitted_handle(&argument)?
                 else {
@@ -1021,7 +1145,8 @@ impl<'inv> SyntaxHost<'inv> {
     ) -> Result<TransformerOutput, RuntimeFailure> {
         let (tag, syntax) = constructor_fields(result, heap)?;
         if tag == self.constructor("Expanded")? {
-            let type_accounting = self.type_accounting || !self.types.is_empty();
+            let type_accounting =
+                self.type_accounting || !self.types.is_empty() || !self.patterns.is_empty();
             return self
                 .transfer_syntax_inner(
                     syntax.ok_or(RuntimeFailure::InvalidControlState)?,
@@ -1196,7 +1321,7 @@ impl<'inv> SyntaxHost<'inv> {
             } else {
                 if self.syntax_work.is_some() {
                     self.charge(4)?;
-                    if ["ExpressionNode", "PatternNode", "DeclarationNode"]
+                    if ["ExpressionNode", "DeclarationNode"]
                         .iter()
                         .any(|name| self.constructors.get(*name) == Some(&tag))
                     {
@@ -1230,6 +1355,37 @@ impl<'inv> SyntaxHost<'inv> {
                     budget.charge().map_err(syntax_failure)?; // output slot
                     reserve_type_push(&mut output, Some(budget), type_accounting)?;
                     output.push(MacroOutputNode::ForwardedType(capture.clone(), origin));
+                    nodes = rest;
+                    continue;
+                }
+                if self.syntax_work.is_some() && self.constructors.get("PatternNode") == Some(&tag)
+                {
+                    let CompilerSyntaxHandleKind::Pattern(index) = self.admitted_handle(value)?
+                    else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    if self.patterns.get(index).is_none() {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    let prefix = depth.saturating_add(groups.len());
+                    let origin = self.copy_origin(origin, prefix)?;
+                    let capture = &self.patterns[index];
+                    let budget = self
+                        .syntax_work
+                        .as_deref_mut()
+                        .expect("the Pattern route owns a budget");
+                    require_pattern_charge(crate::syntax::charge_new_pattern_retention(
+                        capture, prefix, budget,
+                    ))?;
+                    require_pattern_charge(crate::syntax::charge_new_pattern_copy(
+                        &capture.pattern,
+                        crate::syntax::type_depth(prefix, 1).map_err(syntax_failure)?,
+                        false,
+                        budget,
+                    ))?;
+                    budget.charge().map_err(syntax_failure)?;
+                    reserve_type_push(&mut output, Some(budget), type_accounting)?;
+                    output.push(MacroOutputNode::ForwardedPattern(capture.clone(), origin));
                     nodes = rest;
                     continue;
                 }
@@ -1409,6 +1565,38 @@ impl<'inv> SyntaxHost<'inv> {
                         ],
                     )
                 }
+                Some(MacroOutputNode::ForwardedPattern(capture, origin)) => {
+                    let prefix = depth.saturating_add(groups.len());
+                    let Some(budget) = self.syntax_work.as_deref_mut() else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    require_pattern_charge(crate::syntax::charge_new_pattern_retention(
+                        capture, prefix, budget,
+                    ))?;
+                    require_pattern_charge(crate::syntax::charge_new_pattern_copy(
+                        &capture.pattern,
+                        crate::syntax::type_depth(prefix, 1).map_err(syntax_failure)?,
+                        false,
+                        budget,
+                    ))?;
+                    budget.charge_units(4).map_err(syntax_failure)?;
+                    self.charge_origin(origin, prefix)?;
+                    let live = self.patterns.len();
+                    if live == self.patterns.capacity() {
+                        let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                        self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                        self.patterns.reserve_exact(1);
+                    }
+                    let index = self.patterns.len();
+                    self.patterns.push(capture.clone());
+                    (
+                        "PatternNode",
+                        vec![
+                            self.handle(CompilerSyntaxHandleKind::Pattern(index)),
+                            self.issue_origin_inner(origin.clone(), type_accounting)?,
+                        ],
+                    )
+                }
                 Some(MacroOutputNode::Token(kind, spelling, origin)) => {
                     if let Some(budget) = self.syntax_work.as_deref_mut() {
                         crate::syntax::charge_type_token_copy(kind, budget)
@@ -1461,7 +1649,7 @@ impl<'inv> SyntaxHost<'inv> {
                     rest = self.construct(heap, "NoNodes", None)?;
                     continue;
                 }
-                Some(MacroOutputNode::Splice(_) | MacroOutputNode::ForwardedPattern(_, _)) => {
+                Some(MacroOutputNode::Splice(_)) => {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
                 None => {
@@ -1878,6 +2066,7 @@ mod tests {
             expressions: Vec::new(),
             declarations: Vec::new(),
             types: Vec::new(),
+            patterns: Vec::new(),
             identifiers: Vec::new(),
             origins: Vec::new(),
             parse_failures: Vec::new(),
@@ -4540,6 +4729,7 @@ mod tests {
                     expressions: Vec::new(),
                     declarations: Vec::new(),
                     types: Vec::new(),
+                    patterns: Vec::new(),
                     identifiers: Vec::new(),
                     origins: Vec::new(),
                     parse_failures: Vec::new(),
@@ -4687,6 +4877,7 @@ mod tests {
             expressions: Vec::new(),
             declarations: Vec::new(),
             types: Vec::new(),
+            patterns: Vec::new(),
             identifiers: Vec::new(),
             origins: Vec::new(),
             parse_failures: Vec::new(),
