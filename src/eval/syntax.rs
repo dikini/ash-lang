@@ -5854,13 +5854,14 @@ mod tests {
         use crate::{
             eval::value::CompilerSyntaxHandleKind,
             integer::Integer,
+            parser::{ExpectedForm, FoundToken, ParseReason},
             surface::{
                 SurfaceDeclarationCapture, SurfaceExpr, SurfaceExprKind, SurfaceExpressionCapture,
                 SurfacePattern, SurfacePatternCapture, SurfacePatternKind, SurfaceSyntaxCapture,
             },
             syntax::{MacroOrigin, MacroOutputNode},
             syntax_resource::SyntaxBudget,
-            types::TypeWorkBudget,
+            types::{ConstructorId, TypeWorkBudget},
         };
         use std::sync::Arc;
 
@@ -5876,7 +5877,7 @@ mod tests {
             },
             contents: Arc::clone(&nested),
         };
-        let unsupported = [SurfaceSyntaxCapture::Expression(expression.clone())];
+        let flat_expression = SurfaceSyntaxCapture::Expression(expression.clone());
         let pattern = SurfaceSyntaxCapture::Pattern(SurfacePatternCapture {
             pattern: SurfacePattern {
                 kind: SurfacePatternKind::Wildcard,
@@ -5886,14 +5887,13 @@ mod tests {
             contents: Arc::clone(&nested),
         });
         let before = Arc::strong_count(&nested);
-        for capture in &unsupported {
-            let mut budget = SyntaxBudget::default();
-            assert!(matches!(
-                fixture.host(std::slice::from_ref(capture), &mut budget),
-                Err(RuntimeFailure::InvalidControlState)
-            ));
-            assert_eq!(Arc::strong_count(&nested), before);
-        }
+        let mut expression_budget = SyntaxBudget::default();
+        let expression_host = fixture
+            .host(std::slice::from_ref(&flat_expression), &mut expression_budget)
+            .expect("the Some host admits a flat Expression capture");
+        assert_eq!(Arc::strong_count(&nested), before + 1);
+        drop(expression_host);
+        assert_eq!(Arc::strong_count(&nested), before);
         let mut pattern_budget = SyntaxBudget::default();
         let pattern_host = fixture
             .host(std::slice::from_ref(&pattern), &mut pattern_budget)
@@ -5925,6 +5925,8 @@ mod tests {
         )];
         let mut budget = SyntaxBudget::default();
         let mut host = fixture.host(&captures, &mut budget).unwrap();
+        let rejected = ConstructorId::new(fixture.constructors["Expanded"].owner(), 100);
+        host.constructors.insert("ParseRejected".into(), rejected);
         let mut heap = Vec::new();
         let argument = Value::Location(
             allocate_heap(
@@ -5993,28 +5995,35 @@ mod tests {
             )
             .unwrap(),
         );
-        let heap_before = heap.len();
-        let paid_before = host.syntax_work.as_ref().unwrap().consumed();
         let expressions_before = host.expressions.len();
         let failures_before = host.parse_failures.len();
-        assert!(matches!(
-            host.request(
+        let result = host
+            .request(
                 fixture.parse_expression,
                 bridge,
                 &mut heap,
-                &mut TypeWorkBudget::unbounded()
-            ),
-            Err(RuntimeFailure::InvalidControlState)
-        ));
-        assert_eq!(heap.len(), heap_before);
-        assert_eq!(
-            host.syntax_work.as_ref().unwrap().consumed() - paid_before,
-            1 + "parse_expression".len()
-        );
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        let (tag, Some(failure)) = constructor_fields(&result, &heap).unwrap() else {
+            panic!("expected a parse rejection")
+        };
+        assert_eq!(tag, rejected);
         assert_eq!(host.expressions.len(), expressions_before);
-        assert_eq!(host.parse_failures.len(), failures_before);
-        // This valid indexed expression is deliberately seeded only for the
-        // component guard check; it is not admitted on the declaration route.
+        assert_eq!(host.parse_failures.len(), failures_before + 1);
+        let CompilerSyntaxHandleKind::ParseFailure(index) = host.admitted_handle(failure).unwrap()
+        else {
+            panic!("expected a parse failure handle")
+        };
+        assert_eq!(index, failures_before);
+        let (diagnostics, resource) = &host.parse_failures[index];
+        assert!(resource.is_none());
+        assert_eq!(diagnostics[0].reason, ParseReason::ExpectedForm);
+        assert_eq!(diagnostics[0].expected_form(), Some(ExpectedForm::Expression));
+        assert_eq!(diagnostics[0].found_token(), Some(FoundToken::EndOfFile));
+
+        // This indexed expression is seeded to check repeated unwrapping
+        // independently of the parser.
         host.expressions.push(SurfaceExpressionCapture {
             contains_protected_type: false,
             expression: SurfaceExpr {
@@ -6025,21 +6034,21 @@ mod tests {
             contents: Arc::clone(&nested),
         });
         let nested_retained = Arc::strong_count(&nested);
-        let paid_before = host.syntax_work.as_ref().unwrap().consumed();
-        assert!(matches!(
-            host.request(
-                fixture.expression_syntax,
-                host.handle(CompilerSyntaxHandleKind::Expression(0)),
-                &mut heap,
-                &mut TypeWorkBudget::unbounded()
-            ),
-            Err(RuntimeFailure::InvalidControlState)
-        ));
-        assert_eq!(
-            host.syntax_work.as_ref().unwrap().consumed() - paid_before,
-            1 + "expression_syntax".len()
-        );
-        assert_eq!(Arc::strong_count(&nested), nested_retained);
+        for _ in 0..2 {
+            let syntax = host
+                .request(
+                    fixture.expression_syntax,
+                    host.handle(CompilerSyntaxHandleKind::Expression(0)),
+                    &mut heap,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .unwrap();
+            assert_eq!(
+                constructor_fields(&syntax, &heap).unwrap().0,
+                fixture.constructors["Syntax"]
+            );
+            assert_eq!(Arc::strong_count(&nested), nested_retained);
+        }
 
         let combined =
             MacroOrigin::combined(vec![span.into()], Arc::clone(&fixture.frame)).unwrap();
@@ -6100,7 +6109,7 @@ mod tests {
             assert_eq!(Arc::strong_count(inputs), retained);
         }
         eprintln!(
-            "Some-route expression bridge and invalid handles refused before copy; flat Pattern capture admitted; valid handle remains reusable"
+            "flat Expression and Pattern captures admitted; foreign handles and nested bridges refused; empty expression rejected; valid handle remains reusable"
         );
     }
 

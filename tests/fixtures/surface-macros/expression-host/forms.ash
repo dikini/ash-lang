@@ -21,12 +21,12 @@ parse_result (input, name, name_origin, body, origin) = match Syntax.parse_expre
 }
 
 tokens : (Syntax.Identifier, Syntax.Origin, Syntax.ExpressionFragment, Syntax.Origin) -> Syntax.MacroResult ! {Syntax.Ops}
-tokens (name, name_origin, body, origin) = match (Syntax.make_token(Syntax.Pub, "pub"), Syntax.make_token(Syntax.Colon, ":"), Syntax.make_token(Syntax.UnitType, "Unit"), Syntax.make_token(Syntax.IntType, "Int"), Syntax.make_token(Syntax.Arrow, "->"), Syntax.make_token(Syntax.LineEnd, "\n"), Syntax.make_token(Syntax.Equal, "="), Syntax.make_token(Syntax.LeftParen, "("), Syntax.make_token(Syntax.RightParen, ")")) {
-    (Syntax.MadeToken(public), Syntax.MadeToken(colon), Syntax.MadeToken(unit), Syntax.MadeToken(int), Syntax.MadeToken(arrow), Syntax.MadeToken(line), Syntax.MadeToken(equal), Syntax.MadeToken(left), Syntax.MadeToken(right)) => {
+tokens (name, name_origin, body, origin) = match (Syntax.make_token(Syntax.Pub, "pub"), Syntax.make_token(Syntax.Colon, ":"), Syntax.make_token(Syntax.UnitType, "Unit"), Syntax.make_token(Syntax.IntType, "Int"), Syntax.make_token(Syntax.Arrow, "->"), Syntax.make_token(Syntax.LineEnd, "\n"), Syntax.make_token(Syntax.Equal, "=")) {
+    (Syntax.MadeToken(public), Syntax.MadeToken(colon), Syntax.MadeToken(unit), Syntax.MadeToken(int), Syntax.MadeToken(arrow), Syntax.MadeToken(line), Syntax.MadeToken(equal)) => {
         let end = Syntax.MoreNodes(Syntax.ExpressionNode(body, origin), Syntax.NoNodes)
         let equation = Syntax.MoreNodes(Syntax.TokenNode(equal, origin), end)
-        let equation = Syntax.MoreNodes(Syntax.TokenNode(right, origin), equation)
-        let equation = Syntax.MoreNodes(Syntax.TokenNode(left, origin), equation)
+        let argument = Syntax.GroupNode(Syntax.Parentheses, Syntax.Syntax(Syntax.NoNodes), origin)
+        let equation = Syntax.MoreNodes(argument, equation)
         let equation = Syntax.MoreNodes(Syntax.IdentifierNode(name, name_origin), equation)
         let equation = Syntax.MoreNodes(Syntax.TokenNode(line, origin), equation)
         let signature = Syntax.MoreNodes(Syntax.TokenNode(int, origin), equation)
