@@ -476,6 +476,7 @@ fn syntax_diagnostic_preserves_the_parser_reason_and_construction_location() {
     write_json(&mut json, diagnostic).unwrap();
     let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
     assert_eq!(json["reason"], "parse.expected-operand");
+    assert_eq!(json["labels"].as_array().unwrap().len(), 3, "{json}");
     assert_eq!(json["labels"][0]["relationship"], "operator");
     assert!(
         json["labels"][0]["path"]

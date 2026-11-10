@@ -97,7 +97,13 @@ pub fn compile_type_mismatch_diagnostic<'a>(
     sources: &[&'a SourceFile],
 ) -> Result<CompileDiagnostic<'a>, PresentationError> {
     let mut result = compile_type_mismatch_diagnostic_inner(mismatch, sources)?;
-    append_diagnostic_locations(&mut result, mismatch.diagnostic_location(), sources)?;
+    append_diagnostic_locations(
+        &mut result,
+        mismatch
+            .diagnostic_location()
+            .map(|location| (location, mismatch.span())),
+        sources,
+    )?;
     Ok(result)
 }
 
@@ -156,7 +162,11 @@ pub fn compile_type_diagnostic<'a>(
         &mut result,
         std::iter::once(&diagnostic.primary)
             .chain(&diagnostic.related)
-            .filter_map(crate::diagnostic::SourceLabel::diagnostic_location),
+            .filter_map(|label| {
+                label
+                    .diagnostic_location()
+                    .map(|location| (location, label.span()))
+            }),
         sources,
     )?;
     Ok(result)
@@ -326,11 +336,11 @@ fn compile_type_diagnostic_inner<'a>(
 
 fn append_diagnostic_locations<'a>(
     diagnostic: &mut CompileDiagnostic<'a>,
-    locations: impl IntoIterator<Item = &'a crate::syntax::DiagnosticLocation>,
+    locations: impl IntoIterator<Item = (&'a crate::syntax::DiagnosticLocation, crate::source::Span)>,
     sources: &[&'a SourceFile],
 ) -> Result<(), PresentationError> {
     let mut frames: Vec<std::sync::Arc<crate::syntax::ExpansionFrame>> = Vec::new();
-    for location in locations {
+    for (location, label_span) in locations {
         for frame in &location.frames {
             if !frames
                 .iter()
@@ -346,7 +356,7 @@ fn append_diagnostic_locations<'a>(
             for part in origin.parts() {
                 match part {
                     crate::syntax::MacroOriginPart::Source(span) => {
-                        if skip_primary && first {
+                        if skip_primary && first && span == label_span {
                             first = false;
                             continue;
                         }
@@ -425,7 +435,11 @@ pub fn compile_interface_diagnostic<'a>(
         &mut result,
         std::iter::once(&error.primary)
             .chain(&error.related)
-            .filter_map(crate::diagnostic::SourceLabel::diagnostic_location),
+            .filter_map(|label| {
+                label
+                    .diagnostic_location()
+                    .map(|location| (location, label.span()))
+            }),
         sources,
     )?;
     Ok(result)
@@ -1082,7 +1096,11 @@ pub fn compile_resolve_diagnostic<'a>(
         &mut result,
         std::iter::once(&error.primary)
             .chain(&error.related)
-            .filter_map(crate::diagnostic::SourceLabel::diagnostic_location),
+            .filter_map(|label| {
+                label
+                    .diagnostic_location()
+                    .map(|location| (location, label.span()))
+            }),
         sources,
     )?;
     Ok(result)
@@ -1302,14 +1320,26 @@ pub fn compile_parse_diagnostic<'a>(
             }],
         )?);
     }
-    Ok(CompileDiagnostic {
+    let mut result = CompileDiagnostic {
         reason: diagnostic.reason.to_string(),
         responsibility: "source",
         message,
         primary: Some(primary),
         related,
         facts,
-    })
+    };
+    append_diagnostic_locations(
+        &mut result,
+        std::iter::once(&diagnostic.primary)
+            .chain(&diagnostic.related)
+            .filter_map(|label| {
+                label
+                    .diagnostic_location()
+                    .map(|location| (location, label.span()))
+            }),
+        sources,
+    )?;
+    Ok(result)
 }
 
 /// Dispatches a file failure to its existing compile-time phase adapter.

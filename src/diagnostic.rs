@@ -46,6 +46,14 @@ impl SourceLabel {
         self
     }
 
+    pub(crate) fn with_location_preserving_span(
+        mut self,
+        location: Option<&crate::syntax::DiagnosticLocation>,
+    ) -> Self {
+        self.diagnostic = location.cloned().map(Box::new);
+        self
+    }
+
     pub(crate) fn diagnostic_location(&self) -> Option<&crate::syntax::DiagnosticLocation> {
         self.diagnostic.as_deref()
     }
