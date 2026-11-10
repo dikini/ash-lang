@@ -2538,7 +2538,40 @@ mod tests {
                         .construct(&mut heap, "MoreNodes", Some(fields))
                         .unwrap();
                     let syntax = host.construct(&mut heap, "Syntax", Some(nodes)).unwrap();
-                    let expanded = host.construct(&mut heap, "Expanded", Some(syntax)).unwrap();
+                    let expanded = host
+                        .construct(&mut heap, "Expanded", Some(syntax.clone()))
+                        .unwrap();
+                    if layers == 125 {
+                        let fields = Value::Location(
+                            allocate_heap(
+                                &mut heap,
+                                HeapCell::Tuple(vec![host.input(), syntax].into_boxed_slice()),
+                            )
+                            .unwrap(),
+                        );
+                        let issued = host
+                            .request(parse, fields, &mut heap, &mut TypeWorkBudget::unbounded())
+                            .unwrap();
+                        let (tag, Some(_)) = constructor_fields(&issued, &heap).unwrap() else {
+                            panic!("expected ParsedType from the protected service input");
+                        };
+                        assert_eq!(tag, host.constructor("ParsedType").unwrap());
+                        let mut retained = SyntaxBudget::default();
+                        assert!(matches!(
+                            crate::syntax::charge_new_type_retention(
+                                host.types.last().unwrap(),
+                                0,
+                                &mut retained,
+                            ),
+                            Err(MacroParseFailure::Syntax {
+                                resource: Some(ResourceFailure::StructuralDepth {
+                                    limit: STRUCTURAL_DEPTH_LIMIT
+                                }),
+                                ..
+                            })
+                        ));
+                        eprintln!("type AST stack: service issued over-depth protected capture");
+                    }
                     let make_output = |host: &mut SyntaxHost<'_>| {
                         let TransformerOutput::Expanded(nodes) = host
                             .transfer(&expanded, &heap, &mut TypeWorkBudget::unbounded())
@@ -2705,6 +2738,102 @@ mod tests {
                     assert!(weak.upgrade().is_none());
                 }
                 eprintln!("type AST stack: capture and protected final aliases dropped");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn type_host_raw_function_result_obeys_retained_depth_on_a_512k_stack() {
+        const CHILD: &str = "ASH_TYPE_RAW_AST_512K_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "eval::machine::syntax::tests::type_host_raw_function_result_obeys_retained_depth_on_a_512k_stack",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+            assert!(output.status.success(), "512 KiB child failed: {}", output.status);
+            return;
+        }
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                use super::{HeapCell, Value, allocate_heap, constructor_fields};
+                use crate::{
+                    lexer::{TokenKind, lex},
+                    module::ModuleId,
+                    parser::STRUCTURAL_DEPTH_LIMIT,
+                    source::{ByteRange, SourceFile},
+                    surface::SurfaceTypeKind,
+                    syntax::{ExpansionFrame, MacroOutputNode},
+                    syntax_resource::SyntaxBudget,
+                    types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
+                };
+                use std::sync::Arc;
+
+                for layers in [126usize, 127] {
+                    let mut budget = SyntaxBudget::default();
+                    let mut host = scalar_host(&mut budget);
+                    let parse = OperationId::new(host.ops, 0);
+                    host.operations.insert(parse, "parse_type".into());
+                    let owner = NominalTypeId::new(ModuleId::new(0), 0);
+                    for (index, name) in (0u32..).zip([
+                        "Syntax", "NoNodes", "MoreNodes", "GroupNode", "TypeNode", "TokenNode",
+                        "IdentifierNode", "ExpressionNode", "ParsedType", "ParseRejected",
+                    ]) {
+                        host.constructors.insert(name.into(), ConstructorId::new(owner, index));
+                    }
+                    let text = format!("{}Int", "Int -> ".repeat(layers));
+                    let source = SourceFile::new("raw-deep-type.ash", text).unwrap();
+                    let lexed = lex(&source).unwrap();
+                    assert!(lexed.diagnostics.is_empty());
+                    let span = source.span(ByteRange::new(0, source.text().len() as u32).unwrap()).unwrap();
+                    host.source = source.clone();
+                    host.frame = Arc::new(ExpansionFrame { invocation: span, definition: span });
+                    host.caller.span = span;
+                    let raw = lexed.tokens.into_iter()
+                        .filter(|token| token.kind != TokenKind::EndOfFile)
+                        .map(|token| {
+                            let range = token.span.range();
+                            let spelling = &source.text()[range.start() as usize..range.end() as usize];
+                            MacroOutputNode::Token(token.kind, spelling.into(), token.span.into())
+                        })
+                        .collect::<Vec<_>>();
+                    let mut heap = Vec::<HeapCell>::new();
+                    let syntax = host.syntax_value(&raw, &mut heap, 0).unwrap();
+                    let fields = Value::Location(allocate_heap(
+                        &mut heap,
+                        HeapCell::Tuple(vec![host.input(), syntax].into_boxed_slice()),
+                    ).unwrap());
+                    let parsed = host.request(parse, fields, &mut heap, &mut TypeWorkBudget::unbounded()).unwrap();
+                    let (tag, Some(_)) = constructor_fields(&parsed, &heap).unwrap() else {
+                        panic!("expected ParsedType from raw source");
+                    };
+                    assert_eq!(tag, host.constructor("ParsedType").unwrap());
+                    let capture = host.types.last().expect("service issued a Type capture");
+                    let mut current = &capture.ty;
+                    for _ in 0..layers {
+                        let SurfaceTypeKind::Function(function) = &current.kind else {
+                            panic!("expected parsed function layer");
+                        };
+                        current = &function.codomain;
+                    }
+                    assert!(current.diagnostic.is_some());
+                    assert_eq!(1 + layers + 1, STRUCTURAL_DEPTH_LIMIT + usize::from(layers == 127));
+                    eprintln!("raw Type AST stack: service issued {layers} function layers");
+                    let mut retained = SyntaxBudget::default();
+                    crate::syntax::charge_new_type_retention(capture, 0, &mut retained)
+                        .expect("raw returned Type capture must fit the retention limit");
+                    eprintln!("raw Type AST stack: {layers} function layers fit returned retention");
+                }
             })
             .unwrap()
             .join()
