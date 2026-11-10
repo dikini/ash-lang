@@ -2295,6 +2295,8 @@ mod tests {
                 "type AST stack: host and final contents alias dropped",
                 "type AST stack: captured and restored composed-128 AST",
                 "type AST stack: returned capture retention fits within 128",
+                "type AST stack: protected service accepted retained 124",
+                "type AST stack: protected service refused 125 without issuance",
                 "type AST stack: pre-copy and post-copy shortages cleaned up",
                 "type AST stack: refused composed-129 AST",
                 "type AST stack: capture and protected final aliases dropped",
@@ -2412,7 +2414,7 @@ mod tests {
                 // Exercise the Type capture and protected restoration with a
                 // separately lexed and parsed function AST. Each primitive's
                 // actual DiagnosticLocation adds one retained depth level.
-                for layers in [125usize, 126] {
+                for layers in [124usize, 125] {
                     use crate::{
                         integer::Integer,
                         parser::{MacroParseFailure, ResourceFailure, STRUCTURAL_DEPTH_LIMIT},
@@ -2541,7 +2543,8 @@ mod tests {
                     let expanded = host
                         .construct(&mut heap, "Expanded", Some(syntax.clone()))
                         .unwrap();
-                    if layers == 125 {
+                    {
+                        let types_before = host.types.len();
                         let fields = Value::Location(
                             allocate_heap(
                                 &mut heap,
@@ -2553,24 +2556,31 @@ mod tests {
                             .request(parse, fields, &mut heap, &mut TypeWorkBudget::unbounded())
                             .unwrap();
                         let (tag, Some(_)) = constructor_fields(&issued, &heap).unwrap() else {
-                            panic!("expected ParsedType from the protected service input");
+                            panic!("expected a protected service result");
                         };
-                        assert_eq!(tag, host.constructor("ParsedType").unwrap());
-                        let mut retained = SyntaxBudget::default();
-                        assert!(matches!(
+                        if layers == 124 {
+                            assert_eq!(tag, host.constructor("ParsedType").unwrap());
+                            assert_eq!(host.types.len(), types_before + 1);
+                            let mut retained = SyntaxBudget::default();
                             crate::syntax::charge_new_type_retention(
                                 host.types.last().unwrap(),
                                 0,
                                 &mut retained,
-                            ),
-                            Err(MacroParseFailure::Syntax {
-                                resource: Some(ResourceFailure::StructuralDepth {
+                            )
+                            .expect("issued Type capture must fit the retention limit");
+                            eprintln!("type AST stack: protected service accepted retained 124");
+                        } else {
+                            assert_eq!(tag, host.constructor("ParseRejected").unwrap());
+                            assert_eq!(host.types.len(), types_before);
+                            let (_, resource) = host.parse_failures.last().unwrap();
+                            assert_eq!(
+                                *resource,
+                                Some(ResourceFailure::StructuralDepth {
                                     limit: STRUCTURAL_DEPTH_LIMIT
-                                }),
-                                ..
-                            })
-                        ));
-                        eprintln!("type AST stack: service issued over-depth protected capture");
+                                })
+                            );
+                            eprintln!("type AST stack: protected service refused 125 without issuance");
+                        }
                     }
                     let make_output = |host: &mut SyntaxHost<'_>| {
                         let TransformerOutput::Expanded(nodes) = host
@@ -2591,8 +2601,8 @@ mod tests {
                         &fixture.frame,
                         host.syntax_work.as_deref_mut().unwrap(),
                     );
-                    if layers == 125 {
-                        assert_eq!(2 + layers + 1, STRUCTURAL_DEPTH_LIMIT);
+                    if layers == 124 {
+                        assert_eq!(3 + layers + 1, STRUCTURAL_DEPTH_LIMIT);
                         let restored = result.unwrap();
                         let [MacroOutputNode::ForwardedType(contents, _)] = restored.contents.as_ref() else {
                             panic!("expected protected contents");
@@ -2714,7 +2724,7 @@ mod tests {
                         assert_eq!(Arc::strong_count(&alias), baseline);
                         eprintln!("type AST stack: pre-copy and post-copy shortages cleaned up");
                     } else {
-                        assert_eq!(2 + layers + 1, STRUCTURAL_DEPTH_LIMIT + 1);
+                        assert_eq!(3 + layers + 1, STRUCTURAL_DEPTH_LIMIT + 1);
                         assert!(matches!(
                             result,
                             Err(MacroParseFailure::Syntax {
@@ -2759,8 +2769,15 @@ mod tests {
                 .output()
                 .unwrap();
             print!("{}", String::from_utf8_lossy(&output.stdout));
-            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprint!("{stderr}");
             assert!(output.status.success(), "512 KiB child failed: {}", output.status);
+            for marker in [
+                "raw Type AST stack: 126 function layers fit returned retention",
+                "raw Type AST stack: service refused 127 without issuance",
+            ] {
+                assert!(stderr.contains(marker), "missing marker {marker}");
+            }
             return;
         }
         std::thread::Builder::new()
@@ -2770,7 +2787,7 @@ mod tests {
                 use crate::{
                     lexer::{TokenKind, lex},
                     module::ModuleId,
-                    parser::STRUCTURAL_DEPTH_LIMIT,
+                    parser::{ResourceFailure, STRUCTURAL_DEPTH_LIMIT},
                     source::{ByteRange, SourceFile},
                     surface::SurfaceTypeKind,
                     syntax::{ExpansionFrame, MacroOutputNode},
@@ -2815,24 +2832,48 @@ mod tests {
                     ).unwrap());
                     let parsed = host.request(parse, fields, &mut heap, &mut TypeWorkBudget::unbounded()).unwrap();
                     let (tag, Some(_)) = constructor_fields(&parsed, &heap).unwrap() else {
-                        panic!("expected ParsedType from raw source");
+                        panic!("expected a raw Type service result");
                     };
-                    assert_eq!(tag, host.constructor("ParsedType").unwrap());
-                    let capture = host.types.last().expect("service issued a Type capture");
-                    let mut current = &capture.ty;
-                    for _ in 0..layers {
-                        let SurfaceTypeKind::Function(function) = &current.kind else {
-                            panic!("expected parsed function layer");
-                        };
-                        current = &function.codomain;
-                    }
-                    assert!(current.diagnostic.is_some());
                     assert_eq!(1 + layers + 1, STRUCTURAL_DEPTH_LIMIT + usize::from(layers == 127));
-                    eprintln!("raw Type AST stack: service issued {layers} function layers");
-                    let mut retained = SyntaxBudget::default();
-                    crate::syntax::charge_new_type_retention(capture, 0, &mut retained)
-                        .expect("raw returned Type capture must fit the retention limit");
-                    eprintln!("raw Type AST stack: {layers} function layers fit returned retention");
+                    if layers == 126 {
+                        assert_eq!(tag, host.constructor("ParsedType").unwrap());
+                        assert_eq!(host.types.len(), 1);
+                        let capture = host.types.last().unwrap();
+                        let mut current = &capture.ty;
+                        for _ in 0..layers {
+                            let SurfaceTypeKind::Function(function) = &current.kind else {
+                                panic!("expected parsed function layer");
+                            };
+                            current = &function.codomain;
+                        }
+                        assert!(current.diagnostic.is_some());
+                        let mut retained = SyntaxBudget::default();
+                        crate::syntax::charge_new_type_retention(capture, 0, &mut retained)
+                            .expect("raw returned Type capture must fit the retention limit");
+                        eprintln!("raw Type AST stack: 126 function layers fit returned retention");
+                        let alias = Arc::clone(&capture.contents);
+                        let weak = Arc::downgrade(&alias);
+                        drop(heap);
+                        drop(host);
+                        drop(raw);
+                        assert_eq!(Arc::strong_count(&alias), 1);
+                        drop(alias);
+                        assert!(weak.upgrade().is_none());
+                    } else {
+                        assert_eq!(tag, host.constructor("ParseRejected").unwrap());
+                        assert!(host.types.is_empty());
+                        let (_, resource) = host.parse_failures.last().unwrap();
+                        assert_eq!(
+                            *resource,
+                            Some(ResourceFailure::StructuralDepth {
+                                limit: STRUCTURAL_DEPTH_LIMIT
+                            })
+                        );
+                        eprintln!("raw Type AST stack: service refused 127 without issuance");
+                        drop(heap);
+                        drop(host);
+                        drop(raw);
+                    }
                 }
             })
             .unwrap()

@@ -3778,7 +3778,7 @@ fn charge_composed_projection_inner(
     let first = (
         root,
         None,
-        0usize,
+        usize::from(new_type_copy),
         false,
         usize::from(source_spans),
         false,

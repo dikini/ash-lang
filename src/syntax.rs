@@ -1504,7 +1504,8 @@ pub(crate) fn copy_type_output(
     for _ in 0..3 {
         budget.charge_units(output.len()).map_err(resource)?;
     }
-    let mut pending = output.iter().map(|node| (node, 1usize)).collect::<Vec<_>>();
+    // The returned Type capture owns both its type and this contents Arc.
+    let mut pending = output.iter().map(|node| (node, 2usize)).collect::<Vec<_>>();
     let mut group_count = 0usize;
     let mut group_depth = 0usize;
     while let Some((node, depth)) = pending.pop() {
@@ -1523,7 +1524,8 @@ pub(crate) fn copy_type_output(
                 let child = type_depth(depth, 1).map_err(resource)?;
                 charge_type_origin_copy(origin, child, budget).map_err(resource)?;
                 group_count = group_count.saturating_add(1);
-                group_depth = group_depth.max(depth);
+                // The copy stack holds only actual Groups, not owner layers.
+                group_depth = group_depth.max(depth - 1);
                 // The copied child Vec and this walk's child entries.
                 budget.charge_units(children.len()).map_err(resource)?;
                 budget.charge_units(children.len()).map_err(resource)?;
