@@ -2874,23 +2874,28 @@ fn charge_structured_items<'a>(
 
     fn push<'a>(
         frames: &mut Vec<Frame<'a>>,
+        logical_capacity: &mut usize,
         frame: Frame<'a>,
         budget: &mut crate::syntax_resource::SyntaxBudget,
     ) -> Result<(), DeclarationExpansionFailure> {
-        if frames.len() == frames.capacity() {
+        if frames.len() == *logical_capacity {
             let capacity = frames.len().saturating_mul(2).max(4);
-            // Pay for the new allocation and moving every live continuation.
-            budget.charge_units(capacity.saturating_add(frames.len()))?;
+            // Both this walk and the materializer use the same DFS frame
+            // schedule and logical growth. Pay for both allocations and moves.
+            budget.charge_units(capacity.saturating_add(frames.len()).saturating_mul(2))?;
             frames.reserve_exact(capacity - frames.len());
+            *logical_capacity = capacity;
         }
-        budget.charge()?;
+        budget.charge_units(2)?;
         frames.push(frame);
         Ok(())
     }
 
     let mut frames = Vec::new();
+    let mut logical_capacity = 0;
     push(
         &mut frames,
+        &mut logical_capacity,
         Frame::Items {
             parts,
             elements,
@@ -3026,6 +3031,7 @@ fn charge_structured_items<'a>(
                                 }
                                 push(
                                     &mut frames,
+                                    &mut logical_capacity,
                                     Frame::Items {
                                         parts: &container.body,
                                         elements: &matched.children[1..len - 1],
@@ -3042,7 +3048,8 @@ fn charge_structured_items<'a>(
                             } if matched.kind == NodeKind::SyntaxMatchedRepeat => {
                                 let inner_slots =
                                     charge_matcher_capture_count(&container.body, next, budget)?;
-                                budget.charge_units(matched.children.len().saturating_mul(2))?;
+                                // Count and row walks in both this preflight and the materializer.
+                                budget.charge_units(matched.children.len().saturating_mul(4))?;
                                 let iterations = matched.children.iter().filter(|element| matches!(element,
                                     ConcreteElement::Node(node) if node.kind == NodeKind::SyntaxMatchedIteration)).count();
                                 if *one_or_more && iterations == 0 {
@@ -3056,6 +3063,7 @@ fn charge_structured_items<'a>(
                                 budget.charge_units(inner_slots.saturating_mul(iterations))?;
                                 push(
                                     &mut frames,
+                                    &mut logical_capacity,
                                     Frame::Repeat {
                                         body: &container.body,
                                         elements: &matched.children,
@@ -3117,6 +3125,7 @@ fn charge_structured_items<'a>(
                         *expect_iteration = separator.is_none();
                         push(
                             &mut frames,
+                            &mut logical_capacity,
                             Frame::Items {
                                 parts: body,
                                 elements: &iteration.children,
@@ -5348,104 +5357,208 @@ fn project_declaration_invocation_node(
     )
 }
 
-fn project_structured_items(
+fn project_structured_items<'a>(
     source: &SourceFile,
-    parts: &[SurfaceSyntaxMatcherPart],
-    elements: &[ConcreteElement],
+    parts: &'a [SurfaceSyntaxMatcherPart],
+    elements: &'a [ConcreteElement],
     tokens: &ProjectionTokens<'_>,
 ) -> Result<Vec<SurfaceSyntaxCapture>, ProjectionError> {
-    let mut captures = Vec::with_capacity(matcher_capture_count(parts)?);
-    let mut children = elements.iter();
-    for part in parts {
-        let element = children.next().ok_or(ProjectionError::MalformedTree(
-            InternalReason::UnexpectedShape,
-        ))?;
-        match (part, element) {
-            (SurfaceSyntaxMatcherPart::Literal { kind, spelling }, element) => {
-                let token = matcher_token(element, tokens)?;
-                if token.kind != *kind || matcher_spelling(source, token)? != spelling {
-                    return malformed(InternalReason::UnexpectedShape);
-                }
-            }
-            (SurfaceSyntaxMatcherPart::LineEnd, element) => {
-                if matcher_token(element, tokens)?.kind != TokenKind::LineEnd {
-                    return malformed(InternalReason::UnexpectedShape);
-                }
-            }
-            (
-                SurfaceSyntaxMatcherPart::Capture {
-                    kind: SurfaceSyntaxCaptureKind::Identifier,
-                    ..
-                },
-                ConcreteElement::Node(argument),
-            ) if argument.kind == NodeKind::SyntaxArgument => {
-                let name = surface_name(only_direct_token(argument, tokens)?)?;
-                let origin = name.span.into();
-                captures.push(SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
-                    name,
-                    origin,
-                }));
-            }
-            (SurfaceSyntaxMatcherPart::Container(container), ConcreteElement::Node(matched)) => {
-                match &container.kind {
-                    SurfaceMatcherContainerKind::Group { .. }
-                        if matched.kind == NodeKind::SyntaxMatchedGroup =>
-                    {
-                        let len = matched.children.len();
-                        if len < 2 {
-                            return malformed(InternalReason::UnexpectedShape);
-                        }
-                        captures.extend(project_structured_items(
-                            source,
-                            &container.body,
-                            &matched.children[1..len - 1],
-                            tokens,
-                        )?);
+    enum Frame<'a> {
+        Items {
+            parts: &'a [SurfaceSyntaxMatcherPart],
+            elements: &'a [ConcreteElement],
+            index: usize,
+            captures: Vec<SurfaceSyntaxCapture>,
+        },
+        Repeat {
+            body: &'a [SurfaceSyntaxMatcherPart],
+            elements: &'a [ConcreteElement],
+            index: usize,
+            slots: usize,
+            columns: Vec<Vec<SurfaceSyntaxCapture>>,
+        },
+    }
+
+    fn push<'a>(frames: &mut Vec<Frame<'a>>, logical_capacity: &mut usize, frame: Frame<'a>) {
+        if frames.len() == *logical_capacity {
+            // This is the same logical growth schedule reserved by the preflight.
+            let capacity = frames.len().saturating_mul(2).max(4);
+            frames.reserve_exact(capacity - frames.len());
+            *logical_capacity = capacity;
+        }
+        frames.push(frame);
+    }
+
+    fn push_items<'a>(
+        frames: &mut Vec<Frame<'a>>,
+        logical_capacity: &mut usize,
+        parts: &'a [SurfaceSyntaxMatcherPart],
+        elements: &'a [ConcreteElement],
+    ) -> Result<(), ProjectionError> {
+        let captures = Vec::with_capacity(matcher_capture_count(parts)?);
+        push(
+            frames,
+            logical_capacity,
+            Frame::Items {
+                parts,
+                elements,
+                index: 0,
+                captures,
+            },
+        );
+        Ok(())
+    }
+
+    let mut frames = Vec::new();
+    let mut logical_capacity = 0;
+    push_items(&mut frames, &mut logical_capacity, parts, elements)?;
+    while let Some(frame) = frames.last_mut() {
+        match frame {
+            Frame::Items {
+                parts,
+                elements,
+                index,
+                captures,
+            } => {
+                let parts = *parts;
+                let elements = *elements;
+                if *index == parts.len() {
+                    if *index != elements.len() {
+                        return malformed(InternalReason::UnexpectedShape);
                     }
-                    SurfaceMatcherContainerKind::Repeat { .. }
-                        if matched.kind == NodeKind::SyntaxMatchedRepeat =>
-                    {
-                        let slots = matcher_capture_count(&container.body)?;
-                        let iterations = matched.children.iter().filter(|element| matches!(element,
-                        ConcreteElement::Node(node) if node.kind == NodeKind::SyntaxMatchedIteration)).count();
-                        let mut columns = (0..slots)
-                            .map(|_| Vec::with_capacity(iterations))
-                            .collect::<Vec<_>>();
-                        for element in &matched.children {
-                            if let ConcreteElement::Node(iteration) = element {
-                                if iteration.kind != NodeKind::SyntaxMatchedIteration {
-                                    return malformed(InternalReason::UnexpectedShape);
-                                }
-                                let row = project_structured_items(
-                                    source,
-                                    &container.body,
-                                    &iteration.children,
-                                    tokens,
-                                )?;
-                                if row.len() != slots {
-                                    return malformed(InternalReason::UnexpectedShape);
-                                }
-                                for (column, value) in columns.iter_mut().zip(row) {
-                                    column.push(value);
-                                }
+                    let Some(Frame::Items { captures, .. }) = frames.pop() else {
+                        unreachable!();
+                    };
+                    match frames.last_mut() {
+                        None => return Ok(captures),
+                        Some(Frame::Items {
+                            captures: parent, ..
+                        }) => parent.extend(captures),
+                        Some(Frame::Repeat { slots, columns, .. }) => {
+                            if captures.len() != *slots {
+                                return malformed(InternalReason::UnexpectedShape);
+                            }
+                            for (column, value) in columns.iter_mut().zip(captures) {
+                                column.push(value);
                             }
                         }
-                        for values in columns {
-                            captures.push(SurfaceSyntaxCapture::Repeated(std::sync::Arc::new(
-                                SurfaceRepeatedCapture { values },
-                            )));
+                    }
+                    continue;
+                }
+                let part = &parts[*index];
+                let element = elements.get(*index).ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                *index += 1;
+                match (part, element) {
+                    (SurfaceSyntaxMatcherPart::Literal { kind, spelling }, element) => {
+                        let token = matcher_token(element, tokens)?;
+                        if token.kind != *kind || matcher_spelling(source, token)? != spelling {
+                            return malformed(InternalReason::UnexpectedShape);
                         }
                     }
+                    (SurfaceSyntaxMatcherPart::LineEnd, element) => {
+                        if matcher_token(element, tokens)?.kind != TokenKind::LineEnd {
+                            return malformed(InternalReason::UnexpectedShape);
+                        }
+                    }
+                    (
+                        SurfaceSyntaxMatcherPart::Capture {
+                            kind: SurfaceSyntaxCaptureKind::Identifier,
+                            ..
+                        },
+                        ConcreteElement::Node(argument),
+                    ) if argument.kind == NodeKind::SyntaxArgument => {
+                        let name = surface_name(only_direct_token(argument, tokens)?)?;
+                        let origin = name.span.into();
+                        captures.push(SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+                            name,
+                            origin,
+                        }));
+                    }
+                    (
+                        SurfaceSyntaxMatcherPart::Container(container),
+                        ConcreteElement::Node(matched),
+                    ) => match &container.kind {
+                        SurfaceMatcherContainerKind::Group { .. }
+                            if matched.kind == NodeKind::SyntaxMatchedGroup =>
+                        {
+                            let len = matched.children.len();
+                            if len < 2 {
+                                return malformed(InternalReason::UnexpectedShape);
+                            }
+                            push_items(
+                                &mut frames,
+                                &mut logical_capacity,
+                                &container.body,
+                                &matched.children[1..len - 1],
+                            )?;
+                        }
+                        SurfaceMatcherContainerKind::Repeat { .. }
+                            if matched.kind == NodeKind::SyntaxMatchedRepeat =>
+                        {
+                            let slots = matcher_capture_count(&container.body)?;
+                            let iterations = matched.children.iter().filter(|element| matches!(element,
+                                ConcreteElement::Node(node) if node.kind == NodeKind::SyntaxMatchedIteration)).count();
+                            let columns = (0..slots)
+                                .map(|_| Vec::with_capacity(iterations))
+                                .collect::<Vec<_>>();
+                            push(
+                                &mut frames,
+                                &mut logical_capacity,
+                                Frame::Repeat {
+                                    body: &container.body,
+                                    elements: &matched.children,
+                                    index: 0,
+                                    slots,
+                                    columns,
+                                },
+                            );
+                        }
+                        _ => return malformed(InternalReason::UnexpectedShape),
+                    },
                     _ => return malformed(InternalReason::UnexpectedShape),
                 }
             }
-            _ => return malformed(InternalReason::UnexpectedShape),
+            Frame::Repeat {
+                body,
+                elements,
+                index,
+                ..
+            } => {
+                let body = *body;
+                let elements = *elements;
+                if *index == elements.len() {
+                    let Some(Frame::Repeat { columns, .. }) = frames.pop() else {
+                        unreachable!();
+                    };
+                    let Some(Frame::Items { captures, .. }) = frames.last_mut() else {
+                        unreachable!();
+                    };
+                    for values in columns {
+                        captures.push(SurfaceSyntaxCapture::Repeated(std::sync::Arc::new(
+                            SurfaceRepeatedCapture { values },
+                        )));
+                    }
+                    continue;
+                }
+                let element = &elements[*index];
+                *index += 1;
+                if let ConcreteElement::Node(iteration) = element {
+                    if iteration.kind != NodeKind::SyntaxMatchedIteration {
+                        return malformed(InternalReason::UnexpectedShape);
+                    }
+                    push_items(
+                        &mut frames,
+                        &mut logical_capacity,
+                        body,
+                        &iteration.children,
+                    )?;
+                }
+            }
         }
     }
-    if children.next().is_some() {
-        return malformed(InternalReason::UnexpectedShape);
-    }
-    Ok(captures)
+    unreachable!()
 }
 
 fn project_selected_declaration_invocation_node(
