@@ -273,12 +273,16 @@ D8 is the next full checkpoint once its required connected paths are ready.
 and Sol own their checks; the orchestrator owns integration and acceptance
 confirmation.
 
-### Local quote and escape parser candidate
+### Retained quote and escape parser slice
 
-**Delivered in the local candidate:** The parser-only E1 candidate for
+**Delivered:** The parser-only E1 source candidate for
 [#226](https://github.com/dikini/ash-lang/issues/226) is
 `74f5e024faf67db185ba97f3c75f00cd9aa93c58`, tree
 `b669b3b00a537cdb4bd955d15249e712e23dddad`, based on retained `3dc43762`.
+PR [#284](https://github.com/dikini/ash-lang/pull/284) retained its reviewed
+TASK-only successor as `c4548296edeb570d9685830737587f5e6686ea53`, tree
+`42335773fb29446bda649a42a3ecf5c311d3d8a0`, with product and test inputs
+unchanged from the focused candidate.
 It parses expression quotes, multiline escapes and the accepted inline
 result-expression form while preserving ordinary Block grammar and the distinct
 template-splice, escape-capture and quote-hole scopes. The ordinary and staged
@@ -321,20 +325,25 @@ checked-host quote consumer, E4 escape execution and the original I17/I22
 connected and diagnostic criteria remain open. No original criterion is closed
 by parser-only evidence.
 
-**Awaiting:** Independent TASK-record checks, PR review, verified retention and
-the partial #226 issue record. D8, E4, V3, V7 and the fresh full-workspace gate
-remain open.
+**Retained:** Independent TASK review, PR review, retention and the
+[partial #226 record](https://github.com/dikini/ash-lang/issues/226#issuecomment-6751073601)
+were confirmed with independent readback. D8, E4, V3, V7 and the fresh
+full-workspace gate remain open.
 
 **Owner:** The developer owns the candidate, evidence and acceptance record.
 Independent QA and Sol own their checks; the orchestrator owns publication,
 retaining integration and acceptance confirmation.
 
-### Local derive parser candidate
+### Retained derive parser slice
 
-**Delivered in the local candidate:** The parser-only R1 candidate for
+**Delivered:** The parser-only R1 source candidate for
 [#227](https://github.com/dikini/ash-lang/issues/227) is
 `f0060437ffcd51a5df037698ab5bc27377eb49c4`, tree
 `2225de79b50d9c0385a70411e921c5e8e5a9f3f7`, based on `c4548296`.
+PR [#285](https://github.com/dikini/ash-lang/pull/285) retained its reviewed
+TASK-only successor as `3ae2c3e1d4a7bb5678d002b72bdd1314ffccd699`, tree
+`01c05d00c6889823843f802e49692b74f0fdb834`, with product and test inputs
+unchanged from the focused candidate.
 It retains contextual derive headers and a final token-only deriving clause on
 module type and newtype CST subjects. Existing whole-root and generated
 projection checks refuse unconsumed forms before publishing owners or source
@@ -372,12 +381,67 @@ unresolved derive free name remain open.
 R2 and its S2 handoff, R3 ordering, R4/R5 execution and R6 generated subjects
 remain separate. This parser-only candidate closes no original criterion.
 
-**Awaiting:** Independent TASK-record checks, posted PR review, verified
-retention and the partial #227 issue record. The D8/E4/V3/V7 checkpoints
-and the fresh full-workspace gate remain open.
+**Retained:** Independent TASK review, posted PR review, retention and the
+[partial #227 record](https://github.com/dikini/ash-lang/issues/227#issuecomment-6759764232)
+were confirmed with independent readback. The D8/E4/V3/V7 checkpoints and
+the fresh full-workspace gate remain open.
 
 **Owner:** The developer owns candidate, evidence and acceptance update;
 independent QA and Sol own their checks, and the orchestrator owns integration
+and acceptance confirmation.
+
+### Local procedural declaration candidate
+
+**Delivered in the local candidate:** The first S2/S4 Declaration/Transformer
+slice is `c5063fa7b0ac468ed9e6ff0e6845f706549d7cd9`, tree
+`6625add9201093b6d0934ea288ab7f61612dcfd5`, based on retained R1 commit
+`3ae2c3e1d4a7bb5678d002b72bdd1314ffccd699`. The existing checked host issues
+and unwraps source Declaration captures, transfers raw identifiers, tokens and
+groups into compiler ownership before teardown, and resumes declaration
+staging on the same graph syntax budget. Identifier captures are supported
+alongside Declaration captures on this route. Legacy expression host callers
+retain their existing allowances; protected Type, Pattern and expression bridge
+paths are not enabled here.
+
+The unchanged supplemental `procedural_declaration/main.ash` and `forms.ash`
+run through the public driver and return `42 : Int`. The unchanged
+`rejected.ash` retains its authored message, distinct caller and definition
+sources, human and JSON labels, and returns no compiled program. Inspected
+staging source flow returns before owner publication and drains the failed
+graph; the rejection test does not directly inspect those graph fields. The
+checked real graph uses one budget from discovery through host and staging:
+exact and retry trials return 42, and one-short refuses without graph or program
+publication. Real-graph constructor, active-service and transfer shortages
+retain their paid work and complete cleanup; a separate injected root-close failure
+preserves the original transfer failure. Constructor refusal precedes the test
+observer, so its counters do not establish a root-drop event.
+
+The focused receipt is at
+`/home/dikini/Projects/ash-lang/.worktrees/task-0068-handoff/evidence/s2-s4-interface/final-gate-c5063fa7/receipt.json`,
+SHA-256 `7f801051b110e6f6b5a55f64203a561666c71d32d346ff43c26e6df11dff0cd7`.
+It records 587 distinct passes and two retained ignores: a valid nonempty
+template with a Declaration capture in its matcher and no used splice, and
+the #277 nominal-context case. Its 512 KiB component
+witness constructs the capture, uses actual host capture, unwrap and transfer,
+and drops the final aliased origin owner: capture composition 128 becomes raw
+transferred output depth 127; composition 129 refuses before host retention.
+That synthetic validated-registry component is separate from the checked public
+graph. Source snapshot path growth and combined text/line-index growth are
+charged; the atomic shortage precedes source cloning by the inspected source
+flow. Retained parser, staging, legacy service, image and architecture cases
+remain regression evidence. Independent QA and Sol cleared the focused source
+and evidence.
+
+**Remaining:** Full S2 I11/I19 and I14 protected categories and their mixed or
+generated consumers remain open. The supplemental S4 positive and rejection
+cases have the focused public-driver evidence above; their original criterion
+assessment and dependency review follow retention. The original I16 derive and
+teardown graphs remain at V3. D8, E4, V3, V7 and the fresh full-workspace gate
+remain open.
+
+**Awaiting:** Independent TASK checks, posted PR review, retaining integration
+and author and independent issue readbacks. The developer
+owns the candidate and acceptance updates; the orchestrator owns integration
 and acceptance confirmation.
 
 **Remaining:** Complete protected-fragment accounting/consumption, declaration
@@ -388,10 +452,8 @@ criterion awaits D5/G1; D6's procedural-output import refusal awaits S3/S4.
 Prior partial H1/H2/H3 tests do not close their original criteria. No TASK-0068
 fresh full-workspace receipt or completed D8/E4/V3/final gate is established.
 
-**Awaiting:** Retain the independently reviewed E1 parser candidate before
-treating its source changes as delivered on the retaining branch. Each delivery
-also requires independent QA, Sol PR review, retained-result
-verification and acceptance readback. Keep every
+**Awaiting:** Each further delivery requires independent QA, Sol PR review,
+retained-result verification and acceptance readback. Keep every
 incomplete original criterion unchecked with Delivered/Remaining/Awaiting/Owner
 and its PR, commit and evidence. The next fresh full checkpoint is D8, after the
 first declaration path, integrated H2/H3 and protected-copy/composed-depth gates
@@ -451,8 +513,8 @@ The reviewed finding is in
 The narrow S2/S4 plan supersedes that broad route for the first Declaration
 slice. It proposes a source Declaration capture through the existing host and
 staging path while leaving both legacy expression callers and their allowances
-intact. Its exact interfaces remain uncompiled and await independent review;
-source is not released. The plan is
+intact. The reviewed interfaces compiled at `8e1d1a8a`; the later first-path
+candidate is recorded above and awaits its own retention. The original plan is
 `/home/dikini/Projects/ash-lang/.worktrees/task-0068-handoff/evidence/host-consumer-plan/s2-s4-narrow-c4548296.md`
 (SHA-256 `70907e327c3c50f6232916149c99694efd70c1fec2363f208fa8c99206782da0`).
 It changes no original DAG edge, criterion or difficulty and does not establish
@@ -466,8 +528,9 @@ The preserved `/home/dikini/Projects/ash-lang-task-0068` worktree remains at the
 verified base on `codex/task-0068-protected`, with the inspected untracked
 `tests/declaration_type_capture.rs` preserved. Its hash and existing type-first
 working evidence are recorded in the plan. The retaining path uses the
-existing syntax budget for the reviewed direct expression/pattern consumers;
-unaccounted consumers and procedural declaration execution remain guarded.
+existing syntax budget for the reviewed direct expression/pattern consumers.
+The local first source Declaration path is recorded above; unaccounted
+protected, mixed and generated consumers remain guarded.
 
 The plan names the
 [protected type-to-expression accounting and release gate](../design/macros/slice2-delivery-plan.md#protected-type-to-expression-accounting-and-release-gate).
