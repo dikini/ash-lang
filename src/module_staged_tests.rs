@@ -94,6 +94,8 @@ fn g1_real_matcher_paths_on_a_512k_stack() {
             "g1 stack: built header 128 and dropped final matcher alias",
             "g1 stack: matched and materialized 127 on the real graph",
             "g1 stack: dropped final capture alias",
+            "g1 stack: mixed 127 captured and final alias dropped",
+            "g1 stack: mixed live 128 refused without publication",
             "g1 stack: refused live 128 before capture and publication",
             "g1 stack: paid late failure, no graph publication, final alias dropped",
         ] {
@@ -124,7 +126,7 @@ fn g1_real_matcher_paths_on_a_512k_stack() {
                 static CAPTURE: RefCell<Option<Arc<SurfaceRepeatedCapture>>> = const { RefCell::new(None) };
                 static PAID: Cell<Option<usize>> = const { Cell::new(None) };
             }
-            fn observe(source: &SourceFile, captures: &[SurfaceSyntaxCapture], budget: &SyntaxBudget) {
+            fn observe_depth(source: &SourceFile, captures: &[SurfaceSyntaxCapture], budget: &SyntaxBudget, levels: usize) {
                 assert!(source.display_path().ends_with("main.ash"));
                 let [SurfaceSyntaxCapture::Repeated(root)] = captures else {
                     panic!("expected one actual repeated capture");
@@ -132,7 +134,7 @@ fn g1_real_matcher_paths_on_a_512k_stack() {
                 let alias = Arc::clone(root);
                 assert!(Arc::ptr_eq(root, &alias));
                 let mut value = &captures[0];
-                for _ in 0..127 {
+                for _ in 0..levels {
                     let SurfaceSyntaxCapture::Repeated(level) = value else { panic!("missing repeated level"); };
                     let [only] = level.values.as_slice() else { panic!("expected one iteration"); };
                     value = only;
@@ -147,7 +149,13 @@ fn g1_real_matcher_paths_on_a_512k_stack() {
                 assert_eq!(&source.text()[range.start() as usize..range.end() as usize], "Alpha");
                 CAPTURE.with(|slot| *slot.borrow_mut() = Some(alias));
                 PAID.set(Some(budget.consumed()));
+            }
+            fn observe(source: &SourceFile, captures: &[SurfaceSyntaxCapture], budget: &SyntaxBudget) {
+                observe_depth(source, captures, budget, 127);
                 eprintln!("g1 stack: matched and materialized 127 on the real graph");
+            }
+            fn observe_mixed(source: &SourceFile, captures: &[SurfaceSyntaxCapture], budget: &SyntaxBudget) {
+                observe_depth(source, captures, budget, 64);
             }
             fn forms(depth: usize) -> String {
                 let mut matcher = format!("{}$value:ident", "$(".repeat(depth));
@@ -159,6 +167,38 @@ fn g1_real_matcher_paths_on_a_512k_stack() {
             fn invocation(depth: usize) -> String {
                 let mut text = String::from("sink Alpha");
                 for marker in (0..depth).rev() { text.push_str(&format!(" {marker}")); }
+                text
+            }
+            fn mixed_forms(depth: usize) -> String {
+                let mut matcher = String::new();
+                for level in 0..depth {
+                    matcher.push_str(if level % 2 == 0 { "$( " } else if level % 4 == 1 { "( " } else { "{ " });
+                }
+                matcher.push_str("$value:ident");
+                for level in (0..depth).rev() {
+                    if level % 2 == 0 {
+                        matcher.push_str(&format!(" {level} )+"));
+                    } else {
+                        matcher.push_str(if level % 4 == 1 { " )" } else { " }" });
+                    }
+                }
+                format!("pub syntax declaration: (sink) {matcher} => {{}}\n")
+            }
+            fn mixed_invocation(depth: usize) -> String {
+                let mut text = String::from("sink");
+                for level in 0..depth {
+                    if level % 2 != 0 {
+                        text.push_str(if level % 4 == 1 { " (" } else { " {" });
+                    }
+                }
+                text.push_str(" Alpha");
+                for level in (0..depth).rev() {
+                    if level % 2 == 0 {
+                        text.push_str(&format!(" {level}"));
+                    } else {
+                        text.push_str(if level % 4 == 1 { " )" } else { " }" });
+                    }
+                }
                 text
             }
 
@@ -238,6 +278,52 @@ fn g1_real_matcher_paths_on_a_512k_stack() {
             drop(alias);
             assert!(weak.upgrade().is_none());
             eprintln!("g1 stack: dropped final capture alias");
+
+            let mixed_tree = Tree::new();
+            mixed_tree.write("forms.ash", &mixed_forms(127));
+            let mixed_entry = mixed_tree.write("main.ash", &format!(
+                "import forms (syntax sink)\n{}\nmain : Unit -> Int\nmain () = 42\n", mixed_invocation(127)
+            ));
+            let mut mixed = graph_at(&mixed_entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+            eprintln!("g1 stack phase: begin mixed live-127 match");
+            PAID.set(None);
+            G1_CAPTURE_OBSERVER.set(Some(observe_mixed));
+            let mixed_result = compile_staged_graph_for_test(&mut mixed);
+            G1_CAPTURE_OBSERVER.set(None);
+            let mixed_program = mixed_result.unwrap();
+            assert!(PAID.get().is_some());
+            assert_eq!(execute(&mixed_program).unwrap().value_display(), "42");
+            let alias = CAPTURE.with(|slot| slot.borrow_mut().take().unwrap());
+            let weak = Arc::downgrade(&alias);
+            drop(mixed_program);
+            drop(mixed);
+            assert_eq!(Arc::strong_count(&alias), 1);
+            drop(alias);
+            assert!(weak.upgrade().is_none());
+            eprintln!("g1 stack: mixed 127 captured and final alias dropped");
+
+            let mixed_over_tree = Tree::new();
+            mixed_over_tree.write("forms.ash", &mixed_forms(128));
+            let mixed_over_entry = mixed_over_tree.write("main.ash", &format!(
+                "import forms (syntax sink)\n{}\nmain : Unit -> Int\nmain () = 42\n", mixed_invocation(128)
+            ));
+            let mut mixed_over = graph_at(&mixed_over_entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+            eprintln!("g1 stack phase: begin mixed live-128 refusal");
+            PAID.set(None);
+            G1_CAPTURE_OBSERVER.set(Some(observe_mixed));
+            let mixed_over_result = compile_staged_graph_for_test(&mut mixed_over);
+            G1_CAPTURE_OBSERVER.set(None);
+            let failure = match mixed_over_result { Ok(_) => panic!("expected mixed live-depth refusal"), Err(failure) => failure };
+            assert_eq!(PAID.get(), None);
+            assert!(mixed_over.pending.is_empty() && mixed_over.loaded.is_empty() && mixed_over.completed.is_none());
+            let FileFailure::Graph(diagnostic) = &failure else { panic!("expected graph failure: {failure:?}"); };
+            let LoadGraphError::Syntax(syntax) = diagnostic.failure() else { panic!("expected structural-depth failure"); };
+            assert!(syntax.source.display_path().ends_with("main.ash"));
+            assert!(syntax.lexical.is_empty() && syntax.parser.is_empty());
+            assert!(matches!(syntax.resource, Some(ResourceFailure::StructuralDepth { limit: STRUCTURAL_DEPTH_LIMIT })));
+            drop(failure);
+            drop(mixed_over);
+            eprintln!("g1 stack: mixed live 128 refused without publication");
 
             let over_live_tree = Tree::new();
             over_live_tree.write("forms.ash", &forms(128));
