@@ -4183,6 +4183,445 @@ mod tests {
     }
 
     #[test]
+    fn pattern_capture_arena_reserves_growth_before_clone() {
+        use super::{HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap};
+        use crate::{
+            integer::Integer,
+            module::ModuleId,
+            surface::{
+                SurfacePattern, SurfacePatternCapture, SurfacePatternKind, SurfaceSyntaxCapture,
+            },
+            syntax::MacroOutputNode,
+            syntax_resource::SyntaxBudget,
+            types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
+        };
+        use std::sync::Arc;
+
+        // This synthetic host state isolates arena accounting; the imported
+        // public graph supplies the separate checked-host evidence.
+        fn host<'a>(
+            budget: &'a mut SyntaxBudget,
+        ) -> (SyntaxHost<'a>, Arc<[MacroOutputNode]>, OperationId) {
+            let mut host = scalar_host(budget);
+            let span = host.caller.span;
+            let contents: Arc<[MacroOutputNode]> = Arc::from([]);
+            host.captures
+                .push(SurfaceSyntaxCapture::Pattern(SurfacePatternCapture {
+                    pattern: SurfacePattern {
+                        kind: SurfacePatternKind::Wildcard,
+                        span,
+                        diagnostic: None,
+                    },
+                    contents: Arc::clone(&contents),
+                }));
+            let operation = OperationId::new(host.ops, 0);
+            host.operations.insert(operation, "capture".into());
+            let owner = NominalTypeId::new(ModuleId::new(0), 0);
+            host.constructors
+                .insert("PatternCapture".into(), ConstructorId::new(owner, 0));
+            host.constructors
+                .insert("Captured".into(), ConstructorId::new(owner, 1));
+            (host, contents, operation)
+        }
+
+        fn capture(
+            host: &mut SyntaxHost<'_>,
+            operation: OperationId,
+            heap: &mut Vec<HeapCell>,
+        ) -> Result<Value, RuntimeFailure> {
+            let fields =
+                vec![host.input(), Value::integer(Integer::from_i64(0))].into_boxed_slice();
+            let argument = Value::Location(allocate_heap(heap, HeapCell::Tuple(fields)).unwrap());
+            host.request(operation, argument, heap, &mut TypeWorkBudget::unbounded())
+        }
+
+        let mut measured = SyntaxBudget::default();
+        measured.charge_units(17).unwrap();
+        let (mut measured_host, contents, operation) = host(&mut measured);
+        let base = Arc::strong_count(&contents);
+        let mut heap = Vec::new();
+        capture(&mut measured_host, operation, &mut heap).unwrap();
+        let first = measured_host.syntax_work.as_deref().unwrap().consumed();
+        assert_eq!(measured_host.patterns.len(), 1);
+        assert_eq!(Arc::strong_count(&contents), base + 1);
+        capture(&mut measured_host, operation, &mut heap).unwrap();
+        let total = measured_host.syntax_work.as_deref().unwrap().consumed();
+        assert_eq!(measured_host.patterns.len(), 2);
+        assert_eq!(Arc::strong_count(&contents), base + 2);
+        drop(measured_host);
+
+        // The first insertion needs one arena slot before the two constructors.
+        let mut initial_short = SyntaxBudget::with_limit(first - 3);
+        initial_short.charge_units(17).unwrap();
+        let (mut initial_host, contents, operation) = host(&mut initial_short);
+        let base = Arc::strong_count(&contents);
+        assert!(matches!(
+            capture(&mut initial_host, operation, &mut Vec::new()),
+            Err(RuntimeFailure::Report(report))
+                if report.primary.reason == "internal.resource.syntax-work"
+        ));
+        assert!(initial_host.patterns.is_empty());
+        assert_eq!(Arc::strong_count(&contents), base);
+        assert_eq!(
+            initial_host.syntax_work.as_deref().unwrap().consumed(),
+            first - 3
+        );
+        drop(initial_host);
+
+        // An already allocated two-slot arena omits the initial 1 and the
+        // later 2+1 growth charge, while still copying both captures.
+        let mut spare = SyntaxBudget::default();
+        spare.charge_units(17).unwrap();
+        let (mut spare_host, contents, operation) = host(&mut spare);
+        spare_host.patterns.reserve_exact(2);
+        let base = Arc::strong_count(&contents);
+        let mut heap = Vec::new();
+        capture(&mut spare_host, operation, &mut heap).unwrap();
+        capture(&mut spare_host, operation, &mut heap).unwrap();
+        assert_eq!(spare_host.patterns.len(), 2);
+        assert_eq!(Arc::strong_count(&contents), base + 2);
+        assert_eq!(
+            spare_host.syntax_work.as_deref().unwrap().consumed() + 4,
+            total
+        );
+        drop(spare_host);
+
+        // The second push requests two slots and moves one live entry. Two
+        // later constructor charges occur after that reservation and clone.
+        let growth_limit = total - 3;
+        assert!(growth_limit > first);
+        let mut short = SyntaxBudget::with_limit(growth_limit);
+        short.charge_units(17).unwrap();
+        let (mut short_host, contents, operation) = host(&mut short);
+        let base = Arc::strong_count(&contents);
+        let mut heap = Vec::new();
+        capture(&mut short_host, operation, &mut heap).unwrap();
+        assert!(matches!(
+            capture(&mut short_host, operation, &mut heap),
+            Err(RuntimeFailure::Report(report))
+                if report.primary.reason == "internal.resource.syntax-work"
+        ));
+        assert_eq!(short_host.patterns.len(), 1);
+        assert_eq!(Arc::strong_count(&contents), base + 1);
+        assert_eq!(
+            short_host.syntax_work.as_deref().unwrap().consumed(),
+            total - 5
+        );
+        drop(short_host);
+
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(total);
+            exact.charge_units(17).unwrap();
+            let (mut exact_host, _, operation) = host(&mut exact);
+            let mut heap = Vec::new();
+            capture(&mut exact_host, operation, &mut heap).unwrap();
+            capture(&mut exact_host, operation, &mut heap).unwrap();
+            assert_eq!(exact_host.patterns.len(), 2);
+            assert_eq!(exact_host.syntax_work.as_deref().unwrap().consumed(), total);
+        }
+    }
+
+    #[test]
+    fn pattern_parse_success_and_failure_arenas_pay_before_growth() {
+        use super::{
+            HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap, constructor_fields,
+        };
+        use crate::{
+            module::ModuleId,
+            syntax::MacroOutputNode,
+            syntax_resource::SyntaxBudget,
+            types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
+        };
+
+        fn host(budget: &mut SyntaxBudget) -> (SyntaxHost<'_>, OperationId) {
+            let mut host = scalar_host(budget);
+            let operation = OperationId::new(host.ops, 0);
+            host.operations.insert(operation, "parse_pattern".into());
+            let owner = NominalTypeId::new(ModuleId::new(0), 0);
+            for (index, name) in (0u32..).zip([
+                "Syntax",
+                "NoNodes",
+                "MoreNodes",
+                "GroupNode",
+                "TypeNode",
+                "PatternNode",
+                "ExpressionNode",
+                "IdentifierNode",
+                "TokenNode",
+                "ParsedPattern",
+                "ParseRejected",
+            ]) {
+                host.constructors
+                    .insert(name.into(), ConstructorId::new(owner, index));
+            }
+            (host, operation)
+        }
+
+        fn input_syntax(host: &mut SyntaxHost<'_>, heap: &mut Vec<HeapCell>, valid: bool) -> Value {
+            let nodes = if valid {
+                vec![MacroOutputNode::Token(
+                    crate::lexer::TokenKind::Wildcard,
+                    "_".into(),
+                    host.frame.invocation.into(),
+                )]
+            } else {
+                Vec::new()
+            };
+            host.syntax_value(&nodes, heap, 0).unwrap()
+        }
+
+        fn parse_pattern(
+            host: &mut SyntaxHost<'_>,
+            operation: OperationId,
+            syntax: &Value,
+            heap: &mut Vec<HeapCell>,
+        ) -> Result<Value, RuntimeFailure> {
+            let fields = vec![host.input(), syntax.clone()].into_boxed_slice();
+            let argument = Value::Location(allocate_heap(heap, HeapCell::Tuple(fields)).unwrap());
+            host.request(operation, argument, heap, &mut TypeWorkBudget::unbounded())
+        }
+
+        // Synthetic constructors exercise the real parser and arenas. The
+        // separate imported test checks the validated public host graph.
+        for valid in [true, false] {
+            let mut measured = SyntaxBudget::default();
+            measured.charge_units(17).unwrap();
+            let (mut measured_host, operation) = host(&mut measured);
+            let mut heap = Vec::new();
+            let syntax = input_syntax(&mut measured_host, &mut heap, valid);
+            let mut first = 0;
+            for expected_len in 1..=2 {
+                let result =
+                    parse_pattern(&mut measured_host, operation, &syntax, &mut heap).unwrap();
+                let (tag, _) = constructor_fields(&result, &heap).unwrap();
+                assert_eq!(
+                    tag,
+                    measured_host
+                        .constructor(if valid {
+                            "ParsedPattern"
+                        } else {
+                            "ParseRejected"
+                        })
+                        .unwrap()
+                );
+                assert_eq!(
+                    if valid {
+                        measured_host.patterns.len()
+                    } else {
+                        measured_host.parse_failures.len()
+                    },
+                    expected_len
+                );
+                if expected_len == 1 {
+                    first = measured_host.syntax_work.as_deref().unwrap().consumed();
+                }
+            }
+            let total = measured_host.syntax_work.as_deref().unwrap().consumed();
+            drop(measured_host);
+
+            let mut initial_short = SyntaxBudget::with_limit(first - 2);
+            initial_short.charge_units(17).unwrap();
+            let (mut initial_host, operation) = host(&mut initial_short);
+            let mut heap = Vec::new();
+            let syntax = input_syntax(&mut initial_host, &mut heap, valid);
+            assert!(matches!(
+                parse_pattern(&mut initial_host, operation, &syntax, &mut heap),
+                Err(RuntimeFailure::Report(report))
+                    if report.primary.reason == "internal.resource.syntax-work"
+            ));
+            assert!(initial_host.patterns.is_empty());
+            assert!(initial_host.parse_failures.is_empty());
+            assert_eq!(
+                initial_host.syntax_work.as_deref().unwrap().consumed(),
+                first - 2
+            );
+            drop(initial_host);
+
+            let mut spare = SyntaxBudget::default();
+            spare.charge_units(17).unwrap();
+            let (mut spare_host, operation) = host(&mut spare);
+            if valid {
+                spare_host.patterns.reserve_exact(2);
+            } else {
+                spare_host.parse_failures.reserve_exact(2);
+            }
+            let mut heap = Vec::new();
+            let syntax = input_syntax(&mut spare_host, &mut heap, valid);
+            parse_pattern(&mut spare_host, operation, &syntax, &mut heap).unwrap();
+            parse_pattern(&mut spare_host, operation, &syntax, &mut heap).unwrap();
+            assert_eq!(
+                spare_host.syntax_work.as_deref().unwrap().consumed() + 4,
+                total
+            );
+            drop(spare_host);
+
+            // The second push reserves two requested slots plus one live
+            // move; constructing ParsedPattern/ParseRejected costs one more.
+            let mut short = SyntaxBudget::with_limit(total - 2);
+            short.charge_units(17).unwrap();
+            let (mut short_host, operation) = host(&mut short);
+            let mut heap = Vec::new();
+            let syntax = input_syntax(&mut short_host, &mut heap, valid);
+            parse_pattern(&mut short_host, operation, &syntax, &mut heap).unwrap();
+            assert!(matches!(
+                parse_pattern(&mut short_host, operation, &syntax, &mut heap),
+                Err(RuntimeFailure::Report(report))
+                    if report.primary.reason == "internal.resource.syntax-work"
+            ));
+            assert_eq!(
+                if valid {
+                    short_host.patterns.len()
+                } else {
+                    short_host.parse_failures.len()
+                },
+                1
+            );
+            assert_eq!(
+                short_host.syntax_work.as_deref().unwrap().consumed(),
+                total - 4
+            );
+            drop(short_host);
+
+            for _ in 0..2 {
+                let mut exact = SyntaxBudget::with_limit(total);
+                exact.charge_units(17).unwrap();
+                let (mut exact_host, operation) = host(&mut exact);
+                let mut heap = Vec::new();
+                let syntax = input_syntax(&mut exact_host, &mut heap, valid);
+                parse_pattern(&mut exact_host, operation, &syntax, &mut heap).unwrap();
+                parse_pattern(&mut exact_host, operation, &syntax, &mut heap).unwrap();
+                assert_eq!(exact_host.syntax_work.as_deref().unwrap().consumed(), total);
+            }
+        }
+    }
+
+    #[test]
+    fn pattern_syntax_issuance_arena_refuses_before_copy_and_retries() {
+        use super::{HeapCell, RuntimeFailure, SyntaxHost};
+        use crate::{
+            module::ModuleId,
+            surface::{SurfacePattern, SurfacePatternCapture, SurfacePatternKind},
+            syntax::MacroOutputNode,
+            syntax_resource::SyntaxBudget,
+            types::{ConstructorId, NominalTypeId},
+        };
+        use std::sync::Arc;
+
+        fn host(budget: &mut SyntaxBudget) -> SyntaxHost<'_> {
+            let mut host = scalar_host(budget);
+            let owner = NominalTypeId::new(ModuleId::new(0), 0);
+            for (index, name) in (0u32..).zip(["NoNodes", "Syntax", "PatternNode", "MoreNodes"]) {
+                host.constructors
+                    .insert(name.into(), ConstructorId::new(owner, index));
+            }
+            host
+        }
+
+        fn capture_nodes(host: &SyntaxHost<'_>) -> (Vec<MacroOutputNode>, Arc<[MacroOutputNode]>) {
+            let span = host.frame.invocation;
+            let contents: Arc<[MacroOutputNode]> = Arc::from([]);
+            (
+                vec![MacroOutputNode::ForwardedPattern(
+                    SurfacePatternCapture {
+                        pattern: SurfacePattern {
+                            kind: SurfacePatternKind::Wildcard,
+                            span,
+                            diagnostic: None,
+                        },
+                        contents: Arc::clone(&contents),
+                    },
+                    span.into(),
+                )],
+                contents,
+            )
+        }
+
+        let mut measured = SyntaxBudget::default();
+        measured.charge_units(17).unwrap();
+        let mut measured_host = host(&mut measured);
+        let (nodes, contents) = capture_nodes(&measured_host);
+        let base = Arc::strong_count(&contents);
+        let mut heap: Vec<HeapCell> = Vec::new();
+        measured_host.syntax_value(&nodes, &mut heap, 0).unwrap();
+        let first = measured_host.syntax_work.as_deref().unwrap().consumed();
+        assert_eq!(measured_host.patterns.len(), 1);
+        assert_eq!(Arc::strong_count(&contents), base + 1);
+        measured_host.syntax_value(&nodes, &mut heap, 0).unwrap();
+        assert_eq!(measured_host.patterns.len(), 2);
+        assert_eq!(Arc::strong_count(&contents), base + 2);
+        let total = measured_host.syntax_work.as_deref().unwrap().consumed();
+        drop(measured_host);
+
+        let mut initial_short = SyntaxBudget::with_limit(first - 11);
+        initial_short.charge_units(17).unwrap();
+        let mut initial_host = host(&mut initial_short);
+        let (nodes, contents) = capture_nodes(&initial_host);
+        let base = Arc::strong_count(&contents);
+        assert!(matches!(
+            initial_host.syntax_value(&nodes, &mut Vec::new(), 0),
+            Err(RuntimeFailure::Report(report))
+                if report.primary.reason == "internal.resource.syntax-work"
+        ));
+        assert!(initial_host.patterns.is_empty());
+        assert_eq!(Arc::strong_count(&contents), base);
+        assert_eq!(
+            initial_host.syntax_work.as_deref().unwrap().consumed(),
+            first - 11
+        );
+        drop(initial_host);
+
+        let mut spare = SyntaxBudget::default();
+        spare.charge_units(17).unwrap();
+        let mut spare_host = host(&mut spare);
+        spare_host.patterns.reserve_exact(2);
+        let (nodes, contents) = capture_nodes(&spare_host);
+        let base = Arc::strong_count(&contents);
+        let mut heap = Vec::new();
+        spare_host.syntax_value(&nodes, &mut heap, 0).unwrap();
+        spare_host.syntax_value(&nodes, &mut heap, 0).unwrap();
+        assert_eq!(Arc::strong_count(&contents), base + 2);
+        assert_eq!(
+            spare_host.syntax_work.as_deref().unwrap().consumed() + 4,
+            total
+        );
+        drop(spare_host);
+
+        // Two requested slots plus one live move are paid before the second
+        // capture clone; ten later units build the returned Syntax value.
+        let mut short = SyntaxBudget::with_limit(total - 11);
+        short.charge_units(17).unwrap();
+        let mut short_host = host(&mut short);
+        let (nodes, contents) = capture_nodes(&short_host);
+        let base = Arc::strong_count(&contents);
+        let mut heap = Vec::new();
+        short_host.syntax_value(&nodes, &mut heap, 0).unwrap();
+        assert!(matches!(
+            short_host.syntax_value(&nodes, &mut heap, 0),
+            Err(RuntimeFailure::Report(report))
+                if report.primary.reason == "internal.resource.syntax-work"
+        ));
+        assert_eq!(short_host.patterns.len(), 1);
+        assert_eq!(Arc::strong_count(&contents), base + 1);
+        assert_eq!(
+            short_host.syntax_work.as_deref().unwrap().consumed(),
+            total - 13
+        );
+        drop(short_host);
+
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(total);
+            exact.charge_units(17).unwrap();
+            let mut exact_host = host(&mut exact);
+            let (nodes, _) = capture_nodes(&exact_host);
+            let mut heap = Vec::new();
+            exact_host.syntax_value(&nodes, &mut heap, 0).unwrap();
+            exact_host.syntax_value(&nodes, &mut heap, 0).unwrap();
+            assert_eq!(exact_host.patterns.len(), 2);
+            assert_eq!(exact_host.syntax_work.as_deref().unwrap().consumed(), total);
+        }
+    }
+
+    #[test]
     fn type_host_deep_packet_roundtrip_on_a_512k_stack() {
         const CHILD: &str = "ASH_TYPE_HOST_512K_CHILD";
         if std::env::var_os(CHILD).is_none() {
