@@ -5944,6 +5944,16 @@ fn reserve_expression_scratch<T>(
     Ok(())
 }
 
+fn push_expression_scratch<T>(
+    buffer: &mut Vec<T>,
+    budget: Option<&std::cell::RefCell<&mut crate::syntax_resource::SyntaxBudget>>,
+    value: impl FnOnce() -> Result<T, ProjectionError>,
+) -> Result<(), ProjectionError> {
+    reserve_expression_scratch(buffer, 1, budget)?;
+    buffer.push(value()?);
+    Ok(())
+}
+
 fn charge_expression_move(
     count: usize,
     budget: Option<&std::cell::RefCell<&mut crate::syntax_resource::SyntaxBudget>>,
@@ -7022,14 +7032,12 @@ fn project_expression_with_fragments(
     macro_rules! push_scratch {
         ($items:expr, $item:expr $(,)?) => {{
             let items = &mut *$items;
-            reserve_expression_scratch(items, 1, tokens.expression_budget)?;
-            items.push($item);
+            push_expression_scratch(items, tokens.expression_budget, || Ok($item))?;
         }};
     }
     macro_rules! push_task {
         ($item:expr $(,)?) => {{
-            reserve_expression_scratch(&mut tasks, 1, tokens.expression_budget)?;
-            tasks.push($item);
+            push_expression_scratch(&mut tasks, tokens.expression_budget, || Ok($item))?;
         }};
     }
     macro_rules! extend_tasks {
@@ -7041,8 +7049,7 @@ fn project_expression_with_fragments(
     }
     macro_rules! push_result {
         ($item:expr $(,)?) => {{
-            reserve_expression_scratch(&mut projected, 1, tokens.expression_budget)?;
-            projected.push($item);
+            push_expression_scratch(&mut projected, tokens.expression_budget, || Ok($item))?;
         }};
     }
     while let Some(task) = tasks.pop() {
@@ -8219,8 +8226,7 @@ fn schedule_block<'a>(
     macro_rules! push_scratch {
         ($items:expr, $item:expr $(,)?) => {{
             let items = &mut *$items;
-            reserve_expression_scratch(items, 1, tokens.expression_budget)?;
-            items.push($item);
+            push_expression_scratch(items, tokens.expression_budget, || Ok($item))?;
         }};
     }
     require_kind(node, NodeKind::Block)?;
@@ -8366,8 +8372,7 @@ fn schedule_binary<'a>(
     macro_rules! push_scratch {
         ($items:expr, $item:expr $(,)?) => {{
             let items = &mut *$items;
-            reserve_expression_scratch(items, 1, tokens.expression_budget)?;
-            items.push($item);
+            push_expression_scratch(items, tokens.expression_budget, || Ok($item))?;
         }};
     }
     let (left, right) = expression_pair(node)?;
@@ -8431,8 +8436,7 @@ fn schedule_group<'a>(
     macro_rules! push_scratch {
         ($items:expr, $item:expr $(,)?) => {{
             let items = &mut *$items;
-            reserve_expression_scratch(items, 1, tokens.expression_budget)?;
-            items.push($item);
+            push_expression_scratch(items, tokens.expression_budget, || Ok($item))?;
         }};
     }
     let span = node_span(source, node, tokens)?;
