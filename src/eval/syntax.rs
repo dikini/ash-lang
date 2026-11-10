@@ -2761,6 +2761,189 @@ mod tests {
     }
 
     #[test]
+    fn fragment_category_and_end_of_input_failures_keep_their_diagnostics() {
+        use super::{HeapCell, Value, allocate_heap, constructor_fields};
+        use crate::{
+            eval::value::CompilerSyntaxHandleKind,
+            lexer::TokenKind,
+            module::ModuleId,
+            parser::{ExpectedForm, FoundToken, ParseReason},
+            surface::{
+                SurfacePattern, SurfacePatternCapture, SurfacePatternKind, SurfaceType,
+                SurfaceTypeCapture, SurfaceTypeKind,
+            },
+            syntax::{MacroDelimiter, MacroOutputNode},
+            syntax_resource::SyntaxBudget,
+            types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
+        };
+        use std::sync::Arc;
+
+        let mut budget = SyntaxBudget::default();
+        let mut host = scalar_host(&mut budget);
+        let pattern_op = OperationId::new(host.ops, 0);
+        let type_op = OperationId::new(host.ops, 1);
+        host.operations.insert(pattern_op, "parse_pattern".into());
+        host.operations.insert(type_op, "parse_type".into());
+        let owner = NominalTypeId::new(ModuleId::new(0), 0);
+        for (index, name) in (0u32..).zip([
+            "Syntax",
+            "NoNodes",
+            "MoreNodes",
+            "GroupNode",
+            "Parentheses",
+            "PatternNode",
+            "TypeNode",
+            "TokenNode",
+            "IdentifierNode",
+            "ExpressionNode",
+            "ParsedPattern",
+            "ParsedType",
+            "ParseRejected",
+        ]) {
+            host.constructors
+                .insert(name.into(), ConstructorId::new(owner, index));
+        }
+        let span = host.caller.span;
+        let pattern = || {
+            MacroOutputNode::ForwardedPattern(
+                SurfacePatternCapture {
+                    pattern: SurfacePattern {
+                        kind: SurfacePatternKind::Wildcard,
+                        span,
+                        diagnostic: None,
+                    },
+                    contents: Arc::from([]),
+                },
+                span.into(),
+            )
+        };
+        let ty = || {
+            MacroOutputNode::ForwardedType(
+                SurfaceTypeCapture {
+                    ty: SurfaceType {
+                        kind: SurfaceTypeKind::Int,
+                        span,
+                        diagnostic: None,
+                    },
+                    contents: Arc::from([]),
+                },
+                span.into(),
+            )
+        };
+        let grouped =
+            |node| MacroOutputNode::Group(MacroDelimiter::Parentheses, vec![node], span.into());
+        let token =
+            |kind, text: &'static str| MacroOutputNode::Token(kind, Arc::from(text), span.into());
+        let cases = [
+            (
+                type_op,
+                vec![grouped(pattern())],
+                ParseReason::ExpectedForm,
+                Some(ExpectedForm::Type),
+                Some(FoundToken::Spelling("_")),
+            ),
+            (
+                pattern_op,
+                vec![grouped(ty())],
+                ParseReason::ExpectedForm,
+                Some(ExpectedForm::Pattern),
+                Some(FoundToken::Spelling("Int")),
+            ),
+            (
+                pattern_op,
+                vec![
+                    token(TokenKind::Wildcard, "_"),
+                    token(TokenKind::Wildcard, "_"),
+                ],
+                ParseReason::UnexpectedToken,
+                None,
+                Some(FoundToken::Spelling("_")),
+            ),
+            (
+                type_op,
+                vec![
+                    token(TokenKind::IntType, "Int"),
+                    token(TokenKind::IntType, "Int"),
+                ],
+                ParseReason::UnexpectedToken,
+                None,
+                Some(FoundToken::Spelling("Int")),
+            ),
+            (
+                pattern_op,
+                vec![
+                    token(TokenKind::Wildcard, "_"),
+                    token(TokenKind::LineEnd, "\n"),
+                ],
+                ParseReason::UnexpectedToken,
+                None,
+                Some(FoundToken::LineEnd),
+            ),
+            (
+                type_op,
+                vec![
+                    token(TokenKind::IntType, "Int"),
+                    token(TokenKind::LineEnd, "\n"),
+                ],
+                ParseReason::UnexpectedToken,
+                None,
+                Some(FoundToken::LineEnd),
+            ),
+        ];
+        let mut heap = Vec::<HeapCell>::new();
+        for (operation, output, reason, expected, found) in cases {
+            let syntax = host
+                .syntax_value_inner(&output, &mut heap, 0, true)
+                .unwrap();
+            let before = (
+                host.types.len(),
+                host.patterns.len(),
+                host.parse_failures.len(),
+            );
+            let argument = Value::Location(
+                allocate_heap(
+                    &mut heap,
+                    HeapCell::Tuple(vec![host.input(), syntax].into_boxed_slice()),
+                )
+                .unwrap(),
+            );
+            let result = host
+                .request(
+                    operation,
+                    argument,
+                    &mut heap,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .unwrap();
+            let (tag, Some(handle)) = constructor_fields(&result, &heap).unwrap() else {
+                panic!("expected rejection")
+            };
+            assert_eq!(tag, host.constructor("ParseRejected").unwrap());
+            assert_eq!(
+                (
+                    host.types.len(),
+                    host.patterns.len(),
+                    host.parse_failures.len()
+                ),
+                (before.0, before.1, before.2 + 1)
+            );
+            let CompilerSyntaxHandleKind::ParseFailure(index) =
+                host.admitted_handle(handle).unwrap()
+            else {
+                panic!("expected failure handle")
+            };
+            let (diagnostics, resource) = &host.parse_failures[index];
+            assert!(resource.is_none());
+            assert!(!diagnostics.is_empty());
+            let diagnostic = &diagnostics[0];
+            assert_eq!(diagnostic.reason, reason);
+            assert_eq!(diagnostic.expected_form(), expected);
+            assert_eq!(diagnostic.found_token(), found);
+            assert_eq!(diagnostic.primary.span(), span);
+        }
+    }
+
+    #[test]
     fn pattern_host_nested_issued_fragments_obey_retained_depth_on_a_512k_stack() {
         const CHILD: &str = "ASH_PATTERN_AST_512K_CHILD";
         if std::env::var_os(CHILD).is_none() {

@@ -13902,6 +13902,141 @@ mod tests {
     }
 
     #[test]
+    fn protected_pattern_copies_prepay_origins_and_inherited_frames() {
+        use crate::{
+            syntax::{
+                DiagnosticLocation, ExpansionFrame, MacroOrigin, charge_new_pattern_copy,
+                charge_new_scheduled_pattern_copy,
+            },
+            syntax_resource::{ResourceFailure, SyntaxBudget},
+        };
+        use std::sync::Arc;
+
+        let source = SourceFile::new("protected-copy.ash", "value").unwrap();
+        let span = source.span(ByteRange::new(0, 5).unwrap()).unwrap();
+        let previous = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let distinct = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let source_origin = MacroOrigin::Source(span);
+        let combined =
+            MacroOrigin::combined(vec![source_origin.clone()], Arc::clone(&previous)).unwrap();
+        let MacroOrigin::Combined { inputs, .. } = &combined else {
+            unreachable!()
+        };
+        let alias = Arc::clone(inputs);
+        let make_pattern = |origin: &MacroOrigin| {
+            let location = || {
+                let mut location = DiagnosticLocation::new(origin.clone());
+                location.related.push(origin.clone());
+                location.frames.push(Arc::clone(&previous));
+                Some(Box::new(location))
+            };
+            SurfacePattern {
+                kind: SurfacePatternKind::Tuple(
+                    (0..4)
+                        .map(|_| SurfacePattern {
+                            kind: SurfacePatternKind::Binder(SurfaceBinder {
+                                name: SurfaceName {
+                                    text: "value".into(),
+                                    span,
+                                    introduction: 0,
+                                    introduced_at: None,
+                                    written: true,
+                                    diagnostic: location(),
+                                },
+                                span,
+                            }),
+                            span,
+                            diagnostic: location(),
+                        })
+                        .collect(),
+                ),
+                span,
+                diagnostic: location(),
+            }
+        };
+        let measure = |pattern: &SurfacePattern, inherited: &Arc<ExpansionFrame>| {
+            let mut budget = SyntaxBudget::default();
+            assert_eq!(
+                charge_new_pattern_copy(pattern, 40, true, &mut budget).unwrap(),
+                Some(false)
+            );
+            let first = budget.consumed();
+            assert_eq!(
+                charge_new_scheduled_pattern_copy(pattern, 40, Some(inherited), &mut budget)
+                    .unwrap(),
+                Some(false)
+            );
+            (first, budget.consumed())
+        };
+        let source_pattern = make_pattern(&source_origin);
+        let pattern = make_pattern(&combined);
+        let (first, total) = measure(&pattern, &previous);
+        let (_, source_total) = measure(&source_pattern, &previous);
+        // Nine locations each retain primary and related origins in two AST
+        // copies. Each Combined origin retains two additional Arcs per copy.
+        assert_eq!(total - source_total, 9 * 2 * 2 * 2);
+        let (distinct_first, distinct_total) = measure(&pattern, &distinct);
+        assert_eq!(distinct_first, first);
+        assert_eq!(distinct_total, total + 9);
+
+        let retained = Arc::strong_count(&alias);
+        let mut first_short = SyntaxBudget::with_limit(17 + first - 1);
+        first_short.charge_units(17).unwrap();
+        assert!(matches!(
+            charge_new_pattern_copy(&pattern, 40, true, &mut first_short),
+            Err(ResourceFailure::SyntaxWork { .. })
+        ));
+        assert_eq!(Arc::strong_count(&alias), retained);
+        let mut second_short = SyntaxBudget::with_limit(17 + total - 1);
+        second_short.charge_units(17).unwrap();
+        charge_new_pattern_copy(&pattern, 40, true, &mut second_short).unwrap();
+        assert!(matches!(
+            charge_new_scheduled_pattern_copy(&pattern, 40, Some(&previous), &mut second_short),
+            Err(ResourceFailure::SyntaxWork { .. })
+        ));
+        assert_eq!(Arc::strong_count(&alias), retained);
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(17 + total);
+            exact.charge_units(17).unwrap();
+            charge_new_pattern_copy(&pattern, 40, true, &mut exact).unwrap();
+            charge_new_scheduled_pattern_copy(&pattern, 40, Some(&previous), &mut exact).unwrap();
+            assert_eq!(exact.consumed(), 17 + total);
+        }
+
+        let mut first_copy = pattern.clone();
+        inherit_pattern_frame(&mut first_copy, &distinct);
+        let second_copy = first_copy.clone();
+        let SurfacePatternKind::Tuple(elements) = &second_copy.kind else {
+            panic!("expected tuple")
+        };
+        let mut locations = vec![second_copy.diagnostic.as_deref().unwrap()];
+        for element in elements {
+            locations.push(element.diagnostic.as_deref().unwrap());
+            let SurfacePatternKind::Binder(binder) = &element.kind else {
+                panic!("expected binder")
+            };
+            locations.push(binder.name.diagnostic.as_deref().unwrap());
+        }
+        assert_eq!(locations.len(), 9);
+        for location in locations {
+            assert_eq!(location.related, [combined.clone()]);
+            assert_eq!(location.frames.len(), 2);
+            assert!(Arc::ptr_eq(&location.frames[0], &previous));
+            assert!(Arc::ptr_eq(&location.frames[1], &distinct));
+            let MacroOrigin::Combined { inputs, .. } = &location.primary else {
+                panic!("expected Combined")
+            };
+            assert!(Arc::ptr_eq(inputs, &alias));
+        }
+    }
+
+    #[test]
     fn scheduled_match_and_handler_keep_combined_names_and_frames() {
         use crate::{
             syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin, MacroOutputNode},
