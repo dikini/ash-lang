@@ -6044,6 +6044,85 @@ fn capture_contents_and_type(
 ) -> Result<(Vec<crate::syntax::MacroOutputNode>, bool), ProjectionError> {
     use crate::syntax::{MacroDelimiter, MacroOutputNode};
 
+    fn push_group(
+        source: &SourceFile,
+        indices: &[usize],
+        position: usize,
+        tokens: &ProjectionTokens<'_>,
+        originals: &std::collections::HashMap<usize, MacroOutputNode>,
+        index: usize,
+        token: &Token,
+        delimiter: MacroDelimiter,
+        children: Vec<MacroOutputNode>,
+        output: &mut Vec<MacroOutputNode>,
+    ) -> Result<(), ProjectionError> {
+        let close = indices
+            .get(position.saturating_sub(1))
+            .and_then(|index| tokens.get(*index))
+            .ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+        let origin = match originals.get(&index) {
+            Some(MacroOutputNode::Group(_, _, origin)) => origin.clone(),
+            _ => join_spans(source, token.span, close.span)?.into(),
+        };
+        output.push(MacroOutputNode::Group(delimiter, children, origin));
+        Ok(())
+    }
+
+    fn push_leaf(
+        source: &SourceFile,
+        indices: &[usize],
+        position: &mut usize,
+        tokens: &ProjectionTokens<'_>,
+        originals: &std::collections::HashMap<usize, MacroOutputNode>,
+        index: usize,
+        token: &Token,
+        output: &mut Vec<MacroOutputNode>,
+        contains_protected_type: &mut bool,
+    ) -> Result<(), ProjectionError> {
+        if matches!(token.kind, TokenKind::Dollar) {
+            let next = indices
+                .get(*position)
+                .and_then(|index| tokens.projection_token(*index))
+                .ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+            *position += 1;
+            output.push(MacroOutputNode::Splice(surface_name(next)?));
+        } else if let Some(original) = originals.get(&index) {
+            *contains_protected_type |= match original {
+                MacroOutputNode::ForwardedType(..) => true,
+                MacroOutputNode::ForwardedExpression(capture, _) => capture.contains_protected_type,
+                _ => false,
+            };
+            output.push(original.clone());
+        } else if matches!(
+            token.kind,
+            TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
+        ) {
+            let name = surface_name(tokens.projection_token(index).ok_or(
+                ProjectionError::MalformedTree(InternalReason::TokenOutOfRange),
+            )?)?;
+            output.push(MacroOutputNode::Identifier(name, token.span.into()));
+        } else {
+            let start = usize::try_from(token.span.range().start())
+                .map_err(|_| ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
+            let end = usize::try_from(token.span.range().end())
+                .map_err(|_| ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
+            let spelling = source
+                .text()
+                .get(start..end)
+                .ok_or(ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
+            output.push(MacroOutputNode::Token(
+                token.kind.clone(),
+                spelling.into(),
+                token.span.into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn sequence(
         source: &SourceFile,
         indices: &[usize],
@@ -6076,57 +6155,30 @@ fn capture_contents_and_type(
                 let (children, child_contains_type) =
                     sequence(source, indices, position, tokens, originals, Some(end))?;
                 contains_protected_type |= child_contains_type;
-                let close = indices
-                    .get(position.saturating_sub(1))
-                    .and_then(|index| tokens.get(*index))
-                    .ok_or(ProjectionError::MalformedTree(
-                        InternalReason::UnexpectedShape,
-                    ))?;
-                let origin = match originals.get(&index) {
-                    Some(MacroOutputNode::Group(_, _, origin)) => origin.clone(),
-                    _ => join_spans(source, token.span, close.span)?.into(),
-                };
-                output.push(MacroOutputNode::Group(delimiter, children, origin));
-            } else if matches!(token.kind, TokenKind::Dollar) {
-                let next = indices
-                    .get(*position)
-                    .and_then(|index| tokens.projection_token(*index))
-                    .ok_or(ProjectionError::MalformedTree(
-                        InternalReason::UnexpectedShape,
-                    ))?;
-                *position += 1;
-                output.push(MacroOutputNode::Splice(surface_name(next)?));
-            } else if let Some(original) = originals.get(&index) {
-                contains_protected_type |= match original {
-                    MacroOutputNode::ForwardedType(..) => true,
-                    MacroOutputNode::ForwardedExpression(capture, _) => {
-                        capture.contains_protected_type
-                    }
-                    _ => false,
-                };
-                output.push(original.clone());
-            } else if matches!(
-                token.kind,
-                TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
-            ) {
-                let name = surface_name(tokens.projection_token(index).ok_or(
-                    ProjectionError::MalformedTree(InternalReason::TokenOutOfRange),
-                )?)?;
-                output.push(MacroOutputNode::Identifier(name, token.span.into()));
+                push_group(
+                    source,
+                    indices,
+                    *position,
+                    tokens,
+                    originals,
+                    index,
+                    token,
+                    delimiter,
+                    children,
+                    &mut output,
+                )?;
             } else {
-                let start = usize::try_from(token.span.range().start())
-                    .map_err(|_| ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
-                let end = usize::try_from(token.span.range().end())
-                    .map_err(|_| ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
-                let spelling = source
-                    .text()
-                    .get(start..end)
-                    .ok_or(ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
-                output.push(MacroOutputNode::Token(
-                    token.kind.clone(),
-                    spelling.into(),
-                    token.span.into(),
-                ));
+                push_leaf(
+                    source,
+                    indices,
+                    position,
+                    tokens,
+                    originals,
+                    index,
+                    token,
+                    &mut output,
+                    &mut contains_protected_type,
+                )?;
             }
         }
         if closing.is_some() {
