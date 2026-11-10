@@ -378,6 +378,110 @@ fn g1_real_matcher_paths_on_a_512k_stack() {
 }
 
 #[test]
+fn type_real_capture_roundtrip_on_a_512k_stack() {
+    const CHILD: &str = "ASH_TYPE_512K_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "module::staged_tests::type_real_capture_roundtrip_on_a_512k_stack",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        print!("{stdout}");
+        eprint!("{stderr}");
+        assert!(
+            output.status.success(),
+            "512 KiB child failed: {}",
+            output.status
+        );
+        for marker in [
+            "type stack: real group-16 graph transferred and executed 42",
+            "type stack: real composed-128 graph transferred and executed 42",
+            "type stack: composed-129 refused without publication",
+        ] {
+            assert!(stderr.contains(marker), "missing marker {marker}");
+        }
+        return;
+    }
+
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(|| {
+            use crate::{
+                driver::{FileFailure, compile_staged_graph_for_test, execute},
+                eval::machine_test_hooks as hooks,
+                parser::{ResourceFailure, STRUCTURAL_DEPTH_LIMIT},
+            };
+
+            for groups in [16usize, 126, 127] {
+                let tree = Tree::new();
+                tree.write(
+                    "forms.ash",
+                    include_str!("../tests/fixtures/surface-macros/type-host/forms.ash"),
+                );
+                let annotation = format!("{}Int{}", "(".repeat(groups), ")".repeat(groups));
+                let entry = tree.write(
+                    "main.ash",
+                    &format!(
+                        "import forms (syntax emit_type)\nemit_type answer as {annotation}\nmain : Unit -> Int\nmain () = answer(())\n"
+                    ),
+                );
+                let mut graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+                hooks::reset();
+                eprintln!("type stack phase: compile real group-{groups} graph");
+                let result = compile_staged_graph_for_test(&mut graph);
+                if groups <= 126 {
+                    let program = result.unwrap();
+                    assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+                    assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+                    assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+                    assert_eq!(hooks::ROOT_CLOSES.get(), 1);
+                    assert_eq!(execute(&program).unwrap().value_display(), "42");
+                    drop(program);
+                    drop(graph);
+                    if groups == 16 {
+                        eprintln!("type stack: real group-16 graph transferred and executed 42");
+                    } else {
+                        // The Type capture's contents Arc and its live prefix
+                        // add two layers to these actual 126 groups.
+                        assert_eq!(2 + groups, STRUCTURAL_DEPTH_LIMIT);
+                        eprintln!("type stack: real composed-128 graph transferred and executed 42");
+                    }
+                } else {
+                    assert_eq!(2 + groups, STRUCTURAL_DEPTH_LIMIT + 1);
+                    let failure = result.expect_err("composed depth 129 must be refused");
+                    assert!(graph.pending.is_empty() && graph.loaded.is_empty() && graph.completed.is_none());
+                    let FileFailure::Graph(diagnostic) = failure else {
+                        panic!("expected a graph depth refusal: {failure:?}");
+                    };
+                    let LoadGraphError::Syntax(syntax) = diagnostic.failure() else {
+                        panic!("expected a syntax depth refusal: {diagnostic:?}");
+                    };
+                    assert_eq!(
+                        syntax.resource,
+                        Some(ResourceFailure::StructuralDepth {
+                            limit: STRUCTURAL_DEPTH_LIMIT,
+                        })
+                    );
+                    drop(diagnostic);
+                    drop(graph);
+                    eprintln!("type stack: composed-129 refused without publication");
+                }
+            }
+            hooks::reset();
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
 fn g1_actual_empty_and_literal_only_repetitions_preserve_capture_shapes() {
     use crate::{
         driver::{FileFailure, compile_staged_graph_for_test, execute},
@@ -801,6 +905,70 @@ fn declaration_graph_shares_budget_through_host_staging_and_retry() {
     eprintln!(
         "real graph shared work: header={header_work}, pre-spent=17, total={total}; exact/short/retry"
     );
+}
+
+#[test]
+fn type_graph_shares_budget_through_host_staging_and_retry() {
+    use crate::{
+        driver::{FileFailure, compile_staged_graph_for_test, execute},
+        eval::machine_test_hooks as hooks,
+    };
+
+    fn observe_transfer() {
+        assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+        assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+        assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+        assert_eq!(hooks::ROOT_CLOSES.get(), 1);
+    }
+
+    let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/surface-macros/type-host/main.ash");
+    let mut measured = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    let header_work = measured.syntax_budget.consumed();
+    measured.syntax_budget.charge_units(17).unwrap();
+    hooks::reset();
+    let program = compile_staged_graph_for_test(&mut measured).unwrap();
+    observe_transfer();
+    let total = measured.syntax_budget.consumed();
+    assert!(total > header_work + 17);
+    let observation = execute(&program).unwrap();
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+
+    for label in ["exact", "retry"] {
+        let mut graph = graph_at(&entry, BodyMode::Header, total).unwrap();
+        assert_eq!(graph.syntax_budget.consumed(), header_work, "{label}");
+        graph.syntax_budget.charge_units(17).unwrap();
+        hooks::reset();
+        let program = compile_staged_graph_for_test(&mut graph).unwrap();
+        observe_transfer();
+        assert_eq!(graph.syntax_budget.consumed(), total, "{label}");
+        assert_eq!(execute(&program).unwrap().value_display(), "42");
+
+        if label == "exact" {
+            let mut short = graph_at(&entry, BodyMode::Header, total - 1).unwrap();
+            assert_eq!(short.syntax_budget.consumed(), header_work);
+            short.syntax_budget.charge_units(17).unwrap();
+            hooks::reset();
+            let failure = compile_staged_graph_for_test(&mut short)
+                .expect_err("one short publishes no compiled program");
+            let FileFailure::Graph(diagnostic) = failure else {
+                panic!("expected a graph refusal: {failure:?}");
+            };
+            let LoadGraphError::Syntax(failure) = diagnostic.failure() else {
+                panic!("expected a syntax resource refusal: {diagnostic:?}");
+            };
+            assert_eq!(
+                failure.resource,
+                Some(ResourceFailure::SyntaxWork { limit: total - 1 })
+            );
+            assert!(short.syntax_budget.consumed() < total);
+            assert!(short.pending.is_empty());
+            assert!(short.loaded.is_empty());
+            assert!(short.completed.is_none());
+        }
+    }
+    hooks::reset();
 }
 
 #[test]

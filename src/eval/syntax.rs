@@ -2079,6 +2079,213 @@ mod tests {
     }
 
     #[test]
+    fn type_host_deep_packet_roundtrip_on_a_512k_stack() {
+        const CHILD: &str = "ASH_TYPE_HOST_512K_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "eval::machine::syntax::tests::type_host_deep_packet_roundtrip_on_a_512k_stack",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            print!("{stdout}");
+            eprint!("{stderr}");
+            assert!(
+                output.status.success(),
+                "512 KiB child failed: {}",
+                output.status
+            );
+            for marker in [
+                "type host stack: issued, unwrapped and transferred composed-128 packet",
+                "type host stack: dropped final accepted alias",
+                "type host stack: refused composed-129 and dropped final alias",
+                "type host stack: paid partial shortage and dropped final alias",
+            ] {
+                assert!(stderr.contains(marker), "missing marker {marker}");
+            }
+            return;
+        }
+
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                use super::{
+                    HeapCell, RuntimeFailure, SyntaxHost, Value, constructor_fields, pair,
+                };
+                use crate::{
+                    module::ModuleId,
+                    source::Span,
+                    surface::{SurfaceType, SurfaceTypeCapture, SurfaceTypeKind},
+                    syntax::{MacroDelimiter, MacroOutputNode},
+                    syntax_resource::SyntaxBudget,
+                    types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
+                };
+                use std::sync::Arc;
+
+                fn make_host(budget: &mut SyntaxBudget) -> (SyntaxHost<'_>, OperationId) {
+                    let mut host = scalar_host(budget);
+                    let operation = OperationId::new(host.ops, 0);
+                    host.operations.insert(operation, "type_syntax".into());
+                    let owner = NominalTypeId::new(ModuleId::new(0), 0);
+                    for (index, name) in (0u32..).zip([
+                        "Syntax",
+                        "NoNodes",
+                        "MoreNodes",
+                        "GroupNode",
+                        "TypeNode",
+                        "ExpressionNode",
+                        "IdentifierNode",
+                        "TokenNode",
+                        "Parentheses",
+                        "Braces",
+                    ]) {
+                        host.constructors
+                            .insert(name.into(), ConstructorId::new(owner, index));
+                    }
+                    (host, operation)
+                }
+
+                fn packet(
+                    depth: usize,
+                    span: Span,
+                ) -> (Vec<MacroOutputNode>, Arc<[MacroOutputNode]>) {
+                    let mut node = MacroOutputNode::Token(
+                        crate::lexer::TokenKind::IntType,
+                        "Int".into(),
+                        span.into(),
+                    );
+                    for _ in 0..depth {
+                        node = MacroOutputNode::Group(
+                            MacroDelimiter::Parentheses,
+                            vec![node],
+                            span.into(),
+                        );
+                    }
+                    let contents: Arc<[MacroOutputNode]> = Arc::from([node]);
+                    let nodes = vec![MacroOutputNode::ForwardedType(
+                        SurfaceTypeCapture {
+                            ty: SurfaceType {
+                                kind: SurfaceTypeKind::Int,
+                                span,
+                                diagnostic: None,
+                            },
+                            contents: Arc::clone(&contents),
+                        },
+                        span.into(),
+                    )];
+                    (nodes, contents)
+                }
+
+                let mut budget = SyntaxBudget::default();
+                let (mut host, operation) = make_host(&mut budget);
+                let (nodes, alias) = packet(126, host.frame.invocation);
+                let weak = Arc::downgrade(&alias);
+                assert_eq!(2 + 126, crate::parser::STRUCTURAL_DEPTH_LIMIT);
+                eprintln!("type host stack phase: issue composed-128 packet");
+                let mut heap: Vec<HeapCell> = Vec::new();
+                let issued = host.syntax_value(&nodes, &mut heap, 0).unwrap();
+                assert_eq!(host.types.len(), 1);
+                let (_, Some(children)) = constructor_fields(&issued, &heap).unwrap() else {
+                    panic!("expected Syntax");
+                };
+                let (_, Some(fields)) = constructor_fields(children, &heap).unwrap() else {
+                    panic!("expected MoreNodes");
+                };
+                let (node, _) = pair(fields, &heap).unwrap();
+                let (_, Some(fields)) = constructor_fields(node, &heap).unwrap() else {
+                    panic!("expected TypeNode");
+                };
+                let (handle, _) = pair(fields, &heap).unwrap();
+                let handle: Value = handle.clone();
+                eprintln!("type host stack phase: unwrap composed-128 packet");
+                let unwrapped = host
+                    .request(
+                        operation,
+                        handle,
+                        &mut heap,
+                        &mut TypeWorkBudget::unbounded(),
+                    )
+                    .unwrap();
+                eprintln!("type host stack phase: transfer unwrapped packet");
+                let transferred = host.transfer_syntax(&unwrapped, &heap, 0).unwrap();
+                let mut level = transferred.as_slice();
+                for _ in 0..126 {
+                    let [MacroOutputNode::Group(MacroDelimiter::Parentheses, children, _)] = level
+                    else {
+                        panic!("expected a retained group");
+                    };
+                    level = children;
+                }
+                assert!(matches!(
+                    level,
+                    [MacroOutputNode::Token(
+                        crate::lexer::TokenKind::IntType,
+                        _,
+                        _
+                    )]
+                ));
+                assert!(Arc::ptr_eq(&host.types[0].contents, &alias));
+                drop(transferred);
+                eprintln!("type host stack: issued, unwrapped and transferred composed-128 packet");
+                drop(heap);
+                drop(host);
+                drop(nodes);
+                assert_eq!(Arc::strong_count(&alias), 1);
+                eprintln!("type host stack phase: drop final accepted alias");
+                drop(alias);
+                assert!(weak.upgrade().is_none());
+                eprintln!("type host stack: dropped final accepted alias");
+
+                let mut budget = SyntaxBudget::default();
+                let (mut host, _) = make_host(&mut budget);
+                let (nodes, alias) = packet(127, host.frame.invocation);
+                let weak = Arc::downgrade(&alias);
+                assert_eq!(2 + 127, crate::parser::STRUCTURAL_DEPTH_LIMIT + 1);
+                eprintln!("type host stack phase: refuse composed-129 packet");
+                assert!(matches!(
+                    host.syntax_value(&nodes, &mut Vec::new(), 0),
+                    Err(RuntimeFailure::Report(report))
+                        if report.primary.reason == "internal.resource.structural-depth"
+                ));
+                assert!(host.types.is_empty());
+                drop(host);
+                drop(nodes);
+                assert_eq!(Arc::strong_count(&alias), 1);
+                drop(alias);
+                assert!(weak.upgrade().is_none());
+                eprintln!("type host stack: refused composed-129 and dropped final alias");
+
+                let mut budget = SyntaxBudget::with_limit(100);
+                let (mut host, _) = make_host(&mut budget);
+                let (nodes, alias) = packet(126, host.frame.invocation);
+                let weak = Arc::downgrade(&alias);
+                eprintln!("type host stack phase: refuse paid partial packet");
+                assert!(matches!(
+                    host.syntax_value(&nodes, &mut Vec::new(), 0),
+                    Err(RuntimeFailure::Report(report))
+                        if report.primary.reason == "internal.resource.syntax-work"
+                ));
+                assert!(host.syntax_work.as_deref().unwrap().consumed() > 1);
+                assert!(host.types.is_empty());
+                drop(host);
+                drop(nodes);
+                assert_eq!(Arc::strong_count(&alias), 1);
+                drop(alias);
+                assert!(weak.upgrade().is_none());
+                eprintln!("type host stack: paid partial shortage and dropped final alias");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
     fn declaration_scalar_lex_reserves_before_temporary_payload_and_retries() {
         use super::super::machine_test_hooks as hooks;
         use crate::{eval::RuntimeFailure, lexer::TokenKind, syntax_resource::SyntaxBudget};
