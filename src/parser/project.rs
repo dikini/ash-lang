@@ -4291,8 +4291,10 @@ fn charge_composed_projection_with_expression(
                         break;
                     }
                 }
-                let frames = tokens.staging_frames.map_or(1, |frames| frames.len());
-                charge_frame_additions(frames, 0, budget)?;
+                if !new_expression_copy {
+                    let frames = tokens.staging_frames.map_or(1, |frames| frames.len());
+                    charge_frame_additions(frames, 0, budget)?;
+                }
             }
             let raw_pattern = node.kind == NodeKind::Pattern
                 && !child_nodes(node)
@@ -4434,7 +4436,7 @@ fn charge_composed_projection_with_expression(
                             .ok_or(ProjectionError::MalformedTree(
                                 InternalReason::UnexpectedShape,
                             ))?;
-                            if tokens.frame.is_some() {
+                            if tokens.frame.is_some() && !new_expression_copy {
                                 let frames = tokens.staging_frames.map_or(1, |frames| frames.len());
                                 let existing = capture
                                     .expression
@@ -8676,7 +8678,7 @@ fn add_projection_frames_with_expression_budget(
     };
     let frames = staging_frames.unwrap_or_else(|| frame.map_or(&[], std::slice::from_ref));
     for frame in frames {
-        // This preliminary search precedes the separately prepaid add_frame search.
+        // Pay the pointer search before inspecting the existing frames.
         budget
             .borrow_mut()
             .charge_units(diagnostic.frames.len().saturating_add(1))
@@ -8686,9 +8688,13 @@ fn add_projection_frames_with_expression_budget(
             .iter()
             .any(|existing| std::sync::Arc::ptr_eq(existing, frame))
         {
+            budget
+                .borrow_mut()
+                .charge()
+                .map_err(ProjectionError::ResourceLimit)?;
             reserve_expression_scratch(&mut diagnostic.frames, 1, Some(budget))?;
+            diagnostic.frames.push(std::sync::Arc::clone(frame));
         }
-        diagnostic.add_frame(frame);
     }
     Ok(())
 }
@@ -21563,7 +21569,7 @@ usage arena => resume arena
             syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin},
             syntax_resource::{ResourceFailure, SyntaxBudget},
         };
-        use std::sync::Arc;
+        use std::{cell::RefCell, sync::Arc};
 
         let source = SourceFile::new("qualified.ash", "Module.member").unwrap();
         let raw = lex(&source).unwrap().tokens;
@@ -21649,6 +21655,96 @@ usage arena => resume arena
             let mut actual = SyntaxBudget::default();
             charge_qualified_expression_diagnostic(&singleton, &mut actual).unwrap();
             assert_eq!(actual.consumed(), expected.consumed());
+        }
+
+        let third = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let frames = [
+            Arc::clone(&first),
+            Arc::clone(&second),
+            Arc::clone(&third),
+            Arc::clone(&third),
+        ];
+        let make_merged = || {
+            let mut merged = reference.diagnostic_location().unwrap();
+            merged.frames = vec![Arc::clone(&first), Arc::clone(&second)];
+            merged
+        };
+        let mut legacy = make_merged();
+        add_projection_frames(&mut legacy, None, Some(&frames));
+        assert_eq!(legacy.frames.len(), 3);
+        for (actual, expected) in legacy.frames.iter().zip([&first, &second, &third]) {
+            assert!(Arc::ptr_eq(actual, expected));
+        }
+
+        let mut short_merged = make_merged();
+        let live = short_merged.frames.len();
+        let growth = if live == short_merged.frames.capacity() {
+            2 * live + 1
+        } else {
+            0
+        };
+        let searches = 3 * (live + 1);
+        let available = if growth == 0 {
+            searches
+        } else {
+            searches + growth
+        };
+        let before_third = Arc::strong_count(&third);
+        let mut short = SyntaxBudget::with_limit(17 + available);
+        short.charge_units(17).unwrap();
+        let loan = RefCell::new(&mut short);
+        assert!(matches!(
+            add_projection_frames_with_expression_budget(
+                &mut short_merged,
+                None,
+                Some(&frames),
+                Some(&loan),
+            ),
+            Err(ProjectionError::ResourceLimit(
+                ResourceFailure::SyntaxWork { .. }
+            ))
+        ));
+        assert_eq!(short_merged.frames.len(), live);
+        assert!(Arc::ptr_eq(&short_merged.frames[0], &first));
+        assert!(Arc::ptr_eq(&short_merged.frames[1], &second));
+        assert_eq!(Arc::strong_count(&third), before_third);
+        drop(loan);
+
+        let mut measured_merged = make_merged();
+        let mut measured = SyntaxBudget::default();
+        let loan = RefCell::new(&mut measured);
+        add_projection_frames_with_expression_budget(
+            &mut measured_merged,
+            None,
+            Some(&frames),
+            Some(&loan),
+        )
+        .unwrap();
+        drop(loan);
+        let total = measured.consumed();
+        assert_eq!(measured_merged, legacy);
+        drop(measured_merged);
+        for _ in 0..2 {
+            let mut exact_merged = make_merged();
+            let mut exact = SyntaxBudget::with_limit(17 + total);
+            exact.charge_units(17).unwrap();
+            let loan = RefCell::new(&mut exact);
+            add_projection_frames_with_expression_budget(
+                &mut exact_merged,
+                None,
+                Some(&frames),
+                Some(&loan),
+            )
+            .unwrap();
+            drop(loan);
+            assert_eq!(exact.consumed(), 17 + total);
+            assert_eq!(exact_merged, legacy);
+            for (actual, expected) in exact_merged.frames.iter().zip([&first, &second, &third]) {
+                assert!(Arc::ptr_eq(actual, expected));
+            }
         }
     }
 

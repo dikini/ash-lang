@@ -925,9 +925,7 @@ fn type_expression_real_composed_depth_on_a_512k_stack() {
                     assert!(slot.borrow_mut().replace(Arc::clone(&ty.contents)).is_none());
                 });
             }
-            let mut accepted = None;
-            let mut refused = None;
-            for groups in 120usize..=127 {
+            for groups in [121usize, 122] {
                 let tree = Tree::new();
                 tree.write("forms.ash", include_str!("../tests/fixtures/surface-macros/type-expression-bridge/forms.ash"));
                 tree.write("helper.ash", include_str!("../tests/fixtures/surface-macros/type-expression-bridge/helper.ash"));
@@ -940,34 +938,25 @@ fn type_expression_real_composed_depth_on_a_512k_stack() {
                 G1_CAPTURE_OBSERVER.set(Some(observe));
                 let result = compile_staged_graph_for_test(&mut graph);
                 G1_CAPTURE_OBSERVER.set(None);
-                let alias = CAPTURE.with(|slot| slot.borrow_mut().take());
-                match result {
-                    Ok(program) => {
+                let alias = CAPTURE.with(|slot| slot.borrow_mut().take().expect("source capture"));
+                match (groups, result) {
+                    (121, Ok(program)) => {
                         assert_eq!(execute(&program).unwrap().value_display(), "42");
                         drop(program);
-                        accepted = Some(groups);
                     }
-                    Err(failure) => {
+                    (122, Err(failure)) => {
                         assert_eq!(failure.reason_code(), "internal.resource.structural-depth");
-                        eprintln!("type expression depth: refused {groups}, capture observed {}", alias.is_some());
                         drop(failure);
-                        refused = Some(groups);
                     }
+                    (groups, _) => panic!("unexpected result for {groups} groups"),
                 }
                 drop(graph);
-                if let Some(alias) = alias {
-                    let weak = Arc::downgrade(&alias);
-                    assert_eq!(Arc::strong_count(&alias), 1);
-                    drop(alias);
-                    assert!(weak.upgrade().is_none());
-                }
-                if refused.is_some() {
-                    break;
-                }
+                let weak = Arc::downgrade(&alias);
+                assert_eq!(Arc::strong_count(&alias), 1);
+                drop(alias);
+                assert!(weak.upgrade().is_none());
             }
-            assert_eq!(refused, accepted.map(|groups| groups + 1));
-            assert!(accepted.is_some());
-            eprintln!("type expression depth: accepted {}, refused {}", accepted.unwrap(), refused.unwrap());
+            eprintln!("type expression depth: accepted 121, refused 122 after capture");
             eprintln!("type expression depth: adjacent source graphs checked");
         })
         .unwrap()
