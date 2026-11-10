@@ -13902,6 +13902,537 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_match_and_handler_keep_combined_names_and_frames() {
+        use crate::{
+            syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin, MacroOutputNode},
+            syntax_resource::{ResourceFailure, SyntaxBudget},
+        };
+        use std::{collections::HashMap, sync::Arc};
+
+        fn check_name(
+            name: &SurfaceName,
+            origin: &MacroOrigin,
+            previous: &Arc<ExpansionFrame>,
+            current: &Arc<ExpansionFrame>,
+        ) {
+            let location = name.diagnostic.as_ref().unwrap();
+            assert_eq!(&location.primary, origin);
+            assert_eq!(location.related, [origin.clone()]);
+            assert_eq!(location.frames.len(), 2);
+            assert!(Arc::ptr_eq(&location.frames[0], previous));
+            assert!(Arc::ptr_eq(&location.frames[1], current));
+        }
+
+        for (text, expression_kind) in [
+            (
+                "match value {\nPair(left, right) => 42\n}",
+                NodeKind::MatchExpression,
+            ),
+            (
+                "handle value with State {\nread Pair(left, right) => 42\n}",
+                NodeKind::HandlerExpression,
+            ),
+        ] {
+            let (source, tree) = parsed(text);
+            let (root, raw) = validated_root(&source, &tree).unwrap();
+            let mut pending = vec![root];
+            let expression = loop {
+                let node = pending.pop().expect("scheduled expression exists");
+                if node.kind == expression_kind {
+                    break node;
+                }
+                pending.extend(child_nodes(node));
+            };
+            let span = raw[0].span;
+            let previous = Arc::new(ExpansionFrame {
+                invocation: span,
+                definition: span,
+            });
+            let current = Arc::new(ExpansionFrame {
+                invocation: span,
+                definition: span,
+            });
+            let origin = MacroOrigin::combined(vec![span.into()], Arc::clone(&previous)).unwrap();
+            let MacroOrigin::Combined { inputs, .. } = &origin else {
+                unreachable!()
+            };
+            let alias = Arc::clone(inputs);
+            let originals = raw
+                .iter()
+                .enumerate()
+                .filter_map(|(index, token)| {
+                    let text = match &token.kind {
+                        TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => text,
+                        _ => return None,
+                    };
+                    let mut diagnostic = DiagnosticLocation::new(origin.clone());
+                    diagnostic.related.push(origin.clone());
+                    diagnostic.frames.push(Arc::clone(&previous));
+                    Some((
+                        index,
+                        MacroOutputNode::Identifier(
+                            SurfaceName {
+                                text: text.clone(),
+                                span: token.span,
+                                introduction: 0,
+                                introduced_at: None,
+                                written: true,
+                                diagnostic: Some(Box::new(diagnostic)),
+                            },
+                            origin.clone(),
+                        ),
+                    ))
+                })
+                .collect::<HashMap<_, _>>();
+            let frames = [Arc::clone(&previous), Arc::clone(&current)];
+            let tokens = ProjectionTokens {
+                tokens: raw,
+                originals: Some(&originals),
+                occurrence: Some(span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: None,
+                frame: Some(&current),
+                name_frame: Some(&current),
+                staging_frames: Some(&frames),
+                preserve_name_diagnostic: true,
+            };
+            let mut measured = SyntaxBudget::default();
+            charge_projection_preflight_selected(expression, &tokens, true, true, &mut measured)
+                .unwrap();
+            let total = measured.consumed();
+            let retained = Arc::strong_count(&alias);
+            let mut short = SyntaxBudget::with_limit(17 + total - 1);
+            short.charge_units(17).unwrap();
+            assert!(matches!(
+                charge_projection_preflight_selected(expression, &tokens, true, true, &mut short),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { .. }),
+                    ..
+                })
+            ));
+            assert_eq!(Arc::strong_count(&alias), retained);
+            for _ in 0..2 {
+                let mut exact = SyntaxBudget::with_limit(17 + total);
+                exact.charge_units(17).unwrap();
+                charge_projection_preflight_selected(expression, &tokens, true, true, &mut exact)
+                    .unwrap();
+                assert_eq!(exact.consumed(), 17 + total);
+            }
+            let projected =
+                project_expression_with_fragments(&source, expression, &tokens, &originals)
+                    .unwrap();
+            let pattern = match &projected.kind {
+                SurfaceExprKind::Match(value) => &value.arms[0].pattern,
+                SurfaceExprKind::Handle(value) => {
+                    check_name(&value.clauses[0].operation, &origin, &previous, &current);
+                    &value.clauses[0].pattern
+                }
+                _ => panic!("expected match or handler"),
+            };
+            let SurfacePatternKind::Constructor {
+                name: SurfaceReference::Unqualified(constructor),
+                payload: Some(payload),
+            } = &pattern.kind
+            else {
+                panic!("expected constructor pattern")
+            };
+            check_name(constructor, &origin, &previous, &current);
+            let SurfacePatternKind::Tuple(elements) = &payload.kind else {
+                panic!("expected tuple payload")
+            };
+            assert_eq!(elements.len(), 2);
+            for element in elements {
+                let SurfacePatternKind::Binder(binder) = &element.kind else {
+                    panic!("expected binder")
+                };
+                check_name(&binder.name, &origin, &previous, &current);
+            }
+        }
+    }
+
+    #[test]
+    fn scheduled_raw_pattern_names_pay_each_combined_origin_copy() {
+        use crate::{
+            syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin, MacroOutputNode},
+            syntax_resource::SyntaxBudget,
+        };
+        use std::{collections::HashMap, sync::Arc};
+
+        fn node(kind: NodeKind, children: Vec<ConcreteElement>) -> ConcreteNode {
+            ConcreteNode { kind, children }
+        }
+        fn cost(
+            root: &ConcreteNode,
+            raw: &[crate::lexer::Token],
+            origin: &MacroOrigin,
+            previous: &Arc<ExpansionFrame>,
+            current: &Arc<ExpansionFrame>,
+            selected: bool,
+        ) -> usize {
+            let originals = raw
+                .iter()
+                .enumerate()
+                .filter_map(|(index, token)| {
+                    let text = match &token.kind {
+                        TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => text,
+                        _ => return None,
+                    };
+                    let mut diagnostic = DiagnosticLocation::new(origin.clone());
+                    diagnostic.related.push(origin.clone());
+                    diagnostic.frames.push(Arc::clone(previous));
+                    Some((
+                        index,
+                        MacroOutputNode::Identifier(
+                            SurfaceName {
+                                text: text.clone(),
+                                span: token.span,
+                                introduction: 0,
+                                introduced_at: None,
+                                written: true,
+                                diagnostic: Some(Box::new(diagnostic)),
+                            },
+                            origin.clone(),
+                        ),
+                    ))
+                })
+                .collect::<HashMap<_, _>>();
+            let tokens = ProjectionTokens {
+                tokens: raw,
+                originals: Some(&originals),
+                occurrence: Some(raw[0].span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: None,
+                frame: Some(current),
+                name_frame: Some(current),
+                staging_frames: None,
+                preserve_name_diagnostic: true,
+            };
+            let mut budget = SyntaxBudget::default();
+            assert!(
+                !charge_composed_projection_selected(
+                    root,
+                    &tokens,
+                    true,
+                    false,
+                    selected,
+                    0,
+                    &mut budget
+                )
+                .unwrap()
+            );
+            budget.consumed()
+        }
+
+        let source = SourceFile::new("scheduled-names.ash", "Pair value").unwrap();
+        let raw = lex(&source).unwrap().tokens;
+        let span = raw[0].span;
+        let previous = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let current = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let plain = MacroOrigin::Source(span);
+        let combined = MacroOrigin::combined(vec![plain.clone()], Arc::clone(&previous)).unwrap();
+        let binder = node(
+            NodeKind::Pattern,
+            vec![ConcreteElement::Node(node(
+                NodeKind::Binder,
+                vec![ConcreteElement::Token(1)],
+            ))],
+        );
+        let constructor = node(
+            NodeKind::Pattern,
+            vec![ConcreteElement::Node(node(
+                NodeKind::ConstructorPattern,
+                vec![ConcreteElement::Token(0)],
+            ))],
+        );
+        let qualified = node(
+            NodeKind::Pattern,
+            vec![ConcreteElement::Node(node(
+                NodeKind::ConstructorPattern,
+                vec![ConcreteElement::Node(node(
+                    NodeKind::QualifiedName,
+                    vec![ConcreteElement::Token(0), ConcreteElement::Token(1)],
+                ))],
+            ))],
+        );
+        let operation = node(NodeKind::Binder, vec![ConcreteElement::Token(1)]);
+        for (plain_node, owner, extra) in [
+            (binder, NodeKind::MatchArm, 8),
+            (constructor, NodeKind::MatchArm, 8),
+            (qualified, NodeKind::MatchArm, 14),
+            (operation, NodeKind::HandlerClause, 6),
+        ] {
+            let scheduled = node(owner, vec![ConcreteElement::Node(plain_node.clone())]);
+            let delta = |root: &ConcreteNode, selected| {
+                cost(root, &raw, &combined, &previous, &current, selected)
+                    - cost(root, &raw, &plain, &previous, &current, selected)
+            };
+            assert_eq!(delta(&scheduled, true) - delta(&plain_node, true), extra);
+            assert_eq!(delta(&scheduled, false), delta(&plain_node, false));
+        }
+    }
+
+    #[test]
+    fn selected_constructor_tuple_prepays_each_actual_child() {
+        use crate::syntax_resource::SyntaxBudget;
+
+        let tokens = ProjectionTokens::source(&[]);
+        for count in [0usize, 1, 8] {
+            let tuple = ConcreteNode {
+                kind: NodeKind::TuplePattern,
+                children: (0..count)
+                    .map(|_| {
+                        ConcreteElement::Node(ConcreteNode {
+                            kind: NodeKind::Pattern,
+                            children: Vec::new(),
+                        })
+                    })
+                    .collect(),
+            };
+            let root = ConcreteNode {
+                kind: NodeKind::ConstructorPattern,
+                children: vec![ConcreteElement::Node(tuple)],
+            };
+            let mut legacy = SyntaxBudget::default();
+            charge_composed_projection_selected(&root, &tokens, true, false, false, 0, &mut legacy)
+                .unwrap();
+            let mut selected = SyntaxBudget::default();
+            charge_composed_projection_selected(
+                &root,
+                &tokens,
+                true,
+                false,
+                true,
+                0,
+                &mut selected,
+            )
+            .unwrap();
+            // Selected mode pays the initial slot, N+L continuation growth,
+            // and six units for each actual direct tuple child.
+            let expected = if count == 0 {
+                1
+            } else {
+                count * count + 6 * count
+            };
+            assert_eq!(selected.consumed() - legacy.consumed(), expected);
+            let mut short = SyntaxBudget::with_limit(17 + selected.consumed() - 1);
+            short.charge_units(17).unwrap();
+            assert!(
+                charge_composed_projection_selected(
+                    &root, &tokens, true, false, true, 0, &mut short
+                )
+                .is_err()
+            );
+            for _ in 0..2 {
+                let mut exact = SyntaxBudget::with_limit(17 + selected.consumed());
+                exact.charge_units(17).unwrap();
+                charge_composed_projection_selected(
+                    &root, &tokens, true, false, true, 0, &mut exact,
+                )
+                .unwrap();
+                assert_eq!(exact.consumed(), 17 + selected.consumed());
+            }
+        }
+    }
+
+    #[test]
+    fn pattern_name_frames_are_paid_and_deduplicated_in_both_projection_modes() {
+        use crate::{
+            syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin, MacroOutputNode},
+            syntax_resource::{ResourceFailure, SyntaxBudget},
+        };
+        use std::{collections::HashMap, sync::Arc};
+
+        let (source, tree) = parsed("fn(value) {\n42\n}");
+        let (root, raw) = validated_root(&source, &tree).unwrap();
+        let mut pending = vec![root];
+        let function = loop {
+            let node = pending.pop().expect("function exists");
+            if node.kind == NodeKind::FunctionExpression {
+                break node;
+            }
+            pending.extend(child_nodes(node));
+        };
+        let parameter = only_child_of_kind(function, NodeKind::Pattern).unwrap();
+        let index = descendant_edge_index(parameter, false).unwrap();
+        let span = raw[index].span;
+        let first = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let second = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let current = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let origin = MacroOrigin::combined(vec![span.into()], Arc::clone(&first)).unwrap();
+        let MacroOrigin::Combined { inputs, .. } = &origin else {
+            unreachable!()
+        };
+        let input_alias = Arc::clone(inputs);
+        let mut costs = Vec::new();
+
+        for previous in [
+            Vec::new(),
+            vec![Arc::clone(&first)],
+            vec![Arc::clone(&first), Arc::clone(&second)],
+        ] {
+            let mut diagnostic = DiagnosticLocation::new(origin.clone());
+            diagnostic.related.push(origin.clone());
+            diagnostic.frames = previous.clone();
+            let name = SurfaceName {
+                text: "value".into(),
+                span,
+                introduction: 0,
+                introduced_at: None,
+                written: true,
+                diagnostic: Some(Box::new(diagnostic)),
+            };
+            let originals =
+                HashMap::from([(index, MacroOutputNode::Identifier(name, origin.clone()))]);
+            let tokens = ProjectionTokens {
+                tokens: raw,
+                originals: Some(&originals),
+                occurrence: Some(span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: None,
+                frame: Some(&current),
+                name_frame: Some(&current),
+                staging_frames: None,
+                preserve_name_diagnostic: true,
+            };
+            let mut measured = SyntaxBudget::default();
+            assert!(
+                !charge_composed_projection_selected(
+                    parameter,
+                    &tokens,
+                    true,
+                    false,
+                    true,
+                    1,
+                    &mut measured
+                )
+                .unwrap()
+            );
+            let total = measured.consumed();
+            let retained = Arc::strong_count(&input_alias);
+            let mut short = SyntaxBudget::with_limit(17 + total - 1);
+            short.charge_units(17).unwrap();
+            assert!(matches!(
+                charge_composed_projection_selected(
+                    parameter, &tokens, true, false, true, 1, &mut short
+                ),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { .. }),
+                    ..
+                })
+            ));
+            assert_eq!(Arc::strong_count(&input_alias), retained);
+            for _ in 0..2 {
+                let mut exact = SyntaxBudget::with_limit(17 + total);
+                exact.charge_units(17).unwrap();
+                charge_composed_projection_selected(
+                    parameter, &tokens, true, false, true, 1, &mut exact,
+                )
+                .unwrap();
+                assert_eq!(exact.consumed(), 17 + total);
+            }
+            let projected = project_pattern(&source, parameter, &tokens).unwrap();
+            let SurfacePatternKind::Binder(binder) = projected.kind else {
+                panic!("expected binder")
+            };
+            let actual = binder.name.diagnostic.unwrap();
+            assert_eq!(actual.primary, origin);
+            assert_eq!(actual.related, [origin.clone()]);
+            assert_eq!(actual.frames.len(), previous.len() + 1);
+            for (actual, expected) in actual.frames.iter().zip(&previous) {
+                assert!(Arc::ptr_eq(actual, expected));
+            }
+            assert!(Arc::ptr_eq(actual.frames.last().unwrap(), &current));
+            costs.push(total);
+        }
+        // Each extra prior frame adds twelve storage units, its own entry and
+        // comparisons against the current frame.
+        assert_eq!(costs[1], costs[0] + 15);
+        assert_eq!(costs[2], costs[1] + 16);
+
+        let mut diagnostic = DiagnosticLocation::new(origin.clone());
+        diagnostic.related.push(origin.clone());
+        diagnostic.frames.push(Arc::clone(&first));
+        let originals = HashMap::from([(
+            index,
+            MacroOutputNode::Identifier(
+                SurfaceName {
+                    text: "value".into(),
+                    span,
+                    introduction: 0,
+                    introduced_at: None,
+                    written: true,
+                    diagnostic: Some(Box::new(diagnostic)),
+                },
+                origin.clone(),
+            ),
+        )]);
+        let frames = [Arc::clone(&first), Arc::clone(&current)];
+        let tokens = ProjectionTokens {
+            tokens: raw,
+            originals: Some(&originals),
+            occurrence: Some(span),
+            construction: None,
+            construction_extents: false,
+            admission_identifiers: None,
+            frame: Some(&current),
+            name_frame: Some(&current),
+            staging_frames: Some(&frames),
+            preserve_name_diagnostic: true,
+        };
+        let mut frame_work = SyntaxBudget::default();
+        charge_staged_name_frames(tokens.projection_token(index).unwrap(), &mut frame_work)
+            .unwrap();
+        assert_eq!(frame_work.consumed(), 9); // F=1 then M=2: 2 + 3 + 4.
+        let mut measured = SyntaxBudget::default();
+        charge_projection_preflight_selected(parameter, &tokens, true, true, &mut measured)
+            .unwrap();
+        let total = measured.consumed();
+        let mut short = SyntaxBudget::with_limit(17 + total - 1);
+        short.charge_units(17).unwrap();
+        assert!(
+            charge_projection_preflight_selected(parameter, &tokens, true, true, &mut short)
+                .is_err()
+        );
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(17 + total);
+            exact.charge_units(17).unwrap();
+            charge_projection_preflight_selected(parameter, &tokens, true, true, &mut exact)
+                .unwrap();
+            assert_eq!(exact.consumed(), 17 + total);
+        }
+        let projected = project_pattern(&source, parameter, &tokens).unwrap();
+        let SurfacePatternKind::Binder(binder) = projected.kind else {
+            panic!("expected binder")
+        };
+        let actual = binder.name.diagnostic.unwrap();
+        assert_eq!(actual.frames.len(), 2);
+        assert!(Arc::ptr_eq(&actual.frames[0], &first));
+        assert!(Arc::ptr_eq(&actual.frames[1], &current));
+        let MacroOrigin::Combined { inputs, .. } = &actual.primary else {
+            panic!("expected Combined")
+        };
+        assert!(Arc::ptr_eq(inputs, &input_alias));
+    }
+
+    #[test]
     fn transformer_pattern_presence_keeps_raw_and_type_metadata_paths_distinct() {
         use crate::{
             syntax::{MacroDelimiter, MacroOutputNode},
