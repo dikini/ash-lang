@@ -378,6 +378,73 @@ fn g1_real_matcher_paths_on_a_512k_stack() {
 }
 
 #[test]
+fn g1_source_header_builder_runs_on_fast_and_ordered_graph_paths() {
+    use crate::{
+        driver::{compile_staged_graph_for_test, execute},
+        surface::SurfaceSyntaxMatcherPart,
+    };
+
+    let fast_tree = Tree::new();
+    let fast_entry = fast_tree.write(
+        "main.ash",
+        "syntax declaration: (local) ( $value:ident ) => {}\nmain : Unit -> Int\nmain () = 42\n",
+    );
+    let mut fast = graph_at(&fast_entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    let fast_program = compile_staged_graph_for_test(&mut fast).unwrap();
+    let fast_module = fast
+        .completed
+        .as_ref()
+        .unwrap()
+        .modules()
+        .iter()
+        .find(|module| module.source().display_path().ends_with("main.ash"))
+        .unwrap();
+    let [fast_header] = fast_module.surface().syntax_declarations.as_slice() else {
+        panic!("expected the source definition on the fast path");
+    };
+    assert_eq!(fast_header.name.text, "local");
+    assert_eq!(fast_header.name.span.source(), fast_module.source().id());
+    assert!(matches!(
+        fast_header.matcher.as_slice(),
+        [SurfaceSyntaxMatcherPart::Container(_)]
+    ));
+    assert_eq!(execute(&fast_program).unwrap().value_display(), "42");
+
+    let ordered_tree = Tree::new();
+    ordered_tree.write(
+        "forms.ash",
+        "pub syntax declaration: (sink) ( $input:ident ) => {}\n",
+    );
+    let ordered_entry = ordered_tree.write(
+        "main.ash",
+        "import forms (syntax sink)\nsyntax declaration: (local) ( $value:ident ) => {}\nsink (Alpha)\nmain : Unit -> Int\nmain () = 42\n",
+    );
+    let mut ordered = graph_at(&ordered_entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    let ordered_program = compile_staged_graph_for_test(&mut ordered).unwrap();
+    let ordered_module = ordered
+        .completed
+        .as_ref()
+        .unwrap()
+        .modules()
+        .iter()
+        .find(|module| module.source().display_path().ends_with("main.ash"))
+        .unwrap();
+    let [ordered_header] = ordered_module.surface().syntax_declarations.as_slice() else {
+        panic!("expected the source definition alongside a real invocation");
+    };
+    assert_eq!(ordered_header.name.text, "local");
+    assert_eq!(
+        ordered_header.name.span.source(),
+        ordered_module.source().id()
+    );
+    assert!(matches!(
+        ordered_header.matcher.as_slice(),
+        [SurfaceSyntaxMatcherPart::Container(_)]
+    ));
+    assert_eq!(execute(&ordered_program).unwrap().value_display(), "42");
+}
+
+#[test]
 fn g1_imported_graph_shares_budget_exact_short_and_fresh_retry() {
     use crate::{
         driver::{FileFailure, compile_staged_graph_for_test, execute},

@@ -8407,6 +8407,91 @@ mod tests {
     use super::*;
 
     #[test]
+    fn g1_header_copy_reserves_payloads_before_construction() {
+        fn run(literal: &str, integer: &str, capture: &str) -> usize {
+            let text = format!(
+                "pub syntax declaration: (sink) ( \"{literal}\" {integer} ${capture}:ident ) => {{}}\n"
+            );
+            let source = SourceFile::new("header-copy.ash", text).unwrap();
+            let tree = parse(lex(&source).unwrap());
+            let (root, tokens) = validated_root(&source, &tree).unwrap();
+            let child = child_nodes(root)
+                .find(|node| node.kind == NodeKind::SyntaxDeclaration)
+                .unwrap();
+
+            let mut budget = SyntaxBudget::with_limit(super::super::SYNTAX_WORK_LIMIT);
+            budget.charge_units(17).unwrap();
+            let mut module = ModuleProjection::default();
+            project_staged_source_child(&mut module, &source, child, tokens, &mut budget).unwrap();
+            let total = budget.consumed();
+            let [declaration] = module.syntax_declarations.as_slice() else {
+                panic!("expected exactly one constructed header");
+            };
+            let [SurfaceSyntaxMatcherPart::Container(group)] = declaration.matcher.as_slice()
+            else {
+                panic!("expected the real group payload");
+            };
+            let [
+                SurfaceSyntaxMatcherPart::Literal {
+                    kind: TokenKind::StringLiteral(value),
+                    spelling,
+                },
+                SurfaceSyntaxMatcherPart::Literal {
+                    kind: TokenKind::Integer(number),
+                    ..
+                },
+                SurfaceSyntaxMatcherPart::Capture {
+                    name,
+                    kind: SurfaceSyntaxCaptureKind::Identifier,
+                },
+            ] = group.body.as_slice()
+            else {
+                panic!("expected the real literal and capture payloads");
+            };
+            assert_eq!(value, literal);
+            assert_eq!(spelling, &format!("\"{literal}\""));
+            assert_eq!(number.to_string(), integer);
+            assert_eq!(name.text, capture);
+            assert_eq!(name.span.source(), source.id());
+            assert_eq!(name.introduction, 0);
+            assert!(name.written && name.diagnostic.is_none());
+
+            for (label, limit) in [("early", 21), ("one short", total - 1)] {
+                let mut budget = SyntaxBudget::with_limit(limit);
+                budget.charge_units(17).unwrap();
+                let mut module = ModuleProjection::default();
+                let failure =
+                    project_staged_source_child(&mut module, &source, child, tokens, &mut budget)
+                        .unwrap_err();
+                assert!(
+                    matches!(failure, DeclarationExpansionFailure::Syntax { resource: Some(ResourceFailure::SyntaxWork { limit: actual }), .. } if actual == limit),
+                    "{label}"
+                );
+                assert!(
+                    budget.consumed() >= 17 && budget.consumed() <= limit,
+                    "{label}"
+                );
+                assert!(module.syntax_declarations.is_empty(), "{label}");
+            }
+            for _ in 0..2 {
+                let mut budget = SyntaxBudget::with_limit(total);
+                budget.charge_units(17).unwrap();
+                let mut module = ModuleProjection::default();
+                project_staged_source_child(&mut module, &source, child, tokens, &mut budget)
+                    .unwrap();
+                assert_eq!(budget.consumed(), total);
+                assert_eq!(module.syntax_declarations.len(), 1);
+            }
+            total - 17
+        }
+
+        let base = run("x", "1", "x");
+        assert_eq!(run(&"x".repeat(301), "1", "x") - base, 600);
+        assert_eq!(run("x", "256", "x") - base, 3);
+        assert_eq!(run("x", "1", &"x".repeat(101)) - base, 100);
+    }
+
+    #[test]
     fn g1_imported_graph_materializes_ordered_and_ragged_source_captures() {
         use crate::driver::{RunConfiguration, compile_path, execute};
         use crate::module::ModuleRoots;
