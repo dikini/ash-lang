@@ -2293,6 +2293,10 @@ mod tests {
                 "type AST stack: parsed 126 function layers",
                 "type AST stack: unwrapped and transferred parsed AST",
                 "type AST stack: host and final contents alias dropped",
+                "type AST stack: captured and restored composed-128 AST",
+                "type AST stack: pre-copy and post-copy shortages cleaned up",
+                "type AST stack: refused composed-129 AST",
+                "type AST stack: capture and protected final aliases dropped",
             ] {
                 assert!(stderr.contains(marker), "missing marker {marker}");
             }
@@ -2302,7 +2306,7 @@ mod tests {
         std::thread::Builder::new()
             .stack_size(512 * 1024)
             .spawn(|| {
-                use super::{HeapCell, Value, allocate_heap, constructor_fields};
+                use super::{HeapCell, SyntaxHost, Value, allocate_heap, constructor_fields};
                 use crate::{
                     lexer::{TokenKind, lex},
                     module::ModuleId,
@@ -2404,6 +2408,297 @@ mod tests {
                 drop(alias);
                 assert!(weak.upgrade().is_none());
                 eprintln!("type AST stack: host and final contents alias dropped");
+                // Exercise the Type capture and protected restoration with a
+                // separately lexed and parsed function AST. Each primitive's
+                // actual DiagnosticLocation adds one retained depth level.
+                for layers in [125usize, 126] {
+                    use crate::{
+                        integer::Integer,
+                        parser::{MacroParseFailure, ResourceFailure, STRUCTURAL_DEPTH_LIMIT},
+                        surface::SurfaceSyntaxCapture,
+                    };
+                    let text = format!("{}Int", "Int -> ".repeat(layers));
+                    let fixture = DeclarationHostFixture::with_source("deep-captured.ash", &text);
+                    let lexed = lex(&fixture.source).unwrap();
+                    assert!(lexed.diagnostics.is_empty());
+                    let raw = lexed
+                        .tokens
+                        .into_iter()
+                        .filter(|token| token.kind != TokenKind::EndOfFile)
+                        .map(|token| {
+                            let range = token.span.range();
+                            let spelling = &fixture.source.text()[range.start() as usize..range.end() as usize];
+                            MacroOutputNode::Token(token.kind, spelling.into(), token.span.into())
+                        })
+                        .collect();
+                    let mut budget = SyntaxBudget::default();
+                    budget.charge_units(17).unwrap();
+                    let capture = crate::parser::parse_macro_type(
+                        &fixture.source,
+                        fixture.frame.invocation,
+                        raw,
+                        &fixture.contexts,
+                        &fixture.frame,
+                        &mut budget,
+                    )
+                    .unwrap();
+                    let mut current = &capture.ty;
+                    for _ in 0..layers {
+                        let SurfaceTypeKind::Function(function) = &current.kind else {
+                            panic!("expected parsed function layer");
+                        };
+                        current = &function.codomain;
+                    }
+                    assert!(matches!(current.kind, SurfaceTypeKind::Int));
+                    assert!(current.diagnostic.is_some());
+                    let source_alias = Arc::clone(&capture.contents);
+                    let source_weak = Arc::downgrade(&source_alias);
+                    let captures = [SurfaceSyntaxCapture::Type(capture)];
+                    let mut host = fixture.host(&captures, &mut budget).unwrap();
+                    let unwrap = OperationId::new(host.ops, 4);
+                    let parse = OperationId::new(host.ops, 5);
+                    host.operations.insert(unwrap, "type_syntax".into());
+                    host.operations.insert(parse, "parse_type".into());
+                    let owner = NominalTypeId::new(ModuleId::new(0), 0);
+                    for (index, name) in (100u32..).zip(["TypeCapture", "ParsedType", "ParseRejected"]) {
+                        host.constructors
+                            .insert(name.into(), ConstructorId::new(owner, index));
+                    }
+                    let mut heap = Vec::<HeapCell>::new();
+                    let fields = Value::Location(
+                        allocate_heap(
+                            &mut heap,
+                            HeapCell::Tuple(
+                                vec![host.input(), Value::integer(Integer::from_i64(0))].into_boxed_slice(),
+                            ),
+                        )
+                        .unwrap(),
+                    );
+                    let captured = host
+                        .request(
+                            fixture.capture,
+                            fields,
+                            &mut heap,
+                            &mut TypeWorkBudget::unbounded(),
+                        )
+                        .unwrap();
+                    let (tag, Some(value)) = constructor_fields(&captured, &heap).unwrap() else {
+                        panic!("expected Captured");
+                    };
+                    assert_eq!(tag, host.constructor("Captured").unwrap());
+                    let (tag, Some(value)) = constructor_fields(value, &heap).unwrap() else {
+                        panic!("expected TypeCapture");
+                    };
+                    assert_eq!(tag, host.constructor("TypeCapture").unwrap());
+                    let unwrapped = host
+                        .request(
+                            unwrap,
+                            value.clone(),
+                            &mut heap,
+                            &mut TypeWorkBudget::unbounded(),
+                        )
+                        .unwrap();
+                    let fields = Value::Location(
+                        allocate_heap(
+                            &mut heap,
+                            HeapCell::Tuple(vec![host.input(), unwrapped].into_boxed_slice()),
+                        )
+                        .unwrap(),
+                    );
+                    let parsed = host
+                        .request(parse, fields, &mut heap, &mut TypeWorkBudget::unbounded())
+                        .unwrap();
+                    let (tag, Some(handle)) = constructor_fields(&parsed, &heap).unwrap() else {
+                        panic!("expected ParsedType");
+                    };
+                    assert_eq!(tag, host.constructor("ParsedType").unwrap());
+                    let handle = handle.clone();
+                    let alias = Arc::clone(&host.types.last().unwrap().contents);
+                    let weak = Arc::downgrade(&alias);
+                    assert!(!Arc::ptr_eq(&source_alias, &alias));
+                    let origin = host.issue_origin(fixture.frame.invocation.into()).unwrap();
+                    let fields = Value::Location(
+                        allocate_heap(
+                            &mut heap,
+                            HeapCell::Tuple(vec![handle, origin].into_boxed_slice()),
+                        )
+                        .unwrap(),
+                    );
+                    let node = host.construct(&mut heap, "TypeNode", Some(fields)).unwrap();
+                    let end = host.construct(&mut heap, "NoNodes", None).unwrap();
+                    let fields = Value::Location(
+                        allocate_heap(
+                            &mut heap,
+                            HeapCell::Tuple(vec![node, end].into_boxed_slice()),
+                        )
+                        .unwrap(),
+                    );
+                    let nodes = host
+                        .construct(&mut heap, "MoreNodes", Some(fields))
+                        .unwrap();
+                    let syntax = host.construct(&mut heap, "Syntax", Some(nodes)).unwrap();
+                    let expanded = host.construct(&mut heap, "Expanded", Some(syntax)).unwrap();
+                    let make_output = |host: &mut SyntaxHost<'_>| {
+                        let TransformerOutput::Expanded(nodes) = host
+                            .transfer(&expanded, &heap, &mut TypeWorkBudget::unbounded())
+                            .unwrap()
+                        else {
+                            panic!("expected Expanded");
+                        };
+                        nodes
+                    };
+                    let baseline = Arc::strong_count(&alias);
+                    let nodes = make_output(&mut host);
+                    let result = crate::parser::parse_macro_type(
+                        &fixture.source,
+                        fixture.frame.invocation,
+                        nodes,
+                        &fixture.contexts,
+                        &fixture.frame,
+                        host.syntax_work.as_deref_mut().unwrap(),
+                    );
+                    if layers == 125 {
+                        assert_eq!(2 + layers + 1, STRUCTURAL_DEPTH_LIMIT);
+                        let restored = result.unwrap();
+                        let [MacroOutputNode::ForwardedType(contents, _)] = restored.contents.as_ref() else {
+                            panic!("expected protected contents");
+                        };
+                        assert!(Arc::ptr_eq(&contents.contents, &alias));
+                        let mut current = &restored.ty;
+                        for _ in 0..layers {
+                            let SurfaceTypeKind::Function(function) = &current.kind else {
+                                panic!("expected restored function layer");
+                            };
+                            current = &function.codomain;
+                        }
+                        assert!(current.diagnostic.is_some());
+                        drop(restored);
+                        assert_eq!(Arc::strong_count(&alias), baseline);
+                        eprintln!("type AST stack: captured and restored composed-128 AST");
+
+                        let nodes = make_output(&mut host);
+                        let mut measured = SyntaxBudget::default();
+                        let copied = crate::syntax::copy_type_output(&nodes, &mut measured).unwrap();
+                        let copy_cost = measured.consumed();
+                        drop(copied);
+                        let mut short = SyntaxBudget::with_limit(copy_cost - 1);
+                        assert!(matches!(
+                            crate::syntax::copy_type_output(&nodes, &mut short),
+                            Err(MacroParseFailure::Syntax {
+                                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                                ..
+                            })
+                        ));
+                        for _ in 0..2 {
+                            let mut exact = SyntaxBudget::with_limit(copy_cost);
+                            drop(crate::syntax::copy_type_output(&nodes, &mut exact).unwrap());
+                            assert_eq!(exact.consumed(), copy_cost);
+                        }
+                        drop(nodes);
+                        assert_eq!(Arc::strong_count(&alias), baseline);
+                        let nodes = make_output(&mut host);
+                        let mut short = SyntaxBudget::with_limit(copy_cost);
+                        assert!(matches!(
+                            crate::parser::parse_macro_type(
+                                &fixture.source,
+                                fixture.frame.invocation,
+                                nodes,
+                                &fixture.contexts,
+                                &fixture.frame,
+                                &mut short,
+                            ),
+                            Err(MacroParseFailure::Syntax {
+                                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                                ..
+                            })
+                        ));
+                        assert_eq!(short.consumed(), copy_cost);
+                        assert_eq!(Arc::strong_count(&alias), baseline);
+                        let nodes = make_output(&mut host);
+                        let mut measured = SyntaxBudget::default();
+                        let restored = crate::parser::parse_macro_type(
+                            &fixture.source,
+                            fixture.frame.invocation,
+                            nodes,
+                            &fixture.contexts,
+                            &fixture.frame,
+                            &mut measured,
+                        )
+                        .unwrap();
+                        let parse_cost = measured.consumed();
+                        drop(restored);
+                        for (limit, success) in [
+                            (parse_cost - 1, false),
+                            (parse_cost, true),
+                            (parse_cost, true),
+                        ] {
+                            let nodes = make_output(&mut host);
+                            let mut budget = SyntaxBudget::with_limit(limit);
+                            let result = crate::parser::parse_macro_type(
+                                &fixture.source,
+                                fixture.frame.invocation,
+                                nodes,
+                                &fixture.contexts,
+                                &fixture.frame,
+                                &mut budget,
+                            );
+                            if success {
+                                drop(result.unwrap());
+                                assert_eq!(budget.consumed(), parse_cost);
+                            } else {
+                                assert!(matches!(
+                                    result,
+                                    Err(MacroParseFailure::Syntax {
+                                        resource: Some(ResourceFailure::SyntaxWork { .. }),
+                                        ..
+                                    })
+                                ));
+                            }
+                            assert_eq!(Arc::strong_count(&alias), baseline);
+                        }
+                        let token = lex(&fixture.source).unwrap().tokens.remove(0);
+                        let mut nodes = make_output(&mut host);
+                        nodes.push(MacroOutputNode::Token(token.kind, "Int".into(), token.span.into()));
+                        let mut budget = SyntaxBudget::default();
+                        assert!(matches!(
+                            crate::parser::parse_macro_type(
+                                &fixture.source,
+                                fixture.frame.invocation,
+                                nodes,
+                                &fixture.contexts,
+                                &fixture.frame,
+                                &mut budget,
+                            ),
+                            Err(MacroParseFailure::Syntax { diagnostics, resource: None })
+                                if !diagnostics.is_empty()
+                        ));
+                        assert_eq!(Arc::strong_count(&alias), baseline);
+                        eprintln!("type AST stack: pre-copy and post-copy shortages cleaned up");
+                    } else {
+                        assert_eq!(2 + layers + 1, STRUCTURAL_DEPTH_LIMIT + 1);
+                        assert!(matches!(
+                            result,
+                            Err(MacroParseFailure::Syntax {
+                                resource: Some(ResourceFailure::StructuralDepth {
+                                    limit: STRUCTURAL_DEPTH_LIMIT
+                                }),
+                                ..
+                            })
+                        ));
+                        assert_eq!(Arc::strong_count(&alias), baseline);
+                        eprintln!("type AST stack: refused composed-129 AST");
+                    }
+                    drop(heap);
+                    drop(host);
+                    drop(captures);
+                    assert_eq!(Arc::strong_count(&source_alias), 1);
+                    drop(source_alias);
+                    assert!(source_weak.upgrade().is_none());
+                    assert_eq!(Arc::strong_count(&alias), 1);
+                    drop(alias);
+                    assert!(weak.upgrade().is_none());
+                }
+                eprintln!("type AST stack: capture and protected final aliases dropped");
             })
             .unwrap()
             .join()
