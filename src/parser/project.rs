@@ -8841,7 +8841,6 @@ mod tests {
             else {
                 panic!("expected source repetition");
             };
-            let references = Arc::strong_count(matcher);
             let caller = SourceFile::new("copy-main.ash", format!("{invocation}\n")).unwrap();
             let tree = h1_tree(&caller, &selected);
             let (root, tokens) = validated_root(&caller, &tree).unwrap();
@@ -8849,6 +8848,7 @@ mod tests {
                 .find(|node| node.kind == NodeKind::DeclarationSyntaxInvocation)
                 .unwrap();
             let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+            let references = Arc::strong_count(matcher);
             let tokens = ProjectionTokens::source(tokens);
             let mut measured = SyntaxBudget::with_limit(10_000);
             measured.charge_units(17).unwrap();
