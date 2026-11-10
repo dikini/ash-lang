@@ -3744,7 +3744,7 @@ fn charge_projection_preflight_selected(
                 | NodeKind::ResourceDefinition
                 | NodeKind::ResourceFamily
         ) {
-            charge_projection_subtree(node, tokens, budget)?;
+            charge_projection_subtree_inner(node, tokens, new_pattern, budget)?;
         }
         if node.kind == NodeKind::SyntaxInvocation {
             for argument in child_nodes(node).filter(|child| child.kind == NodeKind::SyntaxArgument)
@@ -3752,7 +3752,7 @@ fn charge_projection_preflight_selected(
                 if let Some(expression) =
                     child_nodes(argument).find(|child| is_expression_kind(child.kind))
                 {
-                    charge_projection_subtree(expression, tokens, budget)?;
+                    charge_projection_subtree_inner(expression, tokens, new_pattern, budget)?;
                     if expression_pattern {
                         charge_capture_contents(
                             expression,
@@ -3775,12 +3775,12 @@ fn charge_projection_preflight_selected(
                     && let Some(operation) =
                         child_nodes(clause).find(|child| child.kind == NodeKind::Binder)
                 {
-                    charge_projection_subtree(operation, tokens, budget)?;
+                    charge_projection_subtree_inner(operation, tokens, new_pattern, budget)?;
                 }
                 if let Some(pattern) =
                     child_nodes(clause).find(|child| child.kind == NodeKind::Pattern)
                 {
-                    charge_projection_subtree(pattern, tokens, budget)?;
+                    charge_projection_subtree_inner(pattern, tokens, new_pattern, budget)?;
                 }
             }
         }
@@ -4326,6 +4326,10 @@ fn charge_composed_projection_selected(
                                 budget.charge_units(
                                     previous.saturating_add(added).saturating_mul(12),
                                 )?;
+                                if tokens.staging_frames.is_none() {
+                                    charge_frame_additions(previous, 0, budget)?;
+                                    charge_frame_additions(added, previous, budget)?;
+                                }
                             } else {
                                 crate::syntax::charge_type_origin(origin, location_depth, budget)?;
                             }
