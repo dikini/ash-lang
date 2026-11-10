@@ -3562,6 +3562,7 @@ mod tests {
                 "expression stack: returned metadata preserved",
                 "expression stack: deep unwrap retained contents",
                 "expression stack: final contents alias dropped",
+                "expression stack: parsed AST reached validated intake and capture",
                 "expression stack: parsed owned AST copy boundary and aliases checked",
             ] {
                 assert!(stderr.contains(marker), "missing marker {marker}");
@@ -3580,7 +3581,7 @@ mod tests {
                     lexer::TokenKind,
                     module::ModuleId,
                     parser::ResourceFailure,
-                    surface::SurfaceExprKind,
+                    surface::{SurfaceExprKind, SurfaceSyntaxCapture},
                     syntax::{MacroOutputNode, charge_new_expression_retention},
                     syntax_resource::SyntaxBudget,
                     types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
@@ -3895,6 +3896,47 @@ mod tests {
                     assert!(expression.diagnostic.is_some());
                     let alias = Arc::clone(&host.expressions[index].contents);
                     let weak = Arc::downgrade(&alias);
+                    // Move the parsed capture into a validated Some host and
+                    // issue it through the real capture service.
+                    assert_eq!(index + 1, host.expressions.len());
+                    let source_capture = host.expressions.pop().unwrap();
+                    let captures = [SurfaceSyntaxCapture::Expression(source_capture)];
+                    let fixture = DeclarationHostFixture::new();
+                    let mut intake_budget = SyntaxBudget::default();
+                    let mut intake = SyntaxHost::new(
+                        &fixture.entry, &captures, &host.source, &host.caller, 0,
+                        Arc::clone(&host.contexts), Arc::clone(&host.frame), Some(&mut intake_budget),
+                    ).unwrap();
+                    assert_eq!(Arc::strong_count(&alias), 3);
+                    intake.constructors.insert(
+                        "ExpressionCapture".into(),
+                        ConstructorId::new(fixture.constructors["Expanded"].owner(), 100),
+                    );
+                    let mut intake_heap = Vec::new();
+                    let input = tuple(&mut intake_heap, vec![intake.input(), Value::integer(Integer::from_i64(0))]);
+                    let result = intake.request(fixture.capture, input, &mut intake_heap, &mut TypeWorkBudget::unbounded()).unwrap();
+                    let (tag, Some(capture)) = constructor_fields(&result, &intake_heap).unwrap() else {
+                        panic!("expected Captured")
+                    };
+                    assert_eq!(tag, intake.constructor("Captured").unwrap());
+                    let (tag, Some(handle)) = constructor_fields(capture, &intake_heap).unwrap() else {
+                        panic!("expected ExpressionCapture")
+                    };
+                    assert_eq!(tag, intake.constructor("ExpressionCapture").unwrap());
+                    let handle = handle.clone();
+                    assert_eq!(intake.expressions.len(), 1);
+                    assert_eq!(Arc::strong_count(&alias), 4);
+                    let syntax = intake.request(fixture.expression_syntax, handle, &mut intake_heap, &mut TypeWorkBudget::unbounded()).unwrap();
+                    let output = intake.transfer_syntax_inner(&syntax, &intake_heap, 0, true).unwrap();
+                    assert_eq!(output.len(), height + 1);
+                    drop(output);
+                    drop(intake_heap);
+                    drop(intake);
+                    let [SurfaceSyntaxCapture::Expression(source_capture)] = captures else {
+                        unreachable!()
+                    };
+                    host.expressions.push(source_capture);
+                    assert_eq!(Arc::strong_count(&alias), 2);
                     let unwrapped = host.request(unwrap_op, handle.clone(), &mut heap, &mut TypeWorkBudget::unbounded()).unwrap();
                     let unwrapped = host.transfer_syntax_inner(&unwrapped, &heap, 0, true).unwrap();
                     assert_eq!(unwrapped.len(), height + 1);
@@ -3936,6 +3978,7 @@ mod tests {
                     drop(alias);
                     assert!(weak.upgrade().is_none());
                 }
+                eprintln!("expression stack: parsed AST reached validated intake and capture");
                 eprintln!("expression stack: parsed owned AST copy boundary and aliases checked");
             })
             .unwrap()
