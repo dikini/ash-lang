@@ -507,6 +507,76 @@ fn type_real_capture_roundtrip_on_a_512k_stack() {
 }
 
 #[test]
+fn pattern_source_capture_keeps_binder_and_read_context() {
+    use crate::{
+        driver::{RunConfiguration, compile_path, execute},
+        parser::G1_CAPTURE_OBSERVER,
+        surface::{SurfacePatternKind, SurfaceSyntaxCapture},
+        syntax::{MacroOrigin, MacroOutputNode},
+    };
+    use std::cell::Cell;
+
+    std::thread_local! {
+        static OBSERVED: Cell<bool> = const { Cell::new(false) };
+    }
+    fn observe(source: &SourceFile, captures: &[SurfaceSyntaxCapture], _: &SyntaxBudget) {
+        let [
+            SurfaceSyntaxCapture::Identifier(_),
+            SurfaceSyntaxCapture::Pattern(pattern),
+            SurfaceSyntaxCapture::Identifier(read),
+            ..,
+        ] = captures
+        else {
+            panic!("expected name, Pattern and read captures");
+        };
+        let SurfacePatternKind::Binder(binder) = &pattern.pattern.kind else {
+            panic!("expected the caller's binder pattern");
+        };
+        assert_eq!(binder.name.text, "value");
+        assert_eq!(binder.name.text, read.name.text);
+        assert_eq!(binder.name.introduction, read.name.introduction);
+        assert_eq!(binder.name.introduced_at, read.name.introduced_at);
+        assert_eq!(binder.name.written, read.name.written);
+        assert_eq!(binder.name.introduction, 0);
+        assert!(binder.name.written);
+        assert_ne!(binder.name.span, read.name.span);
+        for span in [binder.name.span, read.name.span] {
+            assert_eq!(span.source(), source.id());
+            let range = span.range();
+            assert_eq!(
+                &source.text()[range.start() as usize..range.end() as usize],
+                "value"
+            );
+        }
+        let [MacroOutputNode::Identifier(name, MacroOrigin::Source(origin))] =
+            pattern.contents.as_ref()
+        else {
+            panic!("expected the original binder syntax");
+        };
+        assert_eq!(name.span, binder.name.span);
+        assert_eq!(*origin, binder.name.span);
+        assert!(matches!(&read.origin, MacroOrigin::Source(span) if *span == read.name.span));
+        OBSERVED.set(true);
+    }
+
+    for fixture in ["main.ash", "mixed_main.ash"] {
+        OBSERVED.set(false);
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/surface-macros/pattern-host")
+            .join(fixture);
+        G1_CAPTURE_OBSERVER.set(Some(observe));
+        let result = compile_path(RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        });
+        G1_CAPTURE_OBSERVER.set(None);
+        let program = result.expect("the imported Pattern graph compiles");
+        assert!(OBSERVED.get());
+        assert_eq!(execute(&program).unwrap().value_display(), "42");
+    }
+}
+
+#[test]
 fn type_deep_source_capture_reaches_host_on_a_512k_stack() {
     const CHILD: &str = "ASH_TYPE_SOURCE_AST_512K_CHILD";
     if std::env::var_os(CHILD).is_none() {
