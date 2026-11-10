@@ -1439,6 +1439,18 @@ pub(crate) struct SyntaxOwner {
     pub(crate) import_span: Span,
 }
 
+pub(crate) type DeclarationTransformer<'a> = dyn for<'call> FnMut(
+        &'call SelectedSyntax,
+        &'call [SurfaceSyntaxCapture],
+        &'call crate::source::SourceFile,
+        &'call SurfaceName,
+        usize,
+        Arc<SyntaxContexts>,
+        Arc<ExpansionFrame>,
+        &'call mut crate::syntax_resource::SyntaxBudget,
+    ) -> Result<(Vec<MacroOutputNode>, usize), Span>
+    + 'a;
+
 type SyntaxTransformer<'a> = dyn FnMut(
         &SelectedSyntax,
         &[SurfaceSyntaxCapture],

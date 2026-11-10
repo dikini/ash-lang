@@ -2108,6 +2108,7 @@ pub(crate) fn project_declaration_expansions(
     owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
     owners: &mut Vec<crate::syntax::SyntaxOwner>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
+    mut transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
 ) -> Result<SurfaceModule, DeclarationExpansionFailure> {
     let (root, raw_tokens) = validated_root(source, tree)?;
     let source_tokens = ProjectionTokens::source(raw_tokens);
@@ -2201,13 +2202,52 @@ pub(crate) fn project_declaration_expansions(
             invocation: anchor,
             definition: invocation.selection.declaration.span,
         });
-        let output = crate::syntax::instantiate_declaration_template(
-            &invocation.selection,
-            &invocation.captures,
-            introduction,
-            anchor,
-            budget,
-        )?;
+        let output = match &invocation.selection.declaration.implementation {
+            SurfaceSyntaxImplementation::Template => {
+                crate::syntax::instantiate_declaration_template(
+                    &invocation.selection,
+                    &invocation.captures,
+                    introduction,
+                    anchor,
+                    budget,
+                )?
+            }
+            SurfaceSyntaxImplementation::Transformer(_) => {
+                // The existing precharge guard keeps this route closed until
+                // the declaration host's service work is accounted for.
+                let transformer =
+                    transformer
+                        .as_deref_mut()
+                        .ok_or(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        ))?;
+                let contexts = crate::syntax::SyntaxContexts::new_budgeted(
+                    selected,
+                    owner_imports,
+                    &staged_owners,
+                    budget,
+                )?;
+                budget.charge()?;
+                let (output, fresh_count) = transformer(
+                    &invocation.selection,
+                    &invocation.captures,
+                    source,
+                    &invocation.name,
+                    introduction,
+                    std::sync::Arc::new(contexts),
+                    std::sync::Arc::clone(&frame),
+                    budget,
+                )
+                .map_err(|_| ProjectionError::MalformedTree(InternalReason::UnexpectedShape))?;
+                budget.charge_units(fresh_count)?;
+                staged_owners.extend((0..fresh_count).map(|_| crate::syntax::SyntaxOwner {
+                    owner: None,
+                    declaration: invocation.selection.declaration.span,
+                    import_span: invocation.selection.import_span,
+                }));
+                output
+            }
+        };
         let contexts = crate::syntax::SyntaxContexts::new_budgeted(
             selected,
             owner_imports,
@@ -7351,6 +7391,7 @@ mod tests {
                         &[],
                         &mut owners,
                         &mut budget,
+                        None,
                     ),
                     Err(DeclarationExpansionFailure::Projection(
                         ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
@@ -7895,6 +7936,7 @@ mod tests {
                     &[],
                     &mut owners,
                     &mut budget,
+                    None,
                 );
                 if has_clause {
                     assert!(matches!(
@@ -8070,6 +8112,7 @@ mod tests {
                 &[],
                 &mut owners,
                 &mut staged_budget,
+                None,
             )
             .unwrap();
             assert_eq!(module.definitions.len(), 1);
@@ -8200,8 +8243,15 @@ mod tests {
         );
         let parsed = budget.consumed();
         let mut owners = Vec::new();
-        let result =
-            project_declaration_expansions(source, &tree, selected, &[], &mut owners, &mut budget);
+        let result = project_declaration_expansions(
+            source,
+            &tree,
+            selected,
+            &[],
+            &mut owners,
+            &mut budget,
+            None,
+        );
         (result, budget.consumed(), parsed, owners.len())
     }
 
@@ -9150,6 +9200,7 @@ mod tests {
                 &[vec![]],
                 &mut owners,
                 &mut crate::syntax_resource::SyntaxBudget::default(),
+                None,
             )
             .unwrap_or_else(|error| panic!("captured {expected}: {error:?}"));
             assert_eq!(owners.len(), 1);
@@ -9182,6 +9233,7 @@ mod tests {
                 &[vec![]],
                 &mut owners,
                 &mut crate::syntax_resource::SyntaxBudget::default(),
+                None,
             )
             .unwrap_or_else(|error| panic!("generated {expected}: {error:?}"));
             assert_eq!(owners.len(), 1);
@@ -9225,6 +9277,7 @@ mod tests {
                     &[vec![]],
                     &mut Vec::new(),
                     &mut crate::syntax_resource::SyntaxBudget::default(),
+                    None,
                 )
                 .unwrap_or_else(|error| panic!("{pattern}, raw={raw_generated}: {error:?}"));
                 let SurfaceDefinitionKind::Equational(global) = &module.definitions[0].kind else {
@@ -11505,6 +11558,7 @@ mod tests {
             &[vec![]],
             &mut owners,
             &mut measured,
+            None,
         )
         .expect("a type-only declaration reaches the ordinary collector");
         assert_eq!(module.definitions.len(), 1);
@@ -11521,6 +11575,7 @@ mod tests {
                 &[vec![]],
                 &mut short_owners,
                 &mut short,
+                None,
             ),
             Err(DeclarationExpansionFailure::Syntax {
                 resource: Some(ResourceFailure::SyntaxWork { .. }),
@@ -11537,6 +11592,7 @@ mod tests {
             &[vec![]],
             &mut exact_owners,
             &mut exact,
+            None,
         )
         .expect("the measured allowance retains the complete declaration");
         assert_eq!(retried.definitions.len(), 1);
@@ -11569,6 +11625,7 @@ mod tests {
             &imports,
             &mut owners,
             &mut crate::syntax_resource::SyntaxBudget::default(),
+            None,
         )
         .expect("both imported declaration frames forward the type");
         assert_eq!(owners.len(), 2);
@@ -11646,6 +11703,7 @@ mod tests {
             &[vec![]],
             &mut prefix_owners,
             &mut prefix,
+            None,
         )
         .unwrap();
         assert_eq!(first_module.definitions.len(), 1);
@@ -11660,6 +11718,7 @@ mod tests {
             &[vec![]],
             &mut measured_owners,
             &mut measured,
+            None,
         )
         .unwrap();
         assert_eq!(module.definitions.len(), 2);
@@ -11707,6 +11766,7 @@ mod tests {
                 &[vec![]],
                 &mut owners,
                 &mut short,
+                None,
             ),
             Err(DeclarationExpansionFailure::Syntax {
                 resource: Some(ResourceFailure::SyntaxWork { .. }),
@@ -11727,6 +11787,7 @@ mod tests {
             &[vec![]],
             &mut retry_owners,
             &mut exact,
+            None,
         )
         .expect("the exact allowance publishes both declarations after the short failure");
         assert_eq!(retried, module);
@@ -11792,6 +11853,7 @@ mod tests {
                 &imports,
                 &mut owners,
                 &mut crate::syntax_resource::SyntaxBudget::default(),
+                None,
             );
             if succeeds {
                 let module = result.expect("the last grouped chain succeeds");
@@ -11843,6 +11905,7 @@ mod tests {
             &[vec![]],
             &mut prefix_owners,
             &mut prefix,
+            None,
         )
         .unwrap();
         assert_eq!(first_module.definitions.len(), 1);
@@ -11856,6 +11919,7 @@ mod tests {
             &[vec![]],
             &mut measured_owners,
             &mut measured,
+            None,
         )
         .unwrap();
         assert_eq!(module.definitions.len(), 2);
@@ -11874,6 +11938,7 @@ mod tests {
                 &[vec![]],
                 &mut owners,
                 &mut short,
+                None,
             ),
             Err(DeclarationExpansionFailure::Syntax {
                 resource: Some(ResourceFailure::SyntaxWork { .. }),
@@ -11893,6 +11958,7 @@ mod tests {
             &[vec![]],
             &mut exact_owners,
             &mut exact,
+            None,
         )
         .expect("the exact measured allowance publishes both declarations");
         assert_eq!(module.definitions.len(), 2);
@@ -11957,6 +12023,7 @@ mod tests {
             &[vec![inner.clone()], vec![], vec![]],
             &mut owners,
             &mut crate::syntax_resource::SyntaxBudget::default(),
+            None,
         )
         .unwrap();
         assert_eq!(module.definitions.len(), 2);
@@ -12025,6 +12092,7 @@ mod tests {
             &[],
             &mut owners,
             &mut crate::syntax_resource::SyntaxBudget::default(),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -12083,6 +12151,7 @@ mod tests {
                 &[],
                 &mut owners,
                 &mut crate::syntax_resource::SyntaxBudget::default(),
+                None,
             )
             .is_err()
         );
@@ -12122,6 +12191,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &mut crate::syntax_resource::SyntaxBudget::default(),
+            None,
         );
         let Err(DeclarationExpansionFailure::Syntax {
             diagnostics,
@@ -12188,6 +12258,7 @@ mod tests {
             &imports,
             &mut Vec::new(),
             &mut crate::syntax_resource::SyntaxBudget::default(),
+            None,
         )
         .unwrap();
         let SurfaceDefinitionKind::Equational(global) = &module.definitions[0].kind else {
@@ -12273,6 +12344,7 @@ mod tests {
             &imports,
             &mut owners,
             &mut measured,
+            None,
         );
         let Err(DeclarationExpansionFailure::Syntax {
             diagnostics,
@@ -12308,7 +12380,8 @@ mod tests {
                 &selected,
                 &imports,
                 &mut owners,
-                &mut short
+                &mut short,
+                None,
             ),
             Err(DeclarationExpansionFailure::Syntax {
                 resource: Some(ResourceFailure::SyntaxWork { .. }),
@@ -12337,6 +12410,7 @@ mod tests {
             &imports,
             &mut Vec::new(),
             &mut crate::syntax_resource::SyntaxBudget::default(),
+            None,
         )
         .unwrap();
         for (name, expected) in [
@@ -12393,6 +12467,7 @@ mod tests {
             &imports,
             &mut Vec::new(),
             &mut crate::syntax_resource::SyntaxBudget::default(),
+            None,
         )
         .unwrap();
         let SurfaceDefinitionKind::Equational(global) = &module.definitions[0].kind else {
@@ -12531,6 +12606,7 @@ mod tests {
             &imports,
             &mut Vec::new(),
             &mut crate::syntax_resource::SyntaxBudget::default(),
+            None,
         )
         .unwrap();
         let name = output_definition_name(&module.definitions[0]);
@@ -12583,6 +12659,7 @@ mod tests {
             &imports,
             &mut owners,
             &mut measured,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -12604,7 +12681,8 @@ mod tests {
                 &selected,
                 &imports,
                 &mut owners,
-                &mut short
+                &mut short,
+                None,
             ),
             Err(DeclarationExpansionFailure::Syntax {
                 resource: Some(ResourceFailure::SyntaxWork { .. }),
@@ -12620,6 +12698,7 @@ mod tests {
             &imports,
             &mut owners,
             &mut exact,
+            None,
         )
         .unwrap();
         assert_eq!(exact.consumed(), used);
@@ -12691,6 +12770,7 @@ mod tests {
                 &[],
                 &mut owners,
                 &mut crate::syntax_resource::SyntaxBudget::default(),
+                None,
             );
             if direct {
                 let module = result.expect("the direct empty template is staged");
@@ -12727,6 +12807,7 @@ mod tests {
             &imports,
             &mut owners,
             &mut ample,
+            None,
         )
         .unwrap();
         assert_eq!(module.definitions.len(), 2);
@@ -12742,6 +12823,7 @@ mod tests {
                 &imports,
                 &mut failed_owners,
                 &mut short,
+                None,
             ),
             Err(DeclarationExpansionFailure::Syntax {
                 resource: Some(ResourceFailure::SyntaxWork { .. }),
@@ -12758,6 +12840,7 @@ mod tests {
             &imports,
             &mut retry_owners,
             &mut exact,
+            None,
         )
         .unwrap();
         assert_eq!(retry.definitions.len(), 2);
@@ -13039,6 +13122,7 @@ mod tests {
             &imports,
             &mut owners,
             &mut crate::syntax_resource::SyntaxBudget::default(),
+            None,
         )
         .unwrap();
         assert!(module.declaration_order.is_empty());
@@ -13054,6 +13138,7 @@ mod tests {
                 &imports,
                 &mut owners,
                 &mut crate::syntax_resource::SyntaxBudget::default(),
+                None,
             ),
             Err(DeclarationExpansionFailure::Syntax {
                 resource: Some(ResourceFailure::StructuralDepth {

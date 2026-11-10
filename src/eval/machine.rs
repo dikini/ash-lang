@@ -1148,7 +1148,7 @@ impl Drop for TransformerDropObserver {
 #[derive(Debug)]
 pub struct Machine<'runtime> {
     worker: Option<WorkerStartup>,
-    syntax_host: Option<syntax::SyntaxHost>,
+    syntax_host: Option<syntax::SyntaxHost<'runtime>>,
     source_bindings: Option<&'runtime crate::foreign::source_bindings::SourceNativeBindings>,
     cleanup_limit: usize,
     live_cleanups: usize,
@@ -6902,6 +6902,7 @@ pub(crate) fn evaluate_transformer(
     introduction: usize,
     contexts: std::sync::Arc<crate::syntax::SyntaxContexts>,
     frame: std::sync::Arc<crate::syntax::ExpansionFrame>,
+    syntax_work: Option<&mut crate::syntax_resource::SyntaxBudget>,
 ) -> Result<(crate::syntax::TransformerOutput, usize), RuntimeFailure> {
     let scope = disposal::Scope::enter();
     let mut result = (|| {
@@ -6914,6 +6915,7 @@ pub(crate) fn evaluate_transformer(
             introduction,
             contexts,
             frame,
+            syntax_work,
         )?);
         #[cfg(test)]
         {
@@ -6923,7 +6925,7 @@ pub(crate) fn evaluate_transformer(
         let (value, heap) = evaluation.into_observation_parts();
         let host = machine
             .syntax_host
-            .as_ref()
+            .as_mut()
             .ok_or(RuntimeFailure::InvalidControlState)?;
         #[cfg(test)]
         {

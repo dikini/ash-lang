@@ -26,7 +26,7 @@ struct SyntaxToken {
 }
 
 #[derive(Debug)]
-pub(super) struct SyntaxHost {
+pub(super) struct SyntaxHost<'inv> {
     pub(super) occurrence: NodeId,
     pub(super) binder: BinderId,
     pub(super) ops: EffectId,
@@ -38,6 +38,9 @@ pub(super) struct SyntaxHost {
     caller: SurfaceName,
     introduction: usize,
     contexts: Arc<SyntaxContexts>,
+    // The declaration route will charge its shared owner when it is enabled.
+    #[allow(dead_code)]
+    syntax_work: Option<&'inv mut crate::syntax_resource::SyntaxBudget>,
     fresh_count: usize,
     captures: Vec<SurfaceSyntaxCapture>,
     expressions: Vec<SurfaceExpressionCapture>,
@@ -52,7 +55,7 @@ pub(super) struct SyntaxHost {
     operations: HashMap<OperationId, String>,
 }
 
-impl SyntaxHost {
+impl<'inv> SyntaxHost<'inv> {
     pub(super) fn new(
         entry: &ValidatedMacroEntry,
         captures: &[SurfaceSyntaxCapture],
@@ -61,6 +64,7 @@ impl SyntaxHost {
         introduction: usize,
         contexts: Arc<SyntaxContexts>,
         frame: Arc<ExpansionFrame>,
+        syntax_work: Option<&'inv mut crate::syntax_resource::SyntaxBudget>,
     ) -> Result<Self, RuntimeFailure> {
         let registry = entry.program.registry();
         let mut constructors = HashMap::new();
@@ -98,6 +102,7 @@ impl SyntaxHost {
             caller: caller.clone(),
             introduction,
             contexts,
+            syntax_work,
             fresh_count: 0,
             captures: {
                 let mut copied = Vec::with_capacity(captures.len());
@@ -464,7 +469,7 @@ impl SyntaxHost {
     }
 
     pub(super) fn transfer(
-        &self,
+        &mut self,
         result: &Value,
         heap: &[HeapCell],
         work: &mut TypeWorkBudget,
@@ -533,7 +538,7 @@ impl SyntaxHost {
     }
 
     fn transfer_syntax(
-        &self,
+        &mut self,
         syntax: &Value,
         heap: &[HeapCell],
         depth: usize,
@@ -1008,6 +1013,7 @@ mod tests {
                     0,
                     Arc::clone(&contexts),
                     Arc::clone(&frame),
+                    None,
                 )
                 .expect("the same entry constructs a host with the supported nested expression");
                 eprintln!("D5 host nested-prefix constructed on 512 KiB");
@@ -1022,7 +1028,8 @@ mod tests {
                             &name,
                             0,
                             Arc::clone(&contexts),
-                            Arc::clone(&frame)
+                            Arc::clone(&frame),
+                            None,
                         ),
                         Err(RuntimeFailure::InvalidControlState)
                     ));
@@ -1044,6 +1051,7 @@ mod tests {
                     caller: name,
                     introduction: 0,
                     contexts,
+                    syntax_work: None,
                     fresh_count: 0,
                     captures,
                     expressions: Vec::new(),
@@ -1154,6 +1162,7 @@ mod tests {
             caller: name.clone(),
             introduction: 0,
             contexts: Arc::new(SyntaxContexts::new(&[], &[], &[])),
+            syntax_work: None,
             fresh_count: 0,
             captures: vec![SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
                 name: name.clone(),
