@@ -789,6 +789,10 @@ pub(crate) fn parse_macro_type(
     budget
         .charge_units(contents.len())
         .map_err(macro_resource_failure)?;
+    // Vec-to-Arc conversion allocates a new slice and moves each element.
+    budget
+        .charge_units(contents.len())
+        .map_err(macro_resource_failure)?;
     budget.charge().map_err(macro_resource_failure)?;
     Ok(crate::surface::SurfaceTypeCapture {
         ty,

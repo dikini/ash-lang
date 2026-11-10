@@ -3734,7 +3734,7 @@ fn charge_composed_projection_inner(
     budget.charge()?;
     let source_spans = tokens.occurrence.is_none();
     // The source invocation itself also finds its first and last token.
-    let mut pending = vec![(
+    let first = (
         root,
         None,
         0usize,
@@ -3744,7 +3744,15 @@ fn charge_composed_projection_inner(
         0usize,
         false,
         None,
-    )];
+    );
+    let mut pending = if new_type_copy {
+        budget.charge()?;
+        let mut pending = Vec::with_capacity(1);
+        pending.push(first);
+        pending
+    } else {
+        vec![first]
+    };
     let mut raw_patterns = Vec::new();
     let mut bridge = false;
     while let Some((
@@ -3972,6 +3980,12 @@ fn charge_composed_projection_inner(
             budget.charge_units(span_walks.saturating_mul(6))?;
             match child {
                 ConcreteElement::Node(child) => {
+                    if new_type_copy && pending.len() == pending.capacity() {
+                        let live = pending.len();
+                        let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                        budget.charge_units(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                        pending.reserve_exact(1);
+                    }
                     pending.push((
                         child,
                         Some(node.kind),
@@ -4119,21 +4133,84 @@ fn charge_composed_projection_inner(
                                 location_depth = location_depth
                                     .max(crate::syntax::type_depth(nominal_depth, 3)?);
                             }
-                            crate::syntax::charge_type_origin(origin, location_depth, budget)?;
-                            if tokens.preserve_name_diagnostic
-                                && let Some(previous) = &name.diagnostic
-                            {
-                                crate::syntax::charge_type_origin(
-                                    &previous.primary,
+                            if new_type_copy {
+                                crate::syntax::charge_type_origin_copy(
+                                    origin,
                                     location_depth,
                                     budget,
                                 )?;
-                                for related in &previous.related {
+                                let previous_frames = name
+                                    .diagnostic
+                                    .as_ref()
+                                    .map_or(0, |location| location.frames.len());
+                                // The new location starts with empty related/frame
+                                // Vecs. On the pinned Vec growth implementation,
+                                // 12 per possible entry bounds their allocations
+                                // and live moves, including a minimum-size buffer.
+                                budget.charge_units(
+                                    previous_frames
+                                        .checked_add(1)
+                                        .and_then(|count| count.checked_mul(12))
+                                        .unwrap_or(usize::MAX),
+                                )?;
+                                charge_frame_additions(previous_frames, 0, budget)?;
+                                charge_frame_additions(1, previous_frames, budget)?;
+                            } else {
+                                crate::syntax::charge_type_origin(origin, location_depth, budget)?;
+                            }
+                            if tokens.preserve_name_diagnostic
+                                && let Some(previous) = &name.diagnostic
+                            {
+                                if new_type_copy {
+                                    budget.charge_units(
+                                        previous
+                                            .related
+                                            .len()
+                                            .checked_add(1)
+                                            .and_then(|count| count.checked_mul(12))
+                                            .unwrap_or(usize::MAX),
+                                    )?;
+                                    // Equality can visit either Combined tree. Its cached
+                                    // span count includes each input occurrence and both
+                                    // frame spans, so twice their sum bounds the visits
+                                    // and fixed origin/frame comparisons without a walk.
+                                    let comparison = previous
+                                        .primary
+                                        .span_count()
+                                        .checked_add(origin.span_count())
+                                        .and_then(|count| count.checked_mul(2))
+                                        .unwrap_or(usize::MAX);
+                                    budget.charge_units(comparison)?;
+                                    // name.clone copies the previous location; preserving
+                                    // it copies related origins again and may copy its
+                                    // primary. Reserve that primary conservatively.
+                                    for _ in 0..2 {
+                                        crate::syntax::charge_type_origin_copy(
+                                            &previous.primary,
+                                            location_depth,
+                                            budget,
+                                        )?;
+                                        for related in &previous.related {
+                                            crate::syntax::charge_type_origin_copy(
+                                                related,
+                                                location_depth,
+                                                budget,
+                                            )?;
+                                        }
+                                    }
+                                } else {
                                     crate::syntax::charge_type_origin(
-                                        related,
+                                        &previous.primary,
                                         location_depth,
                                         budget,
                                     )?;
+                                    for related in &previous.related {
+                                        crate::syntax::charge_type_origin(
+                                            related,
+                                            location_depth,
+                                            budget,
+                                        )?;
+                                    }
                                 }
                             }
                         }
@@ -4150,7 +4227,19 @@ fn charge_composed_projection_inner(
                                 ) =>
                         {
                             let location_depth = crate::syntax::type_depth(depth, 1)?;
-                            crate::syntax::charge_type_origin(origin, location_depth, budget)?;
+                            if new_type_copy {
+                                crate::syntax::charge_type_origin_copy(
+                                    origin,
+                                    location_depth,
+                                    budget,
+                                )?;
+                                // One frame inserted into a new Vec requests the
+                                // pinned minimum buffer of four entries.
+                                budget.charge_units(4)?;
+                                charge_frame_additions(1, 0, budget)?;
+                            } else {
+                                crate::syntax::charge_type_origin(origin, location_depth, budget)?;
+                            }
                         }
                         _ => {}
                     }
@@ -4252,8 +4341,24 @@ fn charge_projection_subtree(
     tokens: &ProjectionTokens<'_>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(), DeclarationExpansionFailure> {
+    charge_projection_subtree_inner(root, tokens, false, budget)
+}
+
+fn charge_projection_subtree_inner(
+    root: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    new_type_copy: bool,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), DeclarationExpansionFailure> {
     budget.charge()?;
-    let mut pending = vec![root];
+    let mut pending = if new_type_copy {
+        budget.charge()?;
+        let mut pending = Vec::with_capacity(1);
+        pending.push(root);
+        pending
+    } else {
+        vec![root]
+    };
     while let Some(node) = pending.pop() {
         // Projected node, traversal/worklist entry, and child-vector retention.
         budget.charge_units(3)?;
@@ -4266,6 +4371,12 @@ fn charge_projection_subtree(
             match child {
                 ConcreteElement::Node(child) => {
                     budget.charge()?;
+                    if new_type_copy && pending.len() == pending.capacity() {
+                        let live = pending.len();
+                        let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                        budget.charge_units(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                        pending.reserve_exact(1);
+                    }
                     pending.push(child);
                 }
                 ConcreteElement::Token(index) => {
@@ -6012,8 +6123,8 @@ pub(super) fn project_macro_type(
         preserve_name_diagnostic: true,
     };
     charge_composed_projection_inner(ty, &tokens, false, true, budget)?;
-    charge_projection_subtree(ty, &tokens, budget)?;
-    Ok(project_type(source, ty, &tokens)?)
+    charge_projection_subtree_inner(ty, &tokens, true, budget)?;
+    Ok(project_type_inner(source, ty, &tokens, Some(budget))?)
 }
 
 fn project_expression_with_fragments(
@@ -7810,15 +7921,65 @@ fn project_type(
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
 ) -> Result<SurfaceType, ProjectionError> {
+    project_type_inner(source, node, tokens, None)
+}
+
+fn project_type_inner(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    mut budget: Option<&mut crate::syntax_resource::SyntaxBudget>,
+) -> Result<SurfaceType, ProjectionError> {
+    macro_rules! reserve_growth {
+        ($items:ident, $count:expr) => {{
+            let count = $count;
+            if let Some(budget) = budget.as_deref_mut()
+                && count != 0
+            {
+                let live = $items.len();
+                let requested = live.checked_add(count).unwrap_or(usize::MAX);
+                if requested > $items.capacity() {
+                    budget
+                        .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                        .map_err(ProjectionError::ResourceLimit)?;
+                    $items.reserve_exact(count);
+                }
+            }
+        }};
+    }
+    macro_rules! reserve_moved_buffer {
+        ($count:expr) => {{
+            let count = $count;
+            if let Some(budget) = budget.as_deref_mut() {
+                budget
+                    .charge_units(count.checked_mul(2).unwrap_or(usize::MAX))
+                    .map_err(ProjectionError::ResourceLimit)?;
+            }
+        }};
+    }
+    if let Some(budget) = budget.as_deref_mut() {
+        budget.charge().map_err(ProjectionError::ResourceLimit)?;
+    }
     let mut tasks = vec![TypeTask::VisitType(node)];
     let mut projected = Vec::new();
     while let Some(task) = tasks.pop() {
         match task {
             TypeTask::VisitType(node) => {
                 if node.kind == NodeKind::EffectRow {
-                    let instances = child_nodes(node)
-                        .filter(|child| child.kind == NodeKind::EffectInstance)
-                        .collect::<Vec<_>>();
+                    let instances = if budget.is_some() {
+                        let mut instances = Vec::new();
+                        for child in
+                            child_nodes(node).filter(|child| child.kind == NodeKind::EffectInstance)
+                        {
+                            reserve_growth!(instances, 1);
+                            instances.push(child);
+                        }
+                        instances
+                    } else {
+                        child_nodes(node)
+                            .filter(|child| child.kind == NodeKind::EffectInstance)
+                            .collect::<Vec<_>>()
+                    };
                     let tail = direct_tokens(node, tokens)
                         .filter(ProjectionToken::is_upper_identifier)
                         .last()
@@ -7841,20 +8002,32 @@ fn project_type(
                             SurfaceReference::Unqualified(surface_name(token)?)
                         };
                         let start = arguments.len();
-                        arguments.extend(child_nodes(instance).filter(|child| {
-                            matches!(child.kind, NodeKind::Type | NodeKind::EffectRow)
-                        }));
+                        if budget.is_some() {
+                            for child in child_nodes(instance).filter(|child| {
+                                matches!(child.kind, NodeKind::Type | NodeKind::EffectRow)
+                            }) {
+                                reserve_growth!(arguments, 1);
+                                arguments.push(child);
+                            }
+                        } else {
+                            arguments.extend(child_nodes(instance).filter(|child| {
+                                matches!(child.kind, NodeKind::Type | NodeKind::EffectRow)
+                            }));
+                        }
+                        reserve_growth!(shapes, 1);
                         shapes.push((
                             effect,
                             arguments.len() - start,
                             node_span(source, instance, tokens)?,
                         ));
                     }
+                    reserve_growth!(tasks, 1);
                     tasks.push(TypeTask::FinishRow {
                         shapes,
                         tail,
                         span: node_span(source, node, tokens)?,
                     });
+                    reserve_growth!(tasks, arguments.len());
                     tasks.extend(arguments.into_iter().rev().map(TypeTask::VisitType));
                     continue;
                 }
@@ -7862,16 +8035,21 @@ fn project_type(
                 let atomic = only_child_of_kind(node, NodeKind::AtomicType)?;
                 if let Some(codomain) = optional_child_of_kind(node, NodeKind::Type)? {
                     let effects = optional_child_of_kind(node, NodeKind::EffectRow)?;
+                    reserve_growth!(tasks, 1);
                     tasks.push(TypeTask::FinishFunction {
                         span: node_span(source, node, tokens)?,
                         has_effects: effects.is_some(),
                     });
                     if let Some(row) = effects {
+                        reserve_growth!(tasks, 1);
                         tasks.push(TypeTask::VisitType(row));
                     }
+                    reserve_growth!(tasks, 1);
                     tasks.push(TypeTask::VisitType(codomain));
+                    reserve_growth!(tasks, 1);
                     tasks.push(TypeTask::VisitAtomic(atomic));
                 } else {
+                    reserve_growth!(tasks, 1);
                     tasks.push(TypeTask::VisitAtomic(atomic));
                 }
             }
@@ -7885,44 +8063,75 @@ fn project_type(
                     if let Some(frame) = tokens.frame {
                         inherit_type_frame(&mut ty, frame);
                     }
+                    reserve_growth!(projected, 1);
                     projected.push(ty);
                     continue;
                 }
                 if let Some(group) = optional_child_of_kind(node, NodeKind::ParenthesizedType)? {
                     if let Some(tuple) = optional_child_of_kind(group, NodeKind::TupleType)? {
-                        let elements = child_nodes(tuple)
-                            .filter(|child| child.kind == NodeKind::Type)
-                            .collect::<Vec<_>>();
+                        let elements = if budget.is_some() {
+                            let mut elements = Vec::new();
+                            for child in
+                                child_nodes(tuple).filter(|child| child.kind == NodeKind::Type)
+                            {
+                                reserve_growth!(elements, 1);
+                                elements.push(child);
+                            }
+                            elements
+                        } else {
+                            child_nodes(tuple)
+                                .filter(|child| child.kind == NodeKind::Type)
+                                .collect::<Vec<_>>()
+                        };
                         if elements.len() < 2 {
                             return malformed(InternalReason::UnexpectedShape);
                         }
+                        reserve_growth!(tasks, 1);
                         tasks.push(TypeTask::FinishTuple {
                             count: elements.len(),
                             span: node_span(source, group, tokens)?,
                         });
+                        reserve_growth!(tasks, elements.len());
                         tasks.extend(elements.into_iter().rev().map(TypeTask::VisitType));
                     } else {
                         let nested = only_child_of_kind(group, NodeKind::Type)?;
+                        reserve_growth!(tasks, 1);
                         tasks.push(TypeTask::ApplyGroupingSpan(node_span(
                             source, group, tokens,
                         )?));
+                        reserve_growth!(tasks, 1);
                         tasks.push(TypeTask::VisitType(nested));
                     }
                 } else {
-                    let arguments = child_nodes(node)
-                        .filter(|child| matches!(child.kind, NodeKind::Type | NodeKind::EffectRow))
-                        .collect::<Vec<_>>();
+                    let arguments = if budget.is_some() {
+                        let mut arguments = Vec::new();
+                        for child in child_nodes(node).filter(|child| {
+                            matches!(child.kind, NodeKind::Type | NodeKind::EffectRow)
+                        }) {
+                            reserve_growth!(arguments, 1);
+                            arguments.push(child);
+                        }
+                        arguments
+                    } else {
+                        child_nodes(node)
+                            .filter(|child| {
+                                matches!(child.kind, NodeKind::Type | NodeKind::EffectRow)
+                            })
+                            .collect::<Vec<_>>()
+                    };
                     let qualified = optional_child_of_kind(node, NodeKind::QualifiedName)?
                         .map(|name| project_qualified_name(source, name, tokens))
                         .transpose()?;
                     if arguments.is_empty() {
                         if let Some(name) = qualified {
+                            reserve_growth!(projected, 1);
                             projected.push(SurfaceType {
                                 span: name.span,
                                 kind: SurfaceTypeKind::Named(SurfaceReference::Qualified(name)),
                                 diagnostic: None,
                             });
                         } else {
+                            reserve_growth!(projected, 1);
                             projected.push(project_atomic_primitive(node, tokens)?);
                         }
                     } else {
@@ -7936,11 +8145,13 @@ fn project_type(
                                 ))?;
                             SurfaceReference::Unqualified(surface_name(token)?)
                         };
+                        reserve_growth!(tasks, 1);
                         tasks.push(TypeTask::FinishApplication {
                             constructor,
                             count: arguments.len(),
                             span: node_span(source, node, tokens)?,
                         });
+                        reserve_growth!(tasks, arguments.len());
                         tasks.extend(arguments.into_iter().rev().map(TypeTask::VisitType));
                     }
                 }
@@ -7954,15 +8165,31 @@ fn project_type(
                         .ok_or(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         ))?;
+                reserve_moved_buffer!(count);
                 let mut arguments = projected.split_off(split).into_iter();
-                let effects = shapes
-                    .into_iter()
-                    .map(|(effect, count, span)| SurfaceEffectInstance {
-                        effect,
-                        arguments: arguments.by_ref().take(count).collect(),
-                        span,
-                    })
-                    .collect();
+                let effects = if budget.is_some() {
+                    reserve_moved_buffer!(shapes.len());
+                    let mut effects = Vec::with_capacity(shapes.len());
+                    for (effect, count, span) in shapes {
+                        reserve_moved_buffer!(count);
+                        effects.push(SurfaceEffectInstance {
+                            effect,
+                            arguments: arguments.by_ref().take(count).collect(),
+                            span,
+                        });
+                    }
+                    effects
+                } else {
+                    shapes
+                        .into_iter()
+                        .map(|(effect, count, span)| SurfaceEffectInstance {
+                            effect,
+                            arguments: arguments.by_ref().take(count).collect(),
+                            span,
+                        })
+                        .collect()
+                };
+                reserve_growth!(projected, 1);
                 projected.push(SurfaceType {
                     kind: SurfaceTypeKind::RowArgument(SurfaceEffectRow {
                         effects,
@@ -7992,6 +8219,7 @@ fn project_type(
                 let domain = projected.pop().ok_or(ProjectionError::MalformedTree(
                     InternalReason::UnexpectedShape,
                 ))?;
+                reserve_growth!(projected, 1);
                 projected.push(SurfaceType {
                     kind: SurfaceTypeKind::Function(FunctionType {
                         domain: Box::new(domain),
@@ -8010,7 +8238,9 @@ fn project_type(
                         .ok_or(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         ))?;
+                reserve_moved_buffer!(count);
                 let elements = projected.split_off(split);
+                reserve_growth!(projected, 1);
                 projected.push(SurfaceType {
                     kind: SurfaceTypeKind::Tuple(elements),
                     span,
@@ -8035,7 +8265,9 @@ fn project_type(
                         .ok_or(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         ))?;
+                reserve_moved_buffer!(count);
                 let arguments = projected.split_off(split);
+                reserve_growth!(projected, 1);
                 projected.push(SurfaceType {
                     kind: SurfaceTypeKind::Application {
                         constructor,
@@ -10660,6 +10892,306 @@ mod tests {
                 )
             });
             assert_eq!(Arc::strong_count(&packet), retained);
+        }
+    }
+
+    #[test]
+    fn type_host_projection_worklists_charge_initial_and_live_growth() {
+        use crate::syntax_resource::SyntaxBudget;
+
+        let source = SourceFile::new("type-host.ash", "Int").unwrap();
+        let span = source.span(ByteRange::new(0, 3).unwrap()).unwrap();
+        let tokens = ProjectionTokens {
+            occurrence: Some(span),
+            ..ProjectionTokens::source(&[])
+        };
+        let node = |children| ConcreteNode {
+            kind: NodeKind::Type,
+            children: (0..children)
+                .map(|_| {
+                    ConcreteElement::Node(ConcreteNode {
+                        kind: NodeKind::AtomicType,
+                        children: Vec::new(),
+                    })
+                })
+                .collect(),
+        };
+        let wide = node(3);
+        let one = node(1);
+        let mut composed = |root: &ConcreteNode, new_type, budget: &mut SyntaxBudget| {
+            charge_composed_projection_inner(root, &tokens, false, new_type, budget).map(|_| ())
+        };
+        let mut subtree = |root: &ConcreteNode, new_type, budget: &mut SyntaxBudget| {
+            charge_projection_subtree_inner(root, &tokens, new_type, budget)
+        };
+        type WorklistCheck<'a> = dyn FnMut(&ConcreteNode, bool, &mut SyntaxBudget) -> Result<(), DeclarationExpansionFailure>
+            + 'a;
+        for (operation, growth_limit, paid_prefix) in [
+            (&mut composed as &mut WorklistCheck<'_>, 13, 11),
+            (&mut subtree as &mut WorklistCheck<'_>, 9, 7),
+        ] {
+            let mut initial = SyntaxBudget::with_limit(1);
+            assert!(matches!(
+                operation(&wide, true, &mut initial),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { limit: 1 }),
+                    ..
+                })
+            ));
+            assert_eq!(initial.consumed(), 1);
+
+            // The second sibling needs capacity two while one entry is live:
+            // its requested buffer and moved entry cost three units.
+            let mut growth = SyntaxBudget::with_limit(growth_limit);
+            assert!(matches!(
+                operation(&wide, true, &mut growth),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { limit }), ..
+                }) if limit == growth_limit
+            ));
+            assert_eq!(growth.consumed(), paid_prefix);
+
+            let mut measured = SyntaxBudget::default();
+            measured.charge_units(17).unwrap();
+            operation(&wide, true, &mut measured).unwrap();
+            let total = measured.consumed();
+            let mut exact = SyntaxBudget::with_limit(total);
+            exact.charge_units(17).unwrap();
+            operation(&wide, true, &mut exact).unwrap();
+            assert_eq!(exact.consumed(), total);
+            let mut short = SyntaxBudget::with_limit(total - 1);
+            short.charge_units(17).unwrap();
+            assert!(matches!(
+                operation(&wide, true, &mut short),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { limit }), ..
+                }) if limit == total - 1
+            ));
+            assert!(short.consumed() >= 17 + paid_prefix);
+            let mut retry = SyntaxBudget::with_limit(total);
+            retry.charge_units(17).unwrap();
+            operation(&wide, true, &mut retry).unwrap();
+            assert_eq!(retry.consumed(), total);
+
+            let mut ordinary = SyntaxBudget::default();
+            operation(&one, false, &mut ordinary).unwrap();
+            let mut new_type = SyntaxBudget::default();
+            operation(&one, true, &mut new_type).unwrap();
+            assert_eq!(new_type.consumed(), ordinary.consumed() + 1);
+        }
+    }
+
+    #[test]
+    fn type_host_raw_projection_reserves_origin_copies_and_comparison() {
+        use crate::syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin, MacroOutputNode};
+        use crate::syntax_resource::SyntaxBudget;
+        use std::{collections::HashMap, sync::Arc};
+
+        let source = SourceFile::new("type-origin.ash", "Thing").unwrap();
+        let span = source.span(ByteRange::new(0, 5).unwrap()).unwrap();
+        let other_span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        let frame = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let other_frame = Arc::new(ExpansionFrame {
+            invocation: other_span,
+            definition: span,
+        });
+        let mut deep = MacroOrigin::Source(span);
+        for _ in 0..8 {
+            deep = MacroOrigin::combined(vec![deep], Arc::clone(&frame)).unwrap();
+        }
+        let wide =
+            MacroOrigin::combined((0..12).map(|_| deep.clone()).collect(), Arc::clone(&frame))
+                .unwrap();
+        let unequal = MacroOrigin::combined(
+            (0..12).map(|_| deep.clone()).collect(),
+            Arc::clone(&other_frame),
+        )
+        .unwrap();
+        let node = ConcreteNode {
+            kind: NodeKind::Type,
+            children: vec![ConcreteElement::Node(ConcreteNode {
+                kind: NodeKind::AtomicType,
+                children: vec![ConcreteElement::Token(0)],
+            })],
+        };
+        let lexed = lex(&source).unwrap();
+        for previous in [wide.clone(), unequal] {
+            let equal = previous == wide;
+            let mut location = DiagnosticLocation::new(previous.clone());
+            location.related.push(deep.clone());
+            location.add_frame(&other_frame);
+            let name = SurfaceName {
+                text: "Thing".into(),
+                span,
+                introduction: 0,
+                introduced_at: None,
+                written: true,
+                diagnostic: Some(Box::new(location)),
+            };
+            let originals = HashMap::from([(0, MacroOutputNode::Identifier(name, wide.clone()))]);
+            let tokens = ProjectionTokens {
+                tokens: &lexed.tokens,
+                originals: Some(&originals),
+                occurrence: Some(span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: None,
+                frame: Some(&frame),
+                name_frame: Some(&frame),
+                staging_frames: None,
+                preserve_name_diagnostic: true,
+            };
+            let MacroOrigin::Combined { inputs, .. } = &wide else {
+                unreachable!("the fixture constructs a Combined origin");
+            };
+            let retained = Arc::strong_count(inputs);
+            let mut old = SyntaxBudget::default();
+            charge_composed_projection_inner(&node, &tokens, false, false, &mut old).unwrap();
+            let mut measured = SyntaxBudget::default();
+            measured.charge_units(17).unwrap();
+            charge_composed_projection_inner(&node, &tokens, false, true, &mut measured).unwrap();
+            let total = measured.consumed();
+            let comparison = 2 * (previous.span_count() + wide.span_count());
+            // Initial scratch, the outer Combined clone, two copies of each
+            // previous Combined origin, and the conservative equality walk.
+            assert!(total - 17 >= old.consumed() + 1 + 2 + 5 * 2 + comparison);
+            let mut short = SyntaxBudget::with_limit(total - 1);
+            short.charge_units(17).unwrap();
+            assert!(matches!(
+                charge_composed_projection_inner(&node, &tokens, false, true, &mut short),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { limit }), ..
+                }) if limit == total - 1
+            ));
+            let mut exact = SyntaxBudget::with_limit(total);
+            exact.charge_units(17).unwrap();
+            charge_composed_projection_inner(&node, &tokens, false, true, &mut exact).unwrap();
+            assert_eq!(exact.consumed(), total);
+            let mut retry = SyntaxBudget::with_limit(total);
+            retry.charge_units(17).unwrap();
+            charge_composed_projection_inner(&node, &tokens, false, true, &mut retry).unwrap();
+            assert_eq!(retry.consumed(), total);
+            assert_eq!(Arc::strong_count(inputs), retained);
+
+            let projected = project_type(&source, &node, &tokens).unwrap();
+            let SurfaceTypeKind::Named(SurfaceReference::Unqualified(name)) = projected.kind else {
+                panic!("expected the actual raw named Type projection");
+            };
+            let diagnostic = name.diagnostic.unwrap();
+            assert_eq!(diagnostic.primary, wide);
+            assert_eq!(diagnostic.related.len(), if equal { 1 } else { 2 });
+            assert!(
+                diagnostic
+                    .frames
+                    .iter()
+                    .any(|item| Arc::ptr_eq(item, &frame))
+            );
+            assert!(
+                diagnostic
+                    .frames
+                    .iter()
+                    .any(|item| Arc::ptr_eq(item, &other_frame))
+            );
+            assert_eq!(Arc::strong_count(inputs), retained + 1);
+            drop(diagnostic);
+            assert_eq!(Arc::strong_count(inputs), retained);
+        }
+
+        let primitive_source = SourceFile::new("type-origin.ash", "Int").unwrap();
+        let primitive_span = primitive_source
+            .span(ByteRange::new(0, 3).unwrap())
+            .unwrap();
+        let lexed = lex(&primitive_source).unwrap();
+        let originals = HashMap::from([(
+            0,
+            MacroOutputNode::Token(TokenKind::IntType, "Int".into(), wide.clone()),
+        )]);
+        let tokens = ProjectionTokens {
+            tokens: &lexed.tokens,
+            originals: Some(&originals),
+            occurrence: Some(primitive_span),
+            construction: None,
+            construction_extents: false,
+            admission_identifiers: None,
+            frame: Some(&frame),
+            name_frame: Some(&frame),
+            staging_frames: None,
+            preserve_name_diagnostic: true,
+        };
+        let mut old = SyntaxBudget::default();
+        charge_composed_projection_inner(&node, &tokens, false, false, &mut old).unwrap();
+        let mut new_type = SyntaxBudget::default();
+        charge_composed_projection_inner(&node, &tokens, false, true, &mut new_type).unwrap();
+        assert_eq!(new_type.consumed(), old.consumed() + 9);
+        let projected = project_type(&primitive_source, &node, &tokens).unwrap();
+        assert!(matches!(projected.kind, SurfaceTypeKind::Int));
+        assert_eq!(projected.diagnostic.unwrap().primary, wide);
+    }
+
+    #[test]
+    fn type_host_projector_pays_its_own_buffers_and_retries() {
+        use crate::syntax_resource::SyntaxBudget;
+
+        for annotation in [
+            "Int",
+            "(Int, Bool, Bytes)",
+            "Box<Int, Bool>",
+            "Unit -> Int ! {Event<Int> | R}",
+        ] {
+            let source = SourceFile::new(
+                "type-projector.ash",
+                format!("value : {annotation}\nvalue _ = 42\n"),
+            )
+            .unwrap();
+            let tree = parse(lex(&source).unwrap());
+            let (root, raw) = validated_root(&source, &tree).unwrap();
+            let declaration = child_nodes(root)
+                .find(|node| node.kind == NodeKind::EquationalGlobal)
+                .unwrap();
+            let ty = only_child_of_kind(declaration, NodeKind::Type).unwrap();
+            let tokens = ProjectionTokens::source(raw);
+            let ordinary = project_type(&source, ty, &tokens).unwrap();
+
+            let mut initial = SyntaxBudget::with_limit(0);
+            assert!(matches!(
+                project_type_inner(&source, ty, &tokens, Some(&mut initial)),
+                Err(ProjectionError::ResourceLimit(
+                    ResourceFailure::SyntaxWork { limit: 0 }
+                ))
+            ));
+            assert_eq!(initial.consumed(), 0);
+
+            let mut measured = SyntaxBudget::default();
+            measured.charge_units(17).unwrap();
+            let projected = project_type_inner(&source, ty, &tokens, Some(&mut measured)).unwrap();
+            assert_eq!(projected, ordinary);
+            let total = measured.consumed();
+            assert!(total > 17);
+            let mut short = SyntaxBudget::with_limit(total - 1);
+            short.charge_units(17).unwrap();
+            assert!(matches!(
+                project_type_inner(&source, ty, &tokens, Some(&mut short)),
+                Err(ProjectionError::ResourceLimit(ResourceFailure::SyntaxWork { limit }))
+                    if limit == total - 1
+            ));
+            assert!(short.consumed() >= 17);
+            let mut exact = SyntaxBudget::with_limit(total);
+            exact.charge_units(17).unwrap();
+            assert_eq!(
+                project_type_inner(&source, ty, &tokens, Some(&mut exact)).unwrap(),
+                ordinary
+            );
+            assert_eq!(exact.consumed(), total);
+            let mut retry = SyntaxBudget::with_limit(total);
+            retry.charge_units(17).unwrap();
+            assert_eq!(
+                project_type_inner(&source, ty, &tokens, Some(&mut retry)).unwrap(),
+                ordinary
+            );
+            assert_eq!(retry.consumed(), total);
         }
     }
 

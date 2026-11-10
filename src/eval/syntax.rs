@@ -592,6 +592,14 @@ impl<'inv> SyntaxHost<'inv> {
                     crate::syntax::charge_new_type_copy(&capture.ty, 1, false, budget)
                         .map_err(syntax_failure)?;
                     budget.charge_units(2).map_err(syntax_failure)?; // arena slot and handle
+                    let live = self.types.len();
+                    if live == self.types.capacity() {
+                        let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                        budget
+                            .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                            .map_err(syntax_failure)?;
+                        self.types.reserve_exact(1);
+                    }
                     let capture = capture.clone();
                     let index = self.types.len();
                     self.types.push(capture);
@@ -830,6 +838,12 @@ impl<'inv> SyntaxHost<'inv> {
                 match result {
                     Ok(capture) => {
                         self.charge(2)?; // arena slot and issued handle
+                        let live = self.types.len();
+                        if live == self.types.capacity() {
+                            let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                            self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                            self.types.reserve_exact(1);
+                        }
                         let index = self.types.len();
                         self.types.push(capture);
                         let fragment = self.handle(CompilerSyntaxHandleKind::Type(index));
@@ -840,6 +854,12 @@ impl<'inv> SyntaxHost<'inv> {
                         resource,
                     }) => {
                         self.charge(2)?; // failure slot and issued handle
+                        let live = self.parse_failures.len();
+                        if live == self.parse_failures.capacity() {
+                            let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                            self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                            self.parse_failures.reserve_exact(1);
+                        }
                         let index = self.parse_failures.len();
                         self.parse_failures.push((diagnostics, resource));
                         let failure = self.handle(CompilerSyntaxHandleKind::ParseFailure(index));
@@ -1259,6 +1279,12 @@ impl<'inv> SyntaxHost<'inv> {
                     .map_err(syntax_failure)?;
                     budget.charge_units(4).map_err(syntax_failure)?;
                     self.charge_origin(origin, prefix)?;
+                    let live = self.types.len();
+                    if live == self.types.capacity() {
+                        let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                        self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                        self.types.reserve_exact(1);
+                    }
                     let index = self.types.len();
                     self.types.push(capture.clone());
                     (
@@ -1729,6 +1755,107 @@ mod tests {
             tokens: Vec::new(),
             constructors: HashMap::new(),
             operations: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn type_capture_arena_reserves_growth_before_clone() {
+        use super::{HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap};
+        use crate::{
+            integer::Integer,
+            module::ModuleId,
+            surface::{SurfaceSyntaxCapture, SurfaceType, SurfaceTypeCapture, SurfaceTypeKind},
+            syntax::MacroOutputNode,
+            syntax_resource::SyntaxBudget,
+            types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
+        };
+        use std::sync::Arc;
+
+        // This synthetic host state isolates arena accounting; the imported
+        // public graph supplies the separate checked-host evidence.
+        fn host<'a>(
+            budget: &'a mut SyntaxBudget,
+        ) -> (SyntaxHost<'a>, Arc<[MacroOutputNode]>, OperationId) {
+            let mut host = scalar_host(budget);
+            let span = host.caller.span;
+            let contents: Arc<[MacroOutputNode]> = Arc::from([]);
+            host.captures
+                .push(SurfaceSyntaxCapture::Type(SurfaceTypeCapture {
+                    ty: SurfaceType {
+                        kind: SurfaceTypeKind::Int,
+                        span,
+                        diagnostic: None,
+                    },
+                    contents: Arc::clone(&contents),
+                }));
+            let operation = OperationId::new(host.ops, 0);
+            host.operations.insert(operation, "capture".into());
+            let owner = NominalTypeId::new(ModuleId::new(0), 0);
+            host.constructors
+                .insert("TypeCapture".into(), ConstructorId::new(owner, 0));
+            host.constructors
+                .insert("Captured".into(), ConstructorId::new(owner, 1));
+            (host, contents, operation)
+        }
+
+        fn capture(
+            host: &mut SyntaxHost<'_>,
+            operation: OperationId,
+            heap: &mut Vec<HeapCell>,
+        ) -> Result<Value, RuntimeFailure> {
+            let fields =
+                vec![host.input(), Value::integer(Integer::from_i64(0))].into_boxed_slice();
+            let argument = Value::Location(allocate_heap(heap, HeapCell::Tuple(fields)).unwrap());
+            host.request(operation, argument, heap, &mut TypeWorkBudget::unbounded())
+        }
+
+        let mut measured = SyntaxBudget::default();
+        measured.charge_units(17).unwrap();
+        let (mut measured_host, contents, operation) = host(&mut measured);
+        let base = Arc::strong_count(&contents);
+        let mut heap = Vec::new();
+        capture(&mut measured_host, operation, &mut heap).unwrap();
+        let first = measured_host.syntax_work.as_deref().unwrap().consumed();
+        assert_eq!(measured_host.types.len(), 1);
+        assert_eq!(Arc::strong_count(&contents), base + 1);
+        capture(&mut measured_host, operation, &mut heap).unwrap();
+        let total = measured_host.syntax_work.as_deref().unwrap().consumed();
+        assert_eq!(measured_host.types.len(), 2);
+        assert_eq!(Arc::strong_count(&contents), base + 2);
+        drop(measured_host);
+
+        // The second push requests two slots and moves one live entry. Two
+        // later constructor charges occur after that reservation and clone.
+        let growth_limit = total - 3;
+        assert!(growth_limit > first);
+        let mut short = SyntaxBudget::with_limit(growth_limit);
+        short.charge_units(17).unwrap();
+        let (mut short_host, contents, operation) = host(&mut short);
+        let base = Arc::strong_count(&contents);
+        let mut heap = Vec::new();
+        capture(&mut short_host, operation, &mut heap).unwrap();
+        assert!(matches!(
+            capture(&mut short_host, operation, &mut heap),
+            Err(RuntimeFailure::Report(report))
+                if report.primary.reason == "internal.resource.syntax-work"
+        ));
+        assert_eq!(short_host.types.len(), 1);
+        assert_eq!(Arc::strong_count(&contents), base + 1);
+        assert_eq!(
+            short_host.syntax_work.as_deref().unwrap().consumed(),
+            total - 5
+        );
+        drop(short_host);
+
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(total);
+            exact.charge_units(17).unwrap();
+            let (mut exact_host, _, operation) = host(&mut exact);
+            let mut heap = Vec::new();
+            capture(&mut exact_host, operation, &mut heap).unwrap();
+            capture(&mut exact_host, operation, &mut heap).unwrap();
+            assert_eq!(exact_host.types.len(), 2);
+            assert_eq!(exact_host.syntax_work.as_deref().unwrap().consumed(), total);
         }
     }
 
