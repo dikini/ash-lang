@@ -8574,6 +8574,7 @@ mod tests {
                 2,
             ),
             ("{ $( item $item:ident ),* }", "sink { }", 0),
+            ("{ $item:ident }", "sink { Alpha }", 1),
             ("$( word ),*", "sink word, word", 3),
         ] {
             let definition = SourceFile::new(
