@@ -36,7 +36,7 @@ use super::{
 
 #[cfg(test)]
 std::thread_local! {
-    static G1_CAPTURE_OBSERVER: std::cell::Cell<Option<fn(&SourceFile, &[SurfaceSyntaxCapture])>> = const { std::cell::Cell::new(None) };
+    pub(crate) static G1_CAPTURE_OBSERVER: std::cell::Cell<Option<fn(&SourceFile, &[SurfaceSyntaxCapture], &crate::syntax_resource::SyntaxBudget)>> = const { std::cell::Cell::new(None) };
 }
 
 // The parser and projector share token indices. Structured output attaches
@@ -2621,7 +2621,7 @@ pub(crate) fn project_declaration_expansions(
         #[cfg(test)]
         G1_CAPTURE_OBSERVER.with(|observer| {
             if let Some(observe) = observer.get() {
-                observe(source, &invocation.captures);
+                observe(source, &invocation.captures, budget);
             }
         });
         // Reserve the owner and frame before retaining either one.
@@ -8188,7 +8188,11 @@ mod tests {
             static OBSERVED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         }
 
-        fn observe(source: &SourceFile, captures: &[SurfaceSyntaxCapture]) {
+        fn observe(
+            source: &SourceFile,
+            captures: &[SurfaceSyntaxCapture],
+            _budget: &crate::syntax_resource::SyntaxBudget,
+        ) {
             let [
                 SurfaceSyntaxCapture::Repeated(outer),
                 SurfaceSyntaxCapture::Repeated(inner),

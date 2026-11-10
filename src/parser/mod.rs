@@ -14,6 +14,8 @@ use std::ops::Deref;
 pub use crate::syntax_resource::{ResourceFailure, SYNTAX_WORK_LIMIT};
 pub use cst::{ConcreteElement, ConcreteNode, ConcreteTree, InternalReason};
 pub use event::Event;
+#[cfg(test)]
+pub(crate) use project::G1_CAPTURE_OBSERVER;
 pub(crate) use project::module_span_from_checkpoint;
 #[allow(unused_imports)]
 pub(crate) use project::project_declaration_invocation;
