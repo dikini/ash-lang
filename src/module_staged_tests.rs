@@ -414,14 +414,14 @@ fn type_real_capture_roundtrip_on_a_512k_stack() {
         .stack_size(512 * 1024)
         .spawn(|| {
             use crate::{
-                driver::{FileFailure, compile_staged_graph_for_test, execute},
-                eval::machine_test_hooks as hooks,
-                parser::{ResourceFailure, STRUCTURAL_DEPTH_LIMIT},
+                driver::{PipelineFailure, compile_staged_graph_for_test, execute},
+                eval::{CleanupStatus, RuntimeFailure, machine_test_hooks as hooks},
+                parser::STRUCTURAL_DEPTH_LIMIT,
             };
 
             for groups in [16usize, 126, 127] {
                 let tree = Tree::new();
-                tree.write(
+                let forms = tree.write(
                     "forms.ash",
                     include_str!("../tests/fixtures/surface-macros/type-host/forms.ash"),
                 );
@@ -457,19 +457,44 @@ fn type_real_capture_roundtrip_on_a_512k_stack() {
                     assert_eq!(2 + groups, STRUCTURAL_DEPTH_LIMIT + 1);
                     let failure = result.expect_err("composed depth 129 must be refused");
                     assert!(graph.pending.is_empty() && graph.loaded.is_empty() && graph.completed.is_none());
-                    let FileFailure::Graph(diagnostic) = failure else {
-                        panic!("expected a graph depth refusal: {failure:?}");
+                    let Some(PipelineFailure::SyntaxRuntime(diagnostic)) = failure.pipeline_failure()
+                    else {
+                        panic!("expected a host depth refusal: {failure:?}");
                     };
-                    let LoadGraphError::Syntax(syntax) = diagnostic.failure() else {
-                        panic!("expected a syntax depth refusal: {diagnostic:?}");
+                    let RuntimeFailure::Report(report) = diagnostic.cause() else {
+                        panic!("expected a structured host report");
                     };
                     assert_eq!(
-                        syntax.resource,
-                        Some(ResourceFailure::StructuralDepth {
-                            limit: STRUCTURAL_DEPTH_LIMIT,
-                        })
+                        report.primary.reason_code(),
+                        "internal.resource.structural-depth"
                     );
-                    drop(diagnostic);
+                    assert!(report.primary.resource().is_none());
+                    assert_eq!(report.cleanup, CleanupStatus::Complete);
+                    assert!(report.teardown.is_none());
+
+                    let source = failure
+                        .sources()
+                        .iter()
+                        .find(|source| source.id() == diagnostic.invocation.source())
+                        .expect("caller source retained in the failure catalogue");
+                    assert_eq!(Path::new(source.display_path()), entry.as_path());
+                    let range = diagnostic.invocation.range();
+                    assert_eq!(
+                        &source.text()[range.start() as usize..range.end() as usize],
+                        format!("emit_type answer as {annotation}")
+                    );
+                    let source = failure
+                        .sources()
+                        .iter()
+                        .find(|source| source.id() == diagnostic.definition.source())
+                        .expect("definition source retained in the failure catalogue");
+                    assert_eq!(Path::new(source.display_path()), forms.as_path());
+                    let range = diagnostic.definition.range();
+                    assert_eq!(
+                        &source.text()[range.start() as usize..range.end() as usize],
+                        "pub syntax declaration: (emit_type) $name:ident as $result:type => using expand"
+                    );
+                    drop(failure);
                     drop(graph);
                     eprintln!("type stack: composed-129 refused without publication");
                 }
