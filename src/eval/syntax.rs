@@ -73,7 +73,7 @@ fn type_retention_failure(failure: crate::parser::MacroParseFailure) -> RuntimeF
     }
 }
 
-fn require_pattern_charge(
+fn require_unbridged_charge(
     result: Result<Option<bool>, crate::syntax_resource::ResourceFailure>,
 ) -> Result<(), RuntimeFailure> {
     if result.map_err(syntax_failure)? == Some(false) {
@@ -193,7 +193,12 @@ impl<'inv> SyntaxHost<'inv> {
                             .map_err(type_retention_failure)?;
                     }
                     SurfaceSyntaxCapture::Pattern(capture) => {
-                        require_pattern_charge(crate::syntax::charge_new_pattern_retention(
+                        require_unbridged_charge(crate::syntax::charge_new_pattern_retention(
+                            capture, 0, budget,
+                        ))?;
+                    }
+                    SurfaceSyntaxCapture::Expression(capture) => {
+                        require_unbridged_charge(crate::syntax::charge_new_expression_retention(
                             capture, 0, budget,
                         ))?;
                     }
@@ -307,12 +312,22 @@ impl<'inv> SyntaxHost<'inv> {
                                     .map_err(syntax_failure)?;
                             }
                             SurfaceSyntaxCapture::Pattern(capture) => {
-                                require_pattern_charge(crate::syntax::charge_new_pattern_copy(
+                                require_unbridged_charge(crate::syntax::charge_new_pattern_copy(
                                     &capture.pattern,
                                     1,
                                     false,
                                     budget,
                                 ))?;
+                            }
+                            SurfaceSyntaxCapture::Expression(capture) => {
+                                require_unbridged_charge(
+                                    crate::syntax::charge_new_expression_copy(
+                                        &capture.expression,
+                                        1,
+                                        false,
+                                        budget,
+                                    ),
+                                )?;
                             }
                             _ => return Err(RuntimeFailure::InvalidControlState),
                         }
@@ -674,13 +689,41 @@ impl<'inv> SyntaxHost<'inv> {
                     let capture = self.construct(heap, "TypeCapture", Some(fragment))?;
                     return self.construct(heap, "Captured", Some(capture));
                 }
+                if let (Some(budget), Some(SurfaceSyntaxCapture::Expression(capture))) =
+                    (self.syntax_work.as_deref_mut(), capture)
+                {
+                    require_unbridged_charge(crate::syntax::charge_new_expression_retention(
+                        capture, 0, budget,
+                    ))?;
+                    require_unbridged_charge(crate::syntax::charge_new_expression_copy(
+                        &capture.expression,
+                        1,
+                        false,
+                        budget,
+                    ))?;
+                    budget.charge_units(2).map_err(syntax_failure)?;
+                    let live = self.expressions.len();
+                    if live == self.expressions.capacity() {
+                        let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                        budget
+                            .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                            .map_err(syntax_failure)?;
+                        self.expressions.reserve_exact(1);
+                    }
+                    let capture = capture.clone();
+                    let index = self.expressions.len();
+                    self.expressions.push(capture);
+                    let fragment = self.handle(CompilerSyntaxHandleKind::Expression(index));
+                    let capture = self.construct(heap, "ExpressionCapture", Some(fragment))?;
+                    return self.construct(heap, "Captured", Some(capture));
+                }
                 if let (Some(budget), Some(SurfaceSyntaxCapture::Pattern(capture))) =
                     (self.syntax_work.as_deref_mut(), capture)
                 {
-                    require_pattern_charge(crate::syntax::charge_new_pattern_retention(
+                    require_unbridged_charge(crate::syntax::charge_new_pattern_retention(
                         capture, 0, budget,
                     ))?;
-                    require_pattern_charge(crate::syntax::charge_new_pattern_copy(
+                    require_unbridged_charge(crate::syntax::charge_new_pattern_copy(
                         &capture.pattern,
                         1,
                         false,
@@ -892,7 +935,52 @@ impl<'inv> SyntaxHost<'inv> {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
                 if self.syntax_work.is_some() {
-                    return Err(RuntimeFailure::InvalidControlState);
+                    let output = self.transfer_syntax_inner(syntax, heap, 0, true)?;
+                    let result = crate::parser::parse_macro_expression_fragment(
+                        &self.source,
+                        self.frame.invocation,
+                        output,
+                        &self.contexts,
+                        &self.frame,
+                        self.syntax_work
+                            .as_deref_mut()
+                            .expect("the Expression route owns a budget"),
+                    );
+                    return match result {
+                        Ok(capture) => {
+                            self.charge(2)?;
+                            let live = self.expressions.len();
+                            if live == self.expressions.capacity() {
+                                let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                                self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                                self.expressions.reserve_exact(1);
+                            }
+                            let index = self.expressions.len();
+                            self.expressions.push(capture);
+                            let fragment = self.handle(CompilerSyntaxHandleKind::Expression(index));
+                            self.construct(heap, "Parsed", Some(fragment))
+                        }
+                        Err(crate::parser::MacroParseFailure::Syntax {
+                            diagnostics,
+                            resource,
+                        }) => {
+                            self.charge(2)?;
+                            let live = self.parse_failures.len();
+                            if live == self.parse_failures.capacity() {
+                                let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                                self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                                self.parse_failures.reserve_exact(1);
+                            }
+                            let index = self.parse_failures.len();
+                            self.parse_failures.push((diagnostics, resource));
+                            let failure =
+                                self.handle(CompilerSyntaxHandleKind::ParseFailure(index));
+                            self.construct(heap, "ParseRejected", Some(failure))
+                        }
+                        Err(crate::parser::MacroParseFailure::Invalid) => {
+                            Err(RuntimeFailure::InvalidControlState)
+                        }
+                    };
                 }
                 let output = self.transfer_syntax(syntax, heap, 0)?;
                 let contents = output.clone().into();
@@ -1042,8 +1130,14 @@ impl<'inv> SyntaxHost<'inv> {
                 else {
                     return Err(RuntimeFailure::InvalidControlState);
                 };
-                if self.syntax_work.is_some() {
-                    return Err(RuntimeFailure::InvalidControlState);
+                if let Some(budget) = self.syntax_work.as_deref_mut() {
+                    let capture = self
+                        .expressions
+                        .get(index)
+                        .ok_or(RuntimeFailure::InvalidControlState)?;
+                    budget.charge().map_err(syntax_failure)?;
+                    let contents = Arc::clone(&capture.contents);
+                    return self.syntax_value_inner(&contents, heap, 1, true);
                 }
                 let contents = Arc::clone(
                     &self
@@ -1146,8 +1240,10 @@ impl<'inv> SyntaxHost<'inv> {
     ) -> Result<TransformerOutput, RuntimeFailure> {
         let (tag, syntax) = constructor_fields(result, heap)?;
         if tag == self.constructor("Expanded")? {
-            let type_accounting =
-                self.type_accounting || !self.types.is_empty() || !self.patterns.is_empty();
+            let type_accounting = self.type_accounting
+                || !self.types.is_empty()
+                || !self.patterns.is_empty()
+                || (self.syntax_work.is_some() && !self.expressions.is_empty());
             return self
                 .transfer_syntax_inner(
                     syntax.ok_or(RuntimeFailure::InvalidControlState)?,
@@ -1322,10 +1418,7 @@ impl<'inv> SyntaxHost<'inv> {
             } else {
                 if self.syntax_work.is_some() {
                     self.charge(4)?;
-                    if ["ExpressionNode", "DeclarationNode"]
-                        .iter()
-                        .any(|name| self.constructors.get(*name) == Some(&tag))
-                    {
+                    if self.constructors.get("DeclarationNode") == Some(&tag) {
                         return Err(RuntimeFailure::InvalidControlState);
                     }
                 }
@@ -1375,10 +1468,10 @@ impl<'inv> SyntaxHost<'inv> {
                         .syntax_work
                         .as_deref_mut()
                         .expect("the Pattern route owns a budget");
-                    require_pattern_charge(crate::syntax::charge_new_pattern_retention(
+                    require_unbridged_charge(crate::syntax::charge_new_pattern_retention(
                         capture, prefix, budget,
                     ))?;
-                    require_pattern_charge(crate::syntax::charge_new_pattern_copy(
+                    require_unbridged_charge(crate::syntax::charge_new_pattern_copy(
                         &capture.pattern,
                         crate::syntax::type_depth(prefix, 1).map_err(syntax_failure)?,
                         false,
@@ -1387,6 +1480,39 @@ impl<'inv> SyntaxHost<'inv> {
                     budget.charge().map_err(syntax_failure)?;
                     reserve_type_push(&mut output, Some(budget), type_accounting)?;
                     output.push(MacroOutputNode::ForwardedPattern(capture.clone(), origin));
+                    nodes = rest;
+                    continue;
+                }
+                if self.syntax_work.is_some()
+                    && self.constructors.get("ExpressionNode") == Some(&tag)
+                {
+                    let CompilerSyntaxHandleKind::Expression(index) =
+                        self.admitted_handle(value)?
+                    else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    if self.expressions.get(index).is_none() {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    let prefix = depth.saturating_add(groups.len());
+                    let origin = self.copy_origin(origin, prefix)?;
+                    let capture = &self.expressions[index];
+                    let budget = self
+                        .syntax_work
+                        .as_deref_mut()
+                        .expect("the Expression route owns a budget");
+                    require_unbridged_charge(crate::syntax::charge_new_expression_retention(
+                        capture, prefix, budget,
+                    ))?;
+                    require_unbridged_charge(crate::syntax::charge_new_expression_copy(
+                        &capture.expression,
+                        crate::syntax::type_depth(prefix, 1).map_err(syntax_failure)?,
+                        false,
+                        budget,
+                    ))?;
+                    budget.charge().map_err(syntax_failure)?;
+                    reserve_type_push(&mut output, Some(budget), type_accounting)?;
+                    output.push(MacroOutputNode::Expression(capture.clone(), origin));
                     nodes = rest;
                     continue;
                 }
@@ -1494,8 +1620,26 @@ impl<'inv> SyntaxHost<'inv> {
             let (constructor, fields) = match nodes.next() {
                 Some(MacroOutputNode::Expression(expression, origin))
                 | Some(MacroOutputNode::ForwardedExpression(expression, origin)) => {
-                    if self.syntax_work.is_some() {
-                        return Err(RuntimeFailure::InvalidControlState);
+                    let selected = self.syntax_work.is_some();
+                    if let Some(budget) = self.syntax_work.as_deref_mut() {
+                        let prefix = depth.saturating_add(groups.len());
+                        require_unbridged_charge(crate::syntax::charge_new_expression_retention(
+                            expression, prefix, budget,
+                        ))?;
+                        require_unbridged_charge(crate::syntax::charge_new_expression_copy(
+                            &expression.expression,
+                            crate::syntax::type_depth(prefix, 1).map_err(syntax_failure)?,
+                            false,
+                            budget,
+                        ))?;
+                        budget.charge_units(4).map_err(syntax_failure)?;
+                        self.charge_origin(origin, prefix)?;
+                        let live = self.expressions.len();
+                        if live == self.expressions.capacity() {
+                            let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                            self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                            self.expressions.reserve_exact(1);
+                        }
                     }
                     let index = self.expressions.len();
                     self.expressions.push(expression.clone());
@@ -1503,7 +1647,7 @@ impl<'inv> SyntaxHost<'inv> {
                         "ExpressionNode",
                         vec![
                             self.handle(CompilerSyntaxHandleKind::Expression(index)),
-                            self.issue_origin_inner(origin.clone(), type_accounting)?,
+                            self.issue_origin_inner(origin.clone(), type_accounting || selected)?,
                         ],
                     )
                 }
@@ -1571,10 +1715,10 @@ impl<'inv> SyntaxHost<'inv> {
                     let Some(budget) = self.syntax_work.as_deref_mut() else {
                         return Err(RuntimeFailure::InvalidControlState);
                     };
-                    require_pattern_charge(crate::syntax::charge_new_pattern_retention(
+                    require_unbridged_charge(crate::syntax::charge_new_pattern_retention(
                         capture, prefix, budget,
                     ))?;
-                    require_pattern_charge(crate::syntax::charge_new_pattern_copy(
+                    require_unbridged_charge(crate::syntax::charge_new_pattern_copy(
                         &capture.pattern,
                         crate::syntax::type_depth(prefix, 1).map_err(syntax_failure)?,
                         false,

@@ -2614,6 +2614,7 @@ pub(crate) fn project_declaration_expansions(
                         current.pattern_accounting,
                         true,
                         Some(&current.contexts),
+                        0,
                         budget,
                     )? {
                         return Err(ProjectionError::MalformedTree(
@@ -2688,6 +2689,7 @@ pub(crate) fn project_declaration_expansions(
             definition: invocation.selection.declaration.span,
         });
         let mut actual_pattern = false;
+        let mut actual_expression = false;
         let output = match &invocation.selection.declaration.implementation {
             SurfaceSyntaxImplementation::Template => {
                 crate::syntax::instantiate_declaration_template(
@@ -2730,7 +2732,8 @@ pub(crate) fn project_declaration_expansions(
                     declaration: invocation.selection.declaration.span,
                     import_span: invocation.selection.import_span,
                 }));
-                actual_pattern = charge_transformer_type_metadata_copies(&output, budget)?;
+                (actual_pattern, actual_expression) =
+                    charge_transformer_type_metadata_copies_with_expression(&output, budget)?;
                 output
             }
         };
@@ -2748,7 +2751,7 @@ pub(crate) fn project_declaration_expansions(
         )?;
         budget.charge_units(2)?;
         staging_frames.push(std::sync::Arc::clone(&frame));
-        let parsed = match super::parse_macro_tree_selected(
+        let parsed = match super::parse_macro_tree_with_expression_scratch(
             source,
             anchor,
             output,
@@ -2756,6 +2759,7 @@ pub(crate) fn project_declaration_expansions(
             &[],
             super::MacroOutputPosition::StagedDeclarations,
             pattern_accounting,
+            actual_expression,
             budget,
         ) {
             Ok(parsed) => parsed,
@@ -2819,10 +2823,19 @@ pub(crate) fn project_declaration_expansions(
     Ok(module.finish(span))
 }
 
+#[cfg(test)]
 fn charge_transformer_type_metadata_copies(
     output: &[crate::syntax::MacroOutputNode],
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<bool, ResourceFailure> {
+    charge_transformer_type_metadata_copies_with_expression(output, budget)
+        .map(|(pattern, _)| pattern)
+}
+
+fn charge_transformer_type_metadata_copies_with_expression(
+    output: &[crate::syntax::MacroOutputNode],
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(bool, bool), ResourceFailure> {
     use crate::syntax::MacroOutputNode;
 
     // This borrowed walk has its own entries and requested buffer.
@@ -2830,6 +2843,7 @@ fn charge_transformer_type_metadata_copies(
     budget.charge_units(output.len())?;
     let mut pending = output.iter().map(|node| (node, 0usize)).collect::<Vec<_>>();
     let mut has_pattern = false;
+    let mut has_expression = false;
     while let Some((node, depth)) = pending.pop() {
         budget.charge()?;
         match node {
@@ -2849,14 +2863,14 @@ fn charge_transformer_type_metadata_copies(
                 crate::syntax::charge_transformer_type_metadata(&capture.ty, child_depth, budget)?;
             }
             MacroOutputNode::ForwardedPattern(_, _) => has_pattern = true,
+            MacroOutputNode::Expression(_, _) => has_expression = true,
             MacroOutputNode::Identifier(_, _)
             | MacroOutputNode::Token(_, _, _)
-            | MacroOutputNode::Expression(_, _)
             | MacroOutputNode::ForwardedExpression(_, _)
             | MacroOutputNode::Splice(_) => {}
         }
     }
-    Ok(has_pattern)
+    Ok((has_pattern, has_expression))
 }
 
 /// Reserve every retained frame and the comparisons needed to deduplicate it.
@@ -3401,7 +3415,7 @@ fn charge_declaration_invocation(
     );
     let declaration_transformer = executing
         && ((has_declaration && !has_other_capture)
-            || (!has_declaration && has_type_or_identifier && !has_expression))
+            || (!has_declaration && (has_type_or_identifier || has_expression)))
         && source_projection_tokens(tokens)
         && matches!(
             selection.declaration.implementation,
@@ -3505,9 +3519,30 @@ fn charge_declaration_invocation(
                     ))?
             };
             let new_pattern = declaration_transformer && *kind == SurfaceSyntaxCaptureKind::Pattern;
-            let mut bridge =
-                charge_projection_preflight_selected(value, tokens, true, new_pattern, budget)?;
-            bridge |= charge_capture_contents_inner(value, tokens, *kind, new_pattern, budget)?;
+            let new_expression =
+                declaration_transformer && *kind == SurfaceSyntaxCaptureKind::Expression;
+            let mut bridge = if new_expression {
+                charge_projection_preflight_with_expression(
+                    value,
+                    tokens,
+                    true,
+                    false,
+                    true,
+                    Some(contexts),
+                    1,
+                    budget,
+                )?
+            } else {
+                charge_projection_preflight_selected(value, tokens, true, new_pattern, budget)?
+            };
+            bridge |= if new_expression {
+                charge_capture_contents_with_expression(
+                    value, tokens, *kind, false, true, 1, budget,
+                )?
+                .0
+            } else {
+                charge_capture_contents_inner(value, tokens, *kind, new_pattern, budget)?
+            };
             if executing && bridge {
                 return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
             }
@@ -3580,7 +3615,7 @@ fn charge_capture_contents_inner(
     new_type_scratch: bool,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<bool, DeclarationExpansionFailure> {
-    charge_capture_contents_with_expression(root, tokens, kind, new_type_scratch, false, budget)
+    charge_capture_contents_with_expression(root, tokens, kind, new_type_scratch, false, 0, budget)
         .map(|(bridge, _)| bridge)
 }
 
@@ -3590,6 +3625,7 @@ fn charge_capture_contents_with_expression(
     kind: SurfaceSyntaxCaptureKind,
     new_type_scratch: bool,
     new_expression: bool,
+    owner_prefix: usize,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(bool, bool), DeclarationExpansionFailure> {
     let new_type_scratch = new_type_scratch || new_expression;
@@ -3620,7 +3656,7 @@ fn charge_capture_contents_with_expression(
             Some(crate::syntax::MacroOutputNode::ForwardedPattern(..))
         )
     );
-    let contents_prefix = usize::from(!reuses_contents);
+    let contents_prefix = crate::syntax::type_depth(owner_prefix, usize::from(!reuses_contents))?;
     let mut bridge =
         kind == SurfaceSyntaxCaptureKind::Expression && root.kind == NodeKind::SyntaxInvocation;
     // Reserve this scan's pending elements and capture_contents' separate
@@ -3838,6 +3874,7 @@ fn charge_projection_preflight_selected(
         new_pattern,
         false,
         None,
+        0,
         budget,
     )
 }
@@ -3849,6 +3886,7 @@ fn charge_projection_preflight_with_expression(
     new_pattern: bool,
     new_expression: bool,
     contexts: Option<&crate::syntax::SyntaxContexts>,
+    owner_prefix: usize,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<bool, DeclarationExpansionFailure> {
     let selected_scratch = new_pattern || new_expression;
@@ -3860,7 +3898,7 @@ fn charge_projection_preflight_with_expression(
             false,
             new_pattern,
             new_expression,
-            0,
+            owner_prefix,
             budget,
         )?
     } else {
@@ -3907,6 +3945,7 @@ fn charge_projection_preflight_with_expression(
                                     SurfaceSyntaxCaptureKind::Expression,
                                     false,
                                     true,
+                                    0,
                                     budget,
                                 )?;
                             if argument_bridge {
@@ -4415,8 +4454,18 @@ fn charge_composed_projection_with_expression(
                                 )?;
                             }
                         }
-                        Some(crate::syntax::MacroOutputNode::ForwardedExpression(capture, _))
-                            if expression_pattern =>
+                        Some(
+                            original @ (crate::syntax::MacroOutputNode::Expression(capture, _)
+                            | crate::syntax::MacroOutputNode::ForwardedExpression(
+                                capture,
+                                _,
+                            )),
+                        ) if expression_pattern
+                            && (new_expression_copy
+                                || matches!(
+                                    original,
+                                    crate::syntax::MacroOutputNode::ForwardedExpression(..)
+                                )) =>
                         {
                             bridge |= if new_expression_copy {
                                 crate::syntax::charge_new_expression_copy(
@@ -4829,6 +4878,8 @@ fn check_narrow_protected_refusal_inner(
                             Some(
                                 MacroOutputNode::ForwardedType(..)
                                     | MacroOutputNode::ForwardedPattern(..)
+                                    | MacroOutputNode::Expression(..)
+                                    | MacroOutputNode::ForwardedExpression(..)
                             )
                         )
                     {
@@ -4881,6 +4932,7 @@ fn check_narrow_protected_refusal_inner(
                             }
                             Some(
                                 MacroOutputNode::ForwardedType(..)
+                                | MacroOutputNode::Expression(..)
                                 | MacroOutputNode::ForwardedExpression(..)
                                 | MacroOutputNode::ForwardedPattern(..),
                             ) => {
@@ -4891,6 +4943,9 @@ fn check_narrow_protected_refusal_inner(
                             }
                             _ => {}
                         }
+                    }
+                    if matches!(original, Some(MacroOutputNode::Expression(..))) {
+                        protected_type = true;
                     }
                 }
                 ConcreteElement::Missing { .. } | ConcreteElement::Error(_) => {}
@@ -4962,6 +5017,7 @@ fn charge_projection_subtree_inner(
                             crate::syntax::MacroOutputNode::ForwardedType(_, _)
                             | crate::syntax::MacroOutputNode::ForwardedExpression(_, _)
                             | crate::syntax::MacroOutputNode::ForwardedPattern(_, _) => {}
+                            crate::syntax::MacroOutputNode::Expression(_, _) if new_type_copy => {}
                             _ => {
                                 return Err(ProjectionError::MalformedTree(
                                     InternalReason::UnexpectedShape,
@@ -6739,10 +6795,51 @@ fn project_selected_declaration_invocation_node_inner(
                         .ok_or(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         ))?;
-                    let (contents, contains_protected_type) =
-                        capture_contents_and_type(source, expression, tokens, originals)?;
-                    let expression =
-                        project_expression_with_fragments(source, expression, tokens, originals)?;
+                    let (expression, contents, contains_protected_type) =
+                        if source_transformer && budget.is_some() {
+                            let expression_budget = std::cell::RefCell::new(
+                                budget
+                                    .as_deref_mut()
+                                    .expect("source transformer has a budget"),
+                            );
+                            let selected_tokens = ProjectionTokens {
+                                tokens: tokens.tokens,
+                                originals: tokens.originals,
+                                occurrence: tokens.occurrence,
+                                construction: tokens.construction,
+                                construction_extents: tokens.construction_extents,
+                                admission_identifiers: tokens.admission_identifiers,
+                                frame: tokens.frame,
+                                name_frame: tokens.name_frame,
+                                staging_frames: tokens.staging_frames,
+                                preserve_name_diagnostic: tokens.preserve_name_diagnostic,
+                                expression_budget: Some(&expression_budget),
+                            };
+                            let (contents, contains_type) = capture_contents_and_type(
+                                source,
+                                expression,
+                                &selected_tokens,
+                                originals,
+                            )?;
+                            let expression = project_expression_with_fragments(
+                                source,
+                                expression,
+                                &selected_tokens,
+                                originals,
+                            )?;
+                            expression_budget
+                                .borrow_mut()
+                                .charge_units(contents.len().saturating_mul(2).saturating_add(1))
+                                .map_err(ProjectionError::ResourceLimit)?;
+                            (expression, contents, contains_type)
+                        } else {
+                            let (contents, contains_type) =
+                                capture_contents_and_type(source, expression, tokens, originals)?;
+                            let expression = project_expression_with_fragments(
+                                source, expression, tokens, originals,
+                            )?;
+                            (expression, contents, contains_type)
+                        };
                     captures.push(SurfaceSyntaxCapture::Expression(
                         project_syntax_expression_capture(
                             expression,
@@ -6977,6 +7074,7 @@ pub(super) fn project_macro_expression_budgeted(
     parsed: &super::ParsedMacroTree,
     contexts: &crate::syntax::SyntaxContexts,
     frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
+    owner_prefix: usize,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<SurfaceExpr, DeclarationExpansionFailure> {
     for _ in 0..4 {
@@ -7010,6 +7108,7 @@ pub(super) fn project_macro_expression_budgeted(
         false,
         true,
         Some(contexts),
+        owner_prefix,
         budget,
     )? {
         return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());

@@ -779,6 +779,7 @@ pub(crate) fn parse_macro_expression_budgeted(
         &parsed,
         contexts,
         frame,
+        0,
         budget,
     )
     .map_err(|failure| match failure {
@@ -796,6 +797,65 @@ pub(crate) fn parse_macro_expression_budgeted(
     })
 }
 
+pub(crate) fn parse_macro_expression_fragment(
+    source: &SourceFile,
+    invocation: Span,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    frame: &std::sync::Arc<crate::syntax::ExpansionFrame>,
+    budget: &mut SyntaxBudget,
+) -> Result<crate::surface::SurfaceExpressionCapture, MacroParseFailure> {
+    let (contents, contains_protected_type, _) =
+        crate::syntax::copy_fragment_output_with_type(&output, budget)?;
+    let parsed = parse_macro_tree_with_expression_scratch(
+        source,
+        invocation,
+        output,
+        contexts,
+        &[],
+        MacroOutputPosition::HostExpressionFragment,
+        false,
+        true,
+        budget,
+    )?;
+    let mut expression = project::project_macro_expression_budgeted(
+        source,
+        invocation,
+        None,
+        &parsed,
+        contexts,
+        Some(frame),
+        1,
+        budget,
+    )
+    .map_err(|failure| match failure {
+        project::DeclarationExpansionFailure::Syntax {
+            diagnostics,
+            resource,
+        } => MacroParseFailure::Syntax {
+            diagnostics,
+            resource,
+        },
+        project::DeclarationExpansionFailure::Projection(ProjectionError::ResourceLimit(
+            resource,
+        )) => macro_resource_failure(resource),
+        project::DeclarationExpansionFailure::Projection(_) => MacroParseFailure::Invalid,
+    })?;
+    expression.span = invocation;
+    budget
+        .charge_units(contents.len())
+        .map_err(macro_resource_failure)?;
+    budget
+        .charge_units(contents.len())
+        .map_err(macro_resource_failure)?;
+    budget.charge().map_err(macro_resource_failure)?;
+    Ok(crate::surface::SurfaceExpressionCapture {
+        expression,
+        contents: contents.into(),
+        contains_protected_type,
+    })
+}
+
 pub(crate) fn parse_macro_type(
     source: &SourceFile,
     invocation: Span,
@@ -804,14 +864,17 @@ pub(crate) fn parse_macro_type(
     frame: &std::sync::Arc<crate::syntax::ExpansionFrame>,
     budget: &mut SyntaxBudget,
 ) -> Result<crate::surface::SurfaceTypeCapture, MacroParseFailure> {
-    let contents = crate::syntax::copy_fragment_output(&output, budget)?;
-    let parsed = parse_macro_tree_inner(
+    let (contents, _, contains_expression) =
+        crate::syntax::copy_fragment_output_with_type(&output, budget)?;
+    let parsed = parse_macro_tree_with_expression_scratch(
         source,
         invocation,
         output,
         contexts,
         &[],
         MacroOutputPosition::Type,
+        false,
+        contains_expression,
         budget,
     )?;
     let ty = project::project_macro_type(source, invocation, &parsed, frame, budget).map_err(
@@ -851,14 +914,17 @@ pub(crate) fn parse_macro_pattern(
     frame: &std::sync::Arc<crate::syntax::ExpansionFrame>,
     budget: &mut SyntaxBudget,
 ) -> Result<crate::surface::SurfacePatternCapture, MacroParseFailure> {
-    let contents = crate::syntax::copy_fragment_output(&output, budget)?;
-    let parsed = parse_macro_tree_inner(
+    let (contents, _, contains_expression) =
+        crate::syntax::copy_fragment_output_with_type(&output, budget)?;
+    let parsed = parse_macro_tree_with_expression_scratch(
         source,
         invocation,
         output,
         contexts,
         &[],
         MacroOutputPosition::Pattern,
+        false,
+        contains_expression,
         budget,
     )?;
     let pattern = project::project_macro_pattern(source, invocation, &parsed, frame, budget)
@@ -938,6 +1004,7 @@ fn parse_macro_expression_inner(
 #[derive(Clone, Copy)]
 enum MacroOutputPosition {
     Expression,
+    HostExpressionFragment,
     Type,
     Pattern,
     Declarations,
@@ -1091,7 +1158,7 @@ fn parse_macro_tree_with_expression_scratch(
         let kind = match piece {
             MacroOutputNode::Expression(expression, origin)
             | MacroOutputNode::ForwardedExpression(expression, origin) => {
-                if type_output {
+                if type_output && !expression_scratch {
                     return Err(MacroParseFailure::Invalid);
                 }
                 original_nodes.insert(
@@ -1107,7 +1174,10 @@ fn parse_macro_tree_with_expression_scratch(
                 TokenKind::Identifier(name)
             }
             MacroOutputNode::ForwardedType(capture, origin) => {
-                if !position.is_declarations() && !type_output {
+                if !position.is_declarations()
+                    && !type_output
+                    && !matches!(position, MacroOutputPosition::HostExpressionFragment)
+                {
                     return Err(MacroParseFailure::Invalid);
                 }
                 original_nodes.insert(
@@ -1117,7 +1187,10 @@ fn parse_macro_tree_with_expression_scratch(
                 TokenKind::IntType
             }
             MacroOutputNode::ForwardedPattern(capture, origin) => {
-                if !position.is_declarations() && !type_output {
+                if !position.is_declarations()
+                    && !type_output
+                    && !matches!(position, MacroOutputPosition::HostExpressionFragment)
+                {
                     return Err(MacroParseFailure::Invalid);
                 }
                 original_nodes.insert(
@@ -1243,13 +1316,16 @@ fn parse_macro_tree_with_expression_scratch(
         diagnostic_spans: Some(&diagnostic_spans),
         admission_identifiers: Some(&admission_identifiers),
         declaration_output_nodes: (position.is_declarations()
-            || matches!(position, MacroOutputPosition::Pattern))
+            || matches!(
+                position,
+                MacroOutputPosition::Pattern | MacroOutputPosition::HostExpressionFragment
+            ))
         .then_some(&original_nodes),
         syntax_stops: Vec::new(),
     };
     parser.start(NodeKind::Module);
     match position {
-        MacroOutputPosition::Expression => {
+        MacroOutputPosition::Expression | MacroOutputPosition::HostExpressionFragment => {
             grammar::expression(&mut parser);
             if !parser.at(&TokenKind::EndOfFile) {
                 parser.error_at_current(ParseReason::UnexpectedToken);
@@ -1280,7 +1356,10 @@ fn parse_macro_tree_with_expression_scratch(
     }
     if matches!(
         position,
-        MacroOutputPosition::Expression | MacroOutputPosition::Type | MacroOutputPosition::Pattern
+        MacroOutputPosition::Expression
+            | MacroOutputPosition::HostExpressionFragment
+            | MacroOutputPosition::Type
+            | MacroOutputPosition::Pattern
     ) {
         let _ = parser.bump();
         parser.finish();
@@ -1451,7 +1530,11 @@ fn charge_staged_output_with_expression_scratch(
             // The adapter moves this preflighted capture into original_nodes;
             // the piece, placeholder token and map entry are reserved above.
             MacroOutputNode::ForwardedType(_, _) => {}
-            MacroOutputNode::ForwardedExpression(capture, origin) => {
+            MacroOutputNode::Expression(capture, origin)
+            | MacroOutputNode::ForwardedExpression(capture, origin) => {
+                if matches!(node, MacroOutputNode::Expression(..)) && !expression_scratch {
+                    return Err(MacroParseFailure::Invalid);
+                }
                 let child = crate::syntax::type_depth(depth, 1).map_err(macro_resource_failure)?;
                 crate::syntax::charge_type_origin(origin, child, budget)
                     .map_err(macro_resource_failure)?;
@@ -1481,7 +1564,7 @@ fn charge_staged_output_with_expression_scratch(
                     return Err(MacroParseFailure::Invalid);
                 }
             }
-            MacroOutputNode::Expression(_, _) | MacroOutputNode::Splice(_) => {
+            MacroOutputNode::Splice(_) => {
                 return Err(MacroParseFailure::Invalid);
             }
         }

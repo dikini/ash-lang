@@ -1390,7 +1390,7 @@ fn charge_owned_syntax(
             OwnedSyntax::Contents(node) => match node {
                 MacroOutputNode::Expression(capture, origin)
                 | MacroOutputNode::ForwardedExpression(capture, origin) => {
-                    if matches!(node, MacroOutputNode::Expression(..)) {
+                    if matches!(node, MacroOutputNode::Expression(..)) && !new_expression {
                         bridge = true;
                     }
                     let child = type_depth(depth, 1)?;
@@ -1775,10 +1775,18 @@ fn charge_type_retention_inner(
 }
 
 /// Preflight and copy the owned contents made by a fragment parse service.
+#[cfg(test)]
 pub(crate) fn copy_fragment_output(
     output: &[MacroOutputNode],
     budget: &mut SyntaxBudget,
 ) -> Result<Vec<MacroOutputNode>, crate::parser::MacroParseFailure> {
+    copy_fragment_output_with_type(output, budget).map(|(contents, _, _)| contents)
+}
+
+pub(crate) fn copy_fragment_output_with_type(
+    output: &[MacroOutputNode],
+    budget: &mut SyntaxBudget,
+) -> Result<(Vec<MacroOutputNode>, bool, bool), crate::parser::MacroParseFailure> {
     use crate::parser::MacroParseFailure;
 
     fn resource(error: ResourceFailure) -> MacroParseFailure {
@@ -1796,6 +1804,8 @@ pub(crate) fn copy_fragment_output(
     let mut pending = output.iter().map(|node| (node, 2usize)).collect::<Vec<_>>();
     let mut group_count = 0usize;
     let mut group_depth = 0usize;
+    let mut contains_protected_type = false;
+    let mut contains_expression = false;
     while let Some((node, depth)) = pending.pop() {
         budget.charge().map_err(resource)?;
         match node {
@@ -1828,6 +1838,7 @@ pub(crate) fn copy_fragment_output(
                 pending.extend(children.iter().map(|node| (node, child)));
             }
             MacroOutputNode::ForwardedType(capture, origin) => {
+                contains_protected_type = true;
                 let child = type_depth(depth, 1).map_err(resource)?;
                 charge_type_origin_copy(origin, child, budget).map_err(resource)?;
                 charge_new_type_copy(&capture.ty, child, false, budget).map_err(resource)?;
@@ -1845,9 +1856,22 @@ pub(crate) fn copy_fragment_output(
                     return Err(MacroParseFailure::Invalid);
                 }
             }
-            MacroOutputNode::Expression(_, _)
-            | MacroOutputNode::ForwardedExpression(_, _)
-            | MacroOutputNode::Splice(_) => return Err(MacroParseFailure::Invalid),
+            MacroOutputNode::Expression(capture, origin)
+            | MacroOutputNode::ForwardedExpression(capture, origin) => {
+                contains_expression = true;
+                contains_protected_type |= capture.contains_protected_type;
+                let child = type_depth(depth, 1).map_err(resource)?;
+                charge_type_origin_copy(origin, child, budget).map_err(resource)?;
+                if charge_new_expression_copy(&capture.expression, child, false, budget)
+                    .map_err(resource)?
+                    != Some(false)
+                    || charge_new_expression_retention(capture, depth, budget).map_err(resource)?
+                        != Some(false)
+                {
+                    return Err(MacroParseFailure::Invalid);
+                }
+            }
+            MacroOutputNode::Splice(_) => return Err(MacroParseFailure::Invalid),
         }
     }
 
@@ -1882,7 +1906,7 @@ pub(crate) fn copy_fragment_output(
             Some(node) => copied.push(node.clone()),
             None => {
                 let Some(group) = groups.pop() else {
-                    return Ok(copied);
+                    return Ok((copied, contains_protected_type, contains_expression));
                 };
                 let node = MacroOutputNode::Group(group.delimiter, copied, group.origin.clone());
                 nodes = group.nodes;
