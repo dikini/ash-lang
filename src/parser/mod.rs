@@ -760,8 +760,7 @@ pub(crate) fn parse_macro_type(
     frame: &std::sync::Arc<crate::syntax::ExpansionFrame>,
     budget: &mut SyntaxBudget,
 ) -> Result<crate::surface::SurfaceTypeCapture, MacroParseFailure> {
-    crate::syntax::charge_type_output_copy(&output, budget)?;
-    let contents = output.clone();
+    let contents = crate::syntax::copy_type_output(&output, budget)?;
     let parsed = parse_macro_tree_inner(
         source,
         invocation,

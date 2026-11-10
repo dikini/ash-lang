@@ -1486,11 +1486,11 @@ fn charge_type_retention_inner(
     Ok(())
 }
 
-/// Reserve the owned contents copy made by the Type parse service.
-pub(crate) fn charge_type_output_copy(
+/// Preflight and copy the owned contents made by the Type parse service.
+pub(crate) fn copy_type_output(
     output: &[MacroOutputNode],
     budget: &mut SyntaxBudget,
-) -> Result<(), crate::parser::MacroParseFailure> {
+) -> Result<Vec<MacroOutputNode>, crate::parser::MacroParseFailure> {
     use crate::parser::MacroParseFailure;
 
     fn resource(error: ResourceFailure) -> MacroParseFailure {
@@ -1505,6 +1505,8 @@ pub(crate) fn charge_type_output_copy(
         budget.charge_units(output.len()).map_err(resource)?;
     }
     let mut pending = output.iter().map(|node| (node, 1usize)).collect::<Vec<_>>();
+    let mut group_count = 0usize;
+    let mut group_depth = 0usize;
     while let Some((node, depth)) = pending.pop() {
         budget.charge().map_err(resource)?;
         match node {
@@ -1520,6 +1522,8 @@ pub(crate) fn charge_type_output_copy(
             MacroOutputNode::Group(_, children, origin) => {
                 let child = type_depth(depth, 1).map_err(resource)?;
                 charge_type_origin_copy(origin, child, budget).map_err(resource)?;
+                group_count = group_count.saturating_add(1);
+                group_depth = group_depth.max(depth);
                 // The copied child Vec and this walk's child entries.
                 budget.charge_units(children.len()).map_err(resource)?;
                 budget.charge_units(children.len()).map_err(resource)?;
@@ -1545,7 +1549,47 @@ pub(crate) fn charge_type_output_copy(
             | MacroOutputNode::Splice(_) => return Err(MacroParseFailure::Invalid),
         }
     }
-    Ok(())
+
+    // The copied root/child Vecs were reserved above. This separate buffer
+    // holds the live group continuations; pay it and their visits before any
+    // owned copy so the copy has no later budget-refusal point.
+    budget.charge_units(group_depth).map_err(resource)?;
+    budget.charge_units(group_count).map_err(resource)?;
+    struct GroupFrame<'a> {
+        nodes: std::slice::Iter<'a, MacroOutputNode>,
+        output: Vec<MacroOutputNode>,
+        delimiter: MacroDelimiter,
+        origin: &'a MacroOrigin,
+    }
+    let mut groups = Vec::with_capacity(group_depth);
+    let mut nodes = output.iter();
+    let mut copied = Vec::with_capacity(output.len());
+    loop {
+        match nodes.next() {
+            Some(MacroOutputNode::Group(delimiter, children, origin)) => {
+                let delimiter = delimiter.clone();
+                let child_output = Vec::with_capacity(children.len());
+                groups.push(GroupFrame {
+                    nodes,
+                    output: copied,
+                    delimiter,
+                    origin,
+                });
+                nodes = children.iter();
+                copied = child_output;
+            }
+            Some(node) => copied.push(node.clone()),
+            None => {
+                let Some(group) = groups.pop() else {
+                    return Ok(copied);
+                };
+                let node = MacroOutputNode::Group(group.delimiter, copied, group.origin.clone());
+                nodes = group.nodes;
+                copied = group.output;
+                copied.push(node);
+            }
+        }
+    }
 }
 
 pub(crate) fn charge_type_token_copy(
@@ -2618,6 +2662,98 @@ mod tests {
             SurfaceTypeCapture, SurfaceTypeKind,
         },
     };
+
+    #[test]
+    fn type_output_group_copy_preserves_order_origins_and_prepaid_boundaries() {
+        use crate::lexer::TokenKind;
+        use crate::parser::MacroParseFailure;
+
+        let source = SourceFile::new("type-copy.ash", "Int").unwrap();
+        let span = source.span(ByteRange::new(0, 3).unwrap()).unwrap();
+        let frame = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let origin = MacroOrigin::combined(vec![span.into()], Arc::clone(&frame)).unwrap();
+        let contents: Arc<[MacroOutputNode]> = Arc::from([]);
+        let packet = vec![
+            MacroOutputNode::Group(
+                MacroDelimiter::Parentheses,
+                vec![
+                    MacroOutputNode::Token(TokenKind::IntType, "Int".into(), origin.clone()),
+                    MacroOutputNode::Group(MacroDelimiter::Braces, Vec::new(), origin.clone()),
+                    MacroOutputNode::ForwardedType(
+                        SurfaceTypeCapture {
+                            ty: SurfaceType {
+                                kind: SurfaceTypeKind::Int,
+                                span,
+                                diagnostic: None,
+                            },
+                            contents: Arc::clone(&contents),
+                        },
+                        origin.clone(),
+                    ),
+                ],
+                origin.clone(),
+            ),
+            MacroOutputNode::Token(TokenKind::IntType, "Int".into(), origin.clone()),
+        ];
+        let expected = packet.clone();
+        let base_contents = Arc::strong_count(&contents);
+        let base_frame = Arc::strong_count(&frame);
+        let mut measured = SyntaxBudget::default();
+        measured.charge_units(17).unwrap();
+        let actual = copy_type_output(&packet, &mut measured).unwrap();
+        let total = measured.consumed();
+        assert_eq!(actual, expected);
+        let [
+            MacroOutputNode::Group(
+                _,
+                children,
+                MacroOrigin::Combined {
+                    frame: copied_frame,
+                    ..
+                },
+            ),
+            _,
+        ] = actual.as_slice()
+        else {
+            panic!("expected the copied group and following token");
+        };
+        assert!(Arc::ptr_eq(copied_frame, &frame));
+        let MacroOutputNode::ForwardedType(capture, _) = &children[2] else {
+            panic!("expected the copied Type fragment");
+        };
+        assert!(Arc::ptr_eq(&capture.contents, &contents));
+        drop(actual);
+        assert_eq!(Arc::strong_count(&contents), base_contents);
+        assert_eq!(Arc::strong_count(&frame), base_frame);
+
+        let mut short = SyntaxBudget::with_limit(total - 1);
+        short.charge_units(17).unwrap();
+        assert!(matches!(
+            copy_type_output(&packet, &mut short),
+            Err(MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { limit }), ..
+            }) if limit == total - 1
+        ));
+        // Both actual Groups require frame-entry work. The final two-unit
+        // reservation refuses as a chunk before any owned copy is made.
+        assert_eq!(short.consumed(), total - 2);
+        assert_eq!(Arc::strong_count(&contents), base_contents);
+        assert_eq!(Arc::strong_count(&frame), base_frame);
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(total);
+            exact.charge_units(17).unwrap();
+            assert_eq!(copy_type_output(&packet, &mut exact).unwrap(), expected);
+            assert_eq!(exact.consumed(), total);
+            assert_eq!(Arc::strong_count(&contents), base_contents);
+            assert_eq!(Arc::strong_count(&frame), base_frame);
+        }
+        let mut empty = SyntaxBudget::with_limit(0);
+        assert!(copy_type_output(&[], &mut empty).unwrap().is_empty());
+        assert_eq!(empty.consumed(), 0);
+    }
 
     #[test]
     fn declaration_host_copy_charges_shallow_origin_and_name_retentions() {
