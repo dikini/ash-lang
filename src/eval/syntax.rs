@@ -1484,16 +1484,21 @@ mod tests {
             source::SourceFile,
             syntax_resource::SyntaxBudget,
         };
-        use sha2::{Digest, Sha256};
-
-        // Revisit the bound when diagnostic text, possible reasons, or lexer
-        // token boundaries change. The actual cases below check the bound.
-        let lexer = include_str!("../lexer/mod.rs");
-        let lexical_contract = &lexer[lexer.find("pub enum LexReason").unwrap()..];
-        assert_eq!(
-            format!("{:x}", Sha256::digest(lexical_contract.as_bytes())),
-            "b9ea9a59f5f0bbd1b43e004e88b4ae52657552d7f5e339070efe86337c13ba6b"
-        );
+        // The lexer currently has no emitting branch for InvalidIdentifier or
+        // NegativeLiteral. Revisit these minima when scanner progress or
+        // diagnostic emission changes; a new reason must update this match.
+        let minimum_span = |reason| match reason {
+            LexReason::BareCarriageReturn
+            | LexReason::UnterminatedString
+            | LexReason::UnknownCharacter => 1,
+            LexReason::UnicodeIdentifier
+            | LexReason::Comment
+            | LexReason::NegativeLiteral
+            | LexReason::InvalidIntegerLiteral
+            | LexReason::InvalidIdentifier => 2,
+            LexReason::ByteOrderMark | LexReason::InvalidStringCharacter => 3,
+            LexReason::InvalidStringEscape => 4,
+        };
         for (spelling, reason) in [
             ("\r", LexReason::BareCarriageReturn),
             ("\u{feff}", LexReason::ByteOrderMark),
@@ -1511,10 +1516,13 @@ mod tests {
                 panic!("one diagnostic for {spelling:?}");
             };
             assert_eq!(diagnostic.reason, reason);
+            let range = diagnostic.primary.span().range();
+            let span_bytes = usize::try_from(range.end() - range.start()).unwrap();
+            assert!(span_bytes >= minimum_span(reason));
             let retained_text = diagnostic.primary.message().len()
                 + diagnostic.expected.as_ref().map_or(0, String::len);
-            assert!(retained_text <= super::SCALAR_DIAGNOSTIC_TEXT_PER_BYTE * spelling.len());
-            assert!(diagnostic.found.as_ref().unwrap().len() <= spelling.len());
+            assert!(retained_text <= super::SCALAR_DIAGNOSTIC_TEXT_PER_BYTE * minimum_span(reason));
+            assert!(diagnostic.found.as_ref().unwrap().len() <= span_bytes);
             if reason == LexReason::BareCarriageReturn {
                 assert_eq!(retained_text, super::SCALAR_DIAGNOSTIC_TEXT_PER_BYTE);
             }
@@ -1526,6 +1534,18 @@ mod tests {
                     .is_none()
             );
         }
+        let repeated = "\r".repeat(8);
+        let source = SourceFile::new("lex-bound.ash", repeated.clone()).unwrap();
+        let diagnostics = lex(&source).unwrap().diagnostics;
+        assert_eq!(diagnostics.len(), repeated.len());
+        assert_eq!(
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.primary.message().len()
+                    + diagnostic.expected.as_ref().map_or(0, String::len))
+                .sum::<usize>(),
+            super::SCALAR_DIAGNOSTIC_TEXT_PER_BYTE * repeated.len()
+        );
         eprintln!(
             "CR reaches 64 bytes; quote, Unicode and other reachable diagnostic text stays bounded"
         );
