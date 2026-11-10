@@ -492,6 +492,8 @@ fn g1_actual_empty_and_literal_only_repetitions_preserve_capture_shapes() {
 fn g1_source_header_builder_runs_on_fast_and_ordered_graph_paths() {
     use crate::{
         driver::{compile_staged_graph_for_test, execute},
+        lexer::{TokenKind, lex},
+        parser::{ConcreteElement, NodeKind, parse},
         surface::SurfaceSyntaxMatcherPart,
     };
 
@@ -522,16 +524,65 @@ fn g1_source_header_builder_runs_on_fast_and_ordered_graph_paths() {
     assert_eq!(execute(&fast_program).unwrap().value_display(), "42");
 
     let ordered_tree = Tree::new();
-    ordered_tree.write(
-        "forms.ash",
-        "pub syntax declaration: (sink) ( $input:ident ) => {}\n",
-    );
+    let forms_text = "pub syntax declaration: (sink) ( $input:ident ) => {\n}\n";
+    let forms_source = SourceFile::new("forms.ash", forms_text).unwrap();
+    let parsed = parse(lex(&forms_source).unwrap());
+    assert!(parsed.parse_diagnostics().is_empty());
+    let declaration = parsed
+        .root()
+        .unwrap()
+        .children
+        .iter()
+        .find_map(|child| match child {
+            ConcreteElement::Node(node) if node.kind == NodeKind::SyntaxDeclaration => Some(node),
+            _ => None,
+        })
+        .unwrap();
+    assert!(matches!(declaration.children.get(7),
+        Some(ConcreteElement::Node(node)) if node.kind == NodeKind::SyntaxMatcherSequence));
+    let Some(ConcreteElement::Node(body)) = declaration.children.get(9) else {
+        panic!("expected the template body");
+    };
+    let [
+        ConcreteElement::Token(left),
+        ConcreteElement::Token(line),
+        ConcreteElement::Token(right),
+    ] = body.children.as_slice()
+    else {
+        panic!("expected braces and one logical line end");
+    };
+    assert_eq!(body.kind, NodeKind::TemplateBody);
+    assert_eq!(parsed.tokens()[*left].kind, TokenKind::LeftBrace);
+    assert_eq!(parsed.tokens()[*line].kind, TokenKind::LineEnd);
+    assert_eq!(parsed.tokens()[*right].kind, TokenKind::RightBrace);
+    ordered_tree.write("forms.ash", forms_text);
     let ordered_entry = ordered_tree.write(
         "main.ash",
         "import forms (syntax sink)\npub syntax declaration: (local) ( $value:ident ) => {}\nsink (Alpha)\nmain : Unit -> Int\nmain () = 42\n",
     );
     let mut ordered = graph_at(&ordered_entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
     let ordered_program = compile_staged_graph_for_test(&mut ordered).unwrap();
+    let forms_module = ordered
+        .completed
+        .as_ref()
+        .unwrap()
+        .modules()
+        .iter()
+        .find(|module| module.source().display_path().ends_with("forms.ash"))
+        .unwrap();
+    let [imported_header] = forms_module.surface().syntax_declarations.as_slice() else {
+        panic!("expected the imported source definition");
+    };
+    assert!(matches!(
+        imported_header.matcher.as_slice(),
+        [SurfaceSyntaxMatcherPart::Container(_)]
+    ));
+    assert!(
+        imported_header
+            .template_contents
+            .as_deref()
+            .is_some_and(<[_]>::is_empty)
+    );
     let ordered_module = ordered
         .completed
         .as_ref()
