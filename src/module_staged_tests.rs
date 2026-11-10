@@ -66,6 +66,672 @@ fn graph_at(entry: &Path, mode: BodyMode, limit: usize) -> Result<HeaderGraph, G
 }
 
 #[test]
+fn g1_real_matcher_paths_on_a_512k_stack() {
+    const CHILD: &str = "ASH_G1_512K_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "module::staged_tests::g1_real_matcher_paths_on_a_512k_stack",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        print!("{stdout}");
+        eprint!("{stderr}");
+        assert!(
+            output.status.success(),
+            "512 KiB child failed: {}",
+            output.status
+        );
+        for marker in [
+            "g1 stack: parsed header 128 and dropped source CST",
+            "g1 stack: refused header 129 and dropped source CST",
+            "g1 stack: built header 128 and dropped final matcher alias",
+            "g1 stack: matched and materialized 127 on the real graph",
+            "g1 stack: dropped final capture alias",
+            "g1 stack: mixed 127 captured and final alias dropped",
+            "g1 stack: mixed live 128 refused without publication",
+            "g1 stack: refused live 128 before capture and publication",
+            "g1 stack: paid late failure, no graph publication, final alias dropped",
+        ] {
+            assert!(stderr.contains(marker), "missing marker {marker}");
+        }
+        assert_eq!(
+            stderr
+                .matches("g1 stack: matched and materialized 127 on the real graph")
+                .count(),
+            2
+        );
+        return;
+    }
+
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(|| {
+            use crate::{
+                driver::{FileFailure, compile_staged_graph_for_test, execute},
+                lexer::lex,
+                parser::{G1_CAPTURE_OBSERVER, NodeKind, ResourceFailure, STRUCTURAL_DEPTH_LIMIT, parse},
+                surface::{SurfaceRepeatedCapture, SurfaceSyntaxCapture, SurfaceSyntaxMatcherPart},
+                syntax::MacroOrigin,
+            };
+            use std::{cell::{Cell, RefCell}, sync::Arc};
+
+            std::thread_local! {
+                static CAPTURE: RefCell<Option<Arc<SurfaceRepeatedCapture>>> = const { RefCell::new(None) };
+                static PAID: Cell<Option<usize>> = const { Cell::new(None) };
+            }
+            fn observe_depth(source: &SourceFile, captures: &[SurfaceSyntaxCapture], budget: &SyntaxBudget, levels: usize) {
+                assert!(source.display_path().ends_with("main.ash"));
+                let [SurfaceSyntaxCapture::Repeated(root)] = captures else {
+                    panic!("expected one actual repeated capture");
+                };
+                let alias = Arc::clone(root);
+                assert!(Arc::ptr_eq(root, &alias));
+                let mut value = &captures[0];
+                for _ in 0..levels {
+                    let SurfaceSyntaxCapture::Repeated(level) = value else { panic!("missing repeated level"); };
+                    let [only] = level.values.as_slice() else { panic!("expected one iteration"); };
+                    value = only;
+                }
+                let SurfaceSyntaxCapture::Identifier(identifier) = value else { panic!("missing source identifier"); };
+                assert_eq!(identifier.name.text, "Alpha");
+                assert_eq!(identifier.name.span.source(), source.id());
+                assert_eq!(identifier.name.introduction, 0);
+                assert!(identifier.name.written && identifier.name.diagnostic.is_none());
+                assert_eq!(identifier.origin, MacroOrigin::Source(identifier.name.span));
+                let range = identifier.name.span.range();
+                assert_eq!(&source.text()[range.start() as usize..range.end() as usize], "Alpha");
+                CAPTURE.with(|slot| *slot.borrow_mut() = Some(alias));
+                PAID.set(Some(budget.consumed()));
+            }
+            fn observe(source: &SourceFile, captures: &[SurfaceSyntaxCapture], budget: &SyntaxBudget) {
+                observe_depth(source, captures, budget, 127);
+                eprintln!("g1 stack: matched and materialized 127 on the real graph");
+            }
+            fn observe_mixed(source: &SourceFile, captures: &[SurfaceSyntaxCapture], budget: &SyntaxBudget) {
+                observe_depth(source, captures, budget, 64);
+            }
+            fn forms(depth: usize) -> String {
+                let mut matcher = format!("{}$value:ident", "$(".repeat(depth));
+                for marker in (0..depth).rev() {
+                    matcher.push_str(&format!(" {marker} )+"));
+                }
+                format!("pub syntax declaration: (sink) {matcher} => {{}}\n")
+            }
+            fn invocation(depth: usize) -> String {
+                let mut text = String::from("sink Alpha");
+                for marker in (0..depth).rev() { text.push_str(&format!(" {marker}")); }
+                text
+            }
+            fn mixed_forms(depth: usize) -> String {
+                let mut matcher = String::new();
+                for level in 0..depth {
+                    matcher.push_str(if level % 2 == 0 { "$( " } else if level % 4 == 1 { "( " } else { "{ " });
+                }
+                matcher.push_str("$value:ident");
+                for level in (0..depth).rev() {
+                    if level % 2 == 0 {
+                        matcher.push_str(&format!(" {level} )+"));
+                    } else {
+                        matcher.push_str(if level % 4 == 1 { " )" } else { " }" });
+                    }
+                }
+                format!("pub syntax declaration: (sink) {matcher} => {{}}\n")
+            }
+            fn mixed_invocation(depth: usize) -> String {
+                let mut text = String::from("sink");
+                for level in 0..depth {
+                    if level % 2 != 0 {
+                        text.push_str(if level % 4 == 1 { " (" } else { " {" });
+                    }
+                }
+                text.push_str(" Alpha");
+                for level in (0..depth).rev() {
+                    if level % 2 == 0 {
+                        text.push_str(&format!(" {level}"));
+                    } else {
+                        text.push_str(if level % 4 == 1 { " )" } else { " }" });
+                    }
+                }
+                text
+            }
+
+            eprintln!("g1 stack phase: begin header-128 lex");
+            let parsed_source = SourceFile::new("g1-stack-header.ash", forms(128)).unwrap();
+            let lexed = lex(&parsed_source).unwrap();
+            eprintln!("g1 stack phase: begin header-128 parse");
+            let tree = parse(lexed);
+            eprintln!("g1 stack phase: parsed header-128");
+            assert!(tree.parse_diagnostics().is_empty(), "{:?}", tree.parse_diagnostics());
+            assert_eq!(tree.resource_failure(), None);
+            let mut pending = vec![tree.root().unwrap()];
+            let mut repeats = 0;
+            while let Some(node) = pending.pop() {
+                repeats += usize::from(node.kind == NodeKind::SyntaxMatcherRepeat);
+                pending.extend(node.children.iter().filter_map(|child| match child {
+                    crate::parser::ConcreteElement::Node(child) => Some(child),
+                    _ => None,
+                }));
+            }
+            assert_eq!(repeats, 128);
+            drop(pending);
+            drop(tree);
+            eprintln!("g1 stack: parsed header 128 and dropped source CST");
+            let over_source = SourceFile::new("g1-stack-over.ash", forms(129)).unwrap();
+            let over = parse(lex(&over_source).unwrap());
+            assert_eq!(over.resource_failure(), Some(ResourceFailure::StructuralDepth { limit: STRUCTURAL_DEPTH_LIMIT }));
+            drop(over);
+            eprintln!("g1 stack: refused header 129 and dropped source CST");
+
+            let header_tree = Tree::new();
+            header_tree.write("forms.ash", &forms(128));
+            let header_entry = header_tree.write("main.ash", "import forms (syntax sink)\nmain : Unit -> Int\nmain () = 42\n");
+            let mut header_graph = graph_at(&header_entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+            eprintln!("g1 stack phase: begin real header-128 construction");
+            let header_program = compile_staged_graph_for_test(&mut header_graph).unwrap();
+            eprintln!("g1 stack phase: real header-128 construction completed");
+            let matcher_alias = {
+                let module = header_graph.completed.as_ref().unwrap().modules().iter()
+                    .find(|module| module.source().display_path().ends_with("forms.ash")).unwrap();
+                let [declaration] = module.surface().syntax_declarations.as_slice() else { panic!("expected the source syntax definition"); };
+                let [SurfaceSyntaxMatcherPart::Container(root)] = declaration.matcher.as_slice() else { panic!("expected one matcher root"); };
+                let alias = Arc::clone(root);
+                assert!(Arc::ptr_eq(root, &alias));
+                alias
+            };
+            let matcher_weak = Arc::downgrade(&matcher_alias);
+            drop(header_program);
+            drop(header_graph);
+            assert_eq!(Arc::strong_count(&matcher_alias), 1);
+            eprintln!("g1 stack phase: begin final matcher alias drop");
+            drop(matcher_alias);
+            assert!(matcher_weak.upgrade().is_none());
+            eprintln!("g1 stack: built header 128 and dropped final matcher alias");
+
+            let live_tree = Tree::new();
+            live_tree.write("forms.ash", &forms(127));
+            let live_entry = live_tree.write("main.ash", &format!(
+                "import forms (syntax sink)\n{}\nmain : Unit -> Int\nmain () = 42\n", invocation(127)
+            ));
+            let mut live = graph_at(&live_entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+            eprintln!("g1 stack phase: begin real live-127 match");
+            PAID.set(None);
+            G1_CAPTURE_OBSERVER.set(Some(observe));
+            let live_result = compile_staged_graph_for_test(&mut live);
+            G1_CAPTURE_OBSERVER.set(None);
+            let live_program = live_result.unwrap();
+            let at_capture = PAID.get().expect("the real materializer was observed");
+            assert!(live.syntax_budget.consumed() > at_capture);
+            assert_eq!(execute(&live_program).unwrap().value_display(), "42");
+            let alias = CAPTURE.with(|slot| slot.borrow_mut().take().unwrap());
+            let weak = Arc::downgrade(&alias);
+            drop(live_program);
+            drop(live);
+            assert_eq!(Arc::strong_count(&alias), 1);
+            eprintln!("g1 stack phase: begin final capture alias drop");
+            drop(alias);
+            assert!(weak.upgrade().is_none());
+            eprintln!("g1 stack: dropped final capture alias");
+
+            let mixed_tree = Tree::new();
+            mixed_tree.write("forms.ash", &mixed_forms(127));
+            let mixed_entry = mixed_tree.write("main.ash", &format!(
+                "import forms (syntax sink)\n{}\nmain : Unit -> Int\nmain () = 42\n", mixed_invocation(127)
+            ));
+            let mut mixed = graph_at(&mixed_entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+            eprintln!("g1 stack phase: begin mixed live-127 match");
+            PAID.set(None);
+            G1_CAPTURE_OBSERVER.set(Some(observe_mixed));
+            let mixed_result = compile_staged_graph_for_test(&mut mixed);
+            G1_CAPTURE_OBSERVER.set(None);
+            let mixed_program = mixed_result.unwrap();
+            assert!(PAID.get().is_some());
+            assert_eq!(execute(&mixed_program).unwrap().value_display(), "42");
+            let alias = CAPTURE.with(|slot| slot.borrow_mut().take().unwrap());
+            let weak = Arc::downgrade(&alias);
+            drop(mixed_program);
+            drop(mixed);
+            assert_eq!(Arc::strong_count(&alias), 1);
+            drop(alias);
+            assert!(weak.upgrade().is_none());
+            eprintln!("g1 stack: mixed 127 captured and final alias dropped");
+
+            let mixed_over_tree = Tree::new();
+            mixed_over_tree.write("forms.ash", &mixed_forms(128));
+            let mixed_over_entry = mixed_over_tree.write("main.ash", &format!(
+                "import forms (syntax sink)\n{}\nmain : Unit -> Int\nmain () = 42\n", mixed_invocation(128)
+            ));
+            let mut mixed_over = graph_at(&mixed_over_entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+            eprintln!("g1 stack phase: begin mixed live-128 refusal");
+            PAID.set(None);
+            G1_CAPTURE_OBSERVER.set(Some(observe_mixed));
+            let mixed_over_result = compile_staged_graph_for_test(&mut mixed_over);
+            G1_CAPTURE_OBSERVER.set(None);
+            let failure = match mixed_over_result { Ok(_) => panic!("expected mixed live-depth refusal"), Err(failure) => failure };
+            assert_eq!(PAID.get(), None);
+            assert!(mixed_over.pending.is_empty() && mixed_over.loaded.is_empty() && mixed_over.completed.is_none());
+            let FileFailure::Graph(diagnostic) = &failure else { panic!("expected graph failure: {failure:?}"); };
+            let LoadGraphError::Syntax(syntax) = diagnostic.failure() else { panic!("expected structural-depth failure"); };
+            assert!(syntax.source.display_path().ends_with("main.ash"));
+            assert!(syntax.lexical.is_empty() && syntax.parser.is_empty());
+            assert!(matches!(syntax.resource, Some(ResourceFailure::StructuralDepth { limit: STRUCTURAL_DEPTH_LIMIT })));
+            drop(failure);
+            drop(mixed_over);
+            eprintln!("g1 stack: mixed live 128 refused without publication");
+
+            let over_live_tree = Tree::new();
+            over_live_tree.write("forms.ash", &forms(128));
+            let over_live_entry = over_live_tree.write("main.ash", &format!(
+                "import forms (syntax sink)\n{}\nmain : Unit -> Int\nmain () = 42\n", invocation(128)
+            ));
+            let mut over_live = graph_at(&over_live_entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+            eprintln!("g1 stack phase: begin real live-128 refusal");
+            PAID.set(None);
+            G1_CAPTURE_OBSERVER.set(Some(observe));
+            let over_live_result = compile_staged_graph_for_test(&mut over_live);
+            G1_CAPTURE_OBSERVER.set(None);
+            let failure = match over_live_result { Ok(_) => panic!("expected the live-depth refusal"), Err(failure) => failure };
+            assert_eq!(PAID.get(), None);
+            assert!(over_live.pending.is_empty() && over_live.loaded.is_empty() && over_live.completed.is_none());
+            let FileFailure::Graph(diagnostic) = &failure else { panic!("expected graph failure: {failure:?}"); };
+            let LoadGraphError::Syntax(syntax) = diagnostic.failure() else { panic!("expected structural-depth failure"); };
+            assert!(syntax.source.display_path().ends_with("main.ash"));
+            assert!(syntax.lexical.is_empty() && syntax.parser.is_empty());
+            assert!(matches!(syntax.resource, Some(ResourceFailure::StructuralDepth { limit: STRUCTURAL_DEPTH_LIMIT })));
+            drop(failure);
+            drop(over_live);
+            eprintln!("g1 stack: refused live 128 before capture and publication");
+
+            let mut short = graph_at(&live_entry, BodyMode::Header, at_capture).unwrap();
+            eprintln!("g1 stack phase: begin real late-shortage retry");
+            PAID.set(None);
+            G1_CAPTURE_OBSERVER.set(Some(observe));
+            let short_result = compile_staged_graph_for_test(&mut short);
+            G1_CAPTURE_OBSERVER.set(None);
+            let failure = match short_result { Ok(_) => panic!("expected a late shortage"), Err(failure) => failure };
+            assert_eq!(PAID.get(), Some(at_capture));
+            assert_eq!(short.syntax_budget.consumed(), at_capture);
+            assert!(short.pending.is_empty() && short.loaded.is_empty() && short.completed.is_none());
+            let FileFailure::Graph(diagnostic) = &failure else { panic!("expected graph failure: {failure:?}"); };
+            let LoadGraphError::Syntax(syntax) = diagnostic.failure() else { panic!("expected syntax-work failure"); };
+            assert!(syntax.source.display_path().ends_with("main.ash"));
+            assert!(syntax.lexical.is_empty() && syntax.parser.is_empty());
+            assert!(matches!(syntax.resource, Some(ResourceFailure::SyntaxWork { limit }) if limit == at_capture));
+            let alias = CAPTURE.with(|slot| slot.borrow_mut().take().unwrap());
+            let weak = Arc::downgrade(&alias);
+            drop(failure);
+            drop(short);
+            assert_eq!(Arc::strong_count(&alias), 1);
+            drop(alias);
+            assert!(weak.upgrade().is_none());
+            eprintln!("g1 stack: paid late failure, no graph publication, final alias dropped");
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn g1_actual_empty_and_literal_only_repetitions_preserve_capture_shapes() {
+    use crate::{
+        driver::{FileFailure, compile_staged_graph_for_test, execute},
+        parser::G1_CAPTURE_OBSERVER,
+        surface::{SurfaceSyntaxCapture, SurfaceSyntaxMatcherPart},
+    };
+    use std::cell::Cell;
+
+    std::thread_local! {
+        static SHAPE: Cell<u8> = const { Cell::new(0) };
+        static OBSERVED: Cell<bool> = const { Cell::new(false) };
+    }
+    fn observe(source: &SourceFile, captures: &[SurfaceSyntaxCapture], _: &SyntaxBudget) {
+        assert!(source.display_path().ends_with("main.ash"));
+        match SHAPE.get() {
+            1 => {
+                let [SurfaceSyntaxCapture::Repeated(values)] = captures else {
+                    panic!("expected empty outer capture");
+                };
+                assert!(values.values.is_empty());
+            }
+            2 => assert!(captures.is_empty(), "literal-only repeats create no slot"),
+            3 => {
+                let [SurfaceSyntaxCapture::Repeated(values)] = captures else {
+                    panic!("expected one row");
+                };
+                let [SurfaceSyntaxCapture::Identifier(value)] = values.values.as_slice() else {
+                    panic!("expected one source identifier");
+                };
+                assert_eq!(value.name.text, "Alpha");
+                assert_eq!(value.name.span.source(), source.id());
+                assert_eq!(value.origin, value.name.span.into());
+            }
+            4 => {
+                let [
+                    SurfaceSyntaxCapture::Repeated(outer),
+                    SurfaceSyntaxCapture::Repeated(inner),
+                ] = captures
+                else {
+                    panic!("expected outer and nested capture columns");
+                };
+                let [SurfaceSyntaxCapture::Identifier(value)] = outer.values.as_slice() else {
+                    panic!("expected one outer source identifier");
+                };
+                assert_eq!(value.name.text, "Alpha");
+                assert_eq!(value.name.span.source(), source.id());
+                let [SurfaceSyntaxCapture::Repeated(empty)] = inner.values.as_slice() else {
+                    panic!("expected an empty nested capture");
+                };
+                assert!(empty.values.is_empty());
+            }
+            5 => {
+                let [SurfaceSyntaxCapture::Identifier(value)] = captures else {
+                    panic!("expected the multiline source identifier");
+                };
+                assert_eq!(value.name.text, "Alpha");
+                assert_eq!(value.name.span.source(), source.id());
+                assert_eq!(value.origin, value.name.span.into());
+            }
+            _ => panic!("unexpected shape"),
+        }
+        OBSERVED.set(true);
+    }
+    fn trial(matcher: &str, invocation: &str, shape: u8) {
+        let tree = Tree::new();
+        tree.write(
+            "forms.ash",
+            &format!("pub syntax declaration: (sink) {matcher} => {{}}\n"),
+        );
+        let entry = tree.write(
+            "main.ash",
+            &format!(
+                "import forms (syntax sink)\n{invocation}\nmain : Unit -> Int\nmain () = 42\n"
+            ),
+        );
+        let mut graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+        SHAPE.set(shape);
+        OBSERVED.set(false);
+        G1_CAPTURE_OBSERVER.set(Some(observe));
+        let result = compile_staged_graph_for_test(&mut graph);
+        G1_CAPTURE_OBSERVER.set(None);
+        if shape != 0 {
+            let program = result.unwrap();
+            assert!(OBSERVED.get());
+            if shape == 5 {
+                let forms = graph
+                    .completed
+                    .as_ref()
+                    .unwrap()
+                    .modules()
+                    .iter()
+                    .find(|module| module.source().display_path().ends_with("forms.ash"))
+                    .unwrap();
+                let [header] = forms.surface().syntax_declarations.as_slice() else {
+                    panic!("expected the multiline matcher definition");
+                };
+                let [SurfaceSyntaxMatcherPart::Container(group)] = header.matcher.as_slice() else {
+                    panic!("expected the braced matcher");
+                };
+                assert!(matches!(
+                    group.body.as_slice(),
+                    [
+                        SurfaceSyntaxMatcherPart::LineEnd,
+                        SurfaceSyntaxMatcherPart::Capture { .. },
+                        SurfaceSyntaxMatcherPart::LineEnd,
+                    ]
+                ));
+            }
+            assert_eq!(execute(&program).unwrap().value_display(), "42");
+        } else {
+            let failure = match result {
+                Ok(_) => panic!("expected source matcher refusal"),
+                Err(failure) => failure,
+            };
+            assert!(!OBSERVED.get());
+            assert!(
+                graph.pending.is_empty() && graph.loaded.is_empty() && graph.completed.is_none()
+            );
+            let FileFailure::Graph(diagnostic) = &failure else {
+                panic!("expected graph failure: {failure:?}");
+            };
+            let LoadGraphError::Syntax(syntax) = diagnostic.failure() else {
+                panic!("expected parser refusal");
+            };
+            assert!(syntax.source.display_path().ends_with("main.ash"));
+            assert!(!syntax.parser.is_empty() && syntax.resource.is_none());
+        }
+    }
+
+    trial("$( row $item:ident ),*", "sink", 1);
+    trial("{ $( item $item:ident ),* }", "sink { }", 1);
+    trial(
+        "$( row $outer:ident $( item $inner:ident ),* );*",
+        "sink row Alpha",
+        4,
+    );
+    trial("$( word ),*", "sink word, word, word", 2);
+    trial("$( row $item:ident ),+", "sink row Alpha", 3);
+    trial("{\n    $item:ident\n}", "sink {\n    Alpha\n}", 5);
+    trial("$( row $item:ident ),+", "sink", 0);
+    trial("$( row $item:ident ),*", "sink row Alpha,", 0);
+}
+
+#[test]
+fn g1_source_header_builder_runs_on_fast_and_ordered_graph_paths() {
+    use crate::{
+        driver::{compile_staged_graph_for_test, execute},
+        lexer::{TokenKind, lex},
+        parser::{ConcreteElement, NodeKind, parse},
+        surface::SurfaceSyntaxMatcherPart,
+    };
+
+    let fast_tree = Tree::new();
+    let fast_entry = fast_tree.write(
+        "main.ash",
+        "pub syntax declaration: (local) ( $value:ident ) => {}\nmain : Unit -> Int\nmain () = 42\n",
+    );
+    let mut fast = graph_at(&fast_entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    let fast_program = compile_staged_graph_for_test(&mut fast).unwrap();
+    let fast_module = fast
+        .completed
+        .as_ref()
+        .unwrap()
+        .modules()
+        .iter()
+        .find(|module| module.source().display_path().ends_with("main.ash"))
+        .unwrap();
+    let [fast_header] = fast_module.surface().syntax_declarations.as_slice() else {
+        panic!("expected the source definition on the fast path");
+    };
+    assert_eq!(fast_header.name.text, "local");
+    assert_eq!(fast_header.name.span.source(), fast_module.source().id());
+    assert!(matches!(
+        fast_header.matcher.as_slice(),
+        [SurfaceSyntaxMatcherPart::Container(_)]
+    ));
+    assert_eq!(execute(&fast_program).unwrap().value_display(), "42");
+
+    let ordered_tree = Tree::new();
+    let forms_text = "pub syntax declaration: (sink) ( $input:ident ) => {\n}\n";
+    let forms_source = SourceFile::new("forms.ash", forms_text).unwrap();
+    let parsed = parse(lex(&forms_source).unwrap());
+    assert!(parsed.parse_diagnostics().is_empty());
+    let declaration = parsed
+        .root()
+        .unwrap()
+        .children
+        .iter()
+        .find_map(|child| match child {
+            ConcreteElement::Node(node) if node.kind == NodeKind::SyntaxDeclaration => Some(node),
+            _ => None,
+        })
+        .unwrap();
+    assert!(matches!(declaration.children.get(7),
+        Some(ConcreteElement::Node(node)) if node.kind == NodeKind::SyntaxMatcherSequence));
+    let Some(ConcreteElement::Node(body)) = declaration.children.get(9) else {
+        panic!("expected the template body");
+    };
+    let [
+        ConcreteElement::Token(left),
+        ConcreteElement::Token(line),
+        ConcreteElement::Token(right),
+    ] = body.children.as_slice()
+    else {
+        panic!("expected braces and one logical line end");
+    };
+    assert_eq!(body.kind, NodeKind::TemplateBody);
+    assert_eq!(parsed.tokens()[*left].kind, TokenKind::LeftBrace);
+    assert_eq!(parsed.tokens()[*line].kind, TokenKind::LineEnd);
+    assert_eq!(parsed.tokens()[*right].kind, TokenKind::RightBrace);
+    ordered_tree.write("forms.ash", forms_text);
+    let ordered_entry = ordered_tree.write(
+        "main.ash",
+        "import forms (syntax sink)\npub syntax declaration: (local) ( $value:ident ) => {}\nsink (Alpha)\nmain : Unit -> Int\nmain () = 42\n",
+    );
+    let mut ordered = graph_at(&ordered_entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    let ordered_program = compile_staged_graph_for_test(&mut ordered).unwrap();
+    let forms_module = ordered
+        .completed
+        .as_ref()
+        .unwrap()
+        .modules()
+        .iter()
+        .find(|module| module.source().display_path().ends_with("forms.ash"))
+        .unwrap();
+    let [imported_header] = forms_module.surface().syntax_declarations.as_slice() else {
+        panic!("expected the imported source definition");
+    };
+    assert!(matches!(
+        imported_header.matcher.as_slice(),
+        [SurfaceSyntaxMatcherPart::Container(_)]
+    ));
+    assert!(
+        imported_header
+            .template_contents
+            .as_deref()
+            .is_some_and(<[_]>::is_empty)
+    );
+    let ordered_module = ordered
+        .completed
+        .as_ref()
+        .unwrap()
+        .modules()
+        .iter()
+        .find(|module| module.source().display_path().ends_with("main.ash"))
+        .unwrap();
+    let [ordered_header] = ordered_module.surface().syntax_declarations.as_slice() else {
+        panic!("expected the source definition alongside a real invocation");
+    };
+    assert_eq!(ordered_header.name.text, "local");
+    assert_eq!(
+        ordered_header.name.span.source(),
+        ordered_module.source().id()
+    );
+    assert!(matches!(
+        ordered_header.matcher.as_slice(),
+        [SurfaceSyntaxMatcherPart::Container(_)]
+    ));
+    assert_eq!(execute(&ordered_program).unwrap().value_display(), "42");
+}
+
+#[test]
+fn g1_imported_graph_shares_budget_exact_short_and_fresh_retry() {
+    use crate::{
+        driver::{FileFailure, compile_staged_graph_for_test, execute},
+        parser::G1_CAPTURE_OBSERVER,
+        surface::SurfaceSyntaxCapture,
+    };
+    use std::cell::Cell;
+
+    std::thread_local! {
+        static AT_CAPTURE: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    fn observe(source: &SourceFile, captures: &[SurfaceSyntaxCapture], budget: &SyntaxBudget) {
+        assert!(source.display_path().ends_with("g1-source-ident/main.ash"));
+        assert_eq!(
+            source.text(),
+            include_str!("../tests/fixtures/surface-macros/g1-source-ident/main.ash")
+        );
+        let [
+            SurfaceSyntaxCapture::Repeated(outer),
+            SurfaceSyntaxCapture::Repeated(inner),
+        ] = captures
+        else {
+            panic!("expected the real grouped captures");
+        };
+        assert_eq!(outer.values.len(), 3);
+        assert_eq!(inner.values.len(), 3);
+        AT_CAPTURE.set(Some(budget.consumed()));
+    }
+
+    let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/surface-macros/g1-source-ident/main.ash");
+    let mut measured = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    let header_work = measured.syntax_budget.consumed();
+    measured.syntax_budget.charge_units(17).unwrap();
+    AT_CAPTURE.set(None);
+    G1_CAPTURE_OBSERVER.set(Some(observe));
+    let measured_result = compile_staged_graph_for_test(&mut measured);
+    G1_CAPTURE_OBSERVER.set(None);
+    let program = measured_result.unwrap();
+    let at_capture = AT_CAPTURE.get().expect("real materializer was reached");
+    let total = measured.syntax_budget.consumed();
+    assert!(at_capture > header_work + 17 && total > at_capture);
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+
+    for label in ["exact", "retry"] {
+        if label == "retry" {
+            let mut short = graph_at(&entry, BodyMode::Header, total - 1).unwrap();
+            assert_eq!(short.syntax_budget.consumed(), header_work);
+            short.syntax_budget.charge_units(17).unwrap();
+            AT_CAPTURE.set(None);
+            G1_CAPTURE_OBSERVER.set(Some(observe));
+            let result = compile_staged_graph_for_test(&mut short);
+            G1_CAPTURE_OBSERVER.set(None);
+            let failure = match result {
+                Ok(_) => panic!("one-short graph must refuse"),
+                Err(failure) => failure,
+            };
+            assert_eq!(AT_CAPTURE.get(), Some(at_capture));
+            assert!(short.syntax_budget.consumed() >= at_capture);
+            assert!(short.syntax_budget.consumed() <= total - 1);
+            assert!(
+                short.pending.is_empty() && short.loaded.is_empty() && short.completed.is_none()
+            );
+            let FileFailure::Graph(diagnostic) = &failure else {
+                panic!("expected graph error: {failure:?}");
+            };
+            let LoadGraphError::Syntax(syntax) = diagnostic.failure() else {
+                panic!("expected syntax shortage");
+            };
+            assert_eq!(
+                syntax.resource,
+                Some(ResourceFailure::SyntaxWork { limit: total - 1 })
+            );
+            assert!(syntax.source.display_path().ends_with("main.ash"));
+            assert!(syntax.lexical.is_empty() && syntax.parser.is_empty());
+        }
+        let mut graph = graph_at(&entry, BodyMode::Header, total).unwrap();
+        assert_eq!(graph.syntax_budget.consumed(), header_work, "{label}");
+        graph.syntax_budget.charge_units(17).unwrap();
+        AT_CAPTURE.set(None);
+        G1_CAPTURE_OBSERVER.set(Some(observe));
+        let result = compile_staged_graph_for_test(&mut graph);
+        G1_CAPTURE_OBSERVER.set(None);
+        let program = result.unwrap();
+        assert_eq!(AT_CAPTURE.get(), Some(at_capture), "{label}");
+        assert_eq!(graph.syntax_budget.consumed(), total, "{label}");
+        assert_eq!(execute(&program).unwrap().value_display(), "42", "{label}");
+    }
+}
+
+#[test]
 fn declaration_graph_shares_budget_through_host_staging_and_retry() {
     use crate::{
         driver::{FileFailure, compile_staged_graph_for_test, execute},

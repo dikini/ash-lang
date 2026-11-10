@@ -84,6 +84,28 @@ pub enum SurfaceSyntaxMatcherPart {
         name: SurfaceName,
         kind: SurfaceSyntaxCaptureKind,
     },
+    /// A group or repetition with shared immutable contents.
+    Container(Arc<SurfaceMatcherContainer>),
+    /// A logical line end inside a braced matcher group.
+    LineEnd,
+}
+
+/// One immutable group or repetition in a declaration matcher.
+#[derive(Debug, Eq, PartialEq)]
+pub struct SurfaceMatcherContainer {
+    pub(crate) kind: SurfaceMatcherContainerKind,
+    pub(crate) body: Vec<SurfaceSyntaxMatcherPart>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum SurfaceMatcherContainerKind {
+    Group {
+        braces: bool,
+    },
+    Repeat {
+        one_or_more: bool,
+        separator: Option<(TokenKind, String)>,
+    },
 }
 
 /// A capture admitted by a syntax matcher.
@@ -523,6 +545,14 @@ pub enum SurfaceSyntaxCapture {
     Pattern(SurfacePatternCapture),
     /// A complete declaration's retained source syntax.
     Declaration(SurfaceDeclarationCapture),
+    /// Ordered captures retained at one repetition level.
+    Repeated(Arc<SurfaceRepeatedCapture>),
+}
+
+/// Values retained at one level of a repeated capture.
+#[derive(Debug, Eq, PartialEq)]
+pub struct SurfaceRepeatedCapture {
+    pub(crate) values: Vec<SurfaceSyntaxCapture>,
 }
 
 /// An identifier and its retained syntax origin.

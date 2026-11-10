@@ -14,6 +14,8 @@ use std::ops::Deref;
 pub use crate::syntax_resource::{ResourceFailure, SYNTAX_WORK_LIMIT};
 pub use cst::{ConcreteElement, ConcreteNode, ConcreteTree, InternalReason};
 pub use event::Event;
+#[cfg(test)]
+pub(crate) use project::G1_CAPTURE_OBSERVER;
 pub(crate) use project::module_span_from_checkpoint;
 #[allow(unused_imports)]
 pub(crate) use project::project_declaration_invocation;
@@ -59,6 +61,18 @@ pub enum NodeKind {
     SyntaxDeclaration,
     /// One named syntax capture or fixed subject-name binding.
     SyntaxCapture,
+    /// The complete matcher in an extended declaration syntax header.
+    SyntaxMatcherSequence,
+    /// A parenthesized or braced matcher group.
+    SyntaxMatcherGroup,
+    /// A matcher repetition and its operator.
+    SyntaxMatcherRepeat,
+    /// A matched group in a declaration syntax invocation.
+    SyntaxMatchedGroup,
+    /// A matched repetition in a declaration syntax invocation.
+    SyntaxMatchedRepeat,
+    /// One iteration of a matched repetition.
+    SyntaxMatchedIteration,
     /// The balanced token contents of an expression syntax template.
     TemplateBody,
     /// One imported expression syntax invocation.
@@ -1807,6 +1821,18 @@ impl Parser<'_> {
         }
         if let Err(resource_failure) = self.syntax_budget.charge() {
             self.resource_failure.get_or_insert(resource_failure);
+            self.syntax_work_exhausted = true;
+            return false;
+        }
+        true
+    }
+
+    fn charge_matcher_work(&mut self, units: usize) -> bool {
+        if self.syntax_work_exhausted {
+            return false;
+        }
+        if let Err(failure) = self.syntax_budget.charge_units(units) {
+            self.resource_failure.get_or_insert(failure);
             self.syntax_work_exhausted = true;
             return false;
         }

@@ -17,14 +17,15 @@ use crate::{
         SurfaceIdentifierCapture, SurfaceImplementation, SurfaceImport, SurfaceImportItem,
         SurfaceImportSelection, SurfaceInlineOperationalHeader, SurfaceInterfaceDeclaration,
         SurfaceInterfaceDetermination, SurfaceInterfaceMethod, SurfaceKind, SurfaceKindKind,
-        SurfaceLocalDeclaration, SurfaceMatchArm, SurfaceMatchExpr, SurfaceModule,
-        SurfaceModulePath, SurfaceName, SurfaceNominalDeclarationKind, SurfacePattern,
-        SurfacePatternCapture, SurfacePatternKind, SurfacePerformExpr, SurfaceQualifiedName,
-        SurfaceRecursiveGroup, SurfaceRecursiveMember, SurfaceReference, SurfaceRequirement,
-        SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind, SurfaceSyntaxCategory,
-        SurfaceSyntaxDeclaration, SurfaceSyntaxImplementation, SurfaceSyntaxMatcherPart,
-        SurfaceType, SurfaceTypeCapture, SurfaceTypeDeclaration, SurfaceTypeKind,
-        SurfaceTypeParameter, SurfaceTypeVisibility, SurfaceTypedPattern,
+        SurfaceLocalDeclaration, SurfaceMatchArm, SurfaceMatchExpr, SurfaceMatcherContainer,
+        SurfaceMatcherContainerKind, SurfaceModule, SurfaceModulePath, SurfaceName,
+        SurfaceNominalDeclarationKind, SurfacePattern, SurfacePatternCapture, SurfacePatternKind,
+        SurfacePerformExpr, SurfaceQualifiedName, SurfaceRecursiveGroup, SurfaceRecursiveMember,
+        SurfaceReference, SurfaceRepeatedCapture, SurfaceRequirement, SurfaceSyntaxCapture,
+        SurfaceSyntaxCaptureKind, SurfaceSyntaxCategory, SurfaceSyntaxDeclaration,
+        SurfaceSyntaxImplementation, SurfaceSyntaxMatcherPart, SurfaceType, SurfaceTypeCapture,
+        SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeParameter, SurfaceTypeVisibility,
+        SurfaceTypedPattern,
     },
 };
 
@@ -32,6 +33,11 @@ use super::{
     ConcreteElement, ConcreteNode, ConcreteTree, InternalReason, NodeKind, ParserCheckpoint,
     ResourceFailure, cst,
 };
+
+#[cfg(test)]
+std::thread_local! {
+    pub(crate) static G1_CAPTURE_OBSERVER: std::cell::Cell<Option<fn(&SourceFile, &[SurfaceSyntaxCapture], &crate::syntax_resource::SyntaxBudget)>> = const { std::cell::Cell::new(None) };
+}
 
 // The parser and projector share token indices. Structured output attaches
 // original names and fragments to those indices without changing lexer tokens.
@@ -448,6 +454,10 @@ pub(crate) fn structural_weight(node: &ConcreteNode) -> usize {
         | NodeKind::MultiplicativeExpression
         | NodeKind::ApplicationExpression
         | NodeKind::SyntaxQuote
+        | NodeKind::SyntaxMatcherGroup
+        | NodeKind::SyntaxMatcherRepeat
+        | NodeKind::SyntaxMatchedGroup
+        | NodeKind::SyntaxMatchedRepeat
         | NodeKind::ParenthesizedExpression
         | NodeKind::ParenthesizedType
         | NodeKind::ParenthesizedKind => 1,
@@ -580,9 +590,12 @@ fn validate_shallow_shape(
             } else {
                 shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
             }
-            while !shape.peek_token_is(&TokenKind::FatArrow) {
-                if shape.peek_node_is(NodeKind::SyntaxCapture) {
-                    if !declaration
+            if declaration && shape.peek_node_is(NodeKind::SyntaxMatcherSequence) {
+                shape.node(NodeKind::SyntaxMatcherSequence)?;
+            } else {
+                while !shape.peek_token_is(&TokenKind::FatArrow) {
+                    if shape.peek_node_is(NodeKind::SyntaxCapture) {
+                        if !declaration
                         && shape.peek_node().is_some_and(|capture| {
                             direct_tokens(capture, tokens).any(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
                                 || direct_tokens(capture, tokens).last().is_some_and(|token| {
@@ -593,21 +606,22 @@ fn validate_shallow_shape(
                     {
                         return malformed(InternalReason::UnexpectedShape);
                     }
-                    shape.node(NodeKind::SyntaxCapture)?;
-                } else {
-                    shape.token_matching(|kind| {
-                        !matches!(
-                            kind,
-                            TokenKind::Dollar
-                                | TokenKind::LeftParen
-                                | TokenKind::RightParen
-                                | TokenKind::LeftBrace
-                                | TokenKind::RightBrace
-                                | TokenKind::LineEnd
-                                | TokenKind::EndOfFile
-                                | TokenKind::FatArrow
-                        )
-                    })?;
+                        shape.node(NodeKind::SyntaxCapture)?;
+                    } else {
+                        shape.token_matching(|kind| {
+                            !matches!(
+                                kind,
+                                TokenKind::Dollar
+                                    | TokenKind::LeftParen
+                                    | TokenKind::RightParen
+                                    | TokenKind::LeftBrace
+                                    | TokenKind::RightBrace
+                                    | TokenKind::LineEnd
+                                    | TokenKind::EndOfFile
+                                    | TokenKind::FatArrow
+                            )
+                        })?;
+                    }
                 }
             }
             shape.token(&TokenKind::FatArrow)?;
@@ -672,6 +686,35 @@ fn validate_shallow_shape(
                     || matches!(kind, TokenKind::Identifier(name) if name == "expr" || name == "ident" || name == "pattern" || name == "declaration"),
             )?;
         }
+        NodeKind::SyntaxMatcherSequence => {
+            if !node.children.iter().any(|element| matches!(element,
+                ConcreteElement::Node(child) if matches!(child.kind, NodeKind::SyntaxMatcherGroup | NodeKind::SyntaxMatcherRepeat)))
+            {
+                return malformed(InternalReason::UnexpectedShape);
+            }
+            matcher_shape_items(&mut shape, None, false)?;
+        }
+        NodeKind::SyntaxMatcherGroup => {
+            let braces = shape.peek_token_is(&TokenKind::LeftBrace);
+            let (open, close) = if braces {
+                (TokenKind::LeftBrace, TokenKind::RightBrace)
+            } else {
+                (TokenKind::LeftParen, TokenKind::RightParen)
+            };
+            shape.token(&open)?;
+            matcher_shape_items(&mut shape, Some(&close), braces)?;
+            shape.token(&close)?;
+        }
+        NodeKind::SyntaxMatcherRepeat => {
+            shape.token(&TokenKind::Dollar)?;
+            shape.token(&TokenKind::LeftParen)?;
+            matcher_shape_items(&mut shape, Some(&TokenKind::RightParen), false)?;
+            shape.token(&TokenKind::RightParen)?;
+            if !shape.peek_token_is(&TokenKind::Star) && !shape.peek_token_is(&TokenKind::Plus) {
+                shape.token_matching(matcher_separator)?;
+            }
+            shape.token_matching(|kind| matches!(kind, TokenKind::Star | TokenKind::Plus))?;
+        }
         NodeKind::SyntaxInvocation | NodeKind::DeclarationSyntaxInvocation => {
             shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
             while shape.position < shape.children.len() {
@@ -687,6 +730,11 @@ fn validate_shallow_shape(
                         return malformed(InternalReason::UnexpectedShape);
                     }
                     shape.node(NodeKind::SyntaxArgument)?;
+                } else if node.kind == NodeKind::DeclarationSyntaxInvocation
+                    && (shape.peek_node_is(NodeKind::SyntaxMatchedGroup)
+                        || shape.peek_node_is(NodeKind::SyntaxMatchedRepeat))
+                {
+                    shape.any_node()?;
                 } else {
                     shape.token_matching(|kind| {
                         !matches!(kind, TokenKind::EndOfFile | TokenKind::LineEnd)
@@ -694,6 +742,27 @@ fn validate_shallow_shape(
                 }
             }
         }
+        NodeKind::SyntaxMatchedGroup => {
+            let braces = shape.peek_token_is(&TokenKind::LeftBrace);
+            let (open, close) = if braces {
+                (TokenKind::LeftBrace, TokenKind::RightBrace)
+            } else {
+                (TokenKind::LeftParen, TokenKind::RightParen)
+            };
+            shape.token(&open)?;
+            matched_shape_items(&mut shape, Some(&close))?;
+            shape.token(&close)?;
+        }
+        NodeKind::SyntaxMatchedRepeat => {
+            while shape.position < shape.children.len() {
+                if shape.peek_node_is(NodeKind::SyntaxMatchedIteration) {
+                    shape.node(NodeKind::SyntaxMatchedIteration)?;
+                } else {
+                    shape.token_matching(matcher_separator)?;
+                }
+            }
+        }
+        NodeKind::SyntaxMatchedIteration => matched_shape_items(&mut shape, None)?,
         NodeKind::SyntaxArgument => {
             if shape.peek_token_is(&TokenKind::LeftBrace) {
                 shape.token(&TokenKind::LeftBrace)?;
@@ -1616,6 +1685,80 @@ fn validate_determination_side(shape: &mut ShapeCursor<'_>) -> Result<(), Projec
     }
 }
 
+fn matcher_separator(kind: &TokenKind) -> bool {
+    !matches!(
+        kind,
+        TokenKind::Dollar
+            | TokenKind::FatArrow
+            | TokenKind::Star
+            | TokenKind::Plus
+            | TokenKind::LineEnd
+            | TokenKind::LeftParen
+            | TokenKind::RightParen
+            | TokenKind::LeftBrace
+            | TokenKind::RightBrace
+            | TokenKind::EndOfFile
+    )
+}
+
+fn matcher_shape_items(
+    shape: &mut ShapeCursor<'_>,
+    closing: Option<&TokenKind>,
+    braces: bool,
+) -> Result<(), ProjectionError> {
+    while shape.position < shape.children.len()
+        && !closing.is_some_and(|kind| shape.peek_token_is(kind))
+    {
+        if shape.peek_node().is_some_and(|node| {
+            matches!(
+                node.kind,
+                NodeKind::SyntaxCapture
+                    | NodeKind::SyntaxMatcherGroup
+                    | NodeKind::SyntaxMatcherRepeat
+            )
+        }) {
+            shape.any_node()?;
+        } else {
+            shape.token_matching(|kind| {
+                !matches!(
+                    kind,
+                    TokenKind::Dollar
+                        | TokenKind::FatArrow
+                        | TokenKind::EndOfFile
+                        | TokenKind::LeftParen
+                        | TokenKind::RightParen
+                        | TokenKind::LeftBrace
+                        | TokenKind::RightBrace
+                ) && (braces || !matches!(kind, TokenKind::LineEnd))
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn matched_shape_items(
+    shape: &mut ShapeCursor<'_>,
+    closing: Option<&TokenKind>,
+) -> Result<(), ProjectionError> {
+    while shape.position < shape.children.len()
+        && !closing.is_some_and(|kind| shape.peek_token_is(kind))
+    {
+        if shape.peek_node().is_some_and(|node| {
+            matches!(
+                node.kind,
+                NodeKind::SyntaxArgument
+                    | NodeKind::SyntaxMatchedGroup
+                    | NodeKind::SyntaxMatchedRepeat
+            )
+        }) {
+            shape.any_node()?;
+        } else {
+            shape.token_matching(|kind| !matches!(kind, TokenKind::EndOfFile))?;
+        }
+    }
+    Ok(())
+}
+
 fn validate_qualified_interface_name(
     node: &ConcreteNode,
     tokens: &[Token],
@@ -1806,130 +1949,10 @@ impl ModuleProjection {
         match child.kind {
             NodeKind::ImportDeclaration => imports.push(project_import(source, child, tokens)?),
             NodeKind::SyntaxDeclaration => {
-                let declaration = is_declaration_syntax(child, tokens);
-                let name = direct_tokens(child, tokens)
-                    .nth(if declaration { 5 } else { 2 })
-                    .ok_or(ProjectionError::MalformedTree(
-                        InternalReason::UnexpectedShape,
-                    ))?;
-                let mut matcher = Vec::new();
-                let mut prefix = 0;
-                for element in &child.children {
-                    match element {
-                        ConcreteElement::Token(index) => {
-                            let token = tokens.get(*index).ok_or(
-                                ProjectionError::MalformedTree(InternalReason::TokenOutOfRange),
-                            )?;
-                            if prefix < if declaration { 7 } else { 3 } {
-                                prefix += 1;
-                            } else if token.kind == TokenKind::FatArrow {
-                                break;
-                            } else {
-                                let range = token.span.range();
-                                let spelling = source
-                                    .text()
-                                    .get(range.start() as usize..range.end() as usize)
-                                    .ok_or(ProjectionError::MalformedTree(
-                                        InternalReason::InvalidSpan,
-                                    ))?;
-                                matcher.push(SurfaceSyntaxMatcherPart::Literal {
-                                    kind: token.kind.clone(),
-                                    spelling: spelling.to_owned(),
-                                });
-                            }
-                        }
-                        ConcreteElement::Node(capture)
-                            if capture.kind == NodeKind::SyntaxCapture =>
-                        {
-                            let parts = direct_tokens(capture, tokens).collect::<Vec<_>>();
-                            if parts.len() != 4 {
-                                return malformed(InternalReason::UnexpectedShape);
-                            }
-                            let kind = match &parts[3].kind {
-                                TokenKind::Identifier(kind) if kind == "expr" => {
-                                    SurfaceSyntaxCaptureKind::Expression
-                                }
-                                TokenKind::Identifier(kind) if kind == "ident" => {
-                                    SurfaceSyntaxCaptureKind::Identifier
-                                }
-                                TokenKind::Type if declaration => SurfaceSyntaxCaptureKind::Type,
-                                TokenKind::Identifier(kind) if declaration && kind == "pattern" => {
-                                    SurfaceSyntaxCaptureKind::Pattern
-                                }
-                                TokenKind::Identifier(kind)
-                                    if declaration && kind == "declaration" =>
-                                {
-                                    SurfaceSyntaxCaptureKind::Declaration
-                                }
-                                _ => return malformed(InternalReason::UnexpectedShape),
-                            };
-                            matcher.push(SurfaceSyntaxMatcherPart::Capture {
-                                name: surface_name(parts[1])?,
-                                kind,
-                            });
-                        }
-                        _ => return malformed(InternalReason::UnexpectedShape),
-                    }
+                if extended_matcher(child).is_some() {
+                    return malformed(InternalReason::UnexpectedShape);
                 }
-                let (implementation, template_contents) = if let Some(block) =
-                    child_nodes(child).find(|node| node.kind == NodeKind::TemplateBody)
-                {
-                    let mut contents =
-                        capture_contents(source, block, tokens, &Default::default())?;
-                    if declaration {
-                        contents = match contents.pop() {
-                            Some(crate::syntax::MacroOutputNode::Group(
-                                crate::syntax::MacroDelimiter::Braces,
-                                mut children,
-                                _,
-                            )) if contents.is_empty() => {
-                                if matches!(
-                                    children.first(),
-                                    Some(crate::syntax::MacroOutputNode::Token(
-                                        TokenKind::LineEnd,
-                                        _,
-                                        _
-                                    ))
-                                ) {
-                                    children.remove(0);
-                                }
-                                children
-                            }
-                            _ => return malformed(InternalReason::UnexpectedShape),
-                        };
-                    }
-                    (SurfaceSyntaxImplementation::Template, Some(contents.into()))
-                } else {
-                    let mut after_arrow = direct_tokens(child, tokens)
-                        .skip_while(|token| token.kind != TokenKind::FatArrow)
-                        .skip(1);
-                    if after_arrow.next().map(|token| &token.token.kind) != Some(&TokenKind::Using)
-                    {
-                        return malformed(InternalReason::UnexpectedShape);
-                    }
-                    let transformer = after_arrow.next().ok_or(ProjectionError::MalformedTree(
-                        InternalReason::UnexpectedShape,
-                    ))?;
-                    if after_arrow.next().is_some() {
-                        return malformed(InternalReason::UnexpectedShape);
-                    }
-                    (
-                        SurfaceSyntaxImplementation::Transformer(surface_name(transformer)?),
-                        None,
-                    )
-                };
-                syntax_declarations.push(SurfaceSyntaxDeclaration {
-                    category: if declaration {
-                        SurfaceSyntaxCategory::Declaration
-                    } else {
-                        SurfaceSyntaxCategory::Expression
-                    },
-                    name: surface_name(name)?,
-                    matcher,
-                    implementation,
-                    template_contents,
-                    span: node_span(source, child, tokens)?,
-                });
+                syntax_declarations.push(project_syntax_declaration(source, child, tokens)?);
             }
             NodeKind::ForeignLibrary => {
                 declaration_order.push(SurfaceDeclarationIndex::ForeignLibrary(
@@ -1999,6 +2022,403 @@ impl ModuleProjection {
             span,
         }
     }
+}
+
+fn project_syntax_declaration(
+    source: &SourceFile,
+    child: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+) -> Result<SurfaceSyntaxDeclaration, ProjectionError> {
+    let declaration = is_declaration_syntax(child, tokens);
+    let name = direct_tokens(child, tokens)
+        .nth(if declaration { 5 } else { 2 })
+        .ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?;
+    if let Some(sequence) = extended_matcher(child) {
+        return Ok(SurfaceSyntaxDeclaration {
+            category: SurfaceSyntaxCategory::Declaration,
+            name: surface_name(name)?,
+            matcher: project_matcher_items(source, sequence, tokens)?,
+            implementation: SurfaceSyntaxImplementation::Template,
+            template_contents: Some(Vec::new().into()),
+            span: node_span(source, child, tokens)?,
+        });
+    }
+    let mut matcher = Vec::new();
+    let mut prefix = 0;
+    for element in &child.children {
+        match element {
+            ConcreteElement::Token(index) => {
+                let token = tokens.get(*index).ok_or(ProjectionError::MalformedTree(
+                    InternalReason::TokenOutOfRange,
+                ))?;
+                if prefix < if declaration { 7 } else { 3 } {
+                    prefix += 1;
+                } else if token.kind == TokenKind::FatArrow {
+                    break;
+                } else {
+                    let range = token.span.range();
+                    let spelling = source
+                        .text()
+                        .get(range.start() as usize..range.end() as usize)
+                        .ok_or(ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
+                    matcher.push(SurfaceSyntaxMatcherPart::Literal {
+                        kind: token.kind.clone(),
+                        spelling: spelling.to_owned(),
+                    });
+                }
+            }
+            ConcreteElement::Node(capture) if capture.kind == NodeKind::SyntaxCapture => {
+                let parts = direct_tokens(capture, tokens).collect::<Vec<_>>();
+                if parts.len() != 4 {
+                    return malformed(InternalReason::UnexpectedShape);
+                }
+                let kind = match &parts[3].kind {
+                    TokenKind::Identifier(kind) if kind == "expr" => {
+                        SurfaceSyntaxCaptureKind::Expression
+                    }
+                    TokenKind::Identifier(kind) if kind == "ident" => {
+                        SurfaceSyntaxCaptureKind::Identifier
+                    }
+                    TokenKind::Type if declaration => SurfaceSyntaxCaptureKind::Type,
+                    TokenKind::Identifier(kind) if declaration && kind == "pattern" => {
+                        SurfaceSyntaxCaptureKind::Pattern
+                    }
+                    TokenKind::Identifier(kind) if declaration && kind == "declaration" => {
+                        SurfaceSyntaxCaptureKind::Declaration
+                    }
+                    _ => return malformed(InternalReason::UnexpectedShape),
+                };
+                matcher.push(SurfaceSyntaxMatcherPart::Capture {
+                    name: surface_name(parts[1])?,
+                    kind,
+                });
+            }
+            _ => return malformed(InternalReason::UnexpectedShape),
+        }
+    }
+    let (implementation, template_contents) =
+        if let Some(block) = child_nodes(child).find(|node| node.kind == NodeKind::TemplateBody) {
+            let mut contents = capture_contents(source, block, tokens, &Default::default())?;
+            if declaration {
+                contents = match contents.pop() {
+                    Some(crate::syntax::MacroOutputNode::Group(
+                        crate::syntax::MacroDelimiter::Braces,
+                        mut children,
+                        _,
+                    )) if contents.is_empty() => {
+                        if matches!(
+                            children.first(),
+                            Some(crate::syntax::MacroOutputNode::Token(
+                                TokenKind::LineEnd,
+                                _,
+                                _
+                            ))
+                        ) {
+                            children.remove(0);
+                        }
+                        children
+                    }
+                    _ => return malformed(InternalReason::UnexpectedShape),
+                };
+            }
+            (SurfaceSyntaxImplementation::Template, Some(contents.into()))
+        } else {
+            let mut after_arrow = direct_tokens(child, tokens)
+                .skip_while(|token| token.kind != TokenKind::FatArrow)
+                .skip(1);
+            if after_arrow.next().map(|token| &token.token.kind) != Some(&TokenKind::Using) {
+                return malformed(InternalReason::UnexpectedShape);
+            }
+            let transformer = after_arrow.next().ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+            if after_arrow.next().is_some() {
+                return malformed(InternalReason::UnexpectedShape);
+            }
+            (
+                SurfaceSyntaxImplementation::Transformer(surface_name(transformer)?),
+                None,
+            )
+        };
+    Ok(SurfaceSyntaxDeclaration {
+        category: if declaration {
+            SurfaceSyntaxCategory::Declaration
+        } else {
+            SurfaceSyntaxCategory::Expression
+        },
+        name: surface_name(name)?,
+        matcher,
+        implementation,
+        template_contents,
+        span: node_span(source, child, tokens)?,
+    })
+}
+
+fn extended_matcher(child: &ConcreteNode) -> Option<&ConcreteNode> {
+    match child.children.get(7) {
+        Some(ConcreteElement::Node(node)) if node.kind == NodeKind::SyntaxMatcherSequence => {
+            Some(node)
+        }
+        _ => None,
+    }
+}
+
+fn matcher_token<'a>(
+    element: &ConcreteElement,
+    tokens: &'a ProjectionTokens<'_>,
+) -> Result<&'a Token, ProjectionError> {
+    let ConcreteElement::Token(index) = element else {
+        return malformed(InternalReason::UnexpectedShape);
+    };
+    tokens.get(*index).ok_or(ProjectionError::MalformedTree(
+        InternalReason::TokenOutOfRange,
+    ))
+}
+
+fn matcher_body<'a>(
+    node: &'a ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+) -> Result<&'a [ConcreteElement], ProjectionError> {
+    let len = node.children.len();
+    let (start, end) = match node.kind {
+        NodeKind::SyntaxMatcherSequence => (0, len),
+        NodeKind::SyntaxMatcherGroup if len >= 2 => (1, len - 1),
+        NodeKind::SyntaxMatcherRepeat if len >= 4 => {
+            let before_operator = matcher_token(&node.children[len - 2], tokens)?;
+            (
+                2,
+                if before_operator.kind == TokenKind::RightParen {
+                    len - 2
+                } else {
+                    len - 3
+                },
+            )
+        }
+        _ => return malformed(InternalReason::UnexpectedShape),
+    };
+    node.children
+        .get(start..end)
+        .ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))
+}
+
+fn matcher_spelling<'a>(source: &'a SourceFile, token: &Token) -> Result<&'a str, ProjectionError> {
+    let range = token.span.range();
+    source
+        .text()
+        .get(range.start() as usize..range.end() as usize)
+        .ok_or(ProjectionError::MalformedTree(InternalReason::InvalidSpan))
+}
+
+fn project_matcher_items(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+) -> Result<Vec<SurfaceSyntaxMatcherPart>, ProjectionError> {
+    let body = matcher_body(node, tokens)?;
+    let mut result = Vec::with_capacity(body.len());
+    for element in body {
+        let part =
+            match element {
+                ConcreteElement::Token(index) => {
+                    let token = tokens.get(*index).ok_or(ProjectionError::MalformedTree(
+                        InternalReason::TokenOutOfRange,
+                    ))?;
+                    if token.kind == TokenKind::LineEnd {
+                        SurfaceSyntaxMatcherPart::LineEnd
+                    } else {
+                        SurfaceSyntaxMatcherPart::Literal {
+                            kind: token.kind.clone(),
+                            spelling: matcher_spelling(source, token)?.to_owned(),
+                        }
+                    }
+                }
+                ConcreteElement::Node(capture) if capture.kind == NodeKind::SyntaxCapture => {
+                    let name = direct_tokens(capture, tokens).nth(1).ok_or(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+                    )?;
+                    SurfaceSyntaxMatcherPart::Capture {
+                        name: surface_name(name)?,
+                        kind: SurfaceSyntaxCaptureKind::Identifier,
+                    }
+                }
+                ConcreteElement::Node(container)
+                    if matches!(
+                        container.kind,
+                        NodeKind::SyntaxMatcherGroup | NodeKind::SyntaxMatcherRepeat
+                    ) =>
+                {
+                    let kind = if container.kind == NodeKind::SyntaxMatcherGroup {
+                        SurfaceMatcherContainerKind::Group {
+                            braces: matcher_token(&container.children[0], tokens)?.kind
+                                == TokenKind::LeftBrace,
+                        }
+                    } else {
+                        let len = container.children.len();
+                        let before_operator = matcher_token(&container.children[len - 2], tokens)?;
+                        let separator = if before_operator.kind == TokenKind::RightParen {
+                            None
+                        } else {
+                            Some((
+                                before_operator.kind.clone(),
+                                matcher_spelling(source, before_operator)?.to_owned(),
+                            ))
+                        };
+                        let operator = matcher_token(&container.children[len - 1], tokens)?;
+                        SurfaceMatcherContainerKind::Repeat {
+                            one_or_more: operator.kind == TokenKind::Plus,
+                            separator,
+                        }
+                    };
+                    let body = project_matcher_items(source, container, tokens)?;
+                    SurfaceSyntaxMatcherPart::Container(std::sync::Arc::new(
+                        SurfaceMatcherContainer { kind, body },
+                    ))
+                }
+                _ => return malformed(InternalReason::UnexpectedShape),
+            };
+        result.push(part);
+    }
+    Ok(result)
+}
+
+fn charge_matcher_items(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    depth: usize,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), DeclarationExpansionFailure> {
+    let body = matcher_body(node, tokens)?;
+    // Retained body slots plus the preflight and construction visits.
+    budget.charge_units(body.len())?;
+    for element in body {
+        budget.charge_units(2)?;
+        match element {
+            ConcreteElement::Token(index) => {
+                let token = tokens.get(*index).ok_or(ProjectionError::MalformedTree(
+                    InternalReason::TokenOutOfRange,
+                ))?;
+                if token.kind != TokenKind::LineEnd {
+                    crate::syntax::charge_type_token_copy(&token.kind, budget)?;
+                    budget.charge_units(matcher_spelling(source, token)?.len())?;
+                }
+            }
+            ConcreteElement::Node(capture) if capture.kind == NodeKind::SyntaxCapture => {
+                budget.charge_units(capture.children.len())?;
+                let mut parts = direct_tokens(capture, tokens);
+                let _ = parts.next();
+                let name = parts.next().ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                let _ = parts.next();
+                let kind = parts.next().ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                if !matches!(&kind.kind, TokenKind::Identifier(text) if text == "ident") {
+                    return Err(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                    );
+                }
+                let text = match &name.kind {
+                    TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => text,
+                    _ => {
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
+                    }
+                };
+                budget.charge()?;
+                budget.charge_units(text.len())?;
+            }
+            ConcreteElement::Node(container)
+                if matches!(
+                    container.kind,
+                    NodeKind::SyntaxMatcherGroup | NodeKind::SyntaxMatcherRepeat
+                ) =>
+            {
+                let next = depth
+                    .checked_add(1)
+                    .filter(|value| *value <= super::STRUCTURAL_DEPTH_LIMIT)
+                    .ok_or(ResourceFailure::StructuralDepth {
+                        limit: super::STRUCTURAL_DEPTH_LIMIT,
+                    })?;
+                // Payload, body owner and the reached recursive construction frame.
+                budget.charge_units(3)?;
+                if container.kind == NodeKind::SyntaxMatcherRepeat {
+                    let len = container.children.len();
+                    let separator = matcher_token(&container.children[len - 2], tokens)?;
+                    if separator.kind != TokenKind::RightParen {
+                        crate::syntax::charge_type_token_copy(&separator.kind, budget)?;
+                        budget.charge_units(matcher_spelling(source, separator)?.len())?;
+                    }
+                }
+                charge_matcher_items(source, container, tokens, next, budget)?;
+            }
+            _ => {
+                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn project_staged_source_child(
+    module: &mut ModuleProjection,
+    source: &SourceFile,
+    child: &ConcreteNode,
+    source_tokens: &[Token],
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), DeclarationExpansionFailure> {
+    let tokens = ProjectionTokens::source(source_tokens);
+    let Some(sequence) = extended_matcher(child) else {
+        return module
+            .project_child(source, child, &tokens)
+            .map_err(Into::into);
+    };
+    budget.charge_units(4)?;
+    let Some(ConcreteElement::Node(template)) = child.children.get(9) else {
+        return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+    };
+    if child.kind != NodeKind::SyntaxDeclaration || template.kind != NodeKind::TemplateBody {
+        return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+    }
+    budget.charge_units(template.children.len())?;
+    let empty = match template.children.as_slice() {
+        [left, right] => {
+            matcher_token(left, &tokens)?.kind == TokenKind::LeftBrace
+                && matcher_token(right, &tokens)?.kind == TokenKind::RightBrace
+        }
+        [left, line, right] => {
+            matcher_token(left, &tokens)?.kind == TokenKind::LeftBrace
+                && matcher_token(line, &tokens)?.kind == TokenKind::LineEnd
+                && matcher_token(right, &tokens)?.kind == TokenKind::RightBrace
+        }
+        _ => false,
+    };
+    if !empty {
+        return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+    }
+    let name = direct_tokens(child, &tokens)
+        .nth(5)
+        .ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?;
+    let name_length = match &name.kind {
+        TokenKind::Identifier(text) => text.len(),
+        _ => return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into()),
+    };
+    // Declaration slot, name, empty template Arc and the source-span walk.
+    budget.charge_units(8)?;
+    budget.charge_units(name_length)?;
+    charge_matcher_items(source, sequence, &tokens, 0, budget)?;
+    let declaration = project_syntax_declaration(source, child, &tokens)?;
+    module.syntax_declarations.push(declaration);
+    Ok(())
 }
 
 fn project_surface_module(
@@ -2113,7 +2533,11 @@ pub(crate) fn project_declaration_expansions(
     let (root, raw_tokens) = validated_root(source, tree)?;
     let source_tokens = ProjectionTokens::source(raw_tokens);
     if !child_nodes(root).any(|child| child.kind == NodeKind::DeclarationSyntaxInvocation) {
-        return project_surface_module(source, root, &source_tokens).map_err(Into::into);
+        let mut module = ModuleProjection::default();
+        for child in child_nodes(root) {
+            project_staged_source_child(&mut module, source, child, raw_tokens, budget)?;
+        }
+        return Ok(module.finish(node_span(source, root, &source_tokens)?));
     }
     let span = node_span(source, root, &source_tokens)?;
     budget.charge_units(owners.len())?;
@@ -2175,7 +2599,12 @@ pub(crate) fn project_declaration_expansions(
                     charge_generated_projection(child, &tokens, budget)?;
                 }
             }
-            module.project_child(source, child, &tokens)?;
+            match &current.tree {
+                DeclarationTree::Source(tree) => {
+                    project_staged_source_child(&mut module, source, child, &tree.tokens, budget)?
+                }
+                DeclarationTree::Output(_) => module.project_child(source, child, &tokens)?,
+            }
             continue;
         }
 
@@ -2189,6 +2618,12 @@ pub(crate) fn project_declaration_expansions(
             charge_declaration_invocation(source, child, &tokens, &current.contexts, true, budget)?;
         let invocation =
             project_declaration_invocation_node(source, child, &tokens, &current.contexts, true)?;
+        #[cfg(test)]
+        G1_CAPTURE_OBSERVER.with(|observer| {
+            if let Some(observe) = observer.get() {
+                observe(source, &invocation.captures, budget);
+            }
+        });
         // Reserve the owner and frame before retaining either one.
         budget.charge_units(2)?;
         staged_owners.push(crate::syntax::SyntaxOwner {
@@ -2343,6 +2778,402 @@ fn charge_staged_name_frames(
     charge_frame_additions(frames.len(), previous, budget)
 }
 
+fn matcher_capture_count(parts: &[SurfaceSyntaxMatcherPart]) -> Result<usize, ProjectionError> {
+    let mut count = 0usize;
+    for part in parts {
+        let added = match part {
+            SurfaceSyntaxMatcherPart::Capture {
+                kind: SurfaceSyntaxCaptureKind::Identifier,
+                ..
+            } => 1,
+            SurfaceSyntaxMatcherPart::Capture { .. } => {
+                return malformed(InternalReason::UnexpectedShape);
+            }
+            SurfaceSyntaxMatcherPart::Container(container) => {
+                matcher_capture_count(&container.body)?
+            }
+            SurfaceSyntaxMatcherPart::Literal { .. } | SurfaceSyntaxMatcherPart::LineEnd => 0,
+        };
+        count = count
+            .checked_add(added)
+            .ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+    }
+    Ok(count)
+}
+
+fn charge_matcher_capture_count(
+    parts: &[SurfaceSyntaxMatcherPart],
+    depth: usize,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<usize, DeclarationExpansionFailure> {
+    let mut count = 0usize;
+    for part in parts {
+        // This inspection and the materializer's corresponding count.
+        budget.charge_units(2)?;
+        let added = match part {
+            SurfaceSyntaxMatcherPart::Capture {
+                kind: SurfaceSyntaxCaptureKind::Identifier,
+                ..
+            } => 1,
+            SurfaceSyntaxMatcherPart::Capture { .. } => {
+                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+            }
+            SurfaceSyntaxMatcherPart::Container(container) => {
+                let next = depth
+                    .checked_add(1)
+                    .filter(|value| *value <= super::STRUCTURAL_DEPTH_LIMIT)
+                    .ok_or(ResourceFailure::StructuralDepth {
+                        limit: super::STRUCTURAL_DEPTH_LIMIT,
+                    })?;
+                budget.charge_units(2)?;
+                charge_matcher_capture_count(&container.body, next, budget)?
+            }
+            SurfaceSyntaxMatcherPart::Literal { .. } | SurfaceSyntaxMatcherPart::LineEnd => 0,
+        };
+        count = match count.checked_add(added) {
+            Some(value) => value,
+            None => {
+                // At least one of these reservations fails at the owner's limit.
+                budget.charge_units(usize::MAX)?;
+                budget.charge()?;
+                unreachable!()
+            }
+        };
+    }
+    Ok(count)
+}
+
+fn charge_structured_items<'a>(
+    source: &SourceFile,
+    parts: &'a [SurfaceSyntaxMatcherPart],
+    elements: &'a [ConcreteElement],
+    tokens: &ProjectionTokens<'_>,
+    depth: usize,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), DeclarationExpansionFailure> {
+    enum Frame<'a> {
+        Items {
+            parts: &'a [SurfaceSyntaxMatcherPart],
+            elements: &'a [ConcreteElement],
+            index: usize,
+            depth: usize,
+            entered: bool,
+        },
+        Repeat {
+            body: &'a [SurfaceSyntaxMatcherPart],
+            elements: &'a [ConcreteElement],
+            separator: &'a Option<(TokenKind, String)>,
+            index: usize,
+            depth: usize,
+            iterations: usize,
+            expect_iteration: bool,
+        },
+    }
+
+    fn push<'a>(
+        frames: &mut Vec<Frame<'a>>,
+        logical_capacity: &mut usize,
+        frame: Frame<'a>,
+        budget: &mut crate::syntax_resource::SyntaxBudget,
+    ) -> Result<(), DeclarationExpansionFailure> {
+        if frames.len() == *logical_capacity {
+            let capacity = frames.len().saturating_mul(2).max(4);
+            // Both this walk and the materializer use the same DFS frame
+            // schedule and logical growth. Pay for both allocations and moves.
+            budget.charge_units(capacity.saturating_add(frames.len()).saturating_mul(2))?;
+            frames.reserve_exact(capacity - frames.len());
+            *logical_capacity = capacity;
+        }
+        budget.charge_units(2)?;
+        frames.push(frame);
+        Ok(())
+    }
+
+    let mut frames = Vec::new();
+    let mut logical_capacity = 0;
+    push(
+        &mut frames,
+        &mut logical_capacity,
+        Frame::Items {
+            parts,
+            elements,
+            index: 0,
+            depth,
+            entered: false,
+        },
+        budget,
+    )?;
+    while let Some(frame) = frames.last_mut() {
+        match frame {
+            Frame::Items {
+                parts,
+                elements,
+                index,
+                depth,
+                entered,
+            } => {
+                let parts = *parts;
+                let elements = *elements;
+                let depth = *depth;
+                if !*entered {
+                    let slots = charge_matcher_capture_count(parts, depth, budget)?;
+                    // The materializer's result, root extension and possible vector move.
+                    budget.charge_units(slots.saturating_mul(3))?;
+                    *entered = true;
+                    continue;
+                }
+                if *index == parts.len() {
+                    if *index != elements.len() {
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
+                    }
+                    frames.pop();
+                    continue;
+                }
+                budget.charge_units(2)?;
+                let part = &parts[*index];
+                let element = elements.get(*index).ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                *index += 1;
+                match (part, element) {
+                    (SurfaceSyntaxMatcherPart::Literal { kind, spelling }, element) => {
+                        let token = matcher_token(element, tokens)?;
+                        let actual = matcher_spelling(source, token)?;
+                        budget.charge_units(
+                            spelling
+                                .len()
+                                .saturating_add(actual.len())
+                                .saturating_add(2)
+                                .saturating_mul(2),
+                        )?;
+                        if token.kind != *kind || actual != spelling {
+                            return Err(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            )
+                            .into());
+                        }
+                    }
+                    (SurfaceSyntaxMatcherPart::LineEnd, element) => {
+                        if matcher_token(element, tokens)?.kind != TokenKind::LineEnd {
+                            return Err(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            )
+                            .into());
+                        }
+                    }
+                    (
+                        SurfaceSyntaxMatcherPart::Capture {
+                            kind: SurfaceSyntaxCaptureKind::Identifier,
+                            ..
+                        },
+                        ConcreteElement::Node(argument),
+                    ) if argument.kind == NodeKind::SyntaxArgument => {
+                        budget.charge_units(argument.children.len().saturating_mul(2))?;
+                        let token = only_direct_token(argument, tokens)?;
+                        let text = match &token.kind {
+                            TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text)
+                                if token.original.is_none() =>
+                            {
+                                text
+                            }
+                            _ => {
+                                return Err(ProjectionError::MalformedTree(
+                                    InternalReason::UnexpectedShape,
+                                )
+                                .into());
+                            }
+                        };
+                        // Source name, text and source-origin retention.
+                        budget.charge_units(2)?;
+                        budget.charge_units(text.len())?;
+                    }
+                    (
+                        SurfaceSyntaxMatcherPart::Container(container),
+                        ConcreteElement::Node(matched),
+                    ) => {
+                        let next = depth
+                            .checked_add(1)
+                            .filter(|value| *value <= super::STRUCTURAL_DEPTH_LIMIT)
+                            .ok_or(ResourceFailure::StructuralDepth {
+                                limit: super::STRUCTURAL_DEPTH_LIMIT,
+                            })?;
+                        budget.charge_units(2)?;
+                        match &container.kind {
+                            SurfaceMatcherContainerKind::Group { braces }
+                                if matched.kind == NodeKind::SyntaxMatchedGroup =>
+                            {
+                                let len = matched.children.len();
+                                if len < 2 {
+                                    return Err(ProjectionError::MalformedTree(
+                                        InternalReason::UnexpectedShape,
+                                    )
+                                    .into());
+                                }
+                                let open = matcher_token(&matched.children[0], tokens)?;
+                                let close = matcher_token(&matched.children[len - 1], tokens)?;
+                                let delimiters_match = if *braces {
+                                    open.kind == TokenKind::LeftBrace
+                                        && close.kind == TokenKind::RightBrace
+                                } else {
+                                    open.kind == TokenKind::LeftParen
+                                        && close.kind == TokenKind::RightParen
+                                };
+                                if !delimiters_match {
+                                    return Err(ProjectionError::MalformedTree(
+                                        InternalReason::UnexpectedShape,
+                                    )
+                                    .into());
+                                }
+                                // The materializer also reads the closing token for the source span.
+                                budget.charge()?;
+                                push(
+                                    &mut frames,
+                                    &mut logical_capacity,
+                                    Frame::Items {
+                                        parts: &container.body,
+                                        elements: &matched.children[1..len - 1],
+                                        index: 0,
+                                        depth: next,
+                                        entered: false,
+                                    },
+                                    budget,
+                                )?;
+                            }
+                            SurfaceMatcherContainerKind::Repeat {
+                                one_or_more,
+                                separator,
+                            } if matched.kind == NodeKind::SyntaxMatchedRepeat => {
+                                let inner_slots =
+                                    charge_matcher_capture_count(&container.body, next, budget)?;
+                                // Count and row walks in both this preflight and the materializer.
+                                budget.charge_units(matched.children.len().saturating_mul(4))?;
+                                let iterations = matched.children.iter().filter(|element| matches!(element,
+                                    ConcreteElement::Node(node) if node.kind == NodeKind::SyntaxMatchedIteration)).count();
+                                if *one_or_more && iterations == 0 {
+                                    return Err(ProjectionError::MalformedTree(
+                                        InternalReason::UnexpectedShape,
+                                    )
+                                    .into());
+                                }
+                                // Per-slot accumulator Vecs, final Arc payloads and iteration slots.
+                                budget.charge_units(inner_slots.saturating_mul(2))?;
+                                budget.charge_units(inner_slots.saturating_mul(iterations))?;
+                                push(
+                                    &mut frames,
+                                    &mut logical_capacity,
+                                    Frame::Repeat {
+                                        body: &container.body,
+                                        elements: &matched.children,
+                                        separator,
+                                        index: 0,
+                                        depth: next,
+                                        iterations,
+                                        expect_iteration: true,
+                                    },
+                                    budget,
+                                )?;
+                            }
+                            _ => {
+                                return Err(ProjectionError::MalformedTree(
+                                    InternalReason::UnexpectedShape,
+                                )
+                                .into());
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
+                    }
+                }
+            }
+            Frame::Repeat {
+                body,
+                elements,
+                separator,
+                index,
+                depth,
+                iterations,
+                expect_iteration,
+            } => {
+                let body = *body;
+                let elements = *elements;
+                let separator = *separator;
+                let depth = *depth;
+                if *index == elements.len() {
+                    if separator.is_some() && *iterations > 0 && *expect_iteration {
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
+                    }
+                    frames.pop();
+                    continue;
+                }
+                let element = &elements[*index];
+                *index += 1;
+                match element {
+                    ConcreteElement::Node(iteration)
+                        if *expect_iteration
+                            && iteration.kind == NodeKind::SyntaxMatchedIteration =>
+                    {
+                        *expect_iteration = separator.is_none();
+                        push(
+                            &mut frames,
+                            &mut logical_capacity,
+                            Frame::Items {
+                                parts: body,
+                                elements: &iteration.children,
+                                index: 0,
+                                depth,
+                                entered: false,
+                            },
+                            budget,
+                        )?;
+                    }
+                    element if !*expect_iteration => {
+                        let (kind, spelling) = separator.as_ref().ok_or(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+                        )?;
+                        let token = matcher_token(element, tokens)?;
+                        let actual = matcher_spelling(source, token)?;
+                        budget.charge_units(
+                            spelling
+                                .len()
+                                .saturating_add(actual.len())
+                                .saturating_add(2)
+                                .saturating_mul(2),
+                        )?;
+                        if token.kind != *kind || actual != spelling {
+                            return Err(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            )
+                            .into());
+                        }
+                        // The materializer also reads each separator's source span.
+                        budget.charge()?;
+                        *expect_iteration = true;
+                    }
+                    _ => {
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Reserve supported captures before the shared invocation projector can copy them.
 fn charge_declaration_invocation(
     source: &SourceFile,
@@ -2390,6 +3221,7 @@ fn charge_declaration_invocation(
     budget.charge_units(selection.declaration.matcher.len())?;
     let mut has_declaration = false;
     let mut has_other_capture = false;
+    let mut has_structured = false;
     for part in &selection.declaration.matcher {
         match part {
             SurfaceSyntaxMatcherPart::Literal { spelling, .. } => {
@@ -2401,6 +3233,9 @@ fn charge_declaration_invocation(
                 SurfaceSyntaxCaptureKind::Identifier => {}
                 _ => has_other_capture = true,
             },
+            SurfaceSyntaxMatcherPart::Container(_) | SurfaceSyntaxMatcherPart::LineEnd => {
+                has_structured = true
+            }
         }
     }
     budget.charge_units(selection.declaration.matcher.len())?;
@@ -2416,6 +3251,31 @@ fn charge_declaration_invocation(
             selection.declaration.implementation,
             SurfaceSyntaxImplementation::Transformer(_)
         );
+    if has_structured {
+        if !executing
+            || has_declaration
+            || has_other_capture
+            || !source_projection_tokens(tokens)
+            || !template
+            || !selection
+                .declaration
+                .template_contents
+                .as_deref()
+                .is_some_and(<[_]>::is_empty)
+        {
+            return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+        }
+        crate::syntax::charge_selected(selection, budget)?;
+        charge_structured_items(
+            source,
+            &selection.declaration.matcher,
+            &node.children[1..],
+            tokens,
+            1,
+            budget,
+        )?;
+        return Ok(false);
+    }
     if selection.declaration.category != SurfaceSyntaxCategory::Declaration
         || (executing && !template && !declaration_transformer)
         || (has_declaration
@@ -2439,7 +3299,9 @@ fn charge_declaration_invocation(
         .iter()
         .filter_map(|part| match part {
             SurfaceSyntaxMatcherPart::Capture { kind, .. } => Some(kind),
-            SurfaceSyntaxMatcherPart::Literal { .. } => None,
+            SurfaceSyntaxMatcherPart::Literal { .. }
+            | SurfaceSyntaxMatcherPart::Container(_)
+            | SurfaceSyntaxMatcherPart::LineEnd => None,
         });
     let mut expression_pattern = false;
     for argument in child_nodes(node).filter(|child| child.kind == NodeKind::SyntaxArgument) {
@@ -4428,7 +5290,45 @@ fn project_declaration_invocation_from_tokens(
     {
         return malformed(InternalReason::UnexpectedShape);
     }
-    project_declaration_invocation_node(source, node, tokens, contexts, false)
+    let Some(ConcreteElement::Token(index)) = node.children.first() else {
+        return malformed(InternalReason::UnexpectedShape);
+    };
+    let token = tokens
+        .projection_token(*index)
+        .ok_or(ProjectionError::MalformedTree(
+            InternalReason::TokenOutOfRange,
+        ))?;
+    let (text, introduction) = match token.original {
+        Some(crate::syntax::MacroOutputNode::Identifier(name, _)) => {
+            (name.text.as_str(), name.introduction)
+        }
+        Some(
+            crate::syntax::MacroOutputNode::Expression(_, _)
+            | crate::syntax::MacroOutputNode::ForwardedExpression(_, _)
+            | crate::syntax::MacroOutputNode::ForwardedType(_, _)
+            | crate::syntax::MacroOutputNode::ForwardedPattern(_, _),
+        ) => return malformed(InternalReason::UnexpectedShape),
+        _ => match &token.kind {
+            TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => (text.as_str(), 0),
+            _ => return malformed(InternalReason::UnexpectedShape),
+        },
+    };
+    let selection = contexts
+        .select_parts(text, introduction)
+        .filter(|selected| selected.declaration.category == SurfaceSyntaxCategory::Declaration)
+        .ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?;
+    if selection.declaration.matcher.iter().any(|part| {
+        matches!(
+            part,
+            SurfaceSyntaxMatcherPart::Container(_) | SurfaceSyntaxMatcherPart::LineEnd
+        )
+    }) {
+        return malformed(InternalReason::UnexpectedShape);
+    }
+    let name = surface_name(token)?;
+    project_selected_declaration_invocation_node(source, node, tokens, name, selection, false)
 }
 
 fn project_declaration_invocation_node(
@@ -4450,12 +5350,282 @@ fn project_declaration_invocation_node(
         .filter(|selected| selected.declaration.category == SurfaceSyntaxCategory::Declaration)
         .ok_or(ProjectionError::MalformedTree(
             InternalReason::UnexpectedShape,
-        ))?
-        .clone();
+        ))?;
+    project_selected_declaration_invocation_node(
+        source,
+        node,
+        tokens,
+        name,
+        selection,
+        allow_declaration,
+    )
+}
+
+fn project_structured_items<'a>(
+    source: &SourceFile,
+    parts: &'a [SurfaceSyntaxMatcherPart],
+    elements: &'a [ConcreteElement],
+    tokens: &ProjectionTokens<'_>,
+) -> Result<(Vec<SurfaceSyntaxCapture>, Option<Span>), ProjectionError> {
+    enum Frame<'a> {
+        Items {
+            parts: &'a [SurfaceSyntaxMatcherPart],
+            elements: &'a [ConcreteElement],
+            index: usize,
+            captures: Vec<SurfaceSyntaxCapture>,
+            after_span: Option<Span>,
+        },
+        Repeat {
+            body: &'a [SurfaceSyntaxMatcherPart],
+            elements: &'a [ConcreteElement],
+            index: usize,
+            slots: usize,
+            columns: Vec<Vec<SurfaceSyntaxCapture>>,
+        },
+    }
+
+    fn push<'a>(frames: &mut Vec<Frame<'a>>, logical_capacity: &mut usize, frame: Frame<'a>) {
+        if frames.len() == *logical_capacity {
+            // This is the same logical growth schedule reserved by the preflight.
+            let capacity = frames.len().saturating_mul(2).max(4);
+            frames.reserve_exact(capacity - frames.len());
+            *logical_capacity = capacity;
+        }
+        frames.push(frame);
+    }
+
+    fn push_items<'a>(
+        frames: &mut Vec<Frame<'a>>,
+        logical_capacity: &mut usize,
+        parts: &'a [SurfaceSyntaxMatcherPart],
+        elements: &'a [ConcreteElement],
+        after_span: Option<Span>,
+    ) -> Result<(), ProjectionError> {
+        let captures = Vec::with_capacity(matcher_capture_count(parts)?);
+        push(
+            frames,
+            logical_capacity,
+            Frame::Items {
+                parts,
+                elements,
+                index: 0,
+                captures,
+                after_span,
+            },
+        );
+        Ok(())
+    }
+
+    let mut frames = Vec::new();
+    let mut logical_capacity = 0;
+    let mut last_span = None;
+    push_items(&mut frames, &mut logical_capacity, parts, elements, None)?;
+    while let Some(frame) = frames.last_mut() {
+        match frame {
+            Frame::Items {
+                parts,
+                elements,
+                index,
+                captures,
+                ..
+            } => {
+                let parts = *parts;
+                let elements = *elements;
+                if *index == parts.len() {
+                    if *index != elements.len() {
+                        return malformed(InternalReason::UnexpectedShape);
+                    }
+                    let Some(Frame::Items {
+                        captures,
+                        after_span,
+                        ..
+                    }) = frames.pop()
+                    else {
+                        unreachable!();
+                    };
+                    if let Some(span) = after_span {
+                        last_span = Some(span);
+                    }
+                    match frames.last_mut() {
+                        None => return Ok((captures, last_span)),
+                        Some(Frame::Items {
+                            captures: parent, ..
+                        }) => parent.extend(captures),
+                        Some(Frame::Repeat { slots, columns, .. }) => {
+                            if captures.len() != *slots {
+                                return malformed(InternalReason::UnexpectedShape);
+                            }
+                            for (column, value) in columns.iter_mut().zip(captures) {
+                                column.push(value);
+                            }
+                        }
+                    }
+                    continue;
+                }
+                let part = &parts[*index];
+                let element = elements.get(*index).ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                *index += 1;
+                match (part, element) {
+                    (SurfaceSyntaxMatcherPart::Literal { kind, spelling }, element) => {
+                        let token = matcher_token(element, tokens)?;
+                        if token.kind != *kind || matcher_spelling(source, token)? != spelling {
+                            return malformed(InternalReason::UnexpectedShape);
+                        }
+                        last_span = Some(token.span);
+                    }
+                    (SurfaceSyntaxMatcherPart::LineEnd, element) => {
+                        let token = matcher_token(element, tokens)?;
+                        if token.kind != TokenKind::LineEnd {
+                            return malformed(InternalReason::UnexpectedShape);
+                        }
+                        last_span = Some(token.span);
+                    }
+                    (
+                        SurfaceSyntaxMatcherPart::Capture {
+                            kind: SurfaceSyntaxCaptureKind::Identifier,
+                            ..
+                        },
+                        ConcreteElement::Node(argument),
+                    ) if argument.kind == NodeKind::SyntaxArgument => {
+                        let name = surface_name(only_direct_token(argument, tokens)?)?;
+                        last_span = Some(name.span);
+                        let origin = name.span.into();
+                        captures.push(SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+                            name,
+                            origin,
+                        }));
+                    }
+                    (
+                        SurfaceSyntaxMatcherPart::Container(container),
+                        ConcreteElement::Node(matched),
+                    ) => match &container.kind {
+                        SurfaceMatcherContainerKind::Group { .. }
+                            if matched.kind == NodeKind::SyntaxMatchedGroup =>
+                        {
+                            let len = matched.children.len();
+                            if len < 2 {
+                                return malformed(InternalReason::UnexpectedShape);
+                            }
+                            let close = matcher_token(&matched.children[len - 1], tokens)?;
+                            push_items(
+                                &mut frames,
+                                &mut logical_capacity,
+                                &container.body,
+                                &matched.children[1..len - 1],
+                                Some(close.span),
+                            )?;
+                        }
+                        SurfaceMatcherContainerKind::Repeat { .. }
+                            if matched.kind == NodeKind::SyntaxMatchedRepeat =>
+                        {
+                            let slots = matcher_capture_count(&container.body)?;
+                            let iterations = matched.children.iter().filter(|element| matches!(element,
+                                ConcreteElement::Node(node) if node.kind == NodeKind::SyntaxMatchedIteration)).count();
+                            let columns = (0..slots)
+                                .map(|_| Vec::with_capacity(iterations))
+                                .collect::<Vec<_>>();
+                            push(
+                                &mut frames,
+                                &mut logical_capacity,
+                                Frame::Repeat {
+                                    body: &container.body,
+                                    elements: &matched.children,
+                                    index: 0,
+                                    slots,
+                                    columns,
+                                },
+                            );
+                        }
+                        _ => return malformed(InternalReason::UnexpectedShape),
+                    },
+                    _ => return malformed(InternalReason::UnexpectedShape),
+                }
+            }
+            Frame::Repeat {
+                body,
+                elements,
+                index,
+                ..
+            } => {
+                let body = *body;
+                let elements = *elements;
+                if *index == elements.len() {
+                    let Some(Frame::Repeat { columns, .. }) = frames.pop() else {
+                        unreachable!();
+                    };
+                    let Some(Frame::Items { captures, .. }) = frames.last_mut() else {
+                        unreachable!();
+                    };
+                    for values in columns {
+                        captures.push(SurfaceSyntaxCapture::Repeated(std::sync::Arc::new(
+                            SurfaceRepeatedCapture { values },
+                        )));
+                    }
+                    continue;
+                }
+                let element = &elements[*index];
+                *index += 1;
+                match element {
+                    ConcreteElement::Node(iteration) => {
+                        if iteration.kind != NodeKind::SyntaxMatchedIteration {
+                            return malformed(InternalReason::UnexpectedShape);
+                        }
+                        push_items(
+                            &mut frames,
+                            &mut logical_capacity,
+                            body,
+                            &iteration.children,
+                            None,
+                        )?;
+                    }
+                    ConcreteElement::Token(index) => {
+                        let token = tokens.get(*index).ok_or(ProjectionError::MalformedTree(
+                            InternalReason::TokenOutOfRange,
+                        ))?;
+                        last_span = Some(token.span);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    unreachable!()
+}
+
+fn project_selected_declaration_invocation_node(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    name: SurfaceName,
+    selected: &crate::syntax::SelectedSyntax,
+    allow_declaration: bool,
+) -> Result<ProjectedDeclarationInvocation, ProjectionError> {
+    let selection = selected.clone();
+    let mut children = node.children.iter();
+    let _ = children.next();
     let empty = std::collections::HashMap::new();
     let originals = tokens.originals.unwrap_or(&empty);
     let mut captures = Vec::new();
-    for part in &selection.declaration.matcher {
+    let mut prefix_edge = name.span;
+    let mut structured_edge = None;
+    for (position, part) in selection.declaration.matcher.iter().enumerate() {
+        if matches!(
+            part,
+            SurfaceSyntaxMatcherPart::Container(_) | SurfaceSyntaxMatcherPart::LineEnd
+        ) {
+            let (tail, last_span) = project_structured_items(
+                source,
+                &selection.declaration.matcher[position..],
+                children.as_slice(),
+                tokens,
+            )?;
+            structured_edge = Some(last_span.unwrap_or(prefix_edge));
+            captures.extend(tail);
+            while children.next().is_some() {}
+            break;
+        }
         match (part, children.next()) {
             (
                 SurfaceSyntaxMatcherPart::Literal { kind, spelling },
@@ -4479,15 +5649,16 @@ fn project_declaration_invocation_node(
                 if &token.kind != kind || actual != Some(spelling.as_str()) {
                     return malformed(InternalReason::UnexpectedShape);
                 }
+                prefix_edge = token.span;
             }
             (
                 SurfaceSyntaxMatcherPart::Capture { kind, .. },
                 Some(ConcreteElement::Node(argument)),
             ) if argument.kind == NodeKind::SyntaxArgument => match kind {
                 SurfaceSyntaxCaptureKind::Identifier => {
-                    captures.push(SurfaceSyntaxCapture::Identifier(
-                        project_syntax_identifier_capture(argument, tokens, originals)?,
-                    ));
+                    let capture = project_syntax_identifier_capture(argument, tokens, originals)?;
+                    prefix_edge = capture.name.span;
+                    captures.push(SurfaceSyntaxCapture::Identifier(capture));
                 }
                 SurfaceSyntaxCaptureKind::Expression => {
                     let expression = child_nodes(argument)
@@ -4552,11 +5723,15 @@ fn project_declaration_invocation_node(
     if children.next().is_some() {
         return malformed(InternalReason::UnexpectedShape);
     }
+    let span = match structured_edge {
+        Some(end) => join_spans(source, name.span, end)?,
+        None => node_span(source, node, tokens)?,
+    };
     Ok(ProjectedDeclarationInvocation {
         selection,
         name,
         captures,
-        span: node_span(source, node, tokens)?,
+        span,
     })
 }
 
@@ -7271,6 +8446,637 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn g1_literal_only_rows_pay_all_reached_child_visits() {
+        use crate::{source::ByteRange, syntax::SelectedSyntax, syntax_resource::SyntaxBudget};
+
+        fn paid(rows: usize) -> usize {
+            let definition = SourceFile::new(
+                "zero-slot-forms.ash",
+                "pub syntax declaration: (sink) $( word ),* => {}\n",
+            )
+            .unwrap();
+            let definition_tree = parse(lex(&definition).unwrap());
+            let (root, tokens) = validated_root(&definition, &definition_tree).unwrap();
+            let child = child_nodes(root)
+                .find(|node| node.kind == NodeKind::SyntaxDeclaration)
+                .unwrap();
+            let mut module = ModuleProjection::default();
+            project_staged_source_child(
+                &mut module,
+                &definition,
+                child,
+                tokens,
+                &mut SyntaxBudget::default(),
+            )
+            .unwrap();
+            let declaration = module.syntax_declarations.pop().unwrap();
+            let import_span = definition.span(ByteRange::new(0, 0).unwrap()).unwrap();
+            let selected = SelectedSyntax {
+                name: "sink".into(),
+                declaration,
+                owner: 0,
+                import_span,
+            };
+            let arguments = std::iter::repeat_n("word", rows)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let caller =
+                SourceFile::new("zero-slot-main.ash", format!("sink {arguments}\n")).unwrap();
+            let (tokens, lexical, budget, failure) = lex(&caller).unwrap().into_parts();
+            assert!(failure.is_none());
+            let (checkpoint, budget) = super::super::parse_module_header(tokens, lexical, budget);
+            let (tree, _) = super::super::finish_module_from_checkpoint_with_syntax(
+                checkpoint,
+                budget,
+                Some(&caller),
+                std::slice::from_ref(&selected),
+            );
+            let (root, tokens) = validated_root(&caller, &tree).unwrap();
+            let invocation = child_nodes(root)
+                .find(|node| node.kind == NodeKind::DeclarationSyntaxInvocation)
+                .unwrap();
+            let Some(ConcreteElement::Node(repeat)) = invocation.children.get(1) else {
+                panic!("expected actual matched repetition");
+            };
+            assert_eq!(repeat.kind, NodeKind::SyntaxMatchedRepeat);
+            assert_eq!(
+                repeat.children.len(),
+                rows.saturating_mul(2).saturating_sub(usize::from(rows > 0))
+            );
+            let projected_tokens = ProjectionTokens::source(tokens);
+            let mut budget = SyntaxBudget::with_limit(super::super::SYNTAX_WORK_LIMIT);
+            budget.charge_units(17).unwrap();
+            charge_structured_items(
+                &caller,
+                &selected.declaration.matcher,
+                &invocation.children[1..],
+                &projected_tokens,
+                1,
+                &mut budget,
+            )
+            .unwrap();
+            let total = budget.consumed();
+            assert!(
+                project_structured_items(
+                    &caller,
+                    &selected.declaration.matcher,
+                    &invocation.children[1..],
+                    &projected_tokens
+                )
+                .unwrap()
+                .0
+                .is_empty()
+            );
+            let mut short = SyntaxBudget::with_limit(total - 1);
+            short.charge_units(17).unwrap();
+            assert!(
+                matches!(charge_structured_items(&caller, &selected.declaration.matcher, &invocation.children[1..], &projected_tokens, 1, &mut short), Err(DeclarationExpansionFailure::Syntax { resource: Some(ResourceFailure::SyntaxWork { limit }), .. }) if limit == total - 1)
+            );
+            assert!(short.consumed() >= 17 && short.consumed() <= total - 1);
+            let mut exact = SyntaxBudget::with_limit(total);
+            exact.charge_units(17).unwrap();
+            charge_structured_items(
+                &caller,
+                &selected.declaration.matcher,
+                &invocation.children[1..],
+                &projected_tokens,
+                1,
+                &mut exact,
+            )
+            .unwrap();
+            assert_eq!(exact.consumed(), total);
+            total - 17
+        }
+
+        let empty = paid(0);
+        let one = paid(1);
+        let two = paid(2);
+        let ten = paid(10);
+        assert!(one > empty);
+        // Each added row: two child slots scanned four times (8), one row's
+        // frame/count/visit/comparison (26), and separator comparison and span read (9).
+        assert_eq!(two - one, 43);
+        assert_eq!(ten - one, 9 * 43);
+    }
+
+    #[test]
+    fn g1_structured_invocation_spans_follow_actual_source_tokens() {
+        use crate::{source::ByteRange, syntax::SelectedSyntax, syntax_resource::SyntaxBudget};
+
+        for (matcher, invocation, shape) in [
+            ("$( row $item:ident ),*", "sink", 0),
+            ("prefix $item:ident $( marker )*", "sink prefix Alpha", 1),
+            (
+                "$( row $outer:ident $( item $inner:ident ),* );*",
+                "sink row Alpha",
+                2,
+            ),
+            ("{ $( item $item:ident ),* }", "sink { }", 0),
+            ("{ $item:ident }", "sink { Alpha }", 1),
+            ("$( word ),*", "sink word, word", 3),
+        ] {
+            let definition = SourceFile::new(
+                "span-forms.ash",
+                format!("pub syntax declaration: (sink) {matcher} => {{}}\n"),
+            )
+            .unwrap();
+            let tree = h1_tree(&definition, &[]);
+            let (root, tokens) = validated_root(&definition, &tree).unwrap();
+            let child = child_nodes(root)
+                .find(|node| node.kind == NodeKind::SyntaxDeclaration)
+                .unwrap();
+            let mut module = ModuleProjection::default();
+            project_staged_source_child(
+                &mut module,
+                &definition,
+                child,
+                tokens,
+                &mut SyntaxBudget::default(),
+            )
+            .unwrap();
+            let selected = [SelectedSyntax {
+                name: "sink".into(),
+                declaration: module.syntax_declarations.pop().unwrap(),
+                owner: 0,
+                import_span: definition.span(ByteRange::new(0, 0).unwrap()).unwrap(),
+            }];
+            let caller = SourceFile::new("span-main.ash", format!("{invocation}\n")).unwrap();
+            let tree = h1_tree(&caller, &selected);
+            let (root, tokens) = validated_root(&caller, &tree).unwrap();
+            let node = child_nodes(root)
+                .find(|node| node.kind == NodeKind::DeclarationSyntaxInvocation)
+                .unwrap();
+            let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+            let tokens = ProjectionTokens::source(tokens);
+            let mut budget = SyntaxBudget::default();
+            budget.charge_units(17).unwrap();
+            charge_declaration_invocation(&caller, node, &tokens, &contexts, true, &mut budget)
+                .unwrap();
+            let projected =
+                project_declaration_invocation_node(&caller, node, &tokens, &contexts, true)
+                    .unwrap();
+            let range = projected.span.range();
+            assert_eq!(projected.span.source(), caller.id());
+            assert_eq!(
+                &caller.text()[range.start() as usize..range.end() as usize],
+                invocation
+            );
+            match shape {
+                0 => {
+                    let [SurfaceSyntaxCapture::Repeated(values)] = projected.captures.as_slice()
+                    else {
+                        panic!("expected an empty repeated capture");
+                    };
+                    assert!(values.values.is_empty());
+                }
+                1 => assert!(matches!(
+                    projected.captures.as_slice(),
+                    [SurfaceSyntaxCapture::Identifier(value)] if value.name.text == "Alpha"
+                )),
+                2 => {
+                    let [
+                        SurfaceSyntaxCapture::Repeated(outer),
+                        SurfaceSyntaxCapture::Repeated(inner),
+                    ] = projected.captures.as_slice()
+                    else {
+                        panic!("expected two repeated capture columns");
+                    };
+                    assert!(matches!(outer.values.as_slice(),
+                        [SurfaceSyntaxCapture::Identifier(value)] if value.name.text == "Alpha"));
+                    assert!(matches!(inner.values.as_slice(),
+                        [SurfaceSyntaxCapture::Repeated(values)] if values.values.is_empty()));
+                }
+                3 => assert!(projected.captures.is_empty()),
+                _ => unreachable!(),
+            }
+        }
+        eprintln!("g1 source spans: zero, prefix, nested empty, group close, separator");
+    }
+
+    #[test]
+    fn g1_structured_source_guard_boundaries_refuse_before_construction() {
+        use crate::{
+            source::ByteRange,
+            syntax::{SelectedSyntax, SyntaxContexts},
+            syntax_resource::SyntaxBudget,
+        };
+        use std::sync::Arc;
+
+        let definition = SourceFile::new(
+            "guard-forms.ash",
+            "pub syntax declaration: (sink) ( $value:ident ) => {}\n",
+        )
+        .unwrap();
+        let definition_tree = parse(lex(&definition).unwrap());
+        let (root, tokens) = validated_root(&definition, &definition_tree).unwrap();
+        let child = child_nodes(root)
+            .find(|child| child.kind == NodeKind::SyntaxDeclaration)
+            .unwrap();
+        let mut module = ModuleProjection::default();
+        project_staged_source_child(
+            &mut module,
+            &definition,
+            child,
+            tokens,
+            &mut SyntaxBudget::default(),
+        )
+        .unwrap();
+        let declaration = module.syntax_declarations.pop().unwrap();
+        let import_span = definition.span(ByteRange::new(0, 0).unwrap()).unwrap();
+        let selected = [SelectedSyntax {
+            name: "sink".into(),
+            declaration,
+            owner: 0,
+            import_span,
+        }];
+        let contexts = SyntaxContexts::new(&selected, &[], &[]);
+        let [SurfaceSyntaxMatcherPart::Container(root)] =
+            selected[0].declaration.matcher.as_slice()
+        else {
+            panic!("expected real group payload");
+        };
+        let references = Arc::strong_count(root);
+        let mut measured = SyntaxBudget::with_limit(10_000);
+        measured.charge_units(17).unwrap();
+        crate::syntax::charge_selected(&selected[0], &mut measured).unwrap();
+        let total = measured.consumed();
+        let mut short = SyntaxBudget::with_limit(total - 1);
+        short.charge_units(17).unwrap();
+        assert!(
+            matches!(crate::syntax::charge_selected(&selected[0], &mut short),
+            Err(ResourceFailure::SyntaxWork { limit }) if limit == total - 1)
+        );
+        assert!(short.consumed() >= 17 && short.consumed() <= total - 1);
+        assert_eq!(Arc::strong_count(root), references);
+        let mut exact = SyntaxBudget::with_limit(total);
+        exact.charge_units(17).unwrap();
+        crate::syntax::charge_selected(&selected[0], &mut exact).unwrap();
+        assert_eq!(exact.consumed(), total);
+        let copied = selected[0].clone();
+        let [SurfaceSyntaxMatcherPart::Container(copied_root)] =
+            copied.declaration.matcher.as_slice()
+        else {
+            panic!("expected copied group");
+        };
+        assert!(Arc::ptr_eq(root, copied_root));
+        assert_eq!(Arc::strong_count(root), references + 1);
+        drop(copied);
+        assert_eq!(Arc::strong_count(root), references);
+        let source = SourceFile::new("guard-caller.ash", "sink (Alpha)\n").unwrap();
+        let tree = h1_tree(&source, &selected);
+        let node = child_nodes(tree.root().unwrap()).next().unwrap();
+        assert_eq!(node.kind, NodeKind::DeclarationSyntaxInvocation);
+        assert!(matches!(
+            project_declaration_invocation(&source, &tree, node, &contexts),
+            Err(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape
+            ))
+        ));
+        assert_eq!(Arc::strong_count(root), references);
+
+        let source_tokens = ProjectionTokens::source(tree.tokens());
+        let span = node_span(&source, node, &source_tokens).unwrap();
+        let parsed = d5_structured_tree(&source, &tree, &contexts);
+        let generated = child_nodes(parsed.tree.root().unwrap()).next().unwrap();
+        assert!(matches!(
+            project_macro_declaration_invocation(
+                &source, span, None, &parsed, generated, &contexts, None
+            ),
+            Err(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape
+            ))
+        ));
+        assert!(matches!(
+            validate_declaration_template(
+                &source,
+                span,
+                &parsed,
+                &contexts,
+                &mut SyntaxBudget::default()
+            ),
+            Err(DeclarationExpansionFailure::Projection(
+                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+            ))
+        ));
+        assert_eq!(Arc::strong_count(root), references);
+
+        let mut d6_budget = SyntaxBudget::with_limit(10_000);
+        d6_budget.charge_units(17).unwrap();
+        assert!(matches!(
+            charge_declaration_invocation(
+                &source,
+                node,
+                &source_tokens,
+                &contexts,
+                false,
+                &mut d6_budget
+            ),
+            Err(DeclarationExpansionFailure::Projection(
+                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+            ))
+        ));
+        assert!(d6_budget.consumed() > 17);
+        assert_eq!(Arc::strong_count(root), references);
+
+        for header in [
+            "pub syntax declaration: (sink) ( $value:ident ) => { type Item = Item }\n",
+            "pub syntax declaration: (sink) ( $value:ident ) => { $value }\n",
+            "pub syntax declaration: (sink) ( $value:ident ) => using transformer\n",
+            "pub syntax declaration: (sink) $subject:type ( $value:ident ) => {}\n",
+        ] {
+            let source = SourceFile::new("unsupported-header.ash", header).unwrap();
+            let tree = parse(lex(&source).unwrap());
+            let (root, tokens) = validated_root(&source, &tree).unwrap();
+            let child = child_nodes(root)
+                .find(|node| node.kind == NodeKind::SyntaxDeclaration)
+                .unwrap();
+            let mut module = ModuleProjection::default();
+            let mut budget = SyntaxBudget::with_limit(10_000);
+            budget.charge_units(17).unwrap();
+            assert!(matches!(
+                project_staged_source_child(&mut module, &source, child, tokens, &mut budget),
+                Err(DeclarationExpansionFailure::Projection(
+                    ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                ))
+            ));
+            assert!(budget.consumed() > 17);
+            assert!(module.syntax_declarations.is_empty());
+        }
+    }
+
+    #[test]
+    fn g1_capture_preflight_pays_names_width_and_retries_before_projection() {
+        use crate::{source::ByteRange, syntax::SelectedSyntax, syntax_resource::SyntaxBudget};
+        use std::sync::Arc;
+
+        fn trial(invocation: &str, expected: &[&str]) -> usize {
+            let definition = SourceFile::new(
+                "copy-forms.ash",
+                "pub syntax declaration: (sink) $( row $item:ident ),* => {}\n",
+            )
+            .unwrap();
+            let definition_tree = h1_tree(&definition, &[]);
+            let (root, tokens) = validated_root(&definition, &definition_tree).unwrap();
+            let child = child_nodes(root)
+                .find(|node| node.kind == NodeKind::SyntaxDeclaration)
+                .unwrap();
+            let mut module = ModuleProjection::default();
+            project_staged_source_child(
+                &mut module,
+                &definition,
+                child,
+                tokens,
+                &mut SyntaxBudget::default(),
+            )
+            .unwrap();
+            let selected = [SelectedSyntax {
+                name: "sink".into(),
+                declaration: module.syntax_declarations.pop().unwrap(),
+                owner: 0,
+                import_span: definition.span(ByteRange::new(0, 0).unwrap()).unwrap(),
+            }];
+            let [SurfaceSyntaxMatcherPart::Container(matcher)] =
+                selected[0].declaration.matcher.as_slice()
+            else {
+                panic!("expected source repetition");
+            };
+            let caller = SourceFile::new("copy-main.ash", format!("{invocation}\n")).unwrap();
+            let tree = h1_tree(&caller, &selected);
+            let (root, tokens) = validated_root(&caller, &tree).unwrap();
+            let node = child_nodes(root)
+                .find(|node| node.kind == NodeKind::DeclarationSyntaxInvocation)
+                .unwrap();
+            let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+            let references = Arc::strong_count(matcher);
+            let tokens = ProjectionTokens::source(tokens);
+            let mut measured = SyntaxBudget::with_limit(10_000);
+            measured.charge_units(17).unwrap();
+            charge_declaration_invocation(&caller, node, &tokens, &contexts, true, &mut measured)
+                .unwrap();
+            let total = measured.consumed();
+            assert_eq!(Arc::strong_count(matcher), references);
+            let mut short = SyntaxBudget::with_limit(total - 1);
+            short.charge_units(17).unwrap();
+            assert!(matches!(
+                charge_declaration_invocation(&caller, node, &tokens, &contexts, true, &mut short),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { limit }), ..
+                }) if limit == total - 1
+            ));
+            assert!(short.consumed() >= 17 && short.consumed() <= total - 1);
+            assert_eq!(Arc::strong_count(matcher), references);
+            for _ in 0..2 {
+                let mut exact = SyntaxBudget::with_limit(total);
+                exact.charge_units(17).unwrap();
+                charge_declaration_invocation(&caller, node, &tokens, &contexts, true, &mut exact)
+                    .unwrap();
+                assert_eq!(exact.consumed(), total);
+                let projected =
+                    project_declaration_invocation_node(&caller, node, &tokens, &contexts, true)
+                        .unwrap();
+                let [SurfaceSyntaxCapture::Repeated(values)] = projected.captures.as_slice() else {
+                    panic!("expected one actual repeated capture");
+                };
+                assert_eq!(values.values.len(), expected.len());
+                for (value, expected) in values.values.iter().zip(expected) {
+                    let SurfaceSyntaxCapture::Identifier(value) = value else {
+                        panic!("expected source identifier");
+                    };
+                    assert_eq!(value.name.text, *expected);
+                    assert_eq!(value.name.span.source(), caller.id());
+                    assert_eq!(value.name.introduction, 0);
+                    assert!(value.name.written && value.name.introduced_at.is_none());
+                    assert!(value.name.diagnostic.is_none());
+                    assert_eq!(value.origin, value.name.span.into());
+                }
+                assert_eq!(Arc::strong_count(matcher), references + 1);
+                drop(projected);
+                assert_eq!(Arc::strong_count(matcher), references);
+            }
+            total - 17
+        }
+        let one = trial("sink row a", &["a"]);
+        let long = trial("sink row abcdef", &["abcdef"]);
+        let two = trial("sink row a, row b", &["a", "b"]);
+        assert!(long > one);
+        assert!(two > one);
+    }
+
+    #[test]
+    fn g1_header_copy_reserves_payloads_before_construction() {
+        use crate::syntax_resource::SyntaxBudget;
+
+        fn run(literal: &str, decoded: &str, integer: &str, capture: &str) -> usize {
+            let text = format!(
+                "pub syntax declaration: (sink) ( \"{literal}\" {integer} ${capture}:ident ) => {{}}\n"
+            );
+            let source = SourceFile::new("header-copy.ash", text).unwrap();
+            let tree = parse(lex(&source).unwrap());
+            let (root, tokens) = validated_root(&source, &tree).unwrap();
+            let child = child_nodes(root)
+                .find(|node| node.kind == NodeKind::SyntaxDeclaration)
+                .unwrap();
+
+            let mut budget = SyntaxBudget::with_limit(super::super::SYNTAX_WORK_LIMIT);
+            budget.charge_units(17).unwrap();
+            let mut module = ModuleProjection::default();
+            project_staged_source_child(&mut module, &source, child, tokens, &mut budget).unwrap();
+            let total = budget.consumed();
+            let [declaration] = module.syntax_declarations.as_slice() else {
+                panic!("expected exactly one constructed header");
+            };
+            let [SurfaceSyntaxMatcherPart::Container(group)] = declaration.matcher.as_slice()
+            else {
+                panic!("expected the real group payload");
+            };
+            let [
+                SurfaceSyntaxMatcherPart::Literal {
+                    kind: TokenKind::StringLiteral(value),
+                    spelling,
+                },
+                SurfaceSyntaxMatcherPart::Literal {
+                    kind: TokenKind::Integer(number),
+                    ..
+                },
+                SurfaceSyntaxMatcherPart::Capture {
+                    name,
+                    kind: SurfaceSyntaxCaptureKind::Identifier,
+                },
+            ] = group.body.as_slice()
+            else {
+                panic!("expected the real literal and capture payloads");
+            };
+            assert_eq!(value, decoded);
+            assert_eq!(spelling, &format!("\"{literal}\""));
+            assert_eq!(number.to_string(), integer);
+            assert_eq!(name.text, capture);
+            assert_eq!(name.span.source(), source.id());
+            assert_eq!(name.introduction, 0);
+            assert!(name.written && name.diagnostic.is_none());
+
+            for (label, limit) in [("early", 21), ("one short", total - 1)] {
+                let mut budget = SyntaxBudget::with_limit(limit);
+                budget.charge_units(17).unwrap();
+                let mut module = ModuleProjection::default();
+                let failure =
+                    project_staged_source_child(&mut module, &source, child, tokens, &mut budget)
+                        .unwrap_err();
+                assert!(
+                    matches!(failure, DeclarationExpansionFailure::Syntax { resource: Some(ResourceFailure::SyntaxWork { limit: actual }), .. } if actual == limit),
+                    "{label}"
+                );
+                assert!(
+                    budget.consumed() >= 17 && budget.consumed() <= limit,
+                    "{label}"
+                );
+                assert!(module.syntax_declarations.is_empty(), "{label}");
+            }
+            for _ in 0..2 {
+                let mut budget = SyntaxBudget::with_limit(total);
+                budget.charge_units(17).unwrap();
+                let mut module = ModuleProjection::default();
+                project_staged_source_child(&mut module, &source, child, tokens, &mut budget)
+                    .unwrap();
+                assert_eq!(budget.consumed(), total);
+                assert_eq!(module.syntax_declarations.len(), 1);
+            }
+            total - 17
+        }
+
+        let base = run("x", "x", "1", "x");
+        assert_eq!(
+            run(&"x".repeat(301), &"x".repeat(301), "1", "x") - base,
+            600
+        );
+        let escaped = run("\\n", "\n", "1", "x");
+        assert_eq!(escaped - base, 1); // one additional spelling byte
+        assert_eq!(run("xx", "xx", "1", "x") - escaped, 1); // one decoded byte
+        let integer_255 = run("x", "x", "255", "x");
+        assert_eq!(integer_255 - base, 2); // two spelling bytes, same magnitude length
+        assert_eq!(run("x", "x", "256", "x") - integer_255, 1); // one magnitude byte
+        assert_eq!(run("x", "x", "1", &"x".repeat(101)) - base, 100);
+    }
+
+    #[test]
+    fn g1_imported_graph_materializes_ordered_and_ragged_source_captures() {
+        use crate::driver::{RunConfiguration, compile_path, execute};
+        use crate::module::ModuleRoots;
+        use crate::syntax::MacroOrigin;
+        use std::path::PathBuf;
+
+        std::thread_local! {
+            static OBSERVED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+
+        fn observe(
+            source: &SourceFile,
+            captures: &[SurfaceSyntaxCapture],
+            _budget: &crate::syntax_resource::SyntaxBudget,
+        ) {
+            let [
+                SurfaceSyntaxCapture::Repeated(outer),
+                SurfaceSyntaxCapture::Repeated(inner),
+            ] = captures
+            else {
+                panic!("expected the two real repeated capture slots: {captures:?}");
+            };
+            let expected_source =
+                include_str!("../../tests/fixtures/surface-macros/g1-source-ident/main.ash");
+            assert!(source.display_path().ends_with("g1-source-ident/main.ash"));
+            assert_eq!(source.text(), expected_source);
+            let check = |capture: &SurfaceSyntaxCapture, expected: &str| {
+                let SurfaceSyntaxCapture::Identifier(capture) = capture else {
+                    panic!("expected an identifier");
+                };
+                assert_eq!(capture.name.text, expected);
+                assert_eq!(capture.name.span.source(), source.id());
+                assert_eq!(capture.name.introduction, 0);
+                assert!(capture.name.written && capture.name.introduced_at.is_none());
+                assert!(capture.name.diagnostic.is_none());
+                assert_eq!(capture.origin, MacroOrigin::Source(capture.name.span));
+                let range = capture.name.span.range();
+                assert_eq!(
+                    &source.text()[range.start() as usize..range.end() as usize],
+                    expected
+                );
+            };
+            assert_eq!(outer.values.len(), 3);
+            for (capture, expected) in outer.values.iter().zip(["alpha", "beta", "gamma"]) {
+                check(capture, expected);
+            }
+            assert_eq!(inner.values.len(), 3);
+            for (capture, expected) in
+                inner
+                    .values
+                    .iter()
+                    .zip([&["a", "b"][..], &[][..], &["c"][..]])
+            {
+                let SurfaceSyntaxCapture::Repeated(values) = capture else {
+                    panic!("expected the inner repetition");
+                };
+                assert_eq!(values.values.len(), expected.len());
+                for (capture, expected) in values.values.iter().zip(expected) {
+                    check(capture, expected);
+                }
+            }
+            OBSERVED.set(true);
+        }
+
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/surface-macros/g1-source-ident/main.ash");
+        OBSERVED.set(false);
+        G1_CAPTURE_OBSERVER.set(Some(observe));
+        let result = compile_path(RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        });
+        G1_CAPTURE_OBSERVER.set(None);
+        let program = result.expect("the imported source graph compiles through empty staging");
+        assert!(OBSERVED.get());
+        assert_eq!(execute(&program).unwrap().value_display(), "42");
+    }
 
     fn h1_selection(
         source: &SourceFile,
@@ -14303,7 +16109,9 @@ mod tests {
             .iter()
             .filter_map(|part| match part {
                 SurfaceSyntaxMatcherPart::Capture { name, .. } => Some(name.clone()),
-                SurfaceSyntaxMatcherPart::Literal { .. } => None,
+                SurfaceSyntaxMatcherPart::Literal { .. }
+                | SurfaceSyntaxMatcherPart::Container(_)
+                | SurfaceSyntaxMatcherPart::LineEnd => None,
             })
             .collect::<Vec<_>>();
         let hop = |captures: &[SurfaceSyntaxCapture], frame: &Arc<ExpansionFrame>| {

@@ -588,6 +588,7 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
         parser.finish();
         return;
     }
+    let matcher_start = parser.event_position();
     let mut names = std::collections::HashSet::new();
     let mut previous_capture = false;
     let mut final_expression = false;
@@ -595,6 +596,47 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
         parser.current(),
         Some(TokenKind::FatArrow | TokenKind::LineEnd | TokenKind::EndOfFile) | None
     ) {
+        if declaration
+            && (matches!(
+                parser.current(),
+                Some(TokenKind::LeftParen | TokenKind::LeftBrace)
+            ) || parser.at(&TokenKind::Dollar) && parser.nth(1) == Some(&TokenKind::LeftParen))
+        {
+            let length = parser.events.len();
+            let extra = length
+                .checked_sub(matcher_start)
+                .and_then(|shifted| {
+                    shifted.checked_add(if length == parser.events.capacity() {
+                        length
+                    } else {
+                        0
+                    })
+                })
+                .and_then(|units| units.checked_add(3))
+                .unwrap_or(usize::MAX);
+            if !parser.charge_matcher_work(extra)
+                || !parser.insert_start(matcher_start, NodeKind::SyntaxMatcherSequence)
+            {
+                break;
+            }
+            // The flat prefix has already used the legacy HashSet. Move it once
+            // to a deterministic extended-header accumulator, paying the
+            // table walk, destination slots and moved String values first. Twice
+            // the reported capacity is a conservative bucket-walk reservation.
+            let names_work = names
+                .capacity()
+                .saturating_mul(2)
+                .saturating_add(names.len().saturating_mul(2));
+            if !parser.charge_matcher_work(names_work) {
+                break;
+            }
+            let mut extended_names = Vec::with_capacity(names.len());
+            extended_names.extend(std::mem::take(&mut names));
+            let _ =
+                syntax_matcher_items(parser, &mut extended_names, None, false, previous_capture);
+            parser.finish();
+            break;
+        }
         if parser.at(&TokenKind::Dollar) {
             parser.start(NodeKind::SyntaxCapture);
             if previous_capture {
@@ -648,6 +690,409 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
     }
     syntax_declaration_body(parser);
     parser.finish();
+}
+
+// A FIRST entry is either a particular literal token or an Identifier capture.
+// These vectors are temporary grammar work; no result is retained on the tree.
+fn push_matcher_start(
+    parser: &mut Parser<'_>,
+    starts: &mut Vec<Option<usize>>,
+    start: Option<usize>,
+) -> bool {
+    let growth = if starts.len() == starts.capacity() {
+        starts.len().saturating_mul(2).saturating_add(1)
+    } else {
+        0
+    };
+    if !parser.charge_matcher_work(growth.saturating_add(1)) {
+        return false;
+    }
+    starts.reserve_exact(1);
+    starts.push(start);
+    true
+}
+
+fn matcher_starts_overlap(
+    parser: &mut Parser<'_>,
+    left: Option<usize>,
+    right: Option<usize>,
+) -> bool {
+    let (Some(left), Some(right)) = (left, right) else {
+        let literal = left.or(right);
+        if !parser.charge_matcher_work(1) {
+            return false;
+        }
+        return literal.is_none_or(|index| {
+            matches!(
+                parser.tokens[index].kind,
+                TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
+            )
+        });
+    };
+    let left_token = &parser.tokens[left];
+    let right_token = &parser.tokens[right];
+    let left_range = left_token.span.range();
+    let right_range = right_token.span.range();
+    let work = ((left_range.end() - left_range.start()) as usize)
+        .saturating_add((right_range.end() - right_range.start()) as usize);
+    if !parser.charge_matcher_work(work.saturating_add(2)) {
+        return false;
+    }
+    if parser.tokens[left].kind != parser.tokens[right].kind {
+        return false;
+    }
+    // Brace-group line ends are logical tokens, independent of LF or CRLF.
+    if parser.tokens[left].kind == TokenKind::LineEnd {
+        return true;
+    }
+    if let Some(source) = parser.syntax_source {
+        let text = source.text();
+        return text
+            .get(left_range.start() as usize..left_range.end() as usize)
+            .zip(text.get(right_range.start() as usize..right_range.end() as usize))
+            .is_some_and(|(a, b)| a == b);
+    }
+    // A standalone token-only parse has no spelling for decoded values. Its
+    // extended child is still refused by the unbudgeted source projector.
+    !matches!(
+        parser.tokens[left].kind,
+        TokenKind::Integer(_) | TokenKind::StringLiteral(_)
+    )
+}
+
+type MatcherStarts = Vec<Option<usize>>;
+type PendingMatcherRepeats = Vec<(MatcherStarts, Option<usize>, bool)>;
+
+fn matcher_pending_overlap(
+    parser: &mut Parser<'_>,
+    pending: &PendingMatcherRepeats,
+    following: &[Option<usize>],
+) -> Option<bool> {
+    for (starts, separator, star) in pending {
+        if !parser.charge_matcher_work(1) {
+            return None;
+        }
+        for following in following {
+            if !parser.charge_matcher_work(1) {
+                return None;
+            }
+            if let Some(separator) = separator {
+                let overlaps = matcher_starts_overlap(parser, Some(*separator), *following);
+                if parser.resource_failure.is_some() {
+                    return None;
+                }
+                if overlaps {
+                    return Some(true);
+                }
+            }
+            if separator.is_none() || *star {
+                for start in starts {
+                    if !parser.charge_matcher_work(1) {
+                        return None;
+                    }
+                    let overlaps = matcher_starts_overlap(parser, *start, *following);
+                    if parser.resource_failure.is_some() {
+                        return None;
+                    }
+                    if overlaps {
+                        return Some(true);
+                    }
+                }
+            }
+        }
+    }
+    Some(false)
+}
+
+fn reserve_pending_matchers(
+    parser: &mut Parser<'_>,
+    pending: &mut PendingMatcherRepeats,
+    additional: usize,
+) -> bool {
+    let needed = pending.len().checked_add(additional).unwrap_or(usize::MAX);
+    let growth = if needed > pending.capacity() {
+        pending.len().saturating_add(needed)
+    } else {
+        0
+    };
+    if !parser.charge_matcher_work(growth.saturating_add(additional)) {
+        return false;
+    }
+    pending.reserve_exact(additional);
+    true
+}
+
+// Parses the remainder of an extended declaration matcher. The tuple returned
+// by this walk contains nullable, first/last capture, FIRST and pending repeats.
+fn syntax_matcher_items(
+    parser: &mut Parser<'_>,
+    names: &mut Vec<String>,
+    closing: Option<TokenKind>,
+    braces: bool,
+    mut previous_capture: bool,
+) -> (bool, bool, bool, MatcherStarts, PendingMatcherRepeats) {
+    let mut nullable = true;
+    let mut first_capture = false;
+    let mut first = Vec::new();
+    // A pending repeat can meet a later item through nullable intervening items.
+    // Each entry owns its temporary FIRST list, separator token, and star flag.
+    let mut pending = PendingMatcherRepeats::new();
+    loop {
+        if parser.resource_failure.is_some()
+            || closing.as_ref().is_some_and(|end| parser.at(end))
+            || matches!(
+                parser.current(),
+                Some(TokenKind::FatArrow | TokenKind::EndOfFile) | None
+            )
+            || parser.at(&TokenKind::LineEnd) && !braces
+        {
+            break;
+        }
+        if !parser.charge_matcher_work(1) {
+            break;
+        }
+        let part_start = parser.position;
+        let part_nullable;
+        let part_first_capture;
+        let part_last_capture;
+        let mut part_first = Vec::new();
+        let mut part_pending = PendingMatcherRepeats::new();
+        let mut repeat = None;
+        if parser.at(&TokenKind::Dollar) && parser.nth(1) == Some(&TokenKind::LeftParen) {
+            if !parser.enter_structure() {
+                break;
+            }
+            if !parser.charge_matcher_work(3) {
+                parser.leave_structure();
+                break;
+            }
+            parser.start(NodeKind::SyntaxMatcherRepeat);
+            let _ = parser.bump(); // $
+            let _ = parser.bump(); // (
+            let (body_nullable, body_first_capture, body_last_capture, body_first, body_pending) =
+                syntax_matcher_items(parser, names, Some(TokenKind::RightParen), false, false);
+            let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
+            let mut separator = None;
+            if !matches!(parser.current(), Some(TokenKind::Star | TokenKind::Plus)) {
+                if matches!(
+                    parser.current(),
+                    Some(
+                        TokenKind::Dollar
+                            | TokenKind::FatArrow
+                            | TokenKind::LineEnd
+                            | TokenKind::LeftParen
+                            | TokenKind::RightParen
+                            | TokenKind::LeftBrace
+                            | TokenKind::RightBrace
+                            | TokenKind::EndOfFile
+                    ) | None
+                ) {
+                    parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+                } else {
+                    separator = Some(parser.position);
+                    let _ = parser.bump();
+                }
+            }
+            part_nullable = parser.at(&TokenKind::Star);
+            if matches!(parser.current(), Some(TokenKind::Star | TokenKind::Plus)) {
+                let _ = parser.bump();
+            } else {
+                parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+            }
+            if body_nullable {
+                parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+            }
+            let separator_start = [separator];
+            let cycle_follow = if separator.is_some() {
+                separator_start.as_slice()
+            } else {
+                body_first.as_slice()
+            };
+            let cycle_overlap = matcher_pending_overlap(parser, &body_pending, cycle_follow);
+            if cycle_overlap == Some(true) {
+                let span = parser.tokens[separator.unwrap_or(part_start)].span;
+                let _ = parser.report_at(
+                    ParseReason::ExpectedForm,
+                    ExpectedForm::Identifier,
+                    span,
+                    None,
+                );
+            }
+            parser.finish();
+            parser.leave_structure();
+            if cycle_overlap.is_none() {
+                break;
+            }
+            part_first = body_first;
+            part_pending = body_pending;
+            part_first_capture = body_first_capture;
+            part_last_capture = body_last_capture;
+            repeat = Some((separator, part_nullable));
+        } else if matches!(
+            parser.current(),
+            Some(TokenKind::LeftParen | TokenKind::LeftBrace)
+        ) {
+            let is_brace = parser.at(&TokenKind::LeftBrace);
+            if !push_matcher_start(parser, &mut part_first, Some(part_start)) {
+                break;
+            }
+            if !parser.enter_structure() {
+                break;
+            }
+            if !parser.charge_matcher_work(3) {
+                parser.leave_structure();
+                break;
+            }
+            parser.start(NodeKind::SyntaxMatcherGroup);
+            let _ = parser.bump();
+            let end = if is_brace {
+                TokenKind::RightBrace
+            } else {
+                TokenKind::RightParen
+            };
+            let _ = syntax_matcher_items(parser, names, Some(end.clone()), is_brace, false);
+            let expected = if is_brace {
+                ExpectedForm::RightBrace
+            } else {
+                ExpectedForm::RightParen
+            };
+            let _ = parser.expect(&end, expected);
+            parser.finish();
+            parser.leave_structure();
+            part_nullable = false;
+            part_first_capture = false;
+            part_last_capture = false;
+        } else if parser.at(&TokenKind::Dollar) {
+            if !push_matcher_start(parser, &mut part_first, None) {
+                break;
+            }
+            parser.start(NodeKind::SyntaxCapture);
+            let _ = parser.bump();
+            let index = parser.position;
+            let length = match parser.current() {
+                Some(TokenKind::Identifier(name) | TokenKind::UpperIdentifier(name)) => {
+                    Some(name.len())
+                }
+                _ => None,
+            };
+            if let Some(length) = length {
+                let mut duplicate = false;
+                for existing in names.iter() {
+                    if !parser.charge_matcher_work(existing.len().min(length).saturating_add(1)) {
+                        break;
+                    }
+                    let found = match &parser.tokens[index].kind {
+                        TokenKind::Identifier(name) | TokenKind::UpperIdentifier(name) => name,
+                        _ => unreachable!(),
+                    };
+                    duplicate |= existing == found;
+                }
+                if parser.resource_failure.is_some() {
+                    parser.finish();
+                    break;
+                }
+                if duplicate {
+                    parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+                } else {
+                    let growth = if names.len() == names.capacity() {
+                        names.len().saturating_mul(2).saturating_add(1)
+                    } else {
+                        0
+                    };
+                    if !parser.charge_matcher_work(length.saturating_add(growth).saturating_add(1))
+                    {
+                        parser.finish();
+                        break;
+                    }
+                    names.reserve_exact(1);
+                    let name = match &parser.tokens[index].kind {
+                        TokenKind::Identifier(name) | TokenKind::UpperIdentifier(name) => {
+                            name.clone()
+                        }
+                        _ => unreachable!(),
+                    };
+                    names.push(name);
+                }
+            }
+            expect_import_name(parser);
+            let _ = parser.expect(&TokenKind::Colon, ExpectedForm::Colon);
+            if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "expr" || name == "ident" || name == "pattern" || name == "declaration")
+                || parser.at(&TokenKind::Type)
+            {
+                let _ = parser.bump();
+            } else {
+                parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+            }
+            parser.finish();
+            part_nullable = false;
+            part_first_capture = true;
+            part_last_capture = true;
+        } else if matches!(
+            parser.current(),
+            Some(TokenKind::RightParen | TokenKind::RightBrace)
+        ) {
+            parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+            break;
+        } else {
+            if !push_matcher_start(parser, &mut part_first, Some(part_start)) {
+                break;
+            }
+            let _ = parser.bump();
+            part_nullable = false;
+            part_first_capture = false;
+            part_last_capture = false;
+        }
+
+        let Some(follow_overlap) = matcher_pending_overlap(parser, &pending, &part_first) else {
+            break;
+        };
+        let ambiguous = previous_capture && part_first_capture || follow_overlap;
+        if ambiguous {
+            let span = parser.tokens[part_start].span;
+            let _ = parser.report_at(
+                ParseReason::ExpectedForm,
+                ExpectedForm::Identifier,
+                span,
+                None,
+            );
+        }
+        if nullable {
+            first_capture |= part_first_capture;
+            for start in &part_first {
+                if !push_matcher_start(parser, &mut first, *start) {
+                    break;
+                }
+            }
+        }
+        nullable &= part_nullable;
+        previous_capture = if part_nullable {
+            previous_capture || part_last_capture
+        } else {
+            part_last_capture
+        };
+        if !part_nullable {
+            pending.clear();
+        }
+        if !part_pending.is_empty() {
+            if !reserve_pending_matchers(parser, &mut pending, part_pending.len()) {
+                break;
+            }
+            pending.append(&mut part_pending);
+        }
+        if let Some((separator, star)) = repeat {
+            // Cloning these token indices and retaining one pending entry are
+            // temporary grammar work, paid before their Vec allocations.
+            if !parser.charge_matcher_work(part_first.len().saturating_mul(2)) {
+                break;
+            }
+            let starts = part_first.clone();
+            if !reserve_pending_matchers(parser, &mut pending, 1) {
+                break;
+            }
+            pending.push((starts, separator, star));
+        }
+    }
+    (nullable, first_capture, previous_capture, first, pending)
 }
 
 fn syntax_declaration_body(parser: &mut Parser<'_>) {
@@ -2065,6 +2510,11 @@ fn syntax_invocation(
                     }
                     parser.finish();
                 }
+                crate::surface::SurfaceSyntaxMatcherPart::Container(_)
+                | crate::surface::SurfaceSyntaxMatcherPart::LineEnd => {
+                    let _ = match_structured_items(parser, &matcher[index..]);
+                    break;
+                }
             }
         }
         for index in inherited {
@@ -2075,6 +2525,217 @@ fn syntax_invocation(
         parser.consume_rest();
     }
     parser.finish();
+}
+
+fn structured_literal(parser: &mut Parser<'_>, kind: &TokenKind, spelling: &str) -> bool {
+    let found = parser.tokens.get(parser.position).map_or(0, |token| {
+        let range = token.span.range();
+        (range.end() - range.start()) as usize
+    });
+    if !parser.charge_matcher_work(spelling.len().saturating_add(found).saturating_add(3)) {
+        return false;
+    }
+    parser.at_syntax_literal(kind, spelling)
+}
+
+fn structured_starts(
+    parser: &mut Parser<'_>,
+    parts: &[crate::surface::SurfaceSyntaxMatcherPart],
+) -> bool {
+    structured_starts_at(parser, parts, parser.nesting_depth)
+}
+
+fn structured_starts_at(
+    parser: &mut Parser<'_>,
+    parts: &[crate::surface::SurfaceSyntaxMatcherPart],
+    depth: usize,
+) -> bool {
+    use crate::surface::{
+        SurfaceMatcherContainerKind, SurfaceSyntaxCaptureKind, SurfaceSyntaxMatcherPart,
+    };
+    for part in parts {
+        if !parser.charge_matcher_work(1) {
+            return false;
+        }
+        match part {
+            SurfaceSyntaxMatcherPart::Literal { kind, spelling } => {
+                return structured_literal(parser, kind, spelling);
+            }
+            SurfaceSyntaxMatcherPart::LineEnd => return parser.at(&TokenKind::LineEnd),
+            SurfaceSyntaxMatcherPart::Capture {
+                kind: SurfaceSyntaxCaptureKind::Identifier,
+                ..
+            } => {
+                return matches!(
+                    parser.current(),
+                    Some(TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_))
+                );
+            }
+            SurfaceSyntaxMatcherPart::Capture { .. } => return false,
+            SurfaceSyntaxMatcherPart::Container(container) => match &container.kind {
+                SurfaceMatcherContainerKind::Group { braces } => {
+                    return parser.at(if *braces {
+                        &TokenKind::LeftBrace
+                    } else {
+                        &TokenKind::LeftParen
+                    });
+                }
+                SurfaceMatcherContainerKind::Repeat { one_or_more, .. } => {
+                    let Some(next) = depth
+                        .checked_add(1)
+                        .filter(|value| *value <= super::STRUCTURAL_DEPTH_LIMIT)
+                    else {
+                        parser.fail_structural_depth();
+                        return false;
+                    };
+                    if !parser.charge_matcher_work(1) {
+                        return false;
+                    }
+                    if structured_starts_at(parser, &container.body, next) {
+                        return true;
+                    }
+                    if parser.resource_failure.is_some() {
+                        return false;
+                    }
+                    if *one_or_more {
+                        return false;
+                    }
+                }
+            },
+        }
+    }
+    false
+}
+
+fn match_structured_items(
+    parser: &mut Parser<'_>,
+    parts: &[crate::surface::SurfaceSyntaxMatcherPart],
+) -> bool {
+    use crate::surface::{
+        SurfaceMatcherContainerKind, SurfaceSyntaxCaptureKind, SurfaceSyntaxMatcherPart,
+    };
+    for part in parts {
+        if !parser.charge_matcher_work(1) {
+            return false;
+        }
+        match part {
+            SurfaceSyntaxMatcherPart::Literal { kind, spelling } => {
+                if !structured_literal(parser, kind, spelling) {
+                    parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+                    return false;
+                }
+                let _ = parser.bump();
+            }
+            SurfaceSyntaxMatcherPart::LineEnd => {
+                if !parser.expect(&TokenKind::LineEnd, ExpectedForm::Identifier) {
+                    return false;
+                }
+            }
+            SurfaceSyntaxMatcherPart::Capture {
+                kind: SurfaceSyntaxCaptureKind::Identifier,
+                ..
+            } => {
+                parser.start(NodeKind::SyntaxArgument);
+                let accepted = matches!(
+                    parser.current(),
+                    Some(TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_))
+                );
+                if accepted {
+                    let _ = parser.bump();
+                } else {
+                    parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+                }
+                parser.finish();
+                if !accepted {
+                    return false;
+                }
+            }
+            SurfaceSyntaxMatcherPart::Capture { .. } => {
+                parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+                return false;
+            }
+            SurfaceSyntaxMatcherPart::Container(container) => {
+                if !parser.enter_structure() {
+                    return false;
+                }
+                if !parser.charge_matcher_work(3) {
+                    parser.leave_structure();
+                    return false;
+                }
+                let accepted = match &container.kind {
+                    SurfaceMatcherContainerKind::Group { braces } => {
+                        parser.start(NodeKind::SyntaxMatchedGroup);
+                        let (open, close, expected) = if *braces {
+                            (
+                                TokenKind::LeftBrace,
+                                TokenKind::RightBrace,
+                                ExpectedForm::RightBrace,
+                            )
+                        } else {
+                            (
+                                TokenKind::LeftParen,
+                                TokenKind::RightParen,
+                                ExpectedForm::RightParen,
+                            )
+                        };
+                        let open_ok = parser.expect(&open, ExpectedForm::Identifier);
+                        let body_ok = open_ok && match_structured_items(parser, &container.body);
+                        let close_ok = body_ok && parser.expect(&close, expected);
+                        parser.finish();
+                        close_ok
+                    }
+                    SurfaceMatcherContainerKind::Repeat {
+                        one_or_more,
+                        separator,
+                    } => {
+                        parser.start(NodeKind::SyntaxMatchedRepeat);
+                        let mut count = 0usize;
+                        let mut success = true;
+                        while structured_starts(parser, &container.body) {
+                            if !parser.charge_matcher_work(4) {
+                                success = false;
+                                break;
+                            }
+                            let previous = parser.position;
+                            parser.start(NodeKind::SyntaxMatchedIteration);
+                            let body_ok = match_structured_items(parser, &container.body);
+                            parser.finish();
+                            if !body_ok || parser.position == previous {
+                                success = false;
+                                break;
+                            }
+                            count += 1;
+                            if let Some((kind, spelling)) = separator {
+                                if !structured_literal(parser, kind, spelling) {
+                                    break;
+                                }
+                                let _ = parser.bump();
+                                if !structured_starts(parser, &container.body) {
+                                    parser.report(
+                                        ParseReason::ExpectedForm,
+                                        ExpectedForm::Identifier,
+                                    );
+                                    success = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if *one_or_more && count == 0 {
+                            parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+                            success = false;
+                        }
+                        parser.finish();
+                        success && parser.resource_failure.is_none()
+                    }
+                };
+                parser.leave_structure();
+                if !accepted {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }
 
 fn declaration_capture(parser: &mut Parser<'_>) {
@@ -3425,6 +4086,189 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn extended_matcher_insertion_prepays_shift_and_full_event_growth() {
+        struct Observation {
+            events: Vec<Event>,
+            diagnostics: Vec<super::super::ParseDiagnostic>,
+            failure: Option<ResourceFailure>,
+            consumed: usize,
+            header_paid: usize,
+            initial_len: usize,
+            insertion_len: usize,
+            capacity: usize,
+        }
+
+        fn run(source: &SourceFile, prefix_len: usize, limit: usize, full: bool) -> Observation {
+            let mut budget = SyntaxBudget::with_limit(limit);
+            budget.charge_units(17).unwrap();
+            let lexed = lex_with_budget(source, &mut budget).unwrap();
+            let (tokens, lexical, _, failure) = lexed.into_parts();
+            assert!(failure.is_none() && lexical.is_empty());
+            let (checkpoint, budget) = super::super::parse_module_header(tokens, lexical, budget);
+            let super::super::ParserCheckpoint {
+                tokens,
+                position,
+                events,
+                diagnostics,
+                pending_recoveries,
+                recovered_expression_group_boundary,
+                nesting_depth,
+                resource_failure,
+                syntax_work_exhausted,
+                ..
+            } = checkpoint;
+            assert!(resource_failure.is_none() && diagnostics.is_empty());
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, Event::Start(NodeKind::ImportDeclaration)))
+            );
+            let header_paid = budget.consumed();
+            let initial_len = events.len();
+            let insertion_len = initial_len + 8 + prefix_len;
+            let capacity = insertion_len + usize::from(!full);
+            let mut controlled = Vec::with_capacity(capacity);
+            controlled.extend(events);
+            assert_eq!(controlled.capacity(), capacity);
+            let mut parser = Parser {
+                tokens: &tokens,
+                position,
+                events: controlled,
+                diagnostics,
+                pending_recoveries,
+                recovered_expression_group_boundary,
+                nesting_depth,
+                resource_failure,
+                syntax_budget: budget,
+                syntax_work_exhausted,
+                in_template: false,
+                quote_mode: super::super::QuoteMode::Ordinary,
+                saw_quote_or_escape: false,
+                syntax: &[],
+                syntax_source: Some(source),
+                syntax_selections: None,
+                syntax_spellings: None,
+                diagnostic_spans: None,
+                admission_identifiers: None,
+                declaration_output_nodes: None,
+                syntax_stops: Vec::new(),
+            };
+            syntax_declaration(&mut parser);
+            let capacity = parser.events.capacity();
+            Observation {
+                events: parser.events,
+                diagnostics: parser.diagnostics,
+                failure: parser.resource_failure,
+                consumed: parser.syntax_budget.consumed(),
+                header_paid,
+                initial_len,
+                insertion_len,
+                capacity,
+            }
+        }
+
+        for prefix_len in [0, 64] {
+            let prefix = (0..prefix_len)
+                .map(|index| format!("word{index} "))
+                .collect::<String>();
+            let source = SourceFile::new(
+                "event-insertion.ash",
+                format!("import dependency as D\npub syntax declaration: (sink) {prefix}( $value:ident ) => {{}}\n"),
+            ).unwrap();
+            let baseline = run(&source, prefix_len, super::super::SYNTAX_WORK_LIMIT, true);
+            assert_eq!(baseline.failure, None);
+            assert!(baseline.diagnostics.is_empty());
+            let matcher_start = baseline.initial_len + 8;
+            assert_eq!(baseline.insertion_len, matcher_start + prefix_len);
+            assert_eq!(
+                baseline.events[matcher_start],
+                Event::Start(NodeKind::SyntaxMatcherSequence)
+            );
+            let mut prefix_events = baseline.events[..matcher_start].to_vec();
+            prefix_events.extend_from_slice(
+                &baseline.events[matcher_start + 1..matcher_start + 1 + prefix_len],
+            );
+            assert_eq!(prefix_events.len(), baseline.insertion_len);
+            let before = baseline.header_paid + 8 + prefix_len;
+            for full in [true, false] {
+                let extra = prefix_len + if full { baseline.insertion_len } else { 0 } + 3;
+                let short = run(&source, prefix_len, before + extra - 1, full);
+                assert_eq!(
+                    short.failure,
+                    Some(ResourceFailure::SyntaxWork {
+                        limit: before + extra - 1
+                    })
+                );
+                assert_eq!(short.consumed, before);
+                assert_eq!(short.capacity, short.insertion_len + usize::from(!full));
+                assert_eq!(short.events, prefix_events);
+                let exact = run(&source, prefix_len, before + extra, full);
+                assert_eq!(
+                    exact.failure,
+                    Some(ResourceFailure::SyntaxWork {
+                        limit: before + extra
+                    })
+                );
+                assert_eq!(exact.consumed, before + extra);
+                assert_eq!(exact.capacity, exact.insertion_len + usize::from(!full));
+                assert_eq!(exact.events, prefix_events);
+                let with_start = run(&source, prefix_len, before + extra + 1, full);
+                assert_eq!(
+                    with_start.failure,
+                    Some(ResourceFailure::SyntaxWork {
+                        limit: before + extra + 1
+                    })
+                );
+                assert_eq!(with_start.consumed, before + extra + 1);
+                let mut expected = prefix_events.clone();
+                expected.insert(matcher_start, Event::Start(NodeKind::SyntaxMatcherSequence));
+                assert_eq!(with_start.events, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn forged_equal_token_kinds_still_compare_distinct_source_spelling() {
+        // This component input deliberately changes a lexer token: the current
+        // source lexer has no known valid decoded-equal spelling aliases.
+        let source = SourceFile::new(
+            "forged-matcher.ash",
+            "pub syntax declaration: (sink) $( item ) \"a\"* \"b\" => {}\n",
+        )
+        .unwrap();
+        let mut lexed = lex(&source).unwrap();
+        let indices = lexed
+            .tokens
+            .iter()
+            .enumerate()
+            .filter_map(|(index, token)| {
+                matches!(token.kind, TokenKind::StringLiteral(_)).then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let [first, second] = indices.as_slice() else {
+            panic!("expected two string tokens");
+        };
+        assert_ne!(lexed.tokens[*first].kind, lexed.tokens[*second].kind);
+        lexed.tokens[*second].kind = lexed.tokens[*first].kind.clone();
+        let (tokens, lexical, budget, failure) = lexed.into_parts();
+        assert!(failure.is_none());
+        let (checkpoint, budget) = super::super::parse_module_header(tokens, lexical, budget);
+        let (tree, _) = super::super::finish_module_from_checkpoint_with_syntax(
+            checkpoint,
+            budget,
+            Some(&source),
+            &[],
+        );
+        assert!(
+            tree.parse_diagnostics().is_empty(),
+            "{:?}",
+            tree.parse_diagnostics()
+        );
+        assert_eq!(tree.resource_failure(), None);
+        eprintln!("component only: equal forged token kinds, distinct source spelling");
+    }
 
     mod mock_nested_feature {
         #[derive(Clone, Copy)]
