@@ -507,6 +507,94 @@ fn type_real_capture_roundtrip_on_a_512k_stack() {
 }
 
 #[test]
+fn expression_host_real_source_capture_roundtrips_on_a_512k_stack() {
+    const CHILD: &str = "ASH_EXPRESSION_HOST_SOURCE_512K_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "module::staged_tests::expression_host_real_source_capture_roundtrips_on_a_512k_stack",
+                "--nocapture", "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output().unwrap();
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprint!("{stderr}");
+        assert!(
+            output.status.success(),
+            "512 KiB source child failed: {}",
+            output.status
+        );
+        for marker in [
+            "expression source stack: 64 groups reached 42",
+            "expression source stack: final alias dropped",
+            "expression source stack: 129 groups refused",
+        ] {
+            assert!(stderr.contains(marker), "missing marker {marker}");
+        }
+        return;
+    }
+    std::thread::Builder::new().stack_size(512 * 1024).spawn(|| {
+        use crate::{
+            driver::{RunConfiguration, compile_path, execute},
+            parser::G1_CAPTURE_OBSERVER,
+            surface::SurfaceSyntaxCapture,
+            syntax::{MacroDelimiter, MacroOutputNode},
+        };
+        use std::{cell::RefCell, sync::Arc};
+
+        std::thread_local! {
+            static CONTENTS: RefCell<Option<Arc<[MacroOutputNode]>>> = const { RefCell::new(None) };
+        }
+        fn observe(source: &SourceFile, captures: &[SurfaceSyntaxCapture], _: &SyntaxBudget) {
+            let [SurfaceSyntaxCapture::Identifier(_), SurfaceSyntaxCapture::Expression(capture)] = captures else {
+                panic!("expected source Expression capture")
+            };
+            assert_eq!(capture.expression.span.source(), source.id());
+            let mut nodes = capture.contents.as_ref();
+            for _ in 0..64 {
+                let [MacroOutputNode::Group(MacroDelimiter::Parentheses, children, _)] = nodes else {
+                    panic!("expected a source group")
+                };
+                nodes = children;
+            }
+            assert!(matches!(nodes, [MacroOutputNode::Token(_, text, _)] if &**text == "42"));
+            CONTENTS.with(|slot| assert!(slot.borrow_mut().replace(Arc::clone(&capture.contents)).is_none()));
+        }
+
+        for groups in [64usize, 129] {
+            let tree = Tree::new();
+            tree.write("forms.ash", include_str!("../tests/fixtures/surface-macros/expression-host/forms.ash"));
+            let expression = format!("{}42{}", "(".repeat(groups), ")".repeat(groups));
+            let entry = tree.write("main.ash", &format!("import forms (syntax emit_expression)\nemit_expression result yields {expression}\nmain : Unit -> Int\nmain () = result(())\n"));
+            G1_CAPTURE_OBSERVER.set(Some(observe));
+            let result = compile_path(RunConfiguration { entry, roots: ModuleRoots::empty() });
+            G1_CAPTURE_OBSERVER.set(None);
+            if groups == 64 {
+                let program = result.expect("the real grouped Expression graph compiles");
+                let value = execute(&program).unwrap();
+                assert_eq!(value.value_display(), "42");
+                assert_eq!(value.type_display(), "Int");
+                eprintln!("expression source stack: 64 groups reached 42");
+                let alias = CONTENTS.with(|slot| slot.borrow_mut().take().expect("capture observed"));
+                let weak = Arc::downgrade(&alias);
+                drop(program);
+                assert_eq!(Arc::strong_count(&alias), 1);
+                drop(alias);
+                assert!(weak.upgrade().is_none());
+                eprintln!("expression source stack: final alias dropped");
+            } else {
+                let failure = result.expect_err("the source graph exceeds structural depth");
+                assert_eq!(failure.reason_code(), "internal.resource.structural-depth");
+                assert!(CONTENTS.with(|slot| slot.borrow().is_none()));
+                eprintln!("expression source stack: 129 groups refused");
+            }
+        }
+    }).unwrap().join().unwrap();
+}
+
+#[test]
 fn pattern_real_source_capture_roundtrips_on_a_512k_stack() {
     const CHILD: &str = "ASH_PATTERN_SOURCE_512K_CHILD";
     if std::env::var_os(CHILD).is_none() {

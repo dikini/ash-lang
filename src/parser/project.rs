@@ -14863,6 +14863,18 @@ mod tests {
         let span = source.span(ByteRange::new(0, 5).unwrap()).unwrap();
         let contents = std::sync::Arc::from([]);
         let protected = [
+            MacroOutputNode::Expression(
+                SurfaceExpressionCapture {
+                    contains_protected_type: false,
+                    expression: SurfaceExpr {
+                        kind: SurfaceExprKind::Unit,
+                        span,
+                        diagnostic: None,
+                    },
+                    contents: std::sync::Arc::clone(&contents),
+                },
+                span.into(),
+            ),
             MacroOutputNode::ForwardedExpression(
                 SurfaceExpressionCapture {
                     contains_protected_type: false,
@@ -14902,6 +14914,7 @@ mod tests {
         let expression = node(NodeKind::SyntaxInvocation, vec![argument()]);
         let declaration = node(NodeKind::DeclarationSyntaxInvocation, vec![argument()]);
         for original in protected {
+            let actual_expression = matches!(original, MacroOutputNode::Expression(..));
             let originals = std::collections::HashMap::from([(0, original)]);
             let tokens = ProjectionTokens {
                 tokens: &[],
@@ -14934,6 +14947,31 @@ mod tests {
                 &mut crate::syntax_resource::SyntaxBudget::default(),
             )
             .expect("declaration forwarding is a separate accounted path");
+            assert!(matches!(
+                check_narrow_protected_refusal(
+                    &declaration,
+                    tokens.originals,
+                    true,
+                    &mut crate::syntax_resource::SyntaxBudget::default(),
+                ),
+                Err(DeclarationExpansionFailure::Projection(
+                    ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                ))
+            ));
+            let ordinary = node(
+                NodeKind::InlineOperationalGlobal,
+                vec![ConcreteElement::Token(0)],
+            );
+            assert_eq!(
+                check_narrow_protected_refusal(
+                    &ordinary,
+                    tokens.originals,
+                    false,
+                    &mut crate::syntax_resource::SyntaxBudget::default(),
+                )
+                .unwrap(),
+                actual_expression
+            );
         }
     }
 

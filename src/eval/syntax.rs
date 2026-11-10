@@ -2701,7 +2701,7 @@ mod tests {
 
     #[test]
     fn expression_services_keep_declaration_and_none_host_accounting_separate() {
-        use super::{HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap};
+        use super::{HeapCell, SyntaxHost, Value, allocate_heap};
         use crate::{
             integer::Integer,
             lexer::TokenKind,
@@ -3243,14 +3243,18 @@ mod tests {
             ),
             (
                 expression_op,
-                vec![literal(), literal()],
+                vec![
+                    literal(),
+                    MacroOutputNode::Token(TokenKind::LineEnd, "\n".into(), span.into()),
+                ],
                 ParseReason::UnexpectedToken,
                 None,
-                Some(FoundToken::Integer),
+                Some(FoundToken::LineEnd),
             ),
         ];
         let mut heap = Vec::<HeapCell>::new();
-        for (operation, nodes, reason, expected, found) in cases {
+        for (case, (operation, nodes, reason, expected, found)) in cases.into_iter().enumerate() {
+            eprintln!("expression category case {case}");
             let syntax = host.syntax_value_inner(&nodes, &mut heap, 0, true).unwrap();
             let before = (
                 host.expressions.len(),
@@ -3553,7 +3557,7 @@ mod tests {
                 output.status
             );
             for marker in [
-                "expression stack: adjacent returned owner refused",
+                "expression stack: adjacent input refused before issuance",
                 "expression stack: deep unwrap retained contents",
                 "expression stack: final contents alias dropped",
             ] {
@@ -3678,7 +3682,7 @@ mod tests {
                     let result = match parse(&mut host, &mut heap, parse_op, input) {
                         Ok(result) => result,
                         Err(RuntimeFailure::Report(report))
-                            if report.primary.reason_code() == "internal.resource.syntax-depth" =>
+                            if report.primary.reason_code() == "internal.resource.structural-depth" =>
                         {
                             assert_eq!(host.expressions.len(), before);
                             refused = true;
@@ -3726,7 +3730,7 @@ mod tests {
                     "accepted={accepted}, refused={refused}"
                 );
                 eprintln!(
-                    "expression stack: adjacent returned owner refused after {accepted} wrappers"
+                    "expression stack: adjacent input refused before issuance after {accepted} wrappers"
                 );
                 let CompilerSyntaxHandleKind::Expression(index) =
                     host.admitted_handle(&last).unwrap()
