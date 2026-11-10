@@ -4088,6 +4088,148 @@ mod tests {
     use super::*;
 
     #[test]
+    fn extended_matcher_insertion_prepays_shift_and_full_event_growth() {
+        struct Observation {
+            events: Vec<Event>,
+            diagnostics: Vec<super::super::ParseDiagnostic>,
+            failure: Option<ResourceFailure>,
+            consumed: usize,
+            header_paid: usize,
+            initial_len: usize,
+            insertion_len: usize,
+            capacity: usize,
+        }
+
+        fn run(source: &SourceFile, prefix_len: usize, limit: usize, full: bool) -> Observation {
+            let mut budget = SyntaxBudget::with_limit(limit);
+            budget.charge_units(17).unwrap();
+            let lexed = lex_with_budget(source, &mut budget).unwrap();
+            let (tokens, lexical, _, failure) = lexed.into_parts();
+            assert!(failure.is_none() && lexical.is_empty());
+            let (checkpoint, budget) = super::super::parse_module_header(tokens, lexical, budget);
+            let super::super::ParserCheckpoint {
+                tokens,
+                position,
+                events,
+                diagnostics,
+                pending_recoveries,
+                recovered_expression_group_boundary,
+                nesting_depth,
+                resource_failure,
+                syntax_work_exhausted,
+                ..
+            } = checkpoint;
+            assert!(resource_failure.is_none() && diagnostics.is_empty());
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, Event::Start(NodeKind::ImportDeclaration)))
+            );
+            let header_paid = budget.consumed();
+            let initial_len = events.len();
+            let insertion_len = initial_len + 8 + prefix_len;
+            let capacity = insertion_len + usize::from(!full);
+            let mut controlled = Vec::with_capacity(capacity);
+            controlled.extend(events);
+            assert_eq!(controlled.capacity(), capacity);
+            let mut parser = Parser {
+                tokens: &tokens,
+                position,
+                events: controlled,
+                diagnostics,
+                pending_recoveries,
+                recovered_expression_group_boundary,
+                nesting_depth,
+                resource_failure,
+                syntax_budget: budget,
+                syntax_work_exhausted,
+                in_template: false,
+                quote_mode: super::super::QuoteMode::Ordinary,
+                saw_quote_or_escape: false,
+                syntax: &[],
+                syntax_source: Some(source),
+                syntax_selections: None,
+                syntax_spellings: None,
+                diagnostic_spans: None,
+                admission_identifiers: None,
+                declaration_output_nodes: None,
+                syntax_stops: Vec::new(),
+            };
+            syntax_declaration(&mut parser);
+            let capacity = parser.events.capacity();
+            Observation {
+                events: parser.events,
+                diagnostics: parser.diagnostics,
+                failure: parser.resource_failure,
+                consumed: parser.syntax_budget.consumed(),
+                header_paid,
+                initial_len,
+                insertion_len,
+                capacity,
+            }
+        }
+
+        for prefix_len in [0, 64] {
+            let prefix = (0..prefix_len)
+                .map(|index| format!("word{index} "))
+                .collect::<String>();
+            let source = SourceFile::new(
+                "event-insertion.ash",
+                format!("import dependency as D\npub syntax declaration: (sink) {prefix}( $value:ident ) => {{}}\n"),
+            ).unwrap();
+            let baseline = run(&source, prefix_len, super::super::SYNTAX_WORK_LIMIT, true);
+            assert_eq!(baseline.failure, None);
+            assert!(baseline.diagnostics.is_empty());
+            let matcher_start = baseline.initial_len + 8;
+            assert_eq!(baseline.insertion_len, matcher_start + prefix_len);
+            assert_eq!(
+                baseline.events[matcher_start],
+                Event::Start(NodeKind::SyntaxMatcherSequence)
+            );
+            let mut prefix_events = baseline.events[..matcher_start].to_vec();
+            prefix_events.extend_from_slice(
+                &baseline.events[matcher_start + 1..matcher_start + 1 + prefix_len],
+            );
+            assert_eq!(prefix_events.len(), baseline.insertion_len);
+            let before = baseline.header_paid + 8 + prefix_len;
+            for full in [true, false] {
+                let extra = prefix_len + if full { baseline.insertion_len } else { 0 } + 3;
+                let short = run(&source, prefix_len, before + extra - 1, full);
+                assert_eq!(
+                    short.failure,
+                    Some(ResourceFailure::SyntaxWork {
+                        limit: before + extra - 1
+                    })
+                );
+                assert_eq!(short.consumed, before);
+                assert_eq!(short.capacity, short.insertion_len + usize::from(!full));
+                assert_eq!(short.events, prefix_events);
+                let exact = run(&source, prefix_len, before + extra, full);
+                assert_eq!(
+                    exact.failure,
+                    Some(ResourceFailure::SyntaxWork {
+                        limit: before + extra
+                    })
+                );
+                assert_eq!(exact.consumed, before + extra);
+                assert_eq!(exact.capacity, exact.insertion_len + usize::from(!full));
+                assert_eq!(exact.events, prefix_events);
+                let with_start = run(&source, prefix_len, before + extra + 1, full);
+                assert_eq!(
+                    with_start.failure,
+                    Some(ResourceFailure::SyntaxWork {
+                        limit: before + extra + 1
+                    })
+                );
+                assert_eq!(with_start.consumed, before + extra + 1);
+                let mut expected = prefix_events.clone();
+                expected.insert(matcher_start, Event::Start(NodeKind::SyntaxMatcherSequence));
+                assert_eq!(with_start.events, expected);
+            }
+        }
+    }
+
+    #[test]
     fn forged_equal_token_kinds_still_compare_distinct_source_spelling() {
         // This component input deliberately changes a lexer token: the current
         // source lexer has no known valid decoded-equal spelling aliases.
