@@ -5730,17 +5730,15 @@ mod tests {
             },
             contents: Arc::clone(&nested),
         };
-        let unsupported = [
-            SurfaceSyntaxCapture::Expression(expression.clone()),
-            SurfaceSyntaxCapture::Pattern(SurfacePatternCapture {
-                pattern: SurfacePattern {
-                    kind: SurfacePatternKind::Wildcard,
-                    span,
-                    diagnostic: None,
-                },
-                contents: Arc::clone(&nested),
-            }),
-        ];
+        let unsupported = [SurfaceSyntaxCapture::Expression(expression.clone())];
+        let pattern = SurfaceSyntaxCapture::Pattern(SurfacePatternCapture {
+            pattern: SurfacePattern {
+                kind: SurfacePatternKind::Wildcard,
+                span,
+                diagnostic: None,
+            },
+            contents: Arc::clone(&nested),
+        });
         let before = Arc::strong_count(&nested);
         for capture in &unsupported {
             let mut budget = SyntaxBudget::default();
@@ -5750,6 +5748,13 @@ mod tests {
             ));
             assert_eq!(Arc::strong_count(&nested), before);
         }
+        let mut pattern_budget = SyntaxBudget::default();
+        let pattern_host = fixture
+            .host(std::slice::from_ref(&pattern), &mut pattern_budget)
+            .expect("the Some host admits a flat Pattern capture");
+        assert_eq!(Arc::strong_count(&nested), before + 1);
+        drop(pattern_host);
+        assert_eq!(Arc::strong_count(&nested), before);
         let nested_packet: Arc<[MacroOutputNode]> =
             Arc::from([MacroOutputNode::Expression(expression, span.into())]);
         let invalid = [SurfaceSyntaxCapture::Declaration(
@@ -5948,7 +5953,7 @@ mod tests {
             assert_eq!(Arc::strong_count(inputs), retained);
         }
         eprintln!(
-            "Some-route protected carriers and bridges refused before copy; foreign/stale/wrong handles refused; valid handle remains reusable"
+            "Some-route expression bridge and invalid handles refused before copy; flat Pattern capture admitted; valid handle remains reusable"
         );
     }
 
