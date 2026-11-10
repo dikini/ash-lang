@@ -1,5 +1,8 @@
 import @builtin.compiler.syntax as Syntax
 
+value : Unit -> Int
+value () = 1
+
 pub syntax declaration: (emit_mixed) $name:ident matching $pattern:pattern as $T:type yields $body:expr => using expand
 
 expand : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}

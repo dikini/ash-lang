@@ -10745,6 +10745,80 @@ mod tests {
         assert_eq!(execute(&program).unwrap().value_display(), "42");
     }
 
+    #[test]
+    fn expression_host_imported_capture_preserves_binder_and_read_context() {
+        use crate::driver::{RunConfiguration, compile_path, execute};
+        use crate::module::ModuleRoots;
+        use crate::syntax::{MacroOrigin, MacroOutputNode};
+        use std::path::PathBuf;
+
+        std::thread_local! {
+            static OBSERVED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+
+        fn observe(
+            source: &SourceFile,
+            captures: &[SurfaceSyntaxCapture],
+            _budget: &crate::syntax_resource::SyntaxBudget,
+        ) {
+            let [
+                SurfaceSyntaxCapture::Identifier(name),
+                SurfaceSyntaxCapture::Pattern(pattern),
+                SurfaceSyntaxCapture::Type(_),
+                SurfaceSyntaxCapture::Expression(expression),
+            ] = captures
+            else {
+                panic!("expected the actual flat mixed captures");
+            };
+            assert!(
+                source
+                    .display_path()
+                    .ends_with("expression-host/mixed_main.ash")
+            );
+            assert_eq!(name.name.text, "identity");
+            assert_eq!(name.name.introduction, 0);
+            let SurfacePatternKind::Binder(binder) = &pattern.pattern.kind else {
+                panic!("expected the actual binder");
+            };
+            let SurfaceExprKind::Name(SurfaceReference::Unqualified(read)) =
+                &expression.expression.kind
+            else {
+                panic!("expected the actual expression name");
+            };
+            for name in [&binder.name, read] {
+                assert_eq!(name.text, "value");
+                assert_eq!(name.introduction, 0);
+                assert!(name.written && name.introduced_at.is_none());
+                assert_eq!(name.span.source(), source.id());
+                let range = name.span.range();
+                assert_eq!(
+                    &source.text()[range.start() as usize..range.end() as usize],
+                    "value"
+                );
+            }
+            assert_ne!(binder.name.span, read.span);
+            assert!(
+                matches!(&expression.contents[..], [MacroOutputNode::Identifier(name, MacroOrigin::Source(origin))] if name.span == read.span && *origin == read.span)
+            );
+            OBSERVED.set(true);
+        }
+
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/surface-macros/expression-host/mixed_main.ash");
+        OBSERVED.set(false);
+        G1_CAPTURE_OBSERVER.set(Some(observe));
+        let result = compile_path(RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        });
+        G1_CAPTURE_OBSERVER.set(None);
+        let program = result.expect("the imported mixed graph compiles");
+        assert!(OBSERVED.get());
+        let value = execute(&program).unwrap();
+        assert_eq!(value.value_display(), "42");
+        assert_eq!(value.type_display(), "Int");
+    }
+
     fn h1_selection(
         source: &SourceFile,
         owner: usize,
