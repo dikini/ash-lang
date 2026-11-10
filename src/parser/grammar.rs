@@ -621,9 +621,11 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
             }
             // The flat prefix has already used the legacy HashSet. Move it once
             // to a deterministic extended-header accumulator, paying the
-            // table walk, destination slots and moved String values first.
+            // table walk, destination slots and moved String values first. Twice
+            // the reported capacity is a conservative bucket-walk reservation.
             let names_work = names
                 .capacity()
+                .saturating_mul(2)
                 .saturating_add(names.len().saturating_mul(2));
             if !parser.charge_matcher_work(names_work) {
                 break;
@@ -698,7 +700,7 @@ fn push_matcher_start(
     start: Option<usize>,
 ) -> bool {
     let growth = if starts.len() == starts.capacity() {
-        starts.len().saturating_add(1)
+        starts.len().saturating_mul(2).saturating_add(1)
     } else {
         0
     };
@@ -731,8 +733,8 @@ fn matcher_starts_overlap(
     let right_token = &parser.tokens[right];
     let left_range = left_token.span.range();
     let right_range = right_token.span.range();
-    let work = (left_range.end() - left_range.start()) as usize
-        + (right_range.end() - right_range.start()) as usize;
+    let work = ((left_range.end() - left_range.start()) as usize)
+        .saturating_add((right_range.end() - right_range.start()) as usize);
     if !parser.charge_matcher_work(work.saturating_add(2)) {
         return false;
     }
@@ -758,21 +760,83 @@ fn matcher_starts_overlap(
     )
 }
 
+type MatcherStarts = Vec<Option<usize>>;
+type PendingMatcherRepeats = Vec<(MatcherStarts, Option<usize>, bool)>;
+
+fn matcher_pending_overlap(
+    parser: &mut Parser<'_>,
+    pending: &PendingMatcherRepeats,
+    following: &[Option<usize>],
+) -> Option<bool> {
+    for (starts, separator, star) in pending {
+        if !parser.charge_matcher_work(1) {
+            return None;
+        }
+        for following in following {
+            if !parser.charge_matcher_work(1) {
+                return None;
+            }
+            if let Some(separator) = separator {
+                let overlaps = matcher_starts_overlap(parser, Some(*separator), *following);
+                if parser.resource_failure.is_some() {
+                    return None;
+                }
+                if overlaps {
+                    return Some(true);
+                }
+            }
+            if separator.is_none() || *star {
+                for start in starts {
+                    if !parser.charge_matcher_work(1) {
+                        return None;
+                    }
+                    let overlaps = matcher_starts_overlap(parser, *start, *following);
+                    if parser.resource_failure.is_some() {
+                        return None;
+                    }
+                    if overlaps {
+                        return Some(true);
+                    }
+                }
+            }
+        }
+    }
+    Some(false)
+}
+
+fn reserve_pending_matchers(
+    parser: &mut Parser<'_>,
+    pending: &mut PendingMatcherRepeats,
+    additional: usize,
+) -> bool {
+    let needed = pending.len().checked_add(additional).unwrap_or(usize::MAX);
+    let growth = if needed > pending.capacity() {
+        pending.len().saturating_add(needed)
+    } else {
+        0
+    };
+    if !parser.charge_matcher_work(growth.saturating_add(additional)) {
+        return false;
+    }
+    pending.reserve_exact(additional);
+    true
+}
+
 // Parses the remainder of an extended declaration matcher. The tuple returned
-// by this walk contains nullable, first-capture, last-capture, and FIRST tokens.
+// by this walk contains nullable, first/last capture, FIRST and pending repeats.
 fn syntax_matcher_items(
     parser: &mut Parser<'_>,
     names: &mut Vec<String>,
     closing: Option<TokenKind>,
     braces: bool,
     mut previous_capture: bool,
-) -> (bool, bool, bool, Vec<Option<usize>>) {
+) -> (bool, bool, bool, MatcherStarts, PendingMatcherRepeats) {
     let mut nullable = true;
     let mut first_capture = false;
     let mut first = Vec::new();
     // A pending repeat can meet a later item through nullable intervening items.
     // Each entry owns its temporary FIRST list, separator token, and star flag.
-    let mut pending: Vec<(Vec<Option<usize>>, Option<usize>, bool)> = Vec::new();
+    let mut pending = PendingMatcherRepeats::new();
     loop {
         if parser.resource_failure.is_some()
             || closing.as_ref().is_some_and(|end| parser.at(end))
@@ -792,6 +856,7 @@ fn syntax_matcher_items(
         let part_first_capture;
         let part_last_capture;
         let mut part_first = Vec::new();
+        let mut part_pending = PendingMatcherRepeats::new();
         let mut repeat = None;
         if parser.at(&TokenKind::Dollar) && parser.nth(1) == Some(&TokenKind::LeftParen) {
             if !parser.enter_structure() {
@@ -804,7 +869,7 @@ fn syntax_matcher_items(
             parser.start(NodeKind::SyntaxMatcherRepeat);
             let _ = parser.bump(); // $
             let _ = parser.bump(); // (
-            let (body_nullable, body_first_capture, body_last_capture, body_first) =
+            let (body_nullable, body_first_capture, body_last_capture, body_first, body_pending) =
                 syntax_matcher_items(parser, names, Some(TokenKind::RightParen), false, false);
             let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
             let mut separator = None;
@@ -837,9 +902,29 @@ fn syntax_matcher_items(
             if body_nullable {
                 parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
             }
+            let separator_start = [separator];
+            let cycle_follow = if separator.is_some() {
+                separator_start.as_slice()
+            } else {
+                body_first.as_slice()
+            };
+            let cycle_overlap = matcher_pending_overlap(parser, &body_pending, cycle_follow);
+            if cycle_overlap == Some(true) {
+                let span = parser.tokens[separator.unwrap_or(part_start)].span;
+                let _ = parser.report_at(
+                    ParseReason::ExpectedForm,
+                    ExpectedForm::Identifier,
+                    span,
+                    None,
+                );
+            }
             parser.finish();
             parser.leave_structure();
+            if cycle_overlap.is_none() {
+                break;
+            }
             part_first = body_first;
+            part_pending = body_pending;
             part_first_capture = body_first_capture;
             part_last_capture = body_last_capture;
             repeat = Some((separator, part_nullable));
@@ -910,7 +995,7 @@ fn syntax_matcher_items(
                     parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
                 } else {
                     let growth = if names.len() == names.capacity() {
-                        names.len().saturating_add(1)
+                        names.len().saturating_mul(2).saturating_add(1)
                     } else {
                         0
                     };
@@ -958,22 +1043,10 @@ fn syntax_matcher_items(
             part_last_capture = false;
         }
 
-        let mut ambiguous = previous_capture && part_first_capture;
-        for (starts, separator, star) in &pending {
-            for following in &part_first {
-                if let Some(separator) = separator {
-                    ambiguous |= matcher_starts_overlap(parser, Some(*separator), *following);
-                }
-                if separator.is_none() || *star {
-                    for start in starts {
-                        ambiguous |= matcher_starts_overlap(parser, *start, *following);
-                    }
-                }
-            }
-        }
-        if parser.resource_failure.is_some() {
+        let Some(follow_overlap) = matcher_pending_overlap(parser, &pending, &part_first) else {
             break;
-        }
+        };
+        let ambiguous = previous_capture && part_first_capture || follow_overlap;
         if ambiguous {
             let span = parser.tokens[part_start].span;
             let _ = parser.report_at(
@@ -1000,23 +1073,26 @@ fn syntax_matcher_items(
         if !part_nullable {
             pending.clear();
         }
+        if !part_pending.is_empty() {
+            if !reserve_pending_matchers(parser, &mut pending, part_pending.len()) {
+                break;
+            }
+            pending.append(&mut part_pending);
+        }
         if let Some((separator, star)) = repeat {
             // Cloning these token indices and retaining one pending entry are
             // temporary grammar work, paid before their Vec allocations.
-            let work = part_first
-                .len()
-                .saturating_mul(2)
-                .saturating_add(pending.len())
-                .saturating_add(2);
-            if !parser.charge_matcher_work(work) {
+            if !parser.charge_matcher_work(part_first.len().saturating_mul(2)) {
                 break;
             }
             let starts = part_first.clone();
-            pending.reserve_exact(1);
+            if !reserve_pending_matchers(parser, &mut pending, 1) {
+                break;
+            }
             pending.push((starts, separator, star));
         }
     }
-    (nullable, first_capture, previous_capture, first)
+    (nullable, first_capture, previous_capture, first, pending)
 }
 
 fn syntax_declaration_body(parser: &mut Parser<'_>) {

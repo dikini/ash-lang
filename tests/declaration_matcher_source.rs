@@ -75,9 +75,15 @@ fn source_definitions_check_repeat_follow_through_nullable_parts() {
         ("$( item ) \"a\"* \"a\"", false),
         ("$name:ident ( $name:ident )", false),
         ("$( $name:ident )* $last:ident", false),
+        ("$( row $( item $x:ident );* );*", false),
+        ("$( item $( item $x:ident )* )*", false),
+        ("$( row $( item $x:ident )* )* item", false),
         ("$( item ) ,+ item", true),
         ("$( item ) ,* ; tail", true),
         ("$( item ) \"a\"* \"b\"", true),
+        ("$( row $( item $x:ident ),* );*", true),
+        ("$( row $( item $x:ident )* )*", true),
+        ("$( row ( $( item $x:ident )* ) )* item", true),
     ] {
         fs::write(
             directory.join("forms.ash"),
@@ -143,13 +149,16 @@ fn live_repeat_lookahead_counts_the_existing_invocation_layer() {
             }
             let _cleanup = Cleanup(directory.clone());
             let entry = directory.join("main.ash");
-            fs::write(
-                &entry,
-                "import forms (syntax sink)\nsink Alpha\nmain : Unit -> Int\nmain () = 42\n",
-            )
-            .unwrap();
             for depth in [127usize, 128, 129] {
-                let matcher = format!("{}$value:ident{}", "$(".repeat(depth), ")+".repeat(depth));
+                let mut matcher = format!("{}$value:ident", "$(".repeat(depth));
+                let mut invocation = String::from("sink Alpha");
+                for marker in (0..depth).rev() {
+                    matcher.push_str(&format!(" {marker} )+"));
+                    invocation.push_str(&format!(" {marker}"));
+                }
+                fs::write(&entry, format!(
+                    "import forms (syntax sink)\n{invocation}\nmain : Unit -> Int\nmain () = 42\n"
+                )).unwrap();
                 fs::write(
                     directory.join("forms.ash"),
                     format!("pub syntax declaration: (sink) {matcher} => {{}}\n"),
