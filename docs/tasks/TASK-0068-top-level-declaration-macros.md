@@ -552,7 +552,8 @@ final focused gate checks them again.
 
 **Remaining:** Full S2 Type, Pattern, Expression and mixed/generated
 consumers, used splices, original I11/I19 and I14 criteria, and the connected
-downstream paths remain open. Full G1 and its repeated host/output consumers also remain open.
+downstream paths remain open. Full G1 and its repeated host/output consumers
+also remain open.
 All original #230 criteria remain unchecked. The original fixed I01–I22 corpus
 remains unchanged. The original I16 derive, teardown and build/image paths, D8,
 E4, V3, V5–V8 and the fresh workspace gate remain open.
