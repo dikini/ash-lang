@@ -574,10 +574,12 @@ have independent retention and readback checks; this is not full S2 acceptance.
 independent QA and Sol own their checks, and the orchestrator owns retaining
 integration and acceptance confirmation.
 
-### Protected Pattern host candidate
+### Protected Pattern host retained contribution
 
-**Delivered in the local candidate:** [PR #291](https://github.com/dikini/ash-lang/pull/291)
-proposes a bounded Pattern host contribution on retaining base
+**Delivered:** [PR #291](https://github.com/dikini/ash-lang/pull/291) retained
+the bounded Pattern host contribution at
+`ee54a766b18c0573af4fbd43baa4a45c3478d957`, tree
+`e11df876d0765d287da6d6e69ff394be08325ca2`, on retaining base
 `b1a93e041826991d8d2f0a8edde267696e4d8f52`. Source/test candidate
 `1bc3eab32c01364aef0b759db308514c44253ee7` adds `pattern_syntax` and
 `parse_pattern` to the existing checked host. Eligible flat Pattern,
@@ -616,10 +618,55 @@ Expression and mixed/generated paths, full G1, original I16 derive/teardown/
 build-image paths, D8, E4, V3, V5–V8 and the fresh workspace gate remain open.
 The complete CP-0034 specification and tool update remains at V4 after V3.
 
-**Awaiting:** TASK-only equality, Sol exact-head review, PR retention and
-checked partial issue readback. **Owner:** The developer owns the
-candidate and acceptance record; independent QA and Sol own their checks, and
-the orchestrator owns retaining integration and acceptance confirmation.
+**Awaiting:** The bounded Pattern contribution and its partial issue record
+have independent retention and readback checks. Full S2 remains open.
+**Owner:** The developer owns the candidate and acceptance record; independent
+QA and Sol own their checks, and the orchestrator owns retaining integration
+and acceptance confirmation.
+
+### Protected Type to declarative expression candidate
+
+**Delivered in the local candidate:** Candidate
+`ffdbc313b7e1aa40856fab898f8719da766f6028` connects a captured Type in a
+source declaration Template to an expression Template invocation generated
+from it. The selected expression expansion borrows the existing graph syntax
+budget. Repeated expression copies, their Type annotations, metadata and
+projection buffers use that same budget. The guard continues to refuse the
+protected bridge to an expression Transformer or through a nested expression
+invocation. It does not introduce new host operations.
+
+Separate imported keep and twice graphs execute `42 : Int`, including a
+caller-side shadow of the selected imported expression syntax. A real graph
+observes the caller Type capture and exercises the shared budget with a
+pre-spent amount, exact allowance, one-short refusal and fresh retry. On a
+512 KiB thread, the source graph with 121 nested Type groups executes 42; the
+122-group graph reaches a structural-depth refusal after capture. Both release
+the final observed contents alias. A separate constructed-owner component
+covers its 128/129 retained-depth boundary; these are distinct observations.
+
+The fresh focused gate on `ffdbc313` records 703 distinct passes and two
+retained ignores. Receipt SHA-256
+`e6adf0a8135c0373d667d9068b23c10d4f030ced844ccfb7e3e1eabfccdae744` is at
+`evidence/type-expression/final-gate-ffdbc313/receipt.json` in the delivery
+handoff. It includes the affected parser, staging, host and public suites,
+architecture 47/47, and the retained 256 KiB and 512 KiB controls. Stack
+children and marker reruns count once. Independent QA reconstructed the
+result in audit
+`d07ec8b8cb2a9efa3d71f368c11ab7c32ecda008e05d2f64b44d259ff678ed5b`.
+The unchanged strict I14 test remains a separate failure at the missing
+definition-origin presentation tracked in
+[#265](https://github.com/dikini/ash-lang/issues/265#issuecomment-6766825789).
+No original #230 criterion is closed by this candidate. The fixed I01–I22
+corpus, broader S2/H1 and mixed consumers, used splices, full G1, I15 refresh,
+original I16 derive/teardown/build-image paths, D8, E4, V3, V5–V8 and the
+fresh workspace gate remain open. The complete CP-0034 specification and
+tool documentation update remains at V4 after V3.
+
+**Awaiting:** Sol exact-head PR review, retention and checked partial issue
+readback.
+
+**Owner:** The developer owns the candidate and evidence; QA and Sol own
+independent checks; the orchestrator owns retention and acceptance confirmation.
 
 **Remaining:** Complete protected-fragment accounting/consumption, declaration
 captures, repetition, host transfer and procedural declarations, quotes/escapes,

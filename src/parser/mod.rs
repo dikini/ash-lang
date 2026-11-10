@@ -752,6 +752,50 @@ pub(crate) fn parse_macro_expression(
     )
 }
 
+pub(crate) fn parse_macro_expression_budgeted(
+    source: &SourceFile,
+    invocation: Span,
+    construction: Option<(Span, usize)>,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
+    budget: &mut SyntaxBudget,
+) -> Result<crate::surface::SurfaceExpr, MacroParseFailure> {
+    let parsed = parse_macro_tree_with_expression_scratch(
+        source,
+        invocation,
+        output,
+        contexts,
+        &[],
+        MacroOutputPosition::Expression,
+        false,
+        true,
+        budget,
+    )?;
+    project::project_macro_expression_budgeted(
+        source,
+        invocation,
+        construction,
+        &parsed,
+        contexts,
+        frame,
+        budget,
+    )
+    .map_err(|failure| match failure {
+        project::DeclarationExpansionFailure::Syntax {
+            diagnostics,
+            resource,
+        } => MacroParseFailure::Syntax {
+            diagnostics,
+            resource,
+        },
+        project::DeclarationExpansionFailure::Projection(ProjectionError::ResourceLimit(
+            resource,
+        )) => macro_resource_failure(resource),
+        project::DeclarationExpansionFailure::Projection(_) => MacroParseFailure::Invalid,
+    })
+}
+
 pub(crate) fn parse_macro_type(
     source: &SourceFile,
     invocation: Span,
@@ -963,16 +1007,49 @@ fn parse_macro_tree_selected(
     pattern_scratch: bool,
     budget: &mut SyntaxBudget,
 ) -> Result<ParsedMacroTree, MacroParseFailure> {
+    parse_macro_tree_with_expression_scratch(
+        source,
+        invocation,
+        output,
+        contexts,
+        placeholders,
+        position,
+        pattern_scratch,
+        false,
+        budget,
+    )
+}
+
+fn parse_macro_tree_with_expression_scratch(
+    source: &SourceFile,
+    invocation: Span,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    placeholders: &[crate::surface::SurfaceName],
+    position: MacroOutputPosition,
+    pattern_scratch: bool,
+    expression_scratch: bool,
+    budget: &mut SyntaxBudget,
+) -> Result<ParsedMacroTree, MacroParseFailure> {
     use crate::source::ByteRange;
     use crate::syntax::MacroOutputNode;
     let type_output = matches!(
         position,
         MacroOutputPosition::Type | MacroOutputPosition::Pattern
     );
-    let fragment_scratch = type_output || pattern_scratch;
-    let budgeted = type_output || matches!(position, MacroOutputPosition::StagedDeclarations);
+    let fragment_scratch = type_output || pattern_scratch || expression_scratch;
+    let budgeted = type_output
+        || expression_scratch
+        || matches!(position, MacroOutputPosition::StagedDeclarations);
     if budgeted {
-        charge_staged_output(&output, contexts, type_output, pattern_scratch, budget)?;
+        charge_staged_output_with_expression_scratch(
+            &output,
+            contexts,
+            type_output,
+            pattern_scratch,
+            expression_scratch,
+            budget,
+        )?;
     }
     let start = invocation.range().start();
     let anchor = source
@@ -1243,11 +1320,30 @@ fn macro_resource_failure(resource: ResourceFailure) -> MacroParseFailure {
 }
 
 /// Reserve adapter storage before converting an identifier-only output tree.
+#[cfg(test)]
 fn charge_staged_output(
     output: &[crate::syntax::MacroOutputNode],
     contexts: &crate::syntax::SyntaxContexts,
     type_scratch: bool,
     pattern_scratch: bool,
+    budget: &mut SyntaxBudget,
+) -> Result<(), MacroParseFailure> {
+    charge_staged_output_with_expression_scratch(
+        output,
+        contexts,
+        type_scratch,
+        pattern_scratch,
+        false,
+        budget,
+    )
+}
+
+fn charge_staged_output_with_expression_scratch(
+    output: &[crate::syntax::MacroOutputNode],
+    contexts: &crate::syntax::SyntaxContexts,
+    type_scratch: bool,
+    pattern_scratch: bool,
+    expression_scratch: bool,
     budget: &mut SyntaxBudget,
 ) -> Result<(), MacroParseFailure> {
     use crate::syntax::MacroOutputNode;
@@ -1257,7 +1353,7 @@ fn charge_staged_output(
     budget
         .charge_units(output.len())
         .map_err(macro_resource_failure)?;
-    let selected_scratch = type_scratch || pattern_scratch;
+    let selected_scratch = type_scratch || pattern_scratch || expression_scratch;
     if selected_scratch && !output.is_empty() {
         budget
             .charge_units(output.len())
@@ -1289,8 +1385,14 @@ fn charge_staged_output(
                     .charge_selection_search(&name.text, name.introduction, budget)
                     .map_err(macro_resource_failure)?;
                 if let Some(selection) = contexts.select(name) {
-                    crate::syntax::charge_selected(selection, budget)
-                        .map_err(macro_resource_failure)?;
+                    let charge_selection = |budget: &mut SyntaxBudget| {
+                        if expression_scratch {
+                            crate::syntax::charge_selected_expression(selection, budget)
+                        } else {
+                            crate::syntax::charge_selected(selection, budget)
+                        }
+                    };
+                    charge_selection(budget).map_err(macro_resource_failure)?;
                     // An invocation's inherited stop indices are depth-bounded.
                     budget
                         .charge_units(STRUCTURAL_DEPTH_LIMIT)
@@ -1300,12 +1402,9 @@ fn charge_staged_output(
                     if selection.declaration.category
                         == crate::surface::SurfaceSyntaxCategory::Expression
                     {
-                        crate::syntax::charge_selected(selection, budget)
-                            .map_err(macro_resource_failure)?;
-                        crate::syntax::charge_selected(selection, budget)
-                            .map_err(macro_resource_failure)?;
-                        crate::syntax::charge_selected(selection, budget)
-                            .map_err(macro_resource_failure)?;
+                        charge_selection(budget).map_err(macro_resource_failure)?;
+                        charge_selection(budget).map_err(macro_resource_failure)?;
+                        charge_selection(budget).map_err(macro_resource_failure)?;
                     }
                 }
             }
@@ -1356,9 +1455,16 @@ fn charge_staged_output(
                 let child = crate::syntax::type_depth(depth, 1).map_err(macro_resource_failure)?;
                 crate::syntax::charge_type_origin(origin, child, budget)
                     .map_err(macro_resource_failure)?;
-                crate::syntax::charge_expression_retention(capture, depth, budget)
-                    .map_err(macro_resource_failure)?
-                    .ok_or(MacroParseFailure::Invalid)?;
+                let bridge = if expression_scratch {
+                    crate::syntax::charge_new_expression_retention(capture, depth, budget)
+                } else {
+                    crate::syntax::charge_expression_retention(capture, depth, budget)
+                }
+                .map_err(macro_resource_failure)?
+                .ok_or(MacroParseFailure::Invalid)?;
+                if expression_scratch && bridge {
+                    return Err(MacroParseFailure::Invalid);
+                }
             }
             MacroOutputNode::ForwardedPattern(capture, origin) => {
                 let child = crate::syntax::type_depth(depth, 1).map_err(macro_resource_failure)?;

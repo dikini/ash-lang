@@ -567,6 +567,7 @@ pub struct SurfaceIdentifierCapture {
 pub struct SurfaceExpressionCapture {
     pub(crate) expression: SurfaceExpr,
     pub(crate) contents: Arc<[crate::syntax::MacroOutputNode]>,
+    pub(crate) contains_protected_type: bool,
 }
 
 /// A type and its immutable, protected syntax contents.

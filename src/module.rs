@@ -1535,11 +1535,22 @@ impl HeaderGraph {
         self.pending.is_empty()
     }
 
+    #[cfg(test)]
     pub(crate) fn current_module(&self) -> Option<&LoadedModule> {
         match &self.completed {
             Some(graph) => graph.modules.last(),
             None => self.loaded.last(),
         }
+    }
+
+    pub(crate) fn current_module_with_syntax_budget(
+        &mut self,
+    ) -> Option<(&LoadedModule, &mut SyntaxBudget)> {
+        let module = match &self.completed {
+            Some(graph) => graph.modules.last(),
+            None => self.loaded.last(),
+        }?;
+        Some((module, &mut self.syntax_budget))
     }
 
     pub(crate) fn next_module(&mut self) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
@@ -3076,6 +3087,29 @@ mod tests {
             },
             selected,
         )
+    }
+
+    #[test]
+    fn current_module_borrows_the_same_syntax_ledger_before_and_after_completion() {
+        let (mut graph, selected) = h1_staged_fixture("make good\n");
+        assert!(graph.current_module_with_syntax_budget().is_none());
+        graph
+            .next_module_with_syntax(&[selected], &[], &mut Vec::new(), None)
+            .unwrap()
+            .unwrap();
+        let consumed = graph.syntax_budget.consumed();
+        let loaded_id = {
+            let (module, budget) = graph.current_module_with_syntax_budget().unwrap();
+            budget.charge_units(7).unwrap();
+            module.id()
+        };
+        assert_eq!(graph.syntax_budget.consumed(), consumed + 7);
+        assert!(graph.completed_graph().is_some());
+        let (module, budget) = graph.current_module_with_syntax_budget().unwrap();
+        assert_eq!(module.id(), loaded_id);
+        assert_eq!(budget.consumed(), consumed + 7);
+        budget.charge().unwrap();
+        assert_eq!(graph.syntax_budget.consumed(), consumed + 8);
     }
 
     #[test]

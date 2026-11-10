@@ -52,6 +52,7 @@ struct ProjectionTokens<'a> {
     name_frame: Option<&'a std::sync::Arc<crate::syntax::ExpansionFrame>>,
     staging_frames: Option<&'a [std::sync::Arc<crate::syntax::ExpansionFrame>]>,
     preserve_name_diagnostic: bool,
+    expression_budget: Option<&'a std::cell::RefCell<&'a mut crate::syntax_resource::SyntaxBudget>>,
 }
 
 impl<'a> ProjectionTokens<'a> {
@@ -67,6 +68,7 @@ impl<'a> ProjectionTokens<'a> {
             name_frame: None,
             staging_frames: None,
             preserve_name_diagnostic: false,
+            expression_budget: None,
         }
     }
 
@@ -82,6 +84,7 @@ impl<'a> ProjectionTokens<'a> {
             name_frame: self.name_frame,
             staging_frames: self.staging_frames,
             preserve_name_diagnostic: self.preserve_name_diagnostic,
+            expression_budget: self.expression_budget,
         }
     }
 
@@ -2516,6 +2519,7 @@ impl DeclarationFrame<'_> {
                 name_frame: self.frame.as_ref(),
                 staging_frames: Some(staging_frames),
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             },
         }
     }
@@ -2595,14 +2599,48 @@ pub(crate) fn project_declaration_expansions(
                         ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
                     );
                 }
-                if current.expression_pattern {
-                    if current.pattern_accounting {
-                        charge_generated_ep_projection_selected(child, &tokens, true, budget)?;
-                    } else {
-                        charge_generated_ep_projection(child, &tokens, budget)?;
+                let protected_type = check_narrow_protected_refusal_inner(
+                    child,
+                    tokens.originals,
+                    false,
+                    Some(&current.contexts),
+                    budget,
+                )?;
+                if protected_type {
+                    if charge_projection_preflight_with_expression(
+                        child,
+                        &tokens,
+                        true,
+                        current.pattern_accounting,
+                        true,
+                        Some(&current.contexts),
+                        budget,
+                    )? {
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
+                    }
+                    let expression_budget = std::cell::RefCell::new(&mut *budget);
+                    let mut selected_tokens = current.tokens(&staging_frames);
+                    selected_tokens.expression_budget = Some(&expression_budget);
+                    module.project_child(source, child, &selected_tokens)?;
+                    continue;
+                } else if current.expression_pattern {
+                    if charge_projection_preflight_selected(
+                        child,
+                        &tokens,
+                        true,
+                        current.pattern_accounting,
+                        budget,
+                    )? {
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
                     }
                 } else {
-                    charge_generated_projection(child, &tokens, budget)?;
+                    charge_projection_preflight(child, &tokens, false, budget)?;
                 }
             }
             match &current.tree {
@@ -2829,6 +2867,38 @@ fn charge_frame_additions(
 ) -> Result<(), ResourceFailure> {
     for added in 0..count {
         budget.charge_units(existing.saturating_add(added).saturating_add(2))?;
+    }
+    Ok(())
+}
+
+fn charge_qualified_expression_diagnostic(
+    name: &SurfaceQualifiedName,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    let qualifier = name.qualifier.diagnostic.as_deref();
+    let member = name.member.diagnostic.as_deref();
+    if let Some(location) = qualifier.or(member) {
+        crate::syntax::charge_diagnostic_location_copy(location, budget)?;
+    }
+    if let (Some(qualifier), Some(member)) = (qualifier, member) {
+        crate::syntax::charge_type_origin_copy(&member.primary, 0, budget)?;
+        for origin in &member.related {
+            crate::syntax::charge_type_origin_copy(origin, 0, budget)?;
+        }
+        // The cloned qualifier's related and frame buffers grow independently
+        // while the member cause is appended. Bound their allocations and
+        // moved entries using the actual lengths of both locations.
+        let related = qualifier
+            .related
+            .len()
+            .saturating_add(member.related.len())
+            .saturating_add(1);
+        let frames = qualifier.frames.len().saturating_add(member.frames.len());
+        budget.charge_units(related.saturating_mul(12))?;
+        if !member.frames.is_empty() {
+            budget.charge_units(frames.saturating_mul(12))?;
+        }
+        charge_frame_additions(member.frames.len(), qualifier.frames.len(), budget)?;
     }
     Ok(())
 }
@@ -3510,6 +3580,20 @@ fn charge_capture_contents_inner(
     new_type_scratch: bool,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<bool, DeclarationExpansionFailure> {
+    charge_capture_contents_with_expression(root, tokens, kind, new_type_scratch, false, budget)
+        .map(|(bridge, _)| bridge)
+}
+
+fn charge_capture_contents_with_expression(
+    root: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    kind: SurfaceSyntaxCaptureKind,
+    new_type_scratch: bool,
+    new_expression: bool,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(bool, bool), DeclarationExpansionFailure> {
+    let new_type_scratch = new_type_scratch || new_expression;
+    let mut contains_type = false;
     // A lone forwarded node reuses its old contents Arc. Every other
     // reconstructed sequence gets a new enclosing Arc before it is retained.
     let mut singleton = root;
@@ -3579,6 +3663,15 @@ fn charge_capture_contents_inner(
                 let token = tokens.get(*index).ok_or(ProjectionError::MalformedTree(
                     InternalReason::TokenOutOfRange,
                 ))?;
+                if let Some(original) = tokens.originals.and_then(|nodes| nodes.get(index)) {
+                    contains_type |= match original {
+                        crate::syntax::MacroOutputNode::ForwardedType(..) => true,
+                        crate::syntax::MacroOutputNode::ForwardedExpression(capture, _) => {
+                            capture.contains_protected_type
+                        }
+                        _ => false,
+                    };
+                }
                 match &token.kind {
                     TokenKind::LeftParen | TokenKind::LeftBrace => {
                         groups = crate::syntax::type_depth(groups, 1)?;
@@ -3589,8 +3682,11 @@ fn charge_capture_contents_inner(
                                     original, groups, budget,
                                 )?;
                             } else {
-                                bridge |= crate::syntax::charge_captured_ep_original(
-                                    original, groups, budget,
+                                bridge |= crate::syntax::charge_captured_ep_original_selected(
+                                    original,
+                                    groups,
+                                    new_expression,
+                                    budget,
                                 )?;
                             }
                         }
@@ -3614,8 +3710,11 @@ fn charge_capture_contents_inner(
                                     original, groups, budget,
                                 )?;
                             } else {
-                                bridge |= crate::syntax::charge_captured_ep_original(
-                                    original, groups, budget,
+                                bridge |= crate::syntax::charge_captured_ep_original_selected(
+                                    original,
+                                    groups,
+                                    new_expression,
+                                    budget,
                                 )?;
                             }
                         } else if let TokenKind::Identifier(text)
@@ -3649,18 +3748,27 @@ fn charge_capture_contents_inner(
         match singleton_original {
             Some(crate::syntax::MacroOutputNode::ForwardedExpression(capture, _)) => {
                 let depth = crate::syntax::type_depth(0, 1)?;
-                bridge |= crate::syntax::charge_expression_copy(
-                    &capture.expression,
-                    depth,
-                    false,
-                    budget,
-                )?
+                bridge |= if new_expression {
+                    crate::syntax::charge_new_expression_copy(
+                        &capture.expression,
+                        depth,
+                        false,
+                        budget,
+                    )
+                } else {
+                    crate::syntax::charge_expression_copy(&capture.expression, depth, false, budget)
+                }?
                 .ok_or(ProjectionError::MalformedTree(
                     InternalReason::UnexpectedShape,
                 ))?;
-                bridge |= crate::syntax::charge_expression_retention(capture, 0, budget)?.ok_or(
-                    ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
-                )?;
+                bridge |= if new_expression {
+                    crate::syntax::charge_new_expression_retention(capture, 0, budget)
+                } else {
+                    crate::syntax::charge_expression_retention(capture, 0, budget)
+                }?
+                .ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
             }
             Some(crate::syntax::MacroOutputNode::ForwardedPattern(..)) => {
                 budget.charge()?; // the final capture retains the existing Arc
@@ -3668,10 +3776,11 @@ fn charge_capture_contents_inner(
             _ => {}
         }
     }
-    Ok(bridge)
+    Ok((bridge, contains_type))
 }
 
 /// Precharge generated projection and its overlapping capture/pattern copies.
+#[cfg(test)]
 fn charge_generated_projection(
     root: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
@@ -3682,6 +3791,7 @@ fn charge_generated_projection(
     Ok(())
 }
 
+#[cfg(test)]
 fn charge_generated_ep_projection(
     root: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
@@ -3690,6 +3800,7 @@ fn charge_generated_ep_projection(
     charge_generated_ep_projection_selected(root, tokens, false, budget)
 }
 
+#[cfg(test)]
 fn charge_generated_ep_projection_selected(
     root: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
@@ -3720,15 +3831,45 @@ fn charge_projection_preflight_selected(
     new_pattern: bool,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<bool, DeclarationExpansionFailure> {
+    charge_projection_preflight_with_expression(
+        root,
+        tokens,
+        expression_pattern,
+        new_pattern,
+        false,
+        None,
+        budget,
+    )
+}
+
+fn charge_projection_preflight_with_expression(
+    root: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    expression_pattern: bool,
+    new_pattern: bool,
+    new_expression: bool,
+    contexts: Option<&crate::syntax::SyntaxContexts>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<bool, DeclarationExpansionFailure> {
+    let selected_scratch = new_pattern || new_expression;
     let bridge = if expression_pattern {
-        charge_composed_projection_selected(root, tokens, true, false, new_pattern, 0, budget)?
+        charge_composed_projection_with_expression(
+            root,
+            tokens,
+            true,
+            false,
+            new_pattern,
+            new_expression,
+            0,
+            budget,
+        )?
     } else {
         charge_composed_type_projection(root, tokens, budget)?;
         false
     };
-    charge_projection_subtree_inner(root, tokens, new_pattern, budget)?;
+    charge_projection_subtree_inner(root, tokens, selected_scratch, budget)?;
     budget.charge()?;
-    let mut pending = if new_pattern {
+    let mut pending = if selected_scratch {
         budget.charge()?;
         let mut pending = Vec::with_capacity(1);
         pending.push(root);
@@ -3745,24 +3886,66 @@ fn charge_projection_preflight_selected(
                 | NodeKind::ResourceDefinition
                 | NodeKind::ResourceFamily
         ) {
-            charge_projection_subtree_inner(node, tokens, new_pattern, budget)?;
+            charge_projection_subtree_inner(node, tokens, selected_scratch, budget)?;
         }
         if node.kind == NodeKind::SyntaxInvocation {
+            let mut invocation_contains_type = false;
+            let mut capture_count = 0usize;
             for argument in child_nodes(node).filter(|child| child.kind == NodeKind::SyntaxArgument)
             {
+                capture_count = capture_count.saturating_add(1);
                 if let Some(expression) =
                     child_nodes(argument).find(|child| is_expression_kind(child.kind))
                 {
-                    charge_projection_subtree_inner(expression, tokens, new_pattern, budget)?;
+                    charge_projection_subtree_inner(expression, tokens, selected_scratch, budget)?;
                     if expression_pattern {
-                        charge_capture_contents(
-                            expression,
-                            tokens,
-                            SurfaceSyntaxCaptureKind::Expression,
-                            budget,
-                        )?;
+                        if new_expression {
+                            let (argument_bridge, contains_type) =
+                                charge_capture_contents_with_expression(
+                                    expression,
+                                    tokens,
+                                    SurfaceSyntaxCaptureKind::Expression,
+                                    false,
+                                    true,
+                                    budget,
+                                )?;
+                            if argument_bridge {
+                                return Err(ProjectionError::MalformedTree(
+                                    InternalReason::UnexpectedShape,
+                                )
+                                .into());
+                            }
+                            invocation_contains_type |= contains_type;
+                        } else {
+                            charge_capture_contents(
+                                expression,
+                                tokens,
+                                SurfaceSyntaxCaptureKind::Expression,
+                                budget,
+                            )?;
+                        }
                     }
                 }
+            }
+            if invocation_contains_type {
+                budget.charge_units(capture_count)?;
+                let Some(ConcreteElement::Token(index)) = node.children.first() else {
+                    return Err(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                    );
+                };
+                let Some(crate::syntax::MacroOutputNode::Identifier(name, _)) =
+                    tokens.originals.and_then(|originals| originals.get(index))
+                else {
+                    return Err(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                    );
+                };
+                let contexts = contexts.ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                // One future lookup is used either by expand or the depth refusal.
+                contexts.charge_selection_search(&name.text, name.introduction, budget)?;
             }
         }
         if matches!(
@@ -3776,18 +3959,18 @@ fn charge_projection_preflight_selected(
                     && let Some(operation) =
                         child_nodes(clause).find(|child| child.kind == NodeKind::Binder)
                 {
-                    charge_projection_subtree_inner(operation, tokens, new_pattern, budget)?;
+                    charge_projection_subtree_inner(operation, tokens, selected_scratch, budget)?;
                 }
                 if let Some(pattern) =
                     child_nodes(clause).find(|child| child.kind == NodeKind::Pattern)
                 {
-                    charge_projection_subtree_inner(pattern, tokens, new_pattern, budget)?;
+                    charge_projection_subtree_inner(pattern, tokens, selected_scratch, budget)?;
                 }
             }
         }
         for child in child_nodes(node) {
             budget.charge()?;
-            if new_pattern && pending.len() == pending.capacity() {
+            if selected_scratch && pending.len() == pending.capacity() {
                 let live = pending.len();
                 let requested = live.checked_add(1).unwrap_or(usize::MAX);
                 budget.charge_units(requested.checked_add(live).unwrap_or(usize::MAX))?;
@@ -3846,6 +4029,30 @@ fn charge_composed_projection_selected(
     owner_prefix: usize,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<bool, DeclarationExpansionFailure> {
+    charge_composed_projection_with_expression(
+        root,
+        tokens,
+        expression_pattern,
+        new_type_copy,
+        new_pattern_copy,
+        false,
+        owner_prefix,
+        budget,
+    )
+}
+
+fn charge_composed_projection_with_expression(
+    root: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    expression_pattern: bool,
+    new_type_copy: bool,
+    new_pattern_copy: bool,
+    new_expression_copy: bool,
+    owner_prefix: usize,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<bool, DeclarationExpansionFailure> {
+    let new_type_copy = new_type_copy || new_expression_copy;
+    let new_pattern_copy = new_pattern_copy || new_expression_copy;
     budget.charge()?;
     let source_spans = tokens.occurrence.is_none();
     // The source invocation itself also finds its first and last token.
@@ -4050,15 +4257,44 @@ fn charge_composed_projection_selected(
                             Some(crate::syntax::MacroOutputNode::Token(_, _, origin))
                             | Some(crate::syntax::MacroOutputNode::Identifier(_, origin))
                             | Some(crate::syntax::MacroOutputNode::Group(_, _, origin)) => {
-                                crate::syntax::charge_type_origin(origin, location_depth, budget)?;
+                                if new_expression_copy {
+                                    // Visit retains the cause; FinishDiagnostic clones it into the location.
+                                    crate::syntax::charge_type_origin_copy(
+                                        origin,
+                                        location_depth,
+                                        budget,
+                                    )?;
+                                    crate::syntax::charge_type_origin_copy(
+                                        origin,
+                                        location_depth,
+                                        budget,
+                                    )?;
+                                } else {
+                                    crate::syntax::charge_type_origin(
+                                        origin,
+                                        location_depth,
+                                        budget,
+                                    )?;
+                                }
+                            }
+                            Some(crate::syntax::MacroOutputNode::Expression(_, origin))
+                                if new_expression_copy =>
+                            {
+                                crate::syntax::charge_type_origin_copy(
+                                    origin,
+                                    location_depth,
+                                    budget,
+                                )?;
                             }
                             _ => {}
                         }
                         break;
                     }
                 }
-                let frames = tokens.staging_frames.map_or(1, |frames| frames.len());
-                charge_frame_additions(frames, 0, budget)?;
+                if !new_expression_copy {
+                    let frames = tokens.staging_frames.map_or(1, |frames| frames.len());
+                    charge_frame_additions(frames, 0, budget)?;
+                }
             }
             let raw_pattern = node.kind == NodeKind::Pattern
                 && !child_nodes(node)
@@ -4182,16 +4418,25 @@ fn charge_composed_projection_selected(
                         Some(crate::syntax::MacroOutputNode::ForwardedExpression(capture, _))
                             if expression_pattern =>
                         {
-                            bridge |= crate::syntax::charge_expression_copy(
-                                &capture.expression,
-                                depth,
-                                false,
-                                budget,
-                            )?
+                            bridge |= if new_expression_copy {
+                                crate::syntax::charge_new_expression_copy(
+                                    &capture.expression,
+                                    depth,
+                                    false,
+                                    budget,
+                                )
+                            } else {
+                                crate::syntax::charge_expression_copy(
+                                    &capture.expression,
+                                    depth,
+                                    false,
+                                    budget,
+                                )
+                            }?
                             .ok_or(ProjectionError::MalformedTree(
                                 InternalReason::UnexpectedShape,
                             ))?;
-                            if tokens.frame.is_some() {
+                            if tokens.frame.is_some() && !new_expression_copy {
                                 let frames = tokens.staging_frames.map_or(1, |frames| frames.len());
                                 let existing = capture
                                     .expression
@@ -4291,7 +4536,7 @@ fn charge_composed_projection_selected(
                                 && (scheduled_pattern
                                     || (parent == Some(NodeKind::HandlerClause)
                                         && node.kind == NodeKind::Binder));
-                            if new_type_copy {
+                            if new_type_copy && !new_expression_copy {
                                 crate::syntax::charge_type_origin_copy(
                                     origin,
                                     location_depth,
@@ -4313,7 +4558,7 @@ fn charge_composed_projection_selected(
                                 )?;
                                 charge_frame_additions(previous_frames, 0, budget)?;
                                 charge_frame_additions(1, previous_frames, budget)?;
-                            } else if new_pattern_name {
+                            } else if new_pattern_name || new_expression_copy {
                                 crate::syntax::charge_type_origin_copy(
                                     origin,
                                     location_depth,
@@ -4436,7 +4681,16 @@ fn charge_composed_projection_selected(
                                 ) =>
                         {
                             let location_depth = crate::syntax::type_depth(depth, 1)?;
-                            if new_type_copy {
+                            if new_expression_copy {
+                                crate::syntax::charge_type_origin_copy(
+                                    origin,
+                                    location_depth,
+                                    budget,
+                                )?;
+                                let frames = tokens.staging_frames.map_or(1, |frames| frames.len());
+                                budget.charge_units(frames.saturating_mul(6))?;
+                                charge_frame_additions(frames, 0, budget)?;
+                            } else if new_type_copy {
                                 crate::syntax::charge_type_origin_copy(
                                     origin,
                                     location_depth,
@@ -4501,15 +4755,30 @@ fn check_narrow_protected_refusal(
     transformer_type_arguments: bool,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(), DeclarationExpansionFailure> {
+    check_narrow_protected_refusal_inner(root, originals, transformer_type_arguments, None, budget)
+        .map(|_| ())
+}
+
+fn check_narrow_protected_refusal_inner(
+    root: &ConcreteNode,
+    originals: Option<&std::collections::HashMap<usize, crate::syntax::MacroOutputNode>>,
+    transformer_type_arguments: bool,
+    template_contexts: Option<&crate::syntax::SyntaxContexts>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<bool, DeclarationExpansionFailure> {
+    // The dummy value represents an argument without a usable callee token.
+    // A one-based offset reserves it while keeping the legacy worklist's size.
+    let dummy = std::num::NonZeroU32::new(1).expect("one is nonzero");
     budget.charge()?;
     let mut pending = if transformer_type_arguments {
         budget.charge()?; // initial requested buffer
         let mut pending = Vec::with_capacity(1);
-        pending.push((root, false, false));
+        pending.push((root, None, false));
         pending
     } else {
-        vec![(root, false, false)]
+        vec![(root, None, false)]
     };
+    let mut protected_type = false;
     while let Some((node, expression_argument, declaration_argument)) = pending.pop() {
         if transformer_type_arguments {
             budget.charge()?;
@@ -4518,9 +4787,23 @@ fn check_narrow_protected_refusal(
             budget.charge()?;
             match child {
                 ConcreteElement::Node(child) => {
-                    let expression_argument = expression_argument
-                        || (node.kind == NodeKind::SyntaxInvocation
-                            && child.kind == NodeKind::SyntaxArgument);
+                    let expression_argument = expression_argument.or_else(|| {
+                        (node.kind == NodeKind::SyntaxInvocation
+                            && child.kind == NodeKind::SyntaxArgument)
+                            .then(|| {
+                                if template_contexts.is_none() {
+                                    return dummy;
+                                }
+                                match node.children.first() {
+                                    Some(ConcreteElement::Token(index)) => u32::try_from(*index)
+                                        .ok()
+                                        .and_then(|index| index.checked_add(2))
+                                        .and_then(std::num::NonZeroU32::new)
+                                        .unwrap_or(dummy),
+                                    _ => dummy,
+                                }
+                            })
+                    });
                     let declaration_argument = declaration_argument
                         || (transformer_type_arguments
                             && node.kind == NodeKind::DeclarationSyntaxInvocation
@@ -4537,36 +4820,84 @@ fn check_narrow_protected_refusal(
                     }
                     pending.push((child, expression_argument, declaration_argument));
                 }
-                ConcreteElement::Token(index)
-                    if (expression_argument
+                ConcreteElement::Token(index) => {
+                    use crate::syntax::MacroOutputNode;
+                    let original = originals.and_then(|originals| originals.get(index));
+                    if declaration_argument
                         && matches!(
-                            originals.and_then(|originals| originals.get(index)),
+                            original,
                             Some(
-                                crate::syntax::MacroOutputNode::ForwardedType(_, _)
-                                    | crate::syntax::MacroOutputNode::ForwardedExpression(_, _)
-                                    | crate::syntax::MacroOutputNode::ForwardedPattern(_, _)
+                                MacroOutputNode::ForwardedType(..)
+                                    | MacroOutputNode::ForwardedPattern(..)
                             )
-                        ))
-                        || (declaration_argument
-                            && matches!(
-                                originals.and_then(|originals| originals.get(index)),
-                                Some(
-                                    crate::syntax::MacroOutputNode::ForwardedType(_, _)
-                                        | crate::syntax::MacroOutputNode::ForwardedPattern(_, _)
+                        )
+                    {
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
+                    }
+                    if let Some(callee) = expression_argument {
+                        match original {
+                            Some(MacroOutputNode::ForwardedType(..))
+                                if template_contexts.is_some() =>
+                            {
+                                let Some(MacroOutputNode::Identifier(name, _)) =
+                                    callee.get().checked_sub(2).and_then(|index| {
+                                        originals
+                                            .and_then(|originals| originals.get(&(index as usize)))
+                                    })
+                                else {
+                                    return Err(ProjectionError::MalformedTree(
+                                        InternalReason::UnexpectedShape,
+                                    )
+                                    .into());
+                                };
+                                let contexts = template_contexts.expect("checked above");
+                                contexts.charge_selection_search(
+                                    &name.text,
+                                    name.introduction,
+                                    budget,
+                                )?;
+                                let Some(selected) = contexts.select(name) else {
+                                    return Err(ProjectionError::MalformedTree(
+                                        InternalReason::UnexpectedShape,
+                                    )
+                                    .into());
+                                };
+                                if selected.declaration.category
+                                    != SurfaceSyntaxCategory::Expression
+                                    || !matches!(
+                                        selected.declaration.implementation,
+                                        SurfaceSyntaxImplementation::Template
+                                    )
+                                {
+                                    return Err(ProjectionError::MalformedTree(
+                                        InternalReason::UnexpectedShape,
+                                    )
+                                    .into());
+                                }
+                                protected_type = true;
+                            }
+                            Some(
+                                MacroOutputNode::ForwardedType(..)
+                                | MacroOutputNode::ForwardedExpression(..)
+                                | MacroOutputNode::ForwardedPattern(..),
+                            ) => {
+                                return Err(ProjectionError::MalformedTree(
+                                    InternalReason::UnexpectedShape,
                                 )
-                            )) =>
-                {
-                    return Err(
-                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
-                    );
+                                .into());
+                            }
+                            _ => {}
+                        }
+                    }
                 }
-                ConcreteElement::Token(_)
-                | ConcreteElement::Missing { .. }
-                | ConcreteElement::Error(_) => {}
+                ConcreteElement::Missing { .. } | ConcreteElement::Error(_) => {}
             }
         }
     }
-    Ok(())
+    Ok(protected_type)
 }
 
 fn charge_projection_subtree(
@@ -5041,10 +5372,12 @@ fn project_nominal_declaration(
     if !name_token.is_upper_identifier() {
         return malformed(InternalReason::UnexpectedShape);
     }
-    let constructors = child_nodes(node)
-        .filter(|child| child.kind == NodeKind::ConstructorDeclaration)
-        .map(|constructor| project_constructor_declaration(source, constructor, tokens))
-        .collect::<Result<Vec<_>, _>>()?;
+    let constructors = collect_expression_scratch(
+        child_nodes(node)
+            .filter(|child| child.kind == NodeKind::ConstructorDeclaration)
+            .map(|constructor| project_constructor_declaration(source, constructor, tokens)),
+        tokens.expression_budget,
+    )?;
     if constructors.is_empty() {
         return malformed(InternalReason::UnexpectedShape);
     }
@@ -5063,17 +5396,20 @@ fn project_nominal_declaration(
         && !parameters.is_empty()
     {
         let parameter_node = only_child_of_kind(node, NodeKind::TypeParameters)?;
-        let occurrences = child_nodes(parameter_node)
-            .filter(|child| child.kind == NodeKind::TypeParameter)
-            .zip(&parameters)
-            .map(|(node, parameter)| {
-                Ok(super::ParsedParameterOccurrence {
-                    name: parameter.name.clone(),
-                    tokens: descendant_edge_index(node, false)?
-                        ..descendant_edge_index(node, true)? + 1,
-                })
-            })
-            .collect::<Result<Vec<_>, ProjectionError>>()?;
+        let occurrences = collect_expression_scratch(
+            child_nodes(parameter_node)
+                .filter(|child| child.kind == NodeKind::TypeParameter)
+                .zip(&parameters)
+                .map(|(node, parameter)| {
+                    Ok(super::ParsedParameterOccurrence {
+                        name: parameter.name.clone(),
+                        tokens: descendant_edge_index(node, false)?
+                            ..descendant_edge_index(node, true)? + 1,
+                    })
+                }),
+            tokens.expression_budget,
+        )?;
+        charge_expression_move(occurrences.len(), tokens.expression_budget)?;
         Some(std::sync::Arc::new(super::ParsedParameterOrder {
             invocation,
             occurrence_extent: tokens.construction.is_none(),
@@ -5111,10 +5447,12 @@ fn project_constructor_declaration(
     if !name_token.is_upper_identifier() {
         return malformed(InternalReason::UnexpectedShape);
     }
-    let fields = child_nodes(node)
-        .filter(|child| child.kind == NodeKind::Type)
-        .map(|field| project_type(source, field, tokens))
-        .collect::<Result<Vec<_>, _>>()?;
+    let fields = collect_expression_scratch(
+        child_nodes(node)
+            .filter(|child| child.kind == NodeKind::Type)
+            .map(|field| project_type(source, field, tokens)),
+        tokens.expression_budget,
+    )?;
     Ok(SurfaceConstructorDeclaration {
         name: surface_name(name_token)?,
         fields,
@@ -5212,10 +5550,12 @@ fn project_equation_head(
 ) -> Result<PendingEquation, ProjectionError> {
     require_kind(equation, NodeKind::Equation)?;
     let name = project_binder(only_child_of_kind(equation, NodeKind::Binder)?, tokens)?.name;
-    let patterns = child_nodes(equation)
-        .filter(|child| child.kind == NodeKind::Pattern)
-        .map(|pattern| project_pattern(source, pattern, tokens))
-        .collect::<Result<Vec<_>, _>>()?;
+    let patterns = collect_expression_scratch(
+        child_nodes(equation)
+            .filter(|child| child.kind == NodeKind::Pattern)
+            .map(|pattern| project_pattern(source, pattern, tokens)),
+        tokens.expression_budget,
+    )?;
     Ok(PendingEquation {
         name,
         patterns,
@@ -5254,13 +5594,16 @@ fn project_interface_application(
             ))?;
         SurfaceReference::Unqualified(surface_name(name)?)
     };
-    let arguments = child_nodes(node)
-        .filter(|child| matches!(child.kind, NodeKind::Type | NodeKind::EffectRow))
-        .map(|argument| project_type(source, argument, tokens))
-        .collect::<Result<Vec<_>, _>>()?;
+    let arguments = collect_expression_scratch(
+        child_nodes(node)
+            .filter(|child| matches!(child.kind, NodeKind::Type | NodeKind::EffectRow))
+            .map(|argument| project_type(source, argument, tokens)),
+        tokens.expression_budget,
+    )?;
     if arguments.is_empty() {
         return malformed(InternalReason::UnexpectedShape);
     }
+    charge_expression_move(arguments.len(), tokens.expression_budget)?;
     Ok(SurfaceRequirement {
         interface,
         arguments: arguments.into_boxed_slice(),
@@ -5312,12 +5655,14 @@ fn project_syntax_identifier_capture(
 fn project_syntax_expression_capture(
     expression: SurfaceExpr,
     contents: Vec<crate::syntax::MacroOutputNode>,
+    contains_protected_type: bool,
 ) -> SurfaceExpressionCapture {
     if let [crate::syntax::MacroOutputNode::ForwardedExpression(original, _)] = contents.as_slice()
     {
         original.clone()
     } else {
         SurfaceExpressionCapture {
+            contains_protected_type,
             expression,
             contents: contents.into(),
         }
@@ -5334,6 +5679,7 @@ fn source_projection_tokens(tokens: &ProjectionTokens<'_>) -> bool {
         && tokens.name_frame.is_none()
         && tokens.staging_frames.is_none()
         && !tokens.preserve_name_diagnostic
+        && tokens.expression_budget.is_none()
 }
 
 fn capture_declaration_node(argument: &ConcreteNode) -> Result<&ConcreteNode, ProjectionError> {
@@ -5608,7 +5954,176 @@ fn capture_contents(
     tokens: &ProjectionTokens<'_>,
     originals: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
 ) -> Result<Vec<crate::syntax::MacroOutputNode>, ProjectionError> {
+    capture_contents_and_type(source, node, tokens, originals).map(|(contents, _)| contents)
+}
+
+fn reserve_expression_scratch<T>(
+    buffer: &mut Vec<T>,
+    additional: usize,
+    budget: Option<&std::cell::RefCell<&mut crate::syntax_resource::SyntaxBudget>>,
+) -> Result<(), ProjectionError> {
+    if let Some(budget) = budget
+        && additional != 0
+    {
+        let live = buffer.len();
+        let requested = live.checked_add(additional).unwrap_or(usize::MAX);
+        if requested > buffer.capacity() {
+            budget
+                .borrow_mut()
+                .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                .map_err(ProjectionError::ResourceLimit)?;
+            buffer.reserve_exact(additional);
+        }
+    }
+    Ok(())
+}
+
+fn push_expression_scratch<T>(
+    buffer: &mut Vec<T>,
+    budget: Option<&std::cell::RefCell<&mut crate::syntax_resource::SyntaxBudget>>,
+    value: impl FnOnce() -> Result<T, ProjectionError>,
+) -> Result<(), ProjectionError> {
+    reserve_expression_scratch(buffer, 1, budget)?;
+    buffer.push(value()?);
+    Ok(())
+}
+
+fn charge_expression_move(
+    count: usize,
+    budget: Option<&std::cell::RefCell<&mut crate::syntax_resource::SyntaxBudget>>,
+) -> Result<(), ProjectionError> {
+    if let Some(budget) = budget {
+        budget
+            .borrow_mut()
+            .charge_units(count.checked_mul(2).unwrap_or(usize::MAX))
+            .map_err(ProjectionError::ResourceLimit)?;
+    }
+    Ok(())
+}
+
+fn charge_expression_allocation(
+    count: usize,
+    budget: Option<&std::cell::RefCell<&mut crate::syntax_resource::SyntaxBudget>>,
+) -> Result<(), ProjectionError> {
+    if let Some(budget) = budget {
+        budget
+            .borrow_mut()
+            .charge_units(count)
+            .map_err(ProjectionError::ResourceLimit)?;
+    }
+    Ok(())
+}
+
+fn collect_expression_scratch<T>(
+    values: impl Iterator<Item = Result<T, ProjectionError>>,
+    budget: Option<&std::cell::RefCell<&mut crate::syntax_resource::SyntaxBudget>>,
+) -> Result<Vec<T>, ProjectionError> {
+    if let Some(budget) = budget {
+        collect_selected_expression_scratch(values, budget)
+    } else {
+        values.collect()
+    }
+}
+
+fn collect_selected_expression_scratch<T>(
+    values: impl Iterator<Item = Result<T, ProjectionError>>,
+    budget: &std::cell::RefCell<&mut crate::syntax_resource::SyntaxBudget>,
+) -> Result<Vec<T>, ProjectionError> {
+    let mut result = Vec::new();
+    for value in values {
+        let value = value?;
+        reserve_expression_scratch(&mut result, 1, Some(budget))?;
+        result.push(value);
+    }
+    Ok(result)
+}
+
+fn capture_contents_and_type(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    originals: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
+) -> Result<(Vec<crate::syntax::MacroOutputNode>, bool), ProjectionError> {
     use crate::syntax::{MacroDelimiter, MacroOutputNode};
+
+    fn push_group(
+        source: &SourceFile,
+        indices: &[usize],
+        position: usize,
+        tokens: &ProjectionTokens<'_>,
+        originals: &std::collections::HashMap<usize, MacroOutputNode>,
+        index: usize,
+        token: &Token,
+        delimiter: MacroDelimiter,
+        children: Vec<MacroOutputNode>,
+        output: &mut Vec<MacroOutputNode>,
+    ) -> Result<(), ProjectionError> {
+        let close = indices
+            .get(position.saturating_sub(1))
+            .and_then(|index| tokens.get(*index))
+            .ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+        let origin = match originals.get(&index) {
+            Some(MacroOutputNode::Group(_, _, origin)) => origin.clone(),
+            _ => join_spans(source, token.span, close.span)?.into(),
+        };
+        output.push(MacroOutputNode::Group(delimiter, children, origin));
+        Ok(())
+    }
+
+    fn push_leaf(
+        source: &SourceFile,
+        indices: &[usize],
+        position: &mut usize,
+        tokens: &ProjectionTokens<'_>,
+        originals: &std::collections::HashMap<usize, MacroOutputNode>,
+        index: usize,
+        token: &Token,
+        output: &mut Vec<MacroOutputNode>,
+        contains_protected_type: &mut bool,
+    ) -> Result<(), ProjectionError> {
+        if matches!(token.kind, TokenKind::Dollar) {
+            let next = indices
+                .get(*position)
+                .and_then(|index| tokens.projection_token(*index))
+                .ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+            *position += 1;
+            output.push(MacroOutputNode::Splice(surface_name(next)?));
+        } else if let Some(original) = originals.get(&index) {
+            *contains_protected_type |= match original {
+                MacroOutputNode::ForwardedType(..) => true,
+                MacroOutputNode::ForwardedExpression(capture, _) => capture.contains_protected_type,
+                _ => false,
+            };
+            output.push(original.clone());
+        } else if matches!(
+            token.kind,
+            TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
+        ) {
+            let name = surface_name(tokens.projection_token(index).ok_or(
+                ProjectionError::MalformedTree(InternalReason::TokenOutOfRange),
+            )?)?;
+            output.push(MacroOutputNode::Identifier(name, token.span.into()));
+        } else {
+            let start = usize::try_from(token.span.range().start())
+                .map_err(|_| ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
+            let end = usize::try_from(token.span.range().end())
+                .map_err(|_| ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
+            let spelling = source
+                .text()
+                .get(start..end)
+                .ok_or(ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
+            output.push(MacroOutputNode::Token(
+                token.kind.clone(),
+                spelling.into(),
+                token.span.into(),
+            ));
+        }
+        Ok(())
+    }
 
     fn sequence(
         source: &SourceFile,
@@ -5617,8 +6132,9 @@ fn capture_contents(
         tokens: &ProjectionTokens<'_>,
         originals: &std::collections::HashMap<usize, MacroOutputNode>,
         closing: Option<TokenKind>,
-    ) -> Result<Vec<MacroOutputNode>, ProjectionError> {
+    ) -> Result<(Vec<MacroOutputNode>, bool), ProjectionError> {
         let mut output = Vec::new();
+        let mut contains_protected_type = false;
         while let Some(&index) = indices.get(*position) {
             let token = tokens.get(index).ok_or(ProjectionError::MalformedTree(
                 InternalReason::TokenOutOfRange,
@@ -5628,8 +6144,9 @@ fn capture_contents(
                 .is_some_and(|kind| same_token_variant(kind, &token.kind))
             {
                 *position += 1;
-                return Ok(output);
+                return Ok((output, contains_protected_type));
             }
+            reserve_expression_scratch(&mut output, 1, tokens.expression_budget)?;
             *position += 1;
             if matches!(token.kind, TokenKind::LeftParen | TokenKind::LeftBrace) {
                 let (delimiter, end) = if matches!(token.kind, TokenKind::LeftParen) {
@@ -5637,65 +6154,64 @@ fn capture_contents(
                 } else {
                     (MacroDelimiter::Braces, TokenKind::RightBrace)
                 };
-                let children = sequence(source, indices, position, tokens, originals, Some(end))?;
-                let close = indices
-                    .get(position.saturating_sub(1))
-                    .and_then(|index| tokens.get(*index))
-                    .ok_or(ProjectionError::MalformedTree(
-                        InternalReason::UnexpectedShape,
-                    ))?;
-                let origin = match originals.get(&index) {
-                    Some(MacroOutputNode::Group(_, _, origin)) => origin.clone(),
-                    _ => join_spans(source, token.span, close.span)?.into(),
-                };
-                output.push(MacroOutputNode::Group(delimiter, children, origin));
-            } else if matches!(token.kind, TokenKind::Dollar) {
-                let next = indices
-                    .get(*position)
-                    .and_then(|index| tokens.projection_token(*index))
-                    .ok_or(ProjectionError::MalformedTree(
-                        InternalReason::UnexpectedShape,
-                    ))?;
-                *position += 1;
-                output.push(MacroOutputNode::Splice(surface_name(next)?));
-            } else if let Some(original) = originals.get(&index) {
-                output.push(original.clone());
-            } else if matches!(
-                token.kind,
-                TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
-            ) {
-                let name = surface_name(tokens.projection_token(index).ok_or(
-                    ProjectionError::MalformedTree(InternalReason::TokenOutOfRange),
-                )?)?;
-                output.push(MacroOutputNode::Identifier(name, token.span.into()));
+                let (children, child_contains_type) =
+                    sequence(source, indices, position, tokens, originals, Some(end))?;
+                contains_protected_type |= child_contains_type;
+                push_group(
+                    source,
+                    indices,
+                    *position,
+                    tokens,
+                    originals,
+                    index,
+                    token,
+                    delimiter,
+                    children,
+                    &mut output,
+                )?;
             } else {
-                let start = usize::try_from(token.span.range().start())
-                    .map_err(|_| ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
-                let end = usize::try_from(token.span.range().end())
-                    .map_err(|_| ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
-                let spelling = source
-                    .text()
-                    .get(start..end)
-                    .ok_or(ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
-                output.push(MacroOutputNode::Token(
-                    token.kind.clone(),
-                    spelling.into(),
-                    token.span.into(),
-                ));
+                push_leaf(
+                    source,
+                    indices,
+                    position,
+                    tokens,
+                    originals,
+                    index,
+                    token,
+                    &mut output,
+                    &mut contains_protected_type,
+                )?;
             }
         }
         if closing.is_some() {
             return malformed(InternalReason::UnexpectedShape);
         }
-        Ok(output)
+        Ok((output, contains_protected_type))
     }
 
     let mut indices = Vec::new();
-    let mut pending = node.children.iter().rev().collect::<Vec<_>>();
+    let mut pending = if tokens.expression_budget.is_some() {
+        let mut pending = Vec::new();
+        reserve_expression_scratch(&mut pending, node.children.len(), tokens.expression_budget)?;
+        pending.extend(node.children.iter().rev());
+        pending
+    } else {
+        node.children.iter().rev().collect::<Vec<_>>()
+    };
     while let Some(element) = pending.pop() {
         match element {
-            ConcreteElement::Node(child) => pending.extend(child.children.iter().rev()),
-            ConcreteElement::Token(index) => indices.push(*index),
+            ConcreteElement::Node(child) => {
+                reserve_expression_scratch(
+                    &mut pending,
+                    child.children.len(),
+                    tokens.expression_budget,
+                )?;
+                pending.extend(child.children.iter().rev());
+            }
+            ConcreteElement::Token(index) => {
+                reserve_expression_scratch(&mut indices, 1, tokens.expression_budget)?;
+                indices.push(*index);
+            }
             ConcreteElement::Missing { .. } | ConcreteElement::Error(_) => {
                 return Err(ProjectionError::RecoveryNodesPresent);
             }
@@ -5785,6 +6301,7 @@ pub(super) fn project_macro_declaration_invocation(
         name_frame: frame,
         staging_frames: None,
         preserve_name_diagnostic: true,
+        expression_budget: None,
     };
     project_declaration_invocation_from_tokens(source, root, node, &tokens, contexts)
 }
@@ -6222,11 +6739,16 @@ fn project_selected_declaration_invocation_node_inner(
                         .ok_or(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         ))?;
-                    let contents = capture_contents(source, expression, tokens, originals)?;
+                    let (contents, contains_protected_type) =
+                        capture_contents_and_type(source, expression, tokens, originals)?;
                     let expression =
                         project_expression_with_fragments(source, expression, tokens, originals)?;
                     captures.push(SurfaceSyntaxCapture::Expression(
-                        project_syntax_expression_capture(expression, contents),
+                        project_syntax_expression_capture(
+                            expression,
+                            contents,
+                            contains_protected_type,
+                        ),
                     ));
                 }
                 SurfaceSyntaxCaptureKind::Type => {
@@ -6339,6 +6861,7 @@ pub(super) fn validate_declaration_template(
         name_frame: None,
         staging_frames: None,
         preserve_name_diagnostic: true,
+        expression_budget: None,
     };
     for child in child_nodes(root) {
         if child.kind == NodeKind::DeclarationSyntaxInvocation {
@@ -6414,6 +6937,7 @@ pub(super) fn project_macro_declarations(
         name_frame: frame,
         staging_frames: None,
         preserve_name_diagnostic: true,
+        expression_budget: None,
     };
     project_surface_module(source, root, &tokens)
 }
@@ -6441,8 +6965,63 @@ pub(super) fn project_macro_expression(
         name_frame: None,
         staging_frames: None,
         preserve_name_diagnostic: false,
+        expression_budget: None,
     };
     project_expression_with_fragments(source, expression, &tokens, original_nodes)
+}
+
+pub(super) fn project_macro_expression_budgeted(
+    source: &SourceFile,
+    invocation: Span,
+    construction: Option<(Span, usize)>,
+    parsed: &super::ParsedMacroTree,
+    contexts: &crate::syntax::SyntaxContexts,
+    frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<SurfaceExpr, DeclarationExpansionFailure> {
+    for _ in 0..4 {
+        budget.charge_units(parsed.tree.events.len())?;
+    }
+    budget.charge_units(parsed.tree.tokens.len())?;
+    let root = validated_macro_root(source, &parsed.tree)?;
+    let expression = expression_child(root)?;
+    validate_node_shape_with_admission(
+        expression,
+        &parsed.tree.tokens,
+        Some(&parsed.admission_identifiers),
+    )?;
+    let mut tokens = ProjectionTokens {
+        tokens: &parsed.tree.tokens,
+        originals: Some(&parsed.original_nodes),
+        occurrence: Some(invocation),
+        construction,
+        construction_extents: false,
+        admission_identifiers: Some(&parsed.admission_identifiers),
+        frame,
+        name_frame: None,
+        staging_frames: None,
+        preserve_name_diagnostic: false,
+        expression_budget: None,
+    };
+    if charge_projection_preflight_with_expression(
+        expression,
+        &tokens,
+        true,
+        false,
+        true,
+        Some(contexts),
+        budget,
+    )? {
+        return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+    }
+    let expression_budget = std::cell::RefCell::new(&mut *budget);
+    tokens.expression_budget = Some(&expression_budget);
+    Ok(project_expression_with_fragments(
+        source,
+        expression,
+        &tokens,
+        &parsed.original_nodes,
+    )?)
 }
 
 pub(super) fn project_macro_type(
@@ -6475,6 +7054,7 @@ pub(super) fn project_macro_type(
         name_frame: Some(frame),
         staging_frames: None,
         preserve_name_diagnostic: true,
+        expression_budget: None,
     };
     charge_composed_projection_inner(ty, &tokens, false, true, budget)?;
     charge_projection_subtree_inner(ty, &tokens, true, budget)?;
@@ -6510,6 +7090,7 @@ pub(super) fn project_macro_pattern(
         name_frame: Some(frame),
         staging_frames: None,
         preserve_name_diagnostic: true,
+        expression_budget: None,
     };
     if charge_composed_projection_selected(pattern, &tokens, true, false, true, 1, budget)? {
         return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
@@ -6524,8 +7105,39 @@ fn project_expression_with_fragments(
     tokens: &ProjectionTokens<'_>,
     original_nodes: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
 ) -> Result<SurfaceExpr, ProjectionError> {
-    let mut tasks = vec![ExpressionTask::Visit(node)];
+    let mut tasks = if tokens.expression_budget.is_some() {
+        let mut tasks = Vec::new();
+        reserve_expression_scratch(&mut tasks, 1, tokens.expression_budget)?;
+        tasks.push(ExpressionTask::Visit(node));
+        tasks
+    } else {
+        vec![ExpressionTask::Visit(node)]
+    };
     let mut projected = Vec::new();
+    let mut type_facts = Vec::<bool>::new();
+    macro_rules! push_scratch {
+        ($items:expr, $item:expr $(,)?) => {{
+            let items = &mut *$items;
+            push_expression_scratch(items, tokens.expression_budget, || Ok($item))?;
+        }};
+    }
+    macro_rules! push_task {
+        ($item:expr $(,)?) => {{
+            push_expression_scratch(&mut tasks, tokens.expression_budget, || Ok($item))?;
+        }};
+    }
+    macro_rules! extend_tasks {
+        ($items:expr $(,)?) => {{
+            let items = $items;
+            reserve_expression_scratch(&mut tasks, items.len(), tokens.expression_budget)?;
+            tasks.extend(items);
+        }};
+    }
+    macro_rules! push_result {
+        ($item:expr $(,)?) => {{
+            push_expression_scratch(&mut projected, tokens.expression_budget, || Ok($item))?;
+        }};
+    }
     while let Some(task) = tasks.pop() {
         if let (ExpressionTask::Visit(node), Some(frame)) = (&task, tokens.frame) {
             let original = node.children.iter().find_map(|child| match child {
@@ -6548,7 +7160,7 @@ fn project_expression_with_fragments(
                 }
                 _ => (None, false, false),
             };
-            tasks.push(ExpressionTask::FinishDiagnostic {
+            push_task!(ExpressionTask::FinishDiagnostic {
                 cause,
                 capture,
                 token_cause,
@@ -6587,14 +7199,23 @@ fn project_expression_with_fragments(
                         if let Some(expression) =
                             child_nodes(argument).find(|child| is_expression_kind(child.kind))
                         {
-                            captures.push(None);
-                            expressions.push(expression);
-                            contents.push(capture_contents(
+                            push_scratch!(&mut captures, None);
+                            push_scratch!(&mut expressions, expression);
+                            let (content, contains_type) = capture_contents_and_type(
                                 source,
                                 expression,
                                 tokens,
                                 original_nodes,
-                            )?);
+                            )?;
+                            if let Some(budget) = tokens.expression_budget {
+                                budget
+                                    .borrow_mut()
+                                    .charge()
+                                    .map_err(ProjectionError::ResourceLimit)?;
+                                reserve_expression_scratch(&mut type_facts, 1, Some(budget))?;
+                                type_facts.push(contains_type);
+                            }
+                            push_scratch!(&mut contents, content);
                         } else {
                             let mut capture = project_syntax_identifier_capture(
                                 argument,
@@ -6609,25 +7230,27 @@ fn project_expression_with_fragments(
                                 });
                                 add_projection_frames(location, None, Some(frames));
                             }
-                            captures.push(Some(capture));
+                            push_scratch!(&mut captures, Some(capture));
                         }
                     }
-                    tasks.push(ExpressionTask::FinishSyntaxInvocation {
+                    push_task!(ExpressionTask::FinishSyntaxInvocation {
                         name,
                         captures,
                         contents,
                         span: node_span(source, node, tokens)?,
                     });
-                    tasks.extend(expressions.into_iter().rev().map(ExpressionTask::Visit));
+                    extend_tasks!(expressions.into_iter().rev().map(ExpressionTask::Visit));
                 }
                 NodeKind::Block => {
                     schedule_block(source, node, tokens, &mut tasks)?;
                 }
                 NodeKind::FunctionExpression => {
-                    let mut parameters = child_nodes(node)
-                        .filter(|child| child.kind == NodeKind::Pattern)
-                        .map(|pattern| project_pattern(source, pattern, tokens))
-                        .collect::<Result<Vec<_>, _>>()?;
+                    let mut parameters = collect_expression_scratch(
+                        child_nodes(node)
+                            .filter(|child| child.kind == NodeKind::Pattern)
+                            .map(|pattern| project_pattern(source, pattern, tokens)),
+                        tokens.expression_budget,
+                    )?;
                     let parameter = if parameters.len() == 1 {
                         parameters.pop().ok_or(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
@@ -6646,11 +7269,11 @@ fn project_expression_with_fragments(
                         }
                     };
                     let body = only_child_of_kind(node, NodeKind::Block)?;
-                    tasks.push(ExpressionTask::FinishFunction {
+                    push_task!(ExpressionTask::FinishFunction {
                         parameter,
                         span: node_span(source, node, tokens)?,
                     });
-                    tasks.push(ExpressionTask::Visit(body));
+                    push_task!(ExpressionTask::Visit(body));
                 }
                 NodeKind::EqualityExpression => schedule_binary(
                     source,
@@ -6678,77 +7301,96 @@ fn project_expression_with_fragments(
                 )?,
                 NodeKind::ApplicationExpression => {
                     let (function, argument) = expression_pair(node)?;
-                    tasks.push(ExpressionTask::FinishApplication(node_span(
+                    push_task!(ExpressionTask::FinishApplication(node_span(
                         source, node, tokens,
                     )?));
-                    tasks.push(ExpressionTask::Visit(argument));
-                    tasks.push(ExpressionTask::Visit(function));
+                    push_task!(ExpressionTask::Visit(argument));
+                    push_task!(ExpressionTask::Visit(function));
                 }
                 NodeKind::TupleExpression => {
-                    let elements = child_nodes(node)
-                        .filter(|child| is_expression_kind(child.kind))
-                        .collect::<Vec<_>>();
+                    let elements = if tokens.expression_budget.is_some() {
+                        collect_expression_scratch(
+                            child_nodes(node)
+                                .filter(|child| is_expression_kind(child.kind))
+                                .map(Ok),
+                            tokens.expression_budget,
+                        )?
+                    } else {
+                        child_nodes(node)
+                            .filter(|child| is_expression_kind(child.kind))
+                            .collect::<Vec<_>>()
+                    };
                     if elements.len() < 2 {
                         return malformed(InternalReason::UnexpectedShape);
                     }
-                    tasks.push(ExpressionTask::FinishTuple {
+                    push_task!(ExpressionTask::FinishTuple {
                         count: elements.len(),
                         span: node_span(source, node, tokens)?,
                     });
-                    tasks.extend(elements.into_iter().rev().map(ExpressionTask::Visit));
+                    extend_tasks!(elements.into_iter().rev().map(ExpressionTask::Visit));
                 }
                 NodeKind::MatchExpression => {
                     let scrutinee = expression_child(node)?;
-                    let arms = child_nodes(node)
-                        .filter(|child| child.kind == NodeKind::MatchArm)
-                        .map(|arm| {
-                            Ok((
-                                project_pattern(
-                                    source,
-                                    only_child_of_kind(arm, NodeKind::Pattern)?,
-                                    tokens,
-                                )?,
-                                expression_child(arm)?,
-                                node_span(source, arm, tokens)?,
-                            ))
-                        })
-                        .collect::<Result<Vec<_>, ProjectionError>>()?;
+                    let arms = collect_expression_scratch(
+                        child_nodes(node)
+                            .filter(|child| child.kind == NodeKind::MatchArm)
+                            .map(|arm| {
+                                Ok((
+                                    project_pattern(
+                                        source,
+                                        only_child_of_kind(arm, NodeKind::Pattern)?,
+                                        tokens,
+                                    )?,
+                                    expression_child(arm)?,
+                                    node_span(source, arm, tokens)?,
+                                ))
+                            }),
+                        tokens.expression_budget,
+                    )?;
                     if arms.is_empty() {
                         return malformed(InternalReason::UnexpectedShape);
                     }
-                    tasks.push(ExpressionTask::FinishMatch {
-                        arms: arms
-                            .iter()
+                    let finish_arms = if tokens.expression_budget.is_some() {
+                        collect_expression_scratch(
+                            arms.iter()
+                                .map(|(pattern, _, span)| Ok((pattern.clone(), *span))),
+                            tokens.expression_budget,
+                        )?
+                    } else {
+                        arms.iter()
                             .map(|(pattern, _, span)| (pattern.clone(), *span))
-                            .collect(),
+                            .collect()
+                    };
+                    push_task!(ExpressionTask::FinishMatch {
+                        arms: finish_arms,
                         span: node_span(source, node, tokens)?,
                     });
-                    tasks.extend(
+                    extend_tasks!(
                         arms.into_iter()
                             .rev()
                             .map(|(_, body, _)| ExpressionTask::Visit(body)),
                     );
-                    tasks.push(ExpressionTask::Visit(scrutinee));
+                    push_task!(ExpressionTask::Visit(scrutinee));
                 }
                 NodeKind::PerformExpression => {
                     let reference = only_child_of_kind(node, NodeKind::OperationReference)?;
                     let (effect, arguments, operation) =
                         project_operation_reference(source, reference, tokens)?;
                     let operand = expression_child(node)?;
-                    tasks.push(ExpressionTask::FinishPerform {
+                    push_task!(ExpressionTask::FinishPerform {
                         effect,
                         arguments,
                         operation,
                         span: node_span(source, node, tokens)?,
                     });
-                    tasks.push(ExpressionTask::Visit(operand));
+                    push_task!(ExpressionTask::Visit(operand));
                 }
                 NodeKind::ResumeExpression => {
                     let value = expression_child(node)?;
-                    tasks.push(ExpressionTask::FinishResume(node_span(
+                    push_task!(ExpressionTask::FinishResume(node_span(
                         source, node, tokens,
                     )?));
-                    tasks.push(ExpressionTask::Visit(value));
+                    push_task!(ExpressionTask::Visit(value));
                 }
 
                 NodeKind::ProviderResourceExpression => {
@@ -6759,17 +7401,17 @@ fn project_expression_with_fragments(
                     )?;
                     let handle =
                         project_binder(only_child_of_kind(node, NodeKind::Binder)?, tokens)?;
-                    tasks.push(ExpressionTask::FinishProviderResource {
+                    push_task!(ExpressionTask::FinishProviderResource {
                         arguments: family.arguments,
                         family: family.effect,
                         handle: handle.name,
                         span: node_span(source, node, tokens)?,
                     });
-                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                    push_task!(ExpressionTask::Visit(only_child_of_kind(
                         node,
                         NodeKind::Block,
                     )?));
-                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                    push_task!(ExpressionTask::Visit(only_child_of_kind(
                         node,
                         NodeKind::PrimaryExpression,
                     )?));
@@ -6783,29 +7425,29 @@ fn project_expression_with_fragments(
                     let handle =
                         project_binder(only_child_of_kind(node, NodeKind::Binder)?, tokens)?;
                     let provider = optional_child_of_kind(node, NodeKind::PrimaryExpression)?;
-                    tasks.push(ExpressionTask::FinishRegion {
+                    push_task!(ExpressionTask::FinishRegion {
                         identity: surface_name(identity)?,
                         handle: handle.name,
                         has_provider: provider.is_some(),
                         span: node_span(source, node, tokens)?,
                     });
-                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                    push_task!(ExpressionTask::Visit(only_child_of_kind(
                         node,
                         NodeKind::Block,
                     )?));
                     if let Some(provider) = provider {
-                        tasks.push(ExpressionTask::Visit(provider));
+                        push_task!(ExpressionTask::Visit(provider));
                     }
                 }
                 NodeKind::RegionSelectionExpression => {
-                    tasks.push(ExpressionTask::FinishRegionSelection(node_span(
+                    push_task!(ExpressionTask::FinishRegionSelection(node_span(
                         source, node, tokens,
                     )?));
-                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                    push_task!(ExpressionTask::Visit(only_child_of_kind(
                         node,
                         NodeKind::Block,
                     )?));
-                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                    push_task!(ExpressionTask::Visit(only_child_of_kind(
                         node,
                         NodeKind::PrimaryExpression,
                     )?));
@@ -6818,7 +7460,7 @@ fn project_expression_with_fragments(
                         ))?;
                     let handle =
                         project_binder(only_child_of_kind(node, NodeKind::Binder)?, tokens)?;
-                    tasks.push(ExpressionTask::FinishResource {
+                    push_task!(ExpressionTask::FinishResource {
                         kind: match direct_tokens(node, tokens).find_map(|token| {
                             if let TokenKind::Identifier(name) = &token.token.kind {
                                 Some(name.as_str())
@@ -6833,11 +7475,11 @@ fn project_expression_with_fragments(
                         handle: handle.name,
                         span: node_span(source, node, tokens)?,
                     });
-                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                    push_task!(ExpressionTask::Visit(only_child_of_kind(
                         node,
                         NodeKind::Block,
                     )?));
-                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                    push_task!(ExpressionTask::Visit(only_child_of_kind(
                         node,
                         NodeKind::PrimaryExpression,
                     )?));
@@ -6850,11 +7492,11 @@ fn project_expression_with_fragments(
                     let body = children.next().ok_or(ProjectionError::MalformedTree(
                         InternalReason::UnexpectedShape,
                     ))?;
-                    tasks.push(ExpressionTask::FinishCleanup(node_span(
+                    push_task!(ExpressionTask::FinishCleanup(node_span(
                         source, node, tokens,
                     )?));
-                    tasks.push(ExpressionTask::Visit(body));
-                    tasks.push(ExpressionTask::Visit(action));
+                    push_task!(ExpressionTask::Visit(body));
+                    push_task!(ExpressionTask::Visit(action));
                 }
                 NodeKind::HookExpression | NodeKind::RegistrationExpression => {
                     let effect = project_effect_instance(
@@ -6863,17 +7505,17 @@ fn project_expression_with_fragments(
                         tokens,
                     )?;
                     let span = node_span(source, node, tokens)?;
-                    tasks.push(if node.kind == NodeKind::HookExpression {
+                    push_task!(if node.kind == NodeKind::HookExpression {
                         ExpressionTask::FinishHook { effect, span }
                     } else {
                         ExpressionTask::FinishRegistration { effect, span }
                     });
-                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                    push_task!(ExpressionTask::Visit(only_child_of_kind(
                         node,
                         NodeKind::Block,
                     )?));
                     if node.kind == NodeKind::RegistrationExpression {
-                        tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                        push_task!(ExpressionTask::Visit(only_child_of_kind(
                             node,
                             NodeKind::PrimaryExpression,
                         )?));
@@ -6902,47 +7544,59 @@ fn project_expression_with_fragments(
                         only_child_of_kind(node, NodeKind::EffectInstance)?,
                         tokens,
                     )?;
-                    let clauses = child_nodes(node)
-                        .filter(|child| child.kind == NodeKind::HandlerClause)
-                        .map(|clause| {
-                            let operation = project_binder(
-                                only_child_of_kind(clause, NodeKind::Binder)?,
-                                tokens,
-                            )?
-                            .name;
-                            let pattern = project_pattern(
-                                source,
-                                only_child_of_kind(clause, NodeKind::Pattern)?,
-                                tokens,
-                            )?;
-                            Ok((
-                                operation,
-                                pattern,
-                                expression_child(clause)?,
-                                node_span(source, clause, tokens)?,
-                            ))
-                        })
-                        .collect::<Result<Vec<_>, ProjectionError>>()?;
-                    tasks.push(ExpressionTask::FinishHandle {
-                        effect,
-                        has_store: store.is_some(),
-                        clauses: clauses
+                    let clauses = collect_expression_scratch(
+                        child_nodes(node)
+                            .filter(|child| child.kind == NodeKind::HandlerClause)
+                            .map(|clause| {
+                                let operation = project_binder(
+                                    only_child_of_kind(clause, NodeKind::Binder)?,
+                                    tokens,
+                                )?
+                                .name;
+                                let pattern = project_pattern(
+                                    source,
+                                    only_child_of_kind(clause, NodeKind::Pattern)?,
+                                    tokens,
+                                )?;
+                                Ok((
+                                    operation,
+                                    pattern,
+                                    expression_child(clause)?,
+                                    node_span(source, clause, tokens)?,
+                                ))
+                            }),
+                        tokens.expression_budget,
+                    )?;
+                    let finish_clauses = if tokens.expression_budget.is_some() {
+                        collect_expression_scratch(
+                            clauses.iter().map(|(operation, pattern, _, span)| {
+                                Ok((operation.clone(), pattern.clone(), *span))
+                            }),
+                            tokens.expression_budget,
+                        )?
+                    } else {
+                        clauses
                             .iter()
                             .map(|(operation, pattern, _, span)| {
                                 (operation.clone(), pattern.clone(), *span)
                             })
-                            .collect(),
+                            .collect()
+                    };
+                    push_task!(ExpressionTask::FinishHandle {
+                        effect,
+                        has_store: store.is_some(),
+                        clauses: finish_clauses,
                         span: node_span(source, node, tokens)?,
                     });
-                    tasks.extend(
+                    extend_tasks!(
                         clauses
                             .into_iter()
                             .rev()
                             .map(|(_, _, body, _)| ExpressionTask::Visit(body)),
                     );
-                    tasks.push(ExpressionTask::Visit(body));
+                    push_task!(ExpressionTask::Visit(body));
                     if let Some(store) = store {
-                        tasks.push(ExpressionTask::Visit(store));
+                        push_task!(ExpressionTask::Visit(store));
                     }
                 }
                 NodeKind::PrimaryExpression => {
@@ -6952,7 +7606,7 @@ fn project_expression_with_fragments(
                             | crate::syntax::MacroOutputNode::ForwardedExpression(capture, _),
                         ) = original_nodes.get(index)
                     {
-                        projected.push(capture.expression.clone());
+                        push_result!(capture.expression.clone());
                     } else if let Some(group) =
                         optional_child_of_kind(node, NodeKind::ParenthesizedExpression)?
                     {
@@ -6960,31 +7614,42 @@ fn project_expression_with_fragments(
                     } else if let Some(perform) =
                         optional_child_of_kind(node, NodeKind::PerformExpression)?
                     {
-                        tasks.push(ExpressionTask::Visit(perform));
+                        push_task!(ExpressionTask::Visit(perform));
                     } else if let Some(hook) =
                         optional_child_of_kind(node, NodeKind::HookExpression)?
                     {
-                        tasks.push(ExpressionTask::Visit(hook));
+                        push_task!(ExpressionTask::Visit(hook));
                     } else if let Some(registration) =
                         optional_child_of_kind(node, NodeKind::RegistrationExpression)?
                     {
-                        tasks.push(ExpressionTask::Visit(registration));
+                        push_task!(ExpressionTask::Visit(registration));
                     } else if let Some(cleanup) =
                         optional_child_of_kind(node, NodeKind::CleanupExpression)?
                     {
-                        tasks.push(ExpressionTask::Visit(cleanup));
+                        push_task!(ExpressionTask::Visit(cleanup));
                     } else if let Some(name) =
                         optional_child_of_kind(node, NodeKind::QualifiedName)?
                     {
                         let name = project_qualified_name(source, name, tokens)?;
                         let reference = SurfaceReference::Qualified(name);
-                        projected.push(SurfaceExpr {
-                            diagnostic: reference.diagnostic_location(),
-                            span: reference.span(),
-                            kind: SurfaceExprKind::Name(reference),
+                        push_result!({
+                            if let Some(budget) = tokens.expression_budget
+                                && let SurfaceReference::Qualified(name) = &reference
+                            {
+                                charge_qualified_expression_diagnostic(
+                                    name,
+                                    &mut budget.borrow_mut(),
+                                )
+                                .map_err(ProjectionError::ResourceLimit)?;
+                            }
+                            SurfaceExpr {
+                                diagnostic: reference.diagnostic_location(),
+                                span: reference.span(),
+                                kind: SurfaceExprKind::Name(reference),
+                            }
                         });
                     } else {
-                        projected.push(project_primitive(node, tokens)?);
+                        push_result!(project_primitive(node, tokens)?);
                     }
                 }
                 NodeKind::ParenthesizedExpression => {
@@ -7006,11 +7671,20 @@ fn project_expression_with_fragments(
                         .ok_or(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         ))?;
+                charge_expression_move(projected.len() - split, tokens.expression_budget)?;
                 let mut expressions = projected.split_off(split).into_iter();
                 let mut contents = contents.into_iter();
-                let captures = captures
-                    .into_iter()
-                    .map(|capture| match capture {
+                let facts_start =
+                    if tokens.expression_budget.is_some() {
+                        type_facts.len().checked_sub(count).ok_or(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+                        )?
+                    } else {
+                        type_facts.len()
+                    };
+                let mut fact_index = facts_start;
+                let captures = collect_expression_scratch(
+                    captures.into_iter().map(|capture| match capture {
                         Some(name) => Ok(SurfaceSyntaxCapture::Identifier(name)),
                         None => {
                             let expression = expressions.next().ok_or(
@@ -7019,13 +7693,26 @@ fn project_expression_with_fragments(
                             let contents = contents.next().ok_or(
                                 ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
                             )?;
+                            let contains_type = if tokens.expression_budget.is_some() {
+                                let value = type_facts[fact_index];
+                                fact_index += 1;
+                                value
+                            } else {
+                                false
+                            };
                             Ok(SurfaceSyntaxCapture::Expression(
-                                project_syntax_expression_capture(expression, contents),
+                                project_syntax_expression_capture(
+                                    expression,
+                                    contents,
+                                    contains_type,
+                                ),
                             ))
                         }
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                projected.push(SurfaceExpr {
+                    }),
+                    tokens.expression_budget,
+                )?;
+                type_facts.truncate(facts_start);
+                push_result!(SurfaceExpr {
                     diagnostic: None,
                     kind: SurfaceExprKind::SyntaxInvocation { name, captures },
                     span,
@@ -7037,7 +7724,7 @@ fn project_expression_with_fragments(
                 span,
             } => {
                 let (left, right) = take_expression_pair(&mut projected)?;
-                projected.push(SurfaceExpr {
+                push_result!(SurfaceExpr {
                     diagnostic: None,
                     kind: make_kind(BinaryExpr {
                         left: Box::new(left),
@@ -7049,7 +7736,7 @@ fn project_expression_with_fragments(
             }
             ExpressionTask::FinishApplication(span) => {
                 let (function, argument) = take_expression_pair(&mut projected)?;
-                projected.push(SurfaceExpr {
+                push_result!(SurfaceExpr {
                     diagnostic: None,
                     kind: SurfaceExprKind::Apply(ApplicationExpr {
                         function: Box::new(function),
@@ -7066,8 +7753,9 @@ fn project_expression_with_fragments(
                         .ok_or(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         ))?;
+                charge_expression_move(projected.len() - split, tokens.expression_budget)?;
                 let elements = projected.split_off(split);
-                projected.push(SurfaceExpr {
+                push_result!(SurfaceExpr {
                     diagnostic: None,
                     kind: SurfaceExprKind::Tuple(elements),
                     span,
@@ -7082,13 +7770,13 @@ fn project_expression_with_fragments(
                         .ok_or(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         ))?;
+                charge_expression_move(projected.len() - split, tokens.expression_budget)?;
                 let mut expressions = projected.split_off(split).into_iter();
                 let scrutinee = expressions.next().ok_or(ProjectionError::MalformedTree(
                     InternalReason::UnexpectedShape,
                 ))?;
-                let projected_arms = arms
-                    .into_iter()
-                    .map(|(pattern, arm_span)| {
+                let projected_arms = collect_expression_scratch(
+                    arms.into_iter().map(|(pattern, arm_span)| {
                         let body = expressions.next().ok_or(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         ))?;
@@ -7097,12 +7785,13 @@ fn project_expression_with_fragments(
                             body,
                             span: arm_span,
                         })
-                    })
-                    .collect::<Result<Vec<_>, ProjectionError>>()?;
+                    }),
+                    tokens.expression_budget,
+                )?;
                 if expressions.next().is_some() {
                     return malformed(InternalReason::UnexpectedShape);
                 }
-                projected.push(SurfaceExpr {
+                push_result!(SurfaceExpr {
                     diagnostic: None,
                     kind: SurfaceExprKind::Match(SurfaceMatchExpr {
                         scrutinee: Box::new(scrutinee),
@@ -7120,7 +7809,7 @@ fn project_expression_with_fragments(
                 let operand = projected.pop().ok_or(ProjectionError::MalformedTree(
                     InternalReason::UnexpectedShape,
                 ))?;
-                projected.push(SurfaceExpr {
+                push_result!(SurfaceExpr {
                     diagnostic: None,
                     kind: SurfaceExprKind::Perform(SurfacePerformExpr {
                         effect,
@@ -7135,7 +7824,7 @@ fn project_expression_with_fragments(
                 let value = projected.pop().ok_or(ProjectionError::MalformedTree(
                     InternalReason::UnexpectedShape,
                 ))?;
-                projected.push(SurfaceExpr {
+                push_result!(SurfaceExpr {
                     diagnostic: None,
                     kind: SurfaceExprKind::Resume(Box::new(value)),
                     span,
@@ -7152,7 +7841,7 @@ fn project_expression_with_fragments(
                 let SurfaceExprKind::Block(body) = body.kind else {
                     return malformed(InternalReason::UnexpectedShape);
                 };
-                projected.push(SurfaceExpr {
+                push_result!(SurfaceExpr {
                     diagnostic: None,
                     kind: SurfaceExprKind::ProviderResource(Box::new(
                         crate::surface::SurfaceProviderResourceExpr {
@@ -7185,7 +7874,7 @@ fn project_expression_with_fragments(
                 } else {
                     None
                 };
-                projected.push(SurfaceExpr {
+                push_result!(SurfaceExpr {
                     diagnostic: None,
                     kind: SurfaceExprKind::Region(Box::new(crate::surface::SurfaceRegionExpr {
                         identity,
@@ -7201,7 +7890,7 @@ fn project_expression_with_fragments(
                 let SurfaceExprKind::Block(body) = body.kind else {
                     return malformed(InternalReason::UnexpectedShape);
                 };
-                projected.push(SurfaceExpr {
+                push_result!(SurfaceExpr {
                     diagnostic: None,
                     kind: SurfaceExprKind::RegionSelection(Box::new(
                         crate::surface::SurfaceRegionSelectionExpr { region, body },
@@ -7219,7 +7908,7 @@ fn project_expression_with_fragments(
                 let SurfaceExprKind::Block(body) = body.kind else {
                     return malformed(InternalReason::UnexpectedShape);
                 };
-                projected.push(SurfaceExpr {
+                push_result!(SurfaceExpr {
                     diagnostic: None,
                     kind: SurfaceExprKind::Resource(Box::new(
                         crate::surface::SurfaceResourceExpr {
@@ -7240,7 +7929,7 @@ fn project_expression_with_fragments(
                 let SurfaceExprKind::Block(body) = body.kind else {
                     return malformed(InternalReason::UnexpectedShape);
                 };
-                projected.push(SurfaceExpr {
+                push_result!(SurfaceExpr {
                     diagnostic: None,
                     kind: SurfaceExprKind::Hook(Box::new(crate::surface::SurfaceHookExpr {
                         effect,
@@ -7254,7 +7943,7 @@ fn project_expression_with_fragments(
                 let SurfaceExprKind::Block(body) = body.kind else {
                     return malformed(InternalReason::UnexpectedShape);
                 };
-                projected.push(SurfaceExpr {
+                push_result!(SurfaceExpr {
                     diagnostic: None,
                     kind: SurfaceExprKind::Cleanup(Box::new(crate::surface::SurfaceCleanupExpr {
                         action,
@@ -7268,7 +7957,7 @@ fn project_expression_with_fragments(
                 let SurfaceExprKind::Block(body) = body.kind else {
                     return malformed(InternalReason::UnexpectedShape);
                 };
-                projected.push(SurfaceExpr {
+                push_result!(SurfaceExpr {
                     diagnostic: None,
                     kind: SurfaceExprKind::Registration(Box::new(
                         crate::surface::SurfaceRegistrationExpr {
@@ -7292,6 +7981,7 @@ fn project_expression_with_fragments(
                     .ok_or(ProjectionError::MalformedTree(
                         InternalReason::UnexpectedShape,
                     ))?;
+                charge_expression_move(projected.len() - split, tokens.expression_budget)?;
                 let mut expressions = projected.split_off(split).into_iter();
                 let store = if has_store {
                     Some(Box::new(expressions.next().ok_or(
@@ -7303,20 +7993,22 @@ fn project_expression_with_fragments(
                 let body = expressions.next().ok_or(ProjectionError::MalformedTree(
                     InternalReason::UnexpectedShape,
                 ))?;
-                let clauses = clauses
-                    .into_iter()
-                    .map(|(operation, pattern, clause_span)| {
-                        Ok(SurfaceHandlerClause {
-                            operation,
-                            pattern,
-                            body: expressions.next().ok_or(ProjectionError::MalformedTree(
-                                InternalReason::UnexpectedShape,
-                            ))?,
-                            span: clause_span,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, ProjectionError>>()?;
-                projected.push(SurfaceExpr {
+                let clauses = collect_expression_scratch(
+                    clauses
+                        .into_iter()
+                        .map(|(operation, pattern, clause_span)| {
+                            Ok(SurfaceHandlerClause {
+                                operation,
+                                pattern,
+                                body: expressions.next().ok_or(ProjectionError::MalformedTree(
+                                    InternalReason::UnexpectedShape,
+                                ))?,
+                                span: clause_span,
+                            })
+                        }),
+                    tokens.expression_budget,
+                )?;
+                push_result!(SurfaceExpr {
                     diagnostic: None,
                     kind: SurfaceExprKind::Handle(SurfaceHandleExpr {
                         body: Box::new(body),
@@ -7340,7 +8032,9 @@ fn project_expression_with_fragments(
                         .ok_or(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         ))?;
+                charge_expression_move(projected.len() - split, tokens.expression_budget)?;
                 let mut expressions = projected.split_off(split).into_iter();
+                charge_expression_allocation(declarations.len(), tokens.expression_budget)?;
                 let mut projected_declarations = Vec::with_capacity(declarations.len());
                 for declaration in declarations {
                     match declaration {
@@ -7358,6 +8052,10 @@ fn project_expression_with_fragments(
                             ));
                         }
                         PendingLocalDeclaration::Recursive(group) => {
+                            charge_expression_allocation(
+                                group.members.len(),
+                                tokens.expression_budget,
+                            )?;
                             let mut members = Vec::with_capacity(group.members.len());
                             for member in group.members {
                                 let initializer = expressions.next().ok_or(
@@ -7383,6 +8081,10 @@ fn project_expression_with_fragments(
                             projected_declarations.push(SurfaceLocalDeclaration::Newtype(newtype));
                         }
                         PendingLocalDeclaration::Evidence(evidence) => {
+                            charge_expression_allocation(
+                                evidence.equations.len(),
+                                tokens.expression_budget,
+                            )?;
                             let mut equations = Vec::with_capacity(evidence.equations.len());
                             for equation in evidence.equations {
                                 equations.push(SurfaceEquation {
@@ -7412,7 +8114,7 @@ fn project_expression_with_fragments(
                 if expressions.next().is_some() {
                     return malformed(InternalReason::UnexpectedShape);
                 }
-                projected.push(SurfaceExpr {
+                push_result!(SurfaceExpr {
                     diagnostic: None,
                     kind: SurfaceExprKind::Block(SurfaceBlock {
                         declarations: projected_declarations,
@@ -7429,7 +8131,7 @@ fn project_expression_with_fragments(
                 let SurfaceExprKind::Block(body) = body.kind else {
                     return malformed(InternalReason::UnexpectedShape);
                 };
-                projected.push(SurfaceExpr {
+                push_result!(SurfaceExpr {
                     diagnostic: None,
                     kind: SurfaceExprKind::Function(FunctionExpr { parameter, body }),
                     span,
@@ -7461,10 +8163,16 @@ fn project_expression_with_fragments(
                     Box::new(location)
                 });
                 if capture && let Some(cause) = cause {
+                    reserve_expression_scratch(&mut location.related, 1, tokens.expression_budget)?;
                     location.related.push(cause);
                 }
                 location.captured_expression |= capture;
-                add_projection_frames(location, Some(&frame), tokens.staging_frames);
+                add_projection_frames_with_expression_budget(
+                    location,
+                    Some(&frame),
+                    tokens.staging_frames,
+                    tokens.expression_budget,
+                )?;
             }
         }
     }
@@ -7612,6 +8320,12 @@ fn schedule_block<'a>(
     tokens: &ProjectionTokens<'_>,
     tasks: &mut Vec<ExpressionTask<'a>>,
 ) -> Result<(), ProjectionError> {
+    macro_rules! push_scratch {
+        ($items:expr, $item:expr $(,)?) => {{
+            let items = &mut *$items;
+            push_expression_scratch(items, tokens.expression_budget, || Ok($item))?;
+        }};
+    }
     require_kind(node, NodeKind::Block)?;
     let mut declarations = Vec::new();
     let mut initializers = Vec::new();
@@ -7626,12 +8340,15 @@ fn schedule_block<'a>(
             let annotation = optional_child_of_kind(child, NodeKind::Type)?
                 .map(|annotation| project_type(source, annotation, tokens))
                 .transpose()?;
-            declarations.push(PendingLocalDeclaration::Binding(Box::new(PendingBinding {
-                pattern,
-                annotation,
-                span: node_span(source, child, tokens)?,
-            })));
-            initializers.push(expression_child(child)?);
+            push_scratch!(
+                &mut declarations,
+                PendingLocalDeclaration::Binding(Box::new(PendingBinding {
+                    pattern,
+                    annotation,
+                    span: node_span(source, child, tokens)?,
+                }))
+            );
+            push_scratch!(&mut initializers, expression_child(child)?);
         } else if child.kind == NodeKind::RecursiveBindingGroup {
             let mut introducers = direct_tokens(child, tokens);
             let let_token = introducers.next().ok_or(ProjectionError::MalformedTree(
@@ -7660,36 +8377,46 @@ fn schedule_block<'a>(
                     only_child_of_kind(member, NodeKind::Binder)?,
                     tokens,
                 )?;
-                members.push(PendingRecursiveMember {
-                    introducer_span: member_introducers.next().ok_or(
-                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
-                    )?,
-                    binder,
-                    binder_splice,
-                    annotation: project_type(
-                        source,
-                        only_child_of_kind(member, NodeKind::Type)?,
-                        tokens,
-                    )?,
-                    span: node_span(source, member, tokens)?,
-                });
-                initializers.push(expression_child(member)?);
+                push_scratch!(
+                    &mut members,
+                    PendingRecursiveMember {
+                        introducer_span: member_introducers.next().ok_or(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+                        )?,
+                        binder,
+                        binder_splice,
+                        annotation: project_type(
+                            source,
+                            only_child_of_kind(member, NodeKind::Type)?,
+                            tokens,
+                        )?,
+                        span: node_span(source, member, tokens)?,
+                    }
+                );
+                push_scratch!(&mut initializers, expression_child(member)?);
             }
             if member_introducers.next().is_some() {
                 return malformed(InternalReason::UnexpectedShape);
             }
-            declarations.push(PendingLocalDeclaration::Recursive(PendingRecursiveGroup {
-                members,
-                span: node_span(source, child, tokens)?,
-            }));
+            push_scratch!(
+                &mut declarations,
+                PendingLocalDeclaration::Recursive(PendingRecursiveGroup {
+                    members,
+                    span: node_span(source, child, tokens)?,
+                })
+            );
         } else if child.kind == NodeKind::LexicalEvidenceDeclaration {
             let mut equations = Vec::new();
             for equation in child_nodes(child).filter(|node| node.kind == NodeKind::Equation) {
-                equations.push(project_equation_head(source, equation, tokens)?);
-                initializers.push(expression_child(equation)?);
+                push_scratch!(
+                    &mut equations,
+                    project_equation_head(source, equation, tokens)?
+                );
+                push_scratch!(&mut initializers, expression_child(equation)?);
             }
-            declarations.push(PendingLocalDeclaration::Evidence(Box::new(
-                PendingLexicalEvidence {
+            push_scratch!(
+                &mut declarations,
+                PendingLocalDeclaration::Evidence(Box::new(PendingLexicalEvidence {
                     application: project_interface_application(
                         source,
                         only_child_of_kind(child, NodeKind::InterfaceApplication)?,
@@ -7697,12 +8424,15 @@ fn schedule_block<'a>(
                     )?,
                     equations,
                     span: node_span(source, child, tokens)?,
-                },
-            )));
+                },))
+            );
         } else if child.kind == NodeKind::NewtypeDeclaration {
-            declarations.push(PendingLocalDeclaration::Newtype(
-                project_newtype_declaration(source, child, tokens)?,
-            ));
+            push_scratch!(
+                &mut declarations,
+                PendingLocalDeclaration::Newtype(project_newtype_declaration(
+                    source, child, tokens
+                )?,)
+            );
         } else if is_expression_kind(child.kind) {
             if result.replace(child).is_some() {
                 return malformed(InternalReason::UnexpectedShape);
@@ -7714,13 +8444,16 @@ fn schedule_block<'a>(
     let result = result.ok_or(ProjectionError::MalformedTree(
         InternalReason::UnexpectedShape,
     ))?;
-    tasks.push(ExpressionTask::FinishBlock {
-        declarations,
-        span: node_span(source, node, tokens)?,
-    });
-    tasks.push(ExpressionTask::Visit(result));
+    push_scratch!(
+        tasks,
+        ExpressionTask::FinishBlock {
+            declarations,
+            span: node_span(source, node, tokens)?,
+        }
+    );
+    push_scratch!(tasks, ExpressionTask::Visit(result));
     for initializer in initializers.into_iter().rev() {
-        tasks.push(ExpressionTask::Visit(initializer));
+        push_scratch!(tasks, ExpressionTask::Visit(initializer));
     }
     Ok(())
 }
@@ -7733,6 +8466,12 @@ fn schedule_binary<'a>(
     make_kind: fn(BinaryExpr) -> SurfaceExprKind,
     tasks: &mut Vec<ExpressionTask<'a>>,
 ) -> Result<(), ProjectionError> {
+    macro_rules! push_scratch {
+        ($items:expr, $item:expr $(,)?) => {{
+            let items = &mut *$items;
+            push_expression_scratch(items, tokens.expression_budget, || Ok($item))?;
+        }};
+    }
     let (left, right) = expression_pair(node)?;
     let mut operators =
         direct_tokens(node, tokens).filter(|token| same_token_variant(&token.kind, operator_kind));
@@ -7745,13 +8484,16 @@ fn schedule_binary<'a>(
     if operators.next().is_some() {
         return malformed(InternalReason::UnexpectedShape);
     }
-    tasks.push(ExpressionTask::FinishBinary {
-        make_kind,
-        operator_span,
-        span: node_span(source, node, tokens)?,
-    });
-    tasks.push(ExpressionTask::Visit(right));
-    tasks.push(ExpressionTask::Visit(left));
+    push_scratch!(
+        tasks,
+        ExpressionTask::FinishBinary {
+            make_kind,
+            operator_span,
+            span: node_span(source, node, tokens)?,
+        }
+    );
+    push_scratch!(tasks, ExpressionTask::Visit(right));
+    push_scratch!(tasks, ExpressionTask::Visit(left));
     Ok(())
 }
 
@@ -7788,20 +8530,29 @@ fn schedule_group<'a>(
     tasks: &mut Vec<ExpressionTask<'a>>,
     projected: &mut Vec<SurfaceExpr>,
 ) -> Result<(), ProjectionError> {
+    macro_rules! push_scratch {
+        ($items:expr, $item:expr $(,)?) => {{
+            let items = &mut *$items;
+            push_expression_scratch(items, tokens.expression_budget, || Ok($item))?;
+        }};
+    }
     let span = node_span(source, node, tokens)?;
     let mut expressions = child_nodes(node).filter(|child| is_expression_kind(child.kind));
     if let Some(expression) = expressions.next() {
         if expressions.next().is_some() {
             return malformed(InternalReason::UnexpectedShape);
         }
-        tasks.push(ExpressionTask::ApplyGroupingSpan(span));
-        tasks.push(ExpressionTask::Visit(expression));
+        push_scratch!(tasks, ExpressionTask::ApplyGroupingSpan(span));
+        push_scratch!(tasks, ExpressionTask::Visit(expression));
     } else {
-        projected.push(SurfaceExpr {
-            diagnostic: None,
-            kind: SurfaceExprKind::Unit,
-            span,
-        });
+        push_scratch!(
+            projected,
+            SurfaceExpr {
+                diagnostic: None,
+                kind: SurfaceExprKind::Unit,
+                span,
+            }
+        );
     }
     Ok(())
 }
@@ -7913,6 +8664,39 @@ fn add_projection_frames(
     } else if let Some(frame) = frame {
         diagnostic.add_frame(frame);
     }
+}
+
+fn add_projection_frames_with_expression_budget(
+    diagnostic: &mut crate::syntax::DiagnosticLocation,
+    frame: Option<&std::sync::Arc<crate::syntax::ExpansionFrame>>,
+    staging_frames: Option<&[std::sync::Arc<crate::syntax::ExpansionFrame>]>,
+    budget: Option<&std::cell::RefCell<&mut crate::syntax_resource::SyntaxBudget>>,
+) -> Result<(), ProjectionError> {
+    let Some(budget) = budget else {
+        add_projection_frames(diagnostic, frame, staging_frames);
+        return Ok(());
+    };
+    let frames = staging_frames.unwrap_or_else(|| frame.map_or(&[], std::slice::from_ref));
+    for frame in frames {
+        // Pay the pointer search before inspecting the existing frames.
+        budget
+            .borrow_mut()
+            .charge_units(diagnostic.frames.len().saturating_add(1))
+            .map_err(ProjectionError::ResourceLimit)?;
+        if !diagnostic
+            .frames
+            .iter()
+            .any(|existing| std::sync::Arc::ptr_eq(existing, frame))
+        {
+            budget
+                .borrow_mut()
+                .charge()
+                .map_err(ProjectionError::ResourceLimit)?;
+            reserve_expression_scratch(&mut diagnostic.frames, 1, Some(budget))?;
+            diagnostic.frames.push(std::sync::Arc::clone(frame));
+        }
+    }
+    Ok(())
 }
 
 fn surface_name(token: ProjectionToken<'_>) -> Result<SurfaceName, ProjectionError> {
@@ -8231,10 +9015,12 @@ fn project_optional_type_parameters(
 ) -> Result<Option<Vec<SurfaceTypeParameter>>, ProjectionError> {
     optional_child_of_kind(owner, NodeKind::TypeParameters)?
         .map(|parameters| {
-            let projected = child_nodes(parameters)
-                .filter(|child| child.kind == NodeKind::TypeParameter)
-                .map(|parameter| project_type_parameter(source, parameter, tokens))
-                .collect::<Result<Vec<_>, _>>()?;
+            let projected = collect_expression_scratch(
+                child_nodes(parameters)
+                    .filter(|child| child.kind == NodeKind::TypeParameter)
+                    .map(|parameter| project_type_parameter(source, parameter, tokens)),
+                tokens.expression_budget,
+            )?;
             if projected.is_empty() {
                 return malformed(InternalReason::UnexpectedShape);
             }
@@ -8312,7 +9098,12 @@ fn project_type(
     node: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
 ) -> Result<SurfaceType, ProjectionError> {
-    project_type_inner(source, node, tokens, None)
+    if let Some(budget) = tokens.expression_budget {
+        let mut budget = budget.borrow_mut();
+        project_type_inner(source, node, tokens, Some(&mut budget))
+    } else {
+        project_type_inner(source, node, tokens, None)
+    }
 }
 
 fn reserve_type_projection_growth<T>(
@@ -8718,10 +9509,12 @@ fn project_effect_instance(
             ))?;
         SurfaceReference::Unqualified(surface_name(token)?)
     };
-    let arguments = child_nodes(instance)
-        .filter(|child| matches!(child.kind, NodeKind::Type | NodeKind::EffectRow))
-        .map(|argument| project_type(source, argument, tokens))
-        .collect::<Result<Vec<_>, _>>()?;
+    let arguments = collect_expression_scratch(
+        child_nodes(instance)
+            .filter(|child| matches!(child.kind, NodeKind::Type | NodeKind::EffectRow))
+            .map(|argument| project_type(source, argument, tokens)),
+        tokens.expression_budget,
+    )?;
     Ok(SurfaceEffectInstance {
         effect,
         arguments,
@@ -8745,10 +9538,12 @@ fn project_operation_reference(
             ))?;
         SurfaceReference::Unqualified(surface_name(token)?)
     };
-    let arguments = child_nodes(node)
-        .filter(|child| matches!(child.kind, NodeKind::Type | NodeKind::EffectRow))
-        .map(|argument| project_type(source, argument, tokens))
-        .collect::<Result<Vec<_>, _>>()?;
+    let arguments = collect_expression_scratch(
+        child_nodes(node)
+            .filter(|child| matches!(child.kind, NodeKind::Type | NodeKind::EffectRow))
+            .map(|argument| project_type(source, argument, tokens)),
+        tokens.expression_budget,
+    )?;
     let operation = direct_tokens(node, tokens)
         .filter(|token| matches!(token.kind, TokenKind::Identifier(_)))
         .last()
@@ -11205,6 +12000,7 @@ mod tests {
                 name_frame: None,
                 staging_frames: None,
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             };
             let mut budget = crate::syntax_resource::SyntaxBudget::default();
             assert!(matches!(
@@ -11257,6 +12053,7 @@ mod tests {
             diagnostic: None,
         };
         let ordinary = SurfaceExpressionCapture {
+            contains_protected_type: false,
             expression: SurfaceExpr {
                 kind: SurfaceExprKind::Unit,
                 span: probe_span,
@@ -11320,6 +12117,7 @@ mod tests {
                 name_frame: None,
                 staging_frames: None,
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             };
             let retained = Arc::strong_count(&packet);
             let check = |operation: &mut dyn FnMut(
@@ -11519,6 +12317,7 @@ mod tests {
                 name_frame: Some(&frame),
                 staging_frames: None,
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             };
             let MacroOrigin::Combined { inputs, .. } = &wide else {
                 unreachable!("the fixture constructs a Combined origin");
@@ -11596,6 +12395,7 @@ mod tests {
             name_frame: Some(&frame),
             staging_frames: None,
             preserve_name_diagnostic: true,
+            expression_budget: None,
         };
         let mut old = SyntaxBudget::default();
         charge_composed_projection_inner(&node, &tokens, false, false, &mut old).unwrap();
@@ -11660,6 +12460,7 @@ mod tests {
                 name_frame: Some(&current),
                 staging_frames: None,
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             };
             let mut old = SyntaxBudget::default();
             charge_composed_projection_inner(&node, &tokens, false, false, &mut old).unwrap();
@@ -11916,6 +12717,7 @@ mod tests {
             },
             ProjectionTokens {
                 preserve_name_diagnostic: true,
+                expression_budget: None,
                 ..ProjectionTokens::source(tree.tokens())
             },
         ];
@@ -11984,6 +12786,7 @@ mod tests {
             name_frame: None,
             staging_frames: None,
             preserve_name_diagnostic: true,
+            expression_budget: None,
         };
         let mut budget = crate::syntax_resource::SyntaxBudget::default();
         assert!(
@@ -12136,6 +12939,55 @@ mod tests {
             "{\nwith Read<Int> {\nread ignored = 42\n}\n42\n}",
         ),
     ];
+
+    #[test]
+    fn selected_expression_copy_prepays_each_parsed_family_copy() {
+        use crate::syntax_resource::{ResourceFailure, SyntaxBudget};
+
+        for &(name, text) in PROTECTED_EXPRESSION_CASES
+            .iter()
+            .chain(PROTECTED_LOCAL_CASES.iter())
+        {
+            let (source, tree) = parsed(text);
+            let module = project_module(&source, &tree).unwrap();
+            let SurfaceDefinitionKind::Equational(global) = &module.definitions[0].kind else {
+                panic!("{name}: expected an equation")
+            };
+            let expression = &global.equations[0].body;
+            let mut measured = SyntaxBudget::default();
+            assert!(
+                !crate::syntax::charge_new_expression_copy(expression, 0, false, &mut measured)
+                    .unwrap()
+                    .unwrap(),
+                "{name}"
+            );
+            let cost = measured.consumed();
+            let total = 17 + cost * 2;
+            let mut short = SyntaxBudget::with_limit(total - 1);
+            short.charge_units(17).unwrap();
+            crate::syntax::charge_new_expression_copy(expression, 0, false, &mut short)
+                .unwrap()
+                .unwrap();
+            let first = expression.clone();
+            assert!(matches!(
+                crate::syntax::charge_new_expression_copy(expression, 0, false, &mut short),
+                Err(ResourceFailure::SyntaxWork { .. })
+            ));
+            drop(first);
+
+            for _ in 0..2 {
+                let mut exact = SyntaxBudget::with_limit(total);
+                exact.charge_units(17).unwrap();
+                for _ in 0..2 {
+                    crate::syntax::charge_new_expression_copy(expression, 0, false, &mut exact)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(expression.clone(), *expression, "{name}");
+                }
+                assert_eq!(exact.consumed(), total, "{name}");
+            }
+        }
+    }
 
     #[test]
     fn protected_expression_walker_covers_the_closed_source_families() {
@@ -12695,6 +13547,7 @@ mod tests {
                 name_frame: None,
                 staging_frames: None,
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             };
             let result =
                 charge_composed_projection(expression, &tokens, true, &mut SyntaxBudget::default());
@@ -12849,6 +13702,7 @@ mod tests {
                     name_frame: generated.then_some(&frame),
                     staging_frames: None,
                     preserve_name_diagnostic: true,
+                    expression_budget: None,
                 };
                 // Block + binding + function + row(2) + effect argument = 6.
                 // A generated forwarded type inherits a location at each node.
@@ -13047,6 +13901,7 @@ mod tests {
                     name_frame: generated.then_some(&frame),
                     staging_frames: None,
                     preserve_name_diagnostic: true,
+                    expression_budget: None,
                 };
                 let result = charge_composed_projection(
                     function,
@@ -13199,6 +14054,7 @@ mod tests {
                         name_frame: generated.then_some(&frame),
                         staging_frames: None,
                         preserve_name_diagnostic: true,
+                        expression_budget: None,
                     };
                     let result = charge_composed_projection(
                         expression,
@@ -13274,6 +14130,7 @@ mod tests {
                 name_frame: None,
                 staging_frames: None,
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             };
             let mut measured = SyntaxBudget::default();
             assert!(!charge_composed_projection(expression, &tokens, true, &mut measured).unwrap());
@@ -13366,6 +14223,7 @@ mod tests {
                 name_frame: frame,
                 staging_frames: staging,
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             };
             let mut measured = SyntaxBudget::default();
             assert!(!charge_composed_projection(function, &tokens, true, &mut measured).unwrap());
@@ -13610,6 +14468,7 @@ mod tests {
             name_frame: None,
             staging_frames: None,
             preserve_name_diagnostic: false,
+            expression_budget: None,
         };
         let argument = || {
             ConcreteElement::Node(node(
@@ -13712,6 +14571,7 @@ mod tests {
             } else {
                 MacroOutputNode::ForwardedExpression(
                     SurfaceExpressionCapture {
+                        contains_protected_type: false,
                         expression: SurfaceExpr {
                             kind: SurfaceExprKind::Unit,
                             span,
@@ -13768,6 +14628,7 @@ mod tests {
                 name_frame: Some(&frame),
                 staging_frames: Some(&frames),
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             };
             let selected_name = direct_tokens(selected_invocation, &tokens).next().unwrap();
             let MacroOutputNode::Identifier(name, _) = selected_name.original.unwrap() else {
@@ -13831,6 +14692,7 @@ mod tests {
         let protected = [
             MacroOutputNode::ForwardedExpression(
                 SurfaceExpressionCapture {
+                    contains_protected_type: false,
                     expression: SurfaceExpr {
                         kind: SurfaceExprKind::Unit,
                         span,
@@ -13879,6 +14741,7 @@ mod tests {
                 name_frame: None,
                 staging_frames: None,
                 preserve_name_diagnostic: false,
+                expression_budget: None,
             };
             assert!(matches!(
                 check_narrow_protected_refusal(
@@ -14131,6 +14994,7 @@ mod tests {
                 name_frame: Some(&current),
                 staging_frames: Some(&frames),
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             };
             let mut measured = SyntaxBudget::default();
             charge_projection_preflight_selected(expression, &tokens, true, true, &mut measured)
@@ -14243,6 +15107,7 @@ mod tests {
                 name_frame: Some(current),
                 staging_frames: None,
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             };
             let mut budget = SyntaxBudget::default();
             assert!(
@@ -14446,6 +15311,7 @@ mod tests {
                 name_frame: Some(&current),
                 staging_frames: None,
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             };
             let mut measured = SyntaxBudget::default();
             assert!(
@@ -14531,6 +15397,7 @@ mod tests {
             name_frame: Some(&current),
             staging_frames: Some(&frames),
             preserve_name_diagnostic: true,
+            expression_budget: None,
         };
         let mut frame_work = SyntaxBudget::default();
         charge_staged_name_frames(tokens.projection_token(index).unwrap(), &mut frame_work)
@@ -15059,6 +15926,7 @@ mod tests {
                 name_frame: None,
                 staging_frames: None,
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             };
             charge_generated_projection(
                 child_nodes(root).next().unwrap(),
@@ -15204,6 +16072,7 @@ mod tests {
                 name_frame: Some(&frame),
                 staging_frames: Some(&frames),
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             };
             charge_generated_projection(
                 child_nodes(root).next().unwrap(),
@@ -15293,6 +16162,7 @@ mod tests {
                 name_frame: None,
                 staging_frames: None,
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             };
             charge_type_capture_contents(
                 type_node,
@@ -15430,6 +16300,7 @@ mod tests {
                     } else {
                         MacroOutputNode::ForwardedExpression(
                             SurfaceExpressionCapture {
+                                contains_protected_type: false,
                                 expression: SurfaceExpr {
                                     kind: SurfaceExprKind::Unit,
                                     span,
@@ -15452,6 +16323,7 @@ mod tests {
                         name_frame: None,
                         staging_frames: None,
                         preserve_name_diagnostic: true,
+                        expression_budget: None,
                     };
                     let references = Arc::strong_count(&contents);
                     assert_eq!(
@@ -15681,6 +16553,7 @@ mod tests {
                 name_frame: None,
                 staging_frames: None,
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             };
             if construction {
                 assert!(tokens.for_node_construction(nominal).construction.is_some());
@@ -17060,6 +17933,7 @@ mod tests {
                 name_frame: Some(&current),
                 staging_frames: None,
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             };
             let mut values = Vec::new();
             for child in child_nodes(root) {
@@ -17098,6 +17972,7 @@ mod tests {
             name_frame: Some(&current),
             staging_frames: None,
             preserve_name_diagnostic: true,
+            expression_budget: None,
         };
         let mut children = child_nodes(root);
         let nominal = children.next().unwrap();
@@ -17187,6 +18062,7 @@ mod tests {
                 name_frame: Some(&current),
                 staging_frames: None,
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             };
             let mut budget = crate::syntax_resource::SyntaxBudget::default();
             charge_generated_projection(child_nodes(root).next().unwrap(), &tokens, &mut budget)
@@ -17218,6 +18094,7 @@ mod tests {
             name_frame: Some(&current),
             staging_frames: None,
             preserve_name_diagnostic: true,
+            expression_budget: None,
         };
         let child = child_nodes(root).next().unwrap();
         let mut short = crate::syntax_resource::SyntaxBudget::with_limit(after - 1);
@@ -18108,6 +18985,7 @@ mod tests {
             diagnostic: None,
         };
         let value = SurfaceExpressionCapture {
+            contains_protected_type: false,
             expression: SurfaceExpr {
                 diagnostic: None,
                 kind: SurfaceExprKind::Unit,
@@ -18250,6 +19128,7 @@ mod tests {
         let body_start = written.text().rfind("value").unwrap();
         let body_name = make_name("value", 8, span(body_start, body_start + 5));
         let body = SurfaceExpressionCapture {
+            contains_protected_type: false,
             expression: SurfaceExpr {
                 kind: SurfaceExprKind::Name(SurfaceReference::Unqualified(body_name.clone())),
                 span: body_name.span,
@@ -18871,6 +19750,7 @@ mod tests {
                         name,
                         kind: SurfaceSyntaxCaptureKind::Expression,
                     } => Some(SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
+                        contains_protected_type: false,
                         expression: SurfaceExpr {
                             kind: SurfaceExprKind::Unit,
                             span: name.span,
@@ -18958,6 +19838,7 @@ mod tests {
                 name_frame: None,
                 staging_frames: None,
                 preserve_name_diagnostic: true,
+                expression_budget: None,
             };
             assert!(
                 !charge_projection_preflight(pattern, &tokens, true, &mut SyntaxBudget::default())
@@ -19217,6 +20098,7 @@ mod tests {
         };
         let expression = captured.equations[0].body.clone();
         let capture = SurfaceExpressionCapture {
+            contains_protected_type: false,
             expression: expression.clone(),
             contents: std::sync::Arc::from([]),
         };
@@ -19697,6 +20579,7 @@ mod tests {
         };
         let expression = captured.equations[0].body.clone();
         let capture = SurfaceExpressionCapture {
+            contains_protected_type: false,
             expression: expression.clone(),
             contents: std::sync::Arc::from([]),
         };
@@ -19724,6 +20607,7 @@ mod tests {
             name_frame: None,
             staging_frames: None,
             preserve_name_diagnostic: false,
+            expression_budget: None,
         };
         let projected = project_surface_module(&source, root, &tokens).unwrap();
         let SurfaceDefinitionKind::Equational(global) = &projected.definitions[0].kind else {
@@ -20342,5 +21226,852 @@ usage arena => resume arena
                 .join()
                 .expect("surface projection should fit the small stack");
         });
+    }
+    #[test]
+    fn selected_type_expression_guard_prepays_the_actual_callee_lookup() {
+        use crate::{
+            syntax::{MacroOutputNode, SyntaxContexts},
+            syntax_resource::SyntaxBudget,
+        };
+        use std::{collections::HashMap, sync::Arc};
+
+        let source =
+            SourceFile::new("guard.ash", "pub syntax keep $body:expr => {\n $body\n}\n").unwrap();
+        let keep = h1_selection(&source, 0, None);
+        let span = keep.declaration.span;
+        let name = keep.declaration.name.clone();
+        let root = ConcreteNode {
+            kind: NodeKind::SyntaxInvocation,
+            children: vec![
+                ConcreteElement::Token(0),
+                ConcreteElement::Node(ConcreteNode {
+                    kind: NodeKind::SyntaxArgument,
+                    children: vec![ConcreteElement::Token(1)],
+                }),
+            ],
+        };
+        let originals = HashMap::from([
+            (0, MacroOutputNode::Identifier(name.clone(), span.into())),
+            (
+                1,
+                MacroOutputNode::ForwardedType(
+                    SurfaceTypeCapture {
+                        ty: SurfaceType {
+                            kind: SurfaceTypeKind::Int,
+                            span,
+                            diagnostic: None,
+                        },
+                        contents: Arc::from([]),
+                    },
+                    span.into(),
+                ),
+            ),
+        ]);
+        let selected = [keep.clone()];
+        let contexts = SyntaxContexts::new(&selected, &[], &[]);
+        let mut measured = SyntaxBudget::default();
+        measured.charge_units(17).unwrap();
+        assert!(
+            check_narrow_protected_refusal_inner(
+                &root,
+                Some(&originals),
+                false,
+                Some(&contexts),
+                &mut measured,
+            )
+            .unwrap()
+        );
+        let total = measured.consumed();
+        let mut exact = SyntaxBudget::with_limit(total);
+        exact.charge_units(17).unwrap();
+        assert!(
+            check_narrow_protected_refusal_inner(
+                &root,
+                Some(&originals),
+                false,
+                Some(&contexts),
+                &mut exact,
+            )
+            .unwrap()
+        );
+        assert_eq!(exact.consumed(), total);
+
+        let mut transformer = keep;
+        transformer.declaration.implementation =
+            SurfaceSyntaxImplementation::Transformer(name.clone());
+        let rejected = [transformer];
+        let contexts = SyntaxContexts::new(&rejected, &[], &[]);
+        let mut full = SyntaxBudget::default();
+        assert!(matches!(
+            check_narrow_protected_refusal_inner(
+                &root,
+                Some(&originals),
+                false,
+                Some(&contexts),
+                &mut full,
+            ),
+            Err(DeclarationExpansionFailure::Projection(
+                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+            ))
+        ));
+        let mut short = SyntaxBudget::with_limit(full.consumed() - 1);
+        assert!(matches!(
+            check_narrow_protected_refusal_inner(
+                &root,
+                Some(&originals),
+                false,
+                Some(&contexts),
+                &mut short,
+            ),
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        let mut absent = originals.clone();
+        absent.remove(&0);
+        assert!(matches!(
+            check_narrow_protected_refusal_inner(
+                &root,
+                Some(&absent),
+                false,
+                Some(&contexts),
+                &mut SyntaxBudget::default(),
+            ),
+            Err(DeclarationExpansionFailure::Projection(
+                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+            ))
+        ));
+        absent.insert(
+            0,
+            MacroOutputNode::Token(TokenKind::IntType, "Int".into(), span.into()),
+        );
+        assert!(matches!(
+            check_narrow_protected_refusal_inner(
+                &root,
+                Some(&absent),
+                false,
+                Some(&contexts),
+                &mut SyntaxBudget::default(),
+            ),
+            Err(DeclarationExpansionFailure::Projection(
+                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+            ))
+        ));
+        let mut raw = originals;
+        raw.remove(&1);
+        let mut old = SyntaxBudget::default();
+        let mut with_context = SyntaxBudget::default();
+        assert!(
+            !check_narrow_protected_refusal_inner(&root, Some(&raw), false, None, &mut old)
+                .unwrap()
+        );
+        assert!(
+            !check_narrow_protected_refusal_inner(
+                &root,
+                Some(&raw),
+                false,
+                Some(&contexts),
+                &mut with_context,
+            )
+            .unwrap()
+        );
+        assert_eq!(old.consumed(), with_context.consumed());
+    }
+
+    #[test]
+    fn selected_expression_capture_fact_follows_originals_and_groups() {
+        use crate::{
+            syntax::MacroOutputNode,
+            syntax_resource::{ResourceFailure, SyntaxBudget},
+        };
+        use std::{cell::RefCell, collections::HashMap, sync::Arc};
+
+        let source = SourceFile::new("fact.ash", "((Int))").unwrap();
+        let raw = lex(&source).unwrap().tokens;
+        let span = raw[2].span;
+        let node = ConcreteNode {
+            kind: NodeKind::ParenthesizedExpression,
+            children: (0..5).map(ConcreteElement::Token).collect(),
+        };
+        let ty = MacroOutputNode::ForwardedType(
+            SurfaceTypeCapture {
+                ty: SurfaceType {
+                    kind: SurfaceTypeKind::Int,
+                    span,
+                    diagnostic: None,
+                },
+                contents: Arc::from([]),
+            },
+            span.into(),
+        );
+        let originals = HashMap::from([(2, ty.clone())]);
+        let (raw_contents, raw_fact) = capture_contents_and_type(
+            &source,
+            &node,
+            &ProjectionTokens::source(&raw),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert!(!raw_fact);
+        drop(raw_contents);
+        let run = |budget: &mut SyntaxBudget| {
+            let loan = RefCell::new(budget);
+            let mut tokens = ProjectionTokens::source(&raw);
+            tokens.expression_budget = Some(&loan);
+            capture_contents_and_type(&source, &node, &tokens, &originals)
+        };
+        let mut measured = SyntaxBudget::default();
+        let (contents, fact) = run(&mut measured).unwrap();
+        let total = measured.consumed();
+        assert!(fact);
+        assert!(matches!(
+            contents.as_slice(),
+            [MacroOutputNode::Group(_, outer, _)]
+                if matches!(outer.as_slice(), [MacroOutputNode::Group(_, inner, _)]
+                    if matches!(inner.as_slice(), [MacroOutputNode::ForwardedType(..)]))
+        ));
+        let mut short = SyntaxBudget::with_limit(total - 1);
+        assert!(matches!(
+            run(&mut short),
+            Err(ProjectionError::ResourceLimit(
+                ResourceFailure::SyntaxWork { .. }
+            ))
+        ));
+        let mut exact = SyntaxBudget::with_limit(total);
+        assert!(run(&mut exact).unwrap().1);
+        assert_eq!(exact.consumed(), total);
+
+        let expression = SurfaceExpr {
+            kind: SurfaceExprKind::Unit,
+            span,
+            diagnostic: None,
+        };
+        let retained: Arc<[MacroOutputNode]> = Arc::from([ty]);
+        let original = SurfaceExpressionCapture {
+            expression: expression.clone(),
+            contents: Arc::clone(&retained),
+            contains_protected_type: true,
+        };
+        let expression_source = SourceFile::new("fact-expression.ash", "((piece))").unwrap();
+        let expression_raw = lex(&expression_source).unwrap().tokens;
+        let expression_span = expression_raw[2].span;
+        for expected in [false, true] {
+            let mut forwarded = original.clone();
+            forwarded.contains_protected_type = expected;
+            if !expected {
+                forwarded.contents = Arc::from([]);
+            }
+            let expression_originals = HashMap::from([(
+                2,
+                MacroOutputNode::ForwardedExpression(forwarded, expression_span.into()),
+            )]);
+            let (_, fact) = capture_contents_and_type(
+                &expression_source,
+                &node,
+                &ProjectionTokens::source(&expression_raw),
+                &expression_originals,
+            )
+            .unwrap();
+            assert_eq!(fact, expected);
+        }
+        let restored = project_syntax_expression_capture(
+            expression,
+            vec![MacroOutputNode::ForwardedExpression(original, span.into())],
+            false,
+        );
+        assert!(restored.contains_protected_type);
+        assert!(Arc::ptr_eq(&restored.contents, &retained));
+    }
+
+    #[test]
+    fn selected_expression_scratch_reserves_growth_before_mutation() {
+        use crate::syntax_resource::{ResourceFailure, SyntaxBudget};
+        use std::cell::{Cell, RefCell};
+
+        let mut values = Vec::with_capacity(1);
+        values.push(7u8);
+        let mut short = SyntaxBudget::with_limit(19);
+        short.charge_units(17).unwrap();
+        let cell = RefCell::new(&mut short);
+        assert!(matches!(
+            reserve_expression_scratch(&mut values, 1, Some(&cell)),
+            Err(ProjectionError::ResourceLimit(
+                ResourceFailure::SyntaxWork { limit: 19 }
+            ))
+        ));
+        assert_eq!(values, [7]);
+        assert_eq!(cell.borrow().consumed(), 17);
+        drop(cell);
+
+        let mut exact = SyntaxBudget::with_limit(20);
+        exact.charge_units(17).unwrap();
+        let cell = RefCell::new(&mut exact);
+        reserve_expression_scratch(&mut values, 1, Some(&cell)).unwrap();
+        values.push(9);
+        assert_eq!(values, [7, 9]);
+        assert_eq!(cell.borrow().consumed(), 20);
+        drop(cell);
+
+        let mut spare = Vec::<u8>::with_capacity(2);
+        spare.push(1);
+        let mut zero = SyntaxBudget::with_limit(0);
+        let cell = RefCell::new(&mut zero);
+        reserve_expression_scratch(&mut spare, 1, Some(&cell)).unwrap();
+        assert_eq!(cell.borrow().consumed(), 0);
+
+        let mut buffer = Vec::new();
+        let mut no_budget = SyntaxBudget::with_limit(0);
+        let loan = RefCell::new(&mut no_budget);
+        let called = Cell::new(false);
+        assert!(matches!(
+            push_expression_scratch(&mut buffer, Some(&loan), || {
+                called.set(true);
+                Ok(3u8)
+            }),
+            Err(ProjectionError::ResourceLimit(
+                ResourceFailure::SyntaxWork { limit: 0 }
+            ))
+        ));
+        assert!(!called.get());
+        assert!(buffer.is_empty());
+        drop(loan);
+
+        let mut exact_push = SyntaxBudget::with_limit(1);
+        let loan = RefCell::new(&mut exact_push);
+        push_expression_scratch(&mut buffer, Some(&loan), || {
+            called.set(true);
+            Ok(3u8)
+        })
+        .unwrap();
+        assert!(called.get());
+        assert_eq!(buffer, [3]);
+        assert_eq!(loan.borrow().consumed(), 1);
+        drop(loan);
+
+        let mut no_budget = SyntaxBudget::with_limit(0);
+        let loan = RefCell::new(&mut no_budget);
+        let values = std::iter::once(Err::<u8, _>(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        )));
+        assert!(matches!(
+            collect_expression_scratch(values, Some(&loan)),
+            Err(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape
+            ))
+        ));
+        assert_eq!(loan.borrow().consumed(), 0);
+    }
+
+    #[test]
+    fn selected_expression_qualified_diagnostic_prepays_merge() {
+        use crate::{
+            syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin},
+            syntax_resource::{ResourceFailure, SyntaxBudget},
+        };
+        use std::{cell::RefCell, sync::Arc};
+
+        let source = SourceFile::new("qualified.ash", "Module.member").unwrap();
+        let raw = lex(&source).unwrap().tokens;
+        let span = raw[0].span;
+        let first = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let second = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let combined = MacroOrigin::combined(vec![span.into()], Arc::clone(&first)).unwrap();
+        let mut qualifier = DiagnosticLocation::new(combined.clone());
+        qualifier.related.push(combined.clone());
+        qualifier.frames.push(Arc::clone(&first));
+        let mut member = DiagnosticLocation::new(combined.clone());
+        member.related.push(combined.clone());
+        member
+            .frames
+            .extend([Arc::clone(&first), Arc::clone(&second)]);
+        let surface_name = |text: &str, diagnostic| SurfaceName {
+            text: text.into(),
+            span,
+            introduction: 0,
+            introduced_at: None,
+            written: true,
+            diagnostic,
+        };
+        let reference = SurfaceReference::Qualified(SurfaceQualifiedName {
+            qualifier: surface_name("Module", Some(Box::new(qualifier))),
+            member: surface_name("member", Some(Box::new(member))),
+            span,
+        });
+        let SurfaceReference::Qualified(name) = &reference else {
+            unreachable!()
+        };
+        let mut measured = SyntaxBudget::default();
+        charge_qualified_expression_diagnostic(name, &mut measured).unwrap();
+        let total = measured.consumed();
+        let baseline = Arc::strong_count(&first);
+        let mut short = SyntaxBudget::with_limit(total - 1);
+        assert!(matches!(
+            charge_qualified_expression_diagnostic(name, &mut short),
+            Err(ResourceFailure::SyntaxWork { .. })
+        ));
+        assert_eq!(Arc::strong_count(&first), baseline);
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(total);
+            charge_qualified_expression_diagnostic(name, &mut exact).unwrap();
+            let merged = reference.diagnostic_location().unwrap();
+            assert_eq!(merged.primary, combined);
+            assert_eq!(
+                merged.related,
+                [combined.clone(), combined.clone(), combined.clone()]
+            );
+            assert_eq!(merged.frames.len(), 2);
+            assert!(Arc::ptr_eq(&merged.frames[0], &first));
+            assert!(Arc::ptr_eq(&merged.frames[1], &second));
+            assert_eq!(exact.consumed(), total);
+            drop(merged);
+            assert_eq!(Arc::strong_count(&first), baseline);
+        }
+        let empty = SurfaceQualifiedName {
+            qualifier: surface_name("Module", None),
+            member: surface_name("member", None),
+            span,
+        };
+        let mut zero = SyntaxBudget::with_limit(0);
+        charge_qualified_expression_diagnostic(&empty, &mut zero).unwrap();
+        assert_eq!(zero.consumed(), 0);
+        for qualifier_only in [true, false] {
+            let mut singleton = empty.clone();
+            let location = if qualifier_only {
+                singleton.qualifier.diagnostic = name.qualifier.diagnostic.clone();
+                singleton.qualifier.diagnostic.as_deref().unwrap()
+            } else {
+                singleton.member.diagnostic = name.member.diagnostic.clone();
+                singleton.member.diagnostic.as_deref().unwrap()
+            };
+            let mut expected = SyntaxBudget::default();
+            crate::syntax::charge_diagnostic_location_copy(location, &mut expected).unwrap();
+            let mut actual = SyntaxBudget::default();
+            charge_qualified_expression_diagnostic(&singleton, &mut actual).unwrap();
+            assert_eq!(actual.consumed(), expected.consumed());
+        }
+
+        let third = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let frames = [
+            Arc::clone(&first),
+            Arc::clone(&second),
+            Arc::clone(&third),
+            Arc::clone(&third),
+        ];
+        let make_merged = || {
+            let mut merged = reference.diagnostic_location().unwrap();
+            merged.frames = vec![Arc::clone(&first), Arc::clone(&second)];
+            merged
+        };
+        let mut legacy = make_merged();
+        add_projection_frames(&mut legacy, None, Some(&frames));
+        assert_eq!(legacy.frames.len(), 3);
+        for (actual, expected) in legacy.frames.iter().zip([&first, &second, &third]) {
+            assert!(Arc::ptr_eq(actual, expected));
+        }
+
+        let mut short_merged = make_merged();
+        let live = short_merged.frames.len();
+        let growth = if live == short_merged.frames.capacity() {
+            2 * live + 1
+        } else {
+            0
+        };
+        let searches = 3 * (live + 1);
+        let available = if growth == 0 {
+            searches
+        } else {
+            searches + growth
+        };
+        let before_third = Arc::strong_count(&third);
+        let mut short = SyntaxBudget::with_limit(17 + available);
+        short.charge_units(17).unwrap();
+        let loan = RefCell::new(&mut short);
+        assert!(matches!(
+            add_projection_frames_with_expression_budget(
+                &mut short_merged,
+                None,
+                Some(&frames),
+                Some(&loan),
+            ),
+            Err(ProjectionError::ResourceLimit(
+                ResourceFailure::SyntaxWork { .. }
+            ))
+        ));
+        assert_eq!(short_merged.frames.len(), live);
+        assert!(Arc::ptr_eq(&short_merged.frames[0], &first));
+        assert!(Arc::ptr_eq(&short_merged.frames[1], &second));
+        assert_eq!(Arc::strong_count(&third), before_third);
+        drop(loan);
+
+        let mut measured_merged = make_merged();
+        let mut measured = SyntaxBudget::default();
+        let loan = RefCell::new(&mut measured);
+        add_projection_frames_with_expression_budget(
+            &mut measured_merged,
+            None,
+            Some(&frames),
+            Some(&loan),
+        )
+        .unwrap();
+        drop(loan);
+        let total = measured.consumed();
+        assert_eq!(measured_merged, legacy);
+        drop(measured_merged);
+        for _ in 0..2 {
+            let mut exact_merged = make_merged();
+            let mut exact = SyntaxBudget::with_limit(17 + total);
+            exact.charge_units(17).unwrap();
+            let loan = RefCell::new(&mut exact);
+            add_projection_frames_with_expression_budget(
+                &mut exact_merged,
+                None,
+                Some(&frames),
+                Some(&loan),
+            )
+            .unwrap();
+            drop(loan);
+            assert_eq!(exact.consumed(), 17 + total);
+            assert_eq!(exact_merged, legacy);
+            for (actual, expected) in exact_merged.frames.iter().zip([&first, &second, &third]) {
+                assert!(Arc::ptr_eq(actual, expected));
+            }
+        }
+    }
+
+    #[test]
+    fn selected_expression_projection_uses_the_loan_and_keeps_staged_metadata() {
+        use crate::{
+            syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin, MacroOutputNode},
+            syntax_resource::{ResourceFailure, SyntaxBudget},
+        };
+        use std::{cell::RefCell, collections::HashMap, sync::Arc};
+
+        let (source, tree) = parsed("({\n    let value : Int = 42\n    value\n})");
+        let (root, raw) = validated_root(&source, &tree).unwrap();
+        let mut pending = vec![root];
+        let block = loop {
+            let node = pending.pop().expect("block exists");
+            if node.kind == NodeKind::Block {
+                break node;
+            }
+            pending.extend(child_nodes(node));
+        };
+        let binding = child_nodes(block)
+            .find(|node| node.kind == NodeKind::LocalBinding)
+            .unwrap();
+        let ty = only_child_of_kind(binding, NodeKind::Type).unwrap();
+        let pattern = only_child_of_kind(binding, NodeKind::Pattern).unwrap();
+        let span = raw[0].span;
+        let previous = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let current = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let later = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let origin = MacroOrigin::combined(vec![span.into()], Arc::clone(&previous)).unwrap();
+        let mut originals = HashMap::new();
+        for (index, token) in raw.iter().enumerate() {
+            match &token.kind {
+                TokenKind::Identifier(text) if text == "value" => {
+                    let mut diagnostic = DiagnosticLocation::new(origin.clone());
+                    diagnostic.frames.push(Arc::clone(&previous));
+                    diagnostic.related.push(origin.clone());
+                    originals.insert(
+                        index,
+                        MacroOutputNode::Identifier(
+                            SurfaceName {
+                                text: text.clone(),
+                                span: token.span,
+                                introduction: 0,
+                                introduced_at: None,
+                                written: true,
+                                diagnostic: Some(Box::new(diagnostic)),
+                            },
+                            origin.clone(),
+                        ),
+                    );
+                }
+                TokenKind::IntType => {
+                    originals.insert(
+                        index,
+                        MacroOutputNode::Token(TokenKind::IntType, "Int".into(), origin.clone()),
+                    );
+                }
+                _ => {}
+            }
+        }
+        let frames = [Arc::clone(&current), Arc::clone(&later)];
+        let run = |budget: &mut SyntaxBudget| {
+            let loan = RefCell::new(budget);
+            let tokens = ProjectionTokens {
+                tokens: raw,
+                originals: Some(&originals),
+                occurrence: Some(span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: None,
+                frame: Some(&current),
+                name_frame: Some(&current),
+                staging_frames: Some(&frames),
+                preserve_name_diagnostic: true,
+                expression_budget: Some(&loan),
+            };
+            project_expression_with_fragments(&source, block, &tokens, &originals)
+        };
+        let mut measured = SyntaxBudget::default();
+        measured.charge_units(17).unwrap();
+        let output = run(&mut measured).unwrap();
+        let total = measured.consumed();
+        let SurfaceExprKind::Block(block) = &output.kind else {
+            panic!("expected block")
+        };
+        let SurfaceLocalDeclaration::Binding(binding) = &block.declarations[0] else {
+            panic!("expected binding")
+        };
+        let diagnostic = binding
+            .annotation
+            .as_ref()
+            .unwrap()
+            .diagnostic
+            .as_ref()
+            .unwrap();
+        assert_eq!(diagnostic.primary, origin);
+        assert_eq!(diagnostic.frames.len(), 2);
+        assert!(Arc::ptr_eq(&diagnostic.frames[0], &current));
+        assert!(Arc::ptr_eq(&diagnostic.frames[1], &later));
+        drop(output);
+        let baseline = Arc::strong_count(&previous);
+        let mut short = SyntaxBudget::with_limit(total - 1);
+        short.charge_units(17).unwrap();
+        assert!(matches!(
+            run(&mut short),
+            Err(ProjectionError::ResourceLimit(
+                ResourceFailure::SyntaxWork { .. }
+            ))
+        ));
+        assert_eq!(Arc::strong_count(&previous), baseline);
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(total);
+            exact.charge_units(17).unwrap();
+            drop(run(&mut exact).unwrap());
+            assert_eq!(exact.consumed(), total);
+            assert_eq!(Arc::strong_count(&previous), baseline);
+        }
+        let composed =
+            |node: &ConcreteNode, frames: &[Arc<ExpansionFrame>], budget: &mut SyntaxBudget| {
+                let tokens = ProjectionTokens {
+                    tokens: raw,
+                    originals: Some(&originals),
+                    occurrence: Some(span),
+                    construction: None,
+                    construction_extents: false,
+                    admission_identifiers: None,
+                    frame: Some(&current),
+                    name_frame: Some(&current),
+                    staging_frames: Some(frames),
+                    preserve_name_diagnostic: true,
+                    expression_budget: None,
+                };
+                charge_composed_projection_with_expression(
+                    node, &tokens, true, false, false, true, 0, budget,
+                )
+            };
+        let mut one_frame = SyntaxBudget::default();
+        composed(ty, &frames[..1], &mut one_frame).unwrap();
+        let mut two_frames = SyntaxBudget::default();
+        composed(ty, &frames, &mut two_frames).unwrap();
+        // The second primitive diagnostic frame pays six storage units and
+        // its three entry/deduplication units.
+        assert_eq!(two_frames.consumed() - one_frame.consumed(), 9);
+
+        let mut one_name_frame = SyntaxBudget::default();
+        composed(pattern, &frames[..1], &mut one_name_frame).unwrap();
+        let mut two_name_frames = SyntaxBudget::default();
+        composed(pattern, &frames, &mut two_name_frames).unwrap();
+        assert!(two_name_frames.consumed() >= one_name_frame.consumed() + 12);
+        let name_total = two_name_frames.consumed();
+        let mut name_short = SyntaxBudget::with_limit(name_total - 1);
+        assert!(composed(pattern, &frames, &mut name_short).is_err());
+        let mut name_exact = SyntaxBudget::with_limit(name_total);
+        composed(pattern, &frames, &mut name_exact).unwrap();
+        assert_eq!(name_exact.consumed(), name_total);
+
+        let mut empty = SyntaxBudget::with_limit(0);
+        let loan = RefCell::new(&mut empty);
+        let tokens = ProjectionTokens {
+            tokens: raw,
+            originals: Some(&originals),
+            occurrence: Some(span),
+            construction: None,
+            construction_extents: false,
+            admission_identifiers: None,
+            frame: Some(&current),
+            name_frame: Some(&current),
+            staging_frames: Some(&frames),
+            preserve_name_diagnostic: true,
+            expression_budget: Some(&loan),
+        };
+        assert!(matches!(
+            project_type(&source, ty, &tokens),
+            Err(ProjectionError::ResourceLimit(
+                ResourceFailure::SyntaxWork { limit: 0 }
+            ))
+        ));
+        assert_eq!(loan.borrow().consumed(), 0);
+    }
+    #[test]
+    fn selected_expression_composes_the_ordinary_return_owner_once() {
+        use crate::{
+            syntax::MacroOutputNode,
+            syntax_resource::{ResourceFailure, SyntaxBudget},
+        };
+        use std::{collections::HashMap, sync::Arc};
+
+        let source = SourceFile::new("expression-owner.ash", "x").unwrap();
+        let raw = lex(&source).unwrap().tokens;
+        let span = raw[0].span;
+        let root = ConcreteNode {
+            kind: NodeKind::PrimaryExpression,
+            children: vec![ConcreteElement::Token(0)],
+        };
+        let attempt = |height: usize, prefix: usize| {
+            let mut expression = SurfaceExpr {
+                diagnostic: None,
+                span,
+                kind: SurfaceExprKind::Unit,
+            };
+            for _ in 0..height {
+                expression = SurfaceExpr {
+                    diagnostic: None,
+                    span,
+                    kind: SurfaceExprKind::Resume(Box::new(expression)),
+                };
+            }
+            let contents: Arc<[MacroOutputNode]> = Arc::from([MacroOutputNode::ForwardedType(
+                SurfaceTypeCapture {
+                    ty: SurfaceType {
+                        kind: SurfaceTypeKind::Int,
+                        span,
+                        diagnostic: None,
+                    },
+                    contents: Arc::from([]),
+                },
+                span.into(),
+            )]);
+            let weak = Arc::downgrade(&contents);
+            let originals = HashMap::from([(
+                0,
+                MacroOutputNode::ForwardedExpression(
+                    SurfaceExpressionCapture {
+                        expression,
+                        contents,
+                        contains_protected_type: true,
+                    },
+                    span.into(),
+                ),
+            )]);
+            let tokens = ProjectionTokens {
+                tokens: &raw,
+                originals: Some(&originals),
+                occurrence: Some(span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: None,
+                frame: None,
+                name_frame: None,
+                staging_frames: None,
+                preserve_name_diagnostic: false,
+                expression_budget: None,
+            };
+            let result = charge_composed_projection_with_expression(
+                &root,
+                &tokens,
+                true,
+                false,
+                false,
+                true,
+                prefix,
+                &mut SyntaxBudget::default(),
+            );
+            drop(originals);
+            assert!(weak.upgrade().is_none());
+            result
+        };
+        let mut last_accepted = None;
+        for height in 0..=128 {
+            match attempt(height, 0) {
+                Ok(false) => last_accepted = Some(height),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
+                    ..
+                }) => break,
+                other => panic!("unexpected owner result: {other:?}"),
+            }
+        }
+        let accepted = last_accepted.expect("an expression fits the owner budget");
+        assert_eq!(accepted, 128);
+        assert!(matches!(attempt(accepted, 0), Ok(false)));
+        assert!(matches!(
+            attempt(accepted + 1, 0),
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
+                ..
+            })
+        ));
+        assert!(matches!(
+            attempt(accepted, 1),
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn selected_expression_owner_boundary_fits_a_512k_stack() {
+        const CHILD: &str = "ASH_TYPE_EXPRESSION_OWNER_512K_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "parser::project::tests::selected_expression_owner_boundary_fits_a_512k_stack",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprint!("{stderr}");
+            assert!(output.status.success(), "512 KiB child failed");
+            assert!(stderr.contains("expression owner stack: boundary and aliases checked"));
+            return;
+        }
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                selected_expression_composes_the_ordinary_return_owner_once();
+                eprintln!("expression owner stack: boundary and aliases checked");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }
