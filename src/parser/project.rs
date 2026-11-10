@@ -2596,12 +2596,11 @@ pub(crate) fn project_declaration_expansions(
                     );
                 }
                 if current.expression_pattern {
-                    charge_generated_ep_projection_selected(
-                        child,
-                        &tokens,
-                        current.pattern_accounting,
-                        budget,
-                    )?;
+                    if current.pattern_accounting {
+                        charge_generated_ep_projection_selected(child, &tokens, true, budget)?;
+                    } else {
+                        charge_generated_ep_projection(child, &tokens, budget)?;
+                    }
                 } else {
                     charge_generated_projection(child, &tokens, budget)?;
                 }

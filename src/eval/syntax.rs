@@ -2890,12 +2890,12 @@ mod tests {
                         let nodes = make_output(&mut host);
                         let mut measured = SyntaxBudget::default();
                         let copied =
-                            crate::syntax::copy_type_output(&nodes, &mut measured).unwrap();
+                            crate::syntax::copy_fragment_output(&nodes, &mut measured).unwrap();
                         let copy_cost = measured.consumed();
                         drop(copied);
                         let mut short = SyntaxBudget::with_limit(copy_cost - 1);
                         assert!(matches!(
-                            crate::syntax::copy_type_output(&nodes, &mut short),
+                            crate::syntax::copy_fragment_output(&nodes, &mut short),
                             Err(MacroParseFailure::Syntax {
                                 resource: Some(ResourceFailure::SyntaxWork { .. }),
                                 ..
@@ -2903,7 +2903,7 @@ mod tests {
                         ));
                         for _ in 0..2 {
                             let mut exact = SyntaxBudget::with_limit(copy_cost);
-                            drop(crate::syntax::copy_type_output(&nodes, &mut exact).unwrap());
+                            drop(crate::syntax::copy_fragment_output(&nodes, &mut exact).unwrap());
                             assert_eq!(exact.consumed(), copy_cost);
                         }
                         drop(nodes);
