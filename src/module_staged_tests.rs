@@ -387,7 +387,7 @@ fn g1_source_header_builder_runs_on_fast_and_ordered_graph_paths() {
     let fast_tree = Tree::new();
     let fast_entry = fast_tree.write(
         "main.ash",
-        "syntax declaration: (local) ( $value:ident ) => {}\nmain : Unit -> Int\nmain () = 42\n",
+        "pub syntax declaration: (local) ( $value:ident ) => {}\nmain : Unit -> Int\nmain () = 42\n",
     );
     let mut fast = graph_at(&fast_entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
     let fast_program = compile_staged_graph_for_test(&mut fast).unwrap();
@@ -417,7 +417,7 @@ fn g1_source_header_builder_runs_on_fast_and_ordered_graph_paths() {
     );
     let ordered_entry = ordered_tree.write(
         "main.ash",
-        "import forms (syntax sink)\nsyntax declaration: (local) ( $value:ident ) => {}\nsink (Alpha)\nmain : Unit -> Int\nmain () = 42\n",
+        "import forms (syntax sink)\npub syntax declaration: (local) ( $value:ident ) => {}\nsink (Alpha)\nmain : Unit -> Int\nmain () = 42\n",
     );
     let mut ordered = graph_at(&ordered_entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
     let ordered_program = compile_staged_graph_for_test(&mut ordered).unwrap();

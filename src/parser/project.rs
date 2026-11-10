@@ -8408,7 +8408,9 @@ mod tests {
 
     #[test]
     fn g1_header_copy_reserves_payloads_before_construction() {
-        fn run(literal: &str, integer: &str, capture: &str) -> usize {
+        use crate::syntax_resource::SyntaxBudget;
+
+        fn run(literal: &str, decoded: &str, integer: &str, capture: &str) -> usize {
             let text = format!(
                 "pub syntax declaration: (sink) ( \"{literal}\" {integer} ${capture}:ident ) => {{}}\n"
             );
@@ -8448,7 +8450,7 @@ mod tests {
             else {
                 panic!("expected the real literal and capture payloads");
             };
-            assert_eq!(value, literal);
+            assert_eq!(value, decoded);
             assert_eq!(spelling, &format!("\"{literal}\""));
             assert_eq!(number.to_string(), integer);
             assert_eq!(name.text, capture);
@@ -8485,10 +8487,18 @@ mod tests {
             total - 17
         }
 
-        let base = run("x", "1", "x");
-        assert_eq!(run(&"x".repeat(301), "1", "x") - base, 600);
-        assert_eq!(run("x", "256", "x") - base, 3);
-        assert_eq!(run("x", "1", &"x".repeat(101)) - base, 100);
+        let base = run("x", "x", "1", "x");
+        assert_eq!(
+            run(&"x".repeat(301), &"x".repeat(301), "1", "x") - base,
+            600
+        );
+        let escaped = run("\\n", "\n", "1", "x");
+        assert_eq!(escaped - base, 1); // one additional spelling byte
+        assert_eq!(run("xx", "xx", "1", "x") - escaped, 1); // one decoded byte
+        let integer_255 = run("x", "x", "255", "x");
+        assert_eq!(integer_255 - base, 2); // two spelling bytes, same magnitude length
+        assert_eq!(run("x", "x", "256", "x") - integer_255, 1); // one magnitude byte
+        assert_eq!(run("x", "x", "1", &"x".repeat(101)) - base, 100);
     }
 
     #[test]
