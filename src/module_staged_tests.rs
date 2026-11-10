@@ -382,7 +382,7 @@ fn g1_actual_empty_and_literal_only_repetitions_preserve_capture_shapes() {
     use crate::{
         driver::{FileFailure, compile_staged_graph_for_test, execute},
         parser::G1_CAPTURE_OBSERVER,
-        surface::SurfaceSyntaxCapture,
+        surface::{SurfaceSyntaxCapture, SurfaceSyntaxMatcherPart},
     };
     use std::cell::Cell;
 
@@ -429,6 +429,14 @@ fn g1_actual_empty_and_literal_only_repetitions_preserve_capture_shapes() {
                 };
                 assert!(empty.values.is_empty());
             }
+            5 => {
+                let [SurfaceSyntaxCapture::Identifier(value)] = captures else {
+                    panic!("expected the multiline source identifier");
+                };
+                assert_eq!(value.name.text, "Alpha");
+                assert_eq!(value.name.span.source(), source.id());
+                assert_eq!(value.origin, value.name.span.into());
+            }
             _ => panic!("unexpected shape"),
         }
         OBSERVED.set(true);
@@ -454,6 +462,30 @@ fn g1_actual_empty_and_literal_only_repetitions_preserve_capture_shapes() {
         if shape != 0 {
             let program = result.unwrap();
             assert!(OBSERVED.get());
+            if shape == 5 {
+                let forms = graph
+                    .completed
+                    .as_ref()
+                    .unwrap()
+                    .modules()
+                    .iter()
+                    .find(|module| module.source().display_path().ends_with("forms.ash"))
+                    .unwrap();
+                let [header] = forms.surface().syntax_declarations.as_slice() else {
+                    panic!("expected the multiline matcher definition");
+                };
+                let [SurfaceSyntaxMatcherPart::Container(group)] = header.matcher.as_slice() else {
+                    panic!("expected the braced matcher");
+                };
+                assert!(matches!(
+                    group.body.as_slice(),
+                    [
+                        SurfaceSyntaxMatcherPart::LineEnd,
+                        SurfaceSyntaxMatcherPart::Capture { .. },
+                        SurfaceSyntaxMatcherPart::LineEnd,
+                    ]
+                ));
+            }
             assert_eq!(execute(&program).unwrap().value_display(), "42");
         } else {
             let failure = match result {
@@ -484,6 +516,7 @@ fn g1_actual_empty_and_literal_only_repetitions_preserve_capture_shapes() {
     );
     trial("$( word ),*", "sink word, word, word", 2);
     trial("$( row $item:ident ),+", "sink row Alpha", 3);
+    trial("{\n    $item:ident\n}", "sink {\n    Alpha\n}", 5);
     trial("$( row $item:ident ),+", "sink", 0);
     trial("$( row $item:ident ),*", "sink row Alpha,", 0);
 }
