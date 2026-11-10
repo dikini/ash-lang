@@ -2555,6 +2555,262 @@ mod tests {
     }
 
     #[test]
+    fn pattern_host_nested_issued_fragments_obey_retained_depth_on_a_512k_stack() {
+        const CHILD: &str = "ASH_PATTERN_AST_512K_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "eval::machine::syntax::tests::pattern_host_nested_issued_fragments_obey_retained_depth_on_a_512k_stack",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprint!("{stderr}");
+            assert!(
+                output.status.success(),
+                "512 KiB child failed: {}",
+                output.status
+            );
+            for marker in [
+                "pattern stack: returned owner reaches 128",
+                "pattern stack: adjacent wrapper refused before issuance",
+                "pattern stack: final PatternNode transferred",
+                "pattern stack: final contents alias dropped",
+            ] {
+                assert!(stderr.contains(marker), "missing marker {marker}");
+            }
+            return;
+        }
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                use super::{
+                    HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap, constructor_fields,
+                };
+                use crate::{
+                    eval::value::CompilerSyntaxHandleKind,
+                    module::ModuleId,
+                    parser::ResourceFailure,
+                    surface::SurfacePatternKind,
+                    syntax::{MacroOutputNode, TransformerOutput, charge_new_pattern_retention},
+                    syntax_resource::SyntaxBudget,
+                    types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
+                };
+                use std::sync::Arc;
+
+                fn tuple(heap: &mut Vec<HeapCell>, fields: Vec<Value>) -> Value {
+                    Value::Location(
+                        allocate_heap(heap, HeapCell::Tuple(fields.into_boxed_slice())).unwrap(),
+                    )
+                }
+                fn node(
+                    host: &mut SyntaxHost<'_>,
+                    heap: &mut Vec<HeapCell>,
+                    tag: &str,
+                    fields: Vec<Value>,
+                ) -> Value {
+                    let payload = tuple(heap, fields);
+                    host.construct(heap, tag, Some(payload)).unwrap()
+                }
+                fn syntax(
+                    host: &mut SyntaxHost<'_>,
+                    heap: &mut Vec<HeapCell>,
+                    values: Vec<Value>,
+                ) -> Value {
+                    let mut nodes = host.construct(heap, "NoNodes", None).unwrap();
+                    for value in values.into_iter().rev() {
+                        let pair = tuple(heap, vec![value, nodes]);
+                        nodes = host.construct(heap, "MoreNodes", Some(pair)).unwrap();
+                    }
+                    host.construct(heap, "Syntax", Some(nodes)).unwrap()
+                }
+                fn parse(
+                    host: &mut SyntaxHost<'_>,
+                    heap: &mut Vec<HeapCell>,
+                    operation: OperationId,
+                    syntax: Value,
+                ) -> Result<Value, RuntimeFailure> {
+                    let input = tuple(heap, vec![host.input(), syntax]);
+                    host.request(operation, input, heap, &mut TypeWorkBudget::unbounded())
+                }
+
+                let mut budget = SyntaxBudget::default();
+                let mut host = scalar_host(&mut budget);
+                host.type_accounting = true;
+                let parse_op = OperationId::new(host.ops, 0);
+                let unwrap_op = OperationId::new(host.ops, 1);
+                host.operations.insert(parse_op, "parse_pattern".into());
+                host.operations.insert(unwrap_op, "pattern_syntax".into());
+                let owner = NominalTypeId::new(ModuleId::new(0), 0);
+                for (index, name) in (0u32..).zip([
+                    "Syntax",
+                    "NoNodes",
+                    "MoreNodes",
+                    "GroupNode",
+                    "Parentheses",
+                    "PatternNode",
+                    "TypeNode",
+                    "TokenNode",
+                    "IdentifierNode",
+                    "ExpressionNode",
+                    "ParsedPattern",
+                    "ParseRejected",
+                    "Expanded",
+                ]) {
+                    host.constructors
+                        .insert(name.into(), ConstructorId::new(owner, index));
+                }
+                let span = host.caller.span;
+                let mut heap = Vec::new();
+                let binder = MacroOutputNode::Identifier(host.caller.clone(), span.into());
+                let input = host
+                    .syntax_value_inner(&[binder], &mut heap, 0, true)
+                    .unwrap();
+                let seed = parse(&mut host, &mut heap, parse_op, input).unwrap();
+                let (tag, payload) = constructor_fields(&seed, &heap).unwrap();
+                assert_eq!(tag, host.constructor("ParsedPattern").unwrap());
+                let mut last = payload.unwrap().clone();
+                let mut constructor = host.caller.clone();
+                constructor.text = "Wrap".into();
+                let packet = MacroOutputNode::Identifier(constructor, span.into());
+                host.syntax_value_inner(&[packet], &mut heap, 0, true)
+                    .unwrap();
+                let wrap = host.handle(CompilerSyntaxHandleKind::Identifier(
+                    host.identifiers.len() - 1,
+                ));
+                let origin = host.issue_origin(span.into()).unwrap();
+                let mut accepted = 0usize;
+                let mut refused = false;
+                for layers in 1..=128 {
+                    let before = host.patterns.len();
+                    let protected = node(
+                        &mut host,
+                        &mut heap,
+                        "PatternNode",
+                        vec![last.clone(), origin.clone()],
+                    );
+                    let inner = syntax(&mut host, &mut heap, vec![protected]);
+                    let delimiter = host.construct(&mut heap, "Parentheses", None).unwrap();
+                    let group = node(
+                        &mut host,
+                        &mut heap,
+                        "GroupNode",
+                        vec![delimiter, inner, origin.clone()],
+                    );
+                    let name = node(
+                        &mut host,
+                        &mut heap,
+                        "IdentifierNode",
+                        vec![wrap.clone(), origin.clone()],
+                    );
+                    let input = syntax(&mut host, &mut heap, vec![name, group]);
+                    let result = match parse(&mut host, &mut heap, parse_op, input) {
+                        Ok(result) => result,
+                        Err(RuntimeFailure::Report(report)) => {
+                            assert_eq!(
+                                report.primary.reason_code(),
+                                "internal.resource.structural-depth"
+                            );
+                            assert_eq!(host.patterns.len(), before);
+                            refused = true;
+                            break;
+                        }
+                        Err(error) => panic!("unexpected Pattern request failure: {error:?}"),
+                    };
+                    let (tag, payload) = constructor_fields(&result, &heap).unwrap();
+                    let value = payload.unwrap().clone();
+                    if tag == host.constructor("ParsedPattern").unwrap() {
+                        assert_eq!(host.patterns.len(), before + 1);
+                        last = value;
+                        accepted = layers;
+                        let capture = host.patterns.last().unwrap();
+                        assert_eq!(
+                            charge_new_pattern_retention(capture, 0, &mut SyntaxBudget::default())
+                                .unwrap(),
+                            Some(false)
+                        );
+                        let mut current = &capture.pattern;
+                        for _ in 0..layers {
+                            let SurfacePatternKind::Constructor {
+                                payload: Some(child),
+                                ..
+                            } = &current.kind
+                            else {
+                                panic!("missing constructor layer");
+                            };
+                            current = child;
+                        }
+                        assert!(matches!(current.kind, SurfacePatternKind::Binder(_)));
+                        if layers == 1 {
+                            host.request(
+                                unwrap_op,
+                                last.clone(),
+                                &mut heap,
+                                &mut TypeWorkBudget::unbounded(),
+                            )
+                            .unwrap();
+                        }
+                    } else {
+                        assert_eq!(tag, host.constructor("ParseRejected").unwrap());
+                        assert_eq!(host.patterns.len(), before);
+                        let CompilerSyntaxHandleKind::ParseFailure(index) =
+                            host.admitted_handle(&value).unwrap()
+                        else {
+                            panic!("expected failure handle");
+                        };
+                        assert_eq!(
+                            host.parse_failures[index].1,
+                            Some(ResourceFailure::StructuralDepth { limit: 128 })
+                        );
+                        refused = true;
+                        break;
+                    }
+                }
+                assert!(refused && accepted > 0);
+                let capture = host.patterns.last().unwrap();
+                assert!(matches!(
+                    charge_new_pattern_retention(capture, 1, &mut SyntaxBudget::default()),
+                    Err(ResourceFailure::StructuralDepth { limit: 128 })
+                ));
+                let alias = Arc::clone(&capture.contents);
+                let weak = Arc::downgrade(&alias);
+                eprintln!("pattern stack: returned owner reaches 128");
+                eprintln!(
+                    "pattern stack: adjacent wrapper refused before issuance ({accepted} accepted)"
+                );
+                let protected = node(&mut host, &mut heap, "PatternNode", vec![last, origin]);
+                let output = syntax(&mut host, &mut heap, vec![protected]);
+                let expanded = host.construct(&mut heap, "Expanded", Some(output)).unwrap();
+                let TransformerOutput::Expanded(nodes) = host
+                    .transfer(&expanded, &heap, &mut TypeWorkBudget::unbounded())
+                    .unwrap()
+                else {
+                    panic!("expected Expanded");
+                };
+                let [MacroOutputNode::ForwardedPattern(capture, _)] = nodes.as_slice() else {
+                    panic!("expected forwarded Pattern");
+                };
+                assert!(Arc::ptr_eq(&capture.contents, &alias));
+                eprintln!("pattern stack: final PatternNode transferred");
+                drop(nodes);
+                drop(heap);
+                drop(host);
+                assert_eq!(Arc::strong_count(&alias), 1);
+                drop(alias);
+                assert!(weak.upgrade().is_none());
+                eprintln!("pattern stack: final contents alias dropped");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
     fn type_host_parsed_function_ast_roundtrips_on_a_512k_stack() {
         const CHILD: &str = "ASH_TYPE_AST_512K_CHILD";
         if std::env::var_os(CHILD).is_none() {
