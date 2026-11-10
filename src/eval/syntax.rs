@@ -2077,6 +2077,80 @@ mod tests {
     }
 
     #[test]
+    fn pattern_syntax_rejects_foreign_stale_wrong_and_out_of_range_handles() {
+        use super::{RuntimeFailure, Value};
+        use crate::{
+            eval::value::CompilerSyntaxHandleKind,
+            surface::{SurfacePattern, SurfacePatternCapture, SurfacePatternKind},
+            syntax::MacroOutputNode,
+            syntax_resource::SyntaxBudget,
+            types::{OperationId, TypeWorkBudget},
+        };
+        use std::sync::Arc;
+
+        let fixture = DeclarationHostFixture::new();
+        let contents: Arc<[MacroOutputNode]> = Arc::from([]);
+        let capture = SurfacePatternCapture {
+            pattern: SurfacePattern {
+                kind: SurfacePatternKind::Wildcard,
+                span: fixture.caller.span,
+                diagnostic: None,
+            },
+            contents: Arc::clone(&contents),
+        };
+        let mut budget = SyntaxBudget::default();
+        let mut host = fixture.host(&[], &mut budget).unwrap();
+        let operation = OperationId::new(host.ops, 40);
+        host.operations.insert(operation, "pattern_syntax".into());
+        host.patterns.push(capture.clone());
+        let local = host.handle(CompilerSyntaxHandleKind::Pattern(0));
+
+        let mut foreign_budget = SyntaxBudget::default();
+        let mut foreign = fixture.host(&[], &mut foreign_budget).unwrap();
+        foreign.patterns.push(capture.clone());
+        let foreign_handle = foreign.handle(CompilerSyntaxHandleKind::Pattern(0));
+        let stale_handle = {
+            let mut stale_budget = SyntaxBudget::default();
+            let mut stale = fixture.host(&[], &mut stale_budget).unwrap();
+            stale.patterns.push(capture);
+            stale.handle(CompilerSyntaxHandleKind::Pattern(0))
+        };
+        let invalid = [
+            foreign_handle,
+            stale_handle,
+            host.handle(CompilerSyntaxHandleKind::Type(0)),
+            host.handle(CompilerSyntaxHandleKind::Pattern(1)),
+            Value::Unit,
+        ];
+        let mut heap = Vec::new();
+        let retained = Arc::strong_count(&contents);
+        for handle in invalid {
+            assert!(matches!(
+                host.request(
+                    operation,
+                    handle,
+                    &mut heap,
+                    &mut TypeWorkBudget::unbounded()
+                ),
+                Err(RuntimeFailure::InvalidControlState)
+            ));
+            assert_eq!(host.patterns.len(), 1);
+            assert_eq!(Arc::strong_count(&contents), retained);
+            assert!(heap.is_empty());
+        }
+        for _ in 0..2 {
+            host.request(
+                operation,
+                local.clone(),
+                &mut heap,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .expect("a local Pattern handle is reusable");
+            assert_eq!(Arc::strong_count(&contents), retained);
+        }
+    }
+
+    #[test]
     fn type_host_origin_arena_prepays_growth_before_issuance() {
         use crate::{
             eval::RuntimeFailure,

@@ -13902,6 +13902,176 @@ mod tests {
     }
 
     #[test]
+    fn staged_pattern_adapter_prepays_pending_and_pieces_growth() {
+        use crate::{
+            parser::MacroParseFailure,
+            syntax::{MacroDelimiter, MacroOutputNode, SyntaxContexts},
+            syntax_resource::{ResourceFailure, SyntaxBudget},
+        };
+        use std::sync::Arc;
+
+        let source = SourceFile::new("adapter.ash", "_").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let token = || MacroOutputNode::Token(TokenKind::Wildcard, Arc::from("_"), span.into());
+        let group = || {
+            MacroOutputNode::Group(
+                MacroDelimiter::Parentheses,
+                (0..8).map(|_| token()).collect(),
+                span.into(),
+            )
+        };
+        let probe = vec![group(), group()];
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        // The initial two-entry pending buffer is full. After one pop, adding
+        // eight children requests nine slots and moves one live entry.
+        let mut before_growth = SyntaxBudget::with_limit(170);
+        assert!(matches!(
+            super::super::charge_staged_output(&probe, &contexts, false, true, &mut before_growth),
+            Err(MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { limit: 170 }),
+                ..
+            })
+        ));
+        assert_eq!(before_growth.consumed(), 161);
+        assert_eq!(probe.len(), 2);
+
+        let text = format!(
+            "value : Int -> Int\nvalue ({}) = 42\n",
+            vec!["_"; 20].join(", ")
+        );
+        let (source, _, mut output) = structured_declarations(&text);
+        let span = source.span(ByteRange::new(0, 0).unwrap()).unwrap();
+        let contents: Arc<[MacroOutputNode]> = Arc::from([MacroOutputNode::Token(
+            TokenKind::Wildcard,
+            Arc::from("_"),
+            span.into(),
+        )]);
+        let mut capture = Some(SurfacePatternCapture {
+            pattern: SurfacePattern {
+                kind: SurfacePatternKind::Wildcard,
+                span,
+                diagnostic: None,
+            },
+            contents: Arc::clone(&contents),
+        });
+        fn replace(
+            nodes: &mut [MacroOutputNode],
+            capture: &mut Option<SurfacePatternCapture>,
+            span: Span,
+        ) -> bool {
+            for node in nodes {
+                match node {
+                    MacroOutputNode::Group(_, children, _) if replace(children, capture, span) => {
+                        return true;
+                    }
+                    MacroOutputNode::Token(TokenKind::Wildcard, _, _) => {
+                        *node =
+                            MacroOutputNode::ForwardedPattern(capture.take().unwrap(), span.into());
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
+            false
+        }
+        assert!(replace(&mut output, &mut capture, span));
+        let (position, children) = output
+            .iter()
+            .enumerate()
+            .find_map(|(index, node)| match node {
+                MacroOutputNode::Group(_, children, _) => Some((index, children.len())),
+                _ => None,
+            })
+            .unwrap();
+        let capacity = output
+            .clone()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .capacity();
+        let live = output.len() - position;
+        let requested = live + children;
+        assert!(requested > capacity);
+        let mut preflight = SyntaxBudget::default();
+        super::super::charge_staged_output(&output, &contexts, false, true, &mut preflight)
+            .unwrap();
+        let before_pieces_growth = preflight.consumed() + output.len();
+        let short_limit = before_pieces_growth + requested + live - 1;
+        let mut short = SyntaxBudget::with_limit(short_limit);
+        assert!(matches!(
+            super::super::parse_macro_tree_selected(
+                &source,
+                span,
+                output.clone(),
+                &contexts,
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                true,
+                &mut short,
+            ),
+            Err(MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        assert_eq!(short.consumed(), before_pieces_growth);
+
+        let mut measured = SyntaxBudget::default();
+        let parsed = super::super::parse_macro_tree_selected(
+            &source,
+            span,
+            output.clone(),
+            &contexts,
+            &[],
+            super::super::MacroOutputPosition::StagedDeclarations,
+            true,
+            &mut measured,
+        )
+        .unwrap();
+        let retained = parsed
+            .original_nodes
+            .values()
+            .find_map(|node| match node {
+                MacroOutputNode::ForwardedPattern(capture, _) => Some(capture),
+                _ => None,
+            })
+            .unwrap();
+        assert!(Arc::ptr_eq(&retained.contents, &contents));
+        let total = measured.consumed();
+        let mut one_short = SyntaxBudget::with_limit(total + 16);
+        one_short.charge_units(17).unwrap();
+        assert!(
+            super::super::parse_macro_tree_selected(
+                &source,
+                span,
+                output.clone(),
+                &contexts,
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                true,
+                &mut one_short,
+            )
+            .is_err()
+        );
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(total + 17);
+            exact.charge_units(17).unwrap();
+            super::super::parse_macro_tree_selected(
+                &source,
+                span,
+                output.clone(),
+                &contexts,
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                true,
+                &mut exact,
+            )
+            .unwrap();
+            assert_eq!(exact.consumed(), total + 17);
+        }
+    }
+
+    #[test]
     fn staged_declaration_adapter_moves_a_forwarded_type_into_original_nodes() {
         use crate::syntax::{MacroOutputNode, SyntaxContexts};
 

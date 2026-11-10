@@ -26,3 +26,8 @@ fn imported_pattern_capture_binds_the_caller_reference() {
 fn imported_mixed_type_and_pattern_captures_bind_the_caller_reference() {
     run("tests/fixtures/surface-macros/pattern-host/mixed_main.ash");
 }
+
+#[test]
+fn imported_pattern_and_type_parsers_reject_wrong_categories_and_trailing_nodes() {
+    run("tests/fixtures/surface-macros/pattern-host/rejection_main.ash");
+}
