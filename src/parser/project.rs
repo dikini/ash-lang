@@ -8806,6 +8806,104 @@ mod tests {
     }
 
     #[test]
+    fn g1_capture_preflight_pays_names_width_and_retries_before_projection() {
+        use crate::{source::ByteRange, syntax::SelectedSyntax, syntax_resource::SyntaxBudget};
+        use std::sync::Arc;
+
+        fn trial(invocation: &str, expected: &[&str]) -> usize {
+            let definition = SourceFile::new(
+                "copy-forms.ash",
+                "pub syntax declaration: (sink) $( row $item:ident ),* => {}\n",
+            )
+            .unwrap();
+            let definition_tree = h1_tree(&definition, &[]);
+            let (root, tokens) = validated_root(&definition, &definition_tree).unwrap();
+            let child = child_nodes(root)
+                .find(|node| node.kind == NodeKind::SyntaxDeclaration)
+                .unwrap();
+            let mut module = ModuleProjection::default();
+            project_staged_source_child(
+                &mut module,
+                &definition,
+                child,
+                tokens,
+                &mut SyntaxBudget::default(),
+            )
+            .unwrap();
+            let selected = [SelectedSyntax {
+                name: "sink".into(),
+                declaration: module.syntax_declarations.pop().unwrap(),
+                owner: 0,
+                import_span: definition.span(ByteRange::new(0, 0).unwrap()).unwrap(),
+            }];
+            let [SurfaceSyntaxMatcherPart::Container(matcher)] =
+                selected[0].declaration.matcher.as_slice()
+            else {
+                panic!("expected source repetition");
+            };
+            let references = Arc::strong_count(matcher);
+            let caller = SourceFile::new("copy-main.ash", format!("{invocation}\n")).unwrap();
+            let tree = h1_tree(&caller, &selected);
+            let (root, tokens) = validated_root(&caller, &tree).unwrap();
+            let node = child_nodes(root)
+                .find(|node| node.kind == NodeKind::DeclarationSyntaxInvocation)
+                .unwrap();
+            let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+            let tokens = ProjectionTokens::source(tokens);
+            let mut measured = SyntaxBudget::with_limit(10_000);
+            measured.charge_units(17).unwrap();
+            charge_declaration_invocation(&caller, node, &tokens, &contexts, true, &mut measured)
+                .unwrap();
+            let total = measured.consumed();
+            assert_eq!(Arc::strong_count(matcher), references);
+            let mut short = SyntaxBudget::with_limit(total - 1);
+            short.charge_units(17).unwrap();
+            assert!(matches!(
+                charge_declaration_invocation(&caller, node, &tokens, &contexts, true, &mut short),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { limit }), ..
+                }) if limit == total - 1
+            ));
+            assert!(short.consumed() >= 17 && short.consumed() <= total - 1);
+            assert_eq!(Arc::strong_count(matcher), references);
+            for _ in 0..2 {
+                let mut exact = SyntaxBudget::with_limit(total);
+                exact.charge_units(17).unwrap();
+                charge_declaration_invocation(&caller, node, &tokens, &contexts, true, &mut exact)
+                    .unwrap();
+                assert_eq!(exact.consumed(), total);
+                let projected =
+                    project_declaration_invocation_node(&caller, node, &tokens, &contexts, true)
+                        .unwrap();
+                let [SurfaceSyntaxCapture::Repeated(values)] = projected.captures.as_slice() else {
+                    panic!("expected one actual repeated capture");
+                };
+                assert_eq!(values.values.len(), expected.len());
+                for (value, expected) in values.values.iter().zip(expected) {
+                    let SurfaceSyntaxCapture::Identifier(value) = value else {
+                        panic!("expected source identifier");
+                    };
+                    assert_eq!(value.name.text, *expected);
+                    assert_eq!(value.name.span.source(), caller.id());
+                    assert_eq!(value.name.introduction, 0);
+                    assert!(value.name.written && value.name.introduced_at.is_none());
+                    assert!(value.name.diagnostic.is_none());
+                    assert_eq!(value.origin, value.name.span.into());
+                }
+                assert_eq!(Arc::strong_count(matcher), references + 1);
+                drop(projected);
+                assert_eq!(Arc::strong_count(matcher), references);
+            }
+            total - 17
+        }
+        let one = trial("sink row a", &["a"]);
+        let long = trial("sink row abcdef", &["abcdef"]);
+        let two = trial("sink row a, row b", &["a", "b"]);
+        assert!(long > one);
+        assert!(two > one);
+    }
+
+    #[test]
     fn g1_header_copy_reserves_payloads_before_construction() {
         use crate::syntax_resource::SyntaxBudget;
 
