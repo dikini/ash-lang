@@ -507,6 +507,117 @@ fn type_real_capture_roundtrip_on_a_512k_stack() {
 }
 
 #[test]
+fn type_deep_source_capture_reaches_host_on_a_512k_stack() {
+    const CHILD: &str = "ASH_TYPE_SOURCE_AST_512K_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "module::staged_tests::type_deep_source_capture_reaches_host_on_a_512k_stack",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprint!("{stderr}");
+        assert!(output.status.success(), "512 KiB child failed: {}", output.status);
+        for marker in [
+            "type source stack: matched and retained 124 function layers",
+            "type source stack: host parsed capture and program executed 42",
+            "type source stack: final capture contents alias dropped",
+        ] {
+            assert!(stderr.contains(marker), "missing marker {marker}");
+        }
+        return;
+    }
+
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(|| {
+            use crate::{
+                driver::{compile_staged_graph_for_test, execute},
+                parser::G1_CAPTURE_OBSERVER,
+                surface::{SurfaceSyntaxCapture, SurfaceTypeKind},
+                syntax::{MacroOutputNode, charge_new_type_retention},
+            };
+            use std::{cell::RefCell, sync::Arc};
+
+            std::thread_local! {
+                static CAPTURE: RefCell<Option<Arc<[MacroOutputNode]>>> = const { RefCell::new(None) };
+            }
+            fn observe(source: &SourceFile, captures: &[SurfaceSyntaxCapture], _: &SyntaxBudget) {
+                assert!(source.display_path().ends_with("main.ash"));
+                let [SurfaceSyntaxCapture::Type(capture)] = captures else {
+                    panic!("expected the source Type capture");
+                };
+                let mut current = &capture.ty;
+                for _ in 0..124 {
+                    let SurfaceTypeKind::Function(function) = &current.kind else {
+                        panic!("expected a source function layer");
+                    };
+                    assert!(matches!(function.domain.kind, SurfaceTypeKind::Int));
+                    current = &function.codomain;
+                }
+                assert!(matches!(current.kind, SurfaceTypeKind::Int));
+                assert!(current.diagnostic.is_none());
+                assert_eq!(current.span.source(), source.id());
+                let range = current.span.range();
+                assert_eq!(&source.text()[range.start() as usize..range.end() as usize], "Int");
+                charge_new_type_retention(capture, 0, &mut SyntaxBudget::default()).unwrap();
+                CAPTURE.with(|slot| assert!(slot.borrow_mut().replace(Arc::clone(&capture.contents)).is_none()));
+                eprintln!("type source stack: matched and retained 124 function layers");
+            }
+
+            let tree = Tree::new();
+            tree.write("forms.ash", r#"import @builtin.compiler.syntax as Syntax
+
+pub syntax declaration: (probe_type) $result:type => using expand
+
+expand : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
+expand input = match Syntax.capture(input, 0) {
+    Syntax.Captured(Syntax.TypeCapture(result)) => parse_result(input, result)
+    _ => reject(input)
+}
+
+parse_result : (Syntax.Input, Syntax.TypeFragment) -> Syntax.MacroResult ! {Syntax.Ops}
+parse_result (input, result) = match Syntax.parse_type(input, Syntax.type_syntax(result)) {
+    Syntax.ParsedType(_) => Syntax.Expanded(Syntax.Syntax(Syntax.NoNodes))
+    _ => reject(input)
+}
+
+reject : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
+reject input = Syntax.Rejected(Syntax.MacroDiagnostic("type capture failed", Syntax.invocation_origin(input), Syntax.NoOrigins))
+"#);
+            let annotation = format!("{}Int", "Int -> ".repeat(124));
+            let entry = tree.write(
+                "main.ash",
+                &format!("import forms (syntax probe_type)\nprobe_type {annotation}\nmain : Unit -> Int\nmain () = 42\n"),
+            );
+            let mut graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+            G1_CAPTURE_OBSERVER.set(Some(observe));
+            let result = compile_staged_graph_for_test(&mut graph);
+            G1_CAPTURE_OBSERVER.set(None);
+            let program = result.unwrap();
+            assert_eq!(execute(&program).unwrap().value_display(), "42");
+            eprintln!("type source stack: host parsed capture and program executed 42");
+            let alias = CAPTURE.with(|slot| slot.borrow_mut().take().expect("source capture observed"));
+            let weak = Arc::downgrade(&alias);
+            drop(program);
+            drop(graph);
+            assert_eq!(Arc::strong_count(&alias), 1);
+            drop(alias);
+            assert!(weak.upgrade().is_none());
+            eprintln!("type source stack: final capture contents alias dropped");
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
 fn g1_actual_empty_and_literal_only_repetitions_preserve_capture_shapes() {
     use crate::{
         driver::{FileFailure, compile_staged_graph_for_test, execute},
