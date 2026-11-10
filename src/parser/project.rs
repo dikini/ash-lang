@@ -8656,6 +8656,156 @@ mod tests {
     }
 
     #[test]
+    fn g1_structured_source_guard_boundaries_refuse_before_construction() {
+        use crate::{
+            source::ByteRange,
+            syntax::{SelectedSyntax, SyntaxContexts},
+            syntax_resource::SyntaxBudget,
+        };
+        use std::sync::Arc;
+
+        let definition = SourceFile::new(
+            "guard-forms.ash",
+            "pub syntax declaration: (sink) ( $value:ident ) => {}\n",
+        )
+        .unwrap();
+        let definition_tree = parse(lex(&definition).unwrap());
+        let (root, tokens) = validated_root(&definition, &definition_tree).unwrap();
+        let child = child_nodes(root)
+            .find(|child| child.kind == NodeKind::SyntaxDeclaration)
+            .unwrap();
+        let mut module = ModuleProjection::default();
+        project_staged_source_child(
+            &mut module,
+            &definition,
+            child,
+            tokens,
+            &mut SyntaxBudget::default(),
+        )
+        .unwrap();
+        let declaration = module.syntax_declarations.pop().unwrap();
+        let import_span = definition.span(ByteRange::new(0, 0).unwrap()).unwrap();
+        let selected = [SelectedSyntax {
+            name: "sink".into(),
+            declaration,
+            owner: 0,
+            import_span,
+        }];
+        let contexts = SyntaxContexts::new(&selected, &[], &[]);
+        let [SurfaceSyntaxMatcherPart::Container(root)] =
+            selected[0].declaration.matcher.as_slice()
+        else {
+            panic!("expected real group payload");
+        };
+        let references = Arc::strong_count(root);
+        let mut measured = SyntaxBudget::with_limit(10_000);
+        measured.charge_units(17).unwrap();
+        crate::syntax::charge_selected(&selected[0], &mut measured).unwrap();
+        let total = measured.consumed();
+        let mut short = SyntaxBudget::with_limit(total - 1);
+        short.charge_units(17).unwrap();
+        assert!(
+            matches!(crate::syntax::charge_selected(&selected[0], &mut short),
+            Err(ResourceFailure::SyntaxWork { limit }) if limit == total - 1)
+        );
+        assert!(short.consumed() >= 17 && short.consumed() <= total - 1);
+        assert_eq!(Arc::strong_count(root), references);
+        let mut exact = SyntaxBudget::with_limit(total);
+        exact.charge_units(17).unwrap();
+        crate::syntax::charge_selected(&selected[0], &mut exact).unwrap();
+        assert_eq!(exact.consumed(), total);
+        let copied = selected[0].clone();
+        let [SurfaceSyntaxMatcherPart::Container(copied_root)] =
+            copied.declaration.matcher.as_slice()
+        else {
+            panic!("expected copied group");
+        };
+        assert!(Arc::ptr_eq(root, copied_root));
+        assert_eq!(Arc::strong_count(root), references + 1);
+        drop(copied);
+        assert_eq!(Arc::strong_count(root), references);
+        let source = SourceFile::new("guard-caller.ash", "sink (Alpha)\n").unwrap();
+        let tree = h1_tree(&source, &selected);
+        let node = child_nodes(tree.root().unwrap()).next().unwrap();
+        assert_eq!(node.kind, NodeKind::DeclarationSyntaxInvocation);
+        assert!(matches!(
+            project_declaration_invocation(&source, &tree, node, &contexts),
+            Err(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape
+            ))
+        ));
+        assert_eq!(Arc::strong_count(root), references);
+
+        let source_tokens = ProjectionTokens::source(tree.tokens());
+        let span = node_span(&source, node, &source_tokens).unwrap();
+        let parsed = d5_structured_tree(&source, &tree, &contexts);
+        let generated = child_nodes(parsed.tree.root().unwrap()).next().unwrap();
+        assert!(matches!(
+            project_macro_declaration_invocation(
+                &source, span, None, &parsed, generated, &contexts, None
+            ),
+            Err(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape
+            ))
+        ));
+        assert!(matches!(
+            validate_declaration_template(
+                &source,
+                span,
+                &parsed,
+                &contexts,
+                &mut SyntaxBudget::default()
+            ),
+            Err(DeclarationExpansionFailure::Projection(
+                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+            ))
+        ));
+        assert_eq!(Arc::strong_count(root), references);
+
+        let mut d6_budget = SyntaxBudget::with_limit(10_000);
+        d6_budget.charge_units(17).unwrap();
+        assert!(matches!(
+            charge_declaration_invocation(
+                &source,
+                node,
+                &source_tokens,
+                &contexts,
+                false,
+                &mut d6_budget
+            ),
+            Err(DeclarationExpansionFailure::Projection(
+                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+            ))
+        ));
+        assert!(d6_budget.consumed() > 17);
+        assert_eq!(Arc::strong_count(root), references);
+
+        for header in [
+            "pub syntax declaration: (sink) ( $value:ident ) => { type Item = Item }\n",
+            "pub syntax declaration: (sink) ( $value:ident ) => using transformer\n",
+            "pub syntax declaration: (sink) $subject:type ( $value:ident ) => {}\n",
+        ] {
+            let source = SourceFile::new("unsupported-header.ash", header).unwrap();
+            let tree = parse(lex(&source).unwrap());
+            let (root, tokens) = validated_root(&source, &tree).unwrap();
+            let child = child_nodes(root)
+                .find(|node| node.kind == NodeKind::SyntaxDeclaration)
+                .unwrap();
+            let mut module = ModuleProjection::default();
+            let mut budget = SyntaxBudget::with_limit(10_000);
+            budget.charge_units(17).unwrap();
+            assert!(matches!(
+                project_staged_source_child(&mut module, &source, child, tokens, &mut budget),
+                Err(DeclarationExpansionFailure::Projection(
+                    ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                ))
+            ));
+            assert!(budget.consumed() > 17);
+            assert!(module.syntax_declarations.is_empty());
+        }
+    }
+
+    #[test]
     fn g1_header_copy_reserves_payloads_before_construction() {
         use crate::syntax_resource::SyntaxBudget;
 
