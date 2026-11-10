@@ -882,6 +882,100 @@ fn type_expression_real_capture_and_alias_on_a_512k_stack() {
 }
 
 #[test]
+fn type_expression_real_composed_depth_on_a_512k_stack() {
+    const CHILD: &str = "ASH_TYPE_EXPRESSION_DEPTH_512K_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "module::staged_tests::type_expression_real_composed_depth_on_a_512k_stack",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprint!("{stderr}");
+        assert!(output.status.success(), "512 KiB depth child failed");
+        assert!(stderr.contains("type expression depth: adjacent source graphs checked"));
+        return;
+    }
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(|| {
+            use crate::{
+                driver::{compile_staged_graph_for_test, execute},
+                parser::G1_CAPTURE_OBSERVER,
+                surface::{SurfaceSyntaxCapture, SurfaceTypeKind},
+                syntax::MacroOutputNode,
+            };
+            use std::{cell::RefCell, sync::Arc};
+
+            std::thread_local! {
+                static CAPTURE: RefCell<Option<Arc<[MacroOutputNode]>>> = const { RefCell::new(None) };
+            }
+            fn observe(_: &SourceFile, captures: &[SurfaceSyntaxCapture], _: &SyntaxBudget) {
+                let [SurfaceSyntaxCapture::Identifier(_), SurfaceSyntaxCapture::Type(ty)] = captures else {
+                    panic!("expected the source Type capture")
+                };
+                assert!(matches!(ty.ty.kind, SurfaceTypeKind::Int));
+                CAPTURE.with(|slot| {
+                    assert!(slot.borrow_mut().replace(Arc::clone(&ty.contents)).is_none());
+                });
+            }
+            let mut accepted = None;
+            let mut refused = None;
+            for groups in 120usize..=127 {
+                let tree = Tree::new();
+                tree.write("forms.ash", include_str!("../tests/fixtures/surface-macros/type-expression-bridge/forms.ash"));
+                tree.write("helper.ash", include_str!("../tests/fixtures/surface-macros/type-expression-bridge/helper.ash"));
+                let annotation = format!("{}Int{}", "(".repeat(groups), ")".repeat(groups));
+                let entry = tree.write(
+                    "main.ash",
+                    &format!("import forms (syntax emit_keep)\nemit_keep result for {annotation}\nmain : Unit -> Int\nmain () = result(())\n"),
+                );
+                let mut graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+                G1_CAPTURE_OBSERVER.set(Some(observe));
+                let result = compile_staged_graph_for_test(&mut graph);
+                G1_CAPTURE_OBSERVER.set(None);
+                let alias = CAPTURE.with(|slot| slot.borrow_mut().take());
+                match result {
+                    Ok(program) => {
+                        assert_eq!(execute(&program).unwrap().value_display(), "42");
+                        drop(program);
+                        accepted = Some(groups);
+                    }
+                    Err(failure) => {
+                        assert_eq!(failure.reason_code(), "internal.resource.structural-depth");
+                        eprintln!("type expression depth: refused {groups}, capture observed {}", alias.is_some());
+                        drop(failure);
+                        refused = Some(groups);
+                    }
+                }
+                drop(graph);
+                if let Some(alias) = alias {
+                    let weak = Arc::downgrade(&alias);
+                    assert_eq!(Arc::strong_count(&alias), 1);
+                    drop(alias);
+                    assert!(weak.upgrade().is_none());
+                }
+                if refused.is_some() {
+                    break;
+                }
+            }
+            assert_eq!(refused, accepted.map(|groups| groups + 1));
+            assert!(accepted.is_some());
+            eprintln!("type expression depth: accepted {}, refused {}", accepted.unwrap(), refused.unwrap());
+            eprintln!("type expression depth: adjacent source graphs checked");
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
 fn type_deep_source_capture_reaches_host_on_a_512k_stack() {
     const CHILD: &str = "ASH_TYPE_SOURCE_AST_512K_CHILD";
     if std::env::var_os(CHILD).is_none() {
