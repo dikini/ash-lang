@@ -411,6 +411,24 @@ fn g1_actual_empty_and_literal_only_repetitions_preserve_capture_shapes() {
                 assert_eq!(value.name.span.source(), source.id());
                 assert_eq!(value.origin, value.name.span.into());
             }
+            4 => {
+                let [
+                    SurfaceSyntaxCapture::Repeated(outer),
+                    SurfaceSyntaxCapture::Repeated(inner),
+                ] = captures
+                else {
+                    panic!("expected outer and nested capture columns");
+                };
+                let [SurfaceSyntaxCapture::Identifier(value)] = outer.values.as_slice() else {
+                    panic!("expected one outer source identifier");
+                };
+                assert_eq!(value.name.text, "Alpha");
+                assert_eq!(value.name.span.source(), source.id());
+                let [SurfaceSyntaxCapture::Repeated(empty)] = inner.values.as_slice() else {
+                    panic!("expected an empty nested capture");
+                };
+                assert!(empty.values.is_empty());
+            }
             _ => panic!("unexpected shape"),
         }
         OBSERVED.set(true);
@@ -458,6 +476,12 @@ fn g1_actual_empty_and_literal_only_repetitions_preserve_capture_shapes() {
     }
 
     trial("$( row $item:ident ),*", "sink", 1);
+    trial("{ $( item $item:ident ),* }", "sink { }", 1);
+    trial(
+        "$( row $outer:ident $( item $inner:ident ),* );*",
+        "sink row Alpha",
+        4,
+    );
     trial("$( word ),*", "sink word, word, word", 2);
     trial("$( row $item:ident ),+", "sink row Alpha", 3);
     trial("$( row $item:ident ),+", "sink", 0);

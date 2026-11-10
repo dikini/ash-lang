@@ -3029,6 +3029,8 @@ fn charge_structured_items<'a>(
                                     )
                                     .into());
                                 }
+                                // The materializer also reads the closing token for the source span.
+                                budget.charge()?;
                                 push(
                                     &mut frames,
                                     &mut logical_capacity,
@@ -3155,6 +3157,8 @@ fn charge_structured_items<'a>(
                             )
                             .into());
                         }
+                        // The materializer also reads each separator's source span.
+                        budget.charge()?;
                         *expect_iteration = true;
                     }
                     _ => {
@@ -5362,13 +5366,14 @@ fn project_structured_items<'a>(
     parts: &'a [SurfaceSyntaxMatcherPart],
     elements: &'a [ConcreteElement],
     tokens: &ProjectionTokens<'_>,
-) -> Result<Vec<SurfaceSyntaxCapture>, ProjectionError> {
+) -> Result<(Vec<SurfaceSyntaxCapture>, Option<Span>), ProjectionError> {
     enum Frame<'a> {
         Items {
             parts: &'a [SurfaceSyntaxMatcherPart],
             elements: &'a [ConcreteElement],
             index: usize,
             captures: Vec<SurfaceSyntaxCapture>,
+            after_span: Option<Span>,
         },
         Repeat {
             body: &'a [SurfaceSyntaxMatcherPart],
@@ -5394,6 +5399,7 @@ fn project_structured_items<'a>(
         logical_capacity: &mut usize,
         parts: &'a [SurfaceSyntaxMatcherPart],
         elements: &'a [ConcreteElement],
+        after_span: Option<Span>,
     ) -> Result<(), ProjectionError> {
         let captures = Vec::with_capacity(matcher_capture_count(parts)?);
         push(
@@ -5404,6 +5410,7 @@ fn project_structured_items<'a>(
                 elements,
                 index: 0,
                 captures,
+                after_span,
             },
         );
         Ok(())
@@ -5411,7 +5418,8 @@ fn project_structured_items<'a>(
 
     let mut frames = Vec::new();
     let mut logical_capacity = 0;
-    push_items(&mut frames, &mut logical_capacity, parts, elements)?;
+    let mut last_span = None;
+    push_items(&mut frames, &mut logical_capacity, parts, elements, None)?;
     while let Some(frame) = frames.last_mut() {
         match frame {
             Frame::Items {
@@ -5419,6 +5427,7 @@ fn project_structured_items<'a>(
                 elements,
                 index,
                 captures,
+                ..
             } => {
                 let parts = *parts;
                 let elements = *elements;
@@ -5426,11 +5435,19 @@ fn project_structured_items<'a>(
                     if *index != elements.len() {
                         return malformed(InternalReason::UnexpectedShape);
                     }
-                    let Some(Frame::Items { captures, .. }) = frames.pop() else {
+                    let Some(Frame::Items {
+                        captures,
+                        after_span,
+                        ..
+                    }) = frames.pop()
+                    else {
                         unreachable!();
                     };
+                    if let Some(span) = after_span {
+                        last_span = Some(span);
+                    }
                     match frames.last_mut() {
-                        None => return Ok(captures),
+                        None => return Ok((captures, last_span)),
                         Some(Frame::Items {
                             captures: parent, ..
                         }) => parent.extend(captures),
@@ -5456,11 +5473,14 @@ fn project_structured_items<'a>(
                         if token.kind != *kind || matcher_spelling(source, token)? != spelling {
                             return malformed(InternalReason::UnexpectedShape);
                         }
+                        last_span = Some(token.span);
                     }
                     (SurfaceSyntaxMatcherPart::LineEnd, element) => {
-                        if matcher_token(element, tokens)?.kind != TokenKind::LineEnd {
+                        let token = matcher_token(element, tokens)?;
+                        if token.kind != TokenKind::LineEnd {
                             return malformed(InternalReason::UnexpectedShape);
                         }
+                        last_span = Some(token.span);
                     }
                     (
                         SurfaceSyntaxMatcherPart::Capture {
@@ -5470,6 +5490,7 @@ fn project_structured_items<'a>(
                         ConcreteElement::Node(argument),
                     ) if argument.kind == NodeKind::SyntaxArgument => {
                         let name = surface_name(only_direct_token(argument, tokens)?)?;
+                        last_span = Some(name.span);
                         let origin = name.span.into();
                         captures.push(SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
                             name,
@@ -5487,11 +5508,13 @@ fn project_structured_items<'a>(
                             if len < 2 {
                                 return malformed(InternalReason::UnexpectedShape);
                             }
+                            let close = matcher_token(&matched.children[len - 1], tokens)?;
                             push_items(
                                 &mut frames,
                                 &mut logical_capacity,
                                 &container.body,
                                 &matched.children[1..len - 1],
+                                Some(close.span),
                             )?;
                         }
                         SurfaceMatcherContainerKind::Repeat { .. }
@@ -5544,16 +5567,26 @@ fn project_structured_items<'a>(
                 }
                 let element = &elements[*index];
                 *index += 1;
-                if let ConcreteElement::Node(iteration) = element {
-                    if iteration.kind != NodeKind::SyntaxMatchedIteration {
-                        return malformed(InternalReason::UnexpectedShape);
+                match element {
+                    ConcreteElement::Node(iteration) => {
+                        if iteration.kind != NodeKind::SyntaxMatchedIteration {
+                            return malformed(InternalReason::UnexpectedShape);
+                        }
+                        push_items(
+                            &mut frames,
+                            &mut logical_capacity,
+                            body,
+                            &iteration.children,
+                            None,
+                        )?;
                     }
-                    push_items(
-                        &mut frames,
-                        &mut logical_capacity,
-                        body,
-                        &iteration.children,
-                    )?;
+                    ConcreteElement::Token(index) => {
+                        let token = tokens.get(*index).ok_or(ProjectionError::MalformedTree(
+                            InternalReason::TokenOutOfRange,
+                        ))?;
+                        last_span = Some(token.span);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -5575,17 +5608,20 @@ fn project_selected_declaration_invocation_node(
     let empty = std::collections::HashMap::new();
     let originals = tokens.originals.unwrap_or(&empty);
     let mut captures = Vec::new();
+    let mut prefix_edge = name.span;
+    let mut structured_edge = None;
     for (position, part) in selection.declaration.matcher.iter().enumerate() {
         if matches!(
             part,
             SurfaceSyntaxMatcherPart::Container(_) | SurfaceSyntaxMatcherPart::LineEnd
         ) {
-            let tail = project_structured_items(
+            let (tail, last_span) = project_structured_items(
                 source,
                 &selection.declaration.matcher[position..],
                 children.as_slice(),
                 tokens,
             )?;
+            structured_edge = Some(last_span.unwrap_or(prefix_edge));
             captures.extend(tail);
             while children.next().is_some() {}
             break;
@@ -5613,15 +5649,16 @@ fn project_selected_declaration_invocation_node(
                 if &token.kind != kind || actual != Some(spelling.as_str()) {
                     return malformed(InternalReason::UnexpectedShape);
                 }
+                prefix_edge = token.span;
             }
             (
                 SurfaceSyntaxMatcherPart::Capture { kind, .. },
                 Some(ConcreteElement::Node(argument)),
             ) if argument.kind == NodeKind::SyntaxArgument => match kind {
                 SurfaceSyntaxCaptureKind::Identifier => {
-                    captures.push(SurfaceSyntaxCapture::Identifier(
-                        project_syntax_identifier_capture(argument, tokens, originals)?,
-                    ));
+                    let capture = project_syntax_identifier_capture(argument, tokens, originals)?;
+                    prefix_edge = capture.name.span;
+                    captures.push(SurfaceSyntaxCapture::Identifier(capture));
                 }
                 SurfaceSyntaxCaptureKind::Expression => {
                     let expression = child_nodes(argument)
@@ -5686,11 +5723,15 @@ fn project_selected_declaration_invocation_node(
     if children.next().is_some() {
         return malformed(InternalReason::UnexpectedShape);
     }
+    let span = match structured_edge {
+        Some(end) => join_spans(source, name.span, end)?,
+        None => node_span(source, node, tokens)?,
+    };
     Ok(ProjectedDeclarationInvocation {
         selection,
         name,
         captures,
-        span: node_span(source, node, tokens)?,
+        span,
     })
 }
 
@@ -8485,6 +8526,7 @@ mod tests {
                     &projected_tokens
                 )
                 .unwrap()
+                .0
                 .is_empty()
             );
             let mut short = SyntaxBudget::with_limit(total - 1);
@@ -8514,9 +8556,102 @@ mod tests {
         let ten = paid(10);
         assert!(one > empty);
         // Each added row: two child slots scanned four times (8), one row's
-        // frame/count/visit/comparison (26), and one separator comparison (8).
-        assert_eq!(two - one, 42);
-        assert_eq!(ten - one, 9 * 42);
+        // frame/count/visit/comparison (26), and separator comparison and span read (9).
+        assert_eq!(two - one, 43);
+        assert_eq!(ten - one, 9 * 43);
+    }
+
+    #[test]
+    fn g1_structured_invocation_spans_follow_actual_source_tokens() {
+        use crate::{source::ByteRange, syntax::SelectedSyntax, syntax_resource::SyntaxBudget};
+
+        for (matcher, invocation, shape) in [
+            ("$( row $item:ident ),*", "sink", 0),
+            ("prefix $item:ident $( marker )*", "sink prefix Alpha", 1),
+            (
+                "$( row $outer:ident $( item $inner:ident ),* );*",
+                "sink row Alpha",
+                2,
+            ),
+            ("{ $( item $item:ident ),* }", "sink { }", 0),
+            ("$( word ),*", "sink word, word", 3),
+        ] {
+            let definition = SourceFile::new(
+                "span-forms.ash",
+                format!("pub syntax declaration: (sink) {matcher} => {{}}\n"),
+            )
+            .unwrap();
+            let tree = h1_tree(&definition, &[]);
+            let (root, tokens) = validated_root(&definition, &tree).unwrap();
+            let child = child_nodes(root)
+                .find(|node| node.kind == NodeKind::SyntaxDeclaration)
+                .unwrap();
+            let mut module = ModuleProjection::default();
+            project_staged_source_child(
+                &mut module,
+                &definition,
+                child,
+                tokens,
+                &mut SyntaxBudget::default(),
+            )
+            .unwrap();
+            let selected = [SelectedSyntax {
+                name: "sink".into(),
+                declaration: module.syntax_declarations.pop().unwrap(),
+                owner: 0,
+                import_span: definition.span(ByteRange::new(0, 0).unwrap()).unwrap(),
+            }];
+            let caller = SourceFile::new("span-main.ash", format!("{invocation}\n")).unwrap();
+            let tree = h1_tree(&caller, &selected);
+            let (root, tokens) = validated_root(&caller, &tree).unwrap();
+            let node = child_nodes(root)
+                .find(|node| node.kind == NodeKind::DeclarationSyntaxInvocation)
+                .unwrap();
+            let contexts = crate::syntax::SyntaxContexts::new(&selected, &[], &[]);
+            let tokens = ProjectionTokens::source(tokens);
+            let mut budget = SyntaxBudget::default();
+            budget.charge_units(17).unwrap();
+            charge_declaration_invocation(&caller, node, &tokens, &contexts, true, &mut budget)
+                .unwrap();
+            let projected =
+                project_declaration_invocation_node(&caller, node, &tokens, &contexts, true)
+                    .unwrap();
+            let range = projected.span.range();
+            assert_eq!(projected.span.source(), caller.id());
+            assert_eq!(
+                &caller.text()[range.start() as usize..range.end() as usize],
+                invocation
+            );
+            match shape {
+                0 => {
+                    let [SurfaceSyntaxCapture::Repeated(values)] = projected.captures.as_slice()
+                    else {
+                        panic!("expected an empty repeated capture");
+                    };
+                    assert!(values.values.is_empty());
+                }
+                1 => assert!(matches!(
+                    projected.captures.as_slice(),
+                    [SurfaceSyntaxCapture::Identifier(value)] if value.name.text == "Alpha"
+                )),
+                2 => {
+                    let [
+                        SurfaceSyntaxCapture::Repeated(outer),
+                        SurfaceSyntaxCapture::Repeated(inner),
+                    ] = projected.captures.as_slice()
+                    else {
+                        panic!("expected two repeated capture columns");
+                    };
+                    assert!(matches!(outer.values.as_slice(),
+                        [SurfaceSyntaxCapture::Identifier(value)] if value.name.text == "Alpha"));
+                    assert!(matches!(inner.values.as_slice(),
+                        [SurfaceSyntaxCapture::Repeated(values)] if values.values.is_empty()));
+                }
+                3 => assert!(projected.captures.is_empty()),
+                _ => unreachable!(),
+            }
+        }
+        eprintln!("g1 source spans: zero, prefix, nested empty, group close, separator");
     }
 
     #[test]
