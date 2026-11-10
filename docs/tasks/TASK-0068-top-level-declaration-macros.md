@@ -624,9 +624,11 @@ have independent retention and readback checks. Full S2 remains open.
 QA and Sol own their checks, and the orchestrator owns retaining integration
 and acceptance confirmation.
 
-### Protected Type to declarative expression candidate
+### Protected Type to declarative expression retained contribution
 
-**Delivered in the local candidate:** Candidate
+**Delivered:** [PR #292](https://github.com/dikini/ash-lang/pull/292) retained
+the bounded contribution at `bf145e287cf3217257cfafdee367637652ff40f5`,
+tree `4b5baa26e1b3127902348ed7d7948c2908c31252`. The tested source candidate
 `ffdbc313b7e1aa40856fab898f8719da766f6028` connects a captured Type in a
 source declaration Template to an expression Template invocation generated
 from it. The selected expression expansion borrows the existing graph syntax
@@ -662,8 +664,64 @@ original I16 derive/teardown/build-image paths, D8, E4, V3, V5–V8 and the
 fresh workspace gate remain open. The complete CP-0034 specification and
 tool documentation update remains at V4 after V3.
 
-**Awaiting:** Sol exact-head PR review, retention and checked partial issue
-readback.
+**Awaiting:** The bounded contribution and its partial issue record have
+independent retention and readback checks. Full H1 remains open.
+
+**Owner:** The developer owns the candidate and evidence; QA and Sol own
+independent checks; the orchestrator owns retention and acceptance confirmation.
+
+### Protected Expression host candidate
+
+**Delivered in the local candidate:** Candidate
+`ce28168c9e2babc393734dc2558dbb557d1ecd21` extends the existing checked
+declaration host to flat Expression, Type, Pattern and Identifier captures.
+Expression capture, unwrap, parse and protected output share the existing
+graph syntax budget. The existing guard refuses protected Expression nodes
+in generated declaration and expression invocation arguments. Legacy None
+accounting and the prior declarative Type-to-expression path stay distinct.
+
+A real imported Expression graph and a mixed Expression/Type/Pattern/Identifier
+graph each execute `42 : Int`. The mixed source observer checks the caller
+binder and read as distinct spans with the same caller context; caller and
+transformer definitions also contain a shadowed `value` name. A measured
+real graph exercises a pre-spent budget, exact allowance, one-short refusal,
+fresh retry and drained graph. The Expression one-short case reports the
+existing projection resource failure; the Type control reports syntax failure.
+
+On a 512 KiB thread, a real Expression source graph with 64 nested groups
+executes 42 and releases its observed final contents alias; a separate graph
+with 129 groups refuses structural depth. Those are chosen source controls,
+not an adjacent source threshold. A synthetic checked-host component issues
+42 nested wrappers, checks retained owner 128 and the adjacent 129 refusal,
+unwrapping, future-owner preflight and final alias release. A separate
+parser-built 124/125-layer Resume AST control uses a validated Some host with
+a test-injected constructor to exercise intake, capture, unwrap and transfer
+on the same stack. Both raw ASTs parse; the 124-layer protected copy succeeds
+and the 125-layer future-owner copy refuses. Returned Expression location,
+cause, capture flag and actual frame identity are checked on an issued result.
+Category/EOF, foreign, stale and wrong-kind controls and initial, growth, spare,
+short and retry arena checks are distinct component evidence.
+
+The fresh focused gate on `ce28168c` records 713 distinct passes and two
+retained ignores. Receipt SHA-256
+`2f46a6a98a4f97b8be7ff5dc2161b5a185cde69fe2caba098e3d4febaa00b402` is at
+`evidence/expression-host/final-gate-ce28168c/receipt.json` in the delivery
+handoff. Architecture passed 47/47; child and marker reruns count once.
+Independent QA reconstructed the result in audit
+`1193a6d96caf496e7679af3070ee6daf5227b1c1309bc073194a0ac7975b50ef`.
+Sol source and command-map review is
+`073c318e450b4d0e1b8f73daa8892a0d4abd94d9af221b7d7865caf5630a488c`.
+The unchanged strict I14 failure remains separate, with missing
+definition-origin presentation tracked in
+[#265](https://github.com/dikini/ash-lang/issues/265#issuecomment-6766825789).
+The fixed I01–I22 corpus remains unchanged. Full S2/H1, used splices,
+repeated and generated consumers, full G1, original I16 derive/teardown/
+build-image paths, D8, E4, V3, V5–V8 and the fresh workspace gate remain
+open. The complete CP-0034 specification and tool documentation update
+remains at V4 after V3. No original #230 criterion is closed by this candidate.
+
+**Awaiting:** Exact-head Sol PR review, retaining integration and checked
+partial issue readback.
 
 **Owner:** The developer owns the candidate and evidence; QA and Sol own
 independent checks; the orchestrator owns retention and acceptance confirmation.

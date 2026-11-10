@@ -507,6 +507,94 @@ fn type_real_capture_roundtrip_on_a_512k_stack() {
 }
 
 #[test]
+fn expression_host_real_source_capture_roundtrips_on_a_512k_stack() {
+    const CHILD: &str = "ASH_EXPRESSION_HOST_SOURCE_512K_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "module::staged_tests::expression_host_real_source_capture_roundtrips_on_a_512k_stack",
+                "--nocapture", "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output().unwrap();
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprint!("{stderr}");
+        assert!(
+            output.status.success(),
+            "512 KiB source child failed: {}",
+            output.status
+        );
+        for marker in [
+            "expression source stack: 64 groups reached 42",
+            "expression source stack: final alias dropped",
+            "expression source stack: 129 groups refused",
+        ] {
+            assert!(stderr.contains(marker), "missing marker {marker}");
+        }
+        return;
+    }
+    std::thread::Builder::new().stack_size(512 * 1024).spawn(|| {
+        use crate::{
+            driver::{RunConfiguration, compile_path, execute},
+            parser::G1_CAPTURE_OBSERVER,
+            surface::SurfaceSyntaxCapture,
+            syntax::{MacroDelimiter, MacroOutputNode},
+        };
+        use std::{cell::RefCell, sync::Arc};
+
+        std::thread_local! {
+            static CONTENTS: RefCell<Option<Arc<[MacroOutputNode]>>> = const { RefCell::new(None) };
+        }
+        fn observe(source: &SourceFile, captures: &[SurfaceSyntaxCapture], _: &SyntaxBudget) {
+            let [SurfaceSyntaxCapture::Identifier(_), SurfaceSyntaxCapture::Expression(capture)] = captures else {
+                panic!("expected source Expression capture")
+            };
+            assert_eq!(capture.expression.span.source(), source.id());
+            let mut nodes = capture.contents.as_ref();
+            for _ in 0..64 {
+                let [MacroOutputNode::Group(MacroDelimiter::Parentheses, children, _)] = nodes else {
+                    panic!("expected a source group")
+                };
+                nodes = children;
+            }
+            assert!(matches!(nodes, [MacroOutputNode::Token(_, text, _)] if &**text == "42"));
+            CONTENTS.with(|slot| assert!(slot.borrow_mut().replace(Arc::clone(&capture.contents)).is_none()));
+        }
+
+        for groups in [64usize, 129] {
+            let tree = Tree::new();
+            tree.write("forms.ash", include_str!("../tests/fixtures/surface-macros/expression-host/forms.ash"));
+            let expression = format!("{}42{}", "(".repeat(groups), ")".repeat(groups));
+            let entry = tree.write("main.ash", &format!("import forms (syntax emit_expression)\nemit_expression result yields {expression}\nmain : Unit -> Int\nmain () = result(())\n"));
+            G1_CAPTURE_OBSERVER.set(Some(observe));
+            let result = compile_path(RunConfiguration { entry, roots: ModuleRoots::empty() });
+            G1_CAPTURE_OBSERVER.set(None);
+            if groups == 64 {
+                let program = result.expect("the real grouped Expression graph compiles");
+                let value = execute(&program).unwrap();
+                assert_eq!(value.value_display(), "42");
+                assert_eq!(value.type_display(), "Int");
+                eprintln!("expression source stack: 64 groups reached 42");
+                let alias = CONTENTS.with(|slot| slot.borrow_mut().take().expect("capture observed"));
+                let weak = Arc::downgrade(&alias);
+                drop(program);
+                assert_eq!(Arc::strong_count(&alias), 1);
+                drop(alias);
+                assert!(weak.upgrade().is_none());
+                eprintln!("expression source stack: final alias dropped");
+            } else {
+                let failure = result.expect_err("the source graph exceeds structural depth");
+                assert_eq!(failure.reason_code(), "internal.resource.structural-depth");
+                assert!(CONTENTS.with(|slot| slot.borrow().is_none()));
+                eprintln!("expression source stack: 129 groups refused");
+            }
+        }
+    }).unwrap().join().unwrap();
+}
+
+#[test]
 fn pattern_real_source_capture_roundtrips_on_a_512k_stack() {
     const CHILD: &str = "ASH_PATTERN_SOURCE_512K_CHILD";
     if std::env::var_os(CHILD).is_none() {
@@ -1519,56 +1607,73 @@ fn type_graph_shares_budget_through_host_staging_and_retry() {
         assert_eq!(hooks::ROOT_CLOSES.get(), 1);
     }
 
-    let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/surface-macros/type-host/main.ash");
-    let mut measured = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
-    let header_work = measured.syntax_budget.consumed();
-    measured.syntax_budget.charge_units(17).unwrap();
-    hooks::reset();
-    let program = compile_staged_graph_for_test(&mut measured).unwrap();
-    observe_transfer();
-    let total = measured.syntax_budget.consumed();
-    assert!(total > header_work + 17);
-    let observation = execute(&program).unwrap();
-    assert_eq!(observation.value_display(), "42");
-    assert_eq!(observation.type_display(), "Int");
-
-    for label in ["exact", "retry"] {
-        let mut graph = graph_at(&entry, BodyMode::Header, total).unwrap();
-        assert_eq!(graph.syntax_budget.consumed(), header_work, "{label}");
-        graph.syntax_budget.charge_units(17).unwrap();
+    for path in [
+        "tests/fixtures/surface-macros/type-host/main.ash",
+        "tests/fixtures/surface-macros/expression-host/main.ash",
+    ] {
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
+        let mut measured = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+        let header_work = measured.syntax_budget.consumed();
+        measured.syntax_budget.charge_units(17).unwrap();
         hooks::reset();
-        let program = compile_staged_graph_for_test(&mut graph).unwrap();
+        let program = compile_staged_graph_for_test(&mut measured).unwrap();
         observe_transfer();
-        assert_eq!(graph.syntax_budget.consumed(), total, "{label}");
-        assert_eq!(execute(&program).unwrap().value_display(), "42");
+        let total = measured.syntax_budget.consumed();
+        assert!(total > header_work + 17);
+        let observation = execute(&program).unwrap();
+        assert_eq!(observation.value_display(), "42");
+        assert_eq!(observation.type_display(), "Int");
 
-        if label == "exact" {
-            let mut short = graph_at(&entry, BodyMode::Header, total - 1).unwrap();
-            assert_eq!(short.syntax_budget.consumed(), header_work);
-            short.syntax_budget.charge_units(17).unwrap();
+        for label in ["exact", "retry"] {
+            let mut graph = graph_at(&entry, BodyMode::Header, total).unwrap();
+            assert_eq!(graph.syntax_budget.consumed(), header_work, "{label}");
+            graph.syntax_budget.charge_units(17).unwrap();
             hooks::reset();
-            let failure = compile_staged_graph_for_test(&mut short)
-                .expect_err("one short publishes no compiled program");
+            let program = compile_staged_graph_for_test(&mut graph).unwrap();
             observe_transfer();
-            let FileFailure::Graph(diagnostic) = failure else {
-                panic!("expected a graph refusal: {failure:?}");
-            };
-            let LoadGraphError::Syntax(failure) = diagnostic.failure() else {
-                panic!("expected a syntax resource refusal: {diagnostic:?}");
-            };
-            assert_eq!(
-                failure.resource,
-                Some(ResourceFailure::SyntaxWork { limit: total - 1 })
-            );
-            assert!(short.syntax_budget.consumed() >= header_work + 17);
-            assert!(short.syntax_budget.consumed() < total);
-            assert!(short.pending.is_empty());
-            assert!(short.loaded.is_empty());
-            assert!(short.completed.is_none());
+            assert_eq!(graph.syntax_budget.consumed(), total, "{label}");
+            assert_eq!(execute(&program).unwrap().value_display(), "42");
+
+            if label == "exact" {
+                let mut short = graph_at(&entry, BodyMode::Header, total - 1).unwrap();
+                assert_eq!(short.syntax_budget.consumed(), header_work);
+                short.syntax_budget.charge_units(17).unwrap();
+                hooks::reset();
+                let failure = compile_staged_graph_for_test(&mut short)
+                    .expect_err("one short publishes no compiled program");
+                observe_transfer();
+                let FileFailure::Graph(diagnostic) = failure else {
+                    panic!("expected a graph refusal: {failure:?}");
+                };
+                if path.contains("expression-host/") {
+                    assert!(matches!(
+                        diagnostic.failure(),
+                        LoadGraphError::Projection {
+                            error: crate::parser::ProjectionError::ResourceLimit(
+                                ResourceFailure::SyntaxWork { limit }
+                            ),
+                            ..
+                        } if *limit == total - 1
+                    ));
+                } else {
+                    let LoadGraphError::Syntax(failure) = diagnostic.failure() else {
+                        panic!("expected a syntax resource refusal: {diagnostic:?}");
+                    };
+                    assert_eq!(
+                        failure.resource,
+                        Some(ResourceFailure::SyntaxWork { limit: total - 1 })
+                    );
+                }
+                assert!(short.syntax_budget.consumed() >= header_work + 17);
+                assert!(short.syntax_budget.consumed() < total);
+                assert!(short.pending.is_empty());
+                assert!(short.loaded.is_empty());
+                assert!(short.completed.is_none());
+            }
         }
+        hooks::reset();
+        eprintln!("host graph budget: {path}, pre-spent=17, exact/short/retry");
     }
-    hooks::reset();
 }
 
 #[test]
