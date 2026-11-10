@@ -4286,6 +4286,10 @@ fn charge_composed_projection_selected(
                                     .max(crate::syntax::type_depth(nominal_depth, 3)?);
                             }
                             let new_pattern_name = new_pattern_copy && !in_type;
+                            let scheduled_name = new_pattern_name
+                                && (scheduled_pattern
+                                    || (parent == Some(NodeKind::HandlerClause)
+                                        && node.kind == NodeKind::Binder));
                             if new_type_copy {
                                 crate::syntax::charge_type_origin_copy(
                                     origin,
@@ -4330,6 +4334,18 @@ fn charge_composed_projection_selected(
                                     charge_frame_additions(previous, 0, budget)?;
                                     charge_frame_additions(added, previous, budget)?;
                                 }
+                                if scheduled_name {
+                                    // The match/handler finish task clones this name's
+                                    // newly constructed diagnostic once more.
+                                    crate::syntax::charge_type_origin_copy(
+                                        origin,
+                                        location_depth,
+                                        budget,
+                                    )?;
+                                    budget.charge_units(
+                                        previous.saturating_add(added).saturating_add(1),
+                                    )?;
+                                }
                             } else {
                                 crate::syntax::charge_type_origin(origin, location_depth, budget)?;
                             }
@@ -4372,6 +4388,23 @@ fn charge_composed_projection_selected(
                                                 budget,
                                             )?;
                                         }
+                                    }
+                                    if scheduled_name {
+                                        crate::syntax::charge_type_origin_copy(
+                                            &previous.primary,
+                                            location_depth,
+                                            budget,
+                                        )?;
+                                        for related in &previous.related {
+                                            crate::syntax::charge_type_origin_copy(
+                                                related,
+                                                location_depth,
+                                                budget,
+                                            )?;
+                                        }
+                                        budget.charge_units(
+                                            previous.related.len().saturating_add(1),
+                                        )?;
                                     }
                                 } else {
                                     crate::syntax::charge_type_origin(
