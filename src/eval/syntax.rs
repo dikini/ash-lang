@@ -3926,8 +3926,8 @@ mod tests {
                     let handle = handle.clone();
                     assert_eq!(intake.expressions.len(), 1);
                     assert_eq!(Arc::strong_count(&alias), 4);
-                    let syntax = intake.request(fixture.expression_syntax, handle, &mut intake_heap, &mut TypeWorkBudget::unbounded()).unwrap();
-                    let output = intake.transfer_syntax_inner(&syntax, &intake_heap, 0, true).unwrap();
+                    let intake_syntax = intake.request(fixture.expression_syntax, handle, &mut intake_heap, &mut TypeWorkBudget::unbounded()).unwrap();
+                    let output = intake.transfer_syntax_inner(&intake_syntax, &intake_heap, 0, true).unwrap();
                     assert_eq!(output.len(), height + 1);
                     drop(output);
                     drop(intake_heap);
