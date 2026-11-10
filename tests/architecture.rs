@@ -531,6 +531,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/syntax.rs::SelectedSyntax.declaration", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
     kind_site!("src/syntax.rs::SyntaxContexts.caller", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
     kind_site!("src/syntax.rs::SyntaxContexts.owner_imports", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Shared),
+    kind_site!("src/syntax.rs::DeclarationTransformer.$alias", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/syntax.rs::SyntaxTransformer.$alias", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Mixed),
     kind_site!("src/syntax.rs::SyntaxExpansion.selected", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
     kind_site!("src/syntax.rs::SyntaxExpansion.owner_imports", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
