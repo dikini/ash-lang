@@ -354,6 +354,16 @@ fn charge_type_location(
     work: TypeWork,
     budget: &mut SyntaxBudget,
 ) -> Result<(), ResourceFailure> {
+    charge_type_location_inner(location, depth, work, false, budget)
+}
+
+fn charge_type_location_inner(
+    location: Option<&DiagnosticLocation>,
+    depth: usize,
+    work: TypeWork,
+    copy_origins: bool,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
     if let Some(location) = location {
         let depth = type_depth(depth, 1)?;
         budget.charge()?;
@@ -362,9 +372,17 @@ fn charge_type_location(
             budget.charge_units(location.related.len())?;
             budget.charge_units(location.frames.len())?;
         }
-        charge_type_origin(&location.primary, depth, budget)?;
+        if copy_origins {
+            charge_type_origin_copy(&location.primary, depth, budget)?;
+        } else {
+            charge_type_origin(&location.primary, depth, budget)?;
+        }
         for origin in &location.related {
-            charge_type_origin(origin, depth, budget)?;
+            if copy_origins {
+                charge_type_origin_copy(origin, depth, budget)?;
+            } else {
+                charge_type_origin(origin, depth, budget)?;
+            }
         }
     }
     if matches!(
@@ -389,12 +407,28 @@ fn charge_type_name(
     work: TypeWork,
     budget: &mut SyntaxBudget,
 ) -> Result<(), ResourceFailure> {
+    charge_type_name_inner(name, depth, work, false, budget)
+}
+
+fn charge_type_name_inner(
+    name: &SurfaceName,
+    depth: usize,
+    work: TypeWork,
+    copy_origins: bool,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
     budget.charge()?;
     if matches!(work, TypeWork::Copy { .. }) {
         budget.charge()?;
         budget.charge_units(name.text.len())?;
     }
-    charge_type_location(name.diagnostic.as_deref(), depth, work, budget)
+    charge_type_location_inner(
+        name.diagnostic.as_deref(),
+        depth,
+        work,
+        copy_origins,
+        budget,
+    )
 }
 
 pub(crate) fn charge_type_name_copy(
@@ -431,12 +465,24 @@ fn charge_type_reference(
     work: TypeWork,
     budget: &mut SyntaxBudget,
 ) -> Result<(), ResourceFailure> {
+    charge_type_reference_inner(reference, depth, work, false, budget)
+}
+
+fn charge_type_reference_inner(
+    reference: &SurfaceReference,
+    depth: usize,
+    work: TypeWork,
+    copy_origins: bool,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
     budget.charge()?;
     match reference {
-        SurfaceReference::Unqualified(name) => charge_type_name(name, depth, work, budget),
+        SurfaceReference::Unqualified(name) => {
+            charge_type_name_inner(name, depth, work, copy_origins, budget)
+        }
         SurfaceReference::Qualified(name) => {
-            charge_type_name(&name.qualifier, depth, work, budget)?;
-            charge_type_name(&name.member, depth, work, budget)
+            charge_type_name_inner(&name.qualifier, depth, work, copy_origins, budget)?;
+            charge_type_name_inner(&name.member, depth, work, copy_origins, budget)
         }
     }
 }
@@ -448,6 +494,17 @@ fn charge_type_value(
     work: TypeWork,
     budget: &mut SyntaxBudget,
 ) -> Result<(), ResourceFailure> {
+    charge_type_value_inner(ty, prefix, work, false, false, budget)
+}
+
+fn charge_type_value_inner(
+    ty: &SurfaceType,
+    prefix: usize,
+    work: TypeWork,
+    new_type: bool,
+    later_metadata: bool,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
     enum Pending<'a> {
         Type(&'a SurfaceType, usize),
         Row(&'a SurfaceEffectRow, usize),
@@ -455,9 +512,44 @@ fn charge_type_value(
 
     type_depth(prefix, 0)?;
     budget.charge()?;
-    let mut pending = vec![Pending::Type(ty, prefix)];
+    let mut pending = if new_type {
+        budget.charge()?;
+        let mut pending = Vec::with_capacity(1);
+        pending.push(Pending::Type(ty, prefix));
+        pending
+    } else {
+        vec![Pending::Type(ty, prefix)]
+    };
+    macro_rules! reserve_pending {
+        ($count:expr) => {{
+            let count = $count;
+            if new_type && count != 0 {
+                let live = pending.len();
+                let requested = live.checked_add(count).unwrap_or(usize::MAX);
+                if requested > pending.capacity() {
+                    budget.charge_units(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                    pending.reserve_exact(count);
+                }
+            }
+        }};
+    }
+    let copy_origins = new_type && (later_metadata || matches!(work, TypeWork::Copy { .. }));
     while let Some(item) = pending.pop() {
         budget.charge()?;
+        if later_metadata {
+            // The later old Type walk and frame-inheritance walk each have a
+            // 6N scratch bound on the pinned Vec growth implementation.
+            budget.charge_units(12)?;
+        } else if new_type
+            && matches!(
+                work,
+                TypeWork::Copy {
+                    inherit_frame: true
+                }
+            )
+        {
+            budget.charge_units(6)?;
+        }
         match item {
             Pending::Type(ty, depth) => {
                 if let TypeWork::Copy { inherit_frame } = work {
@@ -467,21 +559,34 @@ fn charge_type_value(
                         budget.charge_units(2)?;
                     }
                 }
-                charge_type_location(ty.diagnostic.as_deref(), depth, work, budget)?;
+                charge_type_location_inner(
+                    ty.diagnostic.as_deref(),
+                    depth,
+                    work,
+                    copy_origins,
+                    budget,
+                )?;
                 match &ty.kind {
                     SurfaceTypeKind::Named(reference) => {
-                        charge_type_reference(reference, depth, work, budget)?;
+                        charge_type_reference_inner(reference, depth, work, copy_origins, budget)?;
                     }
                     SurfaceTypeKind::Application {
                         constructor,
                         arguments,
                     } => {
-                        charge_type_reference(constructor, depth, work, budget)?;
+                        charge_type_reference_inner(
+                            constructor,
+                            depth,
+                            work,
+                            copy_origins,
+                            budget,
+                        )?;
                         let child_depth = type_depth(depth, 1)?;
                         if matches!(work, TypeWork::Copy { .. }) {
                             budget.charge_units(arguments.len())?;
                         }
                         budget.charge_units(arguments.len())?;
+                        reserve_pending!(arguments.len());
                         pending.extend(
                             arguments
                                 .iter()
@@ -494,6 +599,7 @@ fn charge_type_value(
                             budget.charge_units(elements.len())?;
                         }
                         budget.charge_units(elements.len())?;
+                        reserve_pending!(elements.len());
                         pending.extend(
                             elements
                                 .iter()
@@ -506,16 +612,20 @@ fn charge_type_value(
                             budget.charge_units(2)?;
                         }
                         budget.charge_units(2)?;
+                        reserve_pending!(1);
                         pending.push(Pending::Type(&function.domain, child_depth));
+                        reserve_pending!(1);
                         pending.push(Pending::Type(&function.codomain, child_depth));
                         if let Some(row) = &function.effects {
                             budget.charge()?;
+                            reserve_pending!(1);
                             pending.push(Pending::Row(row, child_depth));
                         }
                     }
                     SurfaceTypeKind::RowArgument(row) => {
                         let child_depth = type_depth(depth, 1)?;
                         budget.charge()?;
+                        reserve_pending!(1);
                         pending.push(Pending::Row(row, child_depth));
                     }
                     SurfaceTypeKind::Int
@@ -531,15 +641,22 @@ fn charge_type_value(
                     budget.charge_units(row.effects.len())?;
                 }
                 if let Some(tail) = &row.tail {
-                    charge_type_name(tail, child_depth, work, budget)?;
+                    charge_type_name_inner(tail, child_depth, work, copy_origins, budget)?;
                 }
                 for instance in &row.effects {
                     budget.charge()?;
-                    charge_type_reference(&instance.effect, child_depth, work, budget)?;
+                    charge_type_reference_inner(
+                        &instance.effect,
+                        child_depth,
+                        work,
+                        copy_origins,
+                        budget,
+                    )?;
                     if matches!(work, TypeWork::Copy { .. }) {
                         budget.charge_units(instance.arguments.len())?;
                     }
                     budget.charge_units(instance.arguments.len())?;
+                    reserve_pending!(instance.arguments.len());
                     pending.extend(
                         instance
                             .arguments
@@ -560,6 +677,30 @@ pub(crate) fn charge_type_copy(
     budget: &mut SyntaxBudget,
 ) -> Result<(), ResourceFailure> {
     charge_type_value(ty, prefix, TypeWork::Copy { inherit_frame }, budget)
+}
+
+pub(crate) fn charge_new_type_copy(
+    ty: &SurfaceType,
+    prefix: usize,
+    inherit_frame: bool,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    charge_type_value_inner(
+        ty,
+        prefix,
+        TypeWork::Copy { inherit_frame },
+        true,
+        false,
+        budget,
+    )
+}
+
+pub(crate) fn charge_transformer_type_metadata(
+    ty: &SurfaceType,
+    prefix: usize,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    charge_type_value_inner(ty, prefix, TypeWork::Inspect, true, true, budget)
 }
 
 /// Borrowed entries used to reserve protected expression and pattern copies.
@@ -1233,6 +1374,23 @@ pub(crate) fn charge_type_retention(
     prefix: usize,
     budget: &mut SyntaxBudget,
 ) -> Result<(), crate::parser::MacroParseFailure> {
+    charge_type_retention_inner(capture, prefix, false, budget)
+}
+
+pub(crate) fn charge_new_type_retention(
+    capture: &SurfaceTypeCapture,
+    prefix: usize,
+    budget: &mut SyntaxBudget,
+) -> Result<(), crate::parser::MacroParseFailure> {
+    charge_type_retention_inner(capture, prefix, true, budget)
+}
+
+fn charge_type_retention_inner(
+    capture: &SurfaceTypeCapture,
+    prefix: usize,
+    new_type: bool,
+    budget: &mut SyntaxBudget,
+) -> Result<(), crate::parser::MacroParseFailure> {
     use crate::parser::MacroParseFailure;
 
     fn resource(error: ResourceFailure) -> MacroParseFailure {
@@ -1243,18 +1401,46 @@ pub(crate) fn charge_type_retention(
     }
 
     let depth = type_depth(prefix, 1).map_err(resource)?;
-    charge_type_value(&capture.ty, depth, TypeWork::Inspect, budget).map_err(resource)?;
+    charge_type_value_inner(
+        &capture.ty,
+        depth,
+        TypeWork::Inspect,
+        new_type,
+        false,
+        budget,
+    )
+    .map_err(resource)?;
     let contents_depth = type_depth(depth, 1).map_err(resource)?;
     // Cloning the capture retains one shared contents handle.
     budget.charge().map_err(resource)?;
     budget
         .charge_units(capture.contents.len())
         .map_err(resource)?;
+    if new_type && !capture.contents.is_empty() {
+        budget
+            .charge_units(capture.contents.len())
+            .map_err(resource)?;
+    }
     let mut pending = capture
         .contents
         .iter()
         .map(|node| (node, contents_depth))
         .collect::<Vec<_>>();
+    macro_rules! reserve_pending {
+        ($count:expr) => {{
+            let count = $count;
+            if new_type && count != 0 {
+                let live = pending.len();
+                let requested = live.checked_add(count).unwrap_or(usize::MAX);
+                if requested > pending.capacity() {
+                    budget
+                        .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                        .map_err(resource)?;
+                    pending.reserve_exact(count);
+                }
+            }
+        }};
+    }
     while let Some((node, prefix)) = pending.pop() {
         budget.charge().map_err(resource)?;
         match node {
@@ -1262,17 +1448,26 @@ pub(crate) fn charge_type_retention(
                 let depth = type_depth(prefix, 1).map_err(resource)?;
                 charge_type_origin(origin, depth, budget).map_err(resource)?;
                 budget.charge_units(children.len()).map_err(resource)?;
+                reserve_pending!(children.len());
                 pending.extend(children.iter().map(|child| (child, depth)));
             }
             MacroOutputNode::ForwardedType(capture, origin) => {
                 let depth = type_depth(prefix, 1).map_err(resource)?;
                 charge_type_origin(origin, depth, budget).map_err(resource)?;
-                charge_type_value(&capture.ty, depth, TypeWork::Inspect, budget)
-                    .map_err(resource)?;
+                charge_type_value_inner(
+                    &capture.ty,
+                    depth,
+                    TypeWork::Inspect,
+                    new_type,
+                    false,
+                    budget,
+                )
+                .map_err(resource)?;
                 let contents_depth = type_depth(depth, 1).map_err(resource)?;
                 budget
                     .charge_units(capture.contents.len())
                     .map_err(resource)?;
+                reserve_pending!(capture.contents.len());
                 pending.extend(capture.contents.iter().map(|child| (child, contents_depth)));
             }
             MacroOutputNode::Identifier(name, origin) => {
@@ -1289,6 +1484,114 @@ pub(crate) fn charge_type_retention(
         }
     }
     Ok(())
+}
+
+/// Preflight and copy the owned contents made by the Type parse service.
+pub(crate) fn copy_type_output(
+    output: &[MacroOutputNode],
+    budget: &mut SyntaxBudget,
+) -> Result<Vec<MacroOutputNode>, crate::parser::MacroParseFailure> {
+    use crate::parser::MacroParseFailure;
+
+    fn resource(error: ResourceFailure) -> MacroParseFailure {
+        MacroParseFailure::Syntax {
+            diagnostics: Vec::new(),
+            resource: Some(error),
+        }
+    }
+
+    // The copied root Vec, this walk's entries, and its requested buffer.
+    for _ in 0..3 {
+        budget.charge_units(output.len()).map_err(resource)?;
+    }
+    // The returned Type capture owns both its type and this contents Arc.
+    let mut pending = output.iter().map(|node| (node, 2usize)).collect::<Vec<_>>();
+    let mut group_count = 0usize;
+    let mut group_depth = 0usize;
+    while let Some((node, depth)) = pending.pop() {
+        budget.charge().map_err(resource)?;
+        match node {
+            MacroOutputNode::Identifier(name, origin) => {
+                charge_type_name_copy(name, depth, budget).map_err(resource)?;
+                charge_type_origin_copy(origin, depth, budget).map_err(resource)?;
+            }
+            MacroOutputNode::Token(kind, _, origin) => {
+                charge_type_token_copy(kind, budget).map_err(resource)?;
+                budget.charge().map_err(resource)?; // spelling Arc
+                charge_type_origin_copy(origin, depth, budget).map_err(resource)?;
+            }
+            MacroOutputNode::Group(_, children, origin) => {
+                let child = type_depth(depth, 1).map_err(resource)?;
+                charge_type_origin_copy(origin, child, budget).map_err(resource)?;
+                group_count = group_count.saturating_add(1);
+                // The copy stack holds only actual Groups, not owner layers.
+                group_depth = group_depth.max(depth - 1);
+                // The copied child Vec and this walk's child entries.
+                budget.charge_units(children.len()).map_err(resource)?;
+                budget.charge_units(children.len()).map_err(resource)?;
+                let live = pending.len();
+                let requested = live.checked_add(children.len()).unwrap_or(usize::MAX);
+                if !children.is_empty() && requested > pending.capacity() {
+                    budget
+                        .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                        .map_err(resource)?;
+                    pending.reserve_exact(children.len());
+                }
+                pending.extend(children.iter().map(|node| (node, child)));
+            }
+            MacroOutputNode::ForwardedType(capture, origin) => {
+                let child = type_depth(depth, 1).map_err(resource)?;
+                charge_type_origin_copy(origin, child, budget).map_err(resource)?;
+                charge_new_type_copy(&capture.ty, child, false, budget).map_err(resource)?;
+                charge_new_type_retention(capture, depth, budget)?;
+            }
+            MacroOutputNode::Expression(_, _)
+            | MacroOutputNode::ForwardedExpression(_, _)
+            | MacroOutputNode::ForwardedPattern(_, _)
+            | MacroOutputNode::Splice(_) => return Err(MacroParseFailure::Invalid),
+        }
+    }
+
+    // The copied root/child Vecs were reserved above. This separate buffer
+    // holds the live group continuations; pay it and their visits before any
+    // owned copy so the copy has no later budget-refusal point.
+    budget.charge_units(group_depth).map_err(resource)?;
+    budget.charge_units(group_count).map_err(resource)?;
+    struct GroupFrame<'a> {
+        nodes: std::slice::Iter<'a, MacroOutputNode>,
+        output: Vec<MacroOutputNode>,
+        delimiter: MacroDelimiter,
+        origin: &'a MacroOrigin,
+    }
+    let mut groups = Vec::with_capacity(group_depth);
+    let mut nodes = output.iter();
+    let mut copied = Vec::with_capacity(output.len());
+    loop {
+        match nodes.next() {
+            Some(MacroOutputNode::Group(delimiter, children, origin)) => {
+                let delimiter = delimiter.clone();
+                let child_output = Vec::with_capacity(children.len());
+                groups.push(GroupFrame {
+                    nodes,
+                    output: copied,
+                    delimiter,
+                    origin,
+                });
+                nodes = children.iter();
+                copied = child_output;
+            }
+            Some(node) => copied.push(node.clone()),
+            None => {
+                let Some(group) = groups.pop() else {
+                    return Ok(copied);
+                };
+                let node = MacroOutputNode::Group(group.delimiter, copied, group.origin.clone());
+                nodes = group.nodes;
+                copied = group.output;
+                copied.push(node);
+            }
+        }
+    }
 }
 
 pub(crate) fn charge_type_token_copy(
@@ -2361,6 +2664,98 @@ mod tests {
             SurfaceTypeCapture, SurfaceTypeKind,
         },
     };
+
+    #[test]
+    fn type_output_group_copy_preserves_order_origins_and_prepaid_boundaries() {
+        use crate::lexer::TokenKind;
+        use crate::parser::MacroParseFailure;
+
+        let source = SourceFile::new("type-copy.ash", "Int").unwrap();
+        let span = source.span(ByteRange::new(0, 3).unwrap()).unwrap();
+        let frame = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let origin = MacroOrigin::combined(vec![span.into()], Arc::clone(&frame)).unwrap();
+        let contents: Arc<[MacroOutputNode]> = Arc::from([]);
+        let packet = vec![
+            MacroOutputNode::Group(
+                MacroDelimiter::Parentheses,
+                vec![
+                    MacroOutputNode::Token(TokenKind::IntType, "Int".into(), origin.clone()),
+                    MacroOutputNode::Group(MacroDelimiter::Braces, Vec::new(), origin.clone()),
+                    MacroOutputNode::ForwardedType(
+                        SurfaceTypeCapture {
+                            ty: SurfaceType {
+                                kind: SurfaceTypeKind::Int,
+                                span,
+                                diagnostic: None,
+                            },
+                            contents: Arc::clone(&contents),
+                        },
+                        origin.clone(),
+                    ),
+                ],
+                origin.clone(),
+            ),
+            MacroOutputNode::Token(TokenKind::IntType, "Int".into(), origin.clone()),
+        ];
+        let expected = packet.clone();
+        let base_contents = Arc::strong_count(&contents);
+        let base_frame = Arc::strong_count(&frame);
+        let mut measured = SyntaxBudget::default();
+        measured.charge_units(17).unwrap();
+        let actual = copy_type_output(&packet, &mut measured).unwrap();
+        let total = measured.consumed();
+        assert_eq!(actual, expected);
+        let [
+            MacroOutputNode::Group(
+                _,
+                children,
+                MacroOrigin::Combined {
+                    frame: copied_frame,
+                    ..
+                },
+            ),
+            _,
+        ] = actual.as_slice()
+        else {
+            panic!("expected the copied group and following token");
+        };
+        assert!(Arc::ptr_eq(copied_frame, &frame));
+        let MacroOutputNode::ForwardedType(capture, _) = &children[2] else {
+            panic!("expected the copied Type fragment");
+        };
+        assert!(Arc::ptr_eq(&capture.contents, &contents));
+        drop(actual);
+        assert_eq!(Arc::strong_count(&contents), base_contents);
+        assert_eq!(Arc::strong_count(&frame), base_frame);
+
+        let mut short = SyntaxBudget::with_limit(total - 1);
+        short.charge_units(17).unwrap();
+        assert!(matches!(
+            copy_type_output(&packet, &mut short),
+            Err(MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { limit }), ..
+            }) if limit == total - 1
+        ));
+        // Both actual Groups require frame-entry work. The final two-unit
+        // reservation refuses as a chunk before any owned copy is made.
+        assert_eq!(short.consumed(), total - 2);
+        assert_eq!(Arc::strong_count(&contents), base_contents);
+        assert_eq!(Arc::strong_count(&frame), base_frame);
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(total);
+            exact.charge_units(17).unwrap();
+            assert_eq!(copy_type_output(&packet, &mut exact).unwrap(), expected);
+            assert_eq!(exact.consumed(), total);
+            assert_eq!(Arc::strong_count(&contents), base_contents);
+            assert_eq!(Arc::strong_count(&frame), base_frame);
+        }
+        let mut empty = SyntaxBudget::with_limit(0);
+        assert!(copy_type_output(&[], &mut empty).unwrap().is_empty());
+        assert_eq!(empty.consumed(), 0);
+    }
 
     #[test]
     fn declaration_host_copy_charges_shallow_origin_and_name_retentions() {

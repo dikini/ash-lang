@@ -501,6 +501,77 @@ current Ash semantics or close that verification item.
 integration and checked issue readback. The developer owns the candidate and
 acceptance record; the orchestrator owns integration and acceptance confirmation.
 
+### Protected Type host candidate
+
+**Delivered in the local candidate:** The bounded Type host source for
+[S2 #230](https://github.com/dikini/ash-lang/issues/230) is
+`bbe06818dd8eeddaa5b59002374bbd69da7851a7`, tree
+`14b86d01741de83e659bc0ae357ba50cadc778ff`, based on retaining commit
+`d737b323e1a2613cf7a93e589ef8bdad8ce53291`. It connects eligible flat source
+Type and Identifier captures to the existing checked declaration transformer
+host. The canonical compiler syntax module adds `type_syntax` and `parse_type`;
+the host issues Type handles and transfers protected Type nodes through the
+existing staging path. Retained syntax, owner copies, host scratch and output
+share the existing graph budget. Transformer output refuses an actual protected
+Type node inside a generated declaration-invocation argument.
+
+The supplemental imported Type host graph captures a caller Type, unwraps and
+parses it, and returns a protected TypeNode in an ordinary generated function;
+the public driver executes that function to `42 : Int`. The checked real graph
+also covers shared-budget exact, one-short and retry behavior. A separate real
+source graph observes 124 written Function layers in its Type capture, then
+uses the host capture, unwrap and parser on a 512 KiB thread. That graph stages
+empty output and executes its handwritten main to 42; it is not the generated
+function result. Constructed-host components separately cover protected 124/125
+and raw 126/127 returned-owner boundaries, actual metadata, shortages and final
+alias disposal. The unchanged 126-Group imported graph executes 42 on 512 KiB;
+the adjacent 127-Group graph refuses without publishing a program.
+
+The final focused receipt is
+`/home/dikini/Projects/ash-lang/.worktrees/task-0068-handoff/evidence/type-host/final-gate-bbe06818/receipt.json`,
+SHA-256 `7f9ac4c628768800e325adb39f9d1617818efe76bdbcb082997fd15ffa0091e4`.
+It records 661 distinct passing tests and two existing ignored obligations:
+the unused nonempty Declaration template and the
+[#277](https://github.com/dikini/ash-lang/issues/277) nominal-context graph.
+Stack child and marker reruns count once. Independent QA cleared this receipt
+in audit `06c729710822f591813941d96fe6dd2067f25619d4ae794856d6c691ba3e3b6f`;
+Sol independently cleared the source, command set and receipt. The unchanged
+strict I14 test still fails: the ordinary category cause and caller location are
+present, but its required definition-origin presentation is missing. The separate
+[#265 finding](https://github.com/dikini/ash-lang/issues/265#issuecomment-6766825789)
+tracks that downstream presentation obligation. The I14 failure is not a pass.
+
+The earlier `10af6746` focused run exposed an unchanged 256 KiB local-nominal
+regression. The retained base passes the same test; the candidate's Type
+projector had a larger debug frame. The reviewed `bbe06818` extraction retains
+the same single projector and budget operations while reducing its frame. Its
+controlled receipt
+`9fff5bce5293f34aae0431ef98e82ce8da1856703169f5d606bc51c2ca3768ba`
+records the unchanged local-nominal test, Type budget and 512 KiB controls; the
+final focused gate checks them again.
+
+**Remaining:** Full S2 Type, Pattern, Expression and mixed/generated
+consumers, used splices, original I11/I19 and I14 criteria, and the connected
+downstream paths remain open. Full G1 and its repeated host/output consumers
+also remain open.
+All original #230 criteria remain unchecked. The original fixed I01–I22 corpus
+remains unchanged. The original I16 derive, teardown and build/image paths, D8,
+E4, V3, V5–V8 and the fresh workspace gate remain open.
+
+The candidate adds Type operations to the compiler syntax module. The current
+expression-focused specification's enumerated interface and tool manual do
+not yet document this partial candidate. The complete CP-0034 language and tool
+documentation update remains at V4 after V3; this partial record does not make
+unimplemented forms current Ash.
+
+**Awaiting:** TASK-only equality verification, exact-head Sol PR review,
+retaining-branch integration and checked partial issue readback. The focused
+result is not full S2 acceptance.
+
+**Owner:** The developer owns the candidate, evidence and acceptance update;
+independent QA and Sol own their checks, and the orchestrator owns retaining
+integration and acceptance confirmation.
+
 **Remaining:** Complete protected-fragment accounting/consumption, declaration
 captures, repetition, host transfer and procedural declarations, quotes/escapes,
 derives, generators, publication handoffs, full corpus/diagnostics,

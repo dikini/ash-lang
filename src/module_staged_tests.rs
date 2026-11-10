@@ -378,6 +378,250 @@ fn g1_real_matcher_paths_on_a_512k_stack() {
 }
 
 #[test]
+fn type_real_capture_roundtrip_on_a_512k_stack() {
+    const CHILD: &str = "ASH_TYPE_512K_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "module::staged_tests::type_real_capture_roundtrip_on_a_512k_stack",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        print!("{stdout}");
+        eprint!("{stderr}");
+        assert!(
+            output.status.success(),
+            "512 KiB child failed: {}",
+            output.status
+        );
+        for marker in [
+            "type stack: real group-16 graph transferred and executed 42",
+            "type stack: real composed-128 graph transferred and executed 42",
+            "type stack: composed-129 refused without publication",
+        ] {
+            assert!(stderr.contains(marker), "missing marker {marker}");
+        }
+        return;
+    }
+
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(|| {
+            use crate::{
+                driver::{PipelineFailure, compile_staged_graph_for_test, execute},
+                eval::{CleanupStatus, RuntimeFailure, machine_test_hooks as hooks},
+                parser::STRUCTURAL_DEPTH_LIMIT,
+            };
+
+            for groups in [16usize, 126, 127] {
+                let tree = Tree::new();
+                let forms = tree.write(
+                    "forms.ash",
+                    include_str!("../tests/fixtures/surface-macros/type-host/forms.ash"),
+                );
+                let annotation = format!("{}Int{}", "(".repeat(groups), ")".repeat(groups));
+                let entry = tree.write(
+                    "main.ash",
+                    &format!(
+                        "import forms (syntax emit_type)\nemit_type answer as {annotation}\nmain : Unit -> Int\nmain () = answer(())\n"
+                    ),
+                );
+                let mut graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+                hooks::reset();
+                eprintln!("type stack phase: compile real group-{groups} graph");
+                let result = compile_staged_graph_for_test(&mut graph);
+                if groups <= 126 {
+                    let program = result.unwrap();
+                    assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+                    assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+                    assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+                    assert_eq!(hooks::ROOT_CLOSES.get(), 1);
+                    assert_eq!(execute(&program).unwrap().value_display(), "42");
+                    drop(program);
+                    drop(graph);
+                    if groups == 16 {
+                        eprintln!("type stack: real group-16 graph transferred and executed 42");
+                    } else {
+                        // The Type capture's contents Arc and its live prefix
+                        // add two layers to these actual 126 groups.
+                        assert_eq!(2 + groups, STRUCTURAL_DEPTH_LIMIT);
+                        eprintln!("type stack: real composed-128 graph transferred and executed 42");
+                    }
+                } else {
+                    assert_eq!(2 + groups, STRUCTURAL_DEPTH_LIMIT + 1);
+                    let failure = result.expect_err("composed depth 129 must be refused");
+                    assert!(graph.pending.is_empty() && graph.loaded.is_empty() && graph.completed.is_none());
+                    let Some(PipelineFailure::SyntaxRuntime(diagnostic)) = failure.pipeline_failure()
+                    else {
+                        panic!("expected a host depth refusal: {failure:?}");
+                    };
+                    let RuntimeFailure::Report(report) = diagnostic.cause() else {
+                        panic!("expected a structured host report");
+                    };
+                    assert_eq!(
+                        report.primary.reason_code(),
+                        "internal.resource.structural-depth"
+                    );
+                    assert!(report.primary.resource().is_none());
+                    assert_eq!(report.cleanup, CleanupStatus::Complete);
+                    assert!(report.teardown.is_none());
+
+                    let source = failure
+                        .sources()
+                        .iter()
+                        .find(|source| source.id() == diagnostic.invocation.source())
+                        .expect("caller source retained in the failure catalogue");
+                    assert_eq!(Path::new(source.display_path()), entry.as_path());
+                    let range = diagnostic.invocation.range();
+                    assert_eq!(
+                        &source.text()[range.start() as usize..range.end() as usize],
+                        format!("emit_type answer as {annotation}")
+                    );
+                    let source = failure
+                        .sources()
+                        .iter()
+                        .find(|source| source.id() == diagnostic.definition.source())
+                        .expect("definition source retained in the failure catalogue");
+                    assert_eq!(Path::new(source.display_path()), forms.as_path());
+                    let range = diagnostic.definition.range();
+                    assert_eq!(
+                        &source.text()[range.start() as usize..range.end() as usize],
+                        "pub syntax declaration: (emit_type) $name:ident as $result:type => using expand"
+                    );
+                    drop(failure);
+                    drop(graph);
+                    eprintln!("type stack: composed-129 refused without publication");
+                }
+            }
+            hooks::reset();
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn type_deep_source_capture_reaches_host_on_a_512k_stack() {
+    const CHILD: &str = "ASH_TYPE_SOURCE_AST_512K_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "module::staged_tests::type_deep_source_capture_reaches_host_on_a_512k_stack",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprint!("{stderr}");
+        assert!(
+            output.status.success(),
+            "512 KiB child failed: {}",
+            output.status
+        );
+        for marker in [
+            "type source stack: matched and retained 124 function layers",
+            "type source stack: host parsed capture and program executed 42",
+            "type source stack: final capture contents alias dropped",
+        ] {
+            assert!(stderr.contains(marker), "missing marker {marker}");
+        }
+        return;
+    }
+
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(|| {
+            use crate::{
+                driver::{compile_staged_graph_for_test, execute},
+                parser::G1_CAPTURE_OBSERVER,
+                surface::{SurfaceSyntaxCapture, SurfaceTypeKind},
+                syntax::{MacroOutputNode, charge_new_type_retention},
+            };
+            use std::{cell::RefCell, sync::Arc};
+
+            std::thread_local! {
+                static CAPTURE: RefCell<Option<Arc<[MacroOutputNode]>>> = const { RefCell::new(None) };
+            }
+            fn observe(source: &SourceFile, captures: &[SurfaceSyntaxCapture], _: &SyntaxBudget) {
+                assert!(source.display_path().ends_with("main.ash"));
+                let [SurfaceSyntaxCapture::Type(capture)] = captures else {
+                    panic!("expected the source Type capture");
+                };
+                let mut current = &capture.ty;
+                for _ in 0..124 {
+                    let SurfaceTypeKind::Function(function) = &current.kind else {
+                        panic!("expected a source function layer");
+                    };
+                    assert!(matches!(function.domain.kind, SurfaceTypeKind::Int));
+                    current = &function.codomain;
+                }
+                assert!(matches!(current.kind, SurfaceTypeKind::Int));
+                assert!(current.diagnostic.is_none());
+                assert_eq!(current.span.source(), source.id());
+                let range = current.span.range();
+                assert_eq!(&source.text()[range.start() as usize..range.end() as usize], "Int");
+                charge_new_type_retention(capture, 0, &mut SyntaxBudget::default()).unwrap();
+                CAPTURE.with(|slot| assert!(slot.borrow_mut().replace(Arc::clone(&capture.contents)).is_none()));
+                eprintln!("type source stack: matched and retained 124 function layers");
+            }
+
+            let tree = Tree::new();
+            tree.write("forms.ash", r#"import @builtin.compiler.syntax as Syntax
+
+pub syntax declaration: (probe_type) $result:type => using expand
+
+expand : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
+expand input = match Syntax.capture(input, 0) {
+    Syntax.Captured(Syntax.TypeCapture(result)) => parse_result(input, result)
+    _ => reject(input)
+}
+
+parse_result : (Syntax.Input, Syntax.TypeFragment) -> Syntax.MacroResult ! {Syntax.Ops}
+parse_result (input, result) = match Syntax.parse_type(input, Syntax.type_syntax(result)) {
+    Syntax.ParsedType(_) => Syntax.Expanded(Syntax.Syntax(Syntax.NoNodes))
+    _ => reject(input)
+}
+
+reject : Syntax.Input -> Syntax.MacroResult ! {Syntax.Ops}
+reject input = Syntax.Rejected(Syntax.MacroDiagnostic("type capture failed", Syntax.invocation_origin(input), Syntax.NoOrigins))
+"#);
+            let annotation = format!("{}Int", "Int -> ".repeat(124));
+            let entry = tree.write(
+                "main.ash",
+                &format!("import forms (syntax probe_type)\nprobe_type {annotation}\nmain : Unit -> Int\nmain () = 42\n"),
+            );
+            let mut graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+            G1_CAPTURE_OBSERVER.set(Some(observe));
+            let result = compile_staged_graph_for_test(&mut graph);
+            G1_CAPTURE_OBSERVER.set(None);
+            let program = result.unwrap();
+            assert_eq!(execute(&program).unwrap().value_display(), "42");
+            eprintln!("type source stack: host parsed capture and program executed 42");
+            let alias = CAPTURE.with(|slot| slot.borrow_mut().take().expect("source capture observed"));
+            let weak = Arc::downgrade(&alias);
+            drop(program);
+            drop(graph);
+            assert_eq!(Arc::strong_count(&alias), 1);
+            drop(alias);
+            assert!(weak.upgrade().is_none());
+            eprintln!("type source stack: final capture contents alias dropped");
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
 fn g1_actual_empty_and_literal_only_repetitions_preserve_capture_shapes() {
     use crate::{
         driver::{FileFailure, compile_staged_graph_for_test, execute},
@@ -801,6 +1045,163 @@ fn declaration_graph_shares_budget_through_host_staging_and_retry() {
     eprintln!(
         "real graph shared work: header={header_work}, pre-spent=17, total={total}; exact/short/retry"
     );
+}
+
+#[test]
+fn type_graph_shares_budget_through_host_staging_and_retry() {
+    use crate::{
+        driver::{FileFailure, compile_staged_graph_for_test, execute},
+        eval::machine_test_hooks as hooks,
+    };
+
+    fn observe_transfer() {
+        assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+        assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+        assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+        assert_eq!(hooks::ROOT_CLOSES.get(), 1);
+    }
+
+    let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/surface-macros/type-host/main.ash");
+    let mut measured = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    let header_work = measured.syntax_budget.consumed();
+    measured.syntax_budget.charge_units(17).unwrap();
+    hooks::reset();
+    let program = compile_staged_graph_for_test(&mut measured).unwrap();
+    observe_transfer();
+    let total = measured.syntax_budget.consumed();
+    assert!(total > header_work + 17);
+    let observation = execute(&program).unwrap();
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+
+    for label in ["exact", "retry"] {
+        let mut graph = graph_at(&entry, BodyMode::Header, total).unwrap();
+        assert_eq!(graph.syntax_budget.consumed(), header_work, "{label}");
+        graph.syntax_budget.charge_units(17).unwrap();
+        hooks::reset();
+        let program = compile_staged_graph_for_test(&mut graph).unwrap();
+        observe_transfer();
+        assert_eq!(graph.syntax_budget.consumed(), total, "{label}");
+        assert_eq!(execute(&program).unwrap().value_display(), "42");
+
+        if label == "exact" {
+            let mut short = graph_at(&entry, BodyMode::Header, total - 1).unwrap();
+            assert_eq!(short.syntax_budget.consumed(), header_work);
+            short.syntax_budget.charge_units(17).unwrap();
+            hooks::reset();
+            let failure = compile_staged_graph_for_test(&mut short)
+                .expect_err("one short publishes no compiled program");
+            observe_transfer();
+            let FileFailure::Graph(diagnostic) = failure else {
+                panic!("expected a graph refusal: {failure:?}");
+            };
+            let LoadGraphError::Syntax(failure) = diagnostic.failure() else {
+                panic!("expected a syntax resource refusal: {diagnostic:?}");
+            };
+            assert_eq!(
+                failure.resource,
+                Some(ResourceFailure::SyntaxWork { limit: total - 1 })
+            );
+            assert!(short.syntax_budget.consumed() >= header_work + 17);
+            assert!(short.syntax_budget.consumed() < total);
+            assert!(short.pending.is_empty());
+            assert!(short.loaded.is_empty());
+            assert!(short.completed.is_none());
+        }
+    }
+    hooks::reset();
+}
+
+#[test]
+fn transformer_type_recapture_is_refused_before_generated_template_execution() {
+    use crate::{
+        driver::{compile_staged_graph_for_test, execute},
+        eval::machine_test_hooks as hooks,
+    };
+
+    let tree = Tree::new();
+    tree.write(
+        "helpers.ash",
+        "pub syntax declaration: (sink) $name:ident as $T:type => {\n\
+             pub fn $name(value: $T) -> $T {\n\
+                 value\n\
+             }\n\
+         }\n",
+    );
+    let legacy = tree.write(
+        "legacy.ash",
+        "import helpers (syntax sink)\n\
+         sink answer as Int\n\
+         main : Unit -> Int\n\
+         main () = answer(42)\n",
+    );
+    let mut graph = graph_at(&legacy, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    let program = compile_staged_graph_for_test(&mut graph)
+        .expect("legacy Template forwarding with two Type splices compiles");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+    eprintln!("type recapture: legacy Template forwarding executed 42");
+
+    let entry = tree.write(
+        "main.ash",
+        "import forms (syntax dispatch)\n\
+         import helpers (syntax sink)\n\
+         dispatch sink as answer for Int\n\
+         main : Unit -> Int\n\
+         main () = answer(42)\n",
+    );
+    for protected in [false, true] {
+        let nested = if protected {
+            "Syntax.Syntax(Syntax.MoreNodes(Syntax.TypeNode(item, origin), Syntax.NoNodes))"
+        } else {
+            "Syntax.type_syntax(item)"
+        };
+        tree.write(
+            "forms.ash",
+            &format!(
+                "import @builtin.compiler.syntax as Syntax\n\
+                 pub syntax declaration: (dispatch) $target:ident as $name:ident for $T:type => using expand\n\
+                 expand : Syntax.Input -> Syntax.MacroResult ! {{Syntax.Ops}}\n\
+                 expand input = {{\n\
+                     let origin = Syntax.invocation_origin(input)\n\
+                     match (Syntax.capture(input, 0), Syntax.capture(input, 1), Syntax.capture(input, 2), Syntax.make_token(Syntax.As, \"as\")) {{\n\
+                         (Syntax.Captured(Syntax.IdentifierCapture(target, target_origin)), Syntax.Captured(Syntax.IdentifierCapture(name, name_origin)), Syntax.Captured(Syntax.TypeCapture(item)), Syntax.MadeToken(as_token)) => {{\n\
+                             let nested = {nested}\n\
+                             let inner = Syntax.GroupNode(Syntax.Parentheses, nested, origin)\n\
+                             let inner = Syntax.Syntax(Syntax.MoreNodes(inner, Syntax.NoNodes))\n\
+                             let outer = Syntax.GroupNode(Syntax.Parentheses, inner, origin)\n\
+                             let rest = Syntax.MoreNodes(outer, Syntax.NoNodes)\n\
+                             let rest = Syntax.MoreNodes(Syntax.TokenNode(as_token, origin), rest)\n\
+                             let rest = Syntax.MoreNodes(Syntax.IdentifierNode(name, name_origin), rest)\n\
+                             let rest = Syntax.MoreNodes(Syntax.IdentifierNode(target, target_origin), rest)\n\
+                             Syntax.Expanded(Syntax.Syntax(rest))\n\
+                         }}\n\
+                         _ => Syntax.Rejected(Syntax.MacroDiagnostic(\"capture failed\", origin, Syntax.NoOrigins))\n\
+                     }}\n\
+                 }}\n"
+            ),
+        );
+        let mut graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+        hooks::reset();
+        let result = compile_staged_graph_for_test(&mut graph);
+        assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+        assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+        assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+        assert_eq!(hooks::ROOT_CLOSES.get(), 1);
+        if protected {
+            let failure = result.expect_err("generated TypeNode recapture is refused");
+            assert_eq!(failure.reason_code(), "internal.projection.malformed-tree");
+            assert!(graph.pending.is_empty());
+            assert!(graph.loaded.is_empty());
+            assert!(graph.completed.is_none());
+            eprintln!("type recapture: generated TypeNode refused without publication");
+        } else {
+            let program = result.expect("generated raw Type reaches the imported Template");
+            assert_eq!(execute(&program).unwrap().value_display(), "42");
+            eprintln!("type recapture: generated raw Type control executed 42");
+        }
+    }
+    hooks::reset();
 }
 
 #[test]
