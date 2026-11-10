@@ -713,6 +713,7 @@ fn syntax_matcher_items(
             let body_nullable =
                 syntax_matcher_items(parser, names, Some(TokenKind::RightParen), false, false);
             let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
+            let mut separator = None;
             if !matches!(parser.current(), Some(TokenKind::Star | TokenKind::Plus)) {
                 if matches!(
                     parser.current(),
@@ -729,6 +730,7 @@ fn syntax_matcher_items(
                 ) {
                     parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
                 } else {
+                    separator = Some(parser.position);
                     let _ = parser.bump(); // separator
                 }
             }
@@ -740,6 +742,28 @@ fn syntax_matcher_items(
             }
             if body_nullable {
                 parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+            }
+            if let Some(index) = separator {
+                let separator_bytes = parser.tokens[index].span.range().end()
+                    - parser.tokens[index].span.range().start();
+                let next_bytes = parser.tokens.get(parser.position).map_or(0, |token| {
+                    token.span.range().end() - token.span.range().start()
+                });
+                if !parser.charge_matcher_work(
+                    (separator_bytes as usize)
+                        .saturating_add(next_bytes as usize)
+                        .saturating_add(2),
+                ) {
+                    parser.finish();
+                    parser.leave_structure();
+                    break;
+                }
+                if parser
+                    .current()
+                    .is_some_and(|kind| *kind == parser.tokens[index].kind)
+                {
+                    parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+                }
             }
             parser.finish();
             parser.leave_structure();
