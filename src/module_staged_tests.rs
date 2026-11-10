@@ -974,6 +974,97 @@ fn type_graph_shares_budget_through_host_staging_and_retry() {
 }
 
 #[test]
+fn transformer_type_recapture_is_refused_before_generated_template_execution() {
+    use crate::{
+        driver::{compile_staged_graph_for_test, execute},
+        eval::machine_test_hooks as hooks,
+    };
+
+    let tree = Tree::new();
+    tree.write(
+        "helpers.ash",
+        "pub syntax declaration: (sink) $name:ident as $T:type => {\n\
+             pub fn $name(value: $T) -> $T {\n\
+                 value\n\
+             }\n\
+         }\n",
+    );
+    let legacy = tree.write(
+        "legacy.ash",
+        "import helpers (syntax sink)\n\
+         sink answer as Int\n\
+         main : Unit -> Int\n\
+         main () = answer(42)\n",
+    );
+    let mut graph = graph_at(&legacy, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    let program = compile_staged_graph_for_test(&mut graph)
+        .expect("legacy Template forwarding with two Type splices compiles");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+    eprintln!("type recapture: legacy Template forwarding executed 42");
+
+    let entry = tree.write(
+        "main.ash",
+        "import forms (syntax dispatch)\n\
+         import helpers (syntax sink)\n\
+         dispatch sink as answer for Int\n\
+         main : Unit -> Int\n\
+         main () = answer(42)\n",
+    );
+    for protected in [false, true] {
+        let nested = if protected {
+            "Syntax.Syntax(Syntax.MoreNodes(Syntax.TypeNode(item, origin), Syntax.NoNodes))"
+        } else {
+            "Syntax.type_syntax(item)"
+        };
+        tree.write(
+            "forms.ash",
+            &format!(
+                "import @builtin.compiler.syntax as Syntax\n\
+                 pub syntax declaration: (dispatch) $target:ident as $name:ident for $T:type => using expand\n\
+                 expand : Syntax.Input -> Syntax.MacroResult ! {{Syntax.Ops}}\n\
+                 expand input = {{\n\
+                     let origin = Syntax.invocation_origin(input)\n\
+                     match (Syntax.capture(input, 0), Syntax.capture(input, 1), Syntax.capture(input, 2), Syntax.make_token(Syntax.As, \"as\")) {{\n\
+                         (Syntax.Captured(Syntax.IdentifierCapture(target, target_origin)), Syntax.Captured(Syntax.IdentifierCapture(name, name_origin)), Syntax.Captured(Syntax.TypeCapture(item)), Syntax.MadeToken(as_token)) => {{\n\
+                             let nested = {nested}\n\
+                             let inner = Syntax.GroupNode(Syntax.Parentheses, nested, origin)\n\
+                             let inner = Syntax.Syntax(Syntax.MoreNodes(inner, Syntax.NoNodes))\n\
+                             let outer = Syntax.GroupNode(Syntax.Parentheses, inner, origin)\n\
+                             let rest = Syntax.MoreNodes(outer, Syntax.NoNodes)\n\
+                             let rest = Syntax.MoreNodes(Syntax.TokenNode(as_token, origin), rest)\n\
+                             let rest = Syntax.MoreNodes(Syntax.IdentifierNode(name, name_origin), rest)\n\
+                             let rest = Syntax.MoreNodes(Syntax.IdentifierNode(target, target_origin), rest)\n\
+                             Syntax.Expanded(Syntax.Syntax(rest))\n\
+                         }}\n\
+                         _ => Syntax.Rejected(Syntax.MacroDiagnostic(\"capture failed\", origin, Syntax.NoOrigins))\n\
+                     }}\n\
+                 }}\n"
+            ),
+        );
+        let mut graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+        hooks::reset();
+        let result = compile_staged_graph_for_test(&mut graph);
+        assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+        assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+        assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+        assert_eq!(hooks::ROOT_CLOSES.get(), 1);
+        if protected {
+            let failure = result.expect_err("generated TypeNode recapture is refused");
+            assert_eq!(failure.reason_code(), "internal.projection.malformed-tree");
+            assert!(graph.pending.is_empty());
+            assert!(graph.loaded.is_empty());
+            assert!(graph.completed.is_none());
+            eprintln!("type recapture: generated TypeNode refused without publication");
+        } else {
+            let program = result.expect("generated raw Type reaches the imported Template");
+            assert_eq!(execute(&program).unwrap().value_display(), "42");
+            eprintln!("type recapture: generated raw Type control executed 42");
+        }
+    }
+    hooks::reset();
+}
+
+#[test]
 fn declaration_graph_resource_failures_close_real_roots_and_keep_injected_teardown() {
     use crate::{
         driver::{CompiledProgram, FileFailure, PipelineFailure, compile_staged_graph_for_test},
