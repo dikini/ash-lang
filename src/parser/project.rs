@@ -11132,6 +11132,104 @@ mod tests {
     }
 
     #[test]
+    fn type_host_raw_name_prices_fresh_related_and_deduplicated_frames() {
+        use crate::syntax::{DiagnosticLocation, ExpansionFrame, MacroOutputNode};
+        use crate::syntax_resource::SyntaxBudget;
+        use std::{collections::HashMap, sync::Arc};
+
+        let source = SourceFile::new("type-name.ash", "Thing").unwrap();
+        let span = source.span(ByteRange::new(0, 5).unwrap()).unwrap();
+        let current = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let node = ConcreteNode {
+            kind: NodeKind::Type,
+            children: vec![ConcreteElement::Node(ConcreteNode {
+                kind: NodeKind::AtomicType,
+                children: vec![ConcreteElement::Token(0)],
+            })],
+        };
+        let lexed = lex(&source).unwrap();
+        let measure = |related: usize, frames: usize, include_current: bool| {
+            let mut location = DiagnosticLocation::new(span.into());
+            location.related.extend((0..related).map(|_| span.into()));
+            for index in 0..frames {
+                if include_current && index == 0 {
+                    location.add_frame(&current);
+                } else {
+                    location.add_frame(&Arc::new(ExpansionFrame {
+                        invocation: span,
+                        definition: span,
+                    }));
+                }
+            }
+            let name = SurfaceName {
+                text: "Thing".into(),
+                span,
+                introduction: 0,
+                introduced_at: None,
+                written: true,
+                diagnostic: Some(Box::new(location)),
+            };
+            let originals = HashMap::from([(0, MacroOutputNode::Identifier(name, span.into()))]);
+            let tokens = ProjectionTokens {
+                tokens: &lexed.tokens,
+                originals: Some(&originals),
+                occurrence: Some(span),
+                construction: None,
+                construction_extents: false,
+                admission_identifiers: None,
+                frame: Some(&current),
+                name_frame: Some(&current),
+                staging_frames: None,
+                preserve_name_diagnostic: true,
+            };
+            let mut old = SyntaxBudget::default();
+            charge_composed_projection_inner(&node, &tokens, false, false, &mut old).unwrap();
+            let mut new_type = SyntaxBudget::default();
+            new_type.charge_units(17).unwrap();
+            charge_composed_projection_inner(&node, &tokens, false, true, &mut new_type).unwrap();
+            let total = new_type.consumed();
+            let mut short = SyntaxBudget::with_limit(total - 1);
+            short.charge_units(17).unwrap();
+            assert!(matches!(
+                charge_composed_projection_inner(&node, &tokens, false, true, &mut short),
+                Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { limit }), ..
+                }) if limit == total - 1
+            ));
+            let mut exact = SyntaxBudget::with_limit(total);
+            exact.charge_units(17).unwrap();
+            charge_composed_projection_inner(&node, &tokens, false, true, &mut exact).unwrap();
+            assert_eq!(exact.consumed(), total);
+            let mut retry = SyntaxBudget::with_limit(total);
+            retry.charge_units(17).unwrap();
+            charge_composed_projection_inner(&node, &tokens, false, true, &mut retry).unwrap();
+            let projected = project_type(&source, &node, &tokens).unwrap();
+            let SurfaceTypeKind::Named(SurfaceReference::Unqualified(name)) = projected.kind else {
+                panic!("expected a raw named Type");
+            };
+            let diagnostic = name.diagnostic.unwrap();
+            assert_eq!(diagnostic.related.len(), related);
+            assert_eq!(
+                diagnostic.frames.len(),
+                frames + usize::from(!include_current)
+            );
+            (new_type.consumed() - 17 - old.consumed(), total)
+        };
+
+        let (base, _) = measure(0, 0, false);
+        let (related, _) = measure(6, 0, false);
+        assert_eq!(related - base, 6 * 13);
+        let (fresh_frames, total) = measure(0, 3, false);
+        let (matching_frame, matching_total) = measure(0, 3, true);
+        assert_eq!(fresh_frames - base, 3 * 15 + 3);
+        assert_eq!(matching_frame, fresh_frames);
+        assert_eq!(matching_total, total);
+    }
+
+    #[test]
     fn type_host_projector_pays_its_own_buffers_and_retries() {
         use crate::syntax_resource::SyntaxBudget;
 
@@ -11194,6 +11292,102 @@ mod tests {
             );
             assert_eq!(retry.consumed(), total);
         }
+    }
+
+    #[test]
+    fn type_parser_pays_vec_to_arc_before_conversion_and_final_drop() {
+        use crate::syntax::{ExpansionFrame, MacroOutputNode, SyntaxContexts};
+        use crate::syntax_resource::SyntaxBudget;
+        use std::sync::Arc;
+
+        let source = SourceFile::new("type-arc.ash", "Int").unwrap();
+        let span = source.span(ByteRange::new(0, 3).unwrap()).unwrap();
+        let frame = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        let spelling: Arc<str> = Arc::from("Int");
+        let output = || {
+            vec![MacroOutputNode::Token(
+                TokenKind::IntType,
+                Arc::clone(&spelling),
+                span.into(),
+            )]
+        };
+        let base = Arc::strong_count(&spelling);
+        let mut measured = SyntaxBudget::default();
+        measured.charge_units(17).unwrap();
+        let capture = super::super::parse_macro_type(
+            &source,
+            span,
+            output(),
+            &contexts,
+            &frame,
+            &mut measured,
+        )
+        .unwrap();
+        let total = measured.consumed();
+        assert_eq!(capture.contents.len(), 1);
+        assert_eq!(Arc::strong_count(&spelling), base + 1);
+        let alias = Arc::clone(&capture.contents);
+        let weak = Arc::downgrade(&alias);
+        drop(capture);
+        assert_eq!(Arc::strong_count(&alias), 1);
+        assert_eq!(Arc::strong_count(&spelling), base + 1);
+        drop(alias);
+        assert!(weak.upgrade().is_none());
+        assert_eq!(Arc::strong_count(&spelling), base);
+
+        // One element requires separate storage, move and Arc reservations.
+        // Each short trial fails at the corresponding charge before conversion.
+        for allowance in [total - 3, total - 2, total - 1] {
+            let mut short = SyntaxBudget::with_limit(allowance);
+            short.charge_units(17).unwrap();
+            assert!(matches!(
+                super::super::parse_macro_type(
+                    &source,
+                    span,
+                    output(),
+                    &contexts,
+                    &frame,
+                    &mut short,
+                ),
+                Err(super::super::MacroParseFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { limit }), ..
+                }) if limit == allowance
+            ));
+            assert_eq!(short.consumed(), allowance);
+            assert_eq!(Arc::strong_count(&spelling), base);
+        }
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(total);
+            exact.charge_units(17).unwrap();
+            let capture = super::super::parse_macro_type(
+                &source,
+                span,
+                output(),
+                &contexts,
+                &frame,
+                &mut exact,
+            )
+            .unwrap();
+            assert_eq!(exact.consumed(), total);
+            drop(capture);
+            assert_eq!(Arc::strong_count(&spelling), base);
+        }
+        let mut empty = SyntaxBudget::default();
+        assert!(matches!(
+            super::super::parse_macro_type(
+                &source,
+                span,
+                Vec::new(),
+                &contexts,
+                &frame,
+                &mut empty,
+            ),
+            Err(super::super::MacroParseFailure::Syntax { resource: None, .. })
+        ));
     }
 
     #[test]
