@@ -36,7 +36,7 @@ use super::{
 
 #[cfg(test)]
 std::thread_local! {
-    static G1_CAPTURE_OBSERVER: std::cell::Cell<Option<fn(&[SurfaceSyntaxCapture])>> = const { std::cell::Cell::new(None) };
+    static G1_CAPTURE_OBSERVER: std::cell::Cell<Option<fn(&SourceFile, &[SurfaceSyntaxCapture])>> = const { std::cell::Cell::new(None) };
 }
 
 // The parser and projector share token indices. Structured output attaches
@@ -2621,7 +2621,7 @@ pub(crate) fn project_declaration_expansions(
         #[cfg(test)]
         G1_CAPTURE_OBSERVER.with(|observer| {
             if let Some(observe) = observer.get() {
-                observe(&invocation.captures);
+                observe(source, &invocation.captures);
             }
         });
         // Reserve the owner and frame before retaining either one.
@@ -2832,11 +2832,15 @@ fn charge_matcher_capture_count(
             }
             SurfaceSyntaxMatcherPart::Literal { .. } | SurfaceSyntaxMatcherPart::LineEnd => 0,
         };
-        count = count
-            .checked_add(added)
-            .ok_or(ResourceFailure::SyntaxWork {
-                limit: crate::syntax_resource::SYNTAX_WORK_LIMIT,
-            })?;
+        count = match count.checked_add(added) {
+            Some(value) => value,
+            None => {
+                // At least one of these reservations fails at the owner's limit.
+                budget.charge_units(usize::MAX)?;
+                budget.charge()?;
+                unreachable!()
+            }
+        };
     }
     Ok(count)
 }
@@ -8184,7 +8188,7 @@ mod tests {
             static OBSERVED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         }
 
-        fn observe(captures: &[SurfaceSyntaxCapture]) {
+        fn observe(source: &SourceFile, captures: &[SurfaceSyntaxCapture]) {
             let [
                 SurfaceSyntaxCapture::Repeated(outer),
                 SurfaceSyntaxCapture::Repeated(inner),
@@ -8192,25 +8196,23 @@ mod tests {
             else {
                 panic!("expected the two real repeated capture slots: {captures:?}");
             };
-            let source =
+            let expected_source =
                 include_str!("../../tests/fixtures/surface-macros/g1-source-ident/main.ash");
-            let [SurfaceSyntaxCapture::Identifier(first), ..] = outer.values.as_slice() else {
-                panic!("expected an outer identifier");
-            };
-            let caller = first.name.span.source();
+            assert!(source.display_path().ends_with("g1-source-ident/main.ash"));
+            assert_eq!(source.text(), expected_source);
             let check = |capture: &SurfaceSyntaxCapture, expected: &str| {
                 let SurfaceSyntaxCapture::Identifier(capture) = capture else {
                     panic!("expected an identifier");
                 };
                 assert_eq!(capture.name.text, expected);
-                assert_eq!(capture.name.span.source(), caller);
+                assert_eq!(capture.name.span.source(), source.id());
                 assert_eq!(capture.name.introduction, 0);
                 assert!(capture.name.written && capture.name.introduced_at.is_none());
                 assert!(capture.name.diagnostic.is_none());
                 assert_eq!(capture.origin, MacroOrigin::Source(capture.name.span));
                 let range = capture.name.span.range();
                 assert_eq!(
-                    &source[range.start() as usize..range.end() as usize],
+                    &source.text()[range.start() as usize..range.end() as usize],
                     expected
                 );
             };

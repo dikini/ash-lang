@@ -619,7 +619,19 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
             {
                 break;
             }
-            syntax_matcher_items(parser, &mut names, None, false, previous_capture);
+            // The flat prefix has already used the legacy HashSet. Move it once
+            // to a deterministic extended-header accumulator, paying the
+            // table walk, destination slots and moved String values first.
+            let names_work = names
+                .capacity()
+                .saturating_add(names.len().saturating_mul(2));
+            if !parser.charge_matcher_work(names_work) {
+                break;
+            }
+            let mut extended_names = Vec::with_capacity(names.len());
+            extended_names.extend(std::mem::take(&mut names));
+            let _ =
+                syntax_matcher_items(parser, &mut extended_names, None, false, previous_capture);
             parser.finish();
             break;
         }
@@ -678,18 +690,91 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
     parser.finish();
 }
 
-// Parses the remainder of an extended declaration matcher. The outer sequence
-// wraps the already emitted flat prefix; nested groups own their delimiters.
+// A FIRST entry is either a particular literal token or an Identifier capture.
+// These vectors are temporary grammar work; no result is retained on the tree.
+fn push_matcher_start(
+    parser: &mut Parser<'_>,
+    starts: &mut Vec<Option<usize>>,
+    start: Option<usize>,
+) -> bool {
+    let growth = if starts.len() == starts.capacity() {
+        starts.len().saturating_add(1)
+    } else {
+        0
+    };
+    if !parser.charge_matcher_work(growth.saturating_add(1)) {
+        return false;
+    }
+    starts.reserve_exact(1);
+    starts.push(start);
+    true
+}
+
+fn matcher_starts_overlap(
+    parser: &mut Parser<'_>,
+    left: Option<usize>,
+    right: Option<usize>,
+) -> bool {
+    let (Some(left), Some(right)) = (left, right) else {
+        let literal = left.or(right);
+        if !parser.charge_matcher_work(1) {
+            return false;
+        }
+        return literal.is_none_or(|index| {
+            matches!(
+                parser.tokens[index].kind,
+                TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
+            )
+        });
+    };
+    let left_token = &parser.tokens[left];
+    let right_token = &parser.tokens[right];
+    let left_range = left_token.span.range();
+    let right_range = right_token.span.range();
+    let work = (left_range.end() - left_range.start()) as usize
+        + (right_range.end() - right_range.start()) as usize;
+    if !parser.charge_matcher_work(work.saturating_add(2)) {
+        return false;
+    }
+    if parser.tokens[left].kind != parser.tokens[right].kind {
+        return false;
+    }
+    // Brace-group line ends are logical tokens, independent of LF or CRLF.
+    if parser.tokens[left].kind == TokenKind::LineEnd {
+        return true;
+    }
+    if let Some(source) = parser.syntax_source {
+        let text = source.text();
+        return text
+            .get(left_range.start() as usize..left_range.end() as usize)
+            .zip(text.get(right_range.start() as usize..right_range.end() as usize))
+            .is_some_and(|(a, b)| a == b);
+    }
+    // A standalone token-only parse has no spelling for decoded values. Its
+    // extended child is still refused by the unbudgeted source projector.
+    !matches!(
+        parser.tokens[left].kind,
+        TokenKind::Integer(_) | TokenKind::StringLiteral(_)
+    )
+}
+
+// Parses the remainder of an extended declaration matcher. The tuple returned
+// by this walk contains nullable, first-capture, last-capture, and FIRST tokens.
 fn syntax_matcher_items(
     parser: &mut Parser<'_>,
-    names: &mut std::collections::HashSet<String>,
+    names: &mut Vec<String>,
     closing: Option<TokenKind>,
     braces: bool,
     mut previous_capture: bool,
-) -> bool {
+) -> (bool, bool, bool, Vec<Option<usize>>) {
     let mut nullable = true;
+    let mut first_capture = false;
+    let mut first = Vec::new();
+    // A pending repeat can meet a later item through nullable intervening items.
+    // Each entry owns its temporary FIRST list, separator token, and star flag.
+    let mut pending: Vec<(Vec<Option<usize>>, Option<usize>, bool)> = Vec::new();
     loop {
-        if parser.syntax_work_exhausted
+        if parser.resource_failure.is_some()
             || closing.as_ref().is_some_and(|end| parser.at(end))
             || matches!(
                 parser.current(),
@@ -702,15 +787,24 @@ fn syntax_matcher_items(
         if !parser.charge_matcher_work(1) {
             break;
         }
+        let part_start = parser.position;
         let part_nullable;
+        let part_first_capture;
+        let part_last_capture;
+        let mut part_first = Vec::new();
+        let mut repeat = None;
         if parser.at(&TokenKind::Dollar) && parser.nth(1) == Some(&TokenKind::LeftParen) {
-            if !parser.enter_structure() || !parser.charge_matcher_work(3) {
+            if !parser.enter_structure() {
+                break;
+            }
+            if !parser.charge_matcher_work(3) {
+                parser.leave_structure();
                 break;
             }
             parser.start(NodeKind::SyntaxMatcherRepeat);
             let _ = parser.bump(); // $
             let _ = parser.bump(); // (
-            let body_nullable =
+            let (body_nullable, body_first_capture, body_last_capture, body_first) =
                 syntax_matcher_items(parser, names, Some(TokenKind::RightParen), false, false);
             let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
             let mut separator = None;
@@ -731,7 +825,7 @@ fn syntax_matcher_items(
                     parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
                 } else {
                     separator = Some(parser.position);
-                    let _ = parser.bump(); // separator
+                    let _ = parser.bump();
                 }
             }
             part_nullable = parser.at(&TokenKind::Star);
@@ -743,37 +837,25 @@ fn syntax_matcher_items(
             if body_nullable {
                 parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
             }
-            if let Some(index) = separator {
-                let separator_bytes = parser.tokens[index].span.range().end()
-                    - parser.tokens[index].span.range().start();
-                let next_bytes = parser.tokens.get(parser.position).map_or(0, |token| {
-                    token.span.range().end() - token.span.range().start()
-                });
-                if !parser.charge_matcher_work(
-                    (separator_bytes as usize)
-                        .saturating_add(next_bytes as usize)
-                        .saturating_add(2),
-                ) {
-                    parser.finish();
-                    parser.leave_structure();
-                    break;
-                }
-                if parser
-                    .current()
-                    .is_some_and(|kind| *kind == parser.tokens[index].kind)
-                {
-                    parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
-                }
-            }
             parser.finish();
             parser.leave_structure();
-            previous_capture = false;
+            part_first = body_first;
+            part_first_capture = body_first_capture;
+            part_last_capture = body_last_capture;
+            repeat = Some((separator, part_nullable));
         } else if matches!(
             parser.current(),
             Some(TokenKind::LeftParen | TokenKind::LeftBrace)
         ) {
             let is_brace = parser.at(&TokenKind::LeftBrace);
-            if !parser.enter_structure() || !parser.charge_matcher_work(3) {
+            if !push_matcher_start(parser, &mut part_first, Some(part_start)) {
+                break;
+            }
+            if !parser.enter_structure() {
+                break;
+            }
+            if !parser.charge_matcher_work(3) {
+                parser.leave_structure();
                 break;
             }
             parser.start(NodeKind::SyntaxMatcherGroup);
@@ -793,29 +875,59 @@ fn syntax_matcher_items(
             parser.finish();
             parser.leave_structure();
             part_nullable = false;
-            previous_capture = false;
+            part_first_capture = false;
+            part_last_capture = false;
         } else if parser.at(&TokenKind::Dollar) {
-            parser.start(NodeKind::SyntaxCapture);
-            if previous_capture {
-                parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
-            }
-            let _ = parser.bump();
-            let length = match parser.current() {
-                Some(TokenKind::Identifier(name) | TokenKind::UpperIdentifier(name)) => name.len(),
-                _ => 0,
-            };
-            if !parser.charge_matcher_work(length.saturating_add(2)) {
-                parser.finish();
+            if !push_matcher_start(parser, &mut part_first, None) {
                 break;
             }
-            let name = match parser.current() {
+            parser.start(NodeKind::SyntaxCapture);
+            let _ = parser.bump();
+            let index = parser.position;
+            let length = match parser.current() {
                 Some(TokenKind::Identifier(name) | TokenKind::UpperIdentifier(name)) => {
-                    Some(name.clone())
+                    Some(name.len())
                 }
                 _ => None,
             };
-            if name.is_some_and(|name| !names.insert(name)) {
-                parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+            if let Some(length) = length {
+                let mut duplicate = false;
+                for existing in names.iter() {
+                    if !parser.charge_matcher_work(existing.len().min(length).saturating_add(1)) {
+                        break;
+                    }
+                    let found = match &parser.tokens[index].kind {
+                        TokenKind::Identifier(name) | TokenKind::UpperIdentifier(name) => name,
+                        _ => unreachable!(),
+                    };
+                    duplicate |= existing == found;
+                }
+                if parser.resource_failure.is_some() {
+                    parser.finish();
+                    break;
+                }
+                if duplicate {
+                    parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+                } else {
+                    let growth = if names.len() == names.capacity() {
+                        names.len().saturating_add(1)
+                    } else {
+                        0
+                    };
+                    if !parser.charge_matcher_work(length.saturating_add(growth).saturating_add(1))
+                    {
+                        parser.finish();
+                        break;
+                    }
+                    names.reserve_exact(1);
+                    let name = match &parser.tokens[index].kind {
+                        TokenKind::Identifier(name) | TokenKind::UpperIdentifier(name) => {
+                            name.clone()
+                        }
+                        _ => unreachable!(),
+                    };
+                    names.push(name);
+                }
             }
             expect_import_name(parser);
             let _ = parser.expect(&TokenKind::Colon, ExpectedForm::Colon);
@@ -828,7 +940,8 @@ fn syntax_matcher_items(
             }
             parser.finish();
             part_nullable = false;
-            previous_capture = true;
+            part_first_capture = true;
+            part_last_capture = true;
         } else if matches!(
             parser.current(),
             Some(TokenKind::RightParen | TokenKind::RightBrace)
@@ -836,13 +949,74 @@ fn syntax_matcher_items(
             parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
             break;
         } else {
+            if !push_matcher_start(parser, &mut part_first, Some(part_start)) {
+                break;
+            }
             let _ = parser.bump();
             part_nullable = false;
-            previous_capture = false;
+            part_first_capture = false;
+            part_last_capture = false;
+        }
+
+        let mut ambiguous = previous_capture && part_first_capture;
+        for (starts, separator, star) in &pending {
+            for following in &part_first {
+                if let Some(separator) = separator {
+                    ambiguous |= matcher_starts_overlap(parser, Some(*separator), *following);
+                }
+                if separator.is_none() || *star {
+                    for start in starts {
+                        ambiguous |= matcher_starts_overlap(parser, *start, *following);
+                    }
+                }
+            }
+        }
+        if parser.resource_failure.is_some() {
+            break;
+        }
+        if ambiguous {
+            let span = parser.tokens[part_start].span;
+            let _ = parser.report_at(
+                ParseReason::ExpectedForm,
+                ExpectedForm::Identifier,
+                span,
+                None,
+            );
+        }
+        if nullable {
+            first_capture |= part_first_capture;
+            for start in &part_first {
+                if !push_matcher_start(parser, &mut first, *start) {
+                    break;
+                }
+            }
         }
         nullable &= part_nullable;
+        previous_capture = if part_nullable {
+            previous_capture || part_last_capture
+        } else {
+            part_last_capture
+        };
+        if !part_nullable {
+            pending.clear();
+        }
+        if let Some((separator, star)) = repeat {
+            // Cloning these token indices and retaining one pending entry are
+            // temporary grammar work, paid before their Vec allocations.
+            let work = part_first
+                .len()
+                .saturating_mul(2)
+                .saturating_add(pending.len())
+                .saturating_add(2);
+            if !parser.charge_matcher_work(work) {
+                break;
+            }
+            let starts = part_first.clone();
+            pending.reserve_exact(1);
+            pending.push((starts, separator, star));
+        }
     }
-    nullable
+    (nullable, first_capture, previous_capture, first)
 }
 
 fn syntax_declaration_body(parser: &mut Parser<'_>) {
@@ -2292,6 +2466,14 @@ fn structured_starts(
     parser: &mut Parser<'_>,
     parts: &[crate::surface::SurfaceSyntaxMatcherPart],
 ) -> bool {
+    structured_starts_at(parser, parts, parser.nesting_depth)
+}
+
+fn structured_starts_at(
+    parser: &mut Parser<'_>,
+    parts: &[crate::surface::SurfaceSyntaxMatcherPart],
+    depth: usize,
+) -> bool {
     use crate::surface::{
         SurfaceMatcherContainerKind, SurfaceSyntaxCaptureKind, SurfaceSyntaxMatcherPart,
     };
@@ -2323,8 +2505,21 @@ fn structured_starts(
                     });
                 }
                 SurfaceMatcherContainerKind::Repeat { one_or_more, .. } => {
-                    if structured_starts(parser, &container.body) {
+                    let Some(next) = depth
+                        .checked_add(1)
+                        .filter(|value| *value <= super::STRUCTURAL_DEPTH_LIMIT)
+                    else {
+                        parser.fail_structural_depth();
+                        return false;
+                    };
+                    if !parser.charge_matcher_work(1) {
+                        return false;
+                    }
+                    if structured_starts_at(parser, &container.body, next) {
                         return true;
+                    }
+                    if parser.resource_failure.is_some() {
+                        return false;
                     }
                     if *one_or_more {
                         return false;
@@ -2454,7 +2649,7 @@ fn match_structured_items(
                             success = false;
                         }
                         parser.finish();
-                        success && !parser.syntax_work_exhausted
+                        success && parser.resource_failure.is_none()
                     }
                 };
                 parser.leave_structure();
@@ -3815,6 +4010,47 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn forged_equal_token_kinds_still_compare_distinct_source_spelling() {
+        // This component input deliberately changes a lexer token: the current
+        // source lexer has no known valid decoded-equal spelling aliases.
+        let source = SourceFile::new(
+            "forged-matcher.ash",
+            "pub syntax declaration: (sink) $( item ) \"a\"* \"b\" => {}\n",
+        )
+        .unwrap();
+        let mut lexed = lex(&source).unwrap();
+        let indices = lexed
+            .tokens
+            .iter()
+            .enumerate()
+            .filter_map(|(index, token)| {
+                matches!(token.kind, TokenKind::StringLiteral(_)).then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let [first, second] = indices.as_slice() else {
+            panic!("expected two string tokens");
+        };
+        assert_ne!(lexed.tokens[*first].kind, lexed.tokens[*second].kind);
+        lexed.tokens[*second].kind = lexed.tokens[*first].kind.clone();
+        let (tokens, lexical, budget, failure) = lexed.into_parts();
+        assert!(failure.is_none());
+        let (checkpoint, budget) = super::super::parse_module_header(tokens, lexical, budget);
+        let (tree, _) = super::super::finish_module_from_checkpoint_with_syntax(
+            checkpoint,
+            budget,
+            Some(&source),
+            &[],
+        );
+        assert!(
+            tree.parse_diagnostics().is_empty(),
+            "{:?}",
+            tree.parse_diagnostics()
+        );
+        assert_eq!(tree.resource_failure(), None);
+        eprintln!("component only: equal forged token kinds, distinct source spelling");
+    }
 
     mod mock_nested_feature {
         #[derive(Clone, Copy)]
