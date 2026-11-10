@@ -1356,6 +1356,10 @@ mod tests {
 
     impl DeclarationHostFixture {
         fn new() -> Self {
+            Self::with_source("component.ash", "type Item = Item\n")
+        }
+
+        fn with_source(path: &str, text: &str) -> Self {
             use crate::{
                 core::{EffectCoreBuilder, validate::ValidatedMacroEntry, validate_effect},
                 module::ModuleId,
@@ -1372,7 +1376,7 @@ mod tests {
             };
             use std::sync::Arc;
 
-            let source = SourceFile::new("component.ash", "type Item = Item\n").unwrap();
+            let source = SourceFile::new(path, text).unwrap();
             let span = source.span(ByteRange::new(5, 9).unwrap()).unwrap();
             let module = ModuleId::new(0);
             let owner = NominalTypeId::new(module, 0);
@@ -1792,7 +1796,7 @@ mod tests {
                     nodes = children;
                 }
                 assert!(matches!(nodes, [MacroOutputNode::Identifier(name, _)] if name.diagnostic.is_some()));
-                eprintln!("actual host transfer completed with depth-128 metadata");
+                eprintln!("actual host transfer completed with raw-output depth-127 metadata");
                 drop(host);
                 drop(heap);
                 assert_eq!(Arc::strong_count(&original), initial);
@@ -2001,6 +2005,60 @@ mod tests {
         assert_eq!(Arc::strong_count(&original), retained);
         eprintln!(
             "component pre-spent 17; phase totals {measured:?}; refused (phase, prefix, paid, limit) {refusals:?}; exact and retry"
+        );
+    }
+
+    #[test]
+    fn declaration_host_source_snapshot_reserves_path_text_and_line_index() {
+        use crate::{eval::RuntimeFailure, syntax_resource::SyntaxBudget};
+        use std::sync::Arc;
+
+        fn constructor_work(fixture: &DeclarationHostFixture) -> usize {
+            let mut budget = SyntaxBudget::default();
+            let host = fixture.host(&[], &mut budget).unwrap();
+            drop(host);
+            budget.consumed()
+        }
+
+        let original = "type Item = Item\n";
+        let larger_text = format!("{original}{}\n{}\n", "a".repeat(128), "b".repeat(128));
+        let base = DeclarationHostFixture::new();
+        let path =
+            DeclarationHostFixture::with_source("a-longer-component-source-path.ash", original);
+        let text = DeclarationHostFixture::with_source("component.ash", &larger_text);
+        let base_work = constructor_work(&base);
+        let base_snapshot = base.source.snapshot_work().unwrap();
+        for fixture in [&path, &text] {
+            let snapshot = fixture.source.snapshot_work().unwrap();
+            assert!(snapshot > base_snapshot);
+            assert_eq!(
+                constructor_work(fixture) - base_work,
+                snapshot - base_snapshot
+            );
+        }
+
+        let mut name_work = SyntaxBudget::default();
+        crate::syntax::charge_type_name_copy(&text.caller, 0, &mut name_work).unwrap();
+        let snapshot = text.source.snapshot_work().unwrap();
+        let prefix = constructor_work(&text) - snapshot - name_work.consumed();
+        let mut short = SyntaxBudget::with_limit(prefix + snapshot - 1);
+        let frames = Arc::strong_count(&text.frame);
+        let contexts = Arc::strong_count(&text.contexts);
+        assert!(
+            matches!(text.host(&[], &mut short), Err(RuntimeFailure::Report(report))
+            if report.primary.reason_code() == "internal.resource.syntax-work"
+                && report.primary.resource().is_none())
+        );
+        assert_eq!(
+            short.consumed(),
+            prefix,
+            "the snapshot reservation is atomic"
+        );
+        assert_eq!(Arc::strong_count(&text.frame), frames);
+        assert_eq!(Arc::strong_count(&text.contexts), contexts);
+        assert_eq!(text.source.text(), larger_text);
+        eprintln!(
+            "source snapshot path, text and line-index growth; one-short refusal before source clone, paid prefix {prefix}"
         );
     }
 

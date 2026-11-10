@@ -207,9 +207,12 @@ fn declaration_graph_resource_failures_close_real_roots_and_keep_injected_teardo
     let failure = failure.expect_err("host-constructor shortage publishes no program");
     let report = primary(&failure);
     assert!(report.teardown.is_none());
+    assert_eq!(report.cleanup, CleanupStatus::Complete);
     assert_eq!(hooks::TRANSFORMER_DROPS.get(), 0);
     assert_eq!(hooks::SYNTAX_REQUESTS.get(), 0);
     assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 0);
+    assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+    assert_eq!(hooks::ROOT_CLOSES.get(), 0);
     assert!(graph.syntax_budget.consumed() > header + 17);
     assert!(graph.loaded.is_empty() && graph.pending.is_empty() && graph.completed.is_none());
 
@@ -217,6 +220,7 @@ fn declaration_graph_resource_failures_close_real_roots_and_keep_injected_teardo
     let failure = failure.expect_err("active service shortage publishes no program");
     let report = primary(&failure);
     assert!(report.teardown.is_none());
+    assert_eq!(report.cleanup, CleanupStatus::Complete);
     assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
     assert!(hooks::SYNTAX_REQUESTS.get() > 0);
     assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 0);
@@ -225,9 +229,24 @@ fn declaration_graph_resource_failures_close_real_roots_and_keep_injected_teardo
     assert!(graph.syntax_budget.consumed() > header + 17);
     assert!(graph.loaded.is_empty() && graph.pending.is_empty() && graph.completed.is_none());
 
+    let (graph, failure) = trial(&entry, transfer, false);
+    let failure = failure.expect_err("native transfer shortage publishes no program");
+    let native = primary(&failure);
+    assert!(native.teardown.is_none());
+    assert_eq!(native.cleanup, CleanupStatus::Complete);
+    assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+    assert_eq!(hooks::TRANSFER_FAILURES.get(), 1);
+    assert_eq!(hooks::ROOT_CLOSES.get(), 1);
+    assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+    assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+    let native_paid = graph.syntax_budget.consumed();
+    assert!(native_paid > header + 17);
+    assert!(graph.loaded.is_empty() && graph.pending.is_empty() && graph.completed.is_none());
+
     let (graph, failure) = trial(&entry, transfer, true);
     let failure = failure.expect_err("transfer and injected teardown shortage publish no program");
     let report = primary(&failure);
+    assert_eq!(report.primary, native.primary);
     let teardown = report
         .teardown
         .expect("injected root-close failure remains related");
@@ -240,6 +259,7 @@ fn declaration_graph_resource_failures_close_real_roots_and_keep_injected_teardo
     assert_eq!(hooks::ROOT_CLOSES.get(), 1);
     assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
     assert!(graph.syntax_budget.consumed() > header + 17);
+    assert_eq!(graph.syntax_budget.consumed(), native_paid);
     assert!(graph.loaded.is_empty() && graph.pending.is_empty() && graph.completed.is_none());
     assert!(
         failure
@@ -255,7 +275,7 @@ fn declaration_graph_resource_failures_close_real_roots_and_keep_injected_teardo
     );
     hooks::reset();
     eprintln!(
-        "native constructor and active-root service refusals; transfer syntax-work refusal plus injected root-close failure: header={header}, installed={installed}, transfer={transfer}, total={total}"
+        "native constructor, active-root service and transfer refusals clean up completely; separate injected root-close failure retained: header={header}, installed={installed}, transfer={transfer}, total={total}"
     );
 }
 
