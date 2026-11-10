@@ -905,6 +905,7 @@ impl<'inv> SyntaxHost<'inv> {
                     Ok(expression) => {
                         let index = self.expressions.len();
                         self.expressions.push(SurfaceExpressionCapture {
+                            contains_protected_type: false,
                             expression,
                             contents,
                         });
@@ -5723,6 +5724,7 @@ mod tests {
         let span = fixture.caller.span;
         let nested: Arc<[MacroOutputNode]> = Arc::from([]);
         let expression = SurfaceExpressionCapture {
+            contains_protected_type: false,
             expression: SurfaceExpr {
                 kind: SurfaceExprKind::Unit,
                 span,
@@ -5870,6 +5872,7 @@ mod tests {
         // This valid indexed expression is deliberately seeded only for the
         // component guard check; it is not admitted on the declaration route.
         host.expressions.push(SurfaceExpressionCapture {
+            contains_protected_type: false,
             expression: SurfaceExpr {
                 kind: SurfaceExprKind::Unit,
                 span,
@@ -6149,6 +6152,7 @@ mod tests {
                     };
                 }
                 let supported = SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
+                    contains_protected_type: false,
                     expression,
                     contents: Arc::from([]),
                 });
@@ -6640,6 +6644,7 @@ mod tests {
             diagnostic: None,
         };
         let protected = SurfaceExpressionCapture {
+            contains_protected_type: false,
             expression,
             contents: vec![MacroOutputNode::Identifier(name.clone(), combined.clone())].into(),
         };
@@ -6661,6 +6666,7 @@ mod tests {
         )
         .expect("the mixed captured syntax is an expression");
         let original = SurfaceExpressionCapture {
+            contains_protected_type: false,
             expression,
             contents: contents.into(),
         };

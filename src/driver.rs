@@ -1343,13 +1343,21 @@ impl CompilationInput<'_> {
         }
     }
 
-    fn current(&self) -> Option<&LoadedModule> {
+    fn current_with_syntax_budget(
+        &mut self,
+    ) -> Option<(
+        &LoadedModule,
+        Option<&mut crate::syntax_resource::SyntaxBudget>,
+    )> {
         match self {
             #[cfg(test)]
-            Self::Parsed { graph, next } => {
-                next.checked_sub(1).and_then(|i| graph.modules().get(i))
-            }
-            Self::Staged(graph) => graph.current_module(),
+            Self::Parsed { graph, next } => next
+                .checked_sub(1)
+                .and_then(|i| graph.modules().get(i))
+                .map(|module| (module, None)),
+            Self::Staged(graph) => graph
+                .current_module_with_syntax_budget()
+                .map(|(module, budget)| (module, Some(budget))),
         }
     }
 
@@ -1650,7 +1658,9 @@ where
             crate::calibration_features::observe_input(graph);
             metrics.finish(None, 0, 0);
         }
-        let module = input.current().ok_or_else(internal_file_failure)?;
+        let (module, syntax_budget) = input
+            .current_with_syntax_budget()
+            .ok_or_else(internal_file_failure)?;
         check_loaded_module(|| -> Result<(), FileFailure> {
             let contexts =
                 crate::syntax::SyntaxContexts::new(&selected, &checked_syntax_imports, &[]);
@@ -1767,6 +1777,7 @@ where
                 &selected,
                 &checked_syntax_imports,
                 syntax_owners,
+                syntax_budget,
                 &mut transformer,
             );
             let dependencies = module

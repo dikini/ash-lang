@@ -5098,6 +5098,7 @@ mod tests {
                         );
                         let protected = MacroOutputNode::ForwardedExpression(
                             SurfaceExpressionCapture {
+                                contains_protected_type: false,
                                 expression: SurfaceExpr {
                                     kind: SurfaceExprKind::Integer(value.clone()),
                                     span: origin.primary(),

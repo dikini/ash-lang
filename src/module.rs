@@ -1535,11 +1535,22 @@ impl HeaderGraph {
         self.pending.is_empty()
     }
 
+    #[cfg(test)]
     pub(crate) fn current_module(&self) -> Option<&LoadedModule> {
         match &self.completed {
             Some(graph) => graph.modules.last(),
             None => self.loaded.last(),
         }
+    }
+
+    pub(crate) fn current_module_with_syntax_budget(
+        &mut self,
+    ) -> Option<(&LoadedModule, &mut SyntaxBudget)> {
+        let module = match &self.completed {
+            Some(graph) => graph.modules.last(),
+            None => self.loaded.last(),
+        }?;
+        Some((module, &mut self.syntax_budget))
     }
 
     pub(crate) fn next_module(&mut self) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
