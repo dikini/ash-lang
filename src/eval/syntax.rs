@@ -2117,7 +2117,7 @@ mod tests {
                 let owner = NominalTypeId::new(ModuleId::new(0), 0);
                 for (index, name) in (0u32..).zip([
                     "Syntax", "NoNodes", "MoreNodes", "GroupNode", "TypeNode", "TokenNode",
-                    "IdentifierNode", "ParsedType", "ParseRejected", "Expanded",
+                    "IdentifierNode", "ExpressionNode", "ParsedType", "ParseRejected", "Expanded",
                 ]) {
                     host.constructors.insert(name.into(), ConstructorId::new(owner, index));
                 }
