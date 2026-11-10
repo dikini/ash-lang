@@ -1952,6 +1952,259 @@ mod tests {
     }
 
     #[test]
+    fn type_host_value_and_transfer_pay_each_reached_buffer() {
+        use super::{HeapCell, RuntimeFailure, SyntaxHost};
+        use crate::{
+            lexer::TokenKind,
+            surface::{SurfaceDeclarationCapture, SurfaceIdentifierCapture, SurfaceSyntaxCapture},
+            syntax::{MacroDelimiter, MacroOrigin, MacroOutputNode},
+            syntax_resource::SyntaxBudget,
+        };
+        use std::sync::Arc;
+
+        fn host<'a>(
+            fixture: &DeclarationHostFixture,
+            declaration: bool,
+            budget: &'a mut SyntaxBudget,
+        ) -> SyntaxHost<'a> {
+            let identifier = SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+                name: fixture.caller.clone(),
+                origin: fixture.caller.span.into(),
+            });
+            let captures = if declaration {
+                vec![
+                    SurfaceSyntaxCapture::Declaration(SurfaceDeclarationCapture {
+                        contents: Arc::from([]),
+                    }),
+                    identifier,
+                ]
+            } else {
+                vec![identifier]
+            };
+            fixture.host(&captures, budget).unwrap()
+        }
+
+        fn measure(
+            fixture: &DeclarationHostFixture,
+            declaration: bool,
+            packet: &[MacroOutputNode],
+        ) -> (usize, usize) {
+            let mut budget = SyntaxBudget::default();
+            let mut host = host(fixture, declaration, &mut budget);
+            let mut heap = Vec::<HeapCell>::new();
+            let start = host.syntax_work.as_deref().unwrap().consumed();
+            let syntax = host.syntax_value(packet, &mut heap, 0).unwrap();
+            let after_value = host.syntax_work.as_deref().unwrap().consumed();
+            let transferred = host.transfer_syntax(&syntax, &heap, 0).unwrap();
+            let after_transfer = host.syntax_work.as_deref().unwrap().consumed();
+            assert_eq!(transferred, packet);
+            (after_value - start, after_transfer - after_value)
+        }
+
+        let fixture = DeclarationHostFixture::new();
+        let origin: MacroOrigin = fixture.caller.span.into();
+        let nested = vec![MacroOutputNode::Group(
+            MacroDelimiter::Parentheses,
+            vec![MacroOutputNode::Group(
+                MacroDelimiter::Braces,
+                vec![MacroOutputNode::Token(TokenKind::IntType, "Int".into(), origin.clone())],
+                origin.clone(),
+            )],
+            origin.clone(),
+        )];
+        let selected = measure(&fixture, false, &nested);
+        let legacy = measure(&fixture, true, &nested);
+        // Value construction pays Group stack 1+3, Token arena 1 and Origin
+        // arena 1+3+5. Transfer pays Group stack 1+3 and three output Vecs 1 each.
+        assert_eq!(selected.0 - legacy.0, 14);
+        assert_eq!(selected.1 - legacy.1, 7);
+
+        // A popped continuation is reused by the next sibling. The second
+        // output and Origin pushes still grow their own distinct buffers.
+        let siblings = vec![
+            MacroOutputNode::Group(MacroDelimiter::Parentheses, Vec::new(), origin.clone()),
+            MacroOutputNode::Group(MacroDelimiter::Braces, Vec::new(), origin),
+        ];
+        let selected_siblings = measure(&fixture, false, &siblings);
+        let legacy_siblings = measure(&fixture, true, &siblings);
+        assert_eq!(selected_siblings.0 - legacy_siblings.0, 5);
+        assert_eq!(selected_siblings.1 - legacy_siblings.1, 5);
+        assert_eq!(measure(&fixture, false, &[]), measure(&fixture, true, &[]));
+
+        // These synthetic budgets isolate each real host operation. Earlier
+        // paid local state may exist on failure; no partial Syntax/output is returned.
+        for (limit, success) in [(selected.0 - 1, false), (selected.0, true), (selected.0, true)] {
+            let mut budget = SyntaxBudget::default();
+            let mut host = host(&fixture, false, &mut budget);
+            *host.syntax_work.as_deref_mut().unwrap() = SyntaxBudget::with_limit(17 + limit);
+            host.syntax_work.as_deref_mut().unwrap().charge_units(17).unwrap();
+            let result = host.syntax_value(&nested, &mut Vec::new(), 0);
+            if success {
+                assert!(result.is_ok());
+                assert_eq!(host.syntax_work.as_deref().unwrap().consumed(), 17 + limit);
+            } else {
+                assert!(matches!(result, Err(RuntimeFailure::Report(report))
+                    if report.primary.reason_code() == "internal.resource.syntax-work"));
+            }
+        }
+        for (limit, success) in [(selected.1 - 1, false), (selected.1, true), (selected.1, true)] {
+            let mut budget = SyntaxBudget::default();
+            let mut host = host(&fixture, false, &mut budget);
+            let mut heap = Vec::new();
+            let syntax = host.syntax_value(&nested, &mut heap, 0).unwrap();
+            *host.syntax_work.as_deref_mut().unwrap() = SyntaxBudget::with_limit(17 + limit);
+            host.syntax_work.as_deref_mut().unwrap().charge_units(17).unwrap();
+            let result = host.transfer_syntax(&syntax, &heap, 0);
+            if success {
+                assert_eq!(result.unwrap(), nested);
+                assert_eq!(host.syntax_work.as_deref().unwrap().consumed(), 17 + limit);
+            } else {
+                assert!(matches!(result, Err(RuntimeFailure::Report(report))
+                    if report.primary.reason_code() == "internal.resource.syntax-work"));
+            }
+        }
+    }
+
+    #[test]
+    fn type_host_parsed_function_ast_roundtrips_on_a_512k_stack() {
+        const CHILD: &str = "ASH_TYPE_AST_512K_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "eval::machine::syntax::tests::type_host_parsed_function_ast_roundtrips_on_a_512k_stack",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprint!("{stderr}");
+            assert!(output.status.success(), "512 KiB child failed: {}", output.status);
+            for marker in [
+                "type AST stack: parsed 126 function layers",
+                "type AST stack: unwrapped and transferred parsed AST",
+                "type AST stack: host and final contents alias dropped",
+            ] {
+                assert!(stderr.contains(marker), "missing marker {marker}");
+            }
+            return;
+        }
+
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                use super::{HeapCell, Value, allocate_heap, constructor_fields};
+                use crate::{
+                    lexer::{TokenKind, lex},
+                    module::ModuleId,
+                    source::{ByteRange, SourceFile},
+                    surface::SurfaceTypeKind,
+                    syntax::{ExpansionFrame, MacroOutputNode, TransformerOutput},
+                    syntax_resource::SyntaxBudget,
+                    types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
+                };
+                use std::sync::Arc;
+
+                let mut budget = SyntaxBudget::default();
+                let mut host = scalar_host(&mut budget);
+                let parse = OperationId::new(host.ops, 0);
+                let unwrap = OperationId::new(host.ops, 1);
+                host.operations.insert(parse, "parse_type".into());
+                host.operations.insert(unwrap, "type_syntax".into());
+                let owner = NominalTypeId::new(ModuleId::new(0), 0);
+                for (index, name) in (0u32..).zip([
+                    "Syntax", "NoNodes", "MoreNodes", "GroupNode", "TypeNode", "TokenNode",
+                    "IdentifierNode", "ParsedType", "ParseRejected", "Expanded",
+                ]) {
+                    host.constructors.insert(name.into(), ConstructorId::new(owner, index));
+                }
+                let text = format!("{}Int", "Int -> ".repeat(126));
+                let source = SourceFile::new("deep-type.ash", text).unwrap();
+                let lexed = lex(&source).unwrap();
+                assert!(lexed.diagnostics.is_empty());
+                let span = source
+                    .span(ByteRange::new(0, source.text().len() as u32).unwrap())
+                    .unwrap();
+                host.source = source.clone();
+                host.frame = Arc::new(ExpansionFrame { invocation: span, definition: span });
+                host.caller.span = span;
+                let raw = lexed.tokens.into_iter()
+                    .filter(|token| token.kind != TokenKind::EndOfFile)
+                    .map(|token| {
+                        let range = token.span.range();
+                        let spelling = &source.text()[range.start() as usize..range.end() as usize];
+                        MacroOutputNode::Token(token.kind, spelling.into(), token.span.into())
+                    })
+                    .collect::<Vec<_>>();
+                let mut heap = Vec::<HeapCell>::new();
+                let syntax = host.syntax_value(&raw, &mut heap, 0).unwrap();
+                let input = Value::Location(allocate_heap(
+                    &mut heap,
+                    HeapCell::Tuple(vec![host.input(), syntax].into_boxed_slice()),
+                ).unwrap());
+                eprintln!("type AST stack phase: parse 126 function layers");
+                let parsed = host.request(parse, input, &mut heap, &mut TypeWorkBudget::unbounded()).unwrap();
+                let (tag, Some(handle)) = constructor_fields(&parsed, &heap).unwrap() else {
+                    panic!("expected ParsedType");
+                };
+                assert_eq!(tag, host.constructor("ParsedType").unwrap());
+                let handle = handle.clone();
+                let mut current = &host.types[0].ty;
+                for _ in 0..126 {
+                    let SurfaceTypeKind::Function(function) = &current.kind else {
+                        panic!("expected parsed function layer");
+                    };
+                    assert!(matches!(function.domain.kind, SurfaceTypeKind::Int));
+                    current = &function.codomain;
+                }
+                assert!(matches!(current.kind, SurfaceTypeKind::Int));
+                eprintln!("type AST stack: parsed 126 function layers");
+                let alias = Arc::clone(&host.types[0].contents);
+                let weak = Arc::downgrade(&alias);
+                let unwrapped = host.request(unwrap, handle.clone(), &mut heap, &mut TypeWorkBudget::unbounded()).unwrap();
+                let unwrapped_output = host.transfer_syntax_inner(&unwrapped, &heap, 0, true).unwrap();
+                assert_eq!(unwrapped_output.len(), raw.len());
+                drop(unwrapped_output);
+
+                let origin = host.issue_origin(span.into()).unwrap();
+                let fields = Value::Location(allocate_heap(
+                    &mut heap,
+                    HeapCell::Tuple(vec![handle, origin].into_boxed_slice()),
+                ).unwrap());
+                let node = host.construct(&mut heap, "TypeNode", Some(fields)).unwrap();
+                let end = host.construct(&mut heap, "NoNodes", None).unwrap();
+                let fields = Value::Location(allocate_heap(
+                    &mut heap,
+                    HeapCell::Tuple(vec![node, end].into_boxed_slice()),
+                ).unwrap());
+                let nodes = host.construct(&mut heap, "MoreNodes", Some(fields)).unwrap();
+                let syntax = host.construct(&mut heap, "Syntax", Some(nodes)).unwrap();
+                let expanded = host.construct(&mut heap, "Expanded", Some(syntax)).unwrap();
+                let output = host.transfer(&expanded, &heap, &mut TypeWorkBudget::unbounded()).unwrap();
+                let TransformerOutput::Expanded(nodes) = output else { panic!("expected Expanded"); };
+                let [MacroOutputNode::ForwardedType(capture, _)] = nodes.as_slice() else {
+                    panic!("expected transferred TypeNode");
+                };
+                assert!(Arc::ptr_eq(&capture.contents, &alias));
+                eprintln!("type AST stack: unwrapped and transferred parsed AST");
+                drop(heap);
+                drop(host);
+                drop(raw);
+                drop(nodes);
+                assert_eq!(Arc::strong_count(&alias), 1);
+                drop(alias);
+                assert!(weak.upgrade().is_none());
+                eprintln!("type AST stack: host and final contents alias dropped");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
     fn type_capture_arena_reserves_growth_before_clone() {
         use super::{HeapCell, RuntimeFailure, SyntaxHost, Value, allocate_heap};
         use crate::{
