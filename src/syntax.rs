@@ -3302,14 +3302,13 @@ mod tests {
             validate_template_syntax(&declaration, &source, &contexts),
             Err(crate::parser::MacroParseFailure::Invalid)
         ));
-        declaration.template_contents = Some(Arc::from([]));
+        declaration.template_contents = None;
         declaration.implementation =
             SurfaceSyntaxImplementation::Transformer(declaration.name.clone());
-        assert!(matches!(
-            validate_template_syntax(&declaration, &source, &contexts),
-            Err(crate::parser::MacroParseFailure::Invalid)
-        ));
+        validate_template_syntax(&declaration, &source, &contexts)
+            .expect("a transformer has no template to validate");
         declaration.implementation = SurfaceSyntaxImplementation::Template;
+        declaration.template_contents = Some(Arc::from([]));
         declaration.category = crate::surface::SurfaceSyntaxCategory::Expression;
         assert!(matches!(
             validate_template_syntax(&declaration, &source, &contexts),
