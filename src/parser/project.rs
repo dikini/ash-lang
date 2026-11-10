@@ -14963,10 +14963,11 @@ mod tests {
                 vec![ConcreteElement::Token(0)],
             );
             assert_eq!(
-                check_narrow_protected_refusal(
+                check_narrow_protected_refusal_inner(
                     &ordinary,
                     tokens.originals,
                     false,
+                    None,
                     &mut crate::syntax_resource::SyntaxBudget::default(),
                 )
                 .unwrap(),
