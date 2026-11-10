@@ -21307,7 +21307,7 @@ usage arena => resume arena
             let mut expression = SurfaceExpr {
                 diagnostic: None,
                 span,
-                kind: SurfaceExprKind::Integer(0.into()),
+                kind: SurfaceExprKind::Unit,
             };
             for _ in 0..height {
                 expression = SurfaceExpr {
