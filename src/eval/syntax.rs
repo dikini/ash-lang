@@ -6018,8 +6018,8 @@ mod tests {
         assert_eq!(index, failures_before);
         let (diagnostics, resource) = &host.parse_failures[index];
         assert!(resource.is_none());
-        assert_eq!(diagnostics[0].reason, ParseReason::ExpectedForm);
-        assert_eq!(diagnostics[0].expected_form(), Some(ExpectedForm::Expression));
+        assert_eq!(diagnostics[0].reason, ParseReason::ExpectedOperand);
+        assert_eq!(diagnostics[0].expected_form(), Some(ExpectedForm::Operand));
         assert_eq!(diagnostics[0].found_token(), Some(FoundToken::EndOfFile));
 
         // This indexed expression is seeded to check repeated unwrapping
