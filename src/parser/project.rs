@@ -34,6 +34,11 @@ use super::{
     ResourceFailure, cst,
 };
 
+#[cfg(test)]
+std::thread_local! {
+    static G1_CAPTURE_OBSERVER: std::cell::Cell<Option<fn(&[SurfaceSyntaxCapture])>> = const { std::cell::Cell::new(None) };
+}
+
 // The parser and projector share token indices. Structured output attaches
 // original names and fragments to those indices without changing lexer tokens.
 struct ProjectionTokens<'a> {
@@ -2321,9 +2326,10 @@ fn charge_matcher_items(
                 let text = match &name.kind {
                     TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => text,
                     _ => {
-                        return Err(
-                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
-                        );
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
                     }
                 };
                 budget.charge()?;
@@ -2612,6 +2618,12 @@ pub(crate) fn project_declaration_expansions(
             charge_declaration_invocation(source, child, &tokens, &current.contexts, true, budget)?;
         let invocation =
             project_declaration_invocation_node(source, child, &tokens, &current.contexts, true)?;
+        #[cfg(test)]
+        G1_CAPTURE_OBSERVER.with(|observer| {
+            if let Some(observe) = observer.get() {
+                observe(&invocation.captures);
+            }
+        });
         // Reserve the owner and frame before retaining either one.
         budget.charge_units(2)?;
         staged_owners.push(crate::syntax::SyntaxOwner {
@@ -2886,9 +2898,10 @@ fn charge_structured_items(
                         text
                     }
                     _ => {
-                        return Err(
-                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
-                        );
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
                     }
                 };
                 // Source name, text and source-origin retention.
@@ -3010,9 +3023,10 @@ fn charge_structured_items(
                         }
                     }
                     _ => {
-                        return Err(
-                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
-                        );
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
                     }
                 }
             }
@@ -8158,6 +8172,83 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn g1_imported_graph_materializes_ordered_and_ragged_source_captures() {
+        use crate::driver::{RunConfiguration, compile_path, execute};
+        use crate::module::ModuleRoots;
+        use crate::syntax::MacroOrigin;
+        use std::path::PathBuf;
+
+        std::thread_local! {
+            static OBSERVED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+
+        fn observe(captures: &[SurfaceSyntaxCapture]) {
+            let [
+                SurfaceSyntaxCapture::Repeated(outer),
+                SurfaceSyntaxCapture::Repeated(inner),
+            ] = captures
+            else {
+                panic!("expected the two real repeated capture slots: {captures:?}");
+            };
+            let source =
+                include_str!("../../tests/fixtures/surface-macros/g1-source-ident/main.ash");
+            let [SurfaceSyntaxCapture::Identifier(first), ..] = outer.values.as_slice() else {
+                panic!("expected an outer identifier");
+            };
+            let caller = first.name.span.source();
+            let check = |capture: &SurfaceSyntaxCapture, expected: &str| {
+                let SurfaceSyntaxCapture::Identifier(capture) = capture else {
+                    panic!("expected an identifier");
+                };
+                assert_eq!(capture.name.text, expected);
+                assert_eq!(capture.name.span.source(), caller);
+                assert_eq!(capture.name.introduction, 0);
+                assert!(capture.name.written && capture.name.introduced_at.is_none());
+                assert!(capture.name.diagnostic.is_none());
+                assert_eq!(capture.origin, MacroOrigin::Source(capture.name.span));
+                let range = capture.name.span.range();
+                assert_eq!(
+                    &source[range.start() as usize..range.end() as usize],
+                    expected
+                );
+            };
+            assert_eq!(outer.values.len(), 3);
+            for (capture, expected) in outer.values.iter().zip(["alpha", "beta", "gamma"]) {
+                check(capture, expected);
+            }
+            assert_eq!(inner.values.len(), 3);
+            for (capture, expected) in
+                inner
+                    .values
+                    .iter()
+                    .zip([&["a", "b"][..], &[][..], &["c"][..]])
+            {
+                let SurfaceSyntaxCapture::Repeated(values) = capture else {
+                    panic!("expected the inner repetition");
+                };
+                assert_eq!(values.values.len(), expected.len());
+                for (capture, expected) in values.values.iter().zip(expected) {
+                    check(capture, expected);
+                }
+            }
+            OBSERVED.set(true);
+        }
+
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/surface-macros/g1-source-ident/main.ash");
+        OBSERVED.set(false);
+        G1_CAPTURE_OBSERVER.set(Some(observe));
+        let result = compile_path(RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        });
+        G1_CAPTURE_OBSERVER.set(None);
+        let program = result.expect("the imported source graph compiles through empty staging");
+        assert!(OBSERVED.get());
+        assert_eq!(execute(&program).unwrap().value_display(), "42");
+    }
 
     fn h1_selection(
         source: &SourceFile,
@@ -15190,7 +15281,9 @@ mod tests {
             .iter()
             .filter_map(|part| match part {
                 SurfaceSyntaxMatcherPart::Capture { name, .. } => Some(name.clone()),
-                SurfaceSyntaxMatcherPart::Literal { .. } => None,
+                SurfaceSyntaxMatcherPart::Literal { .. }
+                | SurfaceSyntaxMatcherPart::Container(_)
+                | SurfaceSyntaxMatcherPart::LineEnd => None,
             })
             .collect::<Vec<_>>();
         let hop = |captures: &[SurfaceSyntaxCapture], frame: &Arc<ExpansionFrame>| {
