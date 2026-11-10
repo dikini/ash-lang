@@ -13961,8 +13961,10 @@ mod tests {
         ) -> bool {
             for node in nodes {
                 match node {
-                    MacroOutputNode::Group(_, children, _) if replace(children, capture, span) => {
-                        return true;
+                    MacroOutputNode::Group(_, children, _) => {
+                        if replace(children, capture, span) {
+                            return true;
+                        }
                     }
                     MacroOutputNode::Token(TokenKind::Wildcard, _, _) => {
                         *node =
