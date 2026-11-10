@@ -2845,185 +2845,235 @@ fn charge_matcher_capture_count(
     Ok(count)
 }
 
-fn charge_structured_items(
+fn charge_structured_items<'a>(
     source: &SourceFile,
-    parts: &[SurfaceSyntaxMatcherPart],
-    elements: &[ConcreteElement],
+    parts: &'a [SurfaceSyntaxMatcherPart],
+    elements: &'a [ConcreteElement],
     tokens: &ProjectionTokens<'_>,
     depth: usize,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(), DeclarationExpansionFailure> {
-    let slots = charge_matcher_capture_count(parts, depth, budget)?;
-    // The materializer's result, root extension and possible vector move.
-    budget.charge_units(slots.saturating_mul(3))?;
-    let mut children = elements.iter();
-    for part in parts {
-        budget.charge_units(2)?;
-        let element = children.next().ok_or(ProjectionError::MalformedTree(
-            InternalReason::UnexpectedShape,
-        ))?;
-        match (part, element) {
-            (SurfaceSyntaxMatcherPart::Literal { kind, spelling }, element) => {
-                let token = matcher_token(element, tokens)?;
-                let actual = matcher_spelling(source, token)?;
-                budget.charge_units(
-                    spelling
-                        .len()
-                        .saturating_add(actual.len())
-                        .saturating_add(2)
-                        .saturating_mul(2),
-                )?;
-                if token.kind != *kind || actual != spelling {
-                    return Err(
-                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
-                    );
+    enum Frame<'a> {
+        Items {
+            parts: &'a [SurfaceSyntaxMatcherPart],
+            elements: &'a [ConcreteElement],
+            index: usize,
+            depth: usize,
+            entered: bool,
+        },
+        Repeat {
+            body: &'a [SurfaceSyntaxMatcherPart],
+            elements: &'a [ConcreteElement],
+            separator: &'a Option<(TokenKind, String)>,
+            index: usize,
+            depth: usize,
+            iterations: usize,
+            expect_iteration: bool,
+        },
+    }
+
+    fn push<'a>(
+        frames: &mut Vec<Frame<'a>>,
+        frame: Frame<'a>,
+        budget: &mut crate::syntax_resource::SyntaxBudget,
+    ) -> Result<(), DeclarationExpansionFailure> {
+        if frames.len() == frames.capacity() {
+            let capacity = frames.len().saturating_mul(2).max(4);
+            // Pay for the new allocation and moving every live continuation.
+            budget.charge_units(capacity.saturating_add(frames.len()))?;
+            frames.reserve_exact(capacity - frames.len());
+        }
+        budget.charge()?;
+        frames.push(frame);
+        Ok(())
+    }
+
+    let mut frames = Vec::new();
+    push(
+        &mut frames,
+        Frame::Items {
+            parts,
+            elements,
+            index: 0,
+            depth,
+            entered: false,
+        },
+        budget,
+    )?;
+    while let Some(frame) = frames.last_mut() {
+        match frame {
+            Frame::Items {
+                parts,
+                elements,
+                index,
+                depth,
+                entered,
+            } => {
+                let parts = *parts;
+                let elements = *elements;
+                let depth = *depth;
+                if !*entered {
+                    let slots = charge_matcher_capture_count(parts, depth, budget)?;
+                    // The materializer's result, root extension and possible vector move.
+                    budget.charge_units(slots.saturating_mul(3))?;
+                    *entered = true;
+                    continue;
                 }
-            }
-            (SurfaceSyntaxMatcherPart::LineEnd, element) => {
-                if matcher_token(element, tokens)?.kind != TokenKind::LineEnd {
-                    return Err(
-                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
-                    );
-                }
-            }
-            (
-                SurfaceSyntaxMatcherPart::Capture {
-                    kind: SurfaceSyntaxCaptureKind::Identifier,
-                    ..
-                },
-                ConcreteElement::Node(argument),
-            ) if argument.kind == NodeKind::SyntaxArgument => {
-                budget.charge_units(argument.children.len().saturating_mul(2))?;
-                let token = only_direct_token(argument, tokens)?;
-                let text = match &token.kind {
-                    TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text)
-                        if token.original.is_none() =>
-                    {
-                        text
-                    }
-                    _ => {
+                if *index == parts.len() {
+                    if *index != elements.len() {
                         return Err(ProjectionError::MalformedTree(
                             InternalReason::UnexpectedShape,
                         )
                         .into());
                     }
-                };
-                // Source name, text and source-origin retention.
+                    frames.pop();
+                    continue;
+                }
                 budget.charge_units(2)?;
-                budget.charge_units(text.len())?;
-            }
-            (SurfaceSyntaxMatcherPart::Container(container), ConcreteElement::Node(matched)) => {
-                let next = depth
-                    .checked_add(1)
-                    .filter(|value| *value <= super::STRUCTURAL_DEPTH_LIMIT)
-                    .ok_or(ResourceFailure::StructuralDepth {
-                        limit: super::STRUCTURAL_DEPTH_LIMIT,
-                    })?;
-                budget.charge_units(2)?;
-                match &container.kind {
-                    SurfaceMatcherContainerKind::Group { braces }
-                        if matched.kind == NodeKind::SyntaxMatchedGroup =>
-                    {
-                        let len = matched.children.len();
-                        if len < 2 {
-                            return Err(ProjectionError::MalformedTree(
-                                InternalReason::UnexpectedShape,
-                            )
-                            .into());
-                        }
-                        let open = matcher_token(&matched.children[0], tokens)?;
-                        let close = matcher_token(&matched.children[len - 1], tokens)?;
-                        let delimiters_match = if *braces {
-                            open.kind == TokenKind::LeftBrace && close.kind == TokenKind::RightBrace
-                        } else {
-                            open.kind == TokenKind::LeftParen && close.kind == TokenKind::RightParen
-                        };
-                        if !delimiters_match {
-                            return Err(ProjectionError::MalformedTree(
-                                InternalReason::UnexpectedShape,
-                            )
-                            .into());
-                        }
-                        charge_structured_items(
-                            source,
-                            &container.body,
-                            &matched.children[1..len - 1],
-                            tokens,
-                            next,
-                            budget,
+                let part = &parts[*index];
+                let element = elements.get(*index).ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                *index += 1;
+                match (part, element) {
+                    (SurfaceSyntaxMatcherPart::Literal { kind, spelling }, element) => {
+                        let token = matcher_token(element, tokens)?;
+                        let actual = matcher_spelling(source, token)?;
+                        budget.charge_units(
+                            spelling
+                                .len()
+                                .saturating_add(actual.len())
+                                .saturating_add(2)
+                                .saturating_mul(2),
                         )?;
-                    }
-                    SurfaceMatcherContainerKind::Repeat {
-                        one_or_more,
-                        separator,
-                    } if matched.kind == NodeKind::SyntaxMatchedRepeat => {
-                        let inner_slots =
-                            charge_matcher_capture_count(&container.body, next, budget)?;
-                        budget.charge_units(matched.children.len().saturating_mul(2))?;
-                        let iterations = matched.children.iter().filter(|element| matches!(element,
-                            ConcreteElement::Node(node) if node.kind == NodeKind::SyntaxMatchedIteration)).count();
-                        if *one_or_more && iterations == 0 {
+                        if token.kind != *kind || actual != spelling {
                             return Err(ProjectionError::MalformedTree(
                                 InternalReason::UnexpectedShape,
                             )
                             .into());
                         }
-                        // Per-slot accumulator Vecs, final Arc payloads and iteration slots.
-                        budget.charge_units(inner_slots.saturating_mul(2))?;
-                        budget.charge_units(inner_slots.saturating_mul(iterations))?;
-                        let mut expect_iteration = true;
-                        for element in &matched.children {
-                            match element {
-                                ConcreteElement::Node(iteration)
-                                    if expect_iteration
-                                        && iteration.kind == NodeKind::SyntaxMatchedIteration =>
-                                {
-                                    charge_structured_items(
-                                        source,
-                                        &container.body,
-                                        &iteration.children,
-                                        tokens,
-                                        next,
-                                        budget,
-                                    )?;
-                                    expect_iteration = separator.is_none();
-                                }
-                                element if !expect_iteration => {
-                                    let (kind, spelling) = separator.as_ref().ok_or(
-                                        ProjectionError::MalformedTree(
-                                            InternalReason::UnexpectedShape,
-                                        ),
-                                    )?;
-                                    let token = matcher_token(element, tokens)?;
-                                    let actual = matcher_spelling(source, token)?;
-                                    budget.charge_units(
-                                        spelling
-                                            .len()
-                                            .saturating_add(actual.len())
-                                            .saturating_add(2)
-                                            .saturating_mul(2),
-                                    )?;
-                                    if token.kind != *kind || actual != spelling {
-                                        return Err(ProjectionError::MalformedTree(
-                                            InternalReason::UnexpectedShape,
-                                        )
-                                        .into());
-                                    }
-                                    expect_iteration = true;
-                                }
-                                _ => {
+                    }
+                    (SurfaceSyntaxMatcherPart::LineEnd, element) => {
+                        if matcher_token(element, tokens)?.kind != TokenKind::LineEnd {
+                            return Err(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            )
+                            .into());
+                        }
+                    }
+                    (
+                        SurfaceSyntaxMatcherPart::Capture {
+                            kind: SurfaceSyntaxCaptureKind::Identifier,
+                            ..
+                        },
+                        ConcreteElement::Node(argument),
+                    ) if argument.kind == NodeKind::SyntaxArgument => {
+                        budget.charge_units(argument.children.len().saturating_mul(2))?;
+                        let token = only_direct_token(argument, tokens)?;
+                        let text = match &token.kind {
+                            TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text)
+                                if token.original.is_none() =>
+                            {
+                                text
+                            }
+                            _ => {
+                                return Err(ProjectionError::MalformedTree(
+                                    InternalReason::UnexpectedShape,
+                                )
+                                .into());
+                            }
+                        };
+                        // Source name, text and source-origin retention.
+                        budget.charge_units(2)?;
+                        budget.charge_units(text.len())?;
+                    }
+                    (
+                        SurfaceSyntaxMatcherPart::Container(container),
+                        ConcreteElement::Node(matched),
+                    ) => {
+                        let next = depth
+                            .checked_add(1)
+                            .filter(|value| *value <= super::STRUCTURAL_DEPTH_LIMIT)
+                            .ok_or(ResourceFailure::StructuralDepth {
+                                limit: super::STRUCTURAL_DEPTH_LIMIT,
+                            })?;
+                        budget.charge_units(2)?;
+                        match &container.kind {
+                            SurfaceMatcherContainerKind::Group { braces }
+                                if matched.kind == NodeKind::SyntaxMatchedGroup =>
+                            {
+                                let len = matched.children.len();
+                                if len < 2 {
                                     return Err(ProjectionError::MalformedTree(
                                         InternalReason::UnexpectedShape,
                                     )
                                     .into());
                                 }
+                                let open = matcher_token(&matched.children[0], tokens)?;
+                                let close = matcher_token(&matched.children[len - 1], tokens)?;
+                                let delimiters_match = if *braces {
+                                    open.kind == TokenKind::LeftBrace
+                                        && close.kind == TokenKind::RightBrace
+                                } else {
+                                    open.kind == TokenKind::LeftParen
+                                        && close.kind == TokenKind::RightParen
+                                };
+                                if !delimiters_match {
+                                    return Err(ProjectionError::MalformedTree(
+                                        InternalReason::UnexpectedShape,
+                                    )
+                                    .into());
+                                }
+                                push(
+                                    &mut frames,
+                                    Frame::Items {
+                                        parts: &container.body,
+                                        elements: &matched.children[1..len - 1],
+                                        index: 0,
+                                        depth: next,
+                                        entered: false,
+                                    },
+                                    budget,
+                                )?;
                             }
-                        }
-                        if separator.is_some() && iterations > 0 && expect_iteration {
-                            return Err(ProjectionError::MalformedTree(
-                                InternalReason::UnexpectedShape,
-                            )
-                            .into());
+                            SurfaceMatcherContainerKind::Repeat {
+                                one_or_more,
+                                separator,
+                            } if matched.kind == NodeKind::SyntaxMatchedRepeat => {
+                                let inner_slots =
+                                    charge_matcher_capture_count(&container.body, next, budget)?;
+                                budget.charge_units(matched.children.len().saturating_mul(2))?;
+                                let iterations = matched.children.iter().filter(|element| matches!(element,
+                                    ConcreteElement::Node(node) if node.kind == NodeKind::SyntaxMatchedIteration)).count();
+                                if *one_or_more && iterations == 0 {
+                                    return Err(ProjectionError::MalformedTree(
+                                        InternalReason::UnexpectedShape,
+                                    )
+                                    .into());
+                                }
+                                // Per-slot accumulator Vecs, final Arc payloads and iteration slots.
+                                budget.charge_units(inner_slots.saturating_mul(2))?;
+                                budget.charge_units(inner_slots.saturating_mul(iterations))?;
+                                push(
+                                    &mut frames,
+                                    Frame::Repeat {
+                                        body: &container.body,
+                                        elements: &matched.children,
+                                        separator,
+                                        index: 0,
+                                        depth: next,
+                                        iterations,
+                                        expect_iteration: true,
+                                    },
+                                    budget,
+                                )?;
+                            }
+                            _ => {
+                                return Err(ProjectionError::MalformedTree(
+                                    InternalReason::UnexpectedShape,
+                                )
+                                .into());
+                            }
                         }
                     }
                     _ => {
@@ -3034,13 +3084,79 @@ fn charge_structured_items(
                     }
                 }
             }
-            _ => {
-                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+            Frame::Repeat {
+                body,
+                elements,
+                separator,
+                index,
+                depth,
+                iterations,
+                expect_iteration,
+            } => {
+                let body = *body;
+                let elements = *elements;
+                let separator = *separator;
+                let depth = *depth;
+                if *index == elements.len() {
+                    if separator.is_some() && *iterations > 0 && *expect_iteration {
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
+                    }
+                    frames.pop();
+                    continue;
+                }
+                let element = &elements[*index];
+                *index += 1;
+                match element {
+                    ConcreteElement::Node(iteration)
+                        if *expect_iteration
+                            && iteration.kind == NodeKind::SyntaxMatchedIteration =>
+                    {
+                        *expect_iteration = separator.is_none();
+                        push(
+                            &mut frames,
+                            Frame::Items {
+                                parts: body,
+                                elements: &iteration.children,
+                                index: 0,
+                                depth,
+                                entered: false,
+                            },
+                            budget,
+                        )?;
+                    }
+                    element if !*expect_iteration => {
+                        let (kind, spelling) = separator.as_ref().ok_or(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+                        )?;
+                        let token = matcher_token(element, tokens)?;
+                        let actual = matcher_spelling(source, token)?;
+                        budget.charge_units(
+                            spelling
+                                .len()
+                                .saturating_add(actual.len())
+                                .saturating_add(2)
+                                .saturating_mul(2),
+                        )?;
+                        if token.kind != *kind || actual != spelling {
+                            return Err(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            )
+                            .into());
+                        }
+                        *expect_iteration = true;
+                    }
+                    _ => {
+                        return Err(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        )
+                        .into());
+                    }
+                }
             }
         }
-    }
-    if children.next().is_some() {
-        return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
     }
     Ok(())
 }
