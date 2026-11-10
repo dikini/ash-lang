@@ -5974,13 +5974,22 @@ fn collect_expression_scratch<T>(
     values: impl Iterator<Item = Result<T, ProjectionError>>,
     budget: Option<&std::cell::RefCell<&mut crate::syntax_resource::SyntaxBudget>>,
 ) -> Result<Vec<T>, ProjectionError> {
-    if budget.is_none() {
-        return values.collect();
+    if let Some(budget) = budget {
+        collect_selected_expression_scratch(values, budget)
+    } else {
+        values.collect()
     }
+}
+
+fn collect_selected_expression_scratch<T>(
+    values: impl Iterator<Item = Result<T, ProjectionError>>,
+    budget: &std::cell::RefCell<&mut crate::syntax_resource::SyntaxBudget>,
+) -> Result<Vec<T>, ProjectionError> {
     let mut result = Vec::new();
     for value in values {
-        reserve_expression_scratch(&mut result, 1, budget)?;
-        result.push(value?);
+        let value = value?;
+        reserve_expression_scratch(&mut result, 1, Some(budget))?;
+        result.push(value);
     }
     Ok(result)
 }
