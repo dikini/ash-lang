@@ -1407,11 +1407,12 @@ mod tests {
                 constructors: names.iter().map(|name| constructors[*name]).collect(),
                 representation: None,
                 representation_provenance: None,
-                origin: Origin::Source(span),
+                origin: Origin::Source(source.span(ByteRange::new(0, 17).unwrap()).unwrap()),
             };
             let members = names
                 .iter()
-                .map(|name| ResolvedConstructor {
+                .enumerate()
+                .map(|(index, name)| ResolvedConstructor {
                     id: constructors[*name],
                     owner,
                     spelling: (*name).into(),
@@ -1420,7 +1421,11 @@ mod tests {
                         "NoNodes" | "Parentheses" | "Braces" | "MissingCapture"
                     ))
                     .then_some(Type::Unit),
-                    origin: Origin::Source(span),
+                    origin: Origin::Source(
+                        source
+                            .span(ByteRange::new(index as u32, index as u32 + 1).unwrap())
+                            .unwrap(),
+                    ),
                 })
                 .collect();
             let ops = EffectId::new(module, 0);
@@ -1845,71 +1850,74 @@ mod tests {
             fixture: &DeclarationHostFixture,
             captures: &[SurfaceSyntaxCapture],
             limit: usize,
-        ) -> Result<[usize; 5], Failure> {
+        ) -> (Result<[usize; 5], Failure>, usize) {
             let mut budget = SyntaxBudget::with_limit(limit);
             budget.charge_units(17).unwrap();
-            let mut host = fixture
-                .host(captures, &mut budget)
-                .map_err(|e| Failure::Host("constructor", e))?;
-            let mut phases = [0; 5];
-            phases[0] = host.syntax_work.as_ref().unwrap().consumed();
-            let mut heap = Vec::new();
-            let argument = Value::Location(
-                allocate_heap(
-                    &mut heap,
-                    HeapCell::Tuple(
-                        vec![host.input(), Value::integer(Integer::from_i64(0))].into(),
-                    ),
+            let result = (|| {
+                let mut host = fixture
+                    .host(captures, &mut budget)
+                    .map_err(|e| Failure::Host("constructor", e))?;
+                let mut phases = [0; 5];
+                phases[0] = host.syntax_work.as_ref().unwrap().consumed();
+                let mut heap = Vec::new();
+                let argument = Value::Location(
+                    allocate_heap(
+                        &mut heap,
+                        HeapCell::Tuple(
+                            vec![host.input(), Value::integer(Integer::from_i64(0))].into(),
+                        ),
+                    )
+                    .unwrap(),
+                );
+                let captured = host
+                    .request(
+                        fixture.capture,
+                        argument,
+                        &mut heap,
+                        &mut TypeWorkBudget::unbounded(),
+                    )
+                    .map_err(|e| Failure::Host("capture", e))?;
+                phases[1] = host.syntax_work.as_ref().unwrap().consumed();
+                let (_, capture) = constructor_fields(&captured, &heap).unwrap();
+                let (_, fragment) = constructor_fields(capture.unwrap(), &heap).unwrap();
+                let syntax = host
+                    .request(
+                        fixture.unwrap,
+                        fragment.unwrap().clone(),
+                        &mut heap,
+                        &mut TypeWorkBudget::unbounded(),
+                    )
+                    .map_err(|e| Failure::Host("unwrap", e))?;
+                phases[2] = host.syntax_work.as_ref().unwrap().consumed();
+                let result = Value::Location(
+                    allocate_heap(
+                        &mut heap,
+                        HeapCell::Constructor(fixture.constructors["Expanded"], Some(syntax)),
+                    )
+                    .unwrap(),
+                );
+                let TransformerOutput::Expanded(output) = host
+                    .transfer(&result, &heap, &mut TypeWorkBudget::unbounded())
+                    .map_err(|e| Failure::Host("transfer", e))?
+                else {
+                    panic!("expanded output")
+                };
+                phases[3] = host.syntax_work.as_ref().unwrap().consumed();
+                drop(host);
+                drop(heap);
+                parse_declaration_template_admission(
+                    &fixture.source,
+                    fixture.caller.span,
+                    output,
+                    &fixture.contexts,
+                    &[],
+                    &mut budget,
                 )
-                .unwrap(),
-            );
-            let captured = host
-                .request(
-                    fixture.capture,
-                    argument,
-                    &mut heap,
-                    &mut TypeWorkBudget::unbounded(),
-                )
-                .map_err(|e| Failure::Host("capture", e))?;
-            phases[1] = host.syntax_work.as_ref().unwrap().consumed();
-            let (_, capture) = constructor_fields(&captured, &heap).unwrap();
-            let (_, fragment) = constructor_fields(capture.unwrap(), &heap).unwrap();
-            let syntax = host
-                .request(
-                    fixture.unwrap,
-                    fragment.unwrap().clone(),
-                    &mut heap,
-                    &mut TypeWorkBudget::unbounded(),
-                )
-                .map_err(|e| Failure::Host("unwrap", e))?;
-            phases[2] = host.syntax_work.as_ref().unwrap().consumed();
-            let result = Value::Location(
-                allocate_heap(
-                    &mut heap,
-                    HeapCell::Constructor(fixture.constructors["Expanded"], Some(syntax)),
-                )
-                .unwrap(),
-            );
-            let TransformerOutput::Expanded(output) = host
-                .transfer(&result, &heap, &mut TypeWorkBudget::unbounded())
-                .map_err(|e| Failure::Host("transfer", e))?
-            else {
-                panic!("expanded output")
-            };
-            phases[3] = host.syntax_work.as_ref().unwrap().consumed();
-            drop(host);
-            drop(heap);
-            parse_declaration_template_admission(
-                &fixture.source,
-                fixture.caller.span,
-                output,
-                &fixture.contexts,
-                &[],
-                &mut budget,
-            )
-            .map_err(Failure::Parse)?;
-            phases[4] = budget.consumed();
-            Ok(phases)
+                .map_err(Failure::Parse)?;
+                phases[4] = budget.consumed();
+                Ok(phases)
+            })();
+            (result, budget.consumed())
         }
 
         let fixture = DeclarationHostFixture::new();
@@ -1934,20 +1942,34 @@ mod tests {
             },
         )];
         let retained = Arc::strong_count(&original);
-        let measured = run(
+        let (measured, total) = run(
             &fixture,
             &captures,
             crate::syntax_resource::SYNTAX_WORK_LIMIT,
-        )
-        .unwrap();
+        );
+        let measured = measured.unwrap();
+        assert_eq!(total, measured[4]);
         assert!(measured.windows(2).all(|phase| phase[0] < phase[1]));
+        let mut refusals = Vec::new();
         for (index, phase) in ["constructor", "capture", "unwrap", "transfer", "parse"]
             .iter()
             .enumerate()
         {
             let limit = measured[index] - 1;
-            let failure =
-                run(&fixture, &captures, limit).expect_err("the reached phase is one unit short");
+            let (failure, paid) = run(&fixture, &captures, limit);
+            let failure = failure.expect_err("the reached phase is one unit short");
+            let prefix = if index == 0 { 17 } else { measured[index - 1] };
+            assert!(
+                paid >= prefix && paid <= limit,
+                "{phase}: paid {paid}, prefix {prefix}, limit {limit}"
+            );
+            if *phase == "parse" {
+                assert!(
+                    paid > prefix,
+                    "the late refusal retained additional staging work"
+                );
+            }
+            refusals.push((*phase, prefix, paid, limit));
             match (phase, failure) {
                 (
                     &"parse",
@@ -1968,13 +1990,17 @@ mod tests {
             }
             assert_eq!(Arc::strong_count(&original), retained);
         }
-        let exact = run(&fixture, &captures, measured[4]).unwrap();
+        let (exact, paid) = run(&fixture, &captures, measured[4]);
+        let exact = exact.unwrap();
+        assert_eq!(paid, measured[4]);
         assert_eq!(exact, measured);
-        let retry = run(&fixture, &captures, measured[4]).unwrap();
+        let (retry, paid) = run(&fixture, &captures, measured[4]);
+        let retry = retry.unwrap();
+        assert_eq!(paid, measured[4]);
         assert_eq!(retry, measured);
         assert_eq!(Arc::strong_count(&original), retained);
         eprintln!(
-            "component pre-spent 17; constructor/capture/unwrap/transfer/staging work: {measured:?}; one-short each, exact and retry"
+            "component pre-spent 17; phase totals {measured:?}; refused (phase, prefix, paid, limit) {refusals:?}; exact and retry"
         );
     }
 
@@ -2127,6 +2153,9 @@ mod tests {
             .unwrap(),
         );
         let heap_before = heap.len();
+        let paid_before = host.syntax_work.as_ref().unwrap().consumed();
+        let expressions_before = host.expressions.len();
+        let failures_before = host.parse_failures.len();
         assert!(matches!(
             host.request(
                 fixture.parse_expression,
@@ -2137,6 +2166,24 @@ mod tests {
             Err(RuntimeFailure::InvalidControlState)
         ));
         assert_eq!(heap.len(), heap_before);
+        assert_eq!(
+            host.syntax_work.as_ref().unwrap().consumed() - paid_before,
+            1 + "parse_expression".len()
+        );
+        assert_eq!(host.expressions.len(), expressions_before);
+        assert_eq!(host.parse_failures.len(), failures_before);
+        // This valid indexed expression is deliberately seeded only for the
+        // component guard check; it is not admitted on the declaration route.
+        host.expressions.push(SurfaceExpressionCapture {
+            expression: SurfaceExpr {
+                kind: SurfaceExprKind::Unit,
+                span,
+                diagnostic: None,
+            },
+            contents: Arc::clone(&nested),
+        });
+        let nested_retained = Arc::strong_count(&nested);
+        let paid_before = host.syntax_work.as_ref().unwrap().consumed();
         assert!(matches!(
             host.request(
                 fixture.expression_syntax,
@@ -2146,6 +2193,11 @@ mod tests {
             ),
             Err(RuntimeFailure::InvalidControlState)
         ));
+        assert_eq!(
+            host.syntax_work.as_ref().unwrap().consumed() - paid_before,
+            1 + "expression_syntax".len()
+        );
+        assert_eq!(Arc::strong_count(&nested), nested_retained);
 
         let combined =
             MacroOrigin::combined(vec![span.into()], Arc::clone(&fixture.frame)).unwrap();
@@ -2198,10 +2250,16 @@ mod tests {
                 )
                 .unwrap(),
             );
+            let paid_before = host.syntax_work.as_ref().unwrap().consumed();
             assert!(matches!(
                 host.transfer_syntax(&syntax, &heap, 0),
                 Err(RuntimeFailure::InvalidControlState)
             ));
+            assert_eq!(
+                host.syntax_work.as_ref().unwrap().consumed() - paid_before,
+                5,
+                "{protected}: loop and tag check precede origin copy"
+            );
             assert_eq!(Arc::strong_count(inputs), retained);
         }
         eprintln!(

@@ -137,6 +137,128 @@ fn declaration_graph_shares_budget_through_host_staging_and_retry() {
     );
 }
 
+#[test]
+fn declaration_graph_resource_failures_close_real_roots_and_keep_injected_teardown() {
+    use crate::{
+        driver::{CompiledProgram, FileFailure, PipelineFailure, compile_staged_graph_for_test},
+        eval::{
+            CleanupStatus, ResourceFailureCause, RuntimeFailure, RuntimePhase, RuntimeResource,
+            machine_test_hooks as hooks,
+        },
+    };
+
+    fn trial(
+        entry: &Path,
+        limit: usize,
+        inject_close: bool,
+    ) -> (HeaderGraph, Result<CompiledProgram, FileFailure>) {
+        let mut graph = graph_at(entry, BodyMode::Header, limit).unwrap();
+        graph.syntax_budget.charge_units(17).unwrap();
+        hooks::reset();
+        hooks::FAIL_ROOT_CLOSE.set(inject_close);
+        let result = compile_staged_graph_for_test(&mut graph);
+        (graph, result)
+    }
+
+    fn primary(failure: &FileFailure) -> crate::eval::RuntimeFailureReport {
+        let Some(PipelineFailure::SyntaxRuntime(failure)) = failure.pipeline_failure() else {
+            panic!("the host retains its syntax-work refusal: {failure:?}");
+        };
+        let RuntimeFailure::Report(report) = failure.cause() else {
+            panic!("the host refusal has structured details");
+        };
+        assert_eq!(
+            report.primary.reason_code(),
+            "internal.resource.syntax-work"
+        );
+        assert!(report.primary.resource().is_none());
+        report
+    }
+
+    let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("docs/design/macros/fixtures/procedural_declaration/main.ash");
+    let header = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT)
+        .unwrap()
+        .syntax_budget
+        .consumed();
+    let (measured, result) = trial(&entry, SYNTAX_WORK_LIMIT, false);
+    result.unwrap();
+    let total = measured.syntax_budget.consumed();
+    assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+
+    let first_reaching = |observe: fn() -> bool| {
+        let (mut low, mut high) = (header + 17, total);
+        while low < high {
+            let mid = low + (high - low) / 2;
+            let (_graph, _result) = trial(&entry, mid, false);
+            if observe() {
+                high = mid;
+            } else {
+                low = mid + 1;
+            }
+        }
+        low
+    };
+    let installed = first_reaching(|| hooks::TRANSFORMER_DROPS.get() == 1);
+    let transfer = first_reaching(|| hooks::TRANSFER_ATTEMPTS.get() == 1);
+    assert!(header + 17 < installed && installed < transfer && transfer < total);
+
+    let (graph, failure) = trial(&entry, installed - 1, false);
+    let failure = failure.expect_err("host-constructor shortage publishes no program");
+    let report = primary(&failure);
+    assert!(report.teardown.is_none());
+    assert_eq!(hooks::TRANSFORMER_DROPS.get(), 0);
+    assert_eq!(hooks::SYNTAX_REQUESTS.get(), 0);
+    assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 0);
+    assert!(graph.syntax_budget.consumed() > header + 17);
+    assert!(graph.loaded.is_empty() && graph.pending.is_empty() && graph.completed.is_none());
+
+    let (graph, failure) = trial(&entry, transfer - 1, false);
+    let failure = failure.expect_err("active service shortage publishes no program");
+    let report = primary(&failure);
+    assert!(report.teardown.is_none());
+    assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+    assert!(hooks::SYNTAX_REQUESTS.get() > 0);
+    assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 0);
+    assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 1);
+    assert_eq!(hooks::ROOT_CLOSES.get(), 0);
+    assert!(graph.syntax_budget.consumed() > header + 17);
+    assert!(graph.loaded.is_empty() && graph.pending.is_empty() && graph.completed.is_none());
+
+    let (graph, failure) = trial(&entry, transfer, true);
+    let failure = failure.expect_err("transfer and injected teardown shortage publish no program");
+    let report = primary(&failure);
+    let teardown = report
+        .teardown
+        .expect("injected root-close failure remains related");
+    assert_eq!(teardown.phase, RuntimePhase::Teardown);
+    assert_eq!(teardown.resource, RuntimeResource::EnvironmentDisposal);
+    assert_eq!(teardown.cause, ResourceFailureCause::ConfiguredCapacity);
+    assert_eq!(report.cleanup, CleanupStatus::Incomplete);
+    assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+    assert_eq!(hooks::TRANSFER_FAILURES.get(), 1);
+    assert_eq!(hooks::ROOT_CLOSES.get(), 1);
+    assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+    assert!(graph.syntax_budget.consumed() > header + 17);
+    assert!(graph.loaded.is_empty() && graph.pending.is_empty() && graph.completed.is_none());
+    assert!(
+        failure
+            .sources()
+            .iter()
+            .any(|source| source.display_path().ends_with("main.ash"))
+    );
+    assert!(
+        failure
+            .sources()
+            .iter()
+            .any(|source| source.display_path().ends_with("forms.ash"))
+    );
+    hooks::reset();
+    eprintln!(
+        "native constructor and active-root service refusals; transfer syntax-work refusal plus injected root-close failure: header={header}, installed={installed}, transfer={transfer}, total={total}"
+    );
+}
+
 #[allow(clippy::type_complexity)] // Mirrors the inspected graph's module and edge tuples.
 fn graph_shape(
     graph: &ModuleGraph,
