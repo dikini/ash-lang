@@ -2450,9 +2450,10 @@ mod tests {
             source::{ByteRange, Origin, SourceFile},
             surface::{
                 SurfaceDeclarationCapture, SurfaceExpr, SurfaceExprKind, SurfaceExpressionCapture,
-                SurfaceName, SurfaceSyntaxCapture,
+                SurfaceName, SurfaceRepeatedCapture, SurfaceSyntaxCapture,
             },
             syntax::{ExpansionFrame, MacroOutputNode, SyntaxContexts},
+            syntax_resource::SyntaxBudget,
             types::{EffectId, OperationId, Type, TypeWorkBudget},
         };
         use std::{collections::HashMap, sync::Arc};
@@ -2568,8 +2569,44 @@ mod tests {
                 eprintln!("D5 host late Declaration refused and prefix dropped on 512 KiB");
                 assert_eq!(Arc::strong_count(&contents), retained);
 
+                let repeated = Arc::new(SurfaceRepeatedCapture { values: Vec::new() });
+                let repeated_capture = [SurfaceSyntaxCapture::Repeated(Arc::clone(&repeated))];
+                let repeated_references = Arc::strong_count(&repeated);
+                assert!(matches!(
+                    SyntaxHost::new(
+                        &entry,
+                        &repeated_capture,
+                        &source,
+                        &name,
+                        0,
+                        Arc::clone(&contexts),
+                        Arc::clone(&frame),
+                        None,
+                    ),
+                    Err(RuntimeFailure::InvalidControlState)
+                ));
+                let mut constructor_budget = SyntaxBudget::with_limit(100);
+                constructor_budget.charge_units(17).unwrap();
+                assert!(matches!(
+                    SyntaxHost::new(
+                        &entry,
+                        &repeated_capture,
+                        &source,
+                        &name,
+                        0,
+                        Arc::clone(&contexts),
+                        Arc::clone(&frame),
+                        Some(&mut constructor_budget),
+                    ),
+                    Err(RuntimeFailure::InvalidControlState)
+                ));
+                assert_eq!(constructor_budget.consumed(), 19);
+                assert_eq!(Arc::strong_count(&repeated), repeated_references);
+
                 // Constructor admission makes this state unreachable in the ordinary host.
                 let captures = vec![captures.into_iter().last().unwrap()];
+                let mut request_budget = SyntaxBudget::with_limit(100);
+                request_budget.charge_units(17).unwrap();
                 let mut host = SyntaxHost {
                     occurrence,
                     binder: BinderId::new(0),
@@ -2602,12 +2639,42 @@ mod tests {
                 assert!(matches!(
                     host.request(
                         operation,
+                        argument.clone(),
+                        &mut heap,
+                        &mut TypeWorkBudget::unbounded()
+                    ),
+                    Err(RuntimeFailure::InvalidControlState)
+                ));
+                // The repeated state is injected only to reach the request guard;
+                // the real constructor above refuses it first.
+                host.captures = vec![SurfaceSyntaxCapture::Repeated(Arc::clone(&repeated))];
+                let repeated_references = Arc::strong_count(&repeated);
+                let heap_len = heap.len();
+                assert!(matches!(
+                    host.request(
+                        operation,
+                        argument.clone(),
+                        &mut heap,
+                        &mut TypeWorkBudget::unbounded()
+                    ),
+                    Err(RuntimeFailure::InvalidControlState)
+                ));
+                assert_eq!(heap.len(), heap_len);
+                assert_eq!(Arc::strong_count(&repeated), repeated_references);
+                host.syntax_work = Some(&mut request_budget);
+                assert!(matches!(
+                    host.request(
+                        operation,
                         argument,
                         &mut heap,
                         &mut TypeWorkBudget::unbounded()
                     ),
                     Err(RuntimeFailure::InvalidControlState)
                 ));
+                assert_eq!(heap.len(), heap_len);
+                assert_eq!(Arc::strong_count(&repeated), repeated_references);
+                drop(host);
+                assert_eq!(request_budget.consumed(), 17 + 1 + "capture".len());
             })
             .unwrap()
             .join()

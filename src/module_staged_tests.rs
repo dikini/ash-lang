@@ -378,6 +378,93 @@ fn g1_real_matcher_paths_on_a_512k_stack() {
 }
 
 #[test]
+fn g1_actual_empty_and_literal_only_repetitions_preserve_capture_shapes() {
+    use crate::{
+        driver::{FileFailure, compile_staged_graph_for_test, execute},
+        parser::G1_CAPTURE_OBSERVER,
+        surface::SurfaceSyntaxCapture,
+    };
+    use std::cell::Cell;
+
+    std::thread_local! {
+        static SHAPE: Cell<u8> = const { Cell::new(0) };
+        static OBSERVED: Cell<bool> = const { Cell::new(false) };
+    }
+    fn observe(source: &SourceFile, captures: &[SurfaceSyntaxCapture], _: &SyntaxBudget) {
+        assert!(source.display_path().ends_with("main.ash"));
+        match SHAPE.get() {
+            1 => {
+                let [SurfaceSyntaxCapture::Repeated(values)] = captures else {
+                    panic!("expected empty outer capture");
+                };
+                assert!(values.values.is_empty());
+            }
+            2 => assert!(captures.is_empty(), "literal-only repeats create no slot"),
+            3 => {
+                let [SurfaceSyntaxCapture::Repeated(values)] = captures else {
+                    panic!("expected one row");
+                };
+                let [SurfaceSyntaxCapture::Identifier(value)] = values.values.as_slice() else {
+                    panic!("expected one source identifier");
+                };
+                assert_eq!(value.name.text, "Alpha");
+                assert_eq!(value.name.span.source(), source.id());
+                assert_eq!(value.origin, value.name.span.into());
+            }
+            _ => panic!("unexpected shape"),
+        }
+        OBSERVED.set(true);
+    }
+    fn trial(matcher: &str, invocation: &str, shape: u8) {
+        let tree = Tree::new();
+        tree.write(
+            "forms.ash",
+            &format!("pub syntax declaration: (sink) {matcher} => {{}}\n"),
+        );
+        let entry = tree.write(
+            "main.ash",
+            &format!(
+                "import forms (syntax sink)\n{invocation}\nmain : Unit -> Int\nmain () = 42\n"
+            ),
+        );
+        let mut graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+        SHAPE.set(shape);
+        OBSERVED.set(false);
+        G1_CAPTURE_OBSERVER.set(Some(observe));
+        let result = compile_staged_graph_for_test(&mut graph);
+        G1_CAPTURE_OBSERVER.set(None);
+        if shape != 0 {
+            let program = result.unwrap();
+            assert!(OBSERVED.get());
+            assert_eq!(execute(&program).unwrap().value_display(), "42");
+        } else {
+            let failure = match result {
+                Ok(_) => panic!("expected source matcher refusal"),
+                Err(failure) => failure,
+            };
+            assert!(!OBSERVED.get());
+            assert!(
+                graph.pending.is_empty() && graph.loaded.is_empty() && graph.completed.is_none()
+            );
+            let FileFailure::Graph(diagnostic) = &failure else {
+                panic!("expected graph failure: {failure:?}");
+            };
+            let LoadGraphError::Syntax(syntax) = diagnostic.failure() else {
+                panic!("expected parser refusal");
+            };
+            assert!(syntax.source.display_path().ends_with("main.ash"));
+            assert!(!syntax.parser.is_empty() && syntax.resource.is_none());
+        }
+    }
+
+    trial("$( row $item:ident ),*", "sink", 1);
+    trial("$( word ),*", "sink word, word, word", 2);
+    trial("$( row $item:ident ),+", "sink row Alpha", 3);
+    trial("$( row $item:ident ),+", "sink", 0);
+    trial("$( row $item:ident ),*", "sink row Alpha,", 0);
+}
+
+#[test]
 fn g1_source_header_builder_runs_on_fast_and_ordered_graph_paths() {
     use crate::{
         driver::{compile_staged_graph_for_test, execute},

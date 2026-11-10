@@ -8407,6 +8407,119 @@ mod tests {
     use super::*;
 
     #[test]
+    fn g1_literal_only_rows_pay_all_reached_child_visits() {
+        use crate::{source::ByteRange, syntax::SelectedSyntax, syntax_resource::SyntaxBudget};
+
+        fn paid(rows: usize) -> usize {
+            let definition = SourceFile::new(
+                "zero-slot-forms.ash",
+                "pub syntax declaration: (sink) $( word ),* => {}\n",
+            )
+            .unwrap();
+            let definition_tree = parse(lex(&definition).unwrap());
+            let (root, tokens) = validated_root(&definition, &definition_tree).unwrap();
+            let child = child_nodes(root)
+                .find(|node| node.kind == NodeKind::SyntaxDeclaration)
+                .unwrap();
+            let mut module = ModuleProjection::default();
+            project_staged_source_child(
+                &mut module,
+                &definition,
+                child,
+                tokens,
+                &mut SyntaxBudget::default(),
+            )
+            .unwrap();
+            let declaration = module.syntax_declarations.pop().unwrap();
+            let import_span = definition.span(ByteRange::new(0, 0).unwrap()).unwrap();
+            let selected = SelectedSyntax {
+                name: "sink".into(),
+                declaration,
+                owner: 0,
+                import_span,
+            };
+            let arguments = std::iter::repeat_n("word", rows)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let caller =
+                SourceFile::new("zero-slot-main.ash", format!("sink {arguments}\n")).unwrap();
+            let (tokens, lexical, budget, failure) = lex(&caller).unwrap().into_parts();
+            assert!(failure.is_none());
+            let (checkpoint, budget) = super::super::parse_module_header(tokens, lexical, budget);
+            let (tree, _) = super::super::finish_module_from_checkpoint_with_syntax(
+                checkpoint,
+                budget,
+                Some(&caller),
+                std::slice::from_ref(&selected),
+            );
+            let (root, tokens) = validated_root(&caller, &tree).unwrap();
+            let invocation = child_nodes(root)
+                .find(|node| node.kind == NodeKind::DeclarationSyntaxInvocation)
+                .unwrap();
+            let Some(ConcreteElement::Node(repeat)) = invocation.children.get(1) else {
+                panic!("expected actual matched repetition");
+            };
+            assert_eq!(repeat.kind, NodeKind::SyntaxMatchedRepeat);
+            assert_eq!(
+                repeat.children.len(),
+                rows.saturating_mul(2).saturating_sub(usize::from(rows > 0))
+            );
+            let projected_tokens = ProjectionTokens::source(tokens);
+            let mut budget = SyntaxBudget::with_limit(super::super::SYNTAX_WORK_LIMIT);
+            budget.charge_units(17).unwrap();
+            charge_structured_items(
+                &caller,
+                &selected.declaration.matcher,
+                &invocation.children[1..],
+                &projected_tokens,
+                1,
+                &mut budget,
+            )
+            .unwrap();
+            let total = budget.consumed();
+            assert!(
+                project_structured_items(
+                    &caller,
+                    &selected.declaration.matcher,
+                    &invocation.children[1..],
+                    &projected_tokens
+                )
+                .unwrap()
+                .is_empty()
+            );
+            let mut short = SyntaxBudget::with_limit(total - 1);
+            short.charge_units(17).unwrap();
+            assert!(
+                matches!(charge_structured_items(&caller, &selected.declaration.matcher, &invocation.children[1..], &projected_tokens, 1, &mut short), Err(DeclarationExpansionFailure::Syntax { resource: Some(ResourceFailure::SyntaxWork { limit }), .. }) if limit == total - 1)
+            );
+            assert!(short.consumed() >= 17 && short.consumed() <= total - 1);
+            let mut exact = SyntaxBudget::with_limit(total);
+            exact.charge_units(17).unwrap();
+            charge_structured_items(
+                &caller,
+                &selected.declaration.matcher,
+                &invocation.children[1..],
+                &projected_tokens,
+                1,
+                &mut exact,
+            )
+            .unwrap();
+            assert_eq!(exact.consumed(), total);
+            total - 17
+        }
+
+        let empty = paid(0);
+        let one = paid(1);
+        let two = paid(2);
+        let ten = paid(10);
+        assert!(one > empty);
+        // Each added row: two child slots scanned four times (8), one row's
+        // frame/count/visit/comparison (26), and one separator comparison (8).
+        assert_eq!(two - one, 42);
+        assert_eq!(ten - one, 9 * 42);
+    }
+
+    #[test]
     fn g1_header_copy_reserves_payloads_before_construction() {
         use crate::syntax_resource::SyntaxBudget;
 
