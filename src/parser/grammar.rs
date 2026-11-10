@@ -513,7 +513,7 @@ fn module_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
     {
         resource_definition(parser)
     } else if starts_newtype_declaration(parser) {
-        newtype_declaration(parser)
+        newtype_declaration(parser, true)
     } else if parser.at(&TokenKind::Type)
         || parser.at(&TokenKind::Pub)
             && matches!(parser.nth(1), Some(TokenKind::Type | TokenKind::Opaque))
@@ -547,14 +547,46 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
     let declaration = matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "declaration")
         && parser.nth(1) == Some(&TokenKind::Colon)
         && parser.nth(2) == Some(&TokenKind::LeftParen);
-    if declaration {
-        let _ = parser.bump(); // declaration
+    let derive = matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "derive")
+        && parser.nth(1) == Some(&TokenKind::Colon)
+        && parser.nth(2) == Some(&TokenKind::LeftParen);
+    if declaration || derive {
+        let _ = parser.bump(); // declaration or derive
         let _ = parser.bump(); // :
         let _ = parser.bump(); // (
         expect_syntax_name(parser);
         let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
     } else {
         expect_syntax_name(parser);
+    }
+    if derive {
+        if parser.at(&TokenKind::Dollar) {
+            parser.start(NodeKind::SyntaxCapture);
+            let _ = parser.bump();
+            expect_syntax_name(parser);
+            let _ = parser.expect(&TokenKind::Colon, ExpectedForm::Colon);
+            if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "ident") {
+                let _ = parser.bump();
+            } else {
+                parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+            }
+            parser.finish();
+        }
+        if !matches!(
+            parser.current(),
+            Some(TokenKind::FatArrow | TokenKind::LineEnd | TokenKind::EndOfFile) | None
+        ) {
+            parser.report(ParseReason::ExpectedForm, ExpectedForm::FatArrow);
+            while !matches!(
+                parser.current(),
+                Some(TokenKind::FatArrow | TokenKind::LineEnd | TokenKind::EndOfFile) | None
+            ) {
+                let _ = parser.bump();
+            }
+        }
+        syntax_declaration_body(parser);
+        parser.finish();
+        return;
     }
     let mut names = std::collections::HashSet::new();
     let mut previous_capture = false;
@@ -614,6 +646,11 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
     if !declaration && (!previous_capture || !final_expression || names.is_empty()) {
         parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
     }
+    syntax_declaration_body(parser);
+    parser.finish();
+}
+
+fn syntax_declaration_body(parser: &mut Parser<'_>) {
     let _ = parser.expect(&TokenKind::FatArrow, ExpectedForm::FatArrow);
     if parser.at(&TokenKind::Using) {
         let _ = parser.bump();
@@ -621,7 +658,6 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
     } else {
         template_body(parser);
     }
-    parser.finish();
 }
 
 fn template_body(parser: &mut Parser<'_>) {
@@ -1507,11 +1543,12 @@ fn type_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
         let _ = parser.bump();
         constructor_declaration(parser);
     }
+    deriving_clause(parser);
     parser.finish();
     TypeParametersOutcome::Complete
 }
 
-fn newtype_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
+fn newtype_declaration(parser: &mut Parser<'_>, module_level: bool) -> TypeParametersOutcome {
     parser.start(NodeKind::NewtypeDeclaration);
     if parser.at(&TokenKind::Pub) {
         let _ = parser.bump();
@@ -1545,8 +1582,34 @@ fn newtype_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
     if parser.at(&TokenKind::Pipe) {
         reject_newtype_extra_constructor(parser);
     }
+    if module_level {
+        deriving_clause(parser);
+    }
     parser.finish();
     TypeParametersOutcome::Complete
+}
+
+fn deriving_clause(parser: &mut Parser<'_>) {
+    if !parser.at(&TokenKind::LineEnd)
+        || !matches!(parser.nth(1), Some(TokenKind::Identifier(name)) if name == "deriving")
+        || parser.nth(2) != Some(&TokenKind::LeftParen)
+    {
+        return;
+    }
+    let _ = parser.bump(); // line end belongs to the subject
+    parser.start(NodeKind::DerivingClause);
+    let _ = parser.bump(); // deriving
+    let _ = parser.bump(); // (
+    expect_syntax_name(parser);
+    while parser.at(&TokenKind::Comma) {
+        let _ = parser.bump();
+        if parser.at(&TokenKind::RightParen) {
+            break;
+        }
+        expect_syntax_name(parser);
+    }
+    let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
+    parser.finish();
 }
 
 fn newtype_constructor_declaration(parser: &mut Parser<'_>) {
@@ -2312,7 +2375,7 @@ fn block(parser: &mut Parser<'_>) {
             }
             let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
         } else if parser.at(&TokenKind::Newtype) {
-            newtype_declaration(parser);
+            newtype_declaration(parser, false);
             let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
         } else if parser.at(&TokenKind::With) {
             lexical_evidence_declaration(parser);
@@ -3492,6 +3555,40 @@ mod tests {
         assert_eq!(retry.resource_failure(), None);
         assert_eq!(retry.tokens().len(), baseline.tokens().len());
         assert_eq!(retry.events().len(), baseline.events().len());
+    }
+
+    #[test]
+    fn r1_source_header_and_clause_share_the_exact_syntax_allowance() {
+        for text in [
+            "pub syntax derive: (marker) $target:ident => {\ntype Item = Item\n}\n",
+            "type Item = Item\nderiving (first, second, first,)\n",
+            "newtype Item = Item(Int)\nderiving (first,)\n",
+        ] {
+            let source = SourceFile::new("derive-work.ash", text).unwrap();
+            let baseline = super::super::parse(lex(&source).unwrap());
+            assert!(baseline.parse_diagnostics().is_empty(), "{text:?}");
+            let exact_work = baseline.tokens().len() + baseline.events().len();
+            let parse_at = |limit| {
+                let mut budget = SyntaxBudget::with_limit(limit);
+                let lexed = lex_with_budget(&source, &mut budget).unwrap();
+                parse_with_budget(lexed, &mut budget)
+            };
+            let short = parse_at(exact_work - 1);
+            assert_eq!(
+                short.resource_failure(),
+                Some(ResourceFailure::SyntaxWork {
+                    limit: exact_work - 1
+                }),
+                "{text:?}"
+            );
+            assert!(short.root().is_none());
+            for _ in 0..2 {
+                let exact = parse_at(exact_work);
+                assert_eq!(exact.resource_failure(), None);
+                assert_eq!(exact.tokens(), baseline.tokens());
+                assert_eq!(exact.events(), baseline.events());
+            }
+        }
     }
 
     #[test]

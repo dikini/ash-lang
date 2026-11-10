@@ -55,9 +55,9 @@ pub enum NodeKind {
     ModulePath,
     /// One selected public spelling and its optional local alias.
     ImportItem,
-    /// One public expression syntax declaration.
+    /// One public syntax declaration.
     SyntaxDeclaration,
-    /// One named syntax matcher capture.
+    /// One named syntax capture or fixed subject-name binding.
     SyntaxCapture,
     /// The balanced token contents of an expression syntax template.
     TemplateBody,
@@ -76,6 +76,8 @@ pub enum NodeKind {
     TypeDeclaration,
     /// A representation-preserving nominal declaration.
     NewtypeDeclaration,
+    /// A written deriving clause awaiting consumption with its subject.
+    DerivingClause,
     /// One nonempty declaration-level type-parameter list.
     TypeParameters,
     /// One declaration-level type parameter and its optional kind annotation.
