@@ -2871,6 +2871,38 @@ fn charge_frame_additions(
     Ok(())
 }
 
+fn charge_qualified_expression_diagnostic(
+    name: &SurfaceQualifiedName,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    let qualifier = name.qualifier.diagnostic.as_deref();
+    let member = name.member.diagnostic.as_deref();
+    if let Some(location) = qualifier.or(member) {
+        crate::syntax::charge_diagnostic_location_copy(location, budget)?;
+    }
+    if let (Some(qualifier), Some(member)) = (qualifier, member) {
+        crate::syntax::charge_type_origin_copy(&member.primary, 0, budget)?;
+        for origin in &member.related {
+            crate::syntax::charge_type_origin_copy(origin, 0, budget)?;
+        }
+        // The cloned qualifier's related and frame buffers grow independently
+        // while the member cause is appended. Bound their allocations and
+        // moved entries using the actual lengths of both locations.
+        let related = qualifier
+            .related
+            .len()
+            .saturating_add(member.related.len())
+            .saturating_add(1);
+        let frames = qualifier.frames.len().saturating_add(member.frames.len());
+        budget.charge_units(related.saturating_mul(12))?;
+        if !member.frames.is_empty() {
+            budget.charge_units(frames.saturating_mul(12))?;
+        }
+        charge_frame_additions(member.frames.len(), qualifier.frames.len(), budget)?;
+    }
+    Ok(())
+}
+
 fn charge_staged_name_frames(
     token: ProjectionToken<'_>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
@@ -7546,10 +7578,21 @@ fn project_expression_with_fragments(
                     {
                         let name = project_qualified_name(source, name, tokens)?;
                         let reference = SurfaceReference::Qualified(name);
-                        push_result!(SurfaceExpr {
-                            diagnostic: reference.diagnostic_location(),
-                            span: reference.span(),
-                            kind: SurfaceExprKind::Name(reference),
+                        push_result!({
+                            if let Some(budget) = tokens.expression_budget
+                                && let SurfaceReference::Qualified(name) = &reference
+                            {
+                                charge_qualified_expression_diagnostic(
+                                    name,
+                                    &mut budget.borrow_mut(),
+                                )
+                                .map_err(ProjectionError::ResourceLimit)?;
+                            }
+                            SurfaceExpr {
+                                diagnostic: reference.diagnostic_location(),
+                                span: reference.span(),
+                                kind: SurfaceExprKind::Name(reference),
+                            }
                         });
                     } else {
                         push_result!(project_primitive(node, tokens)?);
@@ -12838,6 +12881,55 @@ mod tests {
             "{\nwith Read<Int> {\nread ignored = 42\n}\n42\n}",
         ),
     ];
+
+    #[test]
+    fn selected_expression_copy_prepays_each_parsed_family_copy() {
+        use crate::syntax_resource::{ResourceFailure, SyntaxBudget};
+
+        for &(name, text) in PROTECTED_EXPRESSION_CASES
+            .iter()
+            .chain(PROTECTED_LOCAL_CASES.iter())
+        {
+            let (source, tree) = parsed(text);
+            let module = project_module(&source, &tree).unwrap();
+            let SurfaceDefinitionKind::Equational(global) = &module.definitions[0].kind else {
+                panic!("{name}: expected an equation")
+            };
+            let expression = &global.equations[0].body;
+            let mut measured = SyntaxBudget::default();
+            assert!(
+                !crate::syntax::charge_new_expression_copy(expression, 0, false, &mut measured)
+                    .unwrap()
+                    .unwrap(),
+                "{name}"
+            );
+            let cost = measured.consumed();
+            let total = 17 + cost * 2;
+            let mut short = SyntaxBudget::with_limit(total - 1);
+            short.charge_units(17).unwrap();
+            crate::syntax::charge_new_expression_copy(expression, 0, false, &mut short)
+                .unwrap()
+                .unwrap();
+            let first = expression.clone();
+            assert!(matches!(
+                crate::syntax::charge_new_expression_copy(expression, 0, false, &mut short),
+                Err(ResourceFailure::SyntaxWork { .. })
+            ));
+            drop(first);
+
+            for _ in 0..2 {
+                let mut exact = SyntaxBudget::with_limit(total);
+                exact.charge_units(17).unwrap();
+                for _ in 0..2 {
+                    crate::syntax::charge_new_expression_copy(expression, 0, false, &mut exact)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(expression.clone(), *expression, "{name}");
+                }
+                assert_eq!(exact.consumed(), total, "{name}");
+            }
+        }
+    }
 
     #[test]
     fn protected_expression_walker_covers_the_closed_source_families() {
@@ -21080,7 +21172,7 @@ usage arena => resume arena
     #[test]
     fn selected_expression_scratch_reserves_growth_before_mutation() {
         use crate::syntax_resource::{ResourceFailure, SyntaxBudget};
-        use std::cell::RefCell;
+        use std::cell::{Cell, RefCell};
 
         let mut values = Vec::with_capacity(1);
         values.push(7u8);
@@ -21112,6 +21204,143 @@ usage arena => resume arena
         let cell = RefCell::new(&mut zero);
         reserve_expression_scratch(&mut spare, 1, Some(&cell)).unwrap();
         assert_eq!(cell.borrow().consumed(), 0);
+
+        let mut buffer = Vec::new();
+        let mut no_budget = SyntaxBudget::with_limit(0);
+        let loan = RefCell::new(&mut no_budget);
+        let called = Cell::new(false);
+        assert!(matches!(
+            push_expression_scratch(&mut buffer, Some(&loan), || {
+                called.set(true);
+                Ok(3u8)
+            }),
+            Err(ProjectionError::ResourceLimit(
+                ResourceFailure::SyntaxWork { limit: 0 }
+            ))
+        ));
+        assert!(!called.get());
+        assert!(buffer.is_empty());
+        drop(loan);
+
+        let mut exact_push = SyntaxBudget::with_limit(1);
+        let loan = RefCell::new(&mut exact_push);
+        push_expression_scratch(&mut buffer, Some(&loan), || {
+            called.set(true);
+            Ok(3u8)
+        })
+        .unwrap();
+        assert!(called.get());
+        assert_eq!(buffer, [3]);
+        assert_eq!(loan.borrow().consumed(), 1);
+        drop(loan);
+
+        let mut no_budget = SyntaxBudget::with_limit(0);
+        let loan = RefCell::new(&mut no_budget);
+        let values = std::iter::once(Err::<u8, _>(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        )));
+        assert!(matches!(
+            collect_expression_scratch(values, Some(&loan)),
+            Err(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape
+            ))
+        ));
+        assert_eq!(loan.borrow().consumed(), 0);
+    }
+
+    #[test]
+    fn selected_expression_qualified_diagnostic_prepays_merge() {
+        use crate::{
+            syntax::{DiagnosticLocation, ExpansionFrame, MacroOrigin},
+            syntax_resource::{ResourceFailure, SyntaxBudget},
+        };
+        use std::sync::Arc;
+
+        let source = SourceFile::new("qualified.ash", "Module.member").unwrap();
+        let raw = lex(&source).unwrap().tokens;
+        let span = raw[0].span;
+        let first = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let second = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let combined = MacroOrigin::combined(vec![span.into()], Arc::clone(&first)).unwrap();
+        let mut qualifier = DiagnosticLocation::new(combined.clone());
+        qualifier.related.push(combined.clone());
+        qualifier.frames.push(Arc::clone(&first));
+        let mut member = DiagnosticLocation::new(combined.clone());
+        member.related.push(combined.clone());
+        member
+            .frames
+            .extend([Arc::clone(&first), Arc::clone(&second)]);
+        let surface_name = |text: &str, diagnostic| SurfaceName {
+            text: text.into(),
+            span,
+            introduction: 0,
+            introduced_at: None,
+            written: true,
+            diagnostic,
+        };
+        let reference = SurfaceReference::Qualified(SurfaceQualifiedName {
+            qualifier: surface_name("Module", Some(Box::new(qualifier))),
+            member: surface_name("member", Some(Box::new(member))),
+            span,
+        });
+        let SurfaceReference::Qualified(name) = &reference else {
+            unreachable!()
+        };
+        let mut measured = SyntaxBudget::default();
+        charge_qualified_expression_diagnostic(name, &mut measured).unwrap();
+        let total = measured.consumed();
+        let baseline = Arc::strong_count(&first);
+        let mut short = SyntaxBudget::with_limit(total - 1);
+        assert!(matches!(
+            charge_qualified_expression_diagnostic(name, &mut short),
+            Err(ResourceFailure::SyntaxWork { .. })
+        ));
+        assert_eq!(Arc::strong_count(&first), baseline);
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(total);
+            charge_qualified_expression_diagnostic(name, &mut exact).unwrap();
+            let merged = reference.diagnostic_location().unwrap();
+            assert_eq!(merged.primary, combined);
+            assert_eq!(
+                merged.related,
+                [combined.clone(), combined.clone(), combined.clone()]
+            );
+            assert_eq!(merged.frames.len(), 2);
+            assert!(Arc::ptr_eq(&merged.frames[0], &first));
+            assert!(Arc::ptr_eq(&merged.frames[1], &second));
+            assert_eq!(exact.consumed(), total);
+            drop(merged);
+            assert_eq!(Arc::strong_count(&first), baseline);
+        }
+        let empty = SurfaceQualifiedName {
+            qualifier: surface_name("Module", None),
+            member: surface_name("member", None),
+            span,
+        };
+        let mut zero = SyntaxBudget::with_limit(0);
+        charge_qualified_expression_diagnostic(&empty, &mut zero).unwrap();
+        assert_eq!(zero.consumed(), 0);
+        for qualifier_only in [true, false] {
+            let mut singleton = empty.clone();
+            let location = if qualifier_only {
+                singleton.qualifier.diagnostic = name.qualifier.diagnostic.clone();
+                singleton.qualifier.diagnostic.as_deref().unwrap()
+            } else {
+                singleton.member.diagnostic = name.member.diagnostic.clone();
+                singleton.member.diagnostic.as_deref().unwrap()
+            };
+            let mut expected = SyntaxBudget::default();
+            crate::syntax::charge_diagnostic_location_copy(location, &mut expected).unwrap();
+            let mut actual = SyntaxBudget::default();
+            charge_qualified_expression_diagnostic(&singleton, &mut actual).unwrap();
+            assert_eq!(actual.consumed(), expected.consumed());
+        }
     }
 
     #[test]
@@ -21329,22 +21558,24 @@ usage arena => resume arena
                     kind: SurfaceExprKind::Resume(Box::new(expression)),
                 };
             }
+            let contents: Arc<[MacroOutputNode]> = Arc::from([MacroOutputNode::ForwardedType(
+                SurfaceTypeCapture {
+                    ty: SurfaceType {
+                        kind: SurfaceTypeKind::Int,
+                        span,
+                        diagnostic: None,
+                    },
+                    contents: Arc::from([]),
+                },
+                span.into(),
+            )]);
+            let weak = Arc::downgrade(&contents);
             let originals = HashMap::from([(
                 0,
                 MacroOutputNode::ForwardedExpression(
                     SurfaceExpressionCapture {
                         expression,
-                        contents: Arc::from([MacroOutputNode::ForwardedType(
-                            SurfaceTypeCapture {
-                                ty: SurfaceType {
-                                    kind: SurfaceTypeKind::Int,
-                                    span,
-                                    diagnostic: None,
-                                },
-                                contents: Arc::from([]),
-                            },
-                            span.into(),
-                        )]),
+                        contents,
                         contains_protected_type: true,
                     },
                     span.into(),
@@ -21363,7 +21594,7 @@ usage arena => resume arena
                 preserve_name_diagnostic: false,
                 expression_budget: None,
             };
-            charge_composed_projection_with_expression(
+            let result = charge_composed_projection_with_expression(
                 &root,
                 &tokens,
                 true,
@@ -21372,7 +21603,10 @@ usage arena => resume arena
                 true,
                 prefix,
                 &mut SyntaxBudget::default(),
-            )
+            );
+            drop(originals);
+            assert!(weak.upgrade().is_none());
+            result
         };
         let mut last_accepted = None;
         for height in 0..=128 {
@@ -21386,6 +21620,7 @@ usage arena => resume arena
             }
         }
         let accepted = last_accepted.expect("an expression fits the owner budget");
+        assert_eq!(accepted, 128);
         assert!(matches!(attempt(accepted, 0), Ok(false)));
         assert!(matches!(
             attempt(accepted + 1, 0),
@@ -21401,5 +21636,37 @@ usage arena => resume arena
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn selected_expression_owner_boundary_fits_a_512k_stack() {
+        const CHILD: &str = "ASH_TYPE_EXPRESSION_OWNER_512K_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "parser::project::tests::selected_expression_owner_boundary_fits_a_512k_stack",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprint!("{stderr}");
+            assert!(output.status.success(), "512 KiB child failed");
+            assert!(stderr.contains("expression owner stack: boundary and aliases checked"));
+            return;
+        }
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                selected_expression_composes_the_ordinary_return_owner_once();
+                eprintln!("expression owner stack: boundary and aliases checked");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

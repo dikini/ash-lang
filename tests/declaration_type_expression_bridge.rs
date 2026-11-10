@@ -41,6 +41,40 @@ fn imported_template_copies_the_captured_type_for_each_splice() {
 }
 
 #[test]
+fn imported_templates_preserve_captured_types_on_a_512k_stack() {
+    const CHILD: &str = "ASH_TYPE_EXPRESSION_BRIDGE_512K_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "imported_templates_preserve_captured_types_on_a_512k_stack",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprint!("{stderr}");
+        assert!(output.status.success(), "512 KiB child failed");
+        assert!(stderr.contains("type expression stack: keep and twice executed 42"));
+        return;
+    }
+
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(|| {
+            run("tests/fixtures/surface-macros/type-expression-bridge/keep_main.ash");
+            run("tests/fixtures/surface-macros/type-expression-bridge/twice_main.ash");
+            eprintln!("type expression stack: keep and twice executed 42");
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
 fn protected_type_cannot_reach_an_expression_transformer() {
     reject("tests/fixtures/surface-macros/type-expression-bridge/blocked_main.ash");
 }

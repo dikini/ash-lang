@@ -292,7 +292,7 @@ fn generated_raw_type_leaves_respect_the_composed_depth() {
 }
 
 #[test]
-fn forwarded_type_in_generated_expression_invocation_is_refused() {
+fn forwarded_type_in_generated_expression_invocation_is_supported() {
     let fixture = Fixture::new();
     fixture.write(
         "entry.ash",
@@ -325,17 +325,15 @@ fn forwarded_type_in_generated_expression_invocation_is_refused() {
         "forms.ash",
         &forms("$macro ({\n let copy : ($T) = value\n copy\n })"),
     );
-    let failure = compile_path(fixture.configuration())
-        .expect_err("a forwarded type inside a nested expression argument is guarded");
-    assert_eq!(
-        failure.reason_code(),
-        "internal.projection.malformed-tree",
-        "{failure:?}"
-    );
+    let program = compile_path(fixture.configuration())
+        .expect("the generated expression argument retains its forwarded type");
+    let result = execute(&program).unwrap();
+    assert_eq!(result.value_display(), "0");
+    assert_eq!(result.type_display(), "Int");
 }
 
 #[test]
-fn imported_expression_syntax_refuses_a_nested_forwarded_type() {
+fn imported_expression_syntax_preserves_a_forwarded_type() {
     let fixture = Fixture::new();
     fixture.write(
         "entry.ash",
@@ -368,13 +366,11 @@ fn imported_expression_syntax_refuses_a_nested_forwarded_type() {
         "forms.ash",
         &forms("keep ({\n let copy : ($T) = value\n copy\n })"),
     );
-    let failure = compile_path(fixture.configuration())
-        .expect_err("a forwarded type inside a nested expression argument is guarded");
-    assert_eq!(
-        failure.reason_code(),
-        "internal.projection.malformed-tree",
-        "{failure:?}"
-    );
+    let program = compile_path(fixture.configuration())
+        .expect("the imported template retains the expression argument's forwarded type");
+    let result = execute(&program).unwrap();
+    assert_eq!(result.value_display(), "0");
+    assert_eq!(result.type_display(), "Int");
 }
 
 fn write_prior_generated_type(fixture: &Fixture) {

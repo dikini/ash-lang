@@ -422,6 +422,21 @@ fn charge_type_location_inner(
     Ok(())
 }
 
+pub(crate) fn charge_diagnostic_location_copy(
+    location: &DiagnosticLocation,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    charge_type_location_inner(
+        Some(location),
+        0,
+        TypeWork::Copy {
+            inherit_frame: false,
+        },
+        true,
+        budget,
+    )
+}
+
 fn charge_type_name(
     name: &SurfaceName,
     depth: usize,
@@ -1098,7 +1113,6 @@ fn charge_owned_syntax(
                         bridge = true;
                         selected_name!(name, depth, inner_work, budget)?;
                         copy_entries!(captures.len(), work);
-                        let mut contains_protected_type = false;
                         if !captures.is_empty() {
                             let child = type_depth(depth, 1)?;
                             for capture in captures {
@@ -1118,7 +1132,6 @@ fn charge_owned_syntax(
                                         }
                                     }
                                     SurfaceSyntaxCapture::Expression(capture) => {
-                                        contains_protected_type |= capture.contains_protected_type;
                                         push!(
                                             OwnedSyntax::Expression(&capture.expression),
                                             child,
@@ -1145,13 +1158,6 @@ fn charge_owned_syntax(
                                     }
                                 }
                             }
-                        }
-                        if new_expression
-                            && contains_protected_type
-                            && matches!(work, TypeWork::Copy { .. })
-                        {
-                            // Each copied invocation will inspect its capture facts once.
-                            budget.charge_units(captures.len())?;
                         }
                     }
                 }
