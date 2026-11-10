@@ -3558,6 +3558,7 @@ mod tests {
             );
             for marker in [
                 "expression stack: adjacent input refused before issuance",
+                "expression stack: future owner accepts 128 and refuses 129",
                 "expression stack: deep unwrap retained contents",
                 "expression stack: final contents alias dropped",
             ] {
@@ -3659,6 +3660,7 @@ mod tests {
                 };
                 assert_eq!(tag, host.constructor("Parsed").unwrap());
                 let mut last = seed.clone();
+                let mut previous = None;
                 let origin = host.issue_origin(span.into()).unwrap();
                 let mut accepted = 0usize;
                 let mut refused = false;
@@ -3708,6 +3710,7 @@ mod tests {
                         break;
                     }
                     assert_eq!(tag, host.constructor("Parsed").unwrap());
+                    previous = Some(last.clone());
                     last = handle.clone();
                     accepted += 1;
                     let CompilerSyntaxHandleKind::Expression(index) =
@@ -3726,9 +3729,10 @@ mod tests {
                     );
                 }
                 assert!(
-                    accepted > 0 && refused,
+                    accepted == 42 && refused,
                     "accepted={accepted}, refused={refused}"
                 );
+                assert_eq!(2 + 3 * accepted, 128);
                 eprintln!(
                     "expression stack: adjacent input refused before issuance after {accepted} wrappers"
                 );
@@ -3737,6 +3741,73 @@ mod tests {
                 else {
                     panic!("expected Expression handle")
                 };
+                assert!(matches!(
+                    charge_new_expression_retention(
+                        &host.expressions[index],
+                        1,
+                        &mut SyntaxBudget::default(),
+                    ),
+                    Err(ResourceFailure::StructuralDepth { limit: 128 })
+                ));
+                let previous = previous.expect("the preceding issued capture exists");
+                for (groups, succeeds) in [(1usize, true), (2, false)] {
+                    let protected = node(
+                        &mut host,
+                        &mut heap,
+                        "ExpressionNode",
+                        vec![previous.clone(), origin.clone()],
+                    );
+                    let mut input = syntax(&mut host, &mut heap, vec![protected]);
+                    for _ in 0..groups {
+                        let delimiter = host.construct(&mut heap, "Parentheses", None).unwrap();
+                        let group = node(
+                            &mut host,
+                            &mut heap,
+                            "GroupNode",
+                            vec![delimiter, input, origin.clone()],
+                        );
+                        input = syntax(&mut host, &mut heap, vec![group]);
+                    }
+                    let transferred = host.transfer_syntax_inner(&input, &heap, 0, true).unwrap();
+                    let copy = crate::syntax::copy_fragment_output_with_type(
+                        &transferred,
+                        &mut SyntaxBudget::default(),
+                    );
+                    if succeeds {
+                        drop(copy.unwrap());
+                    } else {
+                        assert!(matches!(
+                            copy,
+                            Err(crate::parser::MacroParseFailure::Syntax {
+                                resource: Some(ResourceFailure::StructuralDepth { limit: 128 }),
+                                ..
+                            })
+                        ));
+                    }
+                    drop(transferred);
+                    let before = host.expressions.len();
+                    let result = parse(&mut host, &mut heap, parse_op, input).unwrap();
+                    let (tag, Some(handle)) = constructor_fields(&result, &heap).unwrap() else {
+                        panic!("expected Expression service result")
+                    };
+                    if succeeds {
+                        assert_eq!(tag, host.constructor("Parsed").unwrap());
+                        assert_eq!(host.expressions.len(), before + 1);
+                    } else {
+                        assert_eq!(tag, host.constructor("ParseRejected").unwrap());
+                        assert_eq!(host.expressions.len(), before);
+                        let CompilerSyntaxHandleKind::ParseFailure(index) =
+                            host.admitted_handle(handle).unwrap()
+                        else {
+                            panic!("expected failure handle")
+                        };
+                        assert_eq!(
+                            host.parse_failures[index].1,
+                            Some(ResourceFailure::StructuralDepth { limit: 128 })
+                        );
+                    }
+                }
+                eprintln!("expression stack: future owner accepts 128 and refuses 129");
                 let alias = Arc::clone(&host.expressions[index].contents);
                 let weak = Arc::downgrade(&alias);
                 let unwrapped = host
@@ -7150,7 +7221,44 @@ mod tests {
             },
             contents: Arc::clone(&nested),
         });
+        let mut foreign_expression_budget = SyntaxBudget::default();
+        let mut foreign_expression = fixture
+            .host(&captures, &mut foreign_expression_budget)
+            .unwrap();
+        foreign_expression
+            .expressions
+            .push(host.expressions[0].clone());
+        let foreign_expression_handle =
+            foreign_expression.handle(CompilerSyntaxHandleKind::Expression(0));
+        let stale_expression_handle = {
+            let mut stale_budget = SyntaxBudget::default();
+            let mut stale = fixture.host(&captures, &mut stale_budget).unwrap();
+            stale.expressions.push(host.expressions[0].clone());
+            stale.handle(CompilerSyntaxHandleKind::Expression(0))
+        };
         let nested_retained = Arc::strong_count(&nested);
+        let heap_before = heap.len();
+        for invalid in [
+            foreign_expression_handle,
+            stale_expression_handle,
+            host.input(),
+            host.handle(CompilerSyntaxHandleKind::Type(0)),
+            host.handle(CompilerSyntaxHandleKind::Expression(999)),
+            Value::Unit,
+        ] {
+            assert!(matches!(
+                host.request(
+                    fixture.expression_syntax,
+                    invalid,
+                    &mut heap,
+                    &mut TypeWorkBudget::unbounded(),
+                ),
+                Err(RuntimeFailure::InvalidControlState)
+            ));
+            assert_eq!(host.expressions.len(), 1);
+            assert_eq!(heap.len(), heap_before);
+            assert_eq!(Arc::strong_count(&nested), nested_retained);
+        }
         for _ in 0..2 {
             let syntax = host
                 .request(
