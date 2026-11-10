@@ -276,7 +276,7 @@ fn g1_real_matcher_paths_on_a_512k_stack() {
             let LoadGraphError::Syntax(syntax) = diagnostic.failure() else { panic!("expected syntax-work failure"); };
             assert!(syntax.source.display_path().ends_with("main.ash"));
             assert!(syntax.lexical.is_empty() && syntax.parser.is_empty());
-            assert!(matches!(syntax.resource, Some(ResourceFailure::SyntaxWork { .. })));
+            assert!(matches!(syntax.resource, Some(ResourceFailure::SyntaxWork { limit }) if limit == at_capture));
             let alias = CAPTURE.with(|slot| slot.borrow_mut().take().unwrap());
             let weak = Arc::downgrade(&alias);
             drop(failure);
@@ -289,6 +289,98 @@ fn g1_real_matcher_paths_on_a_512k_stack() {
         .unwrap()
         .join()
         .unwrap();
+}
+
+#[test]
+fn g1_imported_graph_shares_budget_exact_short_and_fresh_retry() {
+    use crate::{
+        driver::{FileFailure, compile_staged_graph_for_test, execute},
+        parser::G1_CAPTURE_OBSERVER,
+        surface::SurfaceSyntaxCapture,
+    };
+    use std::cell::Cell;
+
+    std::thread_local! {
+        static AT_CAPTURE: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    fn observe(source: &SourceFile, captures: &[SurfaceSyntaxCapture], budget: &SyntaxBudget) {
+        assert!(source.display_path().ends_with("g1-source-ident/main.ash"));
+        assert_eq!(
+            source.text(),
+            include_str!("../tests/fixtures/surface-macros/g1-source-ident/main.ash")
+        );
+        let [
+            SurfaceSyntaxCapture::Repeated(outer),
+            SurfaceSyntaxCapture::Repeated(inner),
+        ] = captures
+        else {
+            panic!("expected the real grouped captures");
+        };
+        assert_eq!(outer.values.len(), 3);
+        assert_eq!(inner.values.len(), 3);
+        AT_CAPTURE.set(Some(budget.consumed()));
+    }
+
+    let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/surface-macros/g1-source-ident/main.ash");
+    let mut measured = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    let header_work = measured.syntax_budget.consumed();
+    measured.syntax_budget.charge_units(17).unwrap();
+    AT_CAPTURE.set(None);
+    G1_CAPTURE_OBSERVER.set(Some(observe));
+    let measured_result = compile_staged_graph_for_test(&mut measured);
+    G1_CAPTURE_OBSERVER.set(None);
+    let program = measured_result.unwrap();
+    let at_capture = AT_CAPTURE.get().expect("real materializer was reached");
+    let total = measured.syntax_budget.consumed();
+    assert!(at_capture > header_work + 17 && total > at_capture);
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+
+    for label in ["exact", "retry"] {
+        if label == "retry" {
+            let mut short = graph_at(&entry, BodyMode::Header, total - 1).unwrap();
+            assert_eq!(short.syntax_budget.consumed(), header_work);
+            short.syntax_budget.charge_units(17).unwrap();
+            AT_CAPTURE.set(None);
+            G1_CAPTURE_OBSERVER.set(Some(observe));
+            let result = compile_staged_graph_for_test(&mut short);
+            G1_CAPTURE_OBSERVER.set(None);
+            let failure = match result {
+                Ok(_) => panic!("one-short graph must refuse"),
+                Err(failure) => failure,
+            };
+            assert_eq!(AT_CAPTURE.get(), Some(at_capture));
+            assert!(short.syntax_budget.consumed() >= at_capture);
+            assert!(short.syntax_budget.consumed() <= total - 1);
+            assert!(
+                short.pending.is_empty() && short.loaded.is_empty() && short.completed.is_none()
+            );
+            let FileFailure::Graph(diagnostic) = &failure else {
+                panic!("expected graph error: {failure:?}");
+            };
+            let LoadGraphError::Syntax(syntax) = diagnostic.failure() else {
+                panic!("expected syntax shortage");
+            };
+            assert_eq!(
+                syntax.resource,
+                Some(ResourceFailure::SyntaxWork { limit: total - 1 })
+            );
+            assert!(syntax.source.display_path().ends_with("main.ash"));
+            assert!(syntax.lexical.is_empty() && syntax.parser.is_empty());
+        }
+        let mut graph = graph_at(&entry, BodyMode::Header, total).unwrap();
+        assert_eq!(graph.syntax_budget.consumed(), header_work, "{label}");
+        graph.syntax_budget.charge_units(17).unwrap();
+        AT_CAPTURE.set(None);
+        G1_CAPTURE_OBSERVER.set(Some(observe));
+        let result = compile_staged_graph_for_test(&mut graph);
+        G1_CAPTURE_OBSERVER.set(None);
+        let program = result.unwrap();
+        assert_eq!(AT_CAPTURE.get(), Some(at_capture), "{label}");
+        assert_eq!(graph.syntax_budget.consumed(), total, "{label}");
+        assert_eq!(execute(&program).unwrap().value_display(), "42", "{label}");
+    }
 }
 
 #[test]
