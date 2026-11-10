@@ -2080,6 +2080,7 @@ fn invalid_template_output_reports_the_parser_cause() {
     let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
     assert_eq!(json["reason"], "parse.expected-form");
     let labels = json["labels"].as_array().unwrap();
+    assert_eq!(labels.len(), 3, "{json}");
     assert_eq!(labels[0]["relationship"], "expected_form");
     assert!(
         labels

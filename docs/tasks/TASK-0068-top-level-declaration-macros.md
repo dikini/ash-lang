@@ -670,9 +670,11 @@ independent retention and readback checks. Full H1 remains open.
 **Owner:** The developer owns the candidate and evidence; QA and Sol own
 independent checks; the orchestrator owns retention and acceptance confirmation.
 
-### Protected Expression host candidate
+### Protected Expression host retained contribution
 
-**Delivered in the local candidate:** Candidate
+**Delivered:** [PR #293](https://github.com/dikini/ash-lang/pull/293) retained
+this bounded contribution at `640b8311d99d3b7a5af34d7804632e130592ff80`,
+tree `ca12a1349105646173113846c67679c9f8559ede`. Tested source candidate
 `ce28168c9e2babc393734dc2558dbb557d1ecd21` extends the existing checked
 declaration host to flat Expression, Type, Pattern and Identifier captures.
 Expression capture, unwrap, parse and protected output share the existing
@@ -711,20 +713,58 @@ Independent QA reconstructed the result in audit
 `1193a6d96caf496e7679af3070ee6daf5227b1c1309bc073194a0ac7975b50ef`.
 Sol source and command-map review is
 `073c318e450b4d0e1b8f73daa8892a0d4abd94d9af221b7d7865caf5630a488c`.
-The unchanged strict I14 failure remains separate, with missing
-definition-origin presentation tracked in
+At this test pin strict I14 failed separately because definition-origin
+presentation was missing, as recorded in
 [#265](https://github.com/dikini/ash-lang/issues/265#issuecomment-6766825789).
-The fixed I01–I22 corpus remains unchanged. Full S2/H1, used splices,
+The diagnostic candidate below addresses that presentation gap. The fixed
+I01–I22 corpus remains unchanged. Full S2/H1, used splices,
 repeated and generated consumers, full G1, original I16 derive/teardown/
 build-image paths, D8, E4, V3, V5–V8 and the fresh workspace gate remain
 open. The complete CP-0034 specification and tool documentation update
 remains at V4 after V3. No original #230 criterion is closed by this candidate.
 
-**Awaiting:** Exact-head Sol PR review, retaining integration and checked
-partial issue readback.
+**Awaiting:** The bounded Expression contribution and its
+[partial issue record](https://github.com/dikini/ash-lang/issues/230#issuecomment-6780442850)
+have independent retention and readback checks. Full S2 remains open.
 
 **Owner:** The developer owns the candidate and evidence; QA and Sol own
 independent checks; the orchestrator owns retention and acceptance confirmation.
+
+### Diagnostic origin candidate
+
+**Delivered in the candidate:** The existing reviewed diagnostic change for
+[#265](https://github.com/dikini/ash-lang/issues/265),
+[#272](https://github.com/dikini/ash-lang/issues/272) and
+[#274](https://github.com/dikini/ash-lang/issues/274) is adopted unchanged at
+`6458c4ee32c010e73103b787d3113aa06a478ee2`, on retaining base
+`640b8311d99d3b7a5af34d7804632e130592ff80`. Parse presentation includes actual
+invocation and selected-definition locations. Duplicate-name diagnostics carry
+the real location for each name while preserving existing label spans and
+resolution behavior. The shared presenter retains source origins that differ
+from their label spans.
+
+The fresh focused gate records 175 distinct passes and no ignores. It includes
+the strict I14 test, fixed I14/I15 human and JSON origin assertions, H2/H3
+duplicate conflicts and handwritten controls, structured duplicate locations,
+and the current Expression-host tests. Two early suites and the Bulgarian
+parent-locale rerun are excluded from the distinct count. The locale rerun
+uses English diagnostic output. All-target and diff checks passed; C.UTF-8 and
+Bulgarian before/after input snapshots match. The
+receipt SHA-256 is
+`d01666c3e7a85d6d866436407fda25eb6aa17cf5db14bf84d8c275721febf35b`, at
+`evidence/downstream-diagnostics/focused-6458c4ee/receipt.json` in the handoff.
+Independent QA cleared the receipt in audit
+`9deab82714baed7ab02d5503493cd42ff8bc0ddbf59f1eced6f861d07072b2a4`.
+Exact-head review remains pending.
+
+**Remaining:** Original issue acceptance and the full TASK-0068 verification
+remain open. This candidate does not close the original H2/H3 or #230 criteria.
+
+**Awaiting:** Exact-head Sol PR review, retaining integration and checked
+acceptance for each original issue.
+
+**Owner:** The developer owns the candidate and records; independent QA and Sol
+own their checks; the orchestrator owns integration and acceptance confirmation.
 
 **Remaining:** Complete protected-fragment accounting/consumption, declaration
 captures, repetition, host transfer and procedural declarations, quotes/escapes,
@@ -750,11 +790,11 @@ these separate downstream issues:
 [#265](https://github.com/dikini/ash-lang/issues/265),
 [#272](https://github.com/dikini/ash-lang/issues/272) and
 [#274](https://github.com/dikini/ash-lang/issues/274) and
-[#277](https://github.com/dikini/ash-lang/issues/277). All were open and unassigned
-at inspection; active repair owners and timing are unverified. Verify live
-owner/status before reporting further progress. Dependent criteria remain
-blocked, and repairs stay outside this task; continue independent authorized
-work without patching those consumers.
+[#277](https://github.com/dikini/ash-lang/issues/277). The diagnostic-origin
+candidate above is under independent review for #265, #272 and #274. These
+issues and dependent criteria remain open until their retained evidence and
+acceptance readbacks are complete. Verify live status
+for #263 and #277 before reporting their progress.
 
 The plan preserves the fixed inputs, supplemental early cases and original full
 graphs. Component or handwritten-control results do not replace their connected

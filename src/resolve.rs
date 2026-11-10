@@ -3077,9 +3077,9 @@ impl Resolver<'_, '_> {
     }
 
     fn validate_local_namespaces(&self, surface: &SurfaceModule) -> Result<(), ResolveError> {
-        let mut type_names: HashMap<&str, (crate::source::Span, LocalTypeDeclarationKind)> =
+        let mut type_names: HashMap<&str, (&SurfaceName, LocalTypeDeclarationKind)> =
             HashMap::new();
-        let mut term_names: HashMap<&str, (crate::source::Span, Option<crate::source::Span>)> =
+        let mut term_names: HashMap<&str, (&SurfaceName, Option<crate::source::Span>)> =
             HashMap::new();
 
         for declaration in &surface.declaration_order {
@@ -3224,7 +3224,7 @@ impl Resolver<'_, '_> {
         &self,
         name: &'a crate::surface::SurfaceName,
         kind: LocalTypeDeclarationKind,
-        names: &mut HashMap<&'a str, (crate::source::Span, LocalTypeDeclarationKind)>,
+        names: &mut HashMap<&'a str, (&'a SurfaceName, LocalTypeDeclarationKind)>,
     ) -> Result<(), ResolveError> {
         if self.module_aliases.contains_key(&name.text)
             || self.type_names.contains_key(&name.text)
@@ -3233,27 +3233,31 @@ impl Resolver<'_, '_> {
         {
             return Err(import_conflict(name.span, &name.text));
         }
-        if let Some((first, first_kind)) = names.insert(&name.text, (name.span, kind)) {
+        if let Some((first, first_kind)) = names.insert(&name.text, (name, kind)) {
             if first_kind == LocalTypeDeclarationKind::Nominal
                 && kind == LocalTypeDeclarationKind::Nominal
             {
                 let mut diagnostic = Diagnostic::new(
                     ResolveReason::DuplicateType,
-                    SourceLabel::new(name.span, "this nominal type name is already defined"),
+                    SourceLabel::new(name.span, "this nominal type name is already defined")
+                        .with_location_preserving_span(name.diagnostic.as_deref()),
                 );
-                diagnostic
-                    .related
-                    .push(SourceLabel::new(first, "the first nominal type is here"));
+                diagnostic.related.push(
+                    SourceLabel::new(first.span, "the first nominal type is here")
+                        .with_location_preserving_span(first.diagnostic.as_deref()),
+                );
                 diagnostic.found = Some(name.text.clone());
                 return Err(diagnostic.into());
             }
             let mut diagnostic = Diagnostic::new(
                 ResolveReason::DuplicateType,
-                SourceLabel::new(name.span, "this type-namespace name is already declared"),
+                SourceLabel::new(name.span, "this type-namespace name is already declared")
+                    .with_location_preserving_span(name.diagnostic.as_deref()),
             );
-            diagnostic
-                .related
-                .push(SourceLabel::new(first, "the first declaration is here"));
+            diagnostic.related.push(
+                SourceLabel::new(first.span, "the first declaration is here")
+                    .with_location_preserving_span(first.diagnostic.as_deref()),
+            );
             diagnostic.found = Some(name.text.clone());
             return Err(diagnostic.into());
         }
@@ -3287,7 +3291,7 @@ impl Resolver<'_, '_> {
         &self,
         name: &'a crate::surface::SurfaceName,
         complete_definition: Option<crate::source::Span>,
-        names: &mut HashMap<&'a str, (crate::source::Span, Option<crate::source::Span>)>,
+        names: &mut HashMap<&'a str, (&'a SurfaceName, Option<crate::source::Span>)>,
     ) -> Result<(), ResolveError> {
         self.check_written_term_name(name)?;
         if self.module_aliases.contains_key(&name.text)
@@ -3301,16 +3305,18 @@ impl Resolver<'_, '_> {
             return Err(import_conflict(name.span, &name.text));
         }
         if let Some((first, first_definition)) =
-            names.insert(&name.text, (name.span, complete_definition))
+            names.insert(&name.text, (name, complete_definition))
         {
             if let (Some(first_definition), Some(_)) = (first_definition, complete_definition) {
                 let mut diagnostic = Diagnostic::new(
                     ResolveReason::DuplicateGlobal,
-                    SourceLabel::new(name.span, "this global name is already defined"),
+                    SourceLabel::new(name.span, "this global name is already defined")
+                        .with_location_preserving_span(name.diagnostic.as_deref()),
                 );
-                diagnostic
-                    .related
-                    .push(SourceLabel::new(first, "the first global name is here"));
+                diagnostic.related.push(
+                    SourceLabel::new(first.span, "the first global name is here")
+                        .with_location_preserving_span(first.diagnostic.as_deref()),
+                );
                 diagnostic.related.push(SourceLabel::new(
                     first_definition,
                     "the first complete definition is here",
@@ -3320,11 +3326,13 @@ impl Resolver<'_, '_> {
             }
             let mut diagnostic = Diagnostic::new(
                 ResolveReason::DuplicateGlobal,
-                SourceLabel::new(name.span, "this term name is already declared"),
+                SourceLabel::new(name.span, "this term name is already declared")
+                    .with_location_preserving_span(name.diagnostic.as_deref()),
             );
-            diagnostic
-                .related
-                .push(SourceLabel::new(first, "the first term name is here"));
+            diagnostic.related.push(
+                SourceLabel::new(first.span, "the first term name is here")
+                    .with_location_preserving_span(first.diagnostic.as_deref()),
+            );
             if let Some(first_definition) = first_definition {
                 diagnostic.related.push(SourceLabel::new(
                     first_definition,
@@ -10074,18 +10082,20 @@ impl Resolver<'_, '_> {
         let mut nominal_ids = Vec::with_capacity(type_declarations.len());
         for (index, declaration) in type_declarations.iter().enumerate() {
             if let Some(first) =
-                first_types.insert(declaration.name.text.as_str(), declaration.name.span)
+                first_types.insert(declaration.name.text.as_str(), &declaration.name)
             {
                 let mut diagnostic = Diagnostic::new(
                     ResolveReason::DuplicateType,
                     SourceLabel::new(
                         declaration.name.span,
                         "this nominal type name is already defined",
-                    ),
+                    )
+                    .with_location_preserving_span(declaration.name.diagnostic.as_deref()),
                 );
-                diagnostic
-                    .related
-                    .push(SourceLabel::new(first, "the first nominal type is here"));
+                diagnostic.related.push(
+                    SourceLabel::new(first.span, "the first nominal type is here")
+                        .with_location_preserving_span(first.diagnostic.as_deref()),
+                );
                 diagnostic.found = Some(declaration.name.text.clone());
                 return Err(diagnostic.into());
             }
@@ -10122,18 +10132,20 @@ impl Resolver<'_, '_> {
             let mut owned = Vec::with_capacity(declaration.constructors.len());
             for (index, constructor) in declaration.constructors.iter().enumerate() {
                 if let Some(first) =
-                    first_constructors.insert(constructor.name.text.as_str(), constructor.name.span)
+                    first_constructors.insert(constructor.name.text.as_str(), &constructor.name)
                 {
                     let mut diagnostic = Diagnostic::new(
                         ResolveReason::DuplicateConstructor,
                         SourceLabel::new(
                             constructor.name.span,
                             "this constructor name is already defined",
-                        ),
+                        )
+                        .with_location_preserving_span(constructor.name.diagnostic.as_deref()),
                     );
-                    diagnostic
-                        .related
-                        .push(SourceLabel::new(first, "the first constructor is here"));
+                    diagnostic.related.push(
+                        SourceLabel::new(first.span, "the first constructor is here")
+                            .with_location_preserving_span(first.diagnostic.as_deref()),
+                    );
                     diagnostic.found = Some(constructor.name.text.clone());
                     return Err(diagnostic.into());
                 }
@@ -23549,3 +23561,6 @@ mod tests {
             .expect("success, rejection, retry, and teardown should fit a small stack");
     }
 }
+
+#[cfg(test)]
+mod duplicate_origin_tests;
