@@ -101,6 +101,9 @@ fn public_fragment_sums_and_nested_repeated_capture_are_closed() {
         "main.ash",
         r#"import @builtin.compiler.syntax as Syntax
 
+unwrap_declaration : Syntax.DeclarationFragment -> Syntax.Syntax ! {Syntax.Ops}
+unwrap_declaration item = Syntax.declaration_syntax(item)
+
 node_kind : Syntax.Node -> Int
 node_kind (Syntax.TokenNode(_, _)) = 0
 node_kind (Syntax.IdentifierNode(_, _)) = 0

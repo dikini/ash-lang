@@ -1246,7 +1246,9 @@ where
         Err(FileFailure::Pipeline(mut context))
             if !matches!(context.failure.as_ref(), PipelineFailure::Runtime(_)) =>
         {
-            context.sources = graph.into_sources();
+            if context.sources.is_empty() {
+                context.sources = graph.into_sources();
+            }
             Err(FileFailure::Pipeline(context))
         }
         other => other,
@@ -1260,6 +1262,20 @@ enum CompilationInput<'a> {
         next: usize,
     },
     Staged(&'a mut HeaderGraph),
+}
+
+#[cfg(test)]
+pub(crate) fn compile_staged_graph_for_test(
+    graph: &mut HeaderGraph,
+) -> Result<CompiledProgram, FileFailure> {
+    compile_input_with_consumers(
+        &mut CompilationInput::Staged(graph),
+        &mut InterfaceConstraintBudget::default(),
+        validate_interface_evidence_with_budget,
+        validate_modular_effect_core,
+        true,
+        ProvenanceRetention::Retain,
+    )
 }
 
 impl CompilationInput<'_> {
@@ -1300,6 +1316,7 @@ impl CompilationInput<'_> {
         syntax: &[crate::syntax::SelectedSyntax],
         owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
         owners: &mut Vec<crate::syntax::SyntaxOwner>,
+        transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
     ) -> Result<bool, FileFailure> {
         match self {
             #[cfg(test)]
@@ -1317,7 +1334,7 @@ impl CompilationInput<'_> {
                 }
                 let phase = crate::calibration::Phase::start("loading");
                 let advanced = graph
-                    .next_module_with_syntax(syntax, owner_imports, owners)
+                    .next_module_with_syntax(syntax, owner_imports, owners, transformer)
                     .map(|module| module.is_some())
                     .map_err(FileFailure::Graph)?;
                 phase.finish(None, 0, 0);
@@ -1566,7 +1583,64 @@ where
             Vec::new()
         };
         let mut syntax_owners = Vec::new();
-        if !input.advance(&selected, &checked_syntax_imports, &mut syntax_owners)? {
+        let mut declaration_failure = None;
+        let advanced = {
+            let mut transformer =
+                |selection: &crate::syntax::SelectedSyntax,
+                 captures: &[crate::surface::SurfaceSyntaxCapture],
+                 source: &SourceFile,
+                 caller: &crate::surface::SurfaceName,
+                 introduction: usize,
+                 contexts: Arc<crate::syntax::SyntaxContexts>,
+                 frame: Arc<crate::syntax::ExpansionFrame>,
+                 budget: &mut crate::syntax_resource::SyntaxBudget| {
+                    let span = frame.invocation;
+                    let result = evaluate_selected_transformer(
+                        selection,
+                        captures,
+                        source,
+                        caller,
+                        introduction,
+                        contexts,
+                        frame,
+                        &checked,
+                        &mut transformer_entries,
+                        constraint_work,
+                        Some(budget),
+                    )
+                    .and_then(|(output, fresh_count)| match output {
+                        crate::syntax::TransformerOutput::Expanded(nodes) => {
+                            Ok((nodes, fresh_count))
+                        }
+                        crate::syntax::TransformerOutput::Rejected(failure) => {
+                            Err(FileFailure::from(PipelineFailure::SyntaxExpansion(failure)))
+                        }
+                        crate::syntax::TransformerOutput::SyntaxRejected(failure) => {
+                            Err(FileFailure::from(PipelineFailure::SyntaxParse(failure)))
+                        }
+                    });
+                    result.map_err(|failure| {
+                        declaration_failure = Some(failure);
+                        span
+                    })
+                };
+            input.advance(
+                &selected,
+                &checked_syntax_imports,
+                &mut syntax_owners,
+                Some(&mut transformer),
+            )
+        };
+        let advanced = match (advanced, declaration_failure) {
+            (Err(FileFailure::Graph(graph)), Some(mut failure)) => {
+                if let FileFailure::Pipeline(context) = &mut failure {
+                    context.sources = graph.into_sources();
+                }
+                return Err(failure);
+            }
+            (other, _) => other?,
+        };
+        if !advanced {
             return Err(internal_file_failure());
         }
         #[cfg(feature = "resource-calibration")]
@@ -1621,28 +1695,19 @@ where
                             &checked_syntax_imports,
                             owners,
                         ));
-                        let entry = match transformer_owner_and_binder(selection, &checked) {
-                            Ok((owner, binder)) => {
-                                match transformer_entries.entry((owner.module(), binder)) {
-                                    std::collections::hash_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
-                                    std::collections::hash_map::Entry::Vacant(entry) => {
-                                        prepare_transformer_entry(owner, binder, &checked, constraint_work)
-                                            .map(|validated| entry.insert(validated))
-                                    }
-                                }
-                            }
-                            Err(error) => Err(error),
-                        };
-                        match entry {
-                            Ok(entry) => match crate::eval::evaluate_transformer(
-                                entry,
-                                captures,
-                                module.source(),
-                                caller,
-                                introduction,
-                                std::sync::Arc::clone(&contexts),
-                                std::sync::Arc::clone(frame),
-                            ) {
+                        match evaluate_selected_transformer(
+                            selection,
+                            captures,
+                            module.source(),
+                            caller,
+                            introduction,
+                            std::sync::Arc::clone(&contexts),
+                            std::sync::Arc::clone(frame),
+                            &checked,
+                            &mut transformer_entries,
+                            constraint_work,
+                            None,
+                        ) {
                                 Ok((
                                     crate::syntax::TransformerOutput::Expanded(output),
                                     fresh_count,
@@ -1692,20 +1757,9 @@ where
                                     Err(span)
                                 }
                                 Err(error) => {
-                                    transformer_failure = Some(FileFailure::from(
-                                        PipelineFailure::SyntaxRuntime(SyntaxRuntimeFailure {
-                                            cause: error,
-                                            invocation: span,
-                                            definition: selection.declaration.span,
-                                        }),
-                                    ));
+                                    transformer_failure = Some(error);
                                     Err(span)
                                 }
-                            },
-                            Err(error) => {
-                                transformer_failure = Some(error);
-                                Err(span)
-                            }
                         }
                     };
             let mut syntax_expansion = crate::syntax::SyntaxExpansion::new(
@@ -2207,6 +2261,49 @@ type TransformerOutputObserver = fn(
     &[crate::surface::SurfaceSyntaxCapture],
     &[crate::syntax::MacroOutputNode],
 );
+
+fn evaluate_selected_transformer(
+    selection: &crate::syntax::SelectedSyntax,
+    captures: &[crate::surface::SurfaceSyntaxCapture],
+    source: &SourceFile,
+    caller: &crate::surface::SurfaceName,
+    introduction: usize,
+    contexts: Arc<crate::syntax::SyntaxContexts>,
+    frame: Arc<crate::syntax::ExpansionFrame>,
+    checked: &[Arc<crate::resolved::CheckedModule>],
+    entries: &mut HashMap<
+        (ModuleId, crate::resolved::BinderId),
+        crate::core::validate::ValidatedMacroEntry,
+    >,
+    constraint_work: &mut InterfaceConstraintBudget,
+    syntax_work: Option<&mut crate::syntax_resource::SyntaxBudget>,
+) -> Result<(crate::syntax::TransformerOutput, usize), FileFailure> {
+    let (owner, binder) = transformer_owner_and_binder(selection, checked)?;
+    let entry = match entries.entry((owner.module(), binder)) {
+        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+        std::collections::hash_map::Entry::Vacant(entry) => entry.insert(
+            prepare_transformer_entry(owner, binder, checked, constraint_work)?,
+        ),
+    };
+    let invocation = frame.invocation;
+    crate::eval::evaluate_transformer(
+        entry,
+        captures,
+        source,
+        caller,
+        introduction,
+        contexts,
+        frame,
+        syntax_work,
+    )
+    .map_err(|cause| {
+        FileFailure::from(PipelineFailure::SyntaxRuntime(SyntaxRuntimeFailure {
+            cause,
+            invocation,
+            definition: selection.declaration.span,
+        }))
+    })
+}
 
 fn transformer_owner_and_binder<'a>(
     selection: &crate::syntax::SelectedSyntax,
@@ -3361,6 +3458,7 @@ mod tests {
             &owner_imports,
             &mut owners,
             &mut crate::syntax_resource::SyntaxBudget::default(),
+            None,
         )
         .unwrap();
         assert_eq!(owners.len(), 1);

@@ -334,6 +334,20 @@ pub(crate) fn charge_type_origin(
     Ok(())
 }
 
+pub(crate) fn charge_type_origin_copy(
+    origin: &MacroOrigin,
+    depth: usize,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    charge_type_origin(origin, depth, budget)?;
+    if matches!(origin, MacroOrigin::Combined { .. }) {
+        // Cloning this origin retains its inputs and frame Arcs, without
+        // recursively cloning the input origins.
+        budget.charge_units(2)?;
+    }
+    Ok(())
+}
+
 fn charge_type_location(
     location: Option<&DiagnosticLocation>,
     depth: usize,
@@ -381,6 +395,34 @@ fn charge_type_name(
         budget.charge_units(name.text.len())?;
     }
     charge_type_location(name.diagnostic.as_deref(), depth, work, budget)
+}
+
+pub(crate) fn charge_type_name_copy(
+    name: &SurfaceName,
+    depth: usize,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    budget.charge_units(2)?;
+    budget.charge_units(name.text.len())?;
+    if let Some(location) = name.diagnostic.as_deref() {
+        let depth = type_depth(depth, 1)?;
+        budget.charge_units(2)?;
+        budget.charge_units(location.related.len())?;
+        budget.charge_units(location.frames.len())?;
+        charge_type_origin_copy(&location.primary, depth, budget)?;
+        for origin in &location.related {
+            charge_type_origin_copy(origin, depth, budget)?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn charge_type_name_inspection(
+    name: &SurfaceName,
+    depth: usize,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    charge_type_name(name, depth, TypeWork::Inspect, budget)
 }
 
 fn charge_type_reference(
@@ -1439,6 +1481,18 @@ pub(crate) struct SyntaxOwner {
     pub(crate) import_span: Span,
 }
 
+pub(crate) type DeclarationTransformer<'a> = dyn for<'call> FnMut(
+        &'call SelectedSyntax,
+        &'call [SurfaceSyntaxCapture],
+        &'call crate::source::SourceFile,
+        &'call SurfaceName,
+        usize,
+        Arc<SyntaxContexts>,
+        Arc<ExpansionFrame>,
+        &'call mut crate::syntax_resource::SyntaxBudget,
+    ) -> Result<(Vec<MacroOutputNode>, usize), Span>
+    + 'a;
+
 type SyntaxTransformer<'a> = dyn FnMut(
         &SelectedSyntax,
         &[SurfaceSyntaxCapture],
@@ -1909,11 +1963,7 @@ fn validate_template_syntax_inner(
     }
 
     let SurfaceSyntaxImplementation::Template = &declaration.implementation else {
-        return if declaration.category == crate::surface::SurfaceSyntaxCategory::Declaration {
-            Err(crate::parser::MacroParseFailure::Invalid)
-        } else {
-            Ok(())
-        };
+        return Ok(());
     };
     let (capture_count, identifier_count) = if let Some(budget) = &mut admission_budget {
         budget
@@ -2301,6 +2351,73 @@ mod tests {
             SurfaceTypeCapture, SurfaceTypeKind,
         },
     };
+
+    #[test]
+    fn declaration_host_copy_charges_shallow_origin_and_name_retentions() {
+        let source = SourceFile::new("origin.ash", "item").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        let frame = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let combined = MacroOrigin::combined(vec![span.into()], Arc::clone(&frame)).unwrap();
+        let MacroOrigin::Combined { inputs, .. } = &combined else {
+            panic!("combined origin");
+        };
+        let inputs_before = Arc::strong_count(inputs);
+        let frame_before = Arc::strong_count(&frame);
+        let mut inspection = SyntaxBudget::with_limit(1);
+        charge_type_origin(&combined, 0, &mut inspection).unwrap();
+        assert_eq!(inspection.consumed(), 1);
+        let mut short = SyntaxBudget::with_limit(2);
+        assert!(matches!(
+            charge_type_origin_copy(&combined, 0, &mut short),
+            Err(ResourceFailure::SyntaxWork { .. })
+        ));
+        assert_eq!(Arc::strong_count(inputs), inputs_before);
+        assert_eq!(Arc::strong_count(&frame), frame_before);
+        let mut exact = SyntaxBudget::with_limit(3);
+        charge_type_origin_copy(&combined, 0, &mut exact).unwrap();
+        let copied = combined.clone();
+        assert_eq!(exact.consumed(), 3);
+        assert_eq!(Arc::strong_count(inputs), inputs_before + 1);
+        assert_eq!(Arc::strong_count(&frame), frame_before + 1);
+        drop(copied);
+
+        let name = SurfaceName {
+            text: "item".into(),
+            span,
+            introduction: 0,
+            introduced_at: None,
+            written: true,
+            diagnostic: Some(Box::new(DiagnosticLocation {
+                primary: combined.clone(),
+                related: vec![combined.clone(), span.into()],
+                frames: vec![Arc::clone(&frame)],
+                token_cause: false,
+                captured_expression: false,
+            })),
+        };
+        let inputs_before = Arc::strong_count(inputs);
+        let frame_before = Arc::strong_count(&frame);
+        let mut short = SyntaxBudget::with_limit(17);
+        assert!(matches!(
+            charge_type_name_copy(&name, 0, &mut short),
+            Err(ResourceFailure::SyntaxWork { .. })
+        ));
+        assert_eq!(Arc::strong_count(inputs), inputs_before);
+        assert_eq!(Arc::strong_count(&frame), frame_before);
+        let mut exact = SyntaxBudget::with_limit(18);
+        charge_type_name_copy(&name, 0, &mut exact).unwrap();
+        let copied = name.clone();
+        assert_eq!(exact.consumed(), 18);
+        assert_eq!(Arc::strong_count(inputs), inputs_before + 2);
+        assert_eq!(Arc::strong_count(&frame), frame_before + 3);
+        drop(copied);
+        eprintln!(
+            "borrowed origin 1; shallow Combined copy 3; name metadata exact 18 and one-short refusal"
+        );
+    }
 
     #[test]
     fn protected_retention_finds_nested_syntax_and_host_bridges() {
@@ -3185,14 +3302,13 @@ mod tests {
             validate_template_syntax(&declaration, &source, &contexts),
             Err(crate::parser::MacroParseFailure::Invalid)
         ));
-        declaration.template_contents = Some(Arc::from([]));
+        declaration.template_contents = None;
         declaration.implementation =
             SurfaceSyntaxImplementation::Transformer(declaration.name.clone());
-        assert!(matches!(
-            validate_template_syntax(&declaration, &source, &contexts),
-            Err(crate::parser::MacroParseFailure::Invalid)
-        ));
+        validate_template_syntax(&declaration, &source, &contexts)
+            .expect("a transformer has no template to validate");
         declaration.implementation = SurfaceSyntaxImplementation::Template;
+        declaration.template_contents = Some(Arc::from([]));
         declaration.category = crate::surface::SurfaceSyntaxCategory::Expression;
         assert!(matches!(
             validate_template_syntax(&declaration, &source, &contexts),

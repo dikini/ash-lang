@@ -1253,6 +1253,16 @@ impl GraphDiagnostic {
         *self.failure
     }
 
+    pub(crate) fn into_sources(self) -> Box<[SourceFile]> {
+        let mut sources = self.sources.into_vec();
+        match *self.failure {
+            LoadGraphError::Syntax(failure) => sources.push(failure.source),
+            LoadGraphError::Projection { source, .. } => sources.push(source),
+            _ => {}
+        }
+        sources.into_boxed_slice()
+    }
+
     /// Borrows all admitted sources, including a rejected syntax source.
     pub fn sources(&self) -> impl Iterator<Item = &SourceFile> {
         let rejected = match &*self.failure {
@@ -1409,6 +1419,7 @@ impl StagedModule {
         syntax: &[crate::syntax::SelectedSyntax],
         owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
         owners: &mut Vec<crate::syntax::SyntaxOwner>,
+        transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
     ) -> Result<LoadedModule, LoadGraphError> {
         let StagedSyntax {
             imports,
@@ -1448,6 +1459,7 @@ impl StagedModule {
                     owner_imports,
                     &mut staged_owners,
                     budget,
+                    transformer,
                 )?;
                 if surface.imports != imports {
                     return Err(LoadGraphError::Projection {
@@ -1531,7 +1543,7 @@ impl HeaderGraph {
     }
 
     pub(crate) fn next_module(&mut self) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
-        self.next_module_with_syntax(&[], &[], &mut Vec::new())
+        self.next_module_with_syntax(&[], &[], &mut Vec::new(), None)
     }
 
     pub(crate) fn next_module_with_syntax(
@@ -1539,11 +1551,18 @@ impl HeaderGraph {
         syntax: &[crate::syntax::SelectedSyntax],
         owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
         owners: &mut Vec<crate::syntax::SyntaxOwner>,
+        transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
     ) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
         let Some(module) = self.pending.pop_front() else {
             return Ok(None);
         };
-        match module.into_loaded(&mut self.syntax_budget, syntax, owner_imports, owners) {
+        match module.into_loaded(
+            &mut self.syntax_budget,
+            syntax,
+            owner_imports,
+            owners,
+            transformer,
+        ) {
             Ok(module) => {
                 self.loaded.push(module);
                 Ok(self.loaded.last())
@@ -2660,6 +2679,7 @@ fn project_finished_module(
     owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
     owners: &mut Vec<crate::syntax::SyntaxOwner>,
     budget: &mut SyntaxBudget,
+    transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
 ) -> Result<(SourceFile, SurfaceModule), LoadGraphError> {
     if tree.resource_failure().is_some()
         || !tree.lexical_diagnostics().is_empty()
@@ -2680,6 +2700,7 @@ fn project_finished_module(
         owner_imports,
         owners,
         budget,
+        transformer,
     ) {
         Ok(surface) => Ok((source, surface)),
         Err(crate::parser::DeclarationExpansionFailure::Projection(error)) => {
@@ -3063,7 +3084,7 @@ mod tests {
         let mut owners = Vec::new();
         assert!(
             graph
-                .next_module_with_syntax(&[selected], &[], &mut owners)
+                .next_module_with_syntax(&[selected], &[], &mut owners, None)
                 .is_err()
         );
         assert!(graph.loaded.is_empty());
@@ -3087,7 +3108,7 @@ mod tests {
         };
         let mut owners = vec![previous];
         let error = graph
-            .next_module_with_syntax(&[selected], &[], &mut owners)
+            .next_module_with_syntax(&[selected], &[], &mut owners, None)
             .unwrap_err();
         assert!(matches!(
             error.failure(),
