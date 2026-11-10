@@ -1341,6 +1341,177 @@ fn pair<'a>(
 mod tests {
     use super::{token_from_spelling, token_kind_name};
 
+    struct DeclarationHostFixture {
+        entry: crate::core::validate::ValidatedMacroEntry,
+        source: crate::source::SourceFile,
+        caller: crate::surface::SurfaceName,
+        frame: std::sync::Arc<crate::syntax::ExpansionFrame>,
+        contexts: std::sync::Arc<crate::syntax::SyntaxContexts>,
+        capture: crate::types::OperationId,
+        unwrap: crate::types::OperationId,
+        parse_expression: crate::types::OperationId,
+        expression_syntax: crate::types::OperationId,
+        constructors: std::collections::HashMap<String, crate::types::ConstructorId>,
+    }
+
+    impl DeclarationHostFixture {
+        fn new() -> Self {
+            use crate::{
+                core::{EffectCoreBuilder, validate::ValidatedMacroEntry, validate_effect},
+                module::ModuleId,
+                resolved::{
+                    BinderId, ResolvedConstructor, ResolvedEffectDeclaration,
+                    ResolvedEffectOperation, ResolvedNominalDeclarationKind, ResolvedNominalType,
+                    ResolvedRegistry, ResolvedType, ResolvedTypeProvenance,
+                    ResolvedTypeProvenanceNode,
+                },
+                source::{ByteRange, Origin, SourceFile},
+                surface::SurfaceName,
+                syntax::{ExpansionFrame, SyntaxContexts},
+                types::{ConstructorId, EffectId, NominalTypeId, OperationId, Type},
+            };
+            use std::sync::Arc;
+
+            let source = SourceFile::new("component.ash", "type Item = Item\n").unwrap();
+            let span = source.span(ByteRange::new(5, 9).unwrap()).unwrap();
+            let module = ModuleId::new(0);
+            let owner = NominalTypeId::new(module, 0);
+            let names = [
+                "Captured",
+                "DeclarationCapture",
+                "IdentifierCapture",
+                "MissingCapture",
+                "Syntax",
+                "NoNodes",
+                "MoreNodes",
+                "GroupNode",
+                "Parentheses",
+                "Braces",
+                "IdentifierNode",
+                "TokenNode",
+                "ExpressionNode",
+                "TypeNode",
+                "PatternNode",
+                "DeclarationNode",
+                "Expanded",
+            ];
+            let constructors = names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| ((*name).to_owned(), ConstructorId::new(owner, index as u32)))
+                .collect::<std::collections::HashMap<_, _>>();
+            let nominal = ResolvedNominalType {
+                id: owner,
+                declaration_kind: ResolvedNominalDeclarationKind::Data,
+                spelling: "FixtureSyntax".into(),
+                constructors: names.iter().map(|name| constructors[*name]).collect(),
+                representation: None,
+                representation_provenance: None,
+                origin: Origin::Source(span),
+            };
+            let members = names
+                .iter()
+                .map(|name| ResolvedConstructor {
+                    id: constructors[*name],
+                    owner,
+                    spelling: (*name).into(),
+                    payload: (!matches!(
+                        *name,
+                        "NoNodes" | "Parentheses" | "Braces" | "MissingCapture"
+                    ))
+                    .then_some(Type::Unit),
+                    origin: Origin::Source(span),
+                })
+                .collect();
+            let ops = EffectId::new(module, 0);
+            let operation_names = [
+                "capture",
+                "declaration_syntax",
+                "parse_expression",
+                "expression_syntax",
+            ];
+            let operations = operation_names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| ResolvedEffectOperation {
+                    id: OperationId::new(ops, index as u32),
+                    spelling: (*name).into(),
+                    annotation: ResolvedType {
+                        ty: Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
+                        provenance: ResolvedTypeProvenance::new(
+                            vec![ResolvedTypeProvenanceNode::Fact(span)],
+                            0,
+                        ),
+                        origin: Origin::Source(span),
+                        span,
+                    },
+                    origin: Origin::Source(span),
+                    span,
+                })
+                .collect::<Vec<_>>();
+            let registry = ResolvedRegistry::new(vec![nominal], members).with_effects(vec![
+                ResolvedEffectDeclaration {
+                    id: ops,
+                    public: false,
+                    spelling: "Ops".into(),
+                    parameters: Box::new([]),
+                    operations: operations.into_boxed_slice(),
+                    native_contract: None,
+                    origin: Origin::Source(span),
+                    span,
+                },
+            ]);
+            let mut builder = EffectCoreBuilder::with_effect_registry(Arc::new(registry));
+            let occurrence = builder.unit(Type::Unit, Origin::Source(span)).unwrap();
+            let program = validate_effect(builder.finish(occurrence).unwrap(), &[&source]).unwrap();
+            Self {
+                entry: ValidatedMacroEntry {
+                    program,
+                    occurrence,
+                    binder: BinderId::new(0),
+                    syntax_module: module,
+                    ops,
+                },
+                source,
+                caller: SurfaceName {
+                    text: "Item".into(),
+                    span,
+                    introduction: 0,
+                    introduced_at: None,
+                    written: true,
+                    diagnostic: None,
+                },
+                frame: Arc::new(ExpansionFrame {
+                    invocation: span,
+                    definition: span,
+                }),
+                contexts: Arc::new(SyntaxContexts::new(&[], &[], &[])),
+                capture: OperationId::new(ops, 0),
+                unwrap: OperationId::new(ops, 1),
+                parse_expression: OperationId::new(ops, 2),
+                expression_syntax: OperationId::new(ops, 3),
+                constructors,
+            }
+        }
+
+        fn host<'a>(
+            &self,
+            captures: &[crate::surface::SurfaceSyntaxCapture],
+            budget: &'a mut crate::syntax_resource::SyntaxBudget,
+        ) -> Result<super::SyntaxHost<'a>, super::RuntimeFailure> {
+            super::SyntaxHost::new(
+                &self.entry,
+                captures,
+                &self.source,
+                &self.caller,
+                0,
+                std::sync::Arc::clone(&self.contexts),
+                std::sync::Arc::clone(&self.frame),
+                Some(budget),
+            )
+        }
+    }
+
     fn scalar_host<'a>(
         budget: &'a mut crate::syntax_resource::SyntaxBudget,
     ) -> super::SyntaxHost<'a> {
@@ -1546,6 +1717,496 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    #[test]
+    fn declaration_host_roundtrips_composed_depth_on_small_stack() {
+        use super::{HeapCell, RuntimeFailure, Value, allocate_heap, constructor_fields};
+        use crate::{
+            integer::Integer,
+            surface::{SurfaceDeclarationCapture, SurfaceSyntaxCapture},
+            syntax::{
+                DiagnosticLocation, MacroDelimiter, MacroOrigin, MacroOutputNode, TransformerOutput,
+            },
+            syntax_resource::SyntaxBudget,
+            types::TypeWorkBudget,
+        };
+        use std::sync::Arc;
+
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                let fixture = DeclarationHostFixture::new();
+                let packet = |groups: usize| {
+                    let combined = MacroOrigin::combined(
+                        vec![fixture.caller.span.into()], Arc::clone(&fixture.frame),
+                    ).unwrap();
+                    let MacroOrigin::Combined { inputs, .. } = &combined else { unreachable!() };
+                    let weak = Arc::downgrade(inputs);
+                    let mut name = fixture.caller.clone();
+                    name.diagnostic = Some(Box::new(DiagnosticLocation::new(combined)));
+                    let mut node = MacroOutputNode::Identifier(name, fixture.caller.span.into());
+                    for _ in 0..groups {
+                        node = MacroOutputNode::Group(MacroDelimiter::Parentheses, vec![node], fixture.caller.span.into());
+                    }
+                    (Arc::<[MacroOutputNode]>::from(vec![node]), weak)
+                };
+
+                // Capture Arc layer + 125 groups + name location + Combined input = 128.
+                let (original, weak) = packet(125);
+                eprintln!("constructed depth-128 declaration, diagnostic and origin on 512 KiB");
+                let captures = [SurfaceSyntaxCapture::Declaration(SurfaceDeclarationCapture {
+                    contents: Arc::clone(&original),
+                })];
+                let initial = Arc::strong_count(&original);
+                let mut budget = SyntaxBudget::default();
+                let mut host = fixture.host(&captures, &mut budget).unwrap();
+                assert_eq!(Arc::strong_count(&original), initial + 1);
+                let mut heap = Vec::new();
+                let argument = Value::Location(allocate_heap(
+                    &mut heap,
+                    HeapCell::Tuple(vec![host.input(), Value::integer(Integer::from_i64(0))].into()),
+                ).unwrap());
+                let captured = host.request(fixture.capture, argument, &mut heap, &mut TypeWorkBudget::unbounded()).unwrap();
+                let (_, capture) = constructor_fields(&captured, &heap).unwrap();
+                let (_, fragment) = constructor_fields(capture.unwrap(), &heap).unwrap();
+                let fragment = fragment.unwrap().clone();
+                assert_eq!(Arc::strong_count(&original), initial + 2);
+                let syntax = host.request(fixture.unwrap, fragment, &mut heap, &mut TypeWorkBudget::unbounded()).unwrap();
+                eprintln!("actual capture and declaration_syntax unwrap completed at depth 128");
+                let expanded = Value::Location(allocate_heap(
+                    &mut heap,
+                    HeapCell::Constructor(fixture.constructors["Expanded"], Some(syntax)),
+                ).unwrap());
+                let TransformerOutput::Expanded(output) = host.transfer(&expanded, &heap, &mut TypeWorkBudget::unbounded()).unwrap() else {
+                    panic!("the host transfers owned syntax");
+                };
+                let mut nodes = output.as_slice();
+                for _ in 0..125 {
+                    let [MacroOutputNode::Group(_, children, _)] = nodes else { panic!("group retained") };
+                    nodes = children;
+                }
+                assert!(matches!(nodes, [MacroOutputNode::Identifier(name, _)] if name.diagnostic.is_some()));
+                eprintln!("actual host transfer completed with depth-128 metadata");
+                drop(host);
+                drop(heap);
+                assert_eq!(Arc::strong_count(&original), initial);
+                drop(captures);
+                drop(original);
+                assert!(weak.upgrade().is_some(), "the transferred output owns its origin inputs");
+                drop(output);
+                assert!(weak.upgrade().is_none(), "the final output owner released the origin inputs");
+                eprintln!("host, capture, output and final aliased origin owner dropped on 512 KiB");
+
+                let (too_deep, weak) = packet(126);
+                let captures = [SurfaceSyntaxCapture::Declaration(SurfaceDeclarationCapture {
+                    contents: Arc::clone(&too_deep),
+                })];
+                let before = Arc::strong_count(&too_deep);
+                let mut budget = SyntaxBudget::default();
+                assert!(matches!(fixture.host(&captures, &mut budget),
+                    Err(RuntimeFailure::Report(report))
+                        if report.primary.reason_code() == "internal.resource.structural-depth"
+                            && report.primary.resource().is_none()));
+                assert_eq!(Arc::strong_count(&too_deep), before);
+                eprintln!("depth-129 composed declaration refused before host retention");
+                drop(captures);
+                drop(too_deep);
+                assert!(weak.upgrade().is_none());
+                eprintln!("refused declaration and final aliased origin owner dropped on 512 KiB");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn declaration_host_component_charges_each_phase_and_resumes_staging() {
+        use super::{HeapCell, RuntimeFailure, Value, allocate_heap, constructor_fields};
+        use crate::{
+            integer::Integer,
+            lexer::TokenKind,
+            parser::{MacroParseFailure, parse_declaration_template_admission},
+            source::ByteRange,
+            surface::{SurfaceDeclarationCapture, SurfaceSyntaxCapture},
+            syntax::{MacroOutputNode, TransformerOutput},
+            syntax_resource::{ResourceFailure, SyntaxBudget},
+            types::TypeWorkBudget,
+        };
+        use std::sync::Arc;
+
+        #[derive(Debug)]
+        enum Failure {
+            Host(&'static str, RuntimeFailure),
+            Parse(MacroParseFailure),
+        }
+
+        fn run(
+            fixture: &DeclarationHostFixture,
+            captures: &[SurfaceSyntaxCapture],
+            limit: usize,
+        ) -> Result<[usize; 5], Failure> {
+            let mut budget = SyntaxBudget::with_limit(limit);
+            budget.charge_units(17).unwrap();
+            let mut host = fixture
+                .host(captures, &mut budget)
+                .map_err(|e| Failure::Host("constructor", e))?;
+            let mut phases = [0; 5];
+            phases[0] = host.syntax_work.as_ref().unwrap().consumed();
+            let mut heap = Vec::new();
+            let argument = Value::Location(
+                allocate_heap(
+                    &mut heap,
+                    HeapCell::Tuple(
+                        vec![host.input(), Value::integer(Integer::from_i64(0))].into(),
+                    ),
+                )
+                .unwrap(),
+            );
+            let captured = host
+                .request(
+                    fixture.capture,
+                    argument,
+                    &mut heap,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .map_err(|e| Failure::Host("capture", e))?;
+            phases[1] = host.syntax_work.as_ref().unwrap().consumed();
+            let (_, capture) = constructor_fields(&captured, &heap).unwrap();
+            let (_, fragment) = constructor_fields(capture.unwrap(), &heap).unwrap();
+            let syntax = host
+                .request(
+                    fixture.unwrap,
+                    fragment.unwrap().clone(),
+                    &mut heap,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .map_err(|e| Failure::Host("unwrap", e))?;
+            phases[2] = host.syntax_work.as_ref().unwrap().consumed();
+            let result = Value::Location(
+                allocate_heap(
+                    &mut heap,
+                    HeapCell::Constructor(fixture.constructors["Expanded"], Some(syntax)),
+                )
+                .unwrap(),
+            );
+            let TransformerOutput::Expanded(output) = host
+                .transfer(&result, &heap, &mut TypeWorkBudget::unbounded())
+                .map_err(|e| Failure::Host("transfer", e))?
+            else {
+                panic!("expanded output")
+            };
+            phases[3] = host.syntax_work.as_ref().unwrap().consumed();
+            drop(host);
+            drop(heap);
+            parse_declaration_template_admission(
+                &fixture.source,
+                fixture.caller.span,
+                output,
+                &fixture.contexts,
+                &[],
+                &mut budget,
+            )
+            .map_err(Failure::Parse)?;
+            phases[4] = budget.consumed();
+            Ok(phases)
+        }
+
+        let fixture = DeclarationHostFixture::new();
+        let span = |start, end| {
+            fixture
+                .source
+                .span(ByteRange::new(start, end).unwrap())
+                .unwrap()
+        };
+        let mut second = fixture.caller.clone();
+        second.span = span(12, 16);
+        let original: Arc<[MacroOutputNode]> = Arc::from([
+            MacroOutputNode::Token(TokenKind::Type, Arc::from("type"), span(0, 4).into()),
+            MacroOutputNode::Identifier(fixture.caller.clone(), span(5, 9).into()),
+            MacroOutputNode::Token(TokenKind::Equal, Arc::from("="), span(10, 11).into()),
+            MacroOutputNode::Identifier(second, span(12, 16).into()),
+            MacroOutputNode::Token(TokenKind::LineEnd, Arc::from("\n"), span(16, 17).into()),
+        ]);
+        let captures = [SurfaceSyntaxCapture::Declaration(
+            SurfaceDeclarationCapture {
+                contents: Arc::clone(&original),
+            },
+        )];
+        let retained = Arc::strong_count(&original);
+        let measured = run(
+            &fixture,
+            &captures,
+            crate::syntax_resource::SYNTAX_WORK_LIMIT,
+        )
+        .unwrap();
+        assert!(measured.windows(2).all(|phase| phase[0] < phase[1]));
+        for (index, phase) in ["constructor", "capture", "unwrap", "transfer", "parse"]
+            .iter()
+            .enumerate()
+        {
+            let limit = measured[index] - 1;
+            let failure =
+                run(&fixture, &captures, limit).expect_err("the reached phase is one unit short");
+            match (phase, failure) {
+                (
+                    &"parse",
+                    Failure::Parse(MacroParseFailure::Syntax {
+                        resource: Some(ResourceFailure::SyntaxWork { limit: seen }),
+                        ..
+                    }),
+                ) => assert_eq!(seen, limit),
+                (_, Failure::Host(seen, RuntimeFailure::Report(report))) => {
+                    assert_eq!(seen, *phase);
+                    assert_eq!(
+                        report.primary.reason_code(),
+                        "internal.resource.syntax-work"
+                    );
+                    assert!(report.primary.resource().is_none());
+                }
+                (_, failure) => panic!("unexpected {phase} failure: {failure:?}"),
+            }
+            assert_eq!(Arc::strong_count(&original), retained);
+        }
+        let exact = run(&fixture, &captures, measured[4]).unwrap();
+        assert_eq!(exact, measured);
+        let retry = run(&fixture, &captures, measured[4]).unwrap();
+        assert_eq!(retry, measured);
+        assert_eq!(Arc::strong_count(&original), retained);
+        eprintln!(
+            "component pre-spent 17; constructor/capture/unwrap/transfer/staging work: {measured:?}; one-short each, exact and retry"
+        );
+    }
+
+    #[test]
+    fn declaration_host_refuses_foreign_handles_and_protected_bridges_before_copy() {
+        use super::{HeapCell, RuntimeFailure, Value, allocate_heap, constructor_fields};
+        use crate::{
+            eval::value::CompilerSyntaxHandleKind,
+            integer::Integer,
+            surface::{
+                SurfaceDeclarationCapture, SurfaceExpr, SurfaceExprKind, SurfaceExpressionCapture,
+                SurfacePattern, SurfacePatternCapture, SurfacePatternKind, SurfaceSyntaxCapture,
+                SurfaceType, SurfaceTypeCapture, SurfaceTypeKind,
+            },
+            syntax::{MacroOrigin, MacroOutputNode},
+            syntax_resource::SyntaxBudget,
+            types::TypeWorkBudget,
+        };
+        use std::sync::Arc;
+
+        let fixture = DeclarationHostFixture::new();
+        let span = fixture.caller.span;
+        let nested: Arc<[MacroOutputNode]> = Arc::from([]);
+        let expression = SurfaceExpressionCapture {
+            expression: SurfaceExpr {
+                kind: SurfaceExprKind::Unit,
+                span,
+                diagnostic: None,
+            },
+            contents: Arc::clone(&nested),
+        };
+        let unsupported = [
+            SurfaceSyntaxCapture::Expression(expression.clone()),
+            SurfaceSyntaxCapture::Type(SurfaceTypeCapture {
+                ty: SurfaceType {
+                    kind: SurfaceTypeKind::Int,
+                    span,
+                    diagnostic: None,
+                },
+                contents: Arc::clone(&nested),
+            }),
+            SurfaceSyntaxCapture::Pattern(SurfacePatternCapture {
+                pattern: SurfacePattern {
+                    kind: SurfacePatternKind::Wildcard,
+                    span,
+                    diagnostic: None,
+                },
+                contents: Arc::clone(&nested),
+            }),
+        ];
+        let before = Arc::strong_count(&nested);
+        for capture in &unsupported {
+            let mut budget = SyntaxBudget::default();
+            assert!(matches!(
+                fixture.host(std::slice::from_ref(capture), &mut budget),
+                Err(RuntimeFailure::InvalidControlState)
+            ));
+            assert_eq!(Arc::strong_count(&nested), before);
+        }
+        let nested_packet: Arc<[MacroOutputNode]> =
+            Arc::from([MacroOutputNode::Expression(expression, span.into())]);
+        let invalid = [SurfaceSyntaxCapture::Declaration(
+            SurfaceDeclarationCapture {
+                contents: Arc::clone(&nested_packet),
+            },
+        )];
+        let retained = Arc::strong_count(&nested_packet);
+        let mut budget = SyntaxBudget::default();
+        assert!(matches!(
+            fixture.host(&invalid, &mut budget),
+            Err(RuntimeFailure::InvalidControlState)
+        ));
+        assert_eq!(Arc::strong_count(&nested_packet), retained);
+        assert_eq!(Arc::strong_count(&nested), before);
+
+        let contents: Arc<[MacroOutputNode]> = Arc::from([]);
+        let captures = [SurfaceSyntaxCapture::Declaration(
+            SurfaceDeclarationCapture {
+                contents: Arc::clone(&contents),
+            },
+        )];
+        let mut budget = SyntaxBudget::default();
+        let mut host = fixture.host(&captures, &mut budget).unwrap();
+        let mut heap = Vec::new();
+        let argument = Value::Location(
+            allocate_heap(
+                &mut heap,
+                HeapCell::Tuple(vec![host.input(), Value::integer(Integer::from_i64(0))].into()),
+            )
+            .unwrap(),
+        );
+        let captured = host
+            .request(
+                fixture.capture,
+                argument,
+                &mut heap,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        let (_, capture) = constructor_fields(&captured, &heap).unwrap();
+        let (_, fragment) = constructor_fields(capture.unwrap(), &heap).unwrap();
+        let fragment = fragment.unwrap().clone();
+        let mut other_budget = SyntaxBudget::default();
+        let other = fixture.host(&captures, &mut other_budget).unwrap();
+        let foreign = other.handle(CompilerSyntaxHandleKind::Declaration(0));
+        let stale = {
+            let mut stale_budget = SyntaxBudget::default();
+            let stale_host = fixture.host(&captures, &mut stale_budget).unwrap();
+            stale_host.handle(CompilerSyntaxHandleKind::Declaration(0))
+        };
+        let retained = Arc::strong_count(&contents);
+        for invalid in [
+            foreign,
+            stale,
+            host.input(),
+            host.handle(CompilerSyntaxHandleKind::Declaration(999)),
+        ] {
+            assert!(matches!(
+                host.request(
+                    fixture.unwrap,
+                    invalid,
+                    &mut heap,
+                    &mut TypeWorkBudget::unbounded()
+                ),
+                Err(RuntimeFailure::InvalidControlState)
+            ));
+            assert_eq!(Arc::strong_count(&contents), retained);
+        }
+        let syntax = host
+            .request(
+                fixture.unwrap,
+                fragment.clone(),
+                &mut heap,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        host.request(
+            fixture.unwrap,
+            fragment,
+            &mut heap,
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+        assert_eq!(Arc::strong_count(&contents), retained);
+        let bridge = Value::Location(
+            allocate_heap(
+                &mut heap,
+                HeapCell::Tuple(vec![host.input(), syntax].into()),
+            )
+            .unwrap(),
+        );
+        let heap_before = heap.len();
+        assert!(matches!(
+            host.request(
+                fixture.parse_expression,
+                bridge,
+                &mut heap,
+                &mut TypeWorkBudget::unbounded()
+            ),
+            Err(RuntimeFailure::InvalidControlState)
+        ));
+        assert_eq!(heap.len(), heap_before);
+        assert!(matches!(
+            host.request(
+                fixture.expression_syntax,
+                host.handle(CompilerSyntaxHandleKind::Expression(0)),
+                &mut heap,
+                &mut TypeWorkBudget::unbounded()
+            ),
+            Err(RuntimeFailure::InvalidControlState)
+        ));
+
+        let combined =
+            MacroOrigin::combined(vec![span.into()], Arc::clone(&fixture.frame)).unwrap();
+        let MacroOrigin::Combined { inputs, .. } = &combined else {
+            unreachable!()
+        };
+        let origin = host.issue_origin(combined.clone()).unwrap();
+        let retained = Arc::strong_count(inputs);
+        for protected in [
+            "ExpressionNode",
+            "TypeNode",
+            "PatternNode",
+            "DeclarationNode",
+        ] {
+            let fields = Value::Location(
+                allocate_heap(
+                    &mut heap,
+                    HeapCell::Tuple(vec![Value::Unit, origin.clone()].into()),
+                )
+                .unwrap(),
+            );
+            let node = Value::Location(
+                allocate_heap(
+                    &mut heap,
+                    HeapCell::Constructor(fixture.constructors[protected], Some(fields)),
+                )
+                .unwrap(),
+            );
+            let empty = Value::Location(
+                allocate_heap(
+                    &mut heap,
+                    HeapCell::Constructor(fixture.constructors["NoNodes"], None),
+                )
+                .unwrap(),
+            );
+            let pair = Value::Location(
+                allocate_heap(&mut heap, HeapCell::Tuple(vec![node, empty].into())).unwrap(),
+            );
+            let nodes = Value::Location(
+                allocate_heap(
+                    &mut heap,
+                    HeapCell::Constructor(fixture.constructors["MoreNodes"], Some(pair)),
+                )
+                .unwrap(),
+            );
+            let syntax = Value::Location(
+                allocate_heap(
+                    &mut heap,
+                    HeapCell::Constructor(fixture.constructors["Syntax"], Some(nodes)),
+                )
+                .unwrap(),
+            );
+            assert!(matches!(
+                host.transfer_syntax(&syntax, &heap, 0),
+                Err(RuntimeFailure::InvalidControlState)
+            ));
+            assert_eq!(Arc::strong_count(inputs), retained);
+        }
+        eprintln!(
+            "Some-route protected carriers and bridges refused before copy; foreign/stale/wrong handles refused; valid handle remains reusable"
+        );
     }
 
     #[test]
