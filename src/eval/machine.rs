@@ -6936,6 +6936,19 @@ pub(crate) fn evaluate_transformer(
             .transfer(&value, heap.cells(), &mut machine.instantiation_work)
             .map(|output| (output, host.fresh_count()));
         #[cfg(test)]
+        if captures.iter().any(|capture| {
+            matches!(
+                capture,
+                crate::surface::SurfaceSyntaxCapture::Declaration(_)
+            )
+        }) && transferred.is_ok()
+            && machine_test_hooks::TRANSFORMER_DROPS.get() == 0
+            && machine_test_hooks::ROOT_CLOSES.get() == 0
+        {
+            let count = machine_test_hooks::DECLARATION_TRANSFERS_BEFORE_DROP.get();
+            machine_test_hooks::DECLARATION_TRANSFERS_BEFORE_DROP.set(count + 1);
+        }
+        #[cfg(test)]
         if transferred.is_err() {
             let failures = machine_test_hooks::TRANSFER_FAILURES.get();
             machine_test_hooks::TRANSFER_FAILURES.set(failures + 1);
@@ -6993,6 +7006,108 @@ fn apply_primitive(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn declaration_host_runs_the_unchanged_public_graph() {
+        use crate::{
+            driver::{RunConfiguration, compile_path, execute},
+            module::ModuleRoots,
+        };
+        let configuration = RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/procedural_declaration/main.ash"),
+            roots: ModuleRoots::empty(),
+        };
+        super::machine_test_hooks::reset();
+        let program = compile_path(configuration).expect("the fixed declaration graph compiles");
+        assert_eq!(super::machine_test_hooks::DECLARATION_CAPTURES.get(), 1);
+        assert_eq!(super::machine_test_hooks::DECLARATION_UNWRAPS.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFER_ATTEMPTS.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFER_FAILURES.get(), 0);
+        assert_eq!(
+            super::machine_test_hooks::DECLARATION_TRANSFERS_BEFORE_DROP.get(),
+            1
+        );
+        assert_eq!(super::machine_test_hooks::TRANSFORMER_DROPS.get(), 1);
+        assert_eq!(super::machine_test_hooks::ROOT_CLOSES.get(), 1);
+        let result = execute(&program).expect("the staged graph executes");
+        assert_eq!(result.value_display(), "42");
+        assert_eq!(result.type_display(), "Int");
+        eprintln!(
+            "declaration capture, unwrap, owned transfer before drop, root close, staged 42 : Int"
+        );
+        super::machine_test_hooks::reset();
+    }
+
+    #[test]
+    fn declaration_host_rejection_retains_both_sources_and_publishes_no_program() {
+        use crate::{
+            driver::{PipelineFailure, RunConfiguration, compile_path},
+            message::{Catalogue, Locale},
+            module::ModuleRoots,
+            presentation::{compile_file_diagnostics, write_json, write_short},
+        };
+        let configuration = RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/procedural_declaration/rejected.ash"),
+            roots: ModuleRoots::empty(),
+        };
+        super::machine_test_hooks::reset();
+        let failure = compile_path(configuration).expect_err("rejection publishes no program");
+        let Some(PipelineFailure::SyntaxExpansion(rejection)) = failure.pipeline_failure() else {
+            panic!("the authored rejection must be retained: {failure:?}");
+        };
+        assert_eq!(rejection.message(), "declaration rejected");
+        assert!(rejection.teardown().is_none());
+        let caller = failure
+            .sources()
+            .iter()
+            .find(|source| source.display_path().ends_with("rejected.ash"))
+            .expect("caller source retained");
+        let definition = failure
+            .sources()
+            .iter()
+            .find(|source| source.display_path().ends_with("forms.ash"))
+            .expect("definition source retained");
+        assert_ne!(caller.id(), definition.id());
+        assert_eq!(rejection.primary_span().source(), caller.id());
+        assert_eq!(rejection.definition.source(), definition.id());
+        assert_eq!(super::machine_test_hooks::TRANSFER_ATTEMPTS.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFORMER_DROPS.get(), 1);
+        assert_eq!(super::machine_test_hooks::ROOT_CLOSES.get(), 1);
+        let diagnostics = compile_file_diagnostics(&failure).unwrap();
+        let [diagnostic] = diagnostics.as_slice() else {
+            panic!("one authored rejection");
+        };
+        let mut human = Vec::new();
+        write_short(
+            &mut human,
+            diagnostic,
+            &Catalogue::new(Locale::English).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            String::from_utf8(human)
+                .unwrap()
+                .contains("declaration rejected")
+        );
+        let mut json = Vec::new();
+        write_json(&mut json, diagnostic).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(json["reason"], "syntax.rejected");
+        let labels = json["labels"].as_array().unwrap();
+        for source in ["rejected.ash", "forms.ash"] {
+            assert!(labels.iter().any(|label| {
+                label["path"]
+                    .as_str()
+                    .is_some_and(|path| path.ends_with(source))
+            }));
+        }
+        eprintln!(
+            "authored rejection, distinct caller and definition SourceIds, no compiled program, root close"
+        );
+        super::machine_test_hooks::reset();
+    }
+
     #[test]
     fn copied_nested_transformers_each_execute_before_the_runtime_program() {
         use crate::{

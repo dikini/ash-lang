@@ -2213,8 +2213,6 @@ pub(crate) fn project_declaration_expansions(
                 )?
             }
             SurfaceSyntaxImplementation::Transformer(_) => {
-                // The existing precharge guard keeps this route closed until
-                // the declaration host's service work is accounted for.
                 let transformer =
                     transformer
                         .as_deref_mut()
@@ -2227,7 +2225,8 @@ pub(crate) fn project_declaration_expansions(
                     &staged_owners,
                     budget,
                 )?;
-                budget.charge()?;
+                // The context allocation and the passed frame retention.
+                budget.charge_units(2)?;
                 let (output, fresh_count) = transformer(
                     &invocation.selection,
                     &invocation.captures,
@@ -2405,21 +2404,30 @@ fn charge_declaration_invocation(
         }
     }
     budget.charge_units(selection.declaration.matcher.len())?;
+    let template = matches!(
+        selection.declaration.implementation,
+        SurfaceSyntaxImplementation::Template
+    );
+    let declaration_transformer = executing
+        && has_declaration
+        && !has_other_capture
+        && source_projection_tokens(tokens)
+        && matches!(
+            selection.declaration.implementation,
+            SurfaceSyntaxImplementation::Transformer(_)
+        );
     if selection.declaration.category != SurfaceSyntaxCategory::Declaration
-        || (executing
-            && !matches!(
-                selection.declaration.implementation,
-                SurfaceSyntaxImplementation::Template
-            ))
+        || (executing && !template && !declaration_transformer)
         || (has_declaration
             && (!executing
                 || has_other_capture
                 || !source_projection_tokens(tokens)
-                || !selection
-                    .declaration
-                    .template_contents
-                    .as_deref()
-                    .is_some_and(<[_]>::is_empty)))
+                || (template
+                    && !selection
+                        .declaration
+                        .template_contents
+                        .as_deref()
+                        .is_some_and(<[_]>::is_empty))))
     {
         return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
     }

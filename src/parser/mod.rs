@@ -1119,9 +1119,11 @@ fn charge_staged_output(
                     }
                 }
             }
-            MacroOutputNode::Token(_, spelling, _) => {
+            MacroOutputNode::Token(kind, spelling, _) => {
                 budget
                     .charge_units(spelling.len())
+                    .map_err(macro_resource_failure)?;
+                crate::syntax::charge_type_token_copy(kind, budget)
                     .map_err(macro_resource_failure)?;
             }
             MacroOutputNode::Group(_, children, _) => {

@@ -383,6 +383,29 @@ fn charge_type_name(
     charge_type_location(name.diagnostic.as_deref(), depth, work, budget)
 }
 
+pub(crate) fn charge_type_name_copy(
+    name: &SurfaceName,
+    depth: usize,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    charge_type_name(
+        name,
+        depth,
+        TypeWork::Copy {
+            inherit_frame: false,
+        },
+        budget,
+    )
+}
+
+pub(crate) fn charge_type_name_inspection(
+    name: &SurfaceName,
+    depth: usize,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    charge_type_name(name, depth, TypeWork::Inspect, budget)
+}
+
 fn charge_type_reference(
     reference: &SurfaceReference,
     depth: usize,
@@ -1921,11 +1944,7 @@ fn validate_template_syntax_inner(
     }
 
     let SurfaceSyntaxImplementation::Template = &declaration.implementation else {
-        return if declaration.category == crate::surface::SurfaceSyntaxCategory::Declaration {
-            Err(crate::parser::MacroParseFailure::Invalid)
-        } else {
-            Ok(())
-        };
+        return Ok(());
     };
     let (capture_count, identifier_count) = if let Some(budget) = &mut admission_budget {
         budget
