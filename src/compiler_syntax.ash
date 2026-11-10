@@ -118,6 +118,8 @@ pub effect Ops {
     caller_identifier : (Input, String, Origin) -> IdentifierResult
     combine_origins : (Input, Origins) -> OriginsResult
     declaration_syntax : DeclarationFragment -> Syntax
+    type_syntax : TypeFragment -> Syntax
+    parse_type : (Input, Syntax) -> ParseResult
 }
 
 pub capture : (Input, Int) -> CaptureResult ! {Ops}
@@ -148,3 +150,7 @@ pub combine_origins : (Input, Origins) -> OriginsResult ! {Ops}
 combine_origins value = perform Ops.combine_origins value
 pub declaration_syntax : DeclarationFragment -> Syntax ! {Ops}
 declaration_syntax value = perform Ops.declaration_syntax value
+pub type_syntax : TypeFragment -> Syntax ! {Ops}
+type_syntax value = perform Ops.type_syntax value
+pub parse_type : (Input, Syntax) -> ParseResult ! {Ops}
+parse_type value = perform Ops.parse_type value

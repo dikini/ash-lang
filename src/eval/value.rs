@@ -599,6 +599,7 @@ pub(super) enum CompilerSyntaxHandleKind {
     Origin(usize),
     Expression(usize),
     Declaration(usize),
+    Type(usize),
     Identifier(usize),
     Token(usize),
     ParseFailure(usize),

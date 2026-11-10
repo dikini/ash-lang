@@ -752,6 +752,50 @@ pub(crate) fn parse_macro_expression(
     )
 }
 
+pub(crate) fn parse_macro_type(
+    source: &SourceFile,
+    invocation: Span,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    frame: &std::sync::Arc<crate::syntax::ExpansionFrame>,
+    budget: &mut SyntaxBudget,
+) -> Result<crate::surface::SurfaceTypeCapture, MacroParseFailure> {
+    crate::syntax::charge_type_output_copy(&output, budget)?;
+    let contents = output.clone();
+    let parsed = parse_macro_tree_inner(
+        source,
+        invocation,
+        output,
+        contexts,
+        &[],
+        MacroOutputPosition::Type,
+        budget,
+    )?;
+    let ty = project::project_macro_type(source, invocation, &parsed, frame, budget).map_err(
+        |failure| match failure {
+            project::DeclarationExpansionFailure::Syntax {
+                diagnostics,
+                resource,
+            } => MacroParseFailure::Syntax {
+                diagnostics,
+                resource,
+            },
+            project::DeclarationExpansionFailure::Projection(ProjectionError::ResourceLimit(
+                resource,
+            )) => macro_resource_failure(resource),
+            project::DeclarationExpansionFailure::Projection(_) => MacroParseFailure::Invalid,
+        },
+    )?;
+    budget
+        .charge_units(contents.len())
+        .map_err(macro_resource_failure)?;
+    budget.charge().map_err(macro_resource_failure)?;
+    Ok(crate::surface::SurfaceTypeCapture {
+        ty,
+        contents: contents.into(),
+    })
+}
+
 pub(crate) fn parse_template_admission(
     source: &SourceFile,
     invocation: Span,
@@ -802,13 +846,14 @@ fn parse_macro_expression_inner(
 #[derive(Clone, Copy)]
 enum MacroOutputPosition {
     Expression,
+    Type,
     Declarations,
     StagedDeclarations,
 }
 
 impl MacroOutputPosition {
     fn is_declarations(self) -> bool {
-        !matches!(self, Self::Expression)
+        matches!(self, Self::Declarations | Self::StagedDeclarations)
     }
 }
 
@@ -849,9 +894,10 @@ fn parse_macro_tree_inner(
 ) -> Result<ParsedMacroTree, MacroParseFailure> {
     use crate::source::ByteRange;
     use crate::syntax::MacroOutputNode;
-    let staging = matches!(position, MacroOutputPosition::StagedDeclarations);
-    if staging {
-        charge_staged_output(&output, contexts, budget)?;
+    let type_output = matches!(position, MacroOutputPosition::Type);
+    let budgeted = type_output || matches!(position, MacroOutputPosition::StagedDeclarations);
+    if budgeted {
+        charge_staged_output(&output, contexts, type_output, budget)?;
     }
     let start = invocation.range().start();
     let anchor = source
@@ -867,12 +913,35 @@ fn parse_macro_tree_inner(
     let mut syntax_selections = std::collections::HashMap::new();
     let mut syntax_spellings = std::collections::HashMap::new();
     let mut fragment_count = 0usize;
+    if type_output && !output.is_empty() {
+        budget
+            .charge_units(output.len())
+            .map_err(macro_resource_failure)?;
+    }
     let mut pieces = output.into_iter().rev().collect::<Vec<_>>();
+    macro_rules! reserve_pieces {
+        ($count:expr) => {{
+            let count = $count;
+            if type_output && count != 0 {
+                let live = pieces.len();
+                let requested = live.checked_add(count).unwrap_or(usize::MAX);
+                if requested > pieces.capacity() {
+                    budget
+                        .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                        .map_err(macro_resource_failure)?;
+                    pieces.reserve_exact(count);
+                }
+            }
+        }};
+    }
     while let Some(piece) = pieces.pop() {
         let forwarded = matches!(&piece, MacroOutputNode::ForwardedExpression(_, _));
         let kind = match piece {
             MacroOutputNode::Expression(expression, origin)
             | MacroOutputNode::ForwardedExpression(expression, origin) => {
+                if type_output {
+                    return Err(MacroParseFailure::Invalid);
+                }
                 original_nodes.insert(
                     tokens.len(),
                     if forwarded {
@@ -886,7 +955,7 @@ fn parse_macro_tree_inner(
                 TokenKind::Identifier(name)
             }
             MacroOutputNode::ForwardedType(capture, origin) => {
-                if !position.is_declarations() {
+                if !position.is_declarations() && !type_output {
                     return Err(MacroParseFailure::Invalid);
                 }
                 original_nodes.insert(
@@ -958,7 +1027,9 @@ fn parse_macro_tree_inner(
                     TokenKind::RightBrace => "}",
                     _ => unreachable!(),
                 };
+                reserve_pieces!(1);
                 pieces.push(MacroOutputNode::Token(close, close_spelling.into(), origin));
+                reserve_pieces!(children.len());
                 pieces.extend(children.into_iter().rev());
                 open
             }
@@ -1030,6 +1101,12 @@ fn parse_macro_tree_inner(
                 parser.error_at_current(ParseReason::UnexpectedToken);
             }
         }
+        MacroOutputPosition::Type => {
+            grammar::type_expression(&mut parser);
+            if !parser.at(&TokenKind::EndOfFile) {
+                parser.error_at_current(ParseReason::UnexpectedToken);
+            }
+        }
         MacroOutputPosition::Declarations | MacroOutputPosition::StagedDeclarations => {
             grammar::module_body(&mut parser)
         }
@@ -1041,12 +1118,15 @@ fn parse_macro_tree_inner(
             resource: parser.resource_failure,
         });
     }
-    if matches!(position, MacroOutputPosition::Expression) {
+    if matches!(
+        position,
+        MacroOutputPosition::Expression | MacroOutputPosition::Type
+    ) {
         let _ = parser.bump();
         parser.finish();
     }
     *budget = parser.syntax_budget.clone();
-    if staging {
+    if budgeted {
         // The event-built tree and token-coverage table retain another copy of
         // this structure; reserve it before building them.
         budget
@@ -1083,6 +1163,7 @@ fn macro_resource_failure(resource: ResourceFailure) -> MacroParseFailure {
 fn charge_staged_output(
     output: &[crate::syntax::MacroOutputNode],
     contexts: &crate::syntax::SyntaxContexts,
+    type_scratch: bool,
     budget: &mut SyntaxBudget,
 ) -> Result<(), MacroParseFailure> {
     use crate::syntax::MacroOutputNode;
@@ -1092,13 +1173,23 @@ fn charge_staged_output(
     budget
         .charge_units(output.len())
         .map_err(macro_resource_failure)?;
+    if type_scratch && !output.is_empty() {
+        budget
+            .charge_units(output.len())
+            .map_err(macro_resource_failure)?;
+    }
     let mut pending = output.iter().map(|node| (node, 0usize)).collect::<Vec<_>>();
     while let Some((node, depth)) = pending.pop() {
         // Piece, token, original-node entry, spelling entry, diagnostic entry.
         budget.charge_units(5).map_err(macro_resource_failure)?;
         match node {
             MacroOutputNode::Identifier(name, _) => {
-                crate::syntax::charge_name(name, budget).map_err(macro_resource_failure)?;
+                if type_scratch {
+                    crate::syntax::charge_type_name_copy(name, depth, budget)
+                        .map_err(macro_resource_failure)?;
+                } else {
+                    crate::syntax::charge_name(name, budget).map_err(macro_resource_failure)?;
+                }
                 // The token spelling and its shared syntax spelling are separate copies.
                 budget
                     .charge_units(name.text.len())
@@ -1140,11 +1231,15 @@ fn charge_staged_output(
                 crate::syntax::charge_type_token_copy(kind, budget)
                     .map_err(macro_resource_failure)?;
             }
-            MacroOutputNode::Group(_, children, _) => {
+            MacroOutputNode::Group(_, children, origin) => {
                 if depth >= STRUCTURAL_DEPTH_LIMIT {
                     return Err(macro_resource_failure(ResourceFailure::StructuralDepth {
                         limit: STRUCTURAL_DEPTH_LIMIT,
                     }));
+                }
+                if type_scratch {
+                    crate::syntax::charge_type_origin_copy(origin, depth + 1, budget)
+                        .map_err(macro_resource_failure)?;
                 }
                 // A group adds a synthetic closing token and pending child entries.
                 budget.charge_units(5).map_err(macro_resource_failure)?;
@@ -1157,6 +1252,16 @@ fn charge_staged_output(
                 budget
                     .charge_units(children.len())
                     .map_err(macro_resource_failure)?;
+                if type_scratch && !children.is_empty() {
+                    let live = pending.len();
+                    let requested = live.checked_add(children.len()).unwrap_or(usize::MAX);
+                    if requested > pending.capacity() {
+                        budget
+                            .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                            .map_err(macro_resource_failure)?;
+                        pending.reserve_exact(children.len());
+                    }
+                }
                 pending.extend(children.iter().map(|child| (child, depth + 1)));
             }
             // The adapter moves this preflighted capture into original_nodes;
@@ -1183,8 +1288,10 @@ fn charge_staged_output(
             }
         }
     }
-    // Declaration line end, EOF, and their diagnostic entries.
-    budget.charge_units(4).map_err(macro_resource_failure)
+    // Type output has only EOF; declaration output may also need a line end.
+    budget
+        .charge_units(if type_scratch { 2 } else { 4 })
+        .map_err(macro_resource_failure)
 }
 
 fn parse_parts(

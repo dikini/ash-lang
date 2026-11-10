@@ -2679,6 +2679,7 @@ pub(crate) fn project_declaration_expansions(
                     declaration: invocation.selection.declaration.span,
                     import_span: invocation.selection.import_span,
                 }));
+                charge_transformer_type_metadata_copies(&output, budget)?;
                 output
             }
         };
@@ -2733,6 +2734,17 @@ pub(crate) fn project_declaration_expansions(
             &parsed.tree.tokens,
             Some(&parsed.admission_identifiers),
         )?;
+        if matches!(
+            invocation.selection.declaration.implementation,
+            SurfaceSyntaxImplementation::Transformer(_)
+        ) {
+            check_narrow_protected_refusal(
+                output_root,
+                Some(&parsed.original_nodes),
+                true,
+                budget,
+            )?;
+        }
         budget.charge_units(2)?;
         pending.push(DeclarationFrame {
             tree: DeclarationTree::Output(Box::new(parsed)),
@@ -2746,6 +2758,45 @@ pub(crate) fn project_declaration_expansions(
     }
     *owners = staged_owners;
     Ok(module.finish(span))
+}
+
+fn charge_transformer_type_metadata_copies(
+    output: &[crate::syntax::MacroOutputNode],
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    use crate::syntax::MacroOutputNode;
+
+    // This borrowed walk has its own entries and requested buffer.
+    budget.charge_units(output.len())?;
+    budget.charge_units(output.len())?;
+    let mut pending = output.iter().map(|node| (node, 0usize)).collect::<Vec<_>>();
+    while let Some((node, depth)) = pending.pop() {
+        budget.charge()?;
+        match node {
+            MacroOutputNode::Group(_, children, _) => {
+                let child_depth = crate::syntax::type_depth(depth, 1)?;
+                budget.charge_units(children.len())?;
+                let live = pending.len();
+                let requested = live.checked_add(children.len()).unwrap_or(usize::MAX);
+                if !children.is_empty() && requested > pending.capacity() {
+                    budget.charge_units(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                    pending.reserve_exact(children.len());
+                }
+                pending.extend(children.iter().map(|child| (child, child_depth)));
+            }
+            MacroOutputNode::ForwardedType(capture, _) => {
+                let child_depth = crate::syntax::type_depth(depth, 1)?;
+                crate::syntax::charge_transformer_type_metadata(&capture.ty, child_depth, budget)?;
+            }
+            MacroOutputNode::Identifier(_, _)
+            | MacroOutputNode::Token(_, _, _)
+            | MacroOutputNode::Expression(_, _)
+            | MacroOutputNode::ForwardedExpression(_, _)
+            | MacroOutputNode::ForwardedPattern(_, _)
+            | MacroOutputNode::Splice(_) => {}
+        }
+    }
+    Ok(())
 }
 
 /// Reserve every retained frame and the comparisons needed to deduplicate it.
@@ -3222,6 +3273,8 @@ fn charge_declaration_invocation(
     let mut has_declaration = false;
     let mut has_other_capture = false;
     let mut has_structured = false;
+    let mut has_type_or_identifier = false;
+    let mut has_expression_or_pattern = false;
     for part in &selection.declaration.matcher {
         match part {
             SurfaceSyntaxMatcherPart::Literal { spelling, .. } => {
@@ -3230,8 +3283,15 @@ fn charge_declaration_invocation(
             }
             SurfaceSyntaxMatcherPart::Capture { kind, .. } => match kind {
                 SurfaceSyntaxCaptureKind::Declaration => has_declaration = true,
-                SurfaceSyntaxCaptureKind::Identifier => {}
-                _ => has_other_capture = true,
+                SurfaceSyntaxCaptureKind::Identifier => has_type_or_identifier = true,
+                SurfaceSyntaxCaptureKind::Type => {
+                    has_type_or_identifier = true;
+                    has_other_capture = true;
+                }
+                SurfaceSyntaxCaptureKind::Expression | SurfaceSyntaxCaptureKind::Pattern => {
+                    has_expression_or_pattern = true;
+                    has_other_capture = true;
+                }
             },
             SurfaceSyntaxMatcherPart::Container(_) | SurfaceSyntaxMatcherPart::LineEnd => {
                 has_structured = true
@@ -3244,8 +3304,8 @@ fn charge_declaration_invocation(
         SurfaceSyntaxImplementation::Template
     );
     let declaration_transformer = executing
-        && has_declaration
-        && !has_other_capture
+        && ((has_declaration && !has_other_capture)
+            || (!has_declaration && has_type_or_identifier && !has_expression_or_pattern))
         && source_projection_tokens(tokens)
         && matches!(
             selection.declaration.implementation,
@@ -3554,7 +3614,7 @@ fn charge_generated_projection(
     tokens: &ProjectionTokens<'_>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(), DeclarationExpansionFailure> {
-    check_narrow_protected_refusal(root, tokens, budget)?;
+    check_narrow_protected_refusal(root, tokens.originals, false, budget)?;
     charge_projection_preflight(root, tokens, false, budget)?;
     Ok(())
 }
@@ -3564,7 +3624,7 @@ fn charge_generated_ep_projection(
     tokens: &ProjectionTokens<'_>,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(), DeclarationExpansionFailure> {
-    check_narrow_protected_refusal(root, tokens, budget)?;
+    check_narrow_protected_refusal(root, tokens.originals, false, budget)?;
     if charge_projection_preflight(root, tokens, true, budget)? {
         return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
     }
@@ -3659,6 +3719,16 @@ fn charge_composed_projection(
     root: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
     expression_pattern: bool,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<bool, DeclarationExpansionFailure> {
+    charge_composed_projection_inner(root, tokens, expression_pattern, false, budget)
+}
+
+fn charge_composed_projection_inner(
+    root: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    expression_pattern: bool,
+    new_type_copy: bool,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<bool, DeclarationExpansionFailure> {
     budget.charge()?;
@@ -3944,12 +4014,21 @@ fn charge_composed_projection(
                                 )
                                 .into());
                             }
-                            crate::syntax::charge_type_copy(
-                                &capture.ty,
-                                depth,
-                                tokens.frame.is_some(),
-                                budget,
-                            )?;
+                            if new_type_copy {
+                                crate::syntax::charge_new_type_copy(
+                                    &capture.ty,
+                                    depth,
+                                    tokens.frame.is_some(),
+                                    budget,
+                                )?;
+                            } else {
+                                crate::syntax::charge_type_copy(
+                                    &capture.ty,
+                                    depth,
+                                    tokens.frame.is_some(),
+                                    budget,
+                                )?;
+                            }
                         }
                         Some(crate::syntax::MacroOutputNode::ForwardedExpression(capture, _))
                             if expression_pattern =>
@@ -4099,12 +4178,23 @@ fn charge_composed_projection(
 /// Keep forwarded protected syntax out of unbudgeted expression captures.
 fn check_narrow_protected_refusal(
     root: &ConcreteNode,
-    tokens: &ProjectionTokens<'_>,
+    originals: Option<&std::collections::HashMap<usize, crate::syntax::MacroOutputNode>>,
+    transformer_type_arguments: bool,
     budget: &mut crate::syntax_resource::SyntaxBudget,
 ) -> Result<(), DeclarationExpansionFailure> {
     budget.charge()?;
-    let mut pending = vec![(root, false)];
-    while let Some((node, expression_argument)) = pending.pop() {
+    let mut pending = if transformer_type_arguments {
+        budget.charge()?; // initial requested buffer
+        let mut pending = Vec::with_capacity(1);
+        pending.push((root, false, false));
+        pending
+    } else {
+        vec![(root, false, false)]
+    };
+    while let Some((node, expression_argument, declaration_argument)) = pending.pop() {
+        if transformer_type_arguments {
+            budget.charge()?;
+        }
         for child in &node.children {
             budget.charge()?;
             match child {
@@ -4112,18 +4202,37 @@ fn check_narrow_protected_refusal(
                     let expression_argument = expression_argument
                         || (node.kind == NodeKind::SyntaxInvocation
                             && child.kind == NodeKind::SyntaxArgument);
-                    pending.push((child, expression_argument));
+                    let declaration_argument = declaration_argument
+                        || (transformer_type_arguments
+                            && node.kind == NodeKind::DeclarationSyntaxInvocation
+                            && child.kind == NodeKind::SyntaxArgument);
+                    if transformer_type_arguments {
+                        budget.charge()?; // pushed slot
+                        let live = pending.len();
+                        if live == pending.capacity() {
+                            let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                            budget
+                                .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                            pending.reserve_exact(1);
+                        }
+                    }
+                    pending.push((child, expression_argument, declaration_argument));
                 }
                 ConcreteElement::Token(index)
-                    if expression_argument
+                    if (expression_argument
                         && matches!(
-                            tokens.originals.and_then(|originals| originals.get(index)),
+                            originals.and_then(|originals| originals.get(index)),
                             Some(
                                 crate::syntax::MacroOutputNode::ForwardedType(_, _)
                                     | crate::syntax::MacroOutputNode::ForwardedExpression(_, _)
                                     | crate::syntax::MacroOutputNode::ForwardedPattern(_, _)
                             )
-                        ) =>
+                        ))
+                        || (declaration_argument
+                            && matches!(
+                                originals.and_then(|originals| originals.get(index)),
+                                Some(crate::syntax::MacroOutputNode::ForwardedType(_, _))
+                            )) =>
                 {
                     return Err(
                         ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
@@ -5869,6 +5978,42 @@ pub(super) fn project_macro_expression(
         preserve_name_diagnostic: false,
     };
     project_expression_with_fragments(source, expression, &tokens, original_nodes)
+}
+
+pub(super) fn project_macro_type(
+    source: &SourceFile,
+    invocation: Span,
+    parsed: &super::ParsedMacroTree,
+    frame: &std::sync::Arc<crate::syntax::ExpansionFrame>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<SurfaceType, DeclarationExpansionFailure> {
+    // Recovery, depth, coverage, and shape each traverse the built tree.
+    for _ in 0..4 {
+        budget.charge_units(parsed.tree.events.len())?;
+    }
+    budget.charge_units(parsed.tree.tokens.len())?;
+    let root = validated_macro_root(source, &parsed.tree)?;
+    let ty = only_child_of_kind(root, NodeKind::Type)?;
+    validate_node_shape_with_admission(
+        ty,
+        &parsed.tree.tokens,
+        Some(&parsed.admission_identifiers),
+    )?;
+    let tokens = ProjectionTokens {
+        tokens: &parsed.tree.tokens,
+        originals: Some(&parsed.original_nodes),
+        occurrence: Some(invocation),
+        construction: None,
+        construction_extents: false,
+        admission_identifiers: Some(&parsed.admission_identifiers),
+        frame: Some(frame),
+        name_frame: Some(frame),
+        staging_frames: None,
+        preserve_name_diagnostic: true,
+    };
+    charge_composed_projection_inner(ty, &tokens, false, true, budget)?;
+    charge_projection_subtree(ty, &tokens, budget)?;
+    Ok(project_type(source, ty, &tokens)?)
 }
 
 fn project_expression_with_fragments(
@@ -12286,7 +12431,8 @@ mod tests {
             assert!(
                 check_narrow_protected_refusal(
                     allowed,
-                    &tokens,
+                    tokens.originals,
+                    false,
                     &mut crate::syntax_resource::SyntaxBudget::default(),
                 )
                 .is_ok()
@@ -12295,7 +12441,8 @@ mod tests {
         assert!(matches!(
             check_narrow_protected_refusal(
                 &expression,
-                &tokens,
+                tokens.originals,
+                false,
                 &mut crate::syntax_resource::SyntaxBudget::default(),
             ),
             Err(DeclarationExpansionFailure::Projection(
@@ -12449,7 +12596,12 @@ mod tests {
                 "the selected argument contains the protected original"
             );
             assert!(matches!(
-                check_narrow_protected_refusal(global, &tokens, &mut SyntaxBudget::default()),
+                check_narrow_protected_refusal(
+                    global,
+                    tokens.originals,
+                    false,
+                    &mut SyntaxBudget::default(),
+                ),
                 Err(DeclarationExpansionFailure::Projection(
                     ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
                 ))
@@ -12528,7 +12680,8 @@ mod tests {
             assert!(matches!(
                 check_narrow_protected_refusal(
                     &expression,
-                    &tokens,
+                    tokens.originals,
+                    false,
                     &mut crate::syntax_resource::SyntaxBudget::default(),
                 ),
                 Err(DeclarationExpansionFailure::Projection(
@@ -12537,7 +12690,8 @@ mod tests {
             ));
             check_narrow_protected_refusal(
                 &declaration,
-                &tokens,
+                tokens.originals,
+                false,
                 &mut crate::syntax_resource::SyntaxBudget::default(),
             )
             .expect("declaration forwarding is a separate accounted path");

@@ -13,6 +13,7 @@ use crate::{
     source::SourceFile,
     surface::{
         SurfaceDeclarationCapture, SurfaceExpressionCapture, SurfaceName, SurfaceSyntaxCapture,
+        SurfaceTypeCapture,
     },
     syntax::{
         ExpansionFrame, MacroDelimiter, MacroOrigin, MacroOutputNode, SyntaxContexts,
@@ -41,6 +42,16 @@ fn syntax_failure(failure: crate::syntax_resource::ResourceFailure) -> RuntimeFa
         teardown: None,
         cleanup: crate::eval::CleanupStatus::Unknown,
     })
+}
+
+fn type_retention_failure(failure: crate::parser::MacroParseFailure) -> RuntimeFailure {
+    match failure {
+        crate::parser::MacroParseFailure::Syntax {
+            resource: Some(failure),
+            ..
+        } => syntax_failure(failure),
+        _ => RuntimeFailure::InvalidControlState,
+    }
 }
 
 fn check_declaration_contents(
@@ -98,6 +109,7 @@ pub(super) struct SyntaxHost<'inv> {
     captures: Vec<SurfaceSyntaxCapture>,
     expressions: Vec<SurfaceExpressionCapture>,
     declarations: Vec<SurfaceDeclarationCapture>,
+    types: Vec<SurfaceTypeCapture>,
     identifiers: Vec<SurfaceName>,
     origins: Vec<MacroOrigin>,
     parse_failures: Vec<(
@@ -142,6 +154,10 @@ impl<'inv> SyntaxHost<'inv> {
                             .map_err(syntax_failure)?;
                         crate::syntax::charge_type_origin(&capture.origin, 0, budget)
                             .map_err(syntax_failure)?;
+                    }
+                    SurfaceSyntaxCapture::Type(capture) => {
+                        crate::syntax::charge_new_type_retention(capture, 0, budget)
+                            .map_err(type_retention_failure)?;
                     }
                     _ => return Err(RuntimeFailure::InvalidControlState),
                 }
@@ -247,6 +263,10 @@ impl<'inv> SyntaxHost<'inv> {
                                 crate::syntax::charge_type_origin_copy(&capture.origin, 0, budget)
                                     .map_err(syntax_failure)?;
                             }
+                            SurfaceSyntaxCapture::Type(capture) => {
+                                crate::syntax::charge_new_type_copy(&capture.ty, 1, false, budget)
+                                    .map_err(syntax_failure)?;
+                            }
                             _ => return Err(RuntimeFailure::InvalidControlState),
                         }
                     }
@@ -257,6 +277,7 @@ impl<'inv> SyntaxHost<'inv> {
             syntax_work,
             expressions: Vec::new(),
             declarations: Vec::new(),
+            types: Vec::new(),
             identifiers: Vec::new(),
             origins: Vec::new(),
             parse_failures: Vec::new(),
@@ -563,6 +584,21 @@ impl<'inv> SyntaxHost<'inv> {
                     let capture = self.construct(heap, "DeclarationCapture", Some(handle))?;
                     return self.construct(heap, "Captured", Some(capture));
                 }
+                if let (Some(budget), Some(SurfaceSyntaxCapture::Type(capture))) =
+                    (self.syntax_work.as_deref_mut(), capture)
+                {
+                    crate::syntax::charge_new_type_retention(capture, 0, budget)
+                        .map_err(type_retention_failure)?;
+                    crate::syntax::charge_new_type_copy(&capture.ty, 1, false, budget)
+                        .map_err(syntax_failure)?;
+                    budget.charge_units(2).map_err(syntax_failure)?; // arena slot and handle
+                    let capture = capture.clone();
+                    let index = self.types.len();
+                    self.types.push(capture);
+                    let fragment = self.handle(CompilerSyntaxHandleKind::Type(index));
+                    let capture = self.construct(heap, "TypeCapture", Some(fragment))?;
+                    return self.construct(heap, "Captured", Some(capture));
+                }
                 if let (Some(budget), Some(SurfaceSyntaxCapture::Identifier(capture))) =
                     (self.syntax_work.as_deref_mut(), capture)
                 {
@@ -771,6 +807,49 @@ impl<'inv> SyntaxHost<'inv> {
                     }
                 }
             }
+            "parse_type" => {
+                let (input, syntax) = pair(&argument, heap)?;
+                if !matches!(
+                    self.admitted_handle(input)?,
+                    CompilerSyntaxHandleKind::Input
+                ) || self.syntax_work.is_none()
+                {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let output = self.transfer_syntax(syntax, heap, 0)?;
+                let result = crate::parser::parse_macro_type(
+                    &self.source,
+                    self.frame.invocation,
+                    output,
+                    &self.contexts,
+                    &self.frame,
+                    self.syntax_work
+                        .as_deref_mut()
+                        .expect("the Type route owns a budget"),
+                );
+                match result {
+                    Ok(capture) => {
+                        self.charge(2)?; // arena slot and issued handle
+                        let index = self.types.len();
+                        self.types.push(capture);
+                        let fragment = self.handle(CompilerSyntaxHandleKind::Type(index));
+                        self.construct(heap, "ParsedType", Some(fragment))
+                    }
+                    Err(crate::parser::MacroParseFailure::Syntax {
+                        diagnostics,
+                        resource,
+                    }) => {
+                        self.charge(2)?; // failure slot and issued handle
+                        let index = self.parse_failures.len();
+                        self.parse_failures.push((diagnostics, resource));
+                        let failure = self.handle(CompilerSyntaxHandleKind::ParseFailure(index));
+                        self.construct(heap, "ParseRejected", Some(failure))
+                    }
+                    Err(crate::parser::MacroParseFailure::Invalid) => {
+                        Err(RuntimeFailure::InvalidControlState)
+                    }
+                }
+            }
             "expression_syntax" => {
                 let CompilerSyntaxHandleKind::Expression(index) =
                     self.admitted_handle(&argument)?
@@ -809,6 +888,21 @@ impl<'inv> SyntaxHost<'inv> {
                     let count = super::machine_test_hooks::DECLARATION_UNWRAPS.get();
                     super::machine_test_hooks::DECLARATION_UNWRAPS.set(count + 1);
                 }
+                self.syntax_value(&contents, heap, 1)
+            }
+            "type_syntax" => {
+                let CompilerSyntaxHandleKind::Type(index) = self.admitted_handle(&argument)? else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                let capture = self
+                    .types
+                    .get(index)
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                let Some(budget) = self.syntax_work.as_deref_mut() else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                budget.charge().map_err(syntax_failure)?;
+                let contents = Arc::clone(&capture.contents);
                 self.syntax_value(&contents, heap, 1)
             }
             "token_kind" => {
@@ -867,11 +961,16 @@ impl<'inv> SyntaxHost<'inv> {
             };
             let (diagnostics, resource) = self
                 .parse_failures
-                .get(index)
+                .get_mut(index)
                 .ok_or(RuntimeFailure::InvalidControlState)?;
+            let diagnostics = if self.syntax_work.is_some() {
+                std::mem::take(diagnostics)
+            } else {
+                diagnostics.clone()
+            };
             return Ok(TransformerOutput::SyntaxRejected(
                 crate::driver::SyntaxParseFailure {
-                    diagnostics: diagnostics.clone(),
+                    diagnostics,
                     resource: *resource,
                     invocation: self.frame.invocation,
                     definition: self.frame.definition,
@@ -994,19 +1093,42 @@ impl<'inv> SyntaxHost<'inv> {
             } else {
                 if self.syntax_work.is_some() {
                     self.charge(4)?;
-                    if [
-                        "ExpressionNode",
-                        "TypeNode",
-                        "PatternNode",
-                        "DeclarationNode",
-                    ]
-                    .iter()
-                    .any(|name| self.constructors.get(*name) == Some(&tag))
+                    if ["ExpressionNode", "PatternNode", "DeclarationNode"]
+                        .iter()
+                        .any(|name| self.constructors.get(*name) == Some(&tag))
                     {
                         return Err(RuntimeFailure::InvalidControlState);
                     }
                 }
                 let (value, origin) = pair(payload, heap)?;
+                if self.syntax_work.is_some() && tag == self.constructor("TypeNode")? {
+                    let CompilerSyntaxHandleKind::Type(index) = self.admitted_handle(value)? else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    if self.types.get(index).is_none() {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    let prefix = depth.saturating_add(groups.len());
+                    let origin = self.copy_origin(origin, prefix)?;
+                    let capture = &self.types[index];
+                    let budget = self
+                        .syntax_work
+                        .as_deref_mut()
+                        .expect("the Type route owns a budget");
+                    crate::syntax::charge_new_type_retention(capture, prefix, budget)
+                        .map_err(type_retention_failure)?;
+                    crate::syntax::charge_new_type_copy(
+                        &capture.ty,
+                        crate::syntax::type_depth(prefix, 1).map_err(syntax_failure)?,
+                        false,
+                        budget,
+                    )
+                    .map_err(syntax_failure)?;
+                    budget.charge().map_err(syntax_failure)?; // output slot
+                    output.push(MacroOutputNode::ForwardedType(capture.clone(), origin));
+                    nodes = rest;
+                    continue;
+                }
                 let origin = self.copy_origin(origin, depth.saturating_add(groups.len()))?;
                 if tag == self.constructor("ExpressionNode")? {
                     let CompilerSyntaxHandleKind::Expression(index) =
@@ -1121,6 +1243,32 @@ impl<'inv> SyntaxHost<'inv> {
                         ],
                     )
                 }
+                Some(MacroOutputNode::ForwardedType(capture, origin)) => {
+                    let prefix = depth.saturating_add(groups.len());
+                    let Some(budget) = self.syntax_work.as_deref_mut() else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    crate::syntax::charge_new_type_retention(capture, prefix, budget)
+                        .map_err(type_retention_failure)?;
+                    crate::syntax::charge_new_type_copy(
+                        &capture.ty,
+                        crate::syntax::type_depth(prefix, 1).map_err(syntax_failure)?,
+                        false,
+                        budget,
+                    )
+                    .map_err(syntax_failure)?;
+                    budget.charge_units(4).map_err(syntax_failure)?;
+                    self.charge_origin(origin, prefix)?;
+                    let index = self.types.len();
+                    self.types.push(capture.clone());
+                    (
+                        "TypeNode",
+                        vec![
+                            self.handle(CompilerSyntaxHandleKind::Type(index)),
+                            self.issue_origin(origin.clone())?,
+                        ],
+                    )
+                }
                 Some(MacroOutputNode::Token(kind, spelling, origin)) => {
                     if let Some(budget) = self.syntax_work.as_deref_mut() {
                         crate::syntax::charge_type_token_copy(kind, budget)
@@ -1163,11 +1311,7 @@ impl<'inv> SyntaxHost<'inv> {
                     rest = self.construct(heap, "NoNodes", None)?;
                     continue;
                 }
-                Some(
-                    MacroOutputNode::Splice(_)
-                    | MacroOutputNode::ForwardedType(_, _)
-                    | MacroOutputNode::ForwardedPattern(_, _),
-                ) => {
+                Some(MacroOutputNode::Splice(_) | MacroOutputNode::ForwardedPattern(_, _)) => {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
                 None => {
@@ -1578,6 +1722,7 @@ mod tests {
             captures: Vec::new(),
             expressions: Vec::new(),
             declarations: Vec::new(),
+            types: Vec::new(),
             identifiers: Vec::new(),
             origins: Vec::new(),
             parse_failures: Vec::new(),
@@ -2082,7 +2227,6 @@ mod tests {
             surface::{
                 SurfaceDeclarationCapture, SurfaceExpr, SurfaceExprKind, SurfaceExpressionCapture,
                 SurfacePattern, SurfacePatternCapture, SurfacePatternKind, SurfaceSyntaxCapture,
-                SurfaceType, SurfaceTypeCapture, SurfaceTypeKind,
             },
             syntax::{MacroOrigin, MacroOutputNode},
             syntax_resource::SyntaxBudget,
@@ -2103,14 +2247,6 @@ mod tests {
         };
         let unsupported = [
             SurfaceSyntaxCapture::Expression(expression.clone()),
-            SurfaceSyntaxCapture::Type(SurfaceTypeCapture {
-                ty: SurfaceType {
-                    kind: SurfaceTypeKind::Int,
-                    span,
-                    diagnostic: None,
-                },
-                contents: Arc::clone(&nested),
-            }),
             SurfaceSyntaxCapture::Pattern(SurfacePatternCapture {
                 pattern: SurfacePattern {
                     kind: SurfacePatternKind::Wildcard,
@@ -2275,12 +2411,7 @@ mod tests {
         };
         let origin = host.issue_origin(combined.clone()).unwrap();
         let retained = Arc::strong_count(inputs);
-        for protected in [
-            "ExpressionNode",
-            "TypeNode",
-            "PatternNode",
-            "DeclarationNode",
-        ] {
+        for protected in ["ExpressionNode", "PatternNode", "DeclarationNode"] {
             let fields = Value::Location(
                 allocate_heap(
                     &mut heap,
@@ -2624,6 +2755,7 @@ mod tests {
                     captures,
                     expressions: Vec::new(),
                     declarations: Vec::new(),
+                    types: Vec::new(),
                     identifiers: Vec::new(),
                     origins: Vec::new(),
                     parse_failures: Vec::new(),
@@ -2769,6 +2901,7 @@ mod tests {
             })],
             expressions: Vec::new(),
             declarations: Vec::new(),
+            types: Vec::new(),
             identifiers: Vec::new(),
             origins: Vec::new(),
             parse_failures: Vec::new(),

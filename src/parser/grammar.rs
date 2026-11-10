@@ -3660,7 +3660,7 @@ fn typed_pattern(parser: &mut Parser<'_>) {
     parser.finish();
 }
 
-fn type_expression(parser: &mut Parser<'_>) {
+pub(super) fn type_expression(parser: &mut Parser<'_>) {
     parser.start(NodeKind::Type);
     if parser.at_syntax_stop() {
         parser.report(ParseReason::ExpectedForm, ExpectedForm::Type);
