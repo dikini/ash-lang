@@ -891,7 +891,8 @@ fn charge_owned_syntax(
                                         charge_type_value(&capture.ty, child, inner_work, budget)?;
                                         contents!(capture.contents, child);
                                     }
-                                    SurfaceSyntaxCapture::Declaration(_) => {
+                                    SurfaceSyntaxCapture::Declaration(_)
+                                    | SurfaceSyntaxCapture::Repeated(_) => {
                                         budget.charge()?;
                                         return Ok(None);
                                     }
@@ -1448,6 +1449,8 @@ pub(crate) fn charge_selected(
                 budget.charge_units(spelling.len())?;
             }
             SurfaceSyntaxMatcherPart::Capture { name, .. } => charge_name(name, budget)?,
+            SurfaceSyntaxMatcherPart::Container(_) => budget.charge()?,
+            SurfaceSyntaxMatcherPart::LineEnd => {}
         }
     }
     if let SurfaceSyntaxImplementation::Transformer(name) = &selection.declaration.implementation {
@@ -1969,19 +1972,22 @@ fn validate_template_syntax_inner(
         budget
             .charge_units(declaration.matcher.len())
             .map_err(resource)?;
-        let (captures, identifiers, has_declaration) =
-            declaration
-                .matcher
-                .iter()
-                .fold((0usize, 0usize, false), |counts, part| match part {
-                    SurfaceSyntaxMatcherPart::Capture { kind, .. } => (
-                        counts.0 + 1,
-                        counts.1 + usize::from(*kind == SurfaceSyntaxCaptureKind::Identifier),
-                        counts.2 || *kind == SurfaceSyntaxCaptureKind::Declaration,
-                    ),
-                    SurfaceSyntaxMatcherPart::Literal { .. } => counts,
-                });
-        if has_declaration {
+        let (captures, identifiers, has_declaration, has_container) = declaration
+            .matcher
+            .iter()
+            .fold((0usize, 0usize, false, false), |counts, part| match part {
+                SurfaceSyntaxMatcherPart::Capture { kind, .. } => (
+                    counts.0 + 1,
+                    counts.1 + usize::from(*kind == SurfaceSyntaxCaptureKind::Identifier),
+                    counts.2 || *kind == SurfaceSyntaxCaptureKind::Declaration,
+                    counts.3,
+                ),
+                SurfaceSyntaxMatcherPart::Container(_) => (counts.0, counts.1, counts.2, true),
+                SurfaceSyntaxMatcherPart::Literal { .. } | SurfaceSyntaxMatcherPart::LineEnd => {
+                    counts
+                }
+            });
+        if has_declaration || has_container {
             if !declaration
                 .template_contents
                 .as_deref()
@@ -2131,7 +2137,9 @@ fn capture_by_name<'a>(
         .iter()
         .filter_map(|part| match part {
             SurfaceSyntaxMatcherPart::Capture { name, .. } => Some(name),
-            SurfaceSyntaxMatcherPart::Literal { .. } => None,
+            SurfaceSyntaxMatcherPart::Literal { .. }
+            | SurfaceSyntaxMatcherPart::Container(_)
+            | SurfaceSyntaxMatcherPart::LineEnd => None,
         })
         .position(|capture| capture.text == name.text)
         .ok_or(name.span)?;
@@ -2318,7 +2326,9 @@ pub(crate) fn substitute_contents(
                             |location| location.primary.clone(),
                         ),
                     ),
-                    SurfaceSyntaxCapture::Declaration(_) => return Err(name.span),
+                    SurfaceSyntaxCapture::Declaration(_) | SurfaceSyntaxCapture::Repeated(_) => {
+                        return Err(name.span);
+                    }
                 };
             }
             MacroOutputNode::Identifier(name, _) => {

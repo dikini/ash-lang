@@ -120,6 +120,13 @@ impl<'inv> SyntaxHost<'inv> {
         frame: Arc<ExpansionFrame>,
         mut syntax_work: Option<&'inv mut crate::syntax_resource::SyntaxBudget>,
     ) -> Result<Self, RuntimeFailure> {
+        if syntax_work.is_none()
+            && captures
+                .iter()
+                .any(|capture| matches!(capture, SurfaceSyntaxCapture::Repeated(_)))
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
         if let Some(budget) = syntax_work.as_deref_mut() {
             budget
                 .charge_units(captures.len())
@@ -535,6 +542,9 @@ impl<'inv> SyntaxHost<'inv> {
                 }
                 let index = read_integer(index, heap, work)?.to_usize();
                 let capture = index.and_then(|index| self.captures.get(index));
+                if matches!(capture, Some(SurfaceSyntaxCapture::Repeated(_))) {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
                 if let Some(SurfaceSyntaxCapture::Declaration(declaration)) = capture {
                     let Some(budget) = self.syntax_work.as_deref_mut() else {
                         return Err(RuntimeFailure::InvalidControlState);
@@ -584,7 +594,8 @@ impl<'inv> SyntaxHost<'inv> {
                     Some(
                         SurfaceSyntaxCapture::Type(_)
                         | SurfaceSyntaxCapture::Pattern(_)
-                        | SurfaceSyntaxCapture::Declaration(_),
+                        | SurfaceSyntaxCapture::Declaration(_)
+                        | SurfaceSyntaxCapture::Repeated(_),
                     ) => Err(RuntimeFailure::InvalidControlState),
                     None => self.construct(heap, "MissingCapture", None),
                 }

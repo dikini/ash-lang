@@ -17,14 +17,15 @@ use crate::{
         SurfaceIdentifierCapture, SurfaceImplementation, SurfaceImport, SurfaceImportItem,
         SurfaceImportSelection, SurfaceInlineOperationalHeader, SurfaceInterfaceDeclaration,
         SurfaceInterfaceDetermination, SurfaceInterfaceMethod, SurfaceKind, SurfaceKindKind,
-        SurfaceLocalDeclaration, SurfaceMatchArm, SurfaceMatchExpr, SurfaceModule,
-        SurfaceModulePath, SurfaceName, SurfaceNominalDeclarationKind, SurfacePattern,
-        SurfacePatternCapture, SurfacePatternKind, SurfacePerformExpr, SurfaceQualifiedName,
-        SurfaceRecursiveGroup, SurfaceRecursiveMember, SurfaceReference, SurfaceRequirement,
-        SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind, SurfaceSyntaxCategory,
-        SurfaceSyntaxDeclaration, SurfaceSyntaxImplementation, SurfaceSyntaxMatcherPart,
-        SurfaceType, SurfaceTypeCapture, SurfaceTypeDeclaration, SurfaceTypeKind,
-        SurfaceTypeParameter, SurfaceTypeVisibility, SurfaceTypedPattern,
+        SurfaceLocalDeclaration, SurfaceMatchArm, SurfaceMatchExpr, SurfaceMatcherContainer,
+        SurfaceMatcherContainerKind, SurfaceModule, SurfaceModulePath, SurfaceName,
+        SurfaceNominalDeclarationKind, SurfacePattern, SurfacePatternCapture, SurfacePatternKind,
+        SurfacePerformExpr, SurfaceQualifiedName, SurfaceRecursiveGroup, SurfaceRecursiveMember,
+        SurfaceReference, SurfaceRepeatedCapture, SurfaceRequirement, SurfaceSyntaxCapture,
+        SurfaceSyntaxCaptureKind, SurfaceSyntaxCategory, SurfaceSyntaxDeclaration,
+        SurfaceSyntaxImplementation, SurfaceSyntaxMatcherPart, SurfaceType, SurfaceTypeCapture,
+        SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeParameter, SurfaceTypeVisibility,
+        SurfaceTypedPattern,
     },
 };
 
@@ -448,6 +449,10 @@ pub(crate) fn structural_weight(node: &ConcreteNode) -> usize {
         | NodeKind::MultiplicativeExpression
         | NodeKind::ApplicationExpression
         | NodeKind::SyntaxQuote
+        | NodeKind::SyntaxMatcherGroup
+        | NodeKind::SyntaxMatcherRepeat
+        | NodeKind::SyntaxMatchedGroup
+        | NodeKind::SyntaxMatchedRepeat
         | NodeKind::ParenthesizedExpression
         | NodeKind::ParenthesizedType
         | NodeKind::ParenthesizedKind => 1,
@@ -580,9 +585,12 @@ fn validate_shallow_shape(
             } else {
                 shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
             }
-            while !shape.peek_token_is(&TokenKind::FatArrow) {
-                if shape.peek_node_is(NodeKind::SyntaxCapture) {
-                    if !declaration
+            if declaration && shape.peek_node_is(NodeKind::SyntaxMatcherSequence) {
+                shape.node(NodeKind::SyntaxMatcherSequence)?;
+            } else {
+                while !shape.peek_token_is(&TokenKind::FatArrow) {
+                    if shape.peek_node_is(NodeKind::SyntaxCapture) {
+                        if !declaration
                         && shape.peek_node().is_some_and(|capture| {
                             direct_tokens(capture, tokens).any(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
                                 || direct_tokens(capture, tokens).last().is_some_and(|token| {
@@ -593,21 +601,22 @@ fn validate_shallow_shape(
                     {
                         return malformed(InternalReason::UnexpectedShape);
                     }
-                    shape.node(NodeKind::SyntaxCapture)?;
-                } else {
-                    shape.token_matching(|kind| {
-                        !matches!(
-                            kind,
-                            TokenKind::Dollar
-                                | TokenKind::LeftParen
-                                | TokenKind::RightParen
-                                | TokenKind::LeftBrace
-                                | TokenKind::RightBrace
-                                | TokenKind::LineEnd
-                                | TokenKind::EndOfFile
-                                | TokenKind::FatArrow
-                        )
-                    })?;
+                        shape.node(NodeKind::SyntaxCapture)?;
+                    } else {
+                        shape.token_matching(|kind| {
+                            !matches!(
+                                kind,
+                                TokenKind::Dollar
+                                    | TokenKind::LeftParen
+                                    | TokenKind::RightParen
+                                    | TokenKind::LeftBrace
+                                    | TokenKind::RightBrace
+                                    | TokenKind::LineEnd
+                                    | TokenKind::EndOfFile
+                                    | TokenKind::FatArrow
+                            )
+                        })?;
+                    }
                 }
             }
             shape.token(&TokenKind::FatArrow)?;
@@ -672,6 +681,35 @@ fn validate_shallow_shape(
                     || matches!(kind, TokenKind::Identifier(name) if name == "expr" || name == "ident" || name == "pattern" || name == "declaration"),
             )?;
         }
+        NodeKind::SyntaxMatcherSequence => {
+            if !node.children.iter().any(|element| matches!(element,
+                ConcreteElement::Node(child) if matches!(child.kind, NodeKind::SyntaxMatcherGroup | NodeKind::SyntaxMatcherRepeat)))
+            {
+                return malformed(InternalReason::UnexpectedShape);
+            }
+            matcher_shape_items(&mut shape, None, false)?;
+        }
+        NodeKind::SyntaxMatcherGroup => {
+            let braces = shape.peek_token_is(&TokenKind::LeftBrace);
+            let (open, close) = if braces {
+                (TokenKind::LeftBrace, TokenKind::RightBrace)
+            } else {
+                (TokenKind::LeftParen, TokenKind::RightParen)
+            };
+            shape.token(&open)?;
+            matcher_shape_items(&mut shape, Some(&close), braces)?;
+            shape.token(&close)?;
+        }
+        NodeKind::SyntaxMatcherRepeat => {
+            shape.token(&TokenKind::Dollar)?;
+            shape.token(&TokenKind::LeftParen)?;
+            matcher_shape_items(&mut shape, Some(&TokenKind::RightParen), false)?;
+            shape.token(&TokenKind::RightParen)?;
+            if !shape.peek_token_is(&TokenKind::Star) && !shape.peek_token_is(&TokenKind::Plus) {
+                shape.token_matching(matcher_separator)?;
+            }
+            shape.token_matching(|kind| matches!(kind, TokenKind::Star | TokenKind::Plus))?;
+        }
         NodeKind::SyntaxInvocation | NodeKind::DeclarationSyntaxInvocation => {
             shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
             while shape.position < shape.children.len() {
@@ -687,6 +725,11 @@ fn validate_shallow_shape(
                         return malformed(InternalReason::UnexpectedShape);
                     }
                     shape.node(NodeKind::SyntaxArgument)?;
+                } else if node.kind == NodeKind::DeclarationSyntaxInvocation
+                    && (shape.peek_node_is(NodeKind::SyntaxMatchedGroup)
+                        || shape.peek_node_is(NodeKind::SyntaxMatchedRepeat))
+                {
+                    shape.any_node()?;
                 } else {
                     shape.token_matching(|kind| {
                         !matches!(kind, TokenKind::EndOfFile | TokenKind::LineEnd)
@@ -694,6 +737,27 @@ fn validate_shallow_shape(
                 }
             }
         }
+        NodeKind::SyntaxMatchedGroup => {
+            let braces = shape.peek_token_is(&TokenKind::LeftBrace);
+            let (open, close) = if braces {
+                (TokenKind::LeftBrace, TokenKind::RightBrace)
+            } else {
+                (TokenKind::LeftParen, TokenKind::RightParen)
+            };
+            shape.token(&open)?;
+            matched_shape_items(&mut shape, Some(&close))?;
+            shape.token(&close)?;
+        }
+        NodeKind::SyntaxMatchedRepeat => {
+            while shape.position < shape.children.len() {
+                if shape.peek_node_is(NodeKind::SyntaxMatchedIteration) {
+                    shape.node(NodeKind::SyntaxMatchedIteration)?;
+                } else {
+                    shape.token_matching(matcher_separator)?;
+                }
+            }
+        }
+        NodeKind::SyntaxMatchedIteration => matched_shape_items(&mut shape, None)?,
         NodeKind::SyntaxArgument => {
             if shape.peek_token_is(&TokenKind::LeftBrace) {
                 shape.token(&TokenKind::LeftBrace)?;
@@ -1616,6 +1680,80 @@ fn validate_determination_side(shape: &mut ShapeCursor<'_>) -> Result<(), Projec
     }
 }
 
+fn matcher_separator(kind: &TokenKind) -> bool {
+    !matches!(
+        kind,
+        TokenKind::Dollar
+            | TokenKind::FatArrow
+            | TokenKind::Star
+            | TokenKind::Plus
+            | TokenKind::LineEnd
+            | TokenKind::LeftParen
+            | TokenKind::RightParen
+            | TokenKind::LeftBrace
+            | TokenKind::RightBrace
+            | TokenKind::EndOfFile
+    )
+}
+
+fn matcher_shape_items(
+    shape: &mut ShapeCursor<'_>,
+    closing: Option<&TokenKind>,
+    braces: bool,
+) -> Result<(), ProjectionError> {
+    while shape.position < shape.children.len()
+        && !closing.is_some_and(|kind| shape.peek_token_is(kind))
+    {
+        if shape.peek_node().is_some_and(|node| {
+            matches!(
+                node.kind,
+                NodeKind::SyntaxCapture
+                    | NodeKind::SyntaxMatcherGroup
+                    | NodeKind::SyntaxMatcherRepeat
+            )
+        }) {
+            shape.any_node()?;
+        } else {
+            shape.token_matching(|kind| {
+                !matches!(
+                    kind,
+                    TokenKind::Dollar
+                        | TokenKind::FatArrow
+                        | TokenKind::EndOfFile
+                        | TokenKind::LeftParen
+                        | TokenKind::RightParen
+                        | TokenKind::LeftBrace
+                        | TokenKind::RightBrace
+                ) && (braces || !matches!(kind, TokenKind::LineEnd))
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn matched_shape_items(
+    shape: &mut ShapeCursor<'_>,
+    closing: Option<&TokenKind>,
+) -> Result<(), ProjectionError> {
+    while shape.position < shape.children.len()
+        && !closing.is_some_and(|kind| shape.peek_token_is(kind))
+    {
+        if shape.peek_node().is_some_and(|node| {
+            matches!(
+                node.kind,
+                NodeKind::SyntaxArgument
+                    | NodeKind::SyntaxMatchedGroup
+                    | NodeKind::SyntaxMatchedRepeat
+            )
+        }) {
+            shape.any_node()?;
+        } else {
+            shape.token_matching(|kind| !matches!(kind, TokenKind::EndOfFile))?;
+        }
+    }
+    Ok(())
+}
+
 fn validate_qualified_interface_name(
     node: &ConcreteNode,
     tokens: &[Token],
@@ -1806,130 +1944,10 @@ impl ModuleProjection {
         match child.kind {
             NodeKind::ImportDeclaration => imports.push(project_import(source, child, tokens)?),
             NodeKind::SyntaxDeclaration => {
-                let declaration = is_declaration_syntax(child, tokens);
-                let name = direct_tokens(child, tokens)
-                    .nth(if declaration { 5 } else { 2 })
-                    .ok_or(ProjectionError::MalformedTree(
-                        InternalReason::UnexpectedShape,
-                    ))?;
-                let mut matcher = Vec::new();
-                let mut prefix = 0;
-                for element in &child.children {
-                    match element {
-                        ConcreteElement::Token(index) => {
-                            let token = tokens.get(*index).ok_or(
-                                ProjectionError::MalformedTree(InternalReason::TokenOutOfRange),
-                            )?;
-                            if prefix < if declaration { 7 } else { 3 } {
-                                prefix += 1;
-                            } else if token.kind == TokenKind::FatArrow {
-                                break;
-                            } else {
-                                let range = token.span.range();
-                                let spelling = source
-                                    .text()
-                                    .get(range.start() as usize..range.end() as usize)
-                                    .ok_or(ProjectionError::MalformedTree(
-                                        InternalReason::InvalidSpan,
-                                    ))?;
-                                matcher.push(SurfaceSyntaxMatcherPart::Literal {
-                                    kind: token.kind.clone(),
-                                    spelling: spelling.to_owned(),
-                                });
-                            }
-                        }
-                        ConcreteElement::Node(capture)
-                            if capture.kind == NodeKind::SyntaxCapture =>
-                        {
-                            let parts = direct_tokens(capture, tokens).collect::<Vec<_>>();
-                            if parts.len() != 4 {
-                                return malformed(InternalReason::UnexpectedShape);
-                            }
-                            let kind = match &parts[3].kind {
-                                TokenKind::Identifier(kind) if kind == "expr" => {
-                                    SurfaceSyntaxCaptureKind::Expression
-                                }
-                                TokenKind::Identifier(kind) if kind == "ident" => {
-                                    SurfaceSyntaxCaptureKind::Identifier
-                                }
-                                TokenKind::Type if declaration => SurfaceSyntaxCaptureKind::Type,
-                                TokenKind::Identifier(kind) if declaration && kind == "pattern" => {
-                                    SurfaceSyntaxCaptureKind::Pattern
-                                }
-                                TokenKind::Identifier(kind)
-                                    if declaration && kind == "declaration" =>
-                                {
-                                    SurfaceSyntaxCaptureKind::Declaration
-                                }
-                                _ => return malformed(InternalReason::UnexpectedShape),
-                            };
-                            matcher.push(SurfaceSyntaxMatcherPart::Capture {
-                                name: surface_name(parts[1])?,
-                                kind,
-                            });
-                        }
-                        _ => return malformed(InternalReason::UnexpectedShape),
-                    }
+                if extended_matcher(child).is_some() {
+                    return malformed(InternalReason::UnexpectedShape);
                 }
-                let (implementation, template_contents) = if let Some(block) =
-                    child_nodes(child).find(|node| node.kind == NodeKind::TemplateBody)
-                {
-                    let mut contents =
-                        capture_contents(source, block, tokens, &Default::default())?;
-                    if declaration {
-                        contents = match contents.pop() {
-                            Some(crate::syntax::MacroOutputNode::Group(
-                                crate::syntax::MacroDelimiter::Braces,
-                                mut children,
-                                _,
-                            )) if contents.is_empty() => {
-                                if matches!(
-                                    children.first(),
-                                    Some(crate::syntax::MacroOutputNode::Token(
-                                        TokenKind::LineEnd,
-                                        _,
-                                        _
-                                    ))
-                                ) {
-                                    children.remove(0);
-                                }
-                                children
-                            }
-                            _ => return malformed(InternalReason::UnexpectedShape),
-                        };
-                    }
-                    (SurfaceSyntaxImplementation::Template, Some(contents.into()))
-                } else {
-                    let mut after_arrow = direct_tokens(child, tokens)
-                        .skip_while(|token| token.kind != TokenKind::FatArrow)
-                        .skip(1);
-                    if after_arrow.next().map(|token| &token.token.kind) != Some(&TokenKind::Using)
-                    {
-                        return malformed(InternalReason::UnexpectedShape);
-                    }
-                    let transformer = after_arrow.next().ok_or(ProjectionError::MalformedTree(
-                        InternalReason::UnexpectedShape,
-                    ))?;
-                    if after_arrow.next().is_some() {
-                        return malformed(InternalReason::UnexpectedShape);
-                    }
-                    (
-                        SurfaceSyntaxImplementation::Transformer(surface_name(transformer)?),
-                        None,
-                    )
-                };
-                syntax_declarations.push(SurfaceSyntaxDeclaration {
-                    category: if declaration {
-                        SurfaceSyntaxCategory::Declaration
-                    } else {
-                        SurfaceSyntaxCategory::Expression
-                    },
-                    name: surface_name(name)?,
-                    matcher,
-                    implementation,
-                    template_contents,
-                    span: node_span(source, child, tokens)?,
-                });
+                syntax_declarations.push(project_syntax_declaration(source, child, tokens)?);
             }
             NodeKind::ForeignLibrary => {
                 declaration_order.push(SurfaceDeclarationIndex::ForeignLibrary(
@@ -1999,6 +2017,402 @@ impl ModuleProjection {
             span,
         }
     }
+}
+
+fn project_syntax_declaration(
+    source: &SourceFile,
+    child: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+) -> Result<SurfaceSyntaxDeclaration, ProjectionError> {
+    let declaration = is_declaration_syntax(child, tokens);
+    let name = direct_tokens(child, tokens)
+        .nth(if declaration { 5 } else { 2 })
+        .ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?;
+    if let Some(sequence) = extended_matcher(child) {
+        return Ok(SurfaceSyntaxDeclaration {
+            category: SurfaceSyntaxCategory::Declaration,
+            name: surface_name(name)?,
+            matcher: project_matcher_items(source, sequence, tokens)?,
+            implementation: SurfaceSyntaxImplementation::Template,
+            template_contents: Some(Vec::new().into()),
+            span: node_span(source, child, tokens)?,
+        });
+    }
+    let mut matcher = Vec::new();
+    let mut prefix = 0;
+    for element in &child.children {
+        match element {
+            ConcreteElement::Token(index) => {
+                let token = tokens.get(*index).ok_or(ProjectionError::MalformedTree(
+                    InternalReason::TokenOutOfRange,
+                ))?;
+                if prefix < if declaration { 7 } else { 3 } {
+                    prefix += 1;
+                } else if token.kind == TokenKind::FatArrow {
+                    break;
+                } else {
+                    let range = token.span.range();
+                    let spelling = source
+                        .text()
+                        .get(range.start() as usize..range.end() as usize)
+                        .ok_or(ProjectionError::MalformedTree(InternalReason::InvalidSpan))?;
+                    matcher.push(SurfaceSyntaxMatcherPart::Literal {
+                        kind: token.kind.clone(),
+                        spelling: spelling.to_owned(),
+                    });
+                }
+            }
+            ConcreteElement::Node(capture) if capture.kind == NodeKind::SyntaxCapture => {
+                let parts = direct_tokens(capture, tokens).collect::<Vec<_>>();
+                if parts.len() != 4 {
+                    return malformed(InternalReason::UnexpectedShape);
+                }
+                let kind = match &parts[3].kind {
+                    TokenKind::Identifier(kind) if kind == "expr" => {
+                        SurfaceSyntaxCaptureKind::Expression
+                    }
+                    TokenKind::Identifier(kind) if kind == "ident" => {
+                        SurfaceSyntaxCaptureKind::Identifier
+                    }
+                    TokenKind::Type if declaration => SurfaceSyntaxCaptureKind::Type,
+                    TokenKind::Identifier(kind) if declaration && kind == "pattern" => {
+                        SurfaceSyntaxCaptureKind::Pattern
+                    }
+                    TokenKind::Identifier(kind) if declaration && kind == "declaration" => {
+                        SurfaceSyntaxCaptureKind::Declaration
+                    }
+                    _ => return malformed(InternalReason::UnexpectedShape),
+                };
+                matcher.push(SurfaceSyntaxMatcherPart::Capture {
+                    name: surface_name(parts[1])?,
+                    kind,
+                });
+            }
+            _ => return malformed(InternalReason::UnexpectedShape),
+        }
+    }
+    let (implementation, template_contents) =
+        if let Some(block) = child_nodes(child).find(|node| node.kind == NodeKind::TemplateBody) {
+            let mut contents = capture_contents(source, block, tokens, &Default::default())?;
+            if declaration {
+                contents = match contents.pop() {
+                    Some(crate::syntax::MacroOutputNode::Group(
+                        crate::syntax::MacroDelimiter::Braces,
+                        mut children,
+                        _,
+                    )) if contents.is_empty() => {
+                        if matches!(
+                            children.first(),
+                            Some(crate::syntax::MacroOutputNode::Token(
+                                TokenKind::LineEnd,
+                                _,
+                                _
+                            ))
+                        ) {
+                            children.remove(0);
+                        }
+                        children
+                    }
+                    _ => return malformed(InternalReason::UnexpectedShape),
+                };
+            }
+            (SurfaceSyntaxImplementation::Template, Some(contents.into()))
+        } else {
+            let mut after_arrow = direct_tokens(child, tokens)
+                .skip_while(|token| token.kind != TokenKind::FatArrow)
+                .skip(1);
+            if after_arrow.next().map(|token| &token.token.kind) != Some(&TokenKind::Using) {
+                return malformed(InternalReason::UnexpectedShape);
+            }
+            let transformer = after_arrow.next().ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+            if after_arrow.next().is_some() {
+                return malformed(InternalReason::UnexpectedShape);
+            }
+            (
+                SurfaceSyntaxImplementation::Transformer(surface_name(transformer)?),
+                None,
+            )
+        };
+    Ok(SurfaceSyntaxDeclaration {
+        category: if declaration {
+            SurfaceSyntaxCategory::Declaration
+        } else {
+            SurfaceSyntaxCategory::Expression
+        },
+        name: surface_name(name)?,
+        matcher,
+        implementation,
+        template_contents,
+        span: node_span(source, child, tokens)?,
+    })
+}
+
+fn extended_matcher(child: &ConcreteNode) -> Option<&ConcreteNode> {
+    match child.children.get(7) {
+        Some(ConcreteElement::Node(node)) if node.kind == NodeKind::SyntaxMatcherSequence => {
+            Some(node)
+        }
+        _ => None,
+    }
+}
+
+fn matcher_token<'a>(
+    element: &ConcreteElement,
+    tokens: &'a ProjectionTokens<'_>,
+) -> Result<&'a Token, ProjectionError> {
+    let ConcreteElement::Token(index) = element else {
+        return malformed(InternalReason::UnexpectedShape);
+    };
+    tokens.get(*index).ok_or(ProjectionError::MalformedTree(
+        InternalReason::TokenOutOfRange,
+    ))
+}
+
+fn matcher_body<'a>(
+    node: &'a ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+) -> Result<&'a [ConcreteElement], ProjectionError> {
+    let len = node.children.len();
+    let (start, end) = match node.kind {
+        NodeKind::SyntaxMatcherSequence => (0, len),
+        NodeKind::SyntaxMatcherGroup if len >= 2 => (1, len - 1),
+        NodeKind::SyntaxMatcherRepeat if len >= 4 => {
+            let before_operator = matcher_token(&node.children[len - 2], tokens)?;
+            (
+                2,
+                if before_operator.kind == TokenKind::RightParen {
+                    len - 2
+                } else {
+                    len - 3
+                },
+            )
+        }
+        _ => return malformed(InternalReason::UnexpectedShape),
+    };
+    node.children
+        .get(start..end)
+        .ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))
+}
+
+fn matcher_spelling<'a>(source: &'a SourceFile, token: &Token) -> Result<&'a str, ProjectionError> {
+    let range = token.span.range();
+    source
+        .text()
+        .get(range.start() as usize..range.end() as usize)
+        .ok_or(ProjectionError::MalformedTree(InternalReason::InvalidSpan))
+}
+
+fn project_matcher_items(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+) -> Result<Vec<SurfaceSyntaxMatcherPart>, ProjectionError> {
+    let body = matcher_body(node, tokens)?;
+    let mut result = Vec::with_capacity(body.len());
+    for element in body {
+        let part =
+            match element {
+                ConcreteElement::Token(index) => {
+                    let token = tokens.get(*index).ok_or(ProjectionError::MalformedTree(
+                        InternalReason::TokenOutOfRange,
+                    ))?;
+                    if token.kind == TokenKind::LineEnd {
+                        SurfaceSyntaxMatcherPart::LineEnd
+                    } else {
+                        SurfaceSyntaxMatcherPart::Literal {
+                            kind: token.kind.clone(),
+                            spelling: matcher_spelling(source, token)?.to_owned(),
+                        }
+                    }
+                }
+                ConcreteElement::Node(capture) if capture.kind == NodeKind::SyntaxCapture => {
+                    let name = direct_tokens(capture, tokens).nth(1).ok_or(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+                    )?;
+                    SurfaceSyntaxMatcherPart::Capture {
+                        name: surface_name(name)?,
+                        kind: SurfaceSyntaxCaptureKind::Identifier,
+                    }
+                }
+                ConcreteElement::Node(container)
+                    if matches!(
+                        container.kind,
+                        NodeKind::SyntaxMatcherGroup | NodeKind::SyntaxMatcherRepeat
+                    ) =>
+                {
+                    let kind = if container.kind == NodeKind::SyntaxMatcherGroup {
+                        SurfaceMatcherContainerKind::Group {
+                            braces: matcher_token(&container.children[0], tokens)?.kind
+                                == TokenKind::LeftBrace,
+                        }
+                    } else {
+                        let len = container.children.len();
+                        let before_operator = matcher_token(&container.children[len - 2], tokens)?;
+                        let separator = if before_operator.kind == TokenKind::RightParen {
+                            None
+                        } else {
+                            Some((
+                                before_operator.kind.clone(),
+                                matcher_spelling(source, before_operator)?.to_owned(),
+                            ))
+                        };
+                        let operator = matcher_token(&container.children[len - 1], tokens)?;
+                        SurfaceMatcherContainerKind::Repeat {
+                            one_or_more: operator.kind == TokenKind::Plus,
+                            separator,
+                        }
+                    };
+                    let body = project_matcher_items(source, container, tokens)?;
+                    SurfaceSyntaxMatcherPart::Container(std::sync::Arc::new(
+                        SurfaceMatcherContainer { kind, body },
+                    ))
+                }
+                _ => return malformed(InternalReason::UnexpectedShape),
+            };
+        result.push(part);
+    }
+    Ok(result)
+}
+
+fn charge_matcher_items(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    depth: usize,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), DeclarationExpansionFailure> {
+    let body = matcher_body(node, tokens)?;
+    // Retained body slots plus the preflight and construction visits.
+    budget.charge_units(body.len())?;
+    for element in body {
+        budget.charge_units(2)?;
+        match element {
+            ConcreteElement::Token(index) => {
+                let token = tokens.get(*index).ok_or(ProjectionError::MalformedTree(
+                    InternalReason::TokenOutOfRange,
+                ))?;
+                if token.kind != TokenKind::LineEnd {
+                    crate::syntax::charge_type_token_copy(&token.kind, budget)?;
+                    budget.charge_units(matcher_spelling(source, token)?.len())?;
+                }
+            }
+            ConcreteElement::Node(capture) if capture.kind == NodeKind::SyntaxCapture => {
+                budget.charge_units(capture.children.len())?;
+                let mut parts = direct_tokens(capture, tokens);
+                let _ = parts.next();
+                let name = parts.next().ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                let _ = parts.next();
+                let kind = parts.next().ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                if !matches!(&kind.kind, TokenKind::Identifier(text) if text == "ident") {
+                    return Err(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                    );
+                }
+                let text = match &name.kind {
+                    TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => text,
+                    _ => {
+                        return Err(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                        );
+                    }
+                };
+                budget.charge()?;
+                budget.charge_units(text.len())?;
+            }
+            ConcreteElement::Node(container)
+                if matches!(
+                    container.kind,
+                    NodeKind::SyntaxMatcherGroup | NodeKind::SyntaxMatcherRepeat
+                ) =>
+            {
+                let next = depth
+                    .checked_add(1)
+                    .filter(|value| *value <= super::STRUCTURAL_DEPTH_LIMIT)
+                    .ok_or(ResourceFailure::StructuralDepth {
+                        limit: super::STRUCTURAL_DEPTH_LIMIT,
+                    })?;
+                // Payload, body owner and the reached recursive construction frame.
+                budget.charge_units(3)?;
+                if container.kind == NodeKind::SyntaxMatcherRepeat {
+                    let len = container.children.len();
+                    let separator = matcher_token(&container.children[len - 2], tokens)?;
+                    if separator.kind != TokenKind::RightParen {
+                        crate::syntax::charge_type_token_copy(&separator.kind, budget)?;
+                        budget.charge_units(matcher_spelling(source, separator)?.len())?;
+                    }
+                }
+                charge_matcher_items(source, container, tokens, next, budget)?;
+            }
+            _ => {
+                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn project_staged_source_child(
+    module: &mut ModuleProjection,
+    source: &SourceFile,
+    child: &ConcreteNode,
+    source_tokens: &[Token],
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), DeclarationExpansionFailure> {
+    let tokens = ProjectionTokens::source(source_tokens);
+    let Some(sequence) = extended_matcher(child) else {
+        return module
+            .project_child(source, child, &tokens)
+            .map_err(Into::into);
+    };
+    budget.charge_units(4)?;
+    let Some(ConcreteElement::Node(template)) = child.children.get(9) else {
+        return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+    };
+    if child.kind != NodeKind::SyntaxDeclaration || template.kind != NodeKind::TemplateBody {
+        return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+    }
+    budget.charge_units(template.children.len())?;
+    let empty = match template.children.as_slice() {
+        [left, right] => {
+            matcher_token(left, &tokens)?.kind == TokenKind::LeftBrace
+                && matcher_token(right, &tokens)?.kind == TokenKind::RightBrace
+        }
+        [left, line, right] => {
+            matcher_token(left, &tokens)?.kind == TokenKind::LeftBrace
+                && matcher_token(line, &tokens)?.kind == TokenKind::LineEnd
+                && matcher_token(right, &tokens)?.kind == TokenKind::RightBrace
+        }
+        _ => false,
+    };
+    if !empty {
+        return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+    }
+    let name = direct_tokens(child, &tokens)
+        .nth(5)
+        .ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?;
+    let name_length = match &name.kind {
+        TokenKind::Identifier(text) => text.len(),
+        _ => return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into()),
+    };
+    // Declaration slot, name, empty template Arc and the source-span walk.
+    budget.charge_units(8)?;
+    budget.charge_units(name_length)?;
+    charge_matcher_items(source, sequence, &tokens, 0, budget)?;
+    let declaration = project_syntax_declaration(source, child, &tokens)?;
+    module.syntax_declarations.push(declaration);
+    Ok(())
 }
 
 fn project_surface_module(
@@ -2113,7 +2527,11 @@ pub(crate) fn project_declaration_expansions(
     let (root, raw_tokens) = validated_root(source, tree)?;
     let source_tokens = ProjectionTokens::source(raw_tokens);
     if !child_nodes(root).any(|child| child.kind == NodeKind::DeclarationSyntaxInvocation) {
-        return project_surface_module(source, root, &source_tokens).map_err(Into::into);
+        let mut module = ModuleProjection::default();
+        for child in child_nodes(root) {
+            project_staged_source_child(&mut module, source, child, raw_tokens, budget)?;
+        }
+        return Ok(module.finish(node_span(source, root, &source_tokens)?));
     }
     let span = node_span(source, root, &source_tokens)?;
     budget.charge_units(owners.len())?;
@@ -2175,7 +2593,12 @@ pub(crate) fn project_declaration_expansions(
                     charge_generated_projection(child, &tokens, budget)?;
                 }
             }
-            module.project_child(source, child, &tokens)?;
+            match &current.tree {
+                DeclarationTree::Source(tree) => {
+                    project_staged_source_child(&mut module, source, child, &tree.tokens, budget)?
+                }
+                DeclarationTree::Output(_) => module.project_child(source, child, &tokens)?,
+            }
             continue;
         }
 
@@ -2343,6 +2766,267 @@ fn charge_staged_name_frames(
     charge_frame_additions(frames.len(), previous, budget)
 }
 
+fn matcher_capture_count(parts: &[SurfaceSyntaxMatcherPart]) -> Result<usize, ProjectionError> {
+    let mut count = 0usize;
+    for part in parts {
+        let added = match part {
+            SurfaceSyntaxMatcherPart::Capture {
+                kind: SurfaceSyntaxCaptureKind::Identifier,
+                ..
+            } => 1,
+            SurfaceSyntaxMatcherPart::Capture { .. } => {
+                return malformed(InternalReason::UnexpectedShape);
+            }
+            SurfaceSyntaxMatcherPart::Container(container) => {
+                matcher_capture_count(&container.body)?
+            }
+            SurfaceSyntaxMatcherPart::Literal { .. } | SurfaceSyntaxMatcherPart::LineEnd => 0,
+        };
+        count = count
+            .checked_add(added)
+            .ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+    }
+    Ok(count)
+}
+
+fn charge_matcher_capture_count(
+    parts: &[SurfaceSyntaxMatcherPart],
+    depth: usize,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<usize, DeclarationExpansionFailure> {
+    let mut count = 0usize;
+    for part in parts {
+        // This inspection and the materializer's corresponding count.
+        budget.charge_units(2)?;
+        let added = match part {
+            SurfaceSyntaxMatcherPart::Capture {
+                kind: SurfaceSyntaxCaptureKind::Identifier,
+                ..
+            } => 1,
+            SurfaceSyntaxMatcherPart::Capture { .. } => {
+                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+            }
+            SurfaceSyntaxMatcherPart::Container(container) => {
+                let next = depth
+                    .checked_add(1)
+                    .filter(|value| *value <= super::STRUCTURAL_DEPTH_LIMIT)
+                    .ok_or(ResourceFailure::StructuralDepth {
+                        limit: super::STRUCTURAL_DEPTH_LIMIT,
+                    })?;
+                budget.charge_units(2)?;
+                charge_matcher_capture_count(&container.body, next, budget)?
+            }
+            SurfaceSyntaxMatcherPart::Literal { .. } | SurfaceSyntaxMatcherPart::LineEnd => 0,
+        };
+        count = count
+            .checked_add(added)
+            .ok_or(ResourceFailure::SyntaxWork {
+                limit: crate::syntax_resource::SYNTAX_WORK_LIMIT,
+            })?;
+    }
+    Ok(count)
+}
+
+fn charge_structured_items(
+    source: &SourceFile,
+    parts: &[SurfaceSyntaxMatcherPart],
+    elements: &[ConcreteElement],
+    tokens: &ProjectionTokens<'_>,
+    depth: usize,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), DeclarationExpansionFailure> {
+    let slots = charge_matcher_capture_count(parts, depth, budget)?;
+    // The materializer's result, root extension and possible vector move.
+    budget.charge_units(slots.saturating_mul(3))?;
+    let mut children = elements.iter();
+    for part in parts {
+        budget.charge_units(2)?;
+        let element = children.next().ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?;
+        match (part, element) {
+            (SurfaceSyntaxMatcherPart::Literal { kind, spelling }, element) => {
+                let token = matcher_token(element, tokens)?;
+                let actual = matcher_spelling(source, token)?;
+                budget.charge_units(
+                    spelling
+                        .len()
+                        .saturating_add(actual.len())
+                        .saturating_add(2)
+                        .saturating_mul(2),
+                )?;
+                if token.kind != *kind || actual != spelling {
+                    return Err(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                    );
+                }
+            }
+            (SurfaceSyntaxMatcherPart::LineEnd, element) => {
+                if matcher_token(element, tokens)?.kind != TokenKind::LineEnd {
+                    return Err(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                    );
+                }
+            }
+            (
+                SurfaceSyntaxMatcherPart::Capture {
+                    kind: SurfaceSyntaxCaptureKind::Identifier,
+                    ..
+                },
+                ConcreteElement::Node(argument),
+            ) if argument.kind == NodeKind::SyntaxArgument => {
+                budget.charge_units(argument.children.len().saturating_mul(2))?;
+                let token = only_direct_token(argument, tokens)?;
+                let text = match &token.kind {
+                    TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text)
+                        if token.original.is_none() =>
+                    {
+                        text
+                    }
+                    _ => {
+                        return Err(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                        );
+                    }
+                };
+                // Source name, text and source-origin retention.
+                budget.charge_units(2)?;
+                budget.charge_units(text.len())?;
+            }
+            (SurfaceSyntaxMatcherPart::Container(container), ConcreteElement::Node(matched)) => {
+                let next = depth
+                    .checked_add(1)
+                    .filter(|value| *value <= super::STRUCTURAL_DEPTH_LIMIT)
+                    .ok_or(ResourceFailure::StructuralDepth {
+                        limit: super::STRUCTURAL_DEPTH_LIMIT,
+                    })?;
+                budget.charge_units(2)?;
+                match &container.kind {
+                    SurfaceMatcherContainerKind::Group { braces }
+                        if matched.kind == NodeKind::SyntaxMatchedGroup =>
+                    {
+                        let len = matched.children.len();
+                        if len < 2 {
+                            return Err(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            )
+                            .into());
+                        }
+                        let open = matcher_token(&matched.children[0], tokens)?;
+                        let close = matcher_token(&matched.children[len - 1], tokens)?;
+                        let delimiters_match = if *braces {
+                            open.kind == TokenKind::LeftBrace && close.kind == TokenKind::RightBrace
+                        } else {
+                            open.kind == TokenKind::LeftParen && close.kind == TokenKind::RightParen
+                        };
+                        if !delimiters_match {
+                            return Err(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            )
+                            .into());
+                        }
+                        charge_structured_items(
+                            source,
+                            &container.body,
+                            &matched.children[1..len - 1],
+                            tokens,
+                            next,
+                            budget,
+                        )?;
+                    }
+                    SurfaceMatcherContainerKind::Repeat {
+                        one_or_more,
+                        separator,
+                    } if matched.kind == NodeKind::SyntaxMatchedRepeat => {
+                        let inner_slots =
+                            charge_matcher_capture_count(&container.body, next, budget)?;
+                        budget.charge_units(matched.children.len().saturating_mul(2))?;
+                        let iterations = matched.children.iter().filter(|element| matches!(element,
+                            ConcreteElement::Node(node) if node.kind == NodeKind::SyntaxMatchedIteration)).count();
+                        if *one_or_more && iterations == 0 {
+                            return Err(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            )
+                            .into());
+                        }
+                        // Per-slot accumulator Vecs, final Arc payloads and iteration slots.
+                        budget.charge_units(inner_slots.saturating_mul(2))?;
+                        budget.charge_units(inner_slots.saturating_mul(iterations))?;
+                        let mut expect_iteration = true;
+                        for element in &matched.children {
+                            match element {
+                                ConcreteElement::Node(iteration)
+                                    if expect_iteration
+                                        && iteration.kind == NodeKind::SyntaxMatchedIteration =>
+                                {
+                                    charge_structured_items(
+                                        source,
+                                        &container.body,
+                                        &iteration.children,
+                                        tokens,
+                                        next,
+                                        budget,
+                                    )?;
+                                    expect_iteration = separator.is_none();
+                                }
+                                element if !expect_iteration => {
+                                    let (kind, spelling) = separator.as_ref().ok_or(
+                                        ProjectionError::MalformedTree(
+                                            InternalReason::UnexpectedShape,
+                                        ),
+                                    )?;
+                                    let token = matcher_token(element, tokens)?;
+                                    let actual = matcher_spelling(source, token)?;
+                                    budget.charge_units(
+                                        spelling
+                                            .len()
+                                            .saturating_add(actual.len())
+                                            .saturating_add(2)
+                                            .saturating_mul(2),
+                                    )?;
+                                    if token.kind != *kind || actual != spelling {
+                                        return Err(ProjectionError::MalformedTree(
+                                            InternalReason::UnexpectedShape,
+                                        )
+                                        .into());
+                                    }
+                                    expect_iteration = true;
+                                }
+                                _ => {
+                                    return Err(ProjectionError::MalformedTree(
+                                        InternalReason::UnexpectedShape,
+                                    )
+                                    .into());
+                                }
+                            }
+                        }
+                        if separator.is_some() && iterations > 0 && expect_iteration {
+                            return Err(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            )
+                            .into());
+                        }
+                    }
+                    _ => {
+                        return Err(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                        );
+                    }
+                }
+            }
+            _ => {
+                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+            }
+        }
+    }
+    if children.next().is_some() {
+        return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+    }
+    Ok(())
+}
+
 /// Reserve supported captures before the shared invocation projector can copy them.
 fn charge_declaration_invocation(
     source: &SourceFile,
@@ -2390,6 +3074,7 @@ fn charge_declaration_invocation(
     budget.charge_units(selection.declaration.matcher.len())?;
     let mut has_declaration = false;
     let mut has_other_capture = false;
+    let mut has_structured = false;
     for part in &selection.declaration.matcher {
         match part {
             SurfaceSyntaxMatcherPart::Literal { spelling, .. } => {
@@ -2401,6 +3086,9 @@ fn charge_declaration_invocation(
                 SurfaceSyntaxCaptureKind::Identifier => {}
                 _ => has_other_capture = true,
             },
+            SurfaceSyntaxMatcherPart::Container(_) | SurfaceSyntaxMatcherPart::LineEnd => {
+                has_structured = true
+            }
         }
     }
     budget.charge_units(selection.declaration.matcher.len())?;
@@ -2416,6 +3104,31 @@ fn charge_declaration_invocation(
             selection.declaration.implementation,
             SurfaceSyntaxImplementation::Transformer(_)
         );
+    if has_structured {
+        if !executing
+            || has_declaration
+            || has_other_capture
+            || !source_projection_tokens(tokens)
+            || !template
+            || !selection
+                .declaration
+                .template_contents
+                .as_deref()
+                .is_some_and(<[_]>::is_empty)
+        {
+            return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+        }
+        crate::syntax::charge_selected(selection, budget)?;
+        charge_structured_items(
+            source,
+            &selection.declaration.matcher,
+            &node.children[1..],
+            tokens,
+            1,
+            budget,
+        )?;
+        return Ok(false);
+    }
     if selection.declaration.category != SurfaceSyntaxCategory::Declaration
         || (executing && !template && !declaration_transformer)
         || (has_declaration
@@ -2439,7 +3152,9 @@ fn charge_declaration_invocation(
         .iter()
         .filter_map(|part| match part {
             SurfaceSyntaxMatcherPart::Capture { kind, .. } => Some(kind),
-            SurfaceSyntaxMatcherPart::Literal { .. } => None,
+            SurfaceSyntaxMatcherPart::Literal { .. }
+            | SurfaceSyntaxMatcherPart::Container(_)
+            | SurfaceSyntaxMatcherPart::LineEnd => None,
         });
     let mut expression_pattern = false;
     for argument in child_nodes(node).filter(|child| child.kind == NodeKind::SyntaxArgument) {
@@ -4428,7 +5143,45 @@ fn project_declaration_invocation_from_tokens(
     {
         return malformed(InternalReason::UnexpectedShape);
     }
-    project_declaration_invocation_node(source, node, tokens, contexts, false)
+    let Some(ConcreteElement::Token(index)) = node.children.first() else {
+        return malformed(InternalReason::UnexpectedShape);
+    };
+    let token = tokens
+        .projection_token(*index)
+        .ok_or(ProjectionError::MalformedTree(
+            InternalReason::TokenOutOfRange,
+        ))?;
+    let (text, introduction) = match token.original {
+        Some(crate::syntax::MacroOutputNode::Identifier(name, _)) => {
+            (name.text.as_str(), name.introduction)
+        }
+        Some(
+            crate::syntax::MacroOutputNode::Expression(_, _)
+            | crate::syntax::MacroOutputNode::ForwardedExpression(_, _)
+            | crate::syntax::MacroOutputNode::ForwardedType(_, _)
+            | crate::syntax::MacroOutputNode::ForwardedPattern(_, _),
+        ) => return malformed(InternalReason::UnexpectedShape),
+        _ => match &token.kind {
+            TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => (text.as_str(), 0),
+            _ => return malformed(InternalReason::UnexpectedShape),
+        },
+    };
+    let selection = contexts
+        .select_parts(text, introduction)
+        .filter(|selected| selected.declaration.category == SurfaceSyntaxCategory::Declaration)
+        .ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?;
+    if selection.declaration.matcher.iter().any(|part| {
+        matches!(
+            part,
+            SurfaceSyntaxMatcherPart::Container(_) | SurfaceSyntaxMatcherPart::LineEnd
+        )
+    }) {
+        return malformed(InternalReason::UnexpectedShape);
+    }
+    let name = surface_name(token)?;
+    project_selected_declaration_invocation_node(source, node, tokens, name, selection, false)
 }
 
 fn project_declaration_invocation_node(
@@ -4450,12 +5203,146 @@ fn project_declaration_invocation_node(
         .filter(|selected| selected.declaration.category == SurfaceSyntaxCategory::Declaration)
         .ok_or(ProjectionError::MalformedTree(
             InternalReason::UnexpectedShape,
-        ))?
-        .clone();
+        ))?;
+    project_selected_declaration_invocation_node(
+        source,
+        node,
+        tokens,
+        name,
+        selection,
+        allow_declaration,
+    )
+}
+
+fn project_structured_items(
+    source: &SourceFile,
+    parts: &[SurfaceSyntaxMatcherPart],
+    elements: &[ConcreteElement],
+    tokens: &ProjectionTokens<'_>,
+) -> Result<Vec<SurfaceSyntaxCapture>, ProjectionError> {
+    let mut captures = Vec::with_capacity(matcher_capture_count(parts)?);
+    let mut children = elements.iter();
+    for part in parts {
+        let element = children.next().ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?;
+        match (part, element) {
+            (SurfaceSyntaxMatcherPart::Literal { kind, spelling }, element) => {
+                let token = matcher_token(element, tokens)?;
+                if token.kind != *kind || matcher_spelling(source, token)? != spelling {
+                    return malformed(InternalReason::UnexpectedShape);
+                }
+            }
+            (SurfaceSyntaxMatcherPart::LineEnd, element) => {
+                if matcher_token(element, tokens)?.kind != TokenKind::LineEnd {
+                    return malformed(InternalReason::UnexpectedShape);
+                }
+            }
+            (
+                SurfaceSyntaxMatcherPart::Capture {
+                    kind: SurfaceSyntaxCaptureKind::Identifier,
+                    ..
+                },
+                ConcreteElement::Node(argument),
+            ) if argument.kind == NodeKind::SyntaxArgument => {
+                let name = surface_name(only_direct_token(argument, tokens)?)?;
+                let origin = name.span.into();
+                captures.push(SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+                    name,
+                    origin,
+                }));
+            }
+            (SurfaceSyntaxMatcherPart::Container(container), ConcreteElement::Node(matched)) => {
+                match &container.kind {
+                    SurfaceMatcherContainerKind::Group { .. }
+                        if matched.kind == NodeKind::SyntaxMatchedGroup =>
+                    {
+                        let len = matched.children.len();
+                        if len < 2 {
+                            return malformed(InternalReason::UnexpectedShape);
+                        }
+                        captures.extend(project_structured_items(
+                            source,
+                            &container.body,
+                            &matched.children[1..len - 1],
+                            tokens,
+                        )?);
+                    }
+                    SurfaceMatcherContainerKind::Repeat { .. }
+                        if matched.kind == NodeKind::SyntaxMatchedRepeat =>
+                    {
+                        let slots = matcher_capture_count(&container.body)?;
+                        let iterations = matched.children.iter().filter(|element| matches!(element,
+                        ConcreteElement::Node(node) if node.kind == NodeKind::SyntaxMatchedIteration)).count();
+                        let mut columns = (0..slots)
+                            .map(|_| Vec::with_capacity(iterations))
+                            .collect::<Vec<_>>();
+                        for element in &matched.children {
+                            if let ConcreteElement::Node(iteration) = element {
+                                if iteration.kind != NodeKind::SyntaxMatchedIteration {
+                                    return malformed(InternalReason::UnexpectedShape);
+                                }
+                                let row = project_structured_items(
+                                    source,
+                                    &container.body,
+                                    &iteration.children,
+                                    tokens,
+                                )?;
+                                if row.len() != slots {
+                                    return malformed(InternalReason::UnexpectedShape);
+                                }
+                                for (column, value) in columns.iter_mut().zip(row) {
+                                    column.push(value);
+                                }
+                            }
+                        }
+                        for values in columns {
+                            captures.push(SurfaceSyntaxCapture::Repeated(std::sync::Arc::new(
+                                SurfaceRepeatedCapture { values },
+                            )));
+                        }
+                    }
+                    _ => return malformed(InternalReason::UnexpectedShape),
+                }
+            }
+            _ => return malformed(InternalReason::UnexpectedShape),
+        }
+    }
+    if children.next().is_some() {
+        return malformed(InternalReason::UnexpectedShape);
+    }
+    Ok(captures)
+}
+
+fn project_selected_declaration_invocation_node(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    name: SurfaceName,
+    selected: &crate::syntax::SelectedSyntax,
+    allow_declaration: bool,
+) -> Result<ProjectedDeclarationInvocation, ProjectionError> {
+    let selection = selected.clone();
+    let mut children = node.children.iter();
+    let _ = children.next();
     let empty = std::collections::HashMap::new();
     let originals = tokens.originals.unwrap_or(&empty);
     let mut captures = Vec::new();
-    for part in &selection.declaration.matcher {
+    for (position, part) in selection.declaration.matcher.iter().enumerate() {
+        if matches!(
+            part,
+            SurfaceSyntaxMatcherPart::Container(_) | SurfaceSyntaxMatcherPart::LineEnd
+        ) {
+            let tail = project_structured_items(
+                source,
+                &selection.declaration.matcher[position..],
+                children.as_slice(),
+                tokens,
+            )?;
+            captures.extend(tail);
+            while children.next().is_some() {}
+            break;
+        }
         match (part, children.next()) {
             (
                 SurfaceSyntaxMatcherPart::Literal { kind, spelling },

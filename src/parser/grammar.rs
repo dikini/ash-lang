@@ -588,6 +588,7 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
         parser.finish();
         return;
     }
+    let matcher_start = parser.event_position();
     let mut names = std::collections::HashSet::new();
     let mut previous_capture = false;
     let mut final_expression = false;
@@ -595,6 +596,33 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
         parser.current(),
         Some(TokenKind::FatArrow | TokenKind::LineEnd | TokenKind::EndOfFile) | None
     ) {
+        if declaration
+            && (matches!(
+                parser.current(),
+                Some(TokenKind::LeftParen | TokenKind::LeftBrace)
+            ) || parser.at(&TokenKind::Dollar) && parser.nth(1) == Some(&TokenKind::LeftParen))
+        {
+            let length = parser.events.len();
+            let extra = length
+                .checked_sub(matcher_start)
+                .and_then(|shifted| {
+                    shifted.checked_add(if length == parser.events.capacity() {
+                        length
+                    } else {
+                        0
+                    })
+                })
+                .and_then(|units| units.checked_add(3))
+                .unwrap_or(usize::MAX);
+            if !parser.charge_matcher_work(extra)
+                || !parser.insert_start(matcher_start, NodeKind::SyntaxMatcherSequence)
+            {
+                break;
+            }
+            syntax_matcher_items(parser, &mut names, None, false, previous_capture);
+            parser.finish();
+            break;
+        }
         if parser.at(&TokenKind::Dollar) {
             parser.start(NodeKind::SyntaxCapture);
             if previous_capture {
@@ -648,6 +676,149 @@ fn syntax_declaration(parser: &mut Parser<'_>) {
     }
     syntax_declaration_body(parser);
     parser.finish();
+}
+
+// Parses the remainder of an extended declaration matcher. The outer sequence
+// wraps the already emitted flat prefix; nested groups own their delimiters.
+fn syntax_matcher_items(
+    parser: &mut Parser<'_>,
+    names: &mut std::collections::HashSet<String>,
+    closing: Option<TokenKind>,
+    braces: bool,
+    mut previous_capture: bool,
+) -> bool {
+    let mut nullable = true;
+    loop {
+        if parser.syntax_work_exhausted
+            || closing.as_ref().is_some_and(|end| parser.at(end))
+            || matches!(
+                parser.current(),
+                Some(TokenKind::FatArrow | TokenKind::EndOfFile) | None
+            )
+            || parser.at(&TokenKind::LineEnd) && !braces
+        {
+            break;
+        }
+        if !parser.charge_matcher_work(1) {
+            break;
+        }
+        let part_nullable;
+        if parser.at(&TokenKind::Dollar) && parser.nth(1) == Some(&TokenKind::LeftParen) {
+            if !parser.enter_structure() || !parser.charge_matcher_work(3) {
+                break;
+            }
+            parser.start(NodeKind::SyntaxMatcherRepeat);
+            let _ = parser.bump(); // $
+            let _ = parser.bump(); // (
+            let body_nullable =
+                syntax_matcher_items(parser, names, Some(TokenKind::RightParen), false, false);
+            let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
+            if !matches!(parser.current(), Some(TokenKind::Star | TokenKind::Plus)) {
+                if matches!(
+                    parser.current(),
+                    Some(
+                        TokenKind::Dollar
+                            | TokenKind::FatArrow
+                            | TokenKind::LineEnd
+                            | TokenKind::LeftParen
+                            | TokenKind::RightParen
+                            | TokenKind::LeftBrace
+                            | TokenKind::RightBrace
+                            | TokenKind::EndOfFile
+                    ) | None
+                ) {
+                    parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+                } else {
+                    let _ = parser.bump(); // separator
+                }
+            }
+            part_nullable = parser.at(&TokenKind::Star);
+            if matches!(parser.current(), Some(TokenKind::Star | TokenKind::Plus)) {
+                let _ = parser.bump();
+            } else {
+                parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+            }
+            if body_nullable {
+                parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+            }
+            parser.finish();
+            parser.leave_structure();
+            previous_capture = false;
+        } else if matches!(
+            parser.current(),
+            Some(TokenKind::LeftParen | TokenKind::LeftBrace)
+        ) {
+            let is_brace = parser.at(&TokenKind::LeftBrace);
+            if !parser.enter_structure() || !parser.charge_matcher_work(3) {
+                break;
+            }
+            parser.start(NodeKind::SyntaxMatcherGroup);
+            let _ = parser.bump();
+            let end = if is_brace {
+                TokenKind::RightBrace
+            } else {
+                TokenKind::RightParen
+            };
+            let _ = syntax_matcher_items(parser, names, Some(end.clone()), is_brace, false);
+            let expected = if is_brace {
+                ExpectedForm::RightBrace
+            } else {
+                ExpectedForm::RightParen
+            };
+            let _ = parser.expect(&end, expected);
+            parser.finish();
+            parser.leave_structure();
+            part_nullable = false;
+            previous_capture = false;
+        } else if parser.at(&TokenKind::Dollar) {
+            parser.start(NodeKind::SyntaxCapture);
+            if previous_capture {
+                parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+            }
+            let _ = parser.bump();
+            let length = match parser.current() {
+                Some(TokenKind::Identifier(name) | TokenKind::UpperIdentifier(name)) => name.len(),
+                _ => 0,
+            };
+            if !parser.charge_matcher_work(length.saturating_add(2)) {
+                parser.finish();
+                break;
+            }
+            let name = match parser.current() {
+                Some(TokenKind::Identifier(name) | TokenKind::UpperIdentifier(name)) => {
+                    Some(name.clone())
+                }
+                _ => None,
+            };
+            if name.is_some_and(|name| !names.insert(name)) {
+                parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+            }
+            expect_import_name(parser);
+            let _ = parser.expect(&TokenKind::Colon, ExpectedForm::Colon);
+            if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "expr" || name == "ident" || name == "pattern" || name == "declaration")
+                || parser.at(&TokenKind::Type)
+            {
+                let _ = parser.bump();
+            } else {
+                parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+            }
+            parser.finish();
+            part_nullable = false;
+            previous_capture = true;
+        } else if matches!(
+            parser.current(),
+            Some(TokenKind::RightParen | TokenKind::RightBrace)
+        ) {
+            parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+            break;
+        } else {
+            let _ = parser.bump();
+            part_nullable = false;
+            previous_capture = false;
+        }
+        nullable &= part_nullable;
+    }
+    nullable
 }
 
 fn syntax_declaration_body(parser: &mut Parser<'_>) {
@@ -2065,6 +2236,11 @@ fn syntax_invocation(
                     }
                     parser.finish();
                 }
+                crate::surface::SurfaceSyntaxMatcherPart::Container(_)
+                | crate::surface::SurfaceSyntaxMatcherPart::LineEnd => {
+                    let _ = match_structured_items(parser, &matcher[index..]);
+                    break;
+                }
             }
         }
         for index in inherited {
@@ -2075,6 +2251,196 @@ fn syntax_invocation(
         parser.consume_rest();
     }
     parser.finish();
+}
+
+fn structured_literal(parser: &mut Parser<'_>, kind: &TokenKind, spelling: &str) -> bool {
+    let found = parser.tokens.get(parser.position).map_or(0, |token| {
+        let range = token.span.range();
+        (range.end() - range.start()) as usize
+    });
+    if !parser.charge_matcher_work(spelling.len().saturating_add(found).saturating_add(3)) {
+        return false;
+    }
+    parser.at_syntax_literal(kind, spelling)
+}
+
+fn structured_starts(
+    parser: &mut Parser<'_>,
+    parts: &[crate::surface::SurfaceSyntaxMatcherPart],
+) -> bool {
+    use crate::surface::{
+        SurfaceMatcherContainerKind, SurfaceSyntaxCaptureKind, SurfaceSyntaxMatcherPart,
+    };
+    for part in parts {
+        if !parser.charge_matcher_work(1) {
+            return false;
+        }
+        match part {
+            SurfaceSyntaxMatcherPart::Literal { kind, spelling } => {
+                return structured_literal(parser, kind, spelling);
+            }
+            SurfaceSyntaxMatcherPart::LineEnd => return parser.at(&TokenKind::LineEnd),
+            SurfaceSyntaxMatcherPart::Capture {
+                kind: SurfaceSyntaxCaptureKind::Identifier,
+                ..
+            } => {
+                return matches!(
+                    parser.current(),
+                    Some(TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_))
+                );
+            }
+            SurfaceSyntaxMatcherPart::Capture { .. } => return false,
+            SurfaceSyntaxMatcherPart::Container(container) => match &container.kind {
+                SurfaceMatcherContainerKind::Group { braces } => {
+                    return parser.at(if *braces {
+                        &TokenKind::LeftBrace
+                    } else {
+                        &TokenKind::LeftParen
+                    });
+                }
+                SurfaceMatcherContainerKind::Repeat { one_or_more, .. } => {
+                    if structured_starts(parser, &container.body) {
+                        return true;
+                    }
+                    if *one_or_more {
+                        return false;
+                    }
+                }
+            },
+        }
+    }
+    false
+}
+
+fn match_structured_items(
+    parser: &mut Parser<'_>,
+    parts: &[crate::surface::SurfaceSyntaxMatcherPart],
+) -> bool {
+    use crate::surface::{
+        SurfaceMatcherContainerKind, SurfaceSyntaxCaptureKind, SurfaceSyntaxMatcherPart,
+    };
+    for part in parts {
+        if !parser.charge_matcher_work(1) {
+            return false;
+        }
+        match part {
+            SurfaceSyntaxMatcherPart::Literal { kind, spelling } => {
+                if !structured_literal(parser, kind, spelling) {
+                    parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+                    return false;
+                }
+                let _ = parser.bump();
+            }
+            SurfaceSyntaxMatcherPart::LineEnd => {
+                if !parser.expect(&TokenKind::LineEnd, ExpectedForm::Identifier) {
+                    return false;
+                }
+            }
+            SurfaceSyntaxMatcherPart::Capture {
+                kind: SurfaceSyntaxCaptureKind::Identifier,
+                ..
+            } => {
+                parser.start(NodeKind::SyntaxArgument);
+                let accepted = matches!(
+                    parser.current(),
+                    Some(TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_))
+                );
+                if accepted {
+                    let _ = parser.bump();
+                } else {
+                    parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+                }
+                parser.finish();
+                if !accepted {
+                    return false;
+                }
+            }
+            SurfaceSyntaxMatcherPart::Capture { .. } => {
+                parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+                return false;
+            }
+            SurfaceSyntaxMatcherPart::Container(container) => {
+                if !parser.enter_structure() {
+                    return false;
+                }
+                if !parser.charge_matcher_work(3) {
+                    parser.leave_structure();
+                    return false;
+                }
+                let accepted = match &container.kind {
+                    SurfaceMatcherContainerKind::Group { braces } => {
+                        parser.start(NodeKind::SyntaxMatchedGroup);
+                        let (open, close, expected) = if *braces {
+                            (
+                                TokenKind::LeftBrace,
+                                TokenKind::RightBrace,
+                                ExpectedForm::RightBrace,
+                            )
+                        } else {
+                            (
+                                TokenKind::LeftParen,
+                                TokenKind::RightParen,
+                                ExpectedForm::RightParen,
+                            )
+                        };
+                        let open_ok = parser.expect(&open, ExpectedForm::Identifier);
+                        let body_ok = open_ok && match_structured_items(parser, &container.body);
+                        let close_ok = body_ok && parser.expect(&close, expected);
+                        parser.finish();
+                        close_ok
+                    }
+                    SurfaceMatcherContainerKind::Repeat {
+                        one_or_more,
+                        separator,
+                    } => {
+                        parser.start(NodeKind::SyntaxMatchedRepeat);
+                        let mut count = 0usize;
+                        let mut success = true;
+                        while structured_starts(parser, &container.body) {
+                            if !parser.charge_matcher_work(4) {
+                                success = false;
+                                break;
+                            }
+                            let previous = parser.position;
+                            parser.start(NodeKind::SyntaxMatchedIteration);
+                            let body_ok = match_structured_items(parser, &container.body);
+                            parser.finish();
+                            if !body_ok || parser.position == previous {
+                                success = false;
+                                break;
+                            }
+                            count += 1;
+                            if let Some((kind, spelling)) = separator {
+                                if !structured_literal(parser, kind, spelling) {
+                                    break;
+                                }
+                                let _ = parser.bump();
+                                if !structured_starts(parser, &container.body) {
+                                    parser.report(
+                                        ParseReason::ExpectedForm,
+                                        ExpectedForm::Identifier,
+                                    );
+                                    success = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if *one_or_more && count == 0 {
+                            parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+                            success = false;
+                        }
+                        parser.finish();
+                        success && !parser.syntax_work_exhausted
+                    }
+                };
+                parser.leave_structure();
+                if !accepted {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }
 
 fn declaration_capture(parser: &mut Parser<'_>) {
