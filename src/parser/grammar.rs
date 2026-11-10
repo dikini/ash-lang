@@ -809,7 +809,7 @@ fn reserve_pending_matchers(
     pending: &mut PendingMatcherRepeats,
     additional: usize,
 ) -> bool {
-    let needed = pending.len().checked_add(additional).unwrap_or(usize::MAX);
+    let needed = pending.len().saturating_add(additional);
     let growth = if needed > pending.capacity() {
         pending.len().saturating_add(needed)
     } else {

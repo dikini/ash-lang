@@ -1064,6 +1064,8 @@ fn parse_macro_tree_inner(
     )
 }
 
+// Scratch selection and borrowed inputs remain separate at this parser boundary.
+#[allow(clippy::too_many_arguments)]
 fn parse_macro_tree_selected(
     source: &SourceFile,
     invocation: Span,
@@ -1087,6 +1089,8 @@ fn parse_macro_tree_selected(
     )
 }
 
+// Scratch selection and borrowed inputs remain separate at this parser boundary.
+#[allow(clippy::too_many_arguments)]
 fn parse_macro_tree_with_expression_scratch(
     source: &SourceFile,
     invocation: Span,
@@ -1517,10 +1521,10 @@ fn charge_staged_output_with_expression_scratch(
                     .map_err(macro_resource_failure)?;
                 if selected_scratch && !children.is_empty() {
                     let live = pending.len();
-                    let requested = live.checked_add(children.len()).unwrap_or(usize::MAX);
+                    let requested = live.saturating_add(children.len());
                     if requested > pending.capacity() {
                         budget
-                            .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                            .charge_units(requested.saturating_add(live))
                             .map_err(macro_resource_failure)?;
                         pending.reserve_exact(children.len());
                     }
@@ -1768,12 +1772,12 @@ pub(crate) fn finish_module_from_checkpoint_with_syntax(
         events,
         resource_failure,
     );
-    if saw_quote_or_escape {
-        if let Err(failure) = check_completed_quote_depth(&tree, &mut syntax_budget) {
-            drop(tree.root.take());
-            tree.events.clear();
-            tree.resource_failure = Some(failure);
-        }
+    if saw_quote_or_escape
+        && let Err(failure) = check_completed_quote_depth(&tree, &mut syntax_budget)
+    {
+        drop(tree.root.take());
+        tree.events.clear();
+        tree.resource_failure = Some(failure);
     }
     (tree, syntax_budget)
 }

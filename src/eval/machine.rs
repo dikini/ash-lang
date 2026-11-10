@@ -6894,6 +6894,8 @@ pub fn evaluate_effect(program: &ValidatedEffectProgram) -> Result<Evaluation, R
     Machine::new_effect(program).run()
 }
 
+// Keep invocation inputs separate so their borrows and ownership stay explicit.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn evaluate_transformer(
     entry: &crate::core::validate::ValidatedMacroEntry,
     captures: &[crate::surface::SurfaceSyntaxCapture],

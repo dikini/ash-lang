@@ -51,10 +51,10 @@ fn reserve_type_push<T>(
 ) -> Result<(), RuntimeFailure> {
     let live = values.len();
     if selected && live == values.capacity() {
-        let requested = live.checked_add(1).unwrap_or(usize::MAX);
+        let requested = live.saturating_add(1);
         budget
             .expect("selected Type accounting owns a budget")
-            .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+            .charge_units(requested.saturating_add(live))
             .map_err(syntax_failure)?;
         values
             .try_reserve_exact(1)
@@ -153,6 +153,8 @@ pub(super) struct SyntaxHost<'inv> {
 }
 
 impl<'inv> SyntaxHost<'inv> {
+    // Keep invocation inputs separate so their borrows and ownership stay explicit.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         entry: &ValidatedMacroEntry,
         captures: &[SurfaceSyntaxCapture],
@@ -566,8 +568,7 @@ impl<'inv> SyntaxHost<'inv> {
             .charge_units(
                 spelling
                     .len()
-                    .checked_mul(SCALAR_DIAGNOSTIC_TEXT_PER_BYTE)
-                    .unwrap_or(usize::MAX),
+                    .saturating_mul(SCALAR_DIAGNOSTIC_TEXT_PER_BYTE),
             )
             .map_err(syntax_failure)?;
         budget.charge().map_err(syntax_failure)?;
@@ -676,9 +677,9 @@ impl<'inv> SyntaxHost<'inv> {
                     budget.charge_units(2).map_err(syntax_failure)?; // arena slot and handle
                     let live = self.types.len();
                     if live == self.types.capacity() {
-                        let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                        let requested = live.saturating_add(1);
                         budget
-                            .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                            .charge_units(requested.saturating_add(live))
                             .map_err(syntax_failure)?;
                         self.types.reserve_exact(1);
                     }
@@ -704,9 +705,9 @@ impl<'inv> SyntaxHost<'inv> {
                     budget.charge_units(2).map_err(syntax_failure)?;
                     let live = self.expressions.len();
                     if live == self.expressions.capacity() {
-                        let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                        let requested = live.saturating_add(1);
                         budget
-                            .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                            .charge_units(requested.saturating_add(live))
                             .map_err(syntax_failure)?;
                         self.expressions.reserve_exact(1);
                     }
@@ -732,9 +733,9 @@ impl<'inv> SyntaxHost<'inv> {
                     budget.charge_units(2).map_err(syntax_failure)?;
                     let live = self.patterns.len();
                     if live == self.patterns.capacity() {
-                        let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                        let requested = live.saturating_add(1);
                         budget
-                            .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                            .charge_units(requested.saturating_add(live))
                             .map_err(syntax_failure)?;
                         self.patterns.reserve_exact(1);
                     }
@@ -951,8 +952,8 @@ impl<'inv> SyntaxHost<'inv> {
                             self.charge(2)?;
                             let live = self.expressions.len();
                             if live == self.expressions.capacity() {
-                                let requested = live.checked_add(1).unwrap_or(usize::MAX);
-                                self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                                let requested = live.saturating_add(1);
+                                self.charge(requested.saturating_add(live))?;
                                 self.expressions.reserve_exact(1);
                             }
                             let index = self.expressions.len();
@@ -967,8 +968,8 @@ impl<'inv> SyntaxHost<'inv> {
                             self.charge(2)?;
                             let live = self.parse_failures.len();
                             if live == self.parse_failures.capacity() {
-                                let requested = live.checked_add(1).unwrap_or(usize::MAX);
-                                self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                                let requested = live.saturating_add(1);
+                                self.charge(requested.saturating_add(live))?;
                                 self.parse_failures.reserve_exact(1);
                             }
                             let index = self.parse_failures.len();
@@ -1039,8 +1040,8 @@ impl<'inv> SyntaxHost<'inv> {
                         self.charge(2)?; // arena slot and issued handle
                         let live = self.types.len();
                         if live == self.types.capacity() {
-                            let requested = live.checked_add(1).unwrap_or(usize::MAX);
-                            self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                            let requested = live.saturating_add(1);
+                            self.charge(requested.saturating_add(live))?;
                             self.types.reserve_exact(1);
                         }
                         let index = self.types.len();
@@ -1055,8 +1056,8 @@ impl<'inv> SyntaxHost<'inv> {
                         self.charge(2)?; // failure slot and issued handle
                         let live = self.parse_failures.len();
                         if live == self.parse_failures.capacity() {
-                            let requested = live.checked_add(1).unwrap_or(usize::MAX);
-                            self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                            let requested = live.saturating_add(1);
+                            self.charge(requested.saturating_add(live))?;
                             self.parse_failures.reserve_exact(1);
                         }
                         let index = self.parse_failures.len();
@@ -1094,8 +1095,8 @@ impl<'inv> SyntaxHost<'inv> {
                         self.charge(2)?; // arena slot and issued handle
                         let live = self.patterns.len();
                         if live == self.patterns.capacity() {
-                            let requested = live.checked_add(1).unwrap_or(usize::MAX);
-                            self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                            let requested = live.saturating_add(1);
+                            self.charge(requested.saturating_add(live))?;
                             self.patterns.reserve_exact(1);
                         }
                         let index = self.patterns.len();
@@ -1110,8 +1111,8 @@ impl<'inv> SyntaxHost<'inv> {
                         self.charge(2)?; // failure slot and issued handle
                         let live = self.parse_failures.len();
                         if live == self.parse_failures.capacity() {
-                            let requested = live.checked_add(1).unwrap_or(usize::MAX);
-                            self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                            let requested = live.saturating_add(1);
+                            self.charge(requested.saturating_add(live))?;
                             self.parse_failures.reserve_exact(1);
                         }
                         let index = self.parse_failures.len();
@@ -1636,8 +1637,8 @@ impl<'inv> SyntaxHost<'inv> {
                         self.charge_origin(origin, prefix)?;
                         let live = self.expressions.len();
                         if live == self.expressions.capacity() {
-                            let requested = live.checked_add(1).unwrap_or(usize::MAX);
-                            self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                            let requested = live.saturating_add(1);
+                            self.charge(requested.saturating_add(live))?;
                             self.expressions.reserve_exact(1);
                         }
                     }
@@ -1696,8 +1697,8 @@ impl<'inv> SyntaxHost<'inv> {
                     self.charge_origin(origin, prefix)?;
                     let live = self.types.len();
                     if live == self.types.capacity() {
-                        let requested = live.checked_add(1).unwrap_or(usize::MAX);
-                        self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                        let requested = live.saturating_add(1);
+                        self.charge(requested.saturating_add(live))?;
                         self.types.reserve_exact(1);
                     }
                     let index = self.types.len();
@@ -1728,8 +1729,8 @@ impl<'inv> SyntaxHost<'inv> {
                     self.charge_origin(origin, prefix)?;
                     let live = self.patterns.len();
                     if live == self.patterns.capacity() {
-                        let requested = live.checked_add(1).unwrap_or(usize::MAX);
-                        self.charge(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                        let requested = live.saturating_add(1);
+                        self.charge(requested.saturating_add(live))?;
                         self.patterns.reserve_exact(1);
                     }
                     let index = self.patterns.len();

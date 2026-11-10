@@ -2273,6 +2273,8 @@ type TransformerOutputObserver = fn(
     &[crate::syntax::MacroOutputNode],
 );
 
+// Keep invocation inputs separate so their borrows and ownership stay explicit.
+#[allow(clippy::too_many_arguments)]
 fn evaluate_selected_transformer(
     selection: &crate::syntax::SelectedSyntax,
     captures: &[crate::surface::SurfaceSyntaxCapture],

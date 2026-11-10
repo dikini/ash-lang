@@ -2851,9 +2851,9 @@ fn charge_transformer_type_metadata_copies_with_expression(
                 let child_depth = crate::syntax::type_depth(depth, 1)?;
                 budget.charge_units(children.len())?;
                 let live = pending.len();
-                let requested = live.checked_add(children.len()).unwrap_or(usize::MAX);
+                let requested = live.saturating_add(children.len());
                 if !children.is_empty() && requested > pending.capacity() {
-                    budget.charge_units(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                    budget.charge_units(requested.saturating_add(live))?;
                     pending.reserve_exact(children.len());
                 }
                 pending.extend(children.iter().map(|child| (child, child_depth)));
@@ -3684,9 +3684,9 @@ fn charge_capture_contents_with_expression(
                 budget.charge_units(node.children.len())?;
                 if new_type_scratch {
                     let live = pending.len();
-                    let requested = live.checked_add(node.children.len()).unwrap_or(usize::MAX);
+                    let requested = live.saturating_add(node.children.len());
                     if requested > pending.capacity() {
-                        budget.charge_units(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                        budget.charge_units(requested.saturating_add(live))?;
                         pending.reserve_exact(node.children.len());
                     }
                 }
@@ -3879,6 +3879,8 @@ fn charge_projection_preflight_selected(
     )
 }
 
+// Projection flags and borrowed context select distinct accounting paths.
+#[allow(clippy::too_many_arguments)]
 fn charge_projection_preflight_with_expression(
     root: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
@@ -3909,9 +3911,7 @@ fn charge_projection_preflight_with_expression(
     budget.charge()?;
     let mut pending = if selected_scratch {
         budget.charge()?;
-        let mut pending = Vec::with_capacity(1);
-        pending.push(root);
-        pending
+        vec![root]
     } else {
         vec![root]
     };
@@ -4011,8 +4011,8 @@ fn charge_projection_preflight_with_expression(
             budget.charge()?;
             if selected_scratch && pending.len() == pending.capacity() {
                 let live = pending.len();
-                let requested = live.checked_add(1).unwrap_or(usize::MAX);
-                budget.charge_units(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                let requested = live.saturating_add(1);
+                budget.charge_units(requested.saturating_add(live))?;
                 pending.reserve_exact(1);
             }
             pending.push(child);
@@ -4080,6 +4080,8 @@ fn charge_composed_projection_selected(
     )
 }
 
+// Projection flags and owner depth select distinct accounting paths.
+#[allow(clippy::too_many_arguments)]
 fn charge_composed_projection_with_expression(
     root: &ConcreteNode,
     tokens: &ProjectionTokens<'_>,
@@ -4108,9 +4110,7 @@ fn charge_composed_projection_with_expression(
     );
     let mut pending = if new_type_copy || new_pattern_copy {
         budget.charge()?;
-        let mut pending = Vec::with_capacity(1);
-        pending.push(first);
-        pending
+        vec![first]
     } else {
         vec![first]
     };
@@ -4359,8 +4359,8 @@ fn charge_composed_projection_with_expression(
                 charge_frame_additions(frames, 0, budget)?;
                 if new_pattern_copy && raw_patterns.len() == raw_patterns.capacity() {
                     let live = raw_patterns.len();
-                    let requested = live.checked_add(1).unwrap_or(usize::MAX);
-                    budget.charge_units(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                    let requested = live.saturating_add(1);
+                    budget.charge_units(requested.saturating_add(live))?;
                     raw_patterns.reserve_exact(1);
                 }
                 // The low bit carries the scheduled copy without changing the legacy list.
@@ -4392,8 +4392,8 @@ fn charge_composed_projection_with_expression(
                     }
                     if (new_type_copy || new_pattern_copy) && pending.len() == pending.capacity() {
                         let live = pending.len();
-                        let requested = live.checked_add(1).unwrap_or(usize::MAX);
-                        budget.charge_units(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                        let requested = live.saturating_add(1);
+                        budget.charge_units(requested.saturating_add(live))?;
                         pending.reserve_exact(1);
                     }
                     pending.push((
@@ -4821,9 +4821,7 @@ fn check_narrow_protected_refusal_inner(
     budget.charge()?;
     let mut pending = if transformer_type_arguments {
         budget.charge()?; // initial requested buffer
-        let mut pending = Vec::with_capacity(1);
-        pending.push((root, None, false));
-        pending
+        vec![(root, None, false)]
     } else {
         vec![(root, None, false)]
     };
@@ -4861,9 +4859,8 @@ fn check_narrow_protected_refusal_inner(
                         budget.charge()?; // pushed slot
                         let live = pending.len();
                         if live == pending.capacity() {
-                            let requested = live.checked_add(1).unwrap_or(usize::MAX);
-                            budget
-                                .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                            let requested = live.saturating_add(1);
+                            budget.charge_units(requested.saturating_add(live))?;
                             pending.reserve_exact(1);
                         }
                     }
@@ -4972,9 +4969,7 @@ fn charge_projection_subtree_inner(
     budget.charge()?;
     let mut pending = if new_type_copy {
         budget.charge()?;
-        let mut pending = Vec::with_capacity(1);
-        pending.push(root);
-        pending
+        vec![root]
     } else {
         vec![root]
     };
@@ -4992,8 +4987,8 @@ fn charge_projection_subtree_inner(
                     budget.charge()?;
                     if new_type_copy && pending.len() == pending.capacity() {
                         let live = pending.len();
-                        let requested = live.checked_add(1).unwrap_or(usize::MAX);
-                        budget.charge_units(requested.checked_add(live).unwrap_or(usize::MAX))?;
+                        let requested = live.saturating_add(1);
+                        budget.charge_units(requested.saturating_add(live))?;
                         pending.reserve_exact(1);
                     }
                     pending.push(child);
@@ -6022,11 +6017,11 @@ fn reserve_expression_scratch<T>(
         && additional != 0
     {
         let live = buffer.len();
-        let requested = live.checked_add(additional).unwrap_or(usize::MAX);
+        let requested = live.saturating_add(additional);
         if requested > buffer.capacity() {
             budget
                 .borrow_mut()
-                .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                .charge_units(requested.saturating_add(live))
                 .map_err(ProjectionError::ResourceLimit)?;
             buffer.reserve_exact(additional);
         }
@@ -6051,7 +6046,7 @@ fn charge_expression_move(
     if let Some(budget) = budget {
         budget
             .borrow_mut()
-            .charge_units(count.checked_mul(2).unwrap_or(usize::MAX))
+            .charge_units(count.saturating_mul(2))
             .map_err(ProjectionError::ResourceLimit)?;
     }
     Ok(())
@@ -6102,6 +6097,8 @@ fn capture_contents_and_type(
 ) -> Result<(Vec<crate::syntax::MacroOutputNode>, bool), ProjectionError> {
     use crate::syntax::{MacroDelimiter, MacroOutputNode};
 
+    // Keep borrowed builder inputs separate to preserve the small recursive frame.
+    #[allow(clippy::too_many_arguments)]
     fn push_group(
         source: &SourceFile,
         indices: &[usize],
@@ -6128,6 +6125,8 @@ fn capture_contents_and_type(
         Ok(())
     }
 
+    // Keep borrowed builder inputs separate to preserve the small recursive frame.
+    #[allow(clippy::too_many_arguments)]
     fn push_leaf(
         source: &SourceFile,
         indices: &[usize],
@@ -7067,6 +7066,8 @@ pub(super) fn project_macro_expression(
     project_expression_with_fragments(source, expression, &tokens, original_nodes)
 }
 
+// Keep source, frame and budget inputs separate at this projection boundary.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn project_macro_expression_budgeted(
     source: &SourceFile,
     invocation: Span,
@@ -9214,10 +9215,10 @@ fn reserve_type_projection_growth<T>(
         && count != 0
     {
         let live = items.len();
-        let requested = live.checked_add(count).unwrap_or(usize::MAX);
+        let requested = live.saturating_add(count);
         if requested > items.capacity() {
             budget
-                .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                .charge_units(requested.saturating_add(live))
                 .map_err(ProjectionError::ResourceLimit)?;
             items.reserve_exact(count);
         }
@@ -9231,7 +9232,7 @@ fn reserve_type_projection_move(
 ) -> Result<(), ProjectionError> {
     if let Some(budget) = budget.as_deref_mut() {
         budget
-            .charge_units(count.checked_mul(2).unwrap_or(usize::MAX))
+            .charge_units(count.saturating_mul(2))
             .map_err(ProjectionError::ResourceLimit)?;
     }
     Ok(())
