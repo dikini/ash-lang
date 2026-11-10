@@ -8782,6 +8782,7 @@ mod tests {
 
         for header in [
             "pub syntax declaration: (sink) ( $value:ident ) => { type Item = Item }\n",
+            "pub syntax declaration: (sink) ( $value:ident ) => { $value }\n",
             "pub syntax declaration: (sink) ( $value:ident ) => using transformer\n",
             "pub syntax declaration: (sink) $subject:type ( $value:ident ) => {}\n",
         ] {
