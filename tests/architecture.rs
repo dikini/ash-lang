@@ -467,7 +467,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/eval/syntax.rs::SyntaxHost.expressions", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Mixed),
     kind_site!("src/eval/syntax.rs::SyntaxHost.declarations", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/eval/syntax.rs::SyntaxHost.types", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Mixed),
-    kind_site!("src/eval/syntax.rs::SyntaxHost.patterns", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Mixed),
+    kind_site!("src/eval/syntax.rs::SyntaxHost.patterns", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/module.rs::StagedSyntax.body", FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree, Mixed),
     kind_site!("src/module.rs::ModuleBody.Parsed.0", FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree, Mixed),
     kind_site!("src/module.rs::HeaderGraph.pending", FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree, Mixed),
