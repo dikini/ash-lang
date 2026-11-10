@@ -329,6 +329,57 @@ remain open.
 Independent QA and Sol own their checks; the orchestrator owns publication,
 retaining integration and acceptance confirmation.
 
+### Local derive parser candidate
+
+**Delivered in the local candidate:** The parser-only R1 candidate for
+[#227](https://github.com/dikini/ash-lang/issues/227) is
+`f0060437ffcd51a5df037698ab5bc27377eb49c4`, tree
+`2225de79b50d9c0385a70411e921c5e8e5a9f3f7`, based on `c4548296`.
+It retains contextual derive headers and a final token-only deriving clause on
+module type and newtype CST subjects. Existing whole-root and generated
+projection checks refuse unconsumed forms before publishing owners or source
+Declaration packets. Ordinary expression and declaration syntax, local
+newtypes and selected import precedence retain their focused controls. This
+candidate does not admit or execute derives.
+
+The unchanged I09 main, renamed, generic, opaque and duplicate fixtures reach
+their CST/refusal boundary; empty and unsupported clauses reject. I14 and I15
+derive definition fixtures also reach CST/refusal only. The D5 source sink
+retains each complete type or newtype subject and its ordered clause in CST,
+then refuses before packet preflight; no-clause controls execute to 42. Generated
+Type/Newtype clauses and derive headers reach the existing D6 and generated
+projection wrappers and refuse there. The structured carrier and frames are
+component evidence, not an authenticated completed derive invocation.
+
+The focused receipt at
+`/home/dikini/Projects/ash-lang/.worktrees/task-0068-handoff/evidence/r1-recovery/combined-f0060437/receipt.json`
+has SHA-256
+`e48fc38066925173517884e674901a637cf30eb812208519ed8d7bb4fe6fba33`.
+It records 569 distinct passing tests and two ignored obligations: the valid
+nonempty Declaration template and the #277 nominal-context case. Source and
+generated paths cover exact/short/retry work, metadata and depth boundaries;
+source and generated 512 KiB subprocesses observe construction, refusal and
+disposal. The derive header composition checks nested inline escapes and quote
+modes; the retained full E1 suite supplies the multiline regression. The
+D5, expression/pattern, Type, H1/H2/H3/H5, S1/S3, parser, host and architecture
+controls also pass. Separate stack reruns are not additional test names.
+Independent QA and Sol checked the pinned source and receipt.
+
+**Remaining:** Full R1 derive definition admission, name and category
+selection, I09 successful imported and renamed derives, I14 definition-time
+refusal of an unused malformed derive, and I15 returning 42 with an unused
+unresolved derive free name remain open.
+R2 and its S2 handoff, R3 ordering, R4/R5 execution and R6 generated subjects
+remain separate. This parser-only candidate closes no original criterion.
+
+**Awaiting:** Independent TASK-record checks, posted PR review, verified
+retention and the partial #227 issue record. The D8/E4/V3/V7 checkpoints
+and the fresh full-workspace gate remain open.
+
+**Owner:** The developer owns candidate, evidence and acceptance update;
+independent QA and Sol own their checks, and the orchestrator owns integration
+and acceptance confirmation.
+
 **Remaining:** Complete protected-fragment accounting/consumption, declaration
 captures, repetition, host transfer and procedural declarations, quotes/escapes,
 derives, generators, publication handoffs, full corpus/diagnostics,
@@ -387,6 +438,25 @@ the unresolved downstream wait; a bounded completion ETA is not established.
       separate gate under the project workflow.
 
 ## Discoveries
+
+The S2 broad expression-admission proposal would route both host
+`parse_expression` and driver post-host expression admission from their current
+fresh allowances through the remaining shared syntax budget and add adapter and
+projection preflight. That changes possible legacy allowance consumption and
+error ordering; shared accounting alone does not establish slice 1 preservation.
+The reviewed finding is in
+`/home/dikini/Projects/ash-lang/.worktrees/task-0068-handoff/evidence/host-consumer-plan/s2-admission-3dc4376.md`
+(SHA-256 `801df2a0c32307afab3e867786f70ea78cb321d73bad1da5de23095be3013aaf`).
+
+The narrow S2/S4 plan supersedes that broad route for the first Declaration
+slice. It proposes a source Declaration capture through the existing host and
+staging path while leaving both legacy expression callers and their allowances
+intact. Its exact interfaces remain uncompiled and await independent review;
+source is not released. The plan is
+`/home/dikini/Projects/ash-lang/.worktrees/task-0068-handoff/evidence/host-consumer-plan/s2-s4-narrow-c4548296.md`
+(SHA-256 `70907e327c3c50f6232916149c99694efd70c1fec2363f208fa8c99206782da0`).
+It changes no original DAG edge, criterion or difficulty and does not establish
+full S2 or S4 acceptance.
 
 The reviewed draft includes isolated early host, quotation and hygiene cases so
 those focused checks do not depend on unrelated definitions in the full corpus.

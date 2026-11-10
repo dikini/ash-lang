@@ -844,6 +844,7 @@ fn validate_shallow_shape(
             shape.token(&TokenKind::Equal)?;
             shape.node(NodeKind::ConstructorDeclaration)?;
         }
+        NodeKind::DerivingClause => return malformed(InternalReason::UnexpectedShape),
         NodeKind::TypeParameters => {
             shape.token(&TokenKind::Less)?;
             shape.node(NodeKind::TypeParameter)?;
@@ -7257,6 +7258,661 @@ mod tests {
             tree.parse_diagnostics()
         );
         tree
+    }
+
+    #[test]
+    fn r1_selected_deriving_clause_precedes_declaration_invocation() {
+        let forms = SourceFile::new(
+            "forms.ash",
+            "pub syntax declaration: (deriving) $name:ident => {\n$name : Int\n$name = 42\n}\n",
+        )
+        .unwrap();
+        let selected = [h1_selection(&forms, 0, None)];
+        let source = SourceFile::new(
+            "entry.ash",
+            "import forms (syntax deriving)\ntype Subject = Subject\nderiving (answer)\n",
+        )
+        .unwrap();
+        let tree = h1_tree(&source, &selected);
+        let root = tree.root().unwrap();
+        let subject = child_nodes(root)
+            .find(|child| child.kind == NodeKind::TypeDeclaration)
+            .unwrap();
+        let clause = child_nodes(subject)
+            .find(|child| child.kind == NodeKind::DerivingClause)
+            .expect("the selected parser must attach the clause to the subject");
+        assert!(matches!(
+            subject.children.last(),
+            Some(ConcreteElement::Node(last)) if std::ptr::eq(last, clause)
+        ));
+        let tokens = clause
+            .children
+            .iter()
+            .map(|child| match child {
+                ConcreteElement::Token(index) => &tree.tokens()[*index].kind,
+                other => panic!("unexpected clause child: {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tokens,
+            [
+                &TokenKind::Identifier("deriving".into()),
+                &TokenKind::LeftParen,
+                &TokenKind::Identifier("answer".into()),
+                &TokenKind::RightParen,
+            ]
+        );
+        assert!(child_nodes(root).all(|child| child.kind != NodeKind::DeclarationSyntaxInvocation));
+
+        let invocation = SourceFile::new("entry.ash", "deriving answer\n").unwrap();
+        let tree = h1_tree(&invocation, &selected);
+        assert!(
+            child_nodes(tree.root().unwrap())
+                .any(|child| child.kind == NodeKind::DeclarationSyntaxInvocation)
+        );
+    }
+
+    #[test]
+    fn r1_unconsumed_forms_fail_shape_before_complete_or_staged_projection() {
+        let forms = SourceFile::new(
+            "forms.ash",
+            "pub syntax declaration: (stamp) $name:ident => {\n$name : Int\n$name = 42\n}\n",
+        )
+        .unwrap();
+        let selected = [h1_selection(&forms, 0, None)];
+        for text in [
+            "pub syntax derive: (marker) => {}\n",
+            "type Item = Item\nderiving (marker)\n",
+            "newtype Item = Item(Int)\nderiving (marker)\n",
+        ] {
+            for has_invocation in [false, true] {
+                let prefix = if has_invocation { "stamp answer\n" } else { "" };
+                let source = SourceFile::new("entry.ash", format!("{prefix}{text}")).unwrap();
+                let tree = h1_tree(&source, &selected);
+                assert_eq!(
+                    child_nodes(tree.root().unwrap())
+                        .any(|child| child.kind == NodeKind::DeclarationSyntaxInvocation),
+                    has_invocation
+                );
+                assert_eq!(
+                    project_module(&source, &tree),
+                    Err(ProjectionError::MalformedTree(
+                        InternalReason::UnexpectedShape
+                    )),
+                    "{text:?}"
+                );
+                let mut owners = Vec::new();
+                let mut budget = crate::syntax_resource::SyntaxBudget::default();
+                assert!(matches!(
+                    project_declaration_expansions(
+                        &source,
+                        &tree,
+                        &selected,
+                        &[],
+                        &mut owners,
+                        &mut budget,
+                    ),
+                    Err(DeclarationExpansionFailure::Projection(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                    ))
+                ));
+                assert!(owners.is_empty());
+                assert_eq!(budget.consumed(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn r1_structured_subject_keeps_originals_and_separate_frame_carriers() {
+        use crate::syntax::{ExpansionFrame, MacroOutputNode, SyntaxContexts};
+        use std::sync::Arc;
+
+        let forms = SourceFile::new(
+            "forms.ash",
+            "pub syntax declaration: (emit) $name:ident => {\n\
+                 type $name = $name\n\
+                 deriving (marker)\n\
+             }\n",
+        )
+        .unwrap();
+        let marker_forms =
+            SourceFile::new("marker.ash", "pub syntax declaration: (marker) => {}\n").unwrap();
+        let selected = [h1_selection(&forms, 0, None)];
+        let imports = [vec![h1_selection(&marker_forms, 1, None)]];
+        let caller = SourceFile::new("entry.ash", "emit Subject\n").unwrap();
+        let tree = h1_tree(&caller, &selected);
+        let invocation_node = child_nodes(tree.root().unwrap())
+            .find(|child| child.kind == NodeKind::DeclarationSyntaxInvocation)
+            .unwrap();
+        let caller_contexts = SyntaxContexts::new(&selected, &imports, &[]);
+        let invocation =
+            project_declaration_invocation(&caller, &tree, invocation_node, &caller_contexts)
+                .unwrap();
+        let [SurfaceSyntaxCapture::Identifier(capture)] = invocation.captures.as_slice() else {
+            panic!("the caller name must be captured");
+        };
+        let output = crate::syntax::instantiate_declaration_template(
+            &invocation.selection,
+            &invocation.captures,
+            1,
+            invocation.span,
+            &mut crate::syntax_resource::SyntaxBudget::default(),
+        )
+        .unwrap();
+        let contexts = SyntaxContexts::new(&selected, &imports, &[Some(0)]);
+        let parse_at = |budget: &mut crate::syntax_resource::SyntaxBudget| {
+            super::super::parse_macro_tree_inner(
+                &caller,
+                invocation.span,
+                output.clone(),
+                &contexts,
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                budget,
+            )
+        };
+        let mut measured = crate::syntax_resource::SyntaxBudget::default();
+        let baseline = parse_at(&mut measured).unwrap();
+        // This component path starts with the real template instantiation and
+        // uses one already-spent ledger for instantiation, parsing and refusal.
+        let stage = |budget: &mut crate::syntax_resource::SyntaxBudget| {
+            let output = crate::syntax::instantiate_declaration_template(
+                &invocation.selection,
+                &invocation.captures,
+                1,
+                invocation.span,
+                budget,
+            )?;
+            super::super::parse_macro_tree_inner(
+                &caller,
+                invocation.span,
+                output,
+                &contexts,
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                budget,
+            )
+        };
+        let mut measured_stage = crate::syntax_resource::SyntaxBudget::with_limit(100_000);
+        measured_stage.charge_units(17).unwrap();
+        let staged = stage(&mut measured_stage).unwrap();
+        let staged_used = measured_stage.consumed();
+        assert_eq!(staged.tree.events(), baseline.tree.events());
+        assert_eq!(staged.tree.tokens(), baseline.tree.tokens());
+        assert_eq!(staged.original_nodes, baseline.original_nodes);
+        assert_eq!(staged.admission_identifiers, baseline.admission_identifiers);
+        let mut staged_short = crate::syntax_resource::SyntaxBudget::with_limit(staged_used - 1);
+        staged_short.charge_units(17).unwrap();
+        assert!(
+            matches!(stage(&mut staged_short), Err(super::super::MacroParseFailure::Syntax {
+            resource: Some(ResourceFailure::SyntaxWork { limit }), ..
+        }) if limit == staged_used - 1)
+        );
+        for _ in 0..2 {
+            let mut exact = crate::syntax_resource::SyntaxBudget::with_limit(staged_used);
+            exact.charge_units(17).unwrap();
+            let retry = stage(&mut exact).unwrap();
+            assert_eq!(exact.consumed(), staged_used);
+            assert_eq!(retry.tree.events(), staged.tree.events());
+            assert_eq!(retry.original_nodes, staged.original_nodes);
+            assert_eq!(retry.admission_identifiers, staged.admission_identifiers);
+        }
+        let refusal = validate_declaration_template(
+            &caller,
+            invocation.span,
+            &staged,
+            &contexts,
+            &mut measured_stage,
+        );
+        assert!(matches!(
+            refusal,
+            Err(DeclarationExpansionFailure::Projection(
+                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+            ))
+        ));
+        let refusal_used = measured_stage.consumed();
+        assert!(refusal_used > staged_used);
+        for limit in [refusal_used - 1, refusal_used, refusal_used] {
+            let mut budget = crate::syntax_resource::SyntaxBudget::with_limit(limit);
+            budget.charge_units(17).unwrap();
+            let retry = stage(&mut budget).unwrap();
+            let result = validate_declaration_template(
+                &caller,
+                invocation.span,
+                &retry,
+                &contexts,
+                &mut budget,
+            );
+            if limit < refusal_used {
+                assert!(matches!(result, Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { limit: found }), ..
+                }) if found == limit));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(DeclarationExpansionFailure::Projection(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                    ))
+                ));
+                assert_eq!(budget.consumed(), refusal_used);
+            }
+            assert_eq!(retry.original_nodes, staged.original_nodes);
+            assert_eq!(retry.admission_identifiers, staged.admission_identifiers);
+        }
+
+        let used = measured.consumed();
+        let mut short = crate::syntax_resource::SyntaxBudget::with_limit(used - 1);
+        assert!(matches!(
+            parse_at(&mut short),
+            Err(super::super::MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { limit }), ..
+            }) if limit == used - 1
+        ));
+        let mut exact = crate::syntax_resource::SyntaxBudget::with_limit(used);
+        let parsed = parse_at(&mut exact).unwrap();
+        assert_eq!(exact.consumed(), used);
+        assert_eq!(parsed.tree.events(), baseline.tree.events());
+        assert_eq!(parsed.tree.tokens(), baseline.tree.tokens());
+        assert_eq!(parsed.original_nodes, baseline.original_nodes);
+        assert_eq!(parsed.admission_identifiers, baseline.admission_identifiers);
+        let subject = child_nodes(parsed.tree.root().unwrap())
+            .find(|child| child.kind == NodeKind::TypeDeclaration)
+            .unwrap();
+        let subject_index = subject
+            .children
+            .iter()
+            .find_map(|child| match child {
+                ConcreteElement::Token(index)
+                    if matches!(&parsed.tree.tokens()[*index].kind, TokenKind::UpperIdentifier(name) if name == "Subject") => Some(*index),
+                _ => None,
+            })
+            .unwrap();
+        let clause = child_nodes(subject)
+            .find(|child| child.kind == NodeKind::DerivingClause)
+            .unwrap();
+        let marker_index = clause
+            .children
+            .iter()
+            .find_map(|child| match child {
+                ConcreteElement::Token(index)
+                    if matches!(&parsed.tree.tokens()[*index].kind, TokenKind::Identifier(name) if name == "marker") => Some(*index),
+                _ => None,
+            })
+            .unwrap();
+        let Some(MacroOutputNode::Identifier(subject_name, subject_origin)) =
+            parsed.original_nodes.get(&subject_index)
+        else {
+            panic!("the original caller identifier must remain available");
+        };
+        assert_eq!(subject_name.introduction, 0);
+        assert_eq!(subject_name.span, capture.name.span);
+        assert_eq!(subject_name.diagnostic, capture.name.diagnostic);
+        assert_eq!(subject_origin.primary(), capture.origin.primary());
+        let Some(MacroOutputNode::Identifier(marker_name, marker_origin)) =
+            parsed.original_nodes.get(&marker_index)
+        else {
+            panic!("the original definition-context identifier must remain available");
+        };
+        assert_eq!(marker_name.introduction, 1);
+        assert_eq!(marker_name.introduced_at, Some(invocation.span));
+        assert!(!marker_name.written);
+        assert_eq!(marker_origin.primary().source(), forms.id());
+        assert_eq!(
+            parsed.tree.tokens()[subject_index].span,
+            parsed.tree.tokens()[marker_index].span
+        );
+        let selected_marker = contexts.select(marker_name).unwrap();
+        assert_eq!(selected_marker.owner, 1);
+        assert_eq!(
+            selected_marker.declaration.span,
+            imports[0][0].declaration.span
+        );
+        let mut validation_budget = crate::syntax_resource::SyntaxBudget::default();
+        assert!(matches!(
+            validate_declaration_template(
+                &caller,
+                invocation.span,
+                &parsed,
+                &contexts,
+                &mut validation_budget,
+            ),
+            Err(DeclarationExpansionFailure::Projection(
+                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+            ))
+        ));
+        assert_eq!(
+            project_macro_declarations(
+                &caller,
+                invocation.span,
+                Some((invocation.selection.declaration.span, 1)),
+                &parsed.tree,
+                &parsed.original_nodes,
+                &parsed.admission_identifiers,
+                None,
+            ),
+            Err(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape
+            ))
+        );
+
+        // These are the existing staging carriers, supplied separately from the
+        // parsed tree. This does not construct or transfer a derive subject.
+        let frame = Arc::new(ExpansionFrame {
+            invocation: invocation.span,
+            definition: invocation.selection.declaration.span,
+        });
+        let staging_frames = [Arc::clone(&frame)];
+        let frame_state = DeclarationFrame {
+            tree: DeclarationTree::Output(Box::new(parsed)),
+            contexts,
+            next: 0,
+            invocation: Some(invocation.span),
+            construction: Some((invocation.selection.declaration.span, 1)),
+            frame: Some(Arc::clone(&frame)),
+            expression_pattern: false,
+        };
+        let tokens = frame_state.tokens(&staging_frames);
+        assert!(Arc::ptr_eq(tokens.frame.unwrap(), &frame));
+        assert!(Arc::ptr_eq(&tokens.staging_frames.unwrap()[0], &frame));
+        assert!(tokens.originals.unwrap().contains_key(&subject_index));
+        assert!(tokens.originals.unwrap().contains_key(&marker_index));
+        assert!(frame_state.contexts.select_parts("marker", 1).is_some());
+    }
+
+    #[test]
+    fn r1_generated_groups_reject_and_drop_at_the_existing_depth_limit() {
+        const CHILD: &str = "ASH_R1_GENERATED_STACK_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "parser::project::tests::r1_generated_groups_reject_and_drop_at_the_existing_depth_limit",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .expect("the isolated generated stack witness should start");
+            assert!(
+                output.status.success(),
+                "the generated stack witness failed: {}\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(stdout.contains("accepted, accepted dropped, rejected, rejected dropped"));
+            print!("{stdout}");
+            return;
+        }
+        let markers = std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                use crate::syntax::{MacroDelimiter, MacroOrigin, MacroOutputNode, SyntaxContexts};
+
+                let source = SourceFile::new("generated.ash", "emit\n").unwrap();
+                let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+                let origin = MacroOrigin::Source(span);
+                let token = |kind, spelling: &str| {
+                    MacroOutputNode::Token(kind, spelling.into(), origin.clone())
+                };
+                let name = |spelling: &str| {
+                    MacroOutputNode::Identifier(
+                        SurfaceName {
+                            text: spelling.into(),
+                            span,
+                            introduction: 0,
+                            introduced_at: None,
+                            written: true,
+                            diagnostic: None,
+                        },
+                        origin.clone(),
+                    )
+                };
+                let group = |children| {
+                    MacroOutputNode::Group(MacroDelimiter::Parentheses, children, origin.clone())
+                };
+                let parse_at = |inner_depth| {
+                    let mut payload = token(TokenKind::IntType, "Int");
+                    for _ in 0..inner_depth {
+                        payload = group(vec![payload]);
+                    }
+                    let output = vec![
+                        token(TokenKind::Newtype, "newtype"),
+                        name("Deep"),
+                        token(TokenKind::Equal, "="),
+                        name("Deep"),
+                        group(vec![payload]),
+                        token(TokenKind::LineEnd, "\n"),
+                        name("deriving"),
+                        group(vec![name("marker")]),
+                    ];
+                    super::super::parse_macro_tree_inner(
+                        &source,
+                        span,
+                        output,
+                        &SyntaxContexts::new(&[], &[], &[]),
+                        &[],
+                        super::super::MacroOutputPosition::StagedDeclarations,
+                        &mut crate::syntax_resource::SyntaxBudget::default(),
+                    )
+                };
+                // The outer constructor group is the remaining group level.
+                let accepted = parse_at(super::super::STRUCTURAL_DEPTH_LIMIT - 1).unwrap();
+                let subject = child_nodes(accepted.tree.root().unwrap())
+                    .find(|child| child.kind == NodeKind::NewtypeDeclaration)
+                    .unwrap();
+                assert!(child_nodes(subject).any(|child| child.kind == NodeKind::DerivingClause));
+                let mut markers = vec!["accepted"];
+                drop(accepted);
+                markers.push("accepted dropped");
+                assert!(matches!(
+                    parse_at(super::super::STRUCTURAL_DEPTH_LIMIT),
+                    Err(super::super::MacroParseFailure::Syntax {
+                        resource: Some(ResourceFailure::StructuralDepth { limit }), ..
+                    }) if limit == super::super::STRUCTURAL_DEPTH_LIMIT
+                ));
+                markers.push("rejected");
+                markers.push("rejected dropped");
+                markers
+            })
+            .unwrap()
+            .join()
+            .expect("bounded structured parsing and disposal should fit the stack");
+        assert_eq!(
+            markers,
+            [
+                "accepted",
+                "accepted dropped",
+                "rejected",
+                "rejected dropped"
+            ]
+        );
+        println!("{}", markers.join(", "));
+    }
+
+    #[test]
+    fn r1_generated_forms_reach_cst_but_both_wrappers_refuse_unconsumed_forms() {
+        use crate::syntax::SyntaxContexts;
+        for (body, expected_kind, accepted) in [
+            ("type Item = Item", NodeKind::TypeDeclaration, true),
+            (
+                "newtype Item = Item(Int)",
+                NodeKind::NewtypeDeclaration,
+                true,
+            ),
+            (
+                "type Item = Item\nderiving (marker)",
+                NodeKind::TypeDeclaration,
+                false,
+            ),
+            (
+                "newtype Item = Item(Int)\nderiving (marker)",
+                NodeKind::NewtypeDeclaration,
+                false,
+            ),
+            (
+                "pub syntax derive: (marker) => {}",
+                NodeKind::SyntaxDeclaration,
+                false,
+            ),
+        ] {
+            let forms = SourceFile::new(
+                "forms.ash",
+                format!("pub syntax declaration: (emit) => {{\n{body}\n}}\n"),
+            )
+            .unwrap();
+            let selection = h1_selection(&forms, 0, None);
+            let caller = SourceFile::new("caller.ash", "emit\n").unwrap();
+            let span = caller.span(ByteRange::new(0, 4).unwrap()).unwrap();
+            let output = crate::syntax::instantiate_declaration_template(
+                &selection,
+                &[],
+                1,
+                span,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+            .unwrap();
+            let contexts = SyntaxContexts::new(&[], &[], &[]);
+            let parsed = super::super::parse_macro_tree_inner(
+                &caller,
+                span,
+                output.clone(),
+                &contexts,
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+            .unwrap();
+            let declaration = child_nodes(parsed.tree.root().unwrap()).next().unwrap();
+            assert_eq!(declaration.kind, expected_kind, "{body}");
+            if body.contains("deriving") {
+                assert!(child_nodes(declaration).any(|node| node.kind == NodeKind::DerivingClause));
+            }
+            let admission = super::super::parse_declaration_template_admission(
+                &caller,
+                span,
+                output.clone(),
+                &contexts,
+                &[],
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            );
+            let projection = super::super::parse_macro_declarations(
+                &caller, span, None, output, &contexts, None,
+            );
+            if accepted {
+                assert!(admission.is_ok(), "{body}: {admission:?}");
+                assert!(projection.is_ok(), "{body}: {projection:?}");
+            } else {
+                assert!(
+                    matches!(&admission, Err(super::super::MacroParseFailure::Invalid)),
+                    "{body}: {admission:?}"
+                );
+                assert!(
+                    matches!(&projection, Err(super::super::MacroParseFailure::Invalid)),
+                    "{body}: {projection:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn r1_d5_source_capture_keeps_clause_then_refuses_before_packet_work() {
+        let selected = [d5_selection()];
+        for (kind, declaration) in [
+            (NodeKind::TypeDeclaration, "type Subject = Subject"),
+            (
+                NodeKind::NewtypeDeclaration,
+                "newtype Subject = Subject(Int)",
+            ),
+        ] {
+            for has_clause in [false, true] {
+                let suffix = if has_clause {
+                    "\nderiving (first, second, first,)"
+                } else {
+                    ""
+                };
+                let subject_text = format!("{declaration}{suffix}");
+                let source = SourceFile::new(
+                    "caller.ash",
+                    format!("sink {{\n{subject_text}\n}}\nmain : Unit -> Int\nmain () = 42\n"),
+                )
+                .unwrap();
+                let (tree, mut budget) = d5_source_tree(&source, &selected);
+                let root = tree.root().unwrap();
+                let invocation = child_nodes(root)
+                    .find(|node| node.kind == NodeKind::DeclarationSyntaxInvocation)
+                    .unwrap();
+                let argument = child_nodes(invocation)
+                    .find(|node| node.kind == NodeKind::SyntaxArgument)
+                    .unwrap();
+                let subject = capture_declaration_node(argument).unwrap();
+                assert_eq!(subject.kind, kind);
+                let first = descendant_edge_index(subject, false).unwrap();
+                let last = descendant_edge_index(subject, true).unwrap();
+                let start = tree.tokens()[first].span.range().start() as usize;
+                let end = tree.tokens()[last].span.range().end() as usize;
+                assert_eq!(&source.text()[start..end], subject_text);
+                let retained = tree
+                    .events()
+                    .iter()
+                    .filter_map(|event| match event {
+                        super::super::Event::Token(index) => Some(*index),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(retained, (0..tree.tokens().len()).collect::<Vec<_>>());
+                let clauses = child_nodes(subject)
+                    .filter(|node| node.kind == NodeKind::DerivingClause)
+                    .collect::<Vec<_>>();
+                assert_eq!(clauses.len(), usize::from(has_clause));
+                if has_clause {
+                    let clause = clauses[0];
+                    assert!(matches!(subject.children.last(),
+                        Some(ConcreteElement::Node(last)) if std::ptr::eq(last, clause)));
+                    let spellings = clause
+                        .children
+                        .iter()
+                        .map(|child| match child {
+                            ConcreteElement::Token(index) => {
+                                let range = tree.tokens()[*index].span.range();
+                                &source.text()[range.start() as usize..range.end() as usize]
+                            }
+                            other => panic!("clause must contain only tokens: {other:?}"),
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        spellings,
+                        [
+                            "deriving", "(", "first", ",", "second", ",", "first", ",", ")"
+                        ]
+                    );
+                }
+                let before = budget.consumed();
+                let mut owners = Vec::new();
+                let result = project_declaration_expansions(
+                    &source,
+                    &tree,
+                    &selected,
+                    &[],
+                    &mut owners,
+                    &mut budget,
+                );
+                if has_clause {
+                    assert!(matches!(
+                        result,
+                        Err(DeclarationExpansionFailure::Projection(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                        ))
+                    ));
+                    assert_eq!(budget.consumed(), before);
+                    assert!(owners.is_empty());
+                } else {
+                    let module = result.expect("an ordinary captured declaration is accepted");
+                    assert_eq!(module.definitions.len(), 1);
+                    assert_eq!(owners.len(), 1);
+                    assert!(budget.consumed() > before);
+                }
+            }
+        }
     }
 
     fn d5_source_tree(
