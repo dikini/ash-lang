@@ -2710,13 +2710,14 @@ pub(crate) fn project_declaration_expansions(
         )?;
         budget.charge_units(2)?;
         staging_frames.push(std::sync::Arc::clone(&frame));
-        let parsed = match super::parse_macro_tree_inner(
+        let parsed = match super::parse_macro_tree_selected(
             source,
             anchor,
             output,
             &contexts,
             &[],
             super::MacroOutputPosition::StagedDeclarations,
+            pattern_accounting,
             budget,
         ) {
             Ok(parsed) => parsed,

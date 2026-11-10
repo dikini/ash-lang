@@ -941,15 +941,38 @@ fn parse_macro_tree_inner(
     position: MacroOutputPosition,
     budget: &mut SyntaxBudget,
 ) -> Result<ParsedMacroTree, MacroParseFailure> {
+    parse_macro_tree_selected(
+        source,
+        invocation,
+        output,
+        contexts,
+        placeholders,
+        position,
+        false,
+        budget,
+    )
+}
+
+fn parse_macro_tree_selected(
+    source: &SourceFile,
+    invocation: Span,
+    output: Vec<crate::syntax::MacroOutputNode>,
+    contexts: &crate::syntax::SyntaxContexts,
+    placeholders: &[crate::surface::SurfaceName],
+    position: MacroOutputPosition,
+    pattern_scratch: bool,
+    budget: &mut SyntaxBudget,
+) -> Result<ParsedMacroTree, MacroParseFailure> {
     use crate::source::ByteRange;
     use crate::syntax::MacroOutputNode;
     let type_output = matches!(
         position,
         MacroOutputPosition::Type | MacroOutputPosition::Pattern
     );
+    let fragment_scratch = type_output || pattern_scratch;
     let budgeted = type_output || matches!(position, MacroOutputPosition::StagedDeclarations);
     if budgeted {
-        charge_staged_output(&output, contexts, type_output, budget)?;
+        charge_staged_output(&output, contexts, type_output, pattern_scratch, budget)?;
     }
     let start = invocation.range().start();
     let anchor = source
@@ -965,7 +988,7 @@ fn parse_macro_tree_inner(
     let mut syntax_selections = std::collections::HashMap::new();
     let mut syntax_spellings = std::collections::HashMap::new();
     let mut fragment_count = 0usize;
-    if type_output && !output.is_empty() {
+    if fragment_scratch && !output.is_empty() {
         budget
             .charge_units(output.len())
             .map_err(macro_resource_failure)?;
@@ -974,7 +997,7 @@ fn parse_macro_tree_inner(
     macro_rules! reserve_pieces {
         ($count:expr) => {{
             let count = $count;
-            if type_output && count != 0 {
+            if fragment_scratch && count != 0 {
                 let live = pieces.len();
                 let requested = live.checked_add(count).unwrap_or(usize::MAX);
                 if requested > pieces.capacity() {
@@ -1224,6 +1247,7 @@ fn charge_staged_output(
     output: &[crate::syntax::MacroOutputNode],
     contexts: &crate::syntax::SyntaxContexts,
     type_scratch: bool,
+    pattern_scratch: bool,
     budget: &mut SyntaxBudget,
 ) -> Result<(), MacroParseFailure> {
     use crate::syntax::MacroOutputNode;
@@ -1233,7 +1257,8 @@ fn charge_staged_output(
     budget
         .charge_units(output.len())
         .map_err(macro_resource_failure)?;
-    if type_scratch && !output.is_empty() {
+    let selected_scratch = type_scratch || pattern_scratch;
+    if selected_scratch && !output.is_empty() {
         budget
             .charge_units(output.len())
             .map_err(macro_resource_failure)?;
@@ -1244,7 +1269,7 @@ fn charge_staged_output(
         budget.charge_units(5).map_err(macro_resource_failure)?;
         match node {
             MacroOutputNode::Identifier(name, _) => {
-                if type_scratch {
+                if selected_scratch {
                     crate::syntax::charge_type_name_copy(name, depth, budget)
                         .map_err(macro_resource_failure)?;
                 } else {
@@ -1297,7 +1322,7 @@ fn charge_staged_output(
                         limit: STRUCTURAL_DEPTH_LIMIT,
                     }));
                 }
-                if type_scratch {
+                if selected_scratch {
                     crate::syntax::charge_type_origin_copy(origin, depth + 1, budget)
                         .map_err(macro_resource_failure)?;
                 }
@@ -1312,7 +1337,7 @@ fn charge_staged_output(
                 budget
                     .charge_units(children.len())
                     .map_err(macro_resource_failure)?;
-                if type_scratch && !children.is_empty() {
+                if selected_scratch && !children.is_empty() {
                     let live = pending.len();
                     let requested = live.checked_add(children.len()).unwrap_or(usize::MAX);
                     if requested > pending.capacity() {
@@ -1339,14 +1364,14 @@ fn charge_staged_output(
                 let child = crate::syntax::type_depth(depth, 1).map_err(macro_resource_failure)?;
                 crate::syntax::charge_type_origin(origin, child, budget)
                     .map_err(macro_resource_failure)?;
-                let bridge = if type_scratch {
+                let bridge = if selected_scratch {
                     crate::syntax::charge_new_pattern_retention(capture, depth, budget)
                 } else {
                     crate::syntax::charge_pattern_retention(capture, depth, budget)
                 }
                 .map_err(macro_resource_failure)?
                 .ok_or(MacroParseFailure::Invalid)?;
-                if type_scratch && bridge {
+                if selected_scratch && bridge {
                     return Err(MacroParseFailure::Invalid);
                 }
             }
