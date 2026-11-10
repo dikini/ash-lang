@@ -37,11 +37,14 @@ impl Drop for Fixture {
     }
 }
 
+type SpanRange = (u32, u32);
+type FrameRanges = Option<(SpanRange, SpanRange)>;
+
 fn check(
     entry: PathBuf,
     reason: ResolveReason,
     ranges: &[(u32, u32)],
-    frames: &[Option<((u32, u32), (u32, u32))>],
+    frames: &[FrameRanges],
     definition: Option<&str>,
 ) {
     let failure = compile_path(RunConfiguration {

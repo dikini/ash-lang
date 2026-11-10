@@ -35,8 +35,12 @@ use super::{
 };
 
 #[cfg(test)]
+type G1CaptureObserver =
+    fn(&SourceFile, &[SurfaceSyntaxCapture], &crate::syntax_resource::SyntaxBudget);
+
+#[cfg(test)]
 std::thread_local! {
-    pub(crate) static G1_CAPTURE_OBSERVER: std::cell::Cell<Option<fn(&SourceFile, &[SurfaceSyntaxCapture], &crate::syntax_resource::SyntaxBudget)>> = const { std::cell::Cell::new(None) };
+    pub(crate) static G1_CAPTURE_OBSERVER: std::cell::Cell<Option<G1CaptureObserver>> = const { std::cell::Cell::new(None) };
 }
 
 // The parser and projector share token indices. Structured output attaches
@@ -10202,7 +10206,7 @@ mod tests {
             assert!(
                 matches!(charge_structured_items(&caller, &selected.declaration.matcher, &invocation.children[1..], &projected_tokens, 1, &mut short), Err(DeclarationExpansionFailure::Syntax { resource: Some(ResourceFailure::SyntaxWork { limit }), .. }) if limit == total - 1)
             );
-            assert!(short.consumed() >= 17 && short.consumed() <= total - 1);
+            assert!(short.consumed() >= 17 && short.consumed() < total);
             let mut exact = SyntaxBudget::with_limit(total);
             exact.charge_units(17).unwrap();
             charge_structured_items(
@@ -10376,7 +10380,7 @@ mod tests {
             matches!(crate::syntax::charge_selected(&selected[0], &mut short),
             Err(ResourceFailure::SyntaxWork { limit }) if limit == total - 1)
         );
-        assert!(short.consumed() >= 17 && short.consumed() <= total - 1);
+        assert!(short.consumed() >= 17 && short.consumed() < total);
         assert_eq!(Arc::strong_count(root), references);
         let mut exact = SyntaxBudget::with_limit(total);
         exact.charge_units(17).unwrap();
@@ -10533,7 +10537,7 @@ mod tests {
                     resource: Some(ResourceFailure::SyntaxWork { limit }), ..
                 }) if limit == total - 1
             ));
-            assert!(short.consumed() >= 17 && short.consumed() <= total - 1);
+            assert!(short.consumed() >= 17 && short.consumed() < total);
             assert_eq!(Arc::strong_count(matcher), references);
             for _ in 0..2 {
                 let mut exact = SyntaxBudget::with_limit(total);
@@ -15101,7 +15105,7 @@ mod tests {
         }
         assert_eq!(locations.len(), 9);
         for location in locations {
-            assert_eq!(location.related, [combined.clone()]);
+            assert_eq!(location.related.as_slice(), std::slice::from_ref(&combined));
             assert_eq!(location.frames.len(), 2);
             assert!(Arc::ptr_eq(&location.frames[0], &previous));
             assert!(Arc::ptr_eq(&location.frames[1], &distinct));
@@ -15128,7 +15132,7 @@ mod tests {
         ) {
             let location = name.diagnostic.as_ref().unwrap();
             assert_eq!(&location.primary, origin);
-            assert_eq!(location.related, [origin.clone()]);
+            assert_eq!(location.related.as_slice(), std::slice::from_ref(origin));
             assert_eq!(location.frames.len(), 2);
             assert!(Arc::ptr_eq(&location.frames[0], previous));
             assert!(Arc::ptr_eq(&location.frames[1], current));
@@ -15568,7 +15572,7 @@ mod tests {
             };
             let actual = binder.name.diagnostic.unwrap();
             assert_eq!(actual.primary, origin);
-            assert_eq!(actual.related, [origin.clone()]);
+            assert_eq!(actual.related.as_slice(), std::slice::from_ref(&origin));
             assert_eq!(actual.frames.len(), previous.len() + 1);
             for (actual, expected) in actual.frames.iter().zip(&previous) {
                 assert!(Arc::ptr_eq(actual, expected));
@@ -21706,25 +21710,27 @@ usage arena => resume arena
         values.push(7u8);
         let mut short = SyntaxBudget::with_limit(19);
         short.charge_units(17).unwrap();
-        let cell = RefCell::new(&mut short);
-        assert!(matches!(
-            reserve_expression_scratch(&mut values, 1, Some(&cell)),
-            Err(ProjectionError::ResourceLimit(
-                ResourceFailure::SyntaxWork { limit: 19 }
-            ))
-        ));
-        assert_eq!(values, [7]);
-        assert_eq!(cell.borrow().consumed(), 17);
-        drop(cell);
+        {
+            let cell = RefCell::new(&mut short);
+            assert!(matches!(
+                reserve_expression_scratch(&mut values, 1, Some(&cell)),
+                Err(ProjectionError::ResourceLimit(
+                    ResourceFailure::SyntaxWork { limit: 19 }
+                ))
+            ));
+            assert_eq!(values, [7]);
+            assert_eq!(cell.borrow().consumed(), 17);
+        }
 
         let mut exact = SyntaxBudget::with_limit(20);
         exact.charge_units(17).unwrap();
-        let cell = RefCell::new(&mut exact);
-        reserve_expression_scratch(&mut values, 1, Some(&cell)).unwrap();
-        values.push(9);
-        assert_eq!(values, [7, 9]);
-        assert_eq!(cell.borrow().consumed(), 20);
-        drop(cell);
+        {
+            let cell = RefCell::new(&mut exact);
+            reserve_expression_scratch(&mut values, 1, Some(&cell)).unwrap();
+            values.push(9);
+            assert_eq!(values, [7, 9]);
+            assert_eq!(cell.borrow().consumed(), 20);
+        }
 
         let mut spare = Vec::<u8>::with_capacity(2);
         spare.push(1);
@@ -21735,32 +21741,34 @@ usage arena => resume arena
 
         let mut buffer = Vec::new();
         let mut no_budget = SyntaxBudget::with_limit(0);
-        let loan = RefCell::new(&mut no_budget);
         let called = Cell::new(false);
-        assert!(matches!(
+        {
+            let loan = RefCell::new(&mut no_budget);
+            assert!(matches!(
+                push_expression_scratch(&mut buffer, Some(&loan), || {
+                    called.set(true);
+                    Ok(3u8)
+                }),
+                Err(ProjectionError::ResourceLimit(
+                    ResourceFailure::SyntaxWork { limit: 0 }
+                ))
+            ));
+            assert!(!called.get());
+            assert!(buffer.is_empty());
+        }
+
+        let mut exact_push = SyntaxBudget::with_limit(1);
+        {
+            let loan = RefCell::new(&mut exact_push);
             push_expression_scratch(&mut buffer, Some(&loan), || {
                 called.set(true);
                 Ok(3u8)
-            }),
-            Err(ProjectionError::ResourceLimit(
-                ResourceFailure::SyntaxWork { limit: 0 }
-            ))
-        ));
-        assert!(!called.get());
-        assert!(buffer.is_empty());
-        drop(loan);
-
-        let mut exact_push = SyntaxBudget::with_limit(1);
-        let loan = RefCell::new(&mut exact_push);
-        push_expression_scratch(&mut buffer, Some(&loan), || {
-            called.set(true);
-            Ok(3u8)
-        })
-        .unwrap();
-        assert!(called.get());
-        assert_eq!(buffer, [3]);
-        assert_eq!(loan.borrow().consumed(), 1);
-        drop(loan);
+            })
+            .unwrap();
+            assert!(called.get());
+            assert_eq!(buffer, [3]);
+            assert_eq!(loan.borrow().consumed(), 1);
+        }
 
         let mut no_budget = SyntaxBudget::with_limit(0);
         let loan = RefCell::new(&mut no_budget);
@@ -21908,35 +21916,37 @@ usage arena => resume arena
         let before_third = Arc::strong_count(&third);
         let mut short = SyntaxBudget::with_limit(17 + available);
         short.charge_units(17).unwrap();
-        let loan = RefCell::new(&mut short);
-        assert!(matches!(
-            add_projection_frames_with_expression_budget(
-                &mut short_merged,
-                None,
-                Some(&frames),
-                Some(&loan),
-            ),
-            Err(ProjectionError::ResourceLimit(
-                ResourceFailure::SyntaxWork { .. }
-            ))
-        ));
-        assert_eq!(short_merged.frames.len(), live);
-        assert!(Arc::ptr_eq(&short_merged.frames[0], &first));
-        assert!(Arc::ptr_eq(&short_merged.frames[1], &second));
-        assert_eq!(Arc::strong_count(&third), before_third);
-        drop(loan);
+        {
+            let loan = RefCell::new(&mut short);
+            assert!(matches!(
+                add_projection_frames_with_expression_budget(
+                    &mut short_merged,
+                    None,
+                    Some(&frames),
+                    Some(&loan),
+                ),
+                Err(ProjectionError::ResourceLimit(
+                    ResourceFailure::SyntaxWork { .. }
+                ))
+            ));
+            assert_eq!(short_merged.frames.len(), live);
+            assert!(Arc::ptr_eq(&short_merged.frames[0], &first));
+            assert!(Arc::ptr_eq(&short_merged.frames[1], &second));
+            assert_eq!(Arc::strong_count(&third), before_third);
+        }
 
         let mut measured_merged = make_merged();
         let mut measured = SyntaxBudget::default();
-        let loan = RefCell::new(&mut measured);
-        add_projection_frames_with_expression_budget(
-            &mut measured_merged,
-            None,
-            Some(&frames),
-            Some(&loan),
-        )
-        .unwrap();
-        drop(loan);
+        {
+            let loan = RefCell::new(&mut measured);
+            add_projection_frames_with_expression_budget(
+                &mut measured_merged,
+                None,
+                Some(&frames),
+                Some(&loan),
+            )
+            .unwrap();
+        }
         let total = measured.consumed();
         assert_eq!(measured_merged, legacy);
         drop(measured_merged);
@@ -21944,15 +21954,16 @@ usage arena => resume arena
             let mut exact_merged = make_merged();
             let mut exact = SyntaxBudget::with_limit(17 + total);
             exact.charge_units(17).unwrap();
-            let loan = RefCell::new(&mut exact);
-            add_projection_frames_with_expression_budget(
-                &mut exact_merged,
-                None,
-                Some(&frames),
-                Some(&loan),
-            )
-            .unwrap();
-            drop(loan);
+            {
+                let loan = RefCell::new(&mut exact);
+                add_projection_frames_with_expression_budget(
+                    &mut exact_merged,
+                    None,
+                    Some(&frames),
+                    Some(&loan),
+                )
+                .unwrap();
+            }
             assert_eq!(exact.consumed(), 17 + total);
             assert_eq!(exact_merged, legacy);
             for (actual, expected) in exact_merged.frames.iter().zip([&first, &second, &third]) {

@@ -1490,7 +1490,7 @@ fn g1_imported_graph_shares_budget_exact_short_and_fresh_retry() {
             };
             assert_eq!(AT_CAPTURE.get(), Some(at_capture));
             assert!(short.syntax_budget.consumed() >= at_capture);
-            assert!(short.syntax_budget.consumed() <= total - 1);
+            assert!(short.syntax_budget.consumed() < total);
             assert!(
                 short.pending.is_empty() && short.loaded.is_empty() && short.completed.is_none()
             );
