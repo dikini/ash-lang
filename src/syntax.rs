@@ -3229,6 +3229,175 @@ mod tests {
     };
 
     #[test]
+    fn selected_type_expression_expansion_uses_one_retryable_loan() {
+        use crate::{
+            interface::InterfaceConstraintBudget, surface::SurfaceDefinitionKind,
+            syntax_resource::ResourceFailure,
+        };
+        use std::cell::Cell;
+
+        let source = SourceFile::new(
+            "expression-templates.ash",
+            "pub syntax keep $body:expr => {\n $body\n}\n\
+             pub syntax twice $body:expr => {\n $body + $body\n}\n\
+             value : Unit -> Int\nvalue () = {\n let copy : Int = 21\n copy\n}\n",
+        )
+        .unwrap();
+        let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+        let module = crate::parser::project_module_retaining_templates(&source, &tree).unwrap();
+        let SurfaceDefinitionKind::Equational(value) = &module.definitions[0].kind else {
+            panic!("expected an equation")
+        };
+        let expression = value.equations[0].body.clone();
+        let selection = |name: &str| {
+            let declaration = module
+                .syntax_declarations
+                .iter()
+                .find(|declaration| declaration.name.text == name)
+                .unwrap()
+                .clone();
+            SelectedSyntax {
+                name: name.into(),
+                import_span: declaration.span,
+                declaration,
+                owner: 0,
+            }
+        };
+        let keep = selection("keep");
+        let twice = selection("twice");
+        let span = keep.declaration.span;
+        let contents: Arc<[MacroOutputNode]> = Arc::from([MacroOutputNode::ForwardedType(
+            SurfaceTypeCapture {
+                ty: SurfaceType {
+                    kind: SurfaceTypeKind::Int,
+                    span,
+                    diagnostic: None,
+                },
+                contents: Arc::from([]),
+            },
+            span.into(),
+        )]);
+        let capture = SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
+            expression: expression.clone(),
+            contents: Arc::clone(&contents),
+            contains_protected_type: true,
+        });
+        let ordinary = SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
+            expression,
+            contents: Arc::from([]),
+            contains_protected_type: false,
+        });
+        let run = |selected: &[SelectedSyntax],
+                   capture: &SurfaceSyntaxCapture,
+                   loan: Option<&mut SyntaxBudget>| {
+            let called = Cell::new(false);
+            let mut transformer = |_: &SelectedSyntax,
+                                   _: &[SurfaceSyntaxCapture],
+                                   _: Span,
+                                   _: &SurfaceName,
+                                   _: usize,
+                                   _: &[Option<usize>],
+                                   _: &Arc<ExpansionFrame>,
+                                   _: &mut InterfaceConstraintBudget|
+             -> Result<(SurfaceExpr, usize), Span> {
+                called.set(true);
+                Err(span)
+            };
+            let mut expansion =
+                SyntaxExpansion::new(&source, selected, &[], Vec::new(), loan, &mut transformer);
+            let result = expansion.expand(
+                &selected[0].declaration.name,
+                std::slice::from_ref(capture),
+                span,
+                &mut InterfaceConstraintBudget::default(),
+            );
+            let failure = expansion.take_parse_failure();
+            let owners = expansion.owners.len();
+            drop(expansion);
+            (result, failure, owners, called.get())
+        };
+
+        let baseline = Arc::strong_count(&contents);
+        let mut costs = Vec::new();
+        for selected in [keep.clone(), twice.clone()] {
+            let mut measured = SyntaxBudget::default();
+            measured.charge_units(17).unwrap();
+            let (output, failure, owners, called) = run(
+                std::slice::from_ref(&selected),
+                &capture,
+                Some(&mut measured),
+            );
+            let output = output.expect("the selected Template expands");
+            assert!(failure.is_none() && !called);
+            assert_eq!(owners, 1);
+            if selected.name == "keep" {
+                assert!(matches!(output.kind, SurfaceExprKind::Block(_)));
+            } else {
+                let SurfaceExprKind::Add(binary) = &output.kind else {
+                    panic!("twice must return both captured expressions")
+                };
+                assert!(matches!(binary.left.kind, SurfaceExprKind::Block(_)));
+                assert!(matches!(binary.right.kind, SurfaceExprKind::Block(_)));
+            }
+            drop(output);
+            assert_eq!(Arc::strong_count(&contents), baseline);
+            let total = measured.consumed();
+            costs.push(total);
+
+            let mut short = SyntaxBudget::with_limit(total - 1);
+            short.charge_units(17).unwrap();
+            let (output, failure, _, called) =
+                run(std::slice::from_ref(&selected), &capture, Some(&mut short));
+            assert!(output.is_err() && !called);
+            let failure = failure.expect("the shared loan reports its resource failure");
+            assert!(matches!(
+                failure.resource,
+                Some(ResourceFailure::SyntaxWork { .. })
+            ));
+            assert_eq!(failure.invocation, span);
+            assert_eq!(failure.definition, selected.declaration.span);
+            assert_eq!(Arc::strong_count(&contents), baseline);
+            for _ in 0..2 {
+                let mut exact = SyntaxBudget::with_limit(total);
+                exact.charge_units(17).unwrap();
+                let (output, failure, _, called) =
+                    run(std::slice::from_ref(&selected), &capture, Some(&mut exact));
+                drop(output.expect("the exact loan succeeds"));
+                assert!(failure.is_none() && !called);
+                assert_eq!(exact.consumed(), total);
+                assert_eq!(Arc::strong_count(&contents), baseline);
+            }
+        }
+        assert!(costs[1] > costs[0]);
+
+        let (output, failure, owners, called) = run(std::slice::from_ref(&keep), &capture, None);
+        assert!(output.is_err() && failure.is_none() && !called);
+        assert_eq!(owners, 0);
+        let mut zero = SyntaxBudget::with_limit(0);
+        let (output, failure, _, called) =
+            run(std::slice::from_ref(&keep), &ordinary, Some(&mut zero));
+        drop(output.expect("an unmarked expression keeps the legacy path"));
+        assert!(failure.is_none() && !called);
+        assert_eq!(zero.consumed(), 0);
+
+        for wrong_category in [false, true] {
+            let mut rejected = keep.clone();
+            if wrong_category {
+                rejected.declaration.category = SurfaceSyntaxCategory::Declaration;
+            } else {
+                rejected.declaration.implementation =
+                    SurfaceSyntaxImplementation::Transformer(rejected.declaration.name.clone());
+            }
+            let mut budget = SyntaxBudget::default();
+            let (output, failure, owners, called) =
+                run(std::slice::from_ref(&rejected), &capture, Some(&mut budget));
+            assert!(output.is_err() && failure.is_none() && !called);
+            assert_eq!(owners, 0);
+            assert_eq!(budget.consumed(), 0);
+        }
+    }
+
+    #[test]
     fn type_output_group_copy_preserves_order_origins_and_prepaid_boundaries() {
         use crate::lexer::TokenKind;
         use crate::parser::MacroParseFailure;

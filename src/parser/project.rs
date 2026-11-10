@@ -21170,6 +21170,247 @@ usage arena => resume arena
         });
     }
     #[test]
+    fn selected_type_expression_guard_prepays_the_actual_callee_lookup() {
+        use crate::{
+            syntax::{MacroOutputNode, SyntaxContexts},
+            syntax_resource::SyntaxBudget,
+        };
+        use std::{collections::HashMap, sync::Arc};
+
+        let source =
+            SourceFile::new("guard.ash", "pub syntax keep $body:expr => {\n $body\n}\n").unwrap();
+        let keep = h1_selection(&source, 0, None);
+        let span = keep.declaration.span;
+        let name = keep.declaration.name.clone();
+        let root = ConcreteNode {
+            kind: NodeKind::SyntaxInvocation,
+            children: vec![
+                ConcreteElement::Token(0),
+                ConcreteElement::Node(ConcreteNode {
+                    kind: NodeKind::SyntaxArgument,
+                    children: vec![ConcreteElement::Token(1)],
+                }),
+            ],
+        };
+        let originals = HashMap::from([
+            (0, MacroOutputNode::Identifier(name.clone(), span.into())),
+            (
+                1,
+                MacroOutputNode::ForwardedType(
+                    SurfaceTypeCapture {
+                        ty: SurfaceType {
+                            kind: SurfaceTypeKind::Int,
+                            span,
+                            diagnostic: None,
+                        },
+                        contents: Arc::from([]),
+                    },
+                    span.into(),
+                ),
+            ),
+        ]);
+        let selected = [keep.clone()];
+        let contexts = SyntaxContexts::new(&selected, &[], &[]);
+        let mut measured = SyntaxBudget::default();
+        measured.charge_units(17).unwrap();
+        assert!(
+            check_narrow_protected_refusal_inner(
+                &root,
+                Some(&originals),
+                false,
+                Some(&contexts),
+                &mut measured,
+            )
+            .unwrap()
+        );
+        let total = measured.consumed();
+        let mut exact = SyntaxBudget::with_limit(total);
+        exact.charge_units(17).unwrap();
+        assert!(
+            check_narrow_protected_refusal_inner(
+                &root,
+                Some(&originals),
+                false,
+                Some(&contexts),
+                &mut exact,
+            )
+            .unwrap()
+        );
+        assert_eq!(exact.consumed(), total);
+
+        let mut transformer = keep;
+        transformer.declaration.implementation =
+            SurfaceSyntaxImplementation::Transformer(name.clone());
+        let rejected = [transformer];
+        let contexts = SyntaxContexts::new(&rejected, &[], &[]);
+        let mut full = SyntaxBudget::default();
+        assert!(matches!(
+            check_narrow_protected_refusal_inner(
+                &root,
+                Some(&originals),
+                false,
+                Some(&contexts),
+                &mut full,
+            ),
+            Err(DeclarationExpansionFailure::Projection(
+                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+            ))
+        ));
+        let mut short = SyntaxBudget::with_limit(full.consumed() - 1);
+        assert!(matches!(
+            check_narrow_protected_refusal_inner(
+                &root,
+                Some(&originals),
+                false,
+                Some(&contexts),
+                &mut short,
+            ),
+            Err(DeclarationExpansionFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        let mut absent = originals.clone();
+        absent.remove(&0);
+        assert!(matches!(
+            check_narrow_protected_refusal_inner(
+                &root,
+                Some(&absent),
+                false,
+                Some(&contexts),
+                &mut SyntaxBudget::default(),
+            ),
+            Err(DeclarationExpansionFailure::Projection(
+                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+            ))
+        ));
+        let mut raw = originals;
+        raw.remove(&1);
+        let mut old = SyntaxBudget::default();
+        let mut with_context = SyntaxBudget::default();
+        assert!(
+            !check_narrow_protected_refusal_inner(&root, Some(&raw), false, None, &mut old)
+                .unwrap()
+        );
+        assert!(
+            !check_narrow_protected_refusal_inner(
+                &root,
+                Some(&raw),
+                false,
+                Some(&contexts),
+                &mut with_context,
+            )
+            .unwrap()
+        );
+        assert_eq!(old.consumed(), with_context.consumed());
+    }
+
+    #[test]
+    fn selected_expression_capture_fact_follows_originals_and_groups() {
+        use crate::{
+            syntax::MacroOutputNode,
+            syntax_resource::{ResourceFailure, SyntaxBudget},
+        };
+        use std::{cell::RefCell, collections::HashMap, sync::Arc};
+
+        let source = SourceFile::new("fact.ash", "((Int))").unwrap();
+        let raw = lex(&source).unwrap().tokens;
+        let span = raw[2].span;
+        let node = ConcreteNode {
+            kind: NodeKind::ParenthesizedExpression,
+            children: (0..5).map(ConcreteElement::Token).collect(),
+        };
+        let ty = MacroOutputNode::ForwardedType(
+            SurfaceTypeCapture {
+                ty: SurfaceType {
+                    kind: SurfaceTypeKind::Int,
+                    span,
+                    diagnostic: None,
+                },
+                contents: Arc::from([]),
+            },
+            span.into(),
+        );
+        let originals = HashMap::from([(2, ty.clone())]);
+        let (raw_contents, raw_fact) = capture_contents_and_type(
+            &source,
+            &node,
+            &ProjectionTokens::source(&raw),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert!(!raw_fact);
+        drop(raw_contents);
+        let run = |budget: &mut SyntaxBudget| {
+            let loan = RefCell::new(budget);
+            let mut tokens = ProjectionTokens::source(&raw);
+            tokens.expression_budget = Some(&loan);
+            capture_contents_and_type(&source, &node, &tokens, &originals)
+        };
+        let mut measured = SyntaxBudget::default();
+        let (contents, fact) = run(&mut measured).unwrap();
+        let total = measured.consumed();
+        assert!(fact);
+        assert!(matches!(
+            contents.as_slice(),
+            [MacroOutputNode::Group(_, outer, _)]
+                if matches!(outer.as_slice(), [MacroOutputNode::Group(_, inner, _)]
+                    if matches!(inner.as_slice(), [MacroOutputNode::ForwardedType(..)]))
+        ));
+        let mut short = SyntaxBudget::with_limit(total - 1);
+        assert!(matches!(
+            run(&mut short),
+            Err(ProjectionError::ResourceLimit(
+                ResourceFailure::SyntaxWork { .. }
+            ))
+        ));
+        let mut exact = SyntaxBudget::with_limit(total);
+        assert!(run(&mut exact).unwrap().1);
+        assert_eq!(exact.consumed(), total);
+
+        let expression = SurfaceExpr {
+            kind: SurfaceExprKind::Unit,
+            span,
+            diagnostic: None,
+        };
+        let retained: Arc<[MacroOutputNode]> = Arc::from([ty]);
+        let original = SurfaceExpressionCapture {
+            expression: expression.clone(),
+            contents: Arc::clone(&retained),
+            contains_protected_type: true,
+        };
+        let expression_source = SourceFile::new("fact-expression.ash", "((piece))").unwrap();
+        let expression_raw = lex(&expression_source).unwrap().tokens;
+        let expression_span = expression_raw[2].span;
+        for expected in [false, true] {
+            let mut forwarded = original.clone();
+            forwarded.contains_protected_type = expected;
+            if !expected {
+                forwarded.contents = Arc::from([]);
+            }
+            let expression_originals = HashMap::from([(
+                2,
+                MacroOutputNode::ForwardedExpression(forwarded, expression_span.into()),
+            )]);
+            let (_, fact) = capture_contents_and_type(
+                &expression_source,
+                &node,
+                &ProjectionTokens::source(&expression_raw),
+                &expression_originals,
+            )
+            .unwrap();
+            assert_eq!(fact, expected);
+        }
+        let restored = project_syntax_expression_capture(
+            expression,
+            vec![MacroOutputNode::ForwardedExpression(original, span.into())],
+            false,
+        );
+        assert!(restored.contains_protected_type);
+        assert!(Arc::ptr_eq(&restored.contents, &retained));
+    }
+
+    #[test]
     fn selected_expression_scratch_reserves_growth_before_mutation() {
         use crate::syntax_resource::{ResourceFailure, SyntaxBudget};
         use std::cell::{Cell, RefCell};

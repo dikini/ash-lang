@@ -761,6 +761,87 @@ fn pattern_source_capture_keeps_binder_and_read_context() {
 }
 
 #[test]
+fn type_expression_real_capture_and_alias_on_a_512k_stack() {
+    const CHILD: &str = "ASH_TYPE_EXPRESSION_SOURCE_512K_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "module::staged_tests::type_expression_real_capture_and_alias_on_a_512k_stack",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprint!("{stderr}");
+        assert!(output.status.success(), "512 KiB child failed");
+        assert_eq!(
+            stderr
+                .matches("type expression source: 42 and final alias dropped")
+                .count(),
+            2
+        );
+        return;
+    }
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(|| {
+            use crate::{
+                driver::{compile_staged_graph_for_test, execute},
+                parser::G1_CAPTURE_OBSERVER,
+                surface::{SurfaceSyntaxCapture, SurfaceTypeKind},
+                syntax::MacroOutputNode,
+            };
+            use std::{cell::RefCell, sync::Arc};
+
+            std::thread_local! {
+                static CAPTURE: RefCell<Option<Arc<[MacroOutputNode]>>> = const { RefCell::new(None) };
+            }
+            fn observe(source: &SourceFile, captures: &[SurfaceSyntaxCapture], _: &SyntaxBudget) {
+                let [SurfaceSyntaxCapture::Identifier(name), SurfaceSyntaxCapture::Type(ty)] = captures else {
+                    panic!("expected the caller name and Type capture")
+                };
+                assert_eq!(name.name.text, "result");
+                assert_eq!(name.name.introduction, 0);
+                assert!(matches!(ty.ty.kind, SurfaceTypeKind::Int));
+                assert_eq!(ty.ty.span.source(), source.id());
+                let range = ty.ty.span.range();
+                assert_eq!(&source.text()[range.start() as usize..range.end() as usize], "Int");
+                CAPTURE.with(|slot| {
+                    assert!(slot.borrow_mut().replace(Arc::clone(&ty.contents)).is_none());
+                });
+            }
+            for entry in ["keep_main.ash", "twice_main.ash"] {
+                let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/surface-macros/type-expression-bridge")
+                    .join(entry);
+                let mut graph = graph_at(&path, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+                G1_CAPTURE_OBSERVER.set(Some(observe));
+                let result = compile_staged_graph_for_test(&mut graph);
+                G1_CAPTURE_OBSERVER.set(None);
+                let program = result.unwrap();
+                let value = execute(&program).unwrap();
+                assert_eq!(value.value_display(), "42");
+                assert_eq!(value.type_display(), "Int");
+                let alias = CAPTURE.with(|slot| slot.borrow_mut().take().unwrap());
+                let weak = Arc::downgrade(&alias);
+                drop(program);
+                drop(graph);
+                assert_eq!(Arc::strong_count(&alias), 1);
+                drop(alias);
+                assert!(weak.upgrade().is_none());
+                eprintln!("type expression source: 42 and final alias dropped");
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
 fn type_deep_source_capture_reaches_host_on_a_512k_stack() {
     const CHILD: &str = "ASH_TYPE_SOURCE_AST_512K_CHILD";
     if std::env::var_os(CHILD).is_none() {
