@@ -1645,13 +1645,25 @@ fn type_graph_shares_budget_through_host_staging_and_retry() {
                 let FileFailure::Graph(diagnostic) = failure else {
                     panic!("expected a graph refusal: {failure:?}");
                 };
-                let LoadGraphError::Syntax(failure) = diagnostic.failure() else {
-                    panic!("expected a syntax resource refusal: {diagnostic:?}");
-                };
-                assert_eq!(
-                    failure.resource,
-                    Some(ResourceFailure::SyntaxWork { limit: total - 1 })
-                );
+                if path.contains("expression-host/") {
+                    assert!(matches!(
+                        diagnostic.failure(),
+                        LoadGraphError::Projection {
+                            error: crate::parser::ProjectionError::ResourceLimit(
+                                ResourceFailure::SyntaxWork { limit }
+                            ),
+                            ..
+                        } if *limit == total - 1
+                    ));
+                } else {
+                    let LoadGraphError::Syntax(failure) = diagnostic.failure() else {
+                        panic!("expected a syntax resource refusal: {diagnostic:?}");
+                    };
+                    assert_eq!(
+                        failure.resource,
+                        Some(ResourceFailure::SyntaxWork { limit: total - 1 })
+                    );
+                }
                 assert!(short.syntax_budget.consumed() >= header_work + 17);
                 assert!(short.syntax_budget.consumed() < total);
                 assert!(short.pending.is_empty());
