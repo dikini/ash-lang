@@ -93,10 +93,8 @@ fn declaration_graph_shares_budget_through_host_staging_and_retry() {
     let total = measured.syntax_budget.consumed();
     assert!(total > header_work + 17);
     let observation = execute(&program).unwrap();
-    assert_eq!(
-        (observation.value_display(), observation.type_display()),
-        ("42", "Int")
-    );
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
 
     for label in ["exact", "retry"] {
         let mut graph = graph_at(&entry, BodyMode::Header, total).unwrap();
@@ -107,10 +105,8 @@ fn declaration_graph_shares_budget_through_host_staging_and_retry() {
         observe_transfer();
         assert_eq!(graph.syntax_budget.consumed(), total, "{label}");
         let observation = execute(&program).unwrap();
-        assert_eq!(
-            (observation.value_display(), observation.type_display()),
-            ("42", "Int")
-        );
+        assert_eq!(observation.value_display(), "42");
+        assert_eq!(observation.type_display(), "Int");
         if label == "exact" {
             let mut short = graph_at(&entry, BodyMode::Header, total - 1).unwrap();
             assert_eq!(short.syntax_budget.consumed(), header_work);
