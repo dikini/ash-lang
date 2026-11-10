@@ -17,9 +17,9 @@
 
 The retained [expression-syntax specification](../../spec/syntax-expansion.md)
 is the slice 1 baseline. CP-0034 is accepted, and the C1–C4 contract and corpus
-checks are recorded in the delivery plan. On 2026-11-09, the verified retaining
-commit is `3dc43762930eda907e6a75c6d78123019833f5c6`, tree
-`854af3aa615906f56ee905ba32951dfaec72d902`. Recheck refs and worker ownership
+checks are recorded in the delivery plan. The verified retaining commit before
+the G1 candidate is `b8cad02c9f296b539076195fb12811e69e1d64f5`, tree
+`a7753f6009613fdaaee9b5b5a5bc701e42ea9b29`. Recheck refs and worker ownership
 before dispatch. The plan records the earlier retained squash commits, their
 partial criteria and the remaining producer/consumer interfaces.
 
@@ -390,12 +390,14 @@ the fresh full-workspace gate remain open.
 independent QA and Sol own their checks, and the orchestrator owns integration
 and acceptance confirmation.
 
-### Local procedural declaration candidate
+### Retained procedural declaration slice
 
 **Delivered in the local candidate:** The first S2/S4 Declaration/Transformer
 slice is `c5063fa7b0ac468ed9e6ff0e6845f706549d7cd9`, tree
 `6625add9201093b6d0934ea288ab7f61612dcfd5`, based on retained R1 commit
-`3ae2c3e1d4a7bb5678d002b72bdd1314ffccd699`. The existing checked host issues
+`3ae2c3e1d4a7bb5678d002b72bdd1314ffccd699`. [PR #286](https://github.com/dikini/ash-lang/pull/286)
+retained its reviewed TASK-only successor at `b8cad02c`; the retained tree is
+`a7753f6009613fdaaee9b5b5a5bc701e42ea9b29`. The existing checked host issues
 and unwraps source Declaration captures, transfers raw identifiers, tokens and
 groups into compiler ownership before teardown, and resumes declaration
 staging on the same graph syntax budget. Identifier captures are supported
@@ -433,16 +435,68 @@ remain regression evidence. Independent QA and Sol cleared the focused source
 and evidence.
 
 **Remaining:** Full S2 I11/I19 and I14 protected categories and their mixed or
-generated consumers remain open. The supplemental S4 positive and rejection
-cases have the focused public-driver evidence above; their original criterion
-assessment and dependency review follow retention. The original I16 derive and
-teardown graphs remain at V3. D8, E4, V3, V7 and the fresh full-workspace gate
+generated consumers remain open. The two supplemental S4 positive and rejection
+criteria have the focused public-driver evidence above and were checked in the independently read back
+[#234 record](https://github.com/dikini/ash-lang/issues/234#issuecomment-6761689308).
+Its other three criteria remain unchecked. All five original S2 criteria remain
+unchecked in the [#230 record](https://github.com/dikini/ash-lang/issues/230#issuecomment-6761681230).
+The original I16 derive and teardown graphs remain at V3. D8, E4, V3, V7 and the fresh full-workspace gate
 remain open.
 
-**Awaiting:** Independent TASK checks, posted PR review, retaining integration
-and author and independent issue readbacks. The developer
-owns the candidate and acceptance updates; the orchestrator owns integration
-and acceptance confirmation.
+**Awaiting:** The S2/S4 retention and issue records have independent readbacks.
+Full S2 and S4 work, original I16 graphs and subsequent checkpoints remain open.
+The developer owns candidate and acceptance updates; the orchestrator owns
+integration and acceptance confirmation.
+
+### Grouped source identifier and empty declaration candidate
+
+**Delivered in the local candidate:** The bounded [G1 #228](https://github.com/dikini/ash-lang/issues/228)
+source is `478eb4a443a4f12fa744cb5fea5a1feaa791da48`, tree
+`64ae2d7e3674be07968e238647fcc4028d8c2bfb`, based on retained `b8cad02c`.
+It accepts source-Identifier leaves within declaration matcher groups and
+nested repetitions when the declarative body is exactly empty. The real
+imported source graph materializes ordered and ragged captures, then stages an
+empty output through the ordinary checker; its written `main` executes to 42.
+The observer inspects those captures before staging. Separate real graph
+controls cover inline and multiline empty template bodies, logical line ends in
+braced matchers, zero-row, nested-empty, literal-only and nonempty Group cases.
+
+The same graph syntax budget covers source parsing, matcher construction and
+capture materialization. Focused checks cover pre-spent, exact, one-short and
+fresh retry boundaries; refused work retains its paid prefix and the failed
+graph publishes no module or program. Actual 512 KiB trials cover header
+128/129, pure and mixed live 127/128, real capture construction, shallow
+aliasing and final-owner disposal. The post-capture shortage drains the graph;
+the source flow establishes that depth refusal precedes materialization.
+The renewed flat-parser comparison preserves full ordered events, CST,
+diagnostics and exact allowances for its three selected flat inputs. It does
+not establish all legacy behavior by itself; the focused gate includes the
+retained regression targets.
+
+The fresh focused receipt is
+`/home/dikini/Projects/ash-lang/.worktrees/task-0068-handoff/evidence/g1-source-ident/final-gate-478eb4a4/receipt.json`,
+SHA-256 `1bb4e7a25b84b66bef4a5c66b4f0146f4b4e9fea3fb32eb24ecd2a7ee6bdf8fd`.
+It records 640 distinct passes and two retained ignores: the valid nonempty template with a Declaration matcher capture and no used
+splice, and the #277 nominal-context case. Marker and stack-child reruns are
+not additional passes. Independent QA and Sol cleared the focused source and
+evidence. The four ownership inventory entries were added after the preserved
+architecture failure; scanner rules were not changed. The corrected host test executes under `eval::machine::syntax`; an
+earlier zero-match command is retained as non-execution.
+
+**Remaining:** Full G1 and I19, repeated output and host consumption,
+generated/protected/mixed paths, literal declaration output and D8 remain open.
+The separate literal consumers are stopped at the confirmed downstream
+[#287](https://github.com/dikini/ash-lang/issues/287) and
+[#288](https://github.com/dikini/ash-lang/issues/288) origin gaps. The original
+fixed integration graphs and all original criteria remain unchanged.
+Expression matcher specification and the expression-only tool documentation
+remain accurate and unchanged. The complete CP-0034 specification and tool
+documentation update remains at V4 after V3; this candidate does not establish
+current Ash semantics or close that verification item.
+
+**Awaiting:** Independent TASK checks, exact-head Sol PR review, retaining
+integration and checked issue readback. The developer owns the candidate and
+acceptance record; the orchestrator owns integration and acceptance confirmation.
 
 **Remaining:** Complete protected-fragment accounting/consumption, declaration
 captures, repetition, host transfer and procedural declarations, quotes/escapes,
@@ -514,7 +568,7 @@ The narrow S2/S4 plan supersedes that broad route for the first Declaration
 slice. It proposes a source Declaration capture through the existing host and
 staging path while leaving both legacy expression callers and their allowances
 intact. The reviewed interfaces compiled at `8e1d1a8a`; the later first-path
-candidate is recorded above and awaits its own retention. The original plan is
+candidate was retained by PR #286 as recorded above. The original plan is
 `/home/dikini/Projects/ash-lang/.worktrees/task-0068-handoff/evidence/host-consumer-plan/s2-s4-narrow-c4548296.md`
 (SHA-256 `70907e327c3c50f6232916149c99694efd70c1fec2363f208fa8c99206782da0`).
 It changes no original DAG edge, criterion or difficulty and does not establish
