@@ -523,7 +523,11 @@ fn type_deep_source_capture_reaches_host_on_a_512k_stack() {
         print!("{}", String::from_utf8_lossy(&output.stdout));
         let stderr = String::from_utf8_lossy(&output.stderr);
         eprint!("{stderr}");
-        assert!(output.status.success(), "512 KiB child failed: {}", output.status);
+        assert!(
+            output.status.success(),
+            "512 KiB child failed: {}",
+            output.status
+        );
         for marker in [
             "type source stack: matched and retained 124 function layers",
             "type source stack: host parsed capture and program executed 42",

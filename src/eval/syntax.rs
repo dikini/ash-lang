@@ -2007,7 +2007,11 @@ mod tests {
             MacroDelimiter::Parentheses,
             vec![MacroOutputNode::Group(
                 MacroDelimiter::Braces,
-                vec![MacroOutputNode::Token(TokenKind::IntType, "Int".into(), origin.clone())],
+                vec![MacroOutputNode::Token(
+                    TokenKind::IntType,
+                    "Int".into(),
+                    origin.clone(),
+                )],
                 origin.clone(),
             )],
             origin.clone(),
@@ -2033,11 +2037,19 @@ mod tests {
 
         // These synthetic budgets isolate each real host operation. Earlier
         // paid local state may exist on failure; no partial Syntax/output is returned.
-        for (limit, success) in [(selected.0 - 1, false), (selected.0, true), (selected.0, true)] {
+        for (limit, success) in [
+            (selected.0 - 1, false),
+            (selected.0, true),
+            (selected.0, true),
+        ] {
             let mut budget = SyntaxBudget::default();
             let mut host = host(&fixture, false, &mut budget);
             *host.syntax_work.as_deref_mut().unwrap() = SyntaxBudget::with_limit(17 + limit);
-            host.syntax_work.as_deref_mut().unwrap().charge_units(17).unwrap();
+            host.syntax_work
+                .as_deref_mut()
+                .unwrap()
+                .charge_units(17)
+                .unwrap();
             let result = host.syntax_value(&nested, &mut Vec::new(), 0);
             if success {
                 assert!(result.is_ok());
@@ -2047,13 +2059,21 @@ mod tests {
                     if report.primary.reason_code() == "internal.resource.syntax-work"));
             }
         }
-        for (limit, success) in [(selected.1 - 1, false), (selected.1, true), (selected.1, true)] {
+        for (limit, success) in [
+            (selected.1 - 1, false),
+            (selected.1, true),
+            (selected.1, true),
+        ] {
             let mut budget = SyntaxBudget::default();
             let mut host = host(&fixture, false, &mut budget);
             let mut heap = Vec::new();
             let syntax = host.syntax_value(&nested, &mut heap, 0).unwrap();
             *host.syntax_work.as_deref_mut().unwrap() = SyntaxBudget::with_limit(17 + limit);
-            host.syntax_work.as_deref_mut().unwrap().charge_units(17).unwrap();
+            host.syntax_work
+                .as_deref_mut()
+                .unwrap()
+                .charge_units(17)
+                .unwrap();
             let result = host.transfer_syntax(&syntax, &heap, 0);
             if success {
                 assert_eq!(result.unwrap(), nested);
@@ -2288,7 +2308,11 @@ mod tests {
             print!("{}", String::from_utf8_lossy(&output.stdout));
             let stderr = String::from_utf8_lossy(&output.stderr);
             eprint!("{stderr}");
-            assert!(output.status.success(), "512 KiB child failed: {}", output.status);
+            assert!(
+                output.status.success(),
+                "512 KiB child failed: {}",
+                output.status
+            );
             for marker in [
                 "type AST stack: parsed 126 function layers",
                 "type AST stack: unwrapped and transferred parsed AST",
@@ -2329,10 +2353,20 @@ mod tests {
                 host.operations.insert(unwrap, "type_syntax".into());
                 let owner = NominalTypeId::new(ModuleId::new(0), 0);
                 for (index, name) in (0u32..).zip([
-                    "Syntax", "NoNodes", "MoreNodes", "GroupNode", "TypeNode", "TokenNode",
-                    "IdentifierNode", "ExpressionNode", "ParsedType", "ParseRejected", "Expanded",
+                    "Syntax",
+                    "NoNodes",
+                    "MoreNodes",
+                    "GroupNode",
+                    "TypeNode",
+                    "TokenNode",
+                    "IdentifierNode",
+                    "ExpressionNode",
+                    "ParsedType",
+                    "ParseRejected",
+                    "Expanded",
                 ]) {
-                    host.constructors.insert(name.into(), ConstructorId::new(owner, index));
+                    host.constructors
+                        .insert(name.into(), ConstructorId::new(owner, index));
                 }
                 let text = format!("{}Int", "Int -> ".repeat(126));
                 let source = SourceFile::new("deep-type.ash", text).unwrap();
@@ -2342,9 +2376,14 @@ mod tests {
                     .span(ByteRange::new(0, source.text().len() as u32).unwrap())
                     .unwrap();
                 host.source = source.clone();
-                host.frame = Arc::new(ExpansionFrame { invocation: span, definition: span });
+                host.frame = Arc::new(ExpansionFrame {
+                    invocation: span,
+                    definition: span,
+                });
                 host.caller.span = span;
-                let raw = lexed.tokens.into_iter()
+                let raw = lexed
+                    .tokens
+                    .into_iter()
                     .filter(|token| token.kind != TokenKind::EndOfFile)
                     .map(|token| {
                         let range = token.span.range();
@@ -2354,12 +2393,17 @@ mod tests {
                     .collect::<Vec<_>>();
                 let mut heap = Vec::<HeapCell>::new();
                 let syntax = host.syntax_value(&raw, &mut heap, 0).unwrap();
-                let input = Value::Location(allocate_heap(
-                    &mut heap,
-                    HeapCell::Tuple(vec![host.input(), syntax].into_boxed_slice()),
-                ).unwrap());
+                let input = Value::Location(
+                    allocate_heap(
+                        &mut heap,
+                        HeapCell::Tuple(vec![host.input(), syntax].into_boxed_slice()),
+                    )
+                    .unwrap(),
+                );
                 eprintln!("type AST stack phase: parse 126 function layers");
-                let parsed = host.request(parse, input, &mut heap, &mut TypeWorkBudget::unbounded()).unwrap();
+                let parsed = host
+                    .request(parse, input, &mut heap, &mut TypeWorkBudget::unbounded())
+                    .unwrap();
                 let (tag, Some(handle)) = constructor_fields(&parsed, &heap).unwrap() else {
                     panic!("expected ParsedType");
                 };
@@ -2377,27 +2421,48 @@ mod tests {
                 eprintln!("type AST stack: parsed 126 function layers");
                 let alias = Arc::clone(&host.types[0].contents);
                 let weak = Arc::downgrade(&alias);
-                let unwrapped = host.request(unwrap, handle.clone(), &mut heap, &mut TypeWorkBudget::unbounded()).unwrap();
-                let unwrapped_output = host.transfer_syntax_inner(&unwrapped, &heap, 0, true).unwrap();
+                let unwrapped = host
+                    .request(
+                        unwrap,
+                        handle.clone(),
+                        &mut heap,
+                        &mut TypeWorkBudget::unbounded(),
+                    )
+                    .unwrap();
+                let unwrapped_output = host
+                    .transfer_syntax_inner(&unwrapped, &heap, 0, true)
+                    .unwrap();
                 assert_eq!(unwrapped_output.len(), raw.len());
                 drop(unwrapped_output);
 
                 let origin = host.issue_origin(span.into()).unwrap();
-                let fields = Value::Location(allocate_heap(
-                    &mut heap,
-                    HeapCell::Tuple(vec![handle, origin].into_boxed_slice()),
-                ).unwrap());
+                let fields = Value::Location(
+                    allocate_heap(
+                        &mut heap,
+                        HeapCell::Tuple(vec![handle, origin].into_boxed_slice()),
+                    )
+                    .unwrap(),
+                );
                 let node = host.construct(&mut heap, "TypeNode", Some(fields)).unwrap();
                 let end = host.construct(&mut heap, "NoNodes", None).unwrap();
-                let fields = Value::Location(allocate_heap(
-                    &mut heap,
-                    HeapCell::Tuple(vec![node, end].into_boxed_slice()),
-                ).unwrap());
-                let nodes = host.construct(&mut heap, "MoreNodes", Some(fields)).unwrap();
+                let fields = Value::Location(
+                    allocate_heap(
+                        &mut heap,
+                        HeapCell::Tuple(vec![node, end].into_boxed_slice()),
+                    )
+                    .unwrap(),
+                );
+                let nodes = host
+                    .construct(&mut heap, "MoreNodes", Some(fields))
+                    .unwrap();
                 let syntax = host.construct(&mut heap, "Syntax", Some(nodes)).unwrap();
                 let expanded = host.construct(&mut heap, "Expanded", Some(syntax)).unwrap();
-                let output = host.transfer(&expanded, &heap, &mut TypeWorkBudget::unbounded()).unwrap();
-                let TransformerOutput::Expanded(nodes) = output else { panic!("expected Expanded"); };
+                let output = host
+                    .transfer(&expanded, &heap, &mut TypeWorkBudget::unbounded())
+                    .unwrap();
+                let TransformerOutput::Expanded(nodes) = output else {
+                    panic!("expected Expanded");
+                };
                 let [MacroOutputNode::ForwardedType(capture, _)] = nodes.as_slice() else {
                     panic!("expected transferred TypeNode");
                 };
@@ -2430,7 +2495,8 @@ mod tests {
                         .filter(|token| token.kind != TokenKind::EndOfFile)
                         .map(|token| {
                             let range = token.span.range();
-                            let spelling = &fixture.source.text()[range.start() as usize..range.end() as usize];
+                            let spelling = &fixture.source.text()
+                                [range.start() as usize..range.end() as usize];
                             MacroOutputNode::Token(token.kind, spelling.into(), token.span.into())
                         })
                         .collect();
@@ -2463,7 +2529,9 @@ mod tests {
                     host.operations.insert(unwrap, "type_syntax".into());
                     host.operations.insert(parse, "parse_type".into());
                     let owner = NominalTypeId::new(ModuleId::new(0), 0);
-                    for (index, name) in (100u32..).zip(["TypeCapture", "ParsedType", "ParseRejected"]) {
+                    for (index, name) in
+                        (100u32..).zip(["TypeCapture", "ParsedType", "ParseRejected"])
+                    {
                         host.constructors
                             .insert(name.into(), ConstructorId::new(owner, index));
                     }
@@ -2472,7 +2540,8 @@ mod tests {
                         allocate_heap(
                             &mut heap,
                             HeapCell::Tuple(
-                                vec![host.input(), Value::integer(Integer::from_i64(0))].into_boxed_slice(),
+                                vec![host.input(), Value::integer(Integer::from_i64(0))]
+                                    .into_boxed_slice(),
                             ),
                         )
                         .unwrap(),
@@ -2579,7 +2648,9 @@ mod tests {
                                     limit: STRUCTURAL_DEPTH_LIMIT
                                 })
                             );
-                            eprintln!("type AST stack: protected service refused 125 without issuance");
+                            eprintln!(
+                                "type AST stack: protected service refused 125 without issuance"
+                            );
                         }
                     }
                     let make_output = |host: &mut SyntaxHost<'_>| {
@@ -2604,7 +2675,9 @@ mod tests {
                     if layers == 124 {
                         assert_eq!(3 + layers + 1, STRUCTURAL_DEPTH_LIMIT);
                         let restored = result.unwrap();
-                        let [MacroOutputNode::ForwardedType(contents, _)] = restored.contents.as_ref() else {
+                        let [MacroOutputNode::ForwardedType(contents, _)] =
+                            restored.contents.as_ref()
+                        else {
                             panic!("expected protected contents");
                         };
                         assert!(Arc::ptr_eq(&contents.contents, &alias));
@@ -2627,7 +2700,8 @@ mod tests {
 
                         let nodes = make_output(&mut host);
                         let mut measured = SyntaxBudget::default();
-                        let copied = crate::syntax::copy_type_output(&nodes, &mut measured).unwrap();
+                        let copied =
+                            crate::syntax::copy_type_output(&nodes, &mut measured).unwrap();
                         let copy_cost = measured.consumed();
                         drop(copied);
                         let mut short = SyntaxBudget::with_limit(copy_cost - 1);
@@ -2707,7 +2781,11 @@ mod tests {
                         }
                         let token = lex(&fixture.source).unwrap().tokens.remove(0);
                         let mut nodes = make_output(&mut host);
-                        nodes.push(MacroOutputNode::Token(token.kind, "Int".into(), token.span.into()));
+                        nodes.push(MacroOutputNode::Token(
+                            token.kind,
+                            "Int".into(),
+                            token.span.into(),
+                        ));
                         let mut budget = SyntaxBudget::default();
                         assert!(matches!(
                             crate::parser::parse_macro_type(
@@ -2771,7 +2849,11 @@ mod tests {
             print!("{}", String::from_utf8_lossy(&output.stdout));
             let stderr = String::from_utf8_lossy(&output.stderr);
             eprint!("{stderr}");
-            assert!(output.status.success(), "512 KiB child failed: {}", output.status);
+            assert!(
+                output.status.success(),
+                "512 KiB child failed: {}",
+                output.status
+            );
             for marker in [
                 "raw Type AST stack: 126 function layers fit returned retention",
                 "raw Type AST stack: service refused 127 without issuance",
@@ -2803,38 +2885,63 @@ mod tests {
                     host.operations.insert(parse, "parse_type".into());
                     let owner = NominalTypeId::new(ModuleId::new(0), 0);
                     for (index, name) in (0u32..).zip([
-                        "Syntax", "NoNodes", "MoreNodes", "GroupNode", "TypeNode", "TokenNode",
-                        "IdentifierNode", "ExpressionNode", "ParsedType", "ParseRejected",
+                        "Syntax",
+                        "NoNodes",
+                        "MoreNodes",
+                        "GroupNode",
+                        "TypeNode",
+                        "TokenNode",
+                        "IdentifierNode",
+                        "ExpressionNode",
+                        "ParsedType",
+                        "ParseRejected",
                     ]) {
-                        host.constructors.insert(name.into(), ConstructorId::new(owner, index));
+                        host.constructors
+                            .insert(name.into(), ConstructorId::new(owner, index));
                     }
                     let text = format!("{}Int", "Int -> ".repeat(layers));
                     let source = SourceFile::new("raw-deep-type.ash", text).unwrap();
                     let lexed = lex(&source).unwrap();
                     assert!(lexed.diagnostics.is_empty());
-                    let span = source.span(ByteRange::new(0, source.text().len() as u32).unwrap()).unwrap();
+                    let span = source
+                        .span(ByteRange::new(0, source.text().len() as u32).unwrap())
+                        .unwrap();
                     host.source = source.clone();
-                    host.frame = Arc::new(ExpansionFrame { invocation: span, definition: span });
+                    host.frame = Arc::new(ExpansionFrame {
+                        invocation: span,
+                        definition: span,
+                    });
                     host.caller.span = span;
-                    let raw = lexed.tokens.into_iter()
+                    let raw = lexed
+                        .tokens
+                        .into_iter()
                         .filter(|token| token.kind != TokenKind::EndOfFile)
                         .map(|token| {
                             let range = token.span.range();
-                            let spelling = &source.text()[range.start() as usize..range.end() as usize];
+                            let spelling =
+                                &source.text()[range.start() as usize..range.end() as usize];
                             MacroOutputNode::Token(token.kind, spelling.into(), token.span.into())
                         })
                         .collect::<Vec<_>>();
                     let mut heap = Vec::<HeapCell>::new();
                     let syntax = host.syntax_value(&raw, &mut heap, 0).unwrap();
-                    let fields = Value::Location(allocate_heap(
-                        &mut heap,
-                        HeapCell::Tuple(vec![host.input(), syntax].into_boxed_slice()),
-                    ).unwrap());
-                    let parsed = host.request(parse, fields, &mut heap, &mut TypeWorkBudget::unbounded()).unwrap();
+                    let fields = Value::Location(
+                        allocate_heap(
+                            &mut heap,
+                            HeapCell::Tuple(vec![host.input(), syntax].into_boxed_slice()),
+                        )
+                        .unwrap(),
+                    );
+                    let parsed = host
+                        .request(parse, fields, &mut heap, &mut TypeWorkBudget::unbounded())
+                        .unwrap();
                     let (tag, Some(_)) = constructor_fields(&parsed, &heap).unwrap() else {
                         panic!("expected a raw Type service result");
                     };
-                    assert_eq!(1 + layers + 1, STRUCTURAL_DEPTH_LIMIT + usize::from(layers == 127));
+                    assert_eq!(
+                        1 + layers + 1,
+                        STRUCTURAL_DEPTH_LIMIT + usize::from(layers == 127)
+                    );
                     if layers == 126 {
                         assert_eq!(tag, host.constructor("ParsedType").unwrap());
                         assert_eq!(host.types.len(), 1);
