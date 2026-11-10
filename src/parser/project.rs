@@ -7413,6 +7413,93 @@ mod tests {
         };
         let mut measured = crate::syntax_resource::SyntaxBudget::default();
         let baseline = parse_at(&mut measured).unwrap();
+        // This component path starts with the real template instantiation and
+        // uses one already-spent ledger for instantiation, parsing and refusal.
+        let stage = |budget: &mut crate::syntax_resource::SyntaxBudget| {
+            let output = crate::syntax::instantiate_declaration_template(
+                &invocation.selection,
+                &invocation.captures,
+                1,
+                invocation.span,
+                budget,
+            )?;
+            super::super::parse_macro_tree_inner(
+                &caller,
+                invocation.span,
+                output,
+                &contexts,
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                budget,
+            )
+        };
+        let mut measured_stage = crate::syntax_resource::SyntaxBudget::with_limit(100_000);
+        measured_stage.charge_units(17).unwrap();
+        let staged = stage(&mut measured_stage).unwrap();
+        let staged_used = measured_stage.consumed();
+        assert_eq!(staged.tree.events(), baseline.tree.events());
+        assert_eq!(staged.tree.tokens(), baseline.tree.tokens());
+        assert_eq!(staged.original_nodes, baseline.original_nodes);
+        assert_eq!(staged.admission_identifiers, baseline.admission_identifiers);
+        let mut staged_short = crate::syntax_resource::SyntaxBudget::with_limit(staged_used - 1);
+        staged_short.charge_units(17).unwrap();
+        assert!(
+            matches!(stage(&mut staged_short), Err(super::super::MacroParseFailure::Syntax {
+            resource: Some(ResourceFailure::SyntaxWork { limit }), ..
+        }) if limit == staged_used - 1)
+        );
+        for _ in 0..2 {
+            let mut exact = crate::syntax_resource::SyntaxBudget::with_limit(staged_used);
+            exact.charge_units(17).unwrap();
+            let retry = stage(&mut exact).unwrap();
+            assert_eq!(exact.consumed(), staged_used);
+            assert_eq!(retry.tree.events(), staged.tree.events());
+            assert_eq!(retry.original_nodes, staged.original_nodes);
+            assert_eq!(retry.admission_identifiers, staged.admission_identifiers);
+        }
+        let refusal = validate_declaration_template(
+            &caller,
+            invocation.span,
+            &staged,
+            &contexts,
+            &mut measured_stage,
+        );
+        assert!(matches!(
+            refusal,
+            Err(DeclarationExpansionFailure::Projection(
+                ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+            ))
+        ));
+        let refusal_used = measured_stage.consumed();
+        assert!(refusal_used > staged_used);
+        for limit in [refusal_used - 1, refusal_used, refusal_used] {
+            let mut budget = crate::syntax_resource::SyntaxBudget::with_limit(limit);
+            budget.charge_units(17).unwrap();
+            let retry = stage(&mut budget).unwrap();
+            let result = validate_declaration_template(
+                &caller,
+                invocation.span,
+                &retry,
+                &contexts,
+                &mut budget,
+            );
+            if limit < refusal_used {
+                assert!(matches!(result, Err(DeclarationExpansionFailure::Syntax {
+                    resource: Some(ResourceFailure::SyntaxWork { limit: found }), ..
+                }) if found == limit));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(DeclarationExpansionFailure::Projection(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                    ))
+                ));
+                assert_eq!(budget.consumed(), refusal_used);
+            }
+            assert_eq!(retry.original_nodes, staged.original_nodes);
+            assert_eq!(retry.admission_identifiers, staged.admission_identifiers);
+        }
+
         let used = measured.consumed();
         let mut short = crate::syntax_resource::SyntaxBudget::with_limit(used - 1);
         assert!(matches!(
@@ -7640,6 +7727,192 @@ mod tests {
             ]
         );
         println!("{}", markers.join(", "));
+    }
+
+    #[test]
+    fn r1_generated_forms_reach_cst_but_both_wrappers_refuse_unconsumed_forms() {
+        use crate::syntax::SyntaxContexts;
+        for (body, expected_kind, accepted) in [
+            ("type Item = Item", NodeKind::TypeDeclaration, true),
+            (
+                "newtype Item = Item(Int)",
+                NodeKind::NewtypeDeclaration,
+                true,
+            ),
+            (
+                "type Item = Item\nderiving (marker)",
+                NodeKind::TypeDeclaration,
+                false,
+            ),
+            (
+                "newtype Item = Item(Int)\nderiving (marker)",
+                NodeKind::NewtypeDeclaration,
+                false,
+            ),
+            (
+                "pub syntax derive: (marker) => {}",
+                NodeKind::SyntaxDeclaration,
+                false,
+            ),
+        ] {
+            let forms = SourceFile::new(
+                "forms.ash",
+                format!("pub syntax declaration: (emit) => {{\n{body}\n}}\n"),
+            )
+            .unwrap();
+            let selection = h1_selection(&forms, 0, None);
+            let caller = SourceFile::new("caller.ash", "emit\n").unwrap();
+            let span = caller.span(ByteRange::new(0, 4).unwrap()).unwrap();
+            let output = crate::syntax::instantiate_declaration_template(
+                &selection,
+                &[],
+                1,
+                span,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+            .unwrap();
+            let contexts = SyntaxContexts::new(&[], &[], &[]);
+            let parsed = super::super::parse_macro_tree_inner(
+                &caller,
+                span,
+                output.clone(),
+                &contexts,
+                &[],
+                super::super::MacroOutputPosition::StagedDeclarations,
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            )
+            .unwrap();
+            let declaration = child_nodes(parsed.tree.root().unwrap()).next().unwrap();
+            assert_eq!(declaration.kind, expected_kind, "{body}");
+            if body.contains("deriving") {
+                assert!(child_nodes(declaration).any(|node| node.kind == NodeKind::DerivingClause));
+            }
+            let admission = super::super::parse_declaration_template_admission(
+                &caller,
+                span,
+                output.clone(),
+                &contexts,
+                &[],
+                &mut crate::syntax_resource::SyntaxBudget::default(),
+            );
+            let projection = super::super::parse_macro_declarations(
+                &caller, span, None, output, &contexts, None,
+            );
+            if accepted {
+                assert!(admission.is_ok(), "{body}: {admission:?}");
+                assert!(projection.is_ok(), "{body}: {projection:?}");
+            } else {
+                assert!(
+                    matches!(&admission, Err(super::super::MacroParseFailure::Invalid)),
+                    "{body}: {admission:?}"
+                );
+                assert!(
+                    matches!(&projection, Err(super::super::MacroParseFailure::Invalid)),
+                    "{body}: {projection:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn r1_d5_source_capture_keeps_clause_then_refuses_before_packet_work() {
+        let selected = [d5_selection()];
+        for (kind, declaration) in [
+            (NodeKind::TypeDeclaration, "type Subject = Subject"),
+            (
+                NodeKind::NewtypeDeclaration,
+                "newtype Subject = Subject(Int)",
+            ),
+        ] {
+            for has_clause in [false, true] {
+                let suffix = if has_clause {
+                    "\nderiving (first, second, first,)"
+                } else {
+                    ""
+                };
+                let subject_text = format!("{declaration}{suffix}");
+                let source = SourceFile::new(
+                    "caller.ash",
+                    format!("sink {{\n{subject_text}\n}}\nmain : Unit -> Int\nmain () = 42\n"),
+                )
+                .unwrap();
+                let (tree, mut budget) = d5_source_tree(&source, &selected);
+                let root = tree.root().unwrap();
+                let invocation = child_nodes(root)
+                    .find(|node| node.kind == NodeKind::DeclarationSyntaxInvocation)
+                    .unwrap();
+                let argument = child_nodes(invocation)
+                    .find(|node| node.kind == NodeKind::SyntaxArgument)
+                    .unwrap();
+                let subject = capture_declaration_node(argument).unwrap();
+                assert_eq!(subject.kind, kind);
+                let first = descendant_edge_index(subject, false).unwrap();
+                let last = descendant_edge_index(subject, true).unwrap();
+                let start = tree.tokens()[first].span.range().start() as usize;
+                let end = tree.tokens()[last].span.range().end() as usize;
+                assert_eq!(&source.text()[start..end], subject_text);
+                let retained = tree
+                    .events()
+                    .iter()
+                    .filter_map(|event| match event {
+                        super::super::Event::Token(index) => Some(*index),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(retained, (0..tree.tokens().len()).collect::<Vec<_>>());
+                let clauses = child_nodes(subject)
+                    .filter(|node| node.kind == NodeKind::DerivingClause)
+                    .collect::<Vec<_>>();
+                assert_eq!(clauses.len(), usize::from(has_clause));
+                if has_clause {
+                    let clause = clauses[0];
+                    assert!(matches!(subject.children.last(),
+                        Some(ConcreteElement::Node(last)) if std::ptr::eq(last, clause)));
+                    let spellings = clause
+                        .children
+                        .iter()
+                        .map(|child| match child {
+                            ConcreteElement::Token(index) => {
+                                let range = tree.tokens()[*index].span.range();
+                                &source.text()[range.start() as usize..range.end() as usize]
+                            }
+                            other => panic!("clause must contain only tokens: {other:?}"),
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        spellings,
+                        [
+                            "deriving", "(", "first", ",", "second", ",", "first", ",", ")"
+                        ]
+                    );
+                }
+                let before = budget.consumed();
+                let mut owners = Vec::new();
+                let result = project_declaration_expansions(
+                    &source,
+                    &tree,
+                    &selected,
+                    &[],
+                    &mut owners,
+                    &mut budget,
+                );
+                if has_clause {
+                    assert!(matches!(
+                        result,
+                        Err(DeclarationExpansionFailure::Projection(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape)
+                        ))
+                    ));
+                    assert_eq!(budget.consumed(), before);
+                    assert!(owners.is_empty());
+                } else {
+                    let module = result.expect("an ordinary captured declaration is accepted");
+                    assert_eq!(module.definitions.len(), 1);
+                    assert_eq!(owners.len(), 1);
+                    assert!(budget.consumed() > before);
+                }
+            }
+        }
     }
 
     fn d5_source_tree(

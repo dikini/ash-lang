@@ -408,6 +408,101 @@ fn fixed_derive_fixtures_reach_only_the_cst_boundary() {
 }
 
 #[test]
+fn derive_header_preserves_nested_quote_escape_and_mode_restoration() {
+    let text = "pub syntax derive: (marker) $target:ident => {\n\
+                $target () = syntax { ${ syntax { $local } } + $target }\n\
+                sibling () = syntax { ${ $target } + $target }\n\
+                }\n\
+                probe : Unit -> Int\n\
+                probe () = syntax { $outside }\n";
+    let (source, tree) = valid(text);
+    let mut pending = vec![tree.root().unwrap()];
+    let mut found = Vec::new();
+    while let Some(node) = pending.pop() {
+        if matches!(
+            node.kind,
+            NodeKind::SyntaxQuote
+                | NodeKind::SyntaxEscape
+                | NodeKind::TemplateSplice
+                | NodeKind::EscapeCaptureRead
+                | NodeKind::QuoteHole
+        ) {
+            found.push(node);
+        }
+        pending.extend(node.children.iter().filter_map(|child| match child {
+            ConcreteElement::Node(child) => Some(child),
+            _ => None,
+        }));
+    }
+    for (kind, expected) in [
+        (NodeKind::SyntaxQuote, 4),
+        (NodeKind::SyntaxEscape, 2),
+        (NodeKind::TemplateSplice, 2),
+        (NodeKind::EscapeCaptureRead, 1),
+        (NodeKind::QuoteHole, 2),
+    ] {
+        assert_eq!(
+            found.iter().filter(|node| node.kind == kind).count(),
+            expected,
+            "{kind:?}"
+        );
+    }
+    let mut holes = found
+        .iter()
+        .filter(|node| node.kind == NodeKind::QuoteHole)
+        .map(|node| node_text(&source, &tree, node))
+        .collect::<Vec<_>>();
+    holes.sort_unstable();
+    assert_eq!(holes, ["$local", "$outside"]);
+    assert!(
+        found
+            .iter()
+            .filter(|node| node.kind == NodeKind::TemplateSplice)
+            .all(|node| node_text(&source, &tree, node) == "$target")
+    );
+    assert_eq!(
+        project_module(&source, &tree),
+        Err(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape
+        ))
+    );
+}
+
+#[test]
+fn source_sink_executes_without_clause_and_refuses_complete_clause() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "forms.ash",
+        include_str!("fixtures/surface-macros/declaration-capture/forms.ash"),
+    );
+    for declaration in ["type Subject = Subject", "newtype Subject = Subject(Int)"] {
+        for has_clause in [false, true] {
+            let suffix = if has_clause {
+                "\nderiving (marker)"
+            } else {
+                ""
+            };
+            fixture.write("entry.ash", &format!(
+                "import forms (syntax sink)\nsink {{\n{declaration}{suffix}\n}}\nmain : Unit -> Int\nmain () = 42\n"
+            ));
+            let result = compile_path(fixture.configuration());
+            if has_clause {
+                let failure =
+                    result.expect_err("an unconsumed subject must not enter the packet path");
+                assert!(
+                    matches!(failure.graph_failure(), Some(LoadGraphError::Projection { source, .. })
+                    if source.display_path().ends_with("entry.ash")),
+                    "{failure:?}"
+                );
+            } else {
+                let program = result.expect("an ordinary source capture executes");
+                assert_eq!(execute(&program).unwrap().value_display(), "42");
+            }
+        }
+    }
+}
+
+#[test]
 fn malformed_derive_headers_are_not_expression_syntax() {
     for text in [
         "pub syntax derive: () => {}\n",

@@ -3592,6 +3592,46 @@ mod tests {
     }
 
     #[test]
+    fn r1_derive_nested_quote_uses_the_prespent_source_budget_and_retries() {
+        let source = SourceFile::new(
+            "derive-quote-resource.ash",
+            "pub syntax derive: (marker) $target:ident => {\n\
+             $target () = syntax { ${ syntax { $local } } + $target }\n\
+             sibling () = syntax { ${ $target } + $target }\n\
+             }\n",
+        )
+        .unwrap();
+        let parse_at = |limit| {
+            let mut budget = SyntaxBudget::with_limit(limit);
+            budget.charge_units(17).unwrap();
+            let lexed = lex_with_budget(&source, &mut budget).unwrap();
+            let tree = parse_with_budget(lexed, &mut budget);
+            (tree, budget.consumed())
+        };
+        let (baseline, used) = parse_at(100_000);
+        assert_eq!(baseline.resource_failure(), None);
+        assert!(baseline.parse_diagnostics().is_empty());
+        assert!(used > 17 + baseline.tokens().len() + baseline.events().len());
+        assert!(
+            baseline
+                .events()
+                .iter()
+                .any(|event| matches!(event, Event::Start(NodeKind::SyntaxEscape)))
+        );
+        let (short, _) = parse_at(used - 1);
+        assert_eq!(
+            short.resource_failure(),
+            Some(ResourceFailure::SyntaxWork { limit: used - 1 })
+        );
+        assert!(short.root().is_none());
+        for _ in 0..2 {
+            let (exact, consumed) = parse_at(used);
+            assert_eq!(consumed, used);
+            assert_eq!(exact, baseline);
+        }
+    }
+
+    #[test]
     fn local_newtype_declaration_consumes_exact_cumulative_syntax_work_and_retries_cleanly() {
         let source = SourceFile::new(
             "local-newtype-resource.ash",
