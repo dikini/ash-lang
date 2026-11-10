@@ -14,7 +14,7 @@ pub(super) use region::HostRootCompletion;
 
 #[cfg(test)]
 #[path = "machine_test_hooks.rs"]
-mod machine_test_hooks;
+pub(crate) mod machine_test_hooks;
 #[cfg(test)]
 pub(super) fn refuse_disposal_growth() -> bool {
     machine_test_hooks::FAIL_DISPOSAL_GROWTH.replace(false)
@@ -7117,6 +7117,88 @@ mod tests {
             "authored rejection, distinct caller and definition SourceIds, no compiled program, root close"
         );
         super::machine_test_hooks::reset();
+    }
+
+    #[test]
+    fn declaration_host_injected_teardown_failure_keeps_success_and_rejection_unpublished() {
+        use super::machine_test_hooks as hooks;
+        use crate::{
+            driver::{PipelineFailure, RunConfiguration, compile_path},
+            eval::CleanupStatus,
+            module::ModuleRoots,
+        };
+
+        let configuration = |entry: &str| RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/procedural_declaration")
+                .join(entry),
+            roots: ModuleRoots::empty(),
+        };
+        hooks::reset();
+        super::machine_test_hooks::FAIL_ROOT_CLOSE.set(true);
+        let failure = compile_path(configuration("main.ash"))
+            .expect_err("an injected close failure prevents publishing the output");
+        let Some(PipelineFailure::SyntaxRuntime(failure)) = failure.pipeline_failure() else {
+            panic!("the close failure is retained as a transformer failure");
+        };
+        let super::RuntimeFailure::Report(report) = failure.cause() else {
+            panic!("the injected close failure retains its resource details");
+        };
+        assert_eq!(
+            report.primary.resource().unwrap().phase,
+            super::RuntimePhase::Teardown
+        );
+        assert_eq!(report.cleanup, CleanupStatus::Incomplete);
+        assert_eq!(super::machine_test_hooks::DECLARATION_CAPTURES.get(), 1);
+        assert_eq!(super::machine_test_hooks::DECLARATION_UNWRAPS.get(), 1);
+        assert_eq!(
+            super::machine_test_hooks::DECLARATION_TRANSFERS_BEFORE_DROP.get(),
+            1
+        );
+        assert_eq!(super::machine_test_hooks::TRANSFER_ATTEMPTS.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFER_FAILURES.get(), 0);
+        assert_eq!(super::machine_test_hooks::ROOT_CLOSES.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFORMER_DROPS.get(), 1);
+
+        hooks::reset();
+        super::machine_test_hooks::FAIL_ROOT_CLOSE.set(true);
+        let failure = compile_path(configuration("rejected.ash"))
+            .expect_err("an authored rejection publishes no program");
+        let Some(PipelineFailure::SyntaxExpansion(rejection)) = failure.pipeline_failure() else {
+            panic!("the authored rejection remains primary");
+        };
+        assert_eq!(rejection.message(), "declaration rejected");
+        let teardown = rejection
+            .teardown()
+            .expect("the injected close failure remains related");
+        assert_eq!(teardown.phase, super::RuntimePhase::Teardown);
+        assert_eq!(
+            teardown.resource,
+            super::RuntimeResource::EnvironmentDisposal
+        );
+        assert_eq!(
+            teardown.cause,
+            super::ResourceFailureCause::ConfiguredCapacity
+        );
+        assert!(
+            failure
+                .sources()
+                .iter()
+                .any(|source| source.display_path().ends_with("rejected.ash"))
+        );
+        assert!(
+            failure
+                .sources()
+                .iter()
+                .any(|source| source.display_path().ends_with("forms.ash"))
+        );
+        assert_eq!(super::machine_test_hooks::TRANSFER_ATTEMPTS.get(), 1);
+        assert_eq!(super::machine_test_hooks::ROOT_CLOSES.get(), 1);
+        assert_eq!(super::machine_test_hooks::TRANSFORMER_DROPS.get(), 1);
+        hooks::reset();
+        eprintln!(
+            "fixed declaration success and authored rejection: injected root-close refusal retained, no program"
+        );
     }
 
     #[test]

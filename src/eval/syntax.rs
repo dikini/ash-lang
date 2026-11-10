@@ -1478,6 +1478,103 @@ mod tests {
     }
 
     #[test]
+    fn declaration_contents_preflight_checks_real_depth_and_drop_on_small_stack() {
+        use crate::{
+            eval::RuntimeFailure,
+            lexer::TokenKind,
+            source::{ByteRange, SourceFile},
+            syntax::{MacroDelimiter, MacroOutputNode},
+            syntax_resource::SyntaxBudget,
+        };
+        use std::sync::Arc;
+
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("depth.ash", "true").unwrap();
+                let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+                let packet = |groups: usize| {
+                    let mut node =
+                        MacroOutputNode::Token(TokenKind::True, Arc::from("true"), span.into());
+                    for _ in 0..groups {
+                        node = MacroOutputNode::Group(
+                            MacroDelimiter::Parentheses,
+                            vec![node],
+                            span.into(),
+                        );
+                    }
+                    Arc::<[MacroOutputNode]>::from(vec![node])
+                };
+
+                let accepted = packet(127);
+                eprintln!("constructed real declaration contents at depth 128 on 512 KiB");
+                let retained = Arc::strong_count(&accepted);
+                let mut measured = SyntaxBudget::default();
+                super::check_declaration_contents(&accepted, &mut measured).unwrap();
+                let total = measured.consumed();
+                assert_eq!(Arc::strong_count(&accepted), retained);
+                let mut short = SyntaxBudget::with_limit(total - 1);
+                assert!(matches!(
+                    super::check_declaration_contents(&accepted, &mut short),
+                    Err(RuntimeFailure::Report(report))
+                        if report.primary.reason_code() == "internal.resource.syntax-work"
+                            && report.primary.resource().is_none()
+                ));
+                assert_eq!(Arc::strong_count(&accepted), retained);
+                let mut exact = SyntaxBudget::with_limit(total);
+                super::check_declaration_contents(&accepted, &mut exact).unwrap();
+                assert_eq!(exact.consumed(), total);
+                eprintln!("depth 128 accepted, exact/short/retry on borrowed contents");
+                drop(accepted);
+                eprintln!("depth 128 contents dropped on 512 KiB");
+
+                let refused = packet(128);
+                eprintln!("constructed real declaration contents at depth 129 on 512 KiB");
+                let retained = Arc::strong_count(&refused);
+                let mut budget = SyntaxBudget::default();
+                assert!(matches!(
+                    super::check_declaration_contents(&refused, &mut budget),
+                    Err(RuntimeFailure::Report(report))
+                        if report.primary.reason_code() == "internal.resource.structural-depth"
+                            && report.primary.resource().is_none()
+                ));
+                assert_eq!(Arc::strong_count(&refused), retained);
+                eprintln!("depth 129 refused before retention on 512 KiB");
+                drop(refused);
+                eprintln!("depth 129 contents dropped on 512 KiB");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn declaration_scalar_reservation_grows_with_real_payloads() {
+        use crate::syntax_resource::SyntaxBudget;
+
+        for spelling in [
+            ("\"a\"".to_owned(), format!("\"{}\"", "a".repeat(120))),
+            ("9".to_owned(), "9".repeat(120)),
+        ] {
+            let mut small = SyntaxBudget::default();
+            assert!(
+                scalar_host(&mut small)
+                    .single_token(&spelling.0)
+                    .unwrap()
+                    .is_some()
+            );
+            let mut large = SyntaxBudget::default();
+            assert!(
+                scalar_host(&mut large)
+                    .single_token(&spelling.1)
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(large.consumed() > small.consumed());
+        }
+    }
+
+    #[test]
     fn declaration_scalar_diagnostic_bound_tracks_the_lexer() {
         use crate::{
             lexer::{LexReason, lex},

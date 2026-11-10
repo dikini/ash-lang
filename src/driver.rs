@@ -1264,6 +1264,20 @@ enum CompilationInput<'a> {
     Staged(&'a mut HeaderGraph),
 }
 
+#[cfg(test)]
+pub(crate) fn compile_staged_graph_for_test(
+    graph: &mut HeaderGraph,
+) -> Result<CompiledProgram, FileFailure> {
+    compile_input_with_consumers(
+        &mut CompilationInput::Staged(graph),
+        &mut InterfaceConstraintBudget::default(),
+        validate_interface_evidence_with_budget,
+        validate_modular_effect_core,
+        true,
+        ProvenanceRetention::Retain,
+    )
+}
+
 impl CompilationInput<'_> {
     fn len(&self) -> usize {
         match self {

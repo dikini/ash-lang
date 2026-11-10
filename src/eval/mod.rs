@@ -2,6 +2,8 @@ pub(crate) mod disposal;
 mod failure;
 
 mod machine;
+#[cfg(test)]
+pub(crate) use machine::machine_test_hooks;
 mod network_transport;
 mod value;
 
