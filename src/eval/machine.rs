@@ -7044,7 +7044,7 @@ mod tests {
             driver::{PipelineFailure, RunConfiguration, compile_path},
             message::{Catalogue, Locale},
             module::ModuleRoots,
-            presentation::{compile_file_diagnostics, write_json, write_short},
+            presentation::{compile_file_diagnostics, write_human, write_json, write_short},
         };
         let configuration = RunConfiguration {
             entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -7090,6 +7090,17 @@ mod tests {
                 .unwrap()
                 .contains("declaration rejected")
         );
+        let mut human = Vec::new();
+        write_human(
+            &mut human,
+            diagnostic,
+            &Catalogue::new(Locale::English).unwrap(),
+        )
+        .unwrap();
+        let human = String::from_utf8(human).unwrap();
+        assert!(human.contains("declaration rejected"));
+        assert!(human.contains("rejected.ash"));
+        assert!(human.contains("forms.ash"));
         let mut json = Vec::new();
         write_json(&mut json, diagnostic).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&json).unwrap();

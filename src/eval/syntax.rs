@@ -27,6 +27,11 @@ struct SyntaxToken {
     spelling: Arc<str>,
 }
 
+// In the current lexer, a bare CR produces the largest combined primary and
+// expected diagnostic text per consumed byte: 40 + 24 bytes. Other
+// diagnostics consume enough bytes to remain within this same bound.
+const SCALAR_DIAGNOSTIC_TEXT_PER_BYTE: usize = 64;
+
 fn syntax_failure(failure: crate::syntax_resource::ResourceFailure) -> RuntimeFailure {
     RuntimeFailure::Report(crate::eval::RuntimeFailureReport {
         primary: crate::eval::RuntimeFailureSummary {
@@ -232,7 +237,7 @@ impl<'inv> SyntaxHost<'inv> {
                             SurfaceSyntaxCapture::Identifier(capture) => {
                                 crate::syntax::charge_type_name_copy(&capture.name, 0, budget)
                                     .map_err(syntax_failure)?;
-                                crate::syntax::charge_type_origin(&capture.origin, 0, budget)
+                                crate::syntax::charge_type_origin_copy(&capture.origin, 0, budget)
                                     .map_err(syntax_failure)?;
                             }
                             _ => return Err(RuntimeFailure::InvalidControlState),
@@ -288,9 +293,20 @@ impl<'inv> SyntaxHost<'inv> {
 
     fn charge_origin(&mut self, origin: &MacroOrigin, depth: usize) -> Result<(), RuntimeFailure> {
         if let Some(budget) = self.syntax_work.as_deref_mut() {
-            crate::syntax::charge_type_origin(origin, depth, budget).map_err(syntax_failure)?;
+            crate::syntax::charge_type_origin_copy(origin, depth, budget)
+                .map_err(syntax_failure)?;
         }
         Ok(())
+    }
+
+    fn utf8<'a>(&mut self, bytes: &'a [u8]) -> Result<&'a str, RuntimeFailure> {
+        self.charge(bytes.len())?;
+        #[cfg(test)]
+        {
+            let count = super::machine_test_hooks::SCALAR_UTF8_SCANS.get();
+            super::machine_test_hooks::SCALAR_UTF8_SCANS.set(count + 1);
+        }
+        std::str::from_utf8(bytes).map_err(|_| RuntimeFailure::InvalidControlState)
     }
 
     fn issue_origin(&mut self, origin: MacroOrigin) -> Result<Value, RuntimeFailure> {
@@ -309,7 +325,8 @@ impl<'inv> SyntaxHost<'inv> {
             .get(index)
             .ok_or(RuntimeFailure::InvalidControlState)?;
         if let Some(budget) = self.syntax_work.as_deref_mut() {
-            crate::syntax::charge_type_origin(origin, depth, budget).map_err(syntax_failure)?;
+            crate::syntax::charge_type_origin_copy(origin, depth, budget)
+                .map_err(syntax_failure)?;
         }
         Ok(origin.clone())
     }
@@ -365,7 +382,8 @@ impl<'inv> SyntaxHost<'inv> {
                 .ok_or(RuntimeFailure::ResourceCapacity)?;
             if let Some(budget) = self.syntax_work.as_deref_mut() {
                 budget.charge().map_err(syntax_failure)?;
-                crate::syntax::charge_type_origin(origin, 0, budget).map_err(syntax_failure)?;
+                crate::syntax::charge_type_origin_copy(origin, 0, budget)
+                    .map_err(syntax_failure)?;
             }
             inputs.push(origin.clone());
             origins = rest;
@@ -422,6 +440,32 @@ impl<'inv> SyntaxHost<'inv> {
         budget.charge_units(lines).map_err(syntax_failure)?;
         let source = SourceFile::new("<syntax-token>", spelling.to_owned())
             .map_err(|_| RuntimeFailure::HeapCapacity)?;
+        // Eight spelling-length scans cover the outer lexer, token scanning,
+        // identifier checks and decimal normalization. Two further lengths
+        // cover temporary decoded and found text, and one covers delimiter
+        // context entries. Lexical output slots are separately charged by
+        // lex_with_budget.
+        for _ in 0..11 {
+            budget
+                .charge_units(spelling.len())
+                .map_err(syntax_failure)?;
+        }
+        // Diagnostic spans consume disjoint input. This bound covers both
+        // primary and expected strings before the lexer constructs them.
+        budget
+            .charge_units(
+                spelling
+                    .len()
+                    .checked_mul(SCALAR_DIAGNOSTIC_TEXT_PER_BYTE)
+                    .unwrap_or(usize::MAX),
+            )
+            .map_err(syntax_failure)?;
+        budget.charge().map_err(syntax_failure)?;
+        #[cfg(test)]
+        {
+            let count = super::machine_test_hooks::SCALAR_LEX_STARTS.get();
+            super::machine_test_hooks::SCALAR_LEX_STARTS.set(count + 1);
+        }
         let lexed = crate::lexer::lex_with_budget(&source, budget)
             .map_err(|_| RuntimeFailure::InvalidControlState)?;
         if let Some(failure) = lexed.resource_failure() {
@@ -514,7 +558,7 @@ impl<'inv> SyntaxHost<'inv> {
                 {
                     crate::syntax::charge_type_name_copy(&capture.name, 0, budget)
                         .map_err(syntax_failure)?;
-                    crate::syntax::charge_type_origin(&capture.origin, 0, budget)
+                    crate::syntax::charge_type_origin_copy(&capture.origin, 0, budget)
                         .map_err(syntax_failure)?;
                     // Identifier slot and handle, plus tuple fields and cell.
                     budget.charge_units(5).map_err(syntax_failure)?;
@@ -549,8 +593,7 @@ impl<'inv> SyntaxHost<'inv> {
                 let (kind, spelling) = pair(&argument, heap)?;
                 let (tag, payload) = constructor_fields(kind, heap)?;
                 let (spelling, is_string) = borrowed_bytes(spelling, heap, work)?;
-                let spelling = std::str::from_utf8(spelling)
-                    .map_err(|_| RuntimeFailure::InvalidControlState)?;
+                let spelling = self.utf8(spelling)?;
                 let token = if is_string && payload.is_none() {
                     if self.syntax_work.is_some() {
                         self.single_token(spelling)?
@@ -606,8 +649,7 @@ impl<'inv> SyntaxHost<'inv> {
                 }
                 let origin = self.primary_origin(origin)?;
                 let (spelling, is_string) = borrowed_bytes(spelling, heap, work)?;
-                let spelling = std::str::from_utf8(spelling)
-                    .map_err(|_| RuntimeFailure::InvalidControlState)?;
+                let spelling = self.utf8(spelling)?;
                 if !is_string
                     || !matches!(
                         self.single_token(spelling)?,
@@ -835,8 +877,7 @@ impl<'inv> SyntaxHost<'inv> {
         if !is_string {
             return Err(RuntimeFailure::InvalidControlState);
         }
-        let message =
-            std::str::from_utf8(message).map_err(|_| RuntimeFailure::InvalidControlState)?;
+        let message = self.utf8(message)?;
         self.charge(message.len())?;
         let message = message.to_owned();
         let primary = self.copy_origin(primary, 0)?;
@@ -1299,6 +1340,196 @@ fn pair<'a>(
 #[cfg(test)]
 mod tests {
     use super::{token_from_spelling, token_kind_name};
+
+    fn scalar_host<'a>(
+        budget: &'a mut crate::syntax_resource::SyntaxBudget,
+    ) -> super::SyntaxHost<'a> {
+        use crate::{
+            core::CoreBuilder,
+            module::ModuleId,
+            resolved::BinderId,
+            source::{ByteRange, Origin, SourceFile},
+            surface::SurfaceName,
+            syntax::{ExpansionFrame, SyntaxContexts},
+            types::{EffectId, Type},
+        };
+        use std::{collections::HashMap, sync::Arc};
+
+        let source = SourceFile::new("scalar.ash", "name").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        let occurrence = CoreBuilder::new()
+            .unit(Type::Unit, Origin::Source(span))
+            .unwrap();
+        super::SyntaxHost {
+            occurrence,
+            binder: BinderId::new(0),
+            ops: EffectId::new(ModuleId::new(0), 0),
+            started: false,
+            steps_left: 100,
+            invocation: Arc::new(()),
+            frame: Arc::new(ExpansionFrame {
+                invocation: span,
+                definition: span,
+            }),
+            source,
+            caller: SurfaceName {
+                text: "name".into(),
+                span,
+                introduction: 0,
+                introduced_at: None,
+                written: true,
+                diagnostic: None,
+            },
+            introduction: 0,
+            contexts: Arc::new(SyntaxContexts::new(&[], &[], &[])),
+            syntax_work: Some(budget),
+            fresh_count: 0,
+            captures: Vec::new(),
+            expressions: Vec::new(),
+            declarations: Vec::new(),
+            identifiers: Vec::new(),
+            origins: Vec::new(),
+            parse_failures: Vec::new(),
+            tokens: Vec::new(),
+            constructors: HashMap::new(),
+            operations: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn declaration_scalar_lex_reserves_before_temporary_payload_and_retries() {
+        use super::super::machine_test_hooks as hooks;
+        use crate::{eval::RuntimeFailure, lexer::TokenKind, syntax_resource::SyntaxBudget};
+
+        for spelling in [format!("\"{}\"", "a".repeat(120)), "9".repeat(120)] {
+            let length = spelling.len();
+            let before_lex = 3 * length + "<syntax-token>".len() + 1 + 75 * length + 1;
+            hooks::reset();
+            let mut short = SyntaxBudget::with_limit(before_lex - 1);
+            let mut host = scalar_host(&mut short);
+            let failure = host.single_token(&spelling).unwrap_err();
+            assert!(matches!(failure, RuntimeFailure::Report(report)
+                if report.primary.reason_code() == "internal.resource.syntax-work"
+                    && report.primary.resource().is_none()));
+            assert_eq!(hooks::SCALAR_LEX_STARTS.get(), 0);
+            drop(host);
+
+            hooks::reset();
+            let mut measured = SyntaxBudget::default();
+            let mut host = scalar_host(&mut measured);
+            let token = host.single_token(&spelling).unwrap().unwrap();
+            assert!(matches!(
+                token,
+                TokenKind::StringLiteral(_) | TokenKind::Integer(_)
+            ));
+            assert_eq!(hooks::SCALAR_LEX_STARTS.get(), 1);
+            drop(host);
+            let used = measured.consumed();
+            assert!(used > before_lex);
+
+            hooks::reset();
+            let mut short = SyntaxBudget::with_limit(used - 1);
+            let mut host = scalar_host(&mut short);
+            assert!(
+                matches!(host.single_token(&spelling), Err(RuntimeFailure::Report(report))
+                if report.primary.reason_code() == "internal.resource.syntax-work")
+            );
+            assert_eq!(hooks::SCALAR_LEX_STARTS.get(), 1);
+            drop(host);
+
+            hooks::reset();
+            let mut exact = SyntaxBudget::with_limit(used);
+            let mut host = scalar_host(&mut exact);
+            assert!(host.single_token(&spelling).unwrap().is_some());
+            drop(host);
+            assert_eq!(exact.consumed(), used);
+        }
+        hooks::reset();
+        eprintln!("string and integer: pre-lex refusal, late one-short refusal, exact retry");
+    }
+
+    #[test]
+    fn declaration_scalar_utf8_reserves_before_the_scan() {
+        use super::super::machine_test_hooks as hooks;
+        use crate::{eval::RuntimeFailure, syntax_resource::SyntaxBudget};
+
+        let bytes = "name λ".as_bytes();
+        hooks::reset();
+        let mut short = SyntaxBudget::with_limit(bytes.len() - 1);
+        let mut host = scalar_host(&mut short);
+        assert!(
+            matches!(host.utf8(bytes), Err(RuntimeFailure::Report(report))
+            if report.primary.reason_code() == "internal.resource.syntax-work"
+                && report.primary.resource().is_none())
+        );
+        assert_eq!(hooks::SCALAR_UTF8_SCANS.get(), 0);
+        drop(host);
+
+        let mut exact = SyntaxBudget::with_limit(bytes.len());
+        let mut host = scalar_host(&mut exact);
+        let text = host.utf8(bytes).unwrap();
+        assert_eq!(text, "name λ");
+        assert_eq!(text.as_ptr(), bytes.as_ptr());
+        assert_eq!(hooks::SCALAR_UTF8_SCANS.get(), 1);
+        drop(host);
+        assert_eq!(exact.consumed(), bytes.len());
+        hooks::reset();
+        eprintln!("UTF-8 one-short refuses before scan; exact returns borrowed text");
+    }
+
+    #[test]
+    fn declaration_scalar_diagnostic_bound_tracks_the_lexer() {
+        use crate::{
+            lexer::{LexReason, lex},
+            source::SourceFile,
+            syntax_resource::SyntaxBudget,
+        };
+        use sha2::{Digest, Sha256};
+
+        // Revisit the bound when diagnostic text, possible reasons, or lexer
+        // token boundaries change. The actual cases below check the bound.
+        let lexer = include_str!("../lexer/mod.rs");
+        let lexical_contract = &lexer[lexer.find("pub enum LexReason").unwrap()..];
+        assert_eq!(
+            format!("{:x}", Sha256::digest(lexical_contract.as_bytes())),
+            "b9ea9a59f5f0bbd1b43e004e88b4ae52657552d7f5e339070efe86337c13ba6b"
+        );
+        for (spelling, reason) in [
+            ("\r", LexReason::BareCarriageReturn),
+            ("\u{feff}", LexReason::ByteOrderMark),
+            ("λ", LexReason::UnicodeIdentifier),
+            ("//", LexReason::Comment),
+            ("01", LexReason::InvalidIntegerLiteral),
+            ("\"\\z\"", LexReason::InvalidStringEscape),
+            ("\"", LexReason::UnterminatedString),
+            ("\"\n\"", LexReason::InvalidStringCharacter),
+            ("?", LexReason::UnknownCharacter),
+        ] {
+            let source = SourceFile::new("lex-bound.ash", spelling).unwrap();
+            let lexed = lex(&source).unwrap();
+            let [diagnostic] = lexed.diagnostics.as_slice() else {
+                panic!("one diagnostic for {spelling:?}");
+            };
+            assert_eq!(diagnostic.reason, reason);
+            let retained_text = diagnostic.primary.message().len()
+                + diagnostic.expected.as_ref().map_or(0, String::len);
+            assert!(retained_text <= super::SCALAR_DIAGNOSTIC_TEXT_PER_BYTE * spelling.len());
+            assert!(diagnostic.found.as_ref().unwrap().len() <= spelling.len());
+            if reason == LexReason::BareCarriageReturn {
+                assert_eq!(retained_text, super::SCALAR_DIAGNOSTIC_TEXT_PER_BYTE);
+            }
+            let mut budget = SyntaxBudget::default();
+            assert!(
+                scalar_host(&mut budget)
+                    .single_token(spelling)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        eprintln!(
+            "CR reaches 64 bytes; quote, Unicode and other reachable diagnostic text stays bounded"
+        );
+    }
 
     #[test]
     fn d5_host_refuses_declaration_before_its_constructor_and_request_clone() {

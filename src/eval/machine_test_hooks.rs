@@ -16,6 +16,8 @@ std::thread_local! {
     pub(crate) static DECLARATION_CAPTURES: Cell<usize> = const { Cell::new(0) };
     pub(crate) static DECLARATION_UNWRAPS: Cell<usize> = const { Cell::new(0) };
     pub(crate) static DECLARATION_TRANSFERS_BEFORE_DROP: Cell<usize> = const { Cell::new(0) };
+    pub(crate) static SCALAR_LEX_STARTS: Cell<usize> = const { Cell::new(0) };
+    pub(crate) static SCALAR_UTF8_SCANS: Cell<usize> = const { Cell::new(0) };
 }
 
 pub(crate) fn reset() {
@@ -33,4 +35,6 @@ pub(crate) fn reset() {
     DECLARATION_CAPTURES.set(0);
     DECLARATION_UNWRAPS.set(0);
     DECLARATION_TRANSFERS_BEFORE_DROP.set(0);
+    SCALAR_LEX_STARTS.set(0);
+    SCALAR_UTF8_SCANS.set(0);
 }
