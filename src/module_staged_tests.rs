@@ -1278,6 +1278,96 @@ fn type_graph_shares_budget_through_host_staging_and_retry() {
 }
 
 #[test]
+fn transformer_pattern_recapture_is_refused_before_generated_template_execution() {
+    use crate::{
+        driver::{compile_staged_graph_for_test, execute},
+        eval::machine_test_hooks as hooks,
+    };
+
+    let tree = Tree::new();
+    tree.write(
+        "helpers.ash",
+        "pub syntax declaration: (sink) $name:ident as $pattern:pattern => {\n\
+             pub $name : Int -> Int\n\
+             $name $pattern = 42\n\
+         }\n",
+    );
+    let legacy = tree.write(
+        "legacy.ash",
+        "import helpers (syntax sink)\n\
+         sink answer as value\n\
+         main : Unit -> Int\n\
+         main () = answer(42)\n",
+    );
+    let mut graph = graph_at(&legacy, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    let program = compile_staged_graph_for_test(&mut graph)
+        .expect("legacy Template forwarding of the Pattern compiles");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+    eprintln!("pattern recapture: legacy Template forwarding executed 42");
+
+    let entry = tree.write(
+        "main.ash",
+        "import forms (syntax dispatch)\n\
+         import helpers (syntax sink)\n\
+         dispatch sink as answer for value\n\
+         main : Unit -> Int\n\
+         main () = answer(42)\n",
+    );
+    for protected in [false, true] {
+        let nested = if protected {
+            "Syntax.Syntax(Syntax.MoreNodes(Syntax.PatternNode(item, origin), Syntax.NoNodes))"
+        } else {
+            "Syntax.pattern_syntax(item)"
+        };
+        tree.write(
+            "forms.ash",
+            &format!(
+                "import @builtin.compiler.syntax as Syntax\n\
+                 pub syntax declaration: (dispatch) $target:ident as $name:ident for $pattern:pattern => using expand\n\
+                 expand : Syntax.Input -> Syntax.MacroResult ! {{Syntax.Ops}}\n\
+                 expand input = {{\n\
+                     let origin = Syntax.invocation_origin(input)\n\
+                     match (Syntax.capture(input, 0), Syntax.capture(input, 1), Syntax.capture(input, 2), Syntax.make_token(Syntax.As, \"as\")) {{\n\
+                         (Syntax.Captured(Syntax.IdentifierCapture(target, target_origin)), Syntax.Captured(Syntax.IdentifierCapture(name, name_origin)), Syntax.Captured(Syntax.PatternCapture(item)), Syntax.MadeToken(as_token)) => {{\n\
+                             let nested = {nested}\n\
+                             let inner = Syntax.GroupNode(Syntax.Parentheses, nested, origin)\n\
+                             let inner = Syntax.Syntax(Syntax.MoreNodes(inner, Syntax.NoNodes))\n\
+                             let outer = Syntax.GroupNode(Syntax.Parentheses, inner, origin)\n\
+                             let rest = Syntax.MoreNodes(outer, Syntax.NoNodes)\n\
+                             let rest = Syntax.MoreNodes(Syntax.TokenNode(as_token, origin), rest)\n\
+                             let rest = Syntax.MoreNodes(Syntax.IdentifierNode(name, name_origin), rest)\n\
+                             let rest = Syntax.MoreNodes(Syntax.IdentifierNode(target, target_origin), rest)\n\
+                             Syntax.Expanded(Syntax.Syntax(rest))\n\
+                         }}\n\
+                         _ => Syntax.Rejected(Syntax.MacroDiagnostic(\"capture failed\", origin, Syntax.NoOrigins))\n\
+                     }}\n\
+                 }}\n"
+            ),
+        );
+        let mut graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+        hooks::reset();
+        let result = compile_staged_graph_for_test(&mut graph);
+        assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+        assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+        assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+        assert_eq!(hooks::ROOT_CLOSES.get(), 1);
+        if protected {
+            let failure = result.expect_err("generated PatternNode recapture is refused");
+            assert_eq!(failure.reason_code(), "internal.projection.malformed-tree");
+            assert!(graph.pending.is_empty());
+            assert!(graph.loaded.is_empty());
+            assert!(graph.completed.is_none());
+            eprintln!("pattern recapture: generated PatternNode refused without publication");
+        } else {
+            let program = result.expect("generated raw Pattern reaches the imported Template");
+            assert_eq!(execute(&program).unwrap().value_display(), "42");
+            eprintln!("pattern recapture: generated raw Pattern control executed 42");
+        }
+    }
+    hooks::reset();
+}
+
+#[test]
 fn transformer_type_recapture_is_refused_before_generated_template_execution() {
     use crate::{
         driver::{compile_staged_graph_for_test, execute},
@@ -1366,6 +1456,163 @@ fn transformer_type_recapture_is_refused_before_generated_template_execution() {
         }
     }
     hooks::reset();
+}
+
+#[test]
+fn pattern_graph_transfer_shortage_keeps_injected_teardown_on_a_512k_stack() {
+    const CHILD: &str = "ASH_PATTERN_TEARDOWN_512K_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "module::staged_tests::pattern_graph_transfer_shortage_keeps_injected_teardown_on_a_512k_stack",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprint!("{stderr}");
+        assert!(
+            output.status.success(),
+            "512 KiB child failed: {}",
+            output.status
+        );
+        for marker in [
+            "pattern cleanup: actual graph executed 42",
+            "pattern cleanup: transfer shortage drained the graph",
+            "pattern cleanup: injected teardown retained after primary",
+        ] {
+            assert!(stderr.contains(marker), "missing marker {marker}");
+        }
+        return;
+    }
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(|| {
+            use crate::{
+                driver::{
+                    CompiledProgram, FileFailure, PipelineFailure, compile_staged_graph_for_test,
+                    execute,
+                },
+                eval::{
+                    CleanupStatus, ResourceFailureCause, RuntimeFailure, RuntimePhase,
+                    RuntimeResource, machine_test_hooks as hooks,
+                },
+            };
+
+            fn trial(
+                entry: &Path,
+                limit: usize,
+                inject_close: bool,
+            ) -> (HeaderGraph, Result<CompiledProgram, FileFailure>) {
+                let mut graph = graph_at(entry, BodyMode::Header, limit).unwrap();
+                graph.syntax_budget.charge_units(17).unwrap();
+                hooks::reset();
+                hooks::FAIL_ROOT_CLOSE.set(inject_close);
+                let result = compile_staged_graph_for_test(&mut graph);
+                (graph, result)
+            }
+
+            fn primary(failure: &FileFailure) -> crate::eval::RuntimeFailureReport {
+                let Some(PipelineFailure::SyntaxRuntime(failure)) = failure.pipeline_failure()
+                else {
+                    panic!("expected a syntax runtime failure: {failure:?}");
+                };
+                let RuntimeFailure::Report(report) = failure.cause() else {
+                    panic!("expected structured failure details");
+                };
+                assert_eq!(
+                    report.primary.reason_code(),
+                    "internal.resource.syntax-work"
+                );
+                assert!(report.primary.resource().is_none());
+                report
+            }
+
+            let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/surface-macros/pattern-host/main.ash");
+            let header = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT)
+                .unwrap()
+                .syntax_budget
+                .consumed();
+            let (measured, result) = trial(&entry, SYNTAX_WORK_LIMIT, false);
+            let program = result.expect("the actual Pattern graph compiles");
+            let total = measured.syntax_budget.consumed();
+            assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+            assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+            assert_eq!(hooks::ROOT_CLOSES.get(), 1);
+            assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+            assert_eq!(execute(&program).unwrap().value_display(), "42");
+            drop(program);
+            drop(measured);
+            eprintln!("pattern cleanup: actual graph executed 42");
+
+            let (mut low, mut high) = (header + 17, total);
+            while low < high {
+                let mid = low + (high - low) / 2;
+                let (_graph, _result) = trial(&entry, mid, false);
+                if hooks::TRANSFER_ATTEMPTS.get() == 1 {
+                    high = mid;
+                } else {
+                    low = mid + 1;
+                }
+            }
+            let transfer = low;
+            assert!(header + 17 < transfer && transfer < total);
+
+            let (graph, result) = trial(&entry, transfer, false);
+            let failure = result.expect_err("transfer shortage publishes no program");
+            let native = primary(&failure);
+            assert!(native.teardown.is_none());
+            assert_eq!(native.cleanup, CleanupStatus::Complete);
+            assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+            assert_eq!(hooks::TRANSFER_FAILURES.get(), 1);
+            assert_eq!(hooks::ROOT_CLOSES.get(), 1);
+            assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+            assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+            let native_paid = graph.syntax_budget.consumed();
+            assert!(native_paid > header + 17);
+            assert!(
+                graph.loaded.is_empty() && graph.pending.is_empty() && graph.completed.is_none()
+            );
+            eprintln!("pattern cleanup: transfer shortage drained the graph");
+
+            let (graph, result) = trial(&entry, transfer, true);
+            let failure = result.expect_err("injected teardown shortage publishes no program");
+            let report = primary(&failure);
+            assert_eq!(report.primary, native.primary);
+            let teardown = report
+                .teardown
+                .expect("the root-close failure remains related");
+            assert_eq!(teardown.phase, RuntimePhase::Teardown);
+            assert_eq!(teardown.resource, RuntimeResource::EnvironmentDisposal);
+            assert_eq!(teardown.cause, ResourceFailureCause::ConfiguredCapacity);
+            assert_eq!(report.cleanup, CleanupStatus::Incomplete);
+            assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+            assert_eq!(hooks::TRANSFER_FAILURES.get(), 1);
+            assert_eq!(hooks::ROOT_CLOSES.get(), 1);
+            assert_eq!(hooks::TRANSFORMER_DROPS.get(), 1);
+            assert_eq!(graph.syntax_budget.consumed(), native_paid);
+            assert!(
+                graph.loaded.is_empty() && graph.pending.is_empty() && graph.completed.is_none()
+            );
+            for path in ["main.ash", "forms.ash"] {
+                assert!(
+                    failure
+                        .sources()
+                        .iter()
+                        .any(|source| source.display_path().ends_with(path))
+                );
+            }
+            hooks::reset();
+            eprintln!("pattern cleanup: injected teardown retained after primary");
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[test]
