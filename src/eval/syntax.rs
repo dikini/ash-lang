@@ -3562,6 +3562,7 @@ mod tests {
                 "expression stack: returned metadata preserved",
                 "expression stack: deep unwrap retained contents",
                 "expression stack: final contents alias dropped",
+                "expression stack: parsed owned AST copy boundary and aliases checked",
             ] {
                 assert!(stderr.contains(marker), "missing marker {marker}");
             }
@@ -3579,6 +3580,7 @@ mod tests {
                     lexer::TokenKind,
                     module::ModuleId,
                     parser::ResourceFailure,
+                    surface::SurfaceExprKind,
                     syntax::{MacroOutputNode, charge_new_expression_retention},
                     syntax_resource::SyntaxBudget,
                     types::{ConstructorId, NominalTypeId, OperationId, TypeWorkBudget},
@@ -3845,6 +3847,96 @@ mod tests {
                 drop(alias);
                 assert!(weak.upgrade().is_none());
                 eprintln!("expression stack: final contents alias dropped");
+
+                // These are parser-built Resume ASTs, not nested contents
+                // wrappers. Their leaf diagnostic adds one retained edge.
+                for (height, succeeds) in [(124usize, true), (125, false)] {
+                    let mut budget = SyntaxBudget::default();
+                    let mut host = scalar_host(&mut budget);
+                    host.type_accounting = true;
+                    let parse_op = OperationId::new(host.ops, 0);
+                    let unwrap_op = OperationId::new(host.ops, 1);
+                    host.operations.insert(parse_op, "parse_expression".into());
+                    host.operations.insert(unwrap_op, "expression_syntax".into());
+                    let owner = NominalTypeId::new(ModuleId::new(0), 0);
+                    for (index, name) in (0u32..).zip([
+                        "Syntax", "NoNodes", "MoreNodes", "GroupNode", "Parentheses",
+                        "PatternNode", "TypeNode", "TokenNode", "IdentifierNode",
+                        "ExpressionNode", "Parsed", "ParseRejected",
+                    ]) {
+                        host.constructors.insert(name.into(), ConstructorId::new(owner, index));
+                    }
+                    let span = host.caller.span;
+                    let mut raw = (0..height)
+                        .map(|_| MacroOutputNode::Token(TokenKind::Resume, "resume".into(), span.into()))
+                        .collect::<Vec<_>>();
+                    raw.push(MacroOutputNode::Token(
+                        TokenKind::Integer(Integer::from_i64(1)), "1".into(), span.into(),
+                    ));
+                    let mut heap = Vec::new();
+                    let input = host.syntax_value_inner(&raw, &mut heap, 0, true).unwrap();
+                    let parsed = parse(&mut host, &mut heap, parse_op, input).unwrap();
+                    let (tag, Some(handle)) = constructor_fields(&parsed, &heap).unwrap() else {
+                        panic!("expected the raw Expression result")
+                    };
+                    assert_eq!(tag, host.constructor("Parsed").unwrap());
+                    let handle = handle.clone();
+                    let CompilerSyntaxHandleKind::Expression(index) = host.admitted_handle(&handle).unwrap() else {
+                        panic!("expected an Expression handle")
+                    };
+                    let mut expression = &host.expressions[index].expression;
+                    for _ in 0..height {
+                        let SurfaceExprKind::Resume(value) = &expression.kind else {
+                            panic!("expected parsed Resume AST")
+                        };
+                        expression = value;
+                    }
+                    assert!(matches!(expression.kind, SurfaceExprKind::Integer(_)));
+                    assert!(expression.diagnostic.is_some());
+                    let alias = Arc::clone(&host.expressions[index].contents);
+                    let weak = Arc::downgrade(&alias);
+                    let unwrapped = host.request(unwrap_op, handle.clone(), &mut heap, &mut TypeWorkBudget::unbounded()).unwrap();
+                    let unwrapped = host.transfer_syntax_inner(&unwrapped, &heap, 0, true).unwrap();
+                    assert_eq!(unwrapped.len(), height + 1);
+                    drop(unwrapped);
+                    let origin = host.issue_origin(span.into()).unwrap();
+                    let protected = node(&mut host, &mut heap, "ExpressionNode", vec![handle, origin]);
+                    let input = syntax(&mut host, &mut heap, vec![protected]);
+                    let transferred = host.transfer_syntax_inner(&input, &heap, 0, true).unwrap();
+                    assert!(matches!(transferred.as_slice(), [MacroOutputNode::Expression(..)]));
+                    let copy = crate::syntax::copy_fragment_output_with_type(&transferred, &mut SyntaxBudget::default());
+                    if succeeds {
+                        drop(copy.unwrap());
+                    } else {
+                        assert!(matches!(copy, Err(crate::parser::MacroParseFailure::Syntax {
+                            resource: Some(ResourceFailure::StructuralDepth { limit: 128 }), ..
+                        })));
+                    }
+                    drop(transferred);
+                    let before = host.expressions.len();
+                    let result = parse(&mut host, &mut heap, parse_op, input).unwrap();
+                    let (tag, Some(handle)) = constructor_fields(&result, &heap).unwrap() else {
+                        panic!("expected protected Expression result")
+                    };
+                    if succeeds {
+                        assert_eq!(tag, host.constructor("Parsed").unwrap());
+                        assert_eq!(host.expressions.len(), before + 1);
+                    } else {
+                        assert_eq!(tag, host.constructor("ParseRejected").unwrap());
+                        assert_eq!(host.expressions.len(), before);
+                        let CompilerSyntaxHandleKind::ParseFailure(index) = host.admitted_handle(handle).unwrap() else {
+                            panic!("expected a failure handle")
+                        };
+                        assert_eq!(host.parse_failures[index].1, Some(ResourceFailure::StructuralDepth { limit: 128 }));
+                    }
+                    drop(raw);
+                    drop(heap);
+                    drop(host);
+                    assert_eq!(Arc::strong_count(&alias), 1);
+                    drop(alias);
+                    assert!(weak.upgrade().is_none());
+                }
+                eprintln!("expression stack: parsed owned AST copy boundary and aliases checked");
             })
             .unwrap()
             .join()
