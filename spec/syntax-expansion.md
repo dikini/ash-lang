@@ -132,6 +132,34 @@ capture paths are still under development. See the
 [declaration grammar](../docs/design/macros/declaration-grammar.md) for the
 accepted wider design.
 
+## Derive syntax
+
+A public derive is defined with `syntax derive: (name)` and imported through
+an explicit `syntax` selector. It has an optional `$name:ident` binding and
+either a declaration template or a checked transformer. The binding is an
+ordinary lowercase identifier; the reserved-word metaname allowance for
+declaration matchers does not extend to derive bindings. A deriving clause on
+the next logical line after a top-level `type` or `newtype` lists one or more
+imported derive names, with an optional trailing comma. `derive` and
+`deriving` remain contextual identifiers outside these forms.
+
+Each listed derive receives the same complete original subject, including its
+deriving clause. A template's optional binding names the subject. A checked
+transformer receives the subject as a Declaration capture at index 0 and, when
+the binding is present, its Identifier capture at index 1; otherwise index 1
+is `MissingCapture`. The declaration syntax service exposes the original
+ordered syntax without inferred types or selected implementations.
+
+Derives are selected and invoked from left to right. Each returned output is
+admitted before the next invocation; generated nested expansions are processed
+after the whole list succeeds. The subject is retained once, followed by the
+outputs in list order. Failure publishes no partial module. Generated
+declarations continue through ordinary resolution, visibility, duplicate and
+type checking. Some generated interface parameter and constructor-reference
+cases currently reach the separate downstream limitations recorded in
+[#303](https://github.com/dikini/ash-lang/issues/303) and
+[#306](https://github.com/dikini/ash-lang/issues/306).
+
 ## Quotation and template escapes
 
 A checked ordinary helper used during syntax expansion can construct an

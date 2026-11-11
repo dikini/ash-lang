@@ -110,6 +110,38 @@ superseded where the later retained checkpoints say so.
   delivered scope is held on D6 [#219](https://github.com/dikini/ash-lang/issues/219),
   which still needs the checked procedural transformer Import-output refusal.
 
+### Connected derive and checked-host candidate
+
+**Candidate:** Draft [PR #307](https://github.com/dikini/ash-lang/pull/307)
+connects imported derive definitions, complete original subject capture,
+ordered output admission and the existing checked declaration host. It also
+includes the approved declaration-only keyword metanames and the bounded
+[#288](https://github.com/dikini/ash-lang/issues/288) Data origin and exact
+primary-span tie repair. On candidate `55aff55e10988ab316ae1466a4ecbaa84a678ae6`,
+the unchanged I09 and one-, two- and three-constructor Indexed consumers
+execute to 42. Focused observations cover subject and output order, constructor
+contexts and emitted equations, transfer before host teardown, Import refusal,
+and resource exhaustion with retry. The selected run recorded 41 passing
+tests and 59 public success or refusal cases with matching input snapshots.
+
+**Remaining:** The unchanged I04 relation graph now passes source checking and
+elaboration, then reaches the parameter-order validation guard tracked by
+[#303](https://github.com/dikini/ash-lang/issues/303). The fixed I09 nested
+generated-constructor graph reaches
+[#306](https://github.com/dikini/ash-lang/issues/306); the separate effect-row
+coordinate issue [#304](https://github.com/dikini/ash-lang/issues/304) also
+remains open. Generator clauses, matcher-capture reads in escaped code and
+per-iteration escapes remain under development. The full I16 native and
+source-free image path, hygiene and exact identity mutations, V3, V7 and V8
+remain at their original gates.
+
+**Awaiting:** Independent final review and QA, retention, and acceptance of
+each original issue in its native prerequisite order. Earlier progress entries
+below describe their state at the time.
+
+**Owner:** The developer owns the candidate and evidence; independent QA and
+review own their checks; the orchestrator owns integration and acceptance.
+
 ### Connected I19 capture and repetition delivery
 
 The retained I19 delivery connects the extended definition and template,
