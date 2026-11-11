@@ -71,6 +71,30 @@ fn i07_type_captures_reach_the_ordinary_driver() {
 }
 
 #[test]
+fn introduced_signature_uses_its_definition_context_nominal() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "forms.ash",
+        "pub type Layer<A> = Layer(A)\n\
+         pub syntax declaration: (emit) $name:ident => {\n\
+             pub $name : Layer<(Int, Int)> -> Int\n\
+             $name _ = 42\n\
+         }\n",
+    );
+    fixture.write(
+        "entry.ash",
+        "import forms (syntax emit)\n\
+         emit answer\n\
+         main : Unit -> Int\n\
+         main () = 42\n",
+    );
+
+    let program = compile_path(fixture.configuration())
+        .expect("the introduced type uses the syntax owner's nominal");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
+#[test]
 fn imported_templates_forward_and_duplicate_a_type_capture() {
     let fixture = Fixture::new();
     fixture.write(

@@ -3897,15 +3897,12 @@ impl Resolver<'_, '_> {
                 declaration.span,
                 &mut self.type_work,
             )?;
-            collect_free_type_names(
+            self.collect_free_type_names(
                 &method.annotation,
-                &self.type_names,
-                &self.interface_names,
                 &declared,
                 &mut seen,
                 &mut names,
                 false,
-                &mut self.type_work,
             )?;
             let type_parameters =
                 self.allocate_declaration_type_parameters(explicit, &names, false)?;
@@ -4108,15 +4105,12 @@ impl Resolver<'_, '_> {
             }));
         }
         for head_argument in &implementation.head.arguments {
-            collect_free_type_names(
+            self.collect_free_type_names(
                 head_argument,
-                &self.type_names,
-                &self.interface_names,
                 &declared,
                 &mut seen,
                 &mut head_names,
                 false,
-                &mut self.type_work,
             )?;
         }
         let head_parameters = self.allocate_declaration_type_parameters(
@@ -4128,15 +4122,12 @@ impl Resolver<'_, '_> {
         let mut prerequisite_only_names = Vec::new();
         for prerequisite in &implementation.prerequisites {
             for argument in &prerequisite.arguments {
-                collect_free_type_names(
+                self.collect_free_type_names(
                     argument,
-                    &self.type_names,
-                    &self.interface_names,
                     &declared,
                     &mut seen,
                     &mut prerequisite_only_names,
                     false,
-                    &mut self.type_work,
                 )?;
             }
         }
@@ -12110,65 +12101,50 @@ impl Resolver<'_, '_> {
         let mut seen = HashMap::new();
         match &definition.kind {
             SurfaceDefinitionKind::Equational(equational) => {
-                collect_free_type_names(
+                self.collect_free_type_names(
                     &equational.interface.annotation,
-                    &self.type_names,
-                    &self.interface_names,
                     &declared,
                     &mut seen,
                     &mut names,
                     infer_implicit_effect_rows,
-                    &mut self.type_work,
                 )?;
                 for requirement in &equational.interface.requirements {
                     for argument in &requirement.arguments {
-                        collect_free_type_names(
+                        self.collect_free_type_names(
                             argument,
-                            &self.type_names,
-                            &self.interface_names,
                             &declared,
                             &mut seen,
                             &mut names,
                             infer_implicit_effect_rows,
-                            &mut self.type_work,
                         )?;
                     }
                 }
             }
             SurfaceDefinitionKind::InlineOperational(operational) => {
                 for parameter in &operational.header.parameters {
-                    collect_free_type_names(
+                    self.collect_free_type_names(
                         &parameter.annotation,
-                        &self.type_names,
-                        &self.interface_names,
                         &declared,
                         &mut seen,
                         &mut names,
                         infer_implicit_effect_rows,
-                        &mut self.type_work,
                     )?;
                 }
-                collect_free_type_names(
+                self.collect_free_type_names(
                     &operational.header.result_type,
-                    &self.type_names,
-                    &self.interface_names,
                     &declared,
                     &mut seen,
                     &mut names,
                     infer_implicit_effect_rows,
-                    &mut self.type_work,
                 )?;
                 for requirement in &operational.header.requirements {
                     for argument in &requirement.arguments {
-                        collect_free_type_names(
+                        self.collect_free_type_names(
                             argument,
-                            &self.type_names,
-                            &self.interface_names,
                             &declared,
                             &mut seen,
                             &mut names,
                             infer_implicit_effect_rows,
-                            &mut self.type_work,
                         )?;
                     }
                 }
@@ -16299,127 +16275,217 @@ fn retain_free_type_name<'a>(
     }
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "free-name discovery keeps the reviewed omitted-global correction in one pass"
-)]
-fn collect_free_type_names<'a>(
-    root: &'a SurfaceType,
-    nominals: &HashMap<String, NominalTypeId>,
-    interfaces: &HashMap<String, InterfaceId>,
-    declared: &HashSet<&str>,
-    seen: &mut HashMap<&'a str, Option<FreeTypeNameRole>>,
-    output: &mut Vec<FreeTypeName>,
-    reject_mixed_roles: bool,
-    budget: &mut TypeWorkBudget,
-) -> Result<(), ResolveError> {
-    enum Task<'a> {
-        Visit(&'a SurfaceType),
-        Slice(std::slice::Iter<'a, SurfaceType>),
-        RowTail(&'a SurfaceName),
-    }
-
-    let mut work = vec![Task::Visit(root)];
-    while let Some(task) = work.pop() {
-        let ty = match task {
-            Task::Visit(ty) => ty,
-            Task::Slice(mut remaining) => {
-                if let Some(next) = remaining.next() {
-                    work.push(Task::Slice(remaining));
-                    work.push(Task::Visit(next));
-                }
-                continue;
-            }
-            Task::RowTail(tail) => {
-                budget.charge(1).map_err(|()| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        tail.span,
-                        "free type discovery exceeded its work budget",
-                    )
-                })?;
-                retain_free_type_name(
-                    tail,
-                    FreeTypeNameRole::EffectRow,
-                    seen,
-                    output,
-                    reject_mixed_roles,
-                )?;
-                continue;
-            }
+impl Resolver<'_, '_> {
+    fn is_free_type_name(
+        &mut self,
+        reference: &SurfaceReference,
+        declared: &HashSet<&str>,
+    ) -> Result<bool, ResolveError> {
+        let SurfaceReference::Unqualified(name) = reference else {
+            return Ok(false);
         };
-        budget.charge(1).map_err(|()| {
+        if declared.contains(name.text.as_str()) {
+            return Ok(true);
+        }
+        if self.type_names.contains_key(&name.text) || self.interface_names.contains_key(&name.text)
+        {
+            return Ok(false);
+        }
+        if name.introduction == 0 {
+            return Ok(true);
+        }
+
+        let exhausted = || {
             error(
                 ResolveReason::TypeResourceExhausted,
-                ty.span,
-                "free type discovery exceeded its work budget",
+                name.span,
+                "contextual free type discovery exceeded its work budget",
             )
-        })?;
-        match &ty.kind {
-            SurfaceTypeKind::RowArgument(row) => {
-                if let Some(tail) = &row.tail {
-                    work.push(Task::RowTail(tail));
-                }
-                for effect in row.effects.iter().rev() {
-                    work.push(Task::Slice(effect.arguments.iter()));
-                }
-            }
-            SurfaceTypeKind::Named(name) => {
-                let SurfaceReference::Unqualified(name) = name else {
+        };
+        // Copy and hash the exact key before probing the existing authenticated facts.
+        self.type_work
+            .charge(name.text.len().saturating_mul(2).saturating_add(1))
+            .map_err(|()| exhausted())?;
+        let key = (name.text.clone(), name.introduction);
+        if self.syntax_nominals.contains_key(&key) {
+            return Ok(false);
+        }
+
+        self.type_work.charge(1).map_err(|()| exhausted())?;
+        let Some(inputs) = self.syntax_inputs else {
+            return Ok(true);
+        };
+        let Some(owner) = self
+            .syntax_expansion
+            .as_ref()
+            .and_then(|expansion| expansion.owner(name.introduction))
+        else {
+            return Ok(true);
+        };
+        let Some(owner_index) = owner.owner else {
+            return Ok(true);
+        };
+        let checked = inputs.owners.get(owner_index);
+        let terms = inputs.terms.get(owner_index);
+
+        // This lookup sizes the existing retention route; it does not decide which
+        // owner or nominal is valid. The retention call below remains authoritative.
+        self.type_work
+            .charge(name.text.len().saturating_add(1))
+            .map_err(|()| exhausted())?;
+        let original_len = terms
+            .and_then(|terms| terms.targeted_nominal(&name.text))
+            .map_or(0, |(_, original, _)| original.len());
+        let nominal_count = checked.map_or(0, |owner| owner.registry().nominals().len());
+        let route_count = checked.map_or(0, |owner| owner.direct_dependencies().len());
+        let diagnostic_copies = name.diagnostic.as_ref().map_or(0, |location| {
+            location
+                .related
+                .len()
+                .saturating_add(location.frames.len())
+                .saturating_add(1)
+        });
+
+        // Insertion may rehash every existing owned key. Charge the sizing scan
+        // before it starts, then charge key hashing and the grown table before the
+        // existing retention path can mutate the map.
+        let growth_work = if self.syntax_nominals.len() == self.syntax_nominals.capacity() {
+            let count = self.syntax_nominals.len();
+            self.type_work.charge(count).map_err(|()| exhausted())?;
+            self.syntax_nominals.keys().fold(
+                count.saturating_add(1).saturating_mul(4),
+                |work, (text, _)| work.saturating_add(text.len()),
+            )
+        } else {
+            1
+        };
+        let retention_work = nominal_count
+            .saturating_mul(name.text.len().saturating_add(1))
+            .saturating_add(name.text.len().saturating_mul(8))
+            .saturating_add(original_len.saturating_mul(2))
+            .saturating_add(route_count)
+            .saturating_add(inputs.owners.len())
+            .saturating_add(diagnostic_copies)
+            .saturating_add(growth_work)
+            .saturating_add(8);
+        self.type_work
+            .charge(retention_work)
+            .map_err(|()| exhausted())?;
+        self.retain_syntax_reference(reference, crate::syntax::SyntaxNameNamespace::Type)?;
+        Ok(!self.syntax_nominals.contains_key(&key))
+    }
+
+    fn collect_free_type_names<'a>(
+        &mut self,
+        root: &'a SurfaceType,
+        declared: &HashSet<&str>,
+        seen: &mut HashMap<&'a str, Option<FreeTypeNameRole>>,
+        output: &mut Vec<FreeTypeName>,
+        reject_mixed_roles: bool,
+    ) -> Result<(), ResolveError> {
+        enum Task<'a> {
+            Visit(&'a SurfaceType),
+            Slice(std::slice::Iter<'a, SurfaceType>),
+            RowTail(&'a SurfaceName),
+        }
+
+        let mut work = vec![Task::Visit(root)];
+        while let Some(task) = work.pop() {
+            let ty = match task {
+                Task::Visit(ty) => ty,
+                Task::Slice(mut remaining) => {
+                    if let Some(next) = remaining.next() {
+                        work.push(Task::Slice(remaining));
+                        work.push(Task::Visit(next));
+                    }
                     continue;
-                };
-                if declared.contains(name.text.as_str())
-                    || (!nominals.contains_key(&name.text) && !interfaces.contains_key(&name.text))
-                {
+                }
+                Task::RowTail(tail) => {
+                    self.type_work.charge(1).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            tail.span,
+                            "free type discovery exceeded its work budget",
+                        )
+                    })?;
                     retain_free_type_name(
-                        name,
-                        FreeTypeNameRole::Type,
+                        tail,
+                        FreeTypeNameRole::EffectRow,
                         seen,
                         output,
                         reject_mixed_roles,
                     )?;
+                    continue;
                 }
-            }
-            SurfaceTypeKind::Application {
-                constructor,
-                arguments,
-            } => {
-                if let SurfaceReference::Unqualified(constructor) = constructor
-                    && (declared.contains(constructor.text.as_str())
-                        || (!nominals.contains_key(&constructor.text)
-                            && !interfaces.contains_key(&constructor.text)))
-                {
-                    retain_free_type_name(
-                        constructor,
-                        FreeTypeNameRole::Type,
-                        seen,
-                        output,
-                        reject_mixed_roles,
-                    )?;
-                }
-                work.push(Task::Slice(arguments.iter()));
-            }
-            SurfaceTypeKind::Tuple(elements) => work.push(Task::Slice(elements.iter())),
-            SurfaceTypeKind::Function(function) => {
-                if let Some(effects) = &function.effects {
-                    if let Some(tail) = &effects.tail {
+            };
+            self.type_work.charge(1).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    ty.span,
+                    "free type discovery exceeded its work budget",
+                )
+            })?;
+            match &ty.kind {
+                SurfaceTypeKind::RowArgument(row) => {
+                    if let Some(tail) = &row.tail {
                         work.push(Task::RowTail(tail));
                     }
-                    for effect in effects.effects.iter().rev() {
+                    for effect in row.effects.iter().rev() {
                         work.push(Task::Slice(effect.arguments.iter()));
                     }
                 }
-                work.push(Task::Visit(&function.codomain));
-                work.push(Task::Visit(&function.domain));
+                SurfaceTypeKind::Named(reference) => {
+                    if let SurfaceReference::Unqualified(name) = reference
+                        && self.is_free_type_name(reference, declared)?
+                    {
+                        retain_free_type_name(
+                            name,
+                            FreeTypeNameRole::Type,
+                            seen,
+                            output,
+                            reject_mixed_roles,
+                        )?;
+                    }
+                }
+                SurfaceTypeKind::Application {
+                    constructor,
+                    arguments,
+                } => {
+                    if let SurfaceReference::Unqualified(name) = constructor
+                        && self.is_free_type_name(constructor, declared)?
+                    {
+                        retain_free_type_name(
+                            name,
+                            FreeTypeNameRole::Type,
+                            seen,
+                            output,
+                            reject_mixed_roles,
+                        )?;
+                    }
+                    work.push(Task::Slice(arguments.iter()));
+                }
+                SurfaceTypeKind::Tuple(elements) => work.push(Task::Slice(elements.iter())),
+                SurfaceTypeKind::Function(function) => {
+                    if let Some(effects) = &function.effects {
+                        if let Some(tail) = &effects.tail {
+                            work.push(Task::RowTail(tail));
+                        }
+                        for effect in effects.effects.iter().rev() {
+                            work.push(Task::Slice(effect.arguments.iter()));
+                        }
+                    }
+                    work.push(Task::Visit(&function.codomain));
+                    work.push(Task::Visit(&function.domain));
+                }
+                SurfaceTypeKind::Bytes
+                | SurfaceTypeKind::String
+                | SurfaceTypeKind::Int
+                | SurfaceTypeKind::Bool
+                | SurfaceTypeKind::Unit => {}
             }
-            SurfaceTypeKind::Bytes
-            | SurfaceTypeKind::String
-            | SurfaceTypeKind::Int
-            | SurfaceTypeKind::Bool
-            | SurfaceTypeKind::Unit => {}
         }
+        Ok(())
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -23148,24 +23214,17 @@ mod tests {
                 .span(ByteRange::new(0, 5).expect("the range is ordered"))
                 .expect("the range belongs to the fixture"),
         };
-        let mut budget = TypeWorkBudget::default();
-        budget
+        let mut resolver = Resolver::new(ModuleId::new(0));
+        resolver
+            .type_work
             .charge(TYPE_WORK_LIMIT - 2)
             .expect("the fixture leaves two units");
         let mut seen = HashMap::new();
         let mut output = Vec::new();
 
-        let error = collect_free_type_names(
-            &annotation,
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashSet::new(),
-            &mut seen,
-            &mut output,
-            true,
-            &mut budget,
-        )
-        .expect_err("the second name exceeds the remaining budget");
+        let error = resolver
+            .collect_free_type_names(&annotation, &HashSet::new(), &mut seen, &mut output, true)
+            .expect_err("the second name exceeds the remaining budget");
 
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(error.primary.span().range().start(), 2);
