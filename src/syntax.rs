@@ -6739,9 +6739,9 @@ mod tests {
             contents: Arc::from([]),
         });
         let repeated = |value: &SurfaceSyntaxCapture, count| {
-            SurfaceSyntaxCapture::Repeated(SurfaceRepeatedCapture {
+            SurfaceSyntaxCapture::Repeated(Arc::new(SurfaceRepeatedCapture {
                 values: vec![value.clone(); count],
-            })
+            }))
         };
         let captures = [repeated(&identifier, 2), repeated(&expression, 2)];
         let mismatched = [repeated(&identifier, 2), repeated(&expression, 3)];
