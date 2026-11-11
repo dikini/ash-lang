@@ -3734,11 +3734,9 @@ fn charge_template_inner(
                 budget.charge_units(children.len()).map_err(resource)?;
                 budget.charge_units(children.len()).map_err(resource)?;
                 charge_type_origin_copy(origin, depth + 1, budget).map_err(resource)?;
-                if new_expression {
-                    if !children.is_empty() {
-                        // Vec::clone requests the child buffer before substitution.
-                        budget.charge_units(children.len()).map_err(resource)?;
-                    }
+                if new_expression && !children.is_empty() {
+                    // Vec::clone requests the child buffer before substitution.
+                    budget.charge_units(children.len()).map_err(resource)?;
                 }
                 let live = pending.len();
                 let requested = live.saturating_add(children.len());

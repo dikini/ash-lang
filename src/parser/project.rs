@@ -7044,6 +7044,7 @@ fn capture_contents_with_escapes(
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn sequence(
         source: &SourceFile,
         indices: &[(usize, bool)],
@@ -20949,14 +20950,32 @@ mod tests {
         .unwrap();
         let tree = parse(lex(&source).unwrap());
         let module = project_module_retaining_templates(&source, &tree).unwrap();
-        assert!(matches!(
-            crate::syntax::validate_template_syntax(
-                &module.syntax_declarations[0],
-                &source,
-                &contexts
-            ),
-            Err(crate::parser::MacroParseFailure::Invalid)
-        ));
+        let failure = crate::syntax::validate_template_syntax(
+            &module.syntax_declarations[0],
+            &source,
+            &contexts,
+        )
+        .expect_err("the matcher does not declare the spliced capture");
+        let crate::parser::MacroParseFailure::Syntax {
+            diagnostics,
+            resource: None,
+        } = failure
+        else {
+            panic!("expected an unbound capture syntax diagnostic");
+        };
+        let [diagnostic] = diagnostics.as_slice() else {
+            panic!("expected exactly one diagnostic");
+        };
+        assert_eq!(
+            diagnostic.reason,
+            crate::parser::ParseReason::UnknownTemplateCapture
+        );
+        assert_eq!(diagnostic.found.as_deref(), Some("$missing"));
+        let range = diagnostic.primary.span().range();
+        assert_eq!(
+            &source.text()[range.start() as usize..range.end() as usize],
+            "missing"
+        );
     }
 
     #[test]
