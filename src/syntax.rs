@@ -3098,7 +3098,7 @@ pub(crate) fn validate_template_syntax(
     contexts: &SyntaxContexts,
 ) -> Result<(), crate::parser::MacroParseFailure> {
     let mut admission_budget = (declaration.category
-        == crate::surface::SurfaceSyntaxCategory::Declaration)
+        != crate::surface::SurfaceSyntaxCategory::Expression)
         .then(SyntaxBudget::default);
     validate_template_syntax_inner(declaration, source, contexts, admission_budget.as_mut())
 }
@@ -3292,7 +3292,7 @@ fn validate_template_syntax_inner(
         &declaration.matcher,
         0,
         0,
-        declaration.category == crate::surface::SurfaceSyntaxCategory::Declaration,
+        declaration.category != crate::surface::SurfaceSyntaxCategory::Expression,
         &mut captures,
         &mut identifiers,
         &mut admission_budget,
@@ -3370,7 +3370,8 @@ fn validate_template_syntax_inner(
                 &identifiers,
             )?;
         }
-        crate::surface::SurfaceSyntaxCategory::Declaration => {
+        crate::surface::SurfaceSyntaxCategory::Declaration
+        | crate::surface::SurfaceSyntaxCategory::Derive => {
             let budget = admission_budget
                 .as_mut()
                 .expect("declaration admission owns its budget");

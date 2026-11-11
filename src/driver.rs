@@ -1729,7 +1729,7 @@ where
                 crate::syntax::SyntaxContexts::new(&selected, &checked_syntax_imports, &[]);
             for declaration in &module.surface().syntax_declarations {
                 let admission = if declaration.category
-                    == crate::surface::SurfaceSyntaxCategory::Declaration
+                    != crate::surface::SurfaceSyntaxCategory::Expression
                     && declaration.contains_quote_or_escape
                 {
                     let budget = syntax_budget

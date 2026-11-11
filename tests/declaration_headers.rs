@@ -4,7 +4,9 @@ use ash::{
     driver::{RunConfiguration, compile_path, execute},
     lexer::lex,
     module::ModuleRoots,
-    parser::{ConcreteElement, Event, NodeKind, ProjectionError, parse, project_module},
+    parser::{
+        ConcreteElement, Event, NodeKind, ParseReason, ProjectionError, parse, project_module,
+    },
     source::{SourceFile, Span},
     surface::{
         SurfaceSyntaxCaptureKind, SurfaceSyntaxCategory, SurfaceSyntaxImplementation,
@@ -288,13 +290,29 @@ fn keyword_metanames_are_confined_to_declaration_captures_and_template_reads() {
         "pub syntax declaration: (interface) $name:ident => {}\n",
         "pub syntax ordinary $interface:ident then $value:expr => { $value }\n",
         "pub syntax ordinary $value:expr => { syntax { $interface } }\n",
-        "pub syntax derive: (bad) $interface:ident => {}\n",
         "main : Unit -> Int\nmain () = syntax { $interface }\n",
         "pub syntax declaration: (bad) $interface:ident => {\nvalue : Unit -> Int\nvalue () = ${ $interface }\n}\n",
     ] {
         let (_, tree) = parsed(text);
         assert!(!tree.parse_diagnostics().is_empty(), "accepted {text:?}");
     }
+
+    let (source, tree) = parsed("pub syntax derive: (good) $target:ident => {}\n");
+    assert!(tree.parse_diagnostics().is_empty());
+    assert_eq!(
+        project_module(&source, &tree).unwrap().syntax_declarations[0].category,
+        SurfaceSyntaxCategory::Derive
+    );
+
+    let (source, tree) = parsed("pub syntax derive: (bad) $interface:ident => {}\n");
+    assert!(
+        tree.parse_diagnostics().iter().any(|diagnostic| {
+            diagnostic.reason == ParseReason::ExpectedForm
+                && text_at(&source, diagnostic.primary.span()) == "interface"
+        }),
+        "{:?}",
+        tree.parse_diagnostics()
+    );
 }
 
 #[test]

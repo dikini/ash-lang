@@ -65,6 +65,8 @@ pub enum SurfaceSyntaxCategory {
     Expression,
     /// A top-level declaration syntax definition.
     Declaration,
+    /// A derive syntax definition producing top-level declarations.
+    Derive,
 }
 
 /// The source implementation of a syntax declaration.
