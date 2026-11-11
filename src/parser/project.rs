@@ -4323,7 +4323,8 @@ fn charge_declaration_invocation(
         SurfaceSyntaxImplementation::Template
     );
     let declaration_transformer = executing
-        && ((has_declaration && !has_other_capture)
+        && (selection.declaration.matcher.is_empty()
+            || (has_declaration && !has_other_capture)
             || (!has_declaration && (has_type_or_identifier || has_expression)))
         && source_projection_tokens(tokens)
         && matches!(
