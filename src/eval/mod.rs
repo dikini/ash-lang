@@ -12,10 +12,13 @@ pub use failure::{
     RuntimeFailureSummary, RuntimePhase, RuntimeResource,
 };
 
-pub(crate) use machine::evaluate_transformer;
 pub use machine::{
     Control, EffectTraceEvent, Environment, Evaluation, RuntimeFailure, TraceEvent, evaluate,
     evaluate_effect, evaluate_effect_with_source_native_program,
+};
+pub(crate) use machine::{
+    evaluate_effect_with_quote_guards, evaluate_effect_with_source_native_quote_guards,
+    evaluate_transformer_with_owners,
 };
 #[doc(hidden)]
 pub use value::CompilerSyntaxHandle;

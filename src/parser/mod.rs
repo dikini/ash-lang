@@ -17,13 +17,17 @@ pub use event::Event;
 #[cfg(test)]
 pub(crate) use project::G1_CAPTURE_OBSERVER;
 pub(crate) use project::module_span_from_checkpoint;
+#[cfg(test)]
+pub(crate) use project::project_declaration_expansions;
 #[allow(unused_imports)]
 pub(crate) use project::project_declaration_invocation;
 pub(crate) use project::project_module_header;
 #[cfg(test)]
 pub(crate) use project::project_module_retaining_templates;
 pub(crate) use project::structural_weight as source_structural_weight;
-pub(crate) use project::{DeclarationExpansionFailure, project_declaration_expansions};
+pub(crate) use project::{
+    DeclarationExpansionFailure, QuoteProjection, project_declaration_expansions_with_quotes,
+};
 pub use project::{ProjectionError, project_module};
 
 use crate::{
@@ -1262,7 +1266,9 @@ fn parse_macro_tree_with_expression_scratch(
                 pieces.extend(children.into_iter().rev());
                 open
             }
-            MacroOutputNode::Splice(_) => return Err(MacroParseFailure::Invalid),
+            MacroOutputNode::Splice(_) | MacroOutputNode::TemplateEscape(_) => {
+                return Err(MacroParseFailure::Invalid);
+            }
         };
         tokens.push(crate::lexer::Token { kind, span: anchor });
     }
@@ -1277,7 +1283,7 @@ fn parse_macro_tree_with_expression_scratch(
                 | MacroOutputNode::Identifier(_, origin)
                 | MacroOutputNode::Token(_, _, origin)
                 | MacroOutputNode::Group(_, _, origin) => origin,
-                MacroOutputNode::Splice(_) => unreachable!(),
+                MacroOutputNode::Splice(_) | MacroOutputNode::TemplateEscape(_) => unreachable!(),
             };
             (*index, origin.primary())
         })
@@ -1568,7 +1574,7 @@ fn charge_staged_output_with_expression_scratch(
                     return Err(MacroParseFailure::Invalid);
                 }
             }
-            MacroOutputNode::Splice(_) => {
+            MacroOutputNode::Splice(_) | MacroOutputNode::TemplateEscape(_) => {
                 return Err(MacroParseFailure::Invalid);
             }
         }

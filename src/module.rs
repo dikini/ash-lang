@@ -448,12 +448,16 @@ pub struct ModuleDependency {
     target: ModuleId,
     import_span: Span,
     // A compiler dependency is not a fabricated SurfaceImport and binds no names.
-    region_service: bool,
+    compiler_private: bool,
 }
 
 impl ModuleDependency {
     pub(crate) const fn is_region_service(self) -> bool {
-        self.region_service
+        self.compiler_private && self.target.is_builtin_region()
+    }
+
+    pub(crate) const fn is_compiler_private(self) -> bool {
+        self.compiler_private
     }
     /// Returns the imported module identity.
     #[must_use]
@@ -469,14 +473,42 @@ impl ModuleDependency {
 }
 
 /// One parsed module and its source-ordered dependency edges.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct LoadedModule {
     id: ModuleId,
     canonical_path: PathBuf,
     source: std::sync::Arc<SourceFile>,
     surface: SurfaceModule,
     dependencies: Box<[ModuleDependency]>,
+    quote_sites: Vec<crate::syntax::SurfaceQuoteSite>,
 }
+
+// A cloned surface has different Box allocations. Its source syntax is still
+// equal, but the original module's transient quote authority must not follow it.
+impl Clone for LoadedModule {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            canonical_path: self.canonical_path.clone(),
+            source: self.source.clone(),
+            surface: self.surface.clone(),
+            dependencies: self.dependencies.clone(),
+            quote_sites: Vec::new(),
+        }
+    }
+}
+
+impl PartialEq for LoadedModule {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.canonical_path == other.canonical_path
+            && self.source == other.source
+            && self.surface == other.surface
+            && self.dependencies == other.dependencies
+    }
+}
+
+impl Eq for LoadedModule {}
 
 impl LoadedModule {
     /// Returns this module's graph-local identity.
@@ -511,6 +543,10 @@ impl LoadedModule {
     #[must_use]
     pub fn dependencies(&self) -> &[ModuleDependency] {
         &self.dependencies
+    }
+
+    pub(crate) fn quote_sites(&self) -> &[crate::syntax::SurfaceQuoteSite] {
+        &self.quote_sites
     }
 }
 
@@ -1394,6 +1430,7 @@ struct StagedSyntax {
     span: Span,
     body: ModuleBody,
     import_span: Option<Span>,
+    needs_quote_dependency: bool,
 }
 
 enum ModuleBody {
@@ -1408,6 +1445,7 @@ impl StagedSyntax {
             span: surface.span,
             body: ModuleBody::Parsed(surface),
             import_span,
+            needs_quote_dependency: false,
         }
     }
 }
@@ -1420,14 +1458,18 @@ impl StagedModule {
         owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
         owners: &mut Vec<crate::syntax::SyntaxOwner>,
         transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
+        quote_owner: Option<crate::syntax::SyntaxOwner>,
+        next_quote_ordinal: &mut usize,
     ) -> Result<LoadedModule, LoadGraphError> {
         let StagedSyntax {
             imports,
             span,
             body,
             import_span,
+            needs_quote_dependency,
         } = self.surface;
         let mut completed_owners = None;
+        let mut completed_sites = Vec::new();
         let (source, surface) = match body {
             ModuleBody::Parsed(mut surface) => {
                 surface.imports = imports;
@@ -1451,6 +1493,37 @@ impl StagedModule {
                     })));
                 }
                 let mut staged_owners = owners.clone();
+                let quote_projection = if needs_quote_dependency {
+                    if let Some(quote_owner) = quote_owner {
+                        let owner_work = if staged_owners.len() == staged_owners.capacity() {
+                            staged_owners.len().saturating_mul(2).saturating_add(1)
+                        } else {
+                            1
+                        };
+                        if let Err(resource) = budget.charge_units(owner_work) {
+                            return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+                                lexical: Vec::new(),
+                                parser: Vec::new(),
+                                resource: Some(resource),
+                                source: self.source,
+                                import_span,
+                            })));
+                        }
+                        if staged_owners.len() == staged_owners.capacity() {
+                            staged_owners.reserve_exact(1);
+                        }
+                        staged_owners.push(quote_owner);
+                        Some(std::cell::RefCell::new(crate::parser::QuoteProjection {
+                            introduction: staged_owners.len(),
+                            next_ordinal: *next_quote_ordinal,
+                            sites: Vec::new(),
+                        }))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 let (source, mut surface) = project_finished_module(
                     self.source,
                     tree,
@@ -1460,6 +1533,7 @@ impl StagedModule {
                     &mut staged_owners,
                     budget,
                     transformer,
+                    quote_projection.as_ref(),
                 )?;
                 if surface.imports != imports {
                     return Err(LoadGraphError::Projection {
@@ -1472,6 +1546,11 @@ impl StagedModule {
                 }
                 surface.imports = imports;
                 completed_owners = Some(staged_owners);
+                if let Some(quote_projection) = quote_projection {
+                    let quote_projection = quote_projection.into_inner();
+                    *next_quote_ordinal = quote_projection.next_ordinal;
+                    completed_sites = quote_projection.sites;
+                }
                 (source, surface)
             }
         };
@@ -1491,6 +1570,7 @@ impl StagedModule {
             source: std::sync::Arc::new(source),
             surface,
             dependencies: self.dependencies.into_boxed_slice(),
+            quote_sites: completed_sites,
         })
     }
 }
@@ -1501,9 +1581,14 @@ pub(crate) struct HeaderGraph {
     completed: Option<ModuleGraph>,
     entry: ModuleId,
     syntax_budget: SyntaxBudget,
+    next_quote_ordinal: usize,
 }
 
 impl HeaderGraph {
+    pub(crate) fn take_syntax_budget(&mut self) -> SyntaxBudget {
+        std::mem::take(&mut self.syntax_budget)
+    }
+
     pub(crate) fn source_work(&self) -> Result<(crate::types::TypeWorkBudget, usize), ()> {
         if !self.loaded.is_empty() || self.completed.is_some() {
             return Err(());
@@ -1528,6 +1613,17 @@ impl HeaderGraph {
                 module.dependencies.as_slice(),
             )
         })
+    }
+
+    pub(crate) fn next_quote_dependency(&self) -> Option<ModuleDependency> {
+        let module = self.pending.front()?;
+        module.surface.needs_quote_dependency.then(|| {
+            module
+                .dependencies
+                .iter()
+                .copied()
+                .find(|edge| edge.target().is_builtin_compiler_syntax())
+        })?
     }
 
     #[cfg(feature = "resource-calibration")]
@@ -1564,6 +1660,23 @@ impl HeaderGraph {
         owners: &mut Vec<crate::syntax::SyntaxOwner>,
         transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
     ) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
+        self.next_module_with_syntax_and_quote_owner(
+            syntax,
+            owner_imports,
+            owners,
+            transformer,
+            None,
+        )
+    }
+
+    pub(crate) fn next_module_with_syntax_and_quote_owner(
+        &mut self,
+        syntax: &[crate::syntax::SelectedSyntax],
+        owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
+        owners: &mut Vec<crate::syntax::SyntaxOwner>,
+        transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
+        quote_owner: Option<crate::syntax::SyntaxOwner>,
+    ) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
         let Some(module) = self.pending.pop_front() else {
             return Ok(None);
         };
@@ -1573,6 +1686,8 @@ impl HeaderGraph {
             owner_imports,
             owners,
             transformer,
+            quote_owner,
+            &mut self.next_quote_ordinal,
         ) {
             Ok(module) => {
                 self.loaded.push(module);
@@ -1870,7 +1985,7 @@ fn discover_graph_with_budget(
                 staged[module_index].dependencies.push(ModuleDependency {
                     target,
                     import_span: span,
-                    region_service: true,
+                    compiler_private: true,
                 });
             }
             if import_index == staged[module_index].surface.imports.len() {
@@ -1880,9 +1995,44 @@ fn discover_graph_with_budget(
                 if staged[module_index]
                     .dependencies
                     .first()
-                    .is_some_and(|edge| edge.region_service)
+                    .is_some_and(|edge| edge.is_compiler_private())
                 {
                     staged[module_index].dependencies.rotate_left(1);
+                }
+                if staged[module_index].surface.needs_quote_dependency
+                    && !staged[module_index]
+                        .dependencies
+                        .iter()
+                        .any(|edge| edge.target.is_builtin_compiler_syntax())
+                {
+                    let span = staged[module_index].surface.span;
+                    let target = if let Some(id) = builtin_compiler_syntax {
+                        id
+                    } else {
+                        let region = builtin_region
+                            .ok_or_else(|| ModuleFailure::resource(ModuleResource::Sources))?;
+                        let id = admit_builtin_packed(
+                            "compiler.syntax",
+                            region,
+                            graph_identity,
+                            span,
+                            &mut budget,
+                            &mut staged,
+                            &mut dependency_order,
+                        )?;
+                        builtin_compiler_syntax = Some(id);
+                        id
+                    };
+                    budget.charge_edge()?;
+                    staged[module_index]
+                        .dependencies
+                        .try_reserve(1)
+                        .map_err(|_| ModuleFailure::resource(ModuleResource::Edges))?;
+                    staged[module_index].dependencies.push(ModuleDependency {
+                        target,
+                        import_span: span,
+                        compiler_private: true,
+                    });
                 }
                 staged[module_index].state = VisitState::Finished;
                 dependency_order.push(completed);
@@ -2051,7 +2201,7 @@ fn discover_graph_with_budget(
                 staged[module_index].dependencies.push(ModuleDependency {
                     target,
                     import_span: import.span,
-                    region_service: false,
+                    compiler_private: false,
                 });
                 continue;
             }
@@ -2078,7 +2228,7 @@ fn discover_graph_with_budget(
             staged[module_index].dependencies.push(ModuleDependency {
                 target,
                 import_span: import.span,
-                region_service: false,
+                compiler_private: false,
             });
             if relative {
                 staged[module_index].relative_edges.push(RelativeEdge {
@@ -2118,6 +2268,7 @@ fn discover_graph_with_budget(
             completed: None,
             entry: entry_id,
             syntax_budget: budget.syntax_work,
+            next_quote_ordinal: 0,
         })
     })();
     result.map_err(|failure| GraphDiagnostic {
@@ -2178,7 +2329,7 @@ fn admit_builtin_region_facade(
     dependencies.push(ModuleDependency {
         target: service,
         import_span: span,
-        region_service: false,
+        compiler_private: false,
     });
     staged.push(StagedModule {
         id,
@@ -2248,7 +2399,7 @@ fn admit_builtin_region(
     dependencies.push(ModuleDependency {
         target: foreign,
         import_span,
-        region_service: false,
+        compiler_private: false,
     });
     staged.push(StagedModule {
         id,
@@ -2381,7 +2532,7 @@ fn admit_builtin_packed(
         dependencies: vec![ModuleDependency {
             target: region,
             import_span: service_span,
-            region_service: true,
+            compiler_private: true,
         }],
         relative_edges: Vec::new(),
         state: VisitState::Finished,
@@ -2488,7 +2639,7 @@ fn admit_builtin_retained_control(
         dependencies: vec![ModuleDependency {
             target: region,
             import_span: service_span,
-            region_service: true,
+            compiler_private: true,
         }],
         relative_edges: Vec::new(),
         state: VisitState::Finished,
@@ -2538,7 +2689,7 @@ fn admit_builtin_network(
         dependencies: vec![ModuleDependency {
             target: region,
             import_span: service_span,
-            region_service: true,
+            compiler_private: true,
         }],
         relative_edges: Vec::new(),
         state: VisitState::Finished,
@@ -2624,6 +2775,7 @@ fn parse_graph_module(
             operation: crate::source::SourceOperation::SpanConstruction,
             import_span,
         })?;
+    let needs_quote_dependency = lexed.needs_quote_dependency();
     let (tokens, lexical, _, lexical_failure) = lexed.into_parts();
     if let Some(resource) = lexical_failure {
         return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
@@ -2678,6 +2830,7 @@ fn parse_graph_module(
             span,
             body: ModuleBody::Header(checkpoint),
             import_span,
+            needs_quote_dependency,
         },
     ))
 }
@@ -2693,6 +2846,7 @@ fn project_finished_module(
     owners: &mut Vec<crate::syntax::SyntaxOwner>,
     budget: &mut SyntaxBudget,
     transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
+    quote_sites: Option<&std::cell::RefCell<crate::parser::QuoteProjection>>,
 ) -> Result<(SourceFile, SurfaceModule), LoadGraphError> {
     if tree.resource_failure().is_some()
         || !tree.lexical_diagnostics().is_empty()
@@ -2706,7 +2860,7 @@ fn project_finished_module(
             import_span,
         })));
     }
-    match crate::parser::project_declaration_expansions(
+    match crate::parser::project_declaration_expansions_with_quotes(
         &source,
         &tree,
         syntax,
@@ -2714,6 +2868,7 @@ fn project_finished_module(
         owners,
         budget,
         transformer,
+        quote_sites,
     ) {
         Ok(surface) => Ok((source, surface)),
         Err(crate::parser::DeclarationExpansionFailure::Projection(error)) => {
@@ -3074,6 +3229,7 @@ mod tests {
                 span,
                 body: ModuleBody::Header(checkpoint),
                 import_span: None,
+                needs_quote_dependency: false,
             },
             dependencies: Vec::new(),
             relative_edges: Vec::new(),
@@ -3086,6 +3242,7 @@ mod tests {
                 completed: None,
                 entry,
                 syntax_budget: budget,
+                next_quote_ordinal: 0,
             },
             selected,
         )
@@ -3415,6 +3572,7 @@ mod tests {
                 span,
             },
             dependencies: Box::new([]),
+            quote_sites: Vec::new(),
         }
     }
 }

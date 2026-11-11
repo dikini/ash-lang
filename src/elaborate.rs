@@ -3267,6 +3267,10 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     method_capture_binders: Vec<(crate::interface::LexicalEvidenceId, MethodId, BinderId)>,
     checked_lexical_sources: Vec<CheckedLexicalSource>,
     global_capture_uses: Vec<CheckedGlobalUse>,
+    quote_sites: Vec<QuoteSynthesisSite>,
+    checked_quote_sites: Vec<CheckedQuoteSite>,
+    quote_syntax_work: Option<crate::syntax_resource::SyntaxBudget>,
+    quote_resource_failure: Option<crate::syntax_resource::ResourceFailure>,
 
     implementation_capture_roots: Vec<(BinderId, NodeId)>,
     expected_effect_rows: Vec<EffectRow>,
@@ -3276,6 +3280,30 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
         HashMap<crate::module::ModuleId, crate::core::transform::FragmentIdentities>,
     fragment_catalog_offsets:
         HashMap<crate::module::ModuleId, crate::core::dialect::CompletedCatalogOffsets>,
+}
+
+#[derive(Debug)]
+struct QuoteSynthesisSite {
+    owner: crate::module::ModuleId,
+    callee: usize,
+    constructor: crate::types::ConstructorId,
+    template: Arc<crate::syntax::QuoteTemplate>,
+    constructor_body: Option<NodeId>,
+    constructor_result: Option<NodeId>,
+    closure: Option<NodeId>,
+}
+
+#[derive(Debug)]
+pub(crate) struct CheckedQuoteSite {
+    pub(crate) owner: crate::module::ModuleId,
+    pub(crate) constructor: crate::types::ConstructorId,
+    pub(crate) template: Arc<crate::syntax::QuoteTemplate>,
+    pub(crate) application: NodeId,
+    pub(crate) callee: NodeId,
+    pub(crate) argument: NodeId,
+    pub(crate) constructor_body: NodeId,
+    pub(crate) constructor_result: NodeId,
+    pub(crate) closure: NodeId,
 }
 
 /// Pure Core elaboration with its uninhabited operation family.
@@ -3667,6 +3695,74 @@ fn observe_module_body(span: Span, kind: ObservedModuleBody, purpose: Elaboratio
 }
 
 impl<F: CoreLoweringFamily> CoreElaborator<F> {
+    pub(crate) fn set_quote_syntax_work(
+        &mut self,
+        work: Option<crate::syntax_resource::SyntaxBudget>,
+    ) {
+        self.quote_syntax_work = work;
+    }
+
+    pub(crate) fn take_quote_syntax_work(
+        &mut self,
+    ) -> (
+        Option<crate::syntax_resource::SyntaxBudget>,
+        Option<crate::syntax_resource::ResourceFailure>,
+    ) {
+        (
+            self.quote_syntax_work.take(),
+            self.quote_resource_failure.take(),
+        )
+    }
+
+    pub(crate) fn take_checked_quote_sites(&mut self) -> Vec<CheckedQuoteSite> {
+        std::mem::take(&mut self.checked_quote_sites)
+    }
+    fn charge_quote_work(&mut self, units: usize) -> Result<(), TypeError> {
+        let work = self.quote_syntax_work.as_mut().ok_or_else(invalid_state)?;
+        if let Err(failure) = work.charge_units(units) {
+            self.quote_resource_failure = Some(failure);
+            return Err(invalid_state());
+        }
+        Ok(())
+    }
+
+    fn install_quote_sites(
+        &mut self,
+        owner: crate::module::ModuleId,
+        sites: &[crate::syntax::ResolvedQuoteSite],
+    ) -> Result<(), TypeError> {
+        if sites.is_empty() {
+            return Ok(());
+        }
+        self.charge_quote_work(sites.len().saturating_mul(2))?;
+        self.quote_sites
+            .try_reserve_exact(sites.len())
+            .map_err(|_| type_resource())?;
+        for site in sites {
+            self.quote_sites.push(QuoteSynthesisSite {
+                owner,
+                callee: site.callee,
+                constructor: site.constructor,
+                template: Arc::clone(&site.template),
+                constructor_body: None,
+                constructor_result: None,
+                closure: None,
+            });
+        }
+        Ok(())
+    }
+
+    fn quote_site_for(&mut self, callee: &ResolvedExpr) -> Result<Option<usize>, TypeError> {
+        let identity = std::ptr::from_ref(callee) as usize;
+        for index in 0..self.quote_sites.len() {
+            self.charge_quote_work(1)?;
+            if self.quote_sites[index].callee == identity {
+                return Ok(Some(index));
+            }
+        }
+        Ok(None)
+    }
+
     fn elaborate_module_program_plain(
         &mut self,
         program: &ValidatedInterfaceProgram,
@@ -3892,6 +3988,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             next_handler: 0,
             fragment_identities: HashMap::new(),
             fragment_catalog_offsets: HashMap::new(),
+            quote_sites: Vec::new(),
+            checked_quote_sites: Vec::new(),
+            quote_syntax_work: None,
+            quote_resource_failure: None,
         }
     }
 
@@ -4044,6 +4144,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             next_handler: 0,
             fragment_identities: HashMap::new(),
             fragment_catalog_offsets: HashMap::new(),
+            quote_sites: Vec::new(),
+            checked_quote_sites: Vec::new(),
+            quote_syntax_work: None,
+            quote_resource_failure: None,
         })
     }
 
@@ -4409,6 +4513,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             next_handler: 0,
             fragment_identities: HashMap::new(),
             fragment_catalog_offsets: HashMap::new(),
+            quote_sites: Vec::new(),
+            checked_quote_sites: Vec::new(),
+            quote_syntax_work: None,
+            quote_resource_failure: None,
         };
         Ok(elaborator)
     }
@@ -5317,6 +5425,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             next_handler: 0,
             fragment_identities: HashMap::new(),
             fragment_catalog_offsets: HashMap::new(),
+            quote_sites: Vec::new(),
+            checked_quote_sites: Vec::new(),
+            quote_syntax_work: None,
+            quote_resource_failure: None,
         })
     }
 
@@ -5911,6 +6023,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             lexical_captures: std::mem::take(&mut self.checked_lexical_captures),
             scoped_owners: std::mem::take(&mut self.checked_scoped_owners),
             global_uses: std::mem::take(&mut self.global_capture_uses),
+            quote_sites: std::mem::take(&mut self.checked_quote_sites),
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
             imported_type_origins: HashMap::new(),
             next_generated_type_variable: u32::MAX,
@@ -6701,6 +6814,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(identity)
     }
 
+    #[cfg(test)]
     fn lower_constructor_function(
         &mut self,
         owner: crate::types::NominalTypeId,
@@ -6708,6 +6822,25 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         source_scheme: Type,
         origin: &Origin,
         span: Span,
+    ) -> Result<NodeId, TypeError> {
+        self.lower_constructor_function_with_quote(
+            owner,
+            constructor,
+            source_scheme,
+            origin,
+            span,
+            None,
+        )
+    }
+
+    fn lower_constructor_function_with_quote(
+        &mut self,
+        owner: crate::types::NominalTypeId,
+        constructor: Option<crate::types::ConstructorId>,
+        source_scheme: Type,
+        origin: &Origin,
+        span: Span,
+        quote_site: Option<usize>,
     ) -> Result<NodeId, TypeError> {
         let source_scheme = IterativeTypeOwner::new(source_scheme);
         let (source_parameters, source_body) = match &*source_scheme {
@@ -6717,6 +6850,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let generated_marker = self.generated_type_variables.len();
         let next_generated_type_variable = self.next_generated_type_variable;
         let builder_checkpoint = self.builder.checkpoint();
+        let mut produced_quote_nodes = None;
         let result = (|| {
             let scratch_work = source_parameters
                 .len()
@@ -6772,35 +6906,42 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let child = self
                 .builder
                 .variable(parameter.id(), child_type, origin.clone())?;
-            let conversion = if let Some(constructor) = constructor {
-                self.initialize_region_record(
+            let (conversion, constructor_result) = if let Some(constructor) = constructor {
+                let (body, result) = self.initialize_region_record_with_result(
                     Some(constructor),
                     vec![child],
                     &codomain,
                     &effects,
                     span,
-                )?
+                )?;
+                (body, Some(result))
             } else {
                 let conversion_type = self.clone_type(&codomain)?;
-                self.builder.newtype_conversion(
-                    owner,
-                    NewtypeConversionDirection::Wrap,
-                    child,
-                    conversion_type,
-                    origin.clone(),
-                )?
+                (
+                    self.builder.newtype_conversion(
+                        owner,
+                        NewtypeConversionDirection::Wrap,
+                        child,
+                        conversion_type,
+                        origin.clone(),
+                    )?,
+                    None,
+                )
             };
             let function_type = IterativeTypeOwner::new(Type::function_computation(
                 domain.into_inner(),
                 ComputationType::new(codomain.into_inner(), effects),
             ));
             if generated_parameters.is_empty() {
-                return self.construct_function(
+                let function = self.construct_function(
                     parameter,
                     conversion,
                     function_type.into_inner(),
                     origin.clone(),
-                );
+                )?;
+                produced_quote_nodes =
+                    constructor_result.map(|result| (conversion, result, function));
+                return Ok(function);
             }
             let retained_function_type = self.clone_type(&function_type)?;
             let function = self.construct_function(
@@ -6809,6 +6950,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 retained_function_type,
                 origin.clone(),
             )?;
+            produced_quote_nodes = constructor_result.map(|result| (conversion, result, function));
             let scheme_parameters = clone_kinded_type_parameters_with_budget(
                 &generated_parameters,
                 &mut self.type_work,
@@ -6826,6 +6968,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             self.builder.rollback(builder_checkpoint);
             self.generated_type_variables.truncate(generated_marker);
             self.next_generated_type_variable = next_generated_type_variable;
+        } else if let Some(index) = quote_site {
+            let (body, constructor_result, closure) =
+                produced_quote_nodes.ok_or_else(invalid_state)?;
+            let site = self.quote_sites.get_mut(index).ok_or_else(invalid_state)?;
+            site.constructor_body = Some(body);
+            site.constructor_result = Some(constructor_result);
+            site.closure = Some(closure);
         }
         result
     }
@@ -11592,6 +11741,61 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
     }
 
+    fn transfer_quote_sites<S: CheckedFragmentSource>(
+        &mut self,
+        fragment: &CheckedTypedFragment<S>,
+        transfer: &crate::core::transform::FragmentNodeMap<'_>,
+    ) -> Result<(), TypeError> {
+        for site in &fragment.quote_sites {
+            self.charge_quote_work(1)?;
+            // Validate the recorded source ID even when this root does not reach it.
+            fragment
+                .builder
+                .checked_fragment_node(site.application, &mut self.type_work)?;
+            let Ok(application) = transfer.mapped(site.application) else {
+                continue;
+            };
+            self.charge_quote_work(5)?;
+            let callee = transfer
+                .mapped(site.callee)
+                .map_err(fragment_transfer_error)?;
+            let argument = transfer
+                .mapped(site.argument)
+                .map_err(fragment_transfer_error)?;
+            let constructor_body = transfer
+                .mapped(site.constructor_body)
+                .map_err(fragment_transfer_error)?;
+            let constructor_result = transfer
+                .mapped(site.constructor_result)
+                .map_err(fragment_transfer_error)?;
+            let closure = transfer
+                .mapped(site.closure)
+                .map_err(fragment_transfer_error)?;
+            let live = self.checked_quote_sites.len();
+            let work = if live == self.checked_quote_sites.capacity() {
+                live.saturating_mul(2).saturating_add(2)
+            } else {
+                1
+            };
+            self.charge_quote_work(work)?;
+            if live == self.checked_quote_sites.capacity() {
+                self.checked_quote_sites.reserve_exact(1);
+            }
+            self.checked_quote_sites.push(CheckedQuoteSite {
+                owner: site.owner,
+                constructor: site.constructor,
+                template: Arc::clone(&site.template),
+                application,
+                callee,
+                argument,
+                constructor_body,
+                constructor_result,
+                closure,
+            });
+        }
+        Ok(())
+    }
+
     fn relocate_completed_module_group<S: CheckedFragmentSource>(
         &mut self,
         group: &ResolvedModuleGroup,
@@ -11723,6 +11927,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 foreign_constant: binding.foreign_constant,
             });
         }
+        self.transfer_quote_sites(fragment, &transfer)?;
         let retained = fragment.builder.module_method_evidence_anchors();
         self.type_work
             .charge(retained.len())
@@ -12644,6 +12849,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ));
             }
         }
+        self.transfer_quote_sites(fragment, &transfer)?;
         transfer.mapped(root).map_err(fragment_transfer_error)
     }
 
@@ -17489,6 +17695,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     function_span,
                     argument,
                     recursive_call,
+                    quote_site,
                 } => {
                     let function = values.pop().ok_or_else(invalid_state)?;
                     self.schedule_application_argument(
@@ -17496,6 +17703,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         function_span,
                         argument,
                         recursive_call,
+                        quote_site,
                         function.into_inner(),
                         &mut tasks,
                     )?;
@@ -18139,6 +18347,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 }
             },
             ResolvedExprKind::Constructor(occurrence) => {
+                let quote_site = self.quote_site_for(current)?;
+                if let Some(index) = quote_site
+                    && self.quote_sites[index].constructor != occurrence.constructor
+                {
+                    return Err(invalid_state());
+                }
                 let constructor = self
                     .registry
                     .constructor(occurrence.constructor)
@@ -18214,6 +18428,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         })
                     })
                     .flatten();
+                if quote_site.is_some() && (!F::EFFECTS || region_api.is_none() || !has_payload) {
+                    return Err(invalid_state());
+                }
                 let allocation = region_api.map_or_else(EffectRow::empty, |api| {
                     EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])))
                 });
@@ -18254,12 +18471,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 };
                 let mut node = if is_newtype || (F::EFFECTS && region_api.is_some() && has_payload)
                 {
-                    self.lower_constructor_function(
+                    self.lower_constructor_function_with_quote(
                         constructor_owner,
                         (!is_newtype).then_some(occurrence.constructor),
                         core_scheme,
                         &occurrence.origin,
                         current.span,
+                        quote_site,
                     )?
                 } else if F::EFFECTS && region_api.is_some() && !has_payload {
                     discard_type_iteratively(core_scheme);
@@ -18318,6 +18536,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 });
             }
             ResolvedExprKind::Apply(application) => {
+                let quote_site = self.quote_site_for(&application.function)?;
                 let recursive_call = matches!(
                     &application.function.kind,
                     ResolvedExprKind::Occurrence(occurrence)
@@ -18329,6 +18548,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     function_span: application.function.span,
                     argument: &application.argument,
                     recursive_call,
+                    quote_site,
                 });
                 tasks.push(ElaborationTask::Synthesize {
                     expression: &application.function,
@@ -18624,6 +18844,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 function,
                 codomain,
                 latent_effects,
+                quote_site,
             } => {
                 let argument = values.pop().ok_or_else(invalid_state)?;
                 values.push(self.finish_application(
@@ -18634,6 +18855,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     codomain,
                     latent_effects,
                     argument.into_inner(),
+                    quote_site,
                 )?);
             }
             ElaborationTask::AfterLeft {
@@ -19303,6 +19525,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         function_span: Span,
         argument: &'a ResolvedExpr,
         recursive_call: bool,
+        quote_site: Option<usize>,
         function: TypedNode,
         tasks: &mut ElaborationTaskBuffer<'a>,
     ) -> Result<(), TypeError> {
@@ -19383,6 +19606,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             function: function.into_inner(),
             codomain: codomain.into_inner(),
             latent_effects,
+            quote_site,
         });
         tasks.push(ElaborationTask::Check {
             expression: argument,
@@ -19407,6 +19631,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         codomain: ProvenancedType,
         latent_effects: EffectRow,
         argument: TypedNode,
+        quote_site: Option<usize>,
     ) -> Result<TypedNode, TypeError> {
         let function = TypedNodeOwner::new(function);
 
@@ -19429,6 +19654,25 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             primary: Box::new(Origin::Source(whole_span)),
             related: vec![function_span, argument_span],
         };
+        if let Some(index) = quote_site {
+            let site = self.quote_sites.get(index).ok_or_else(invalid_state)?;
+            if site.constructor_body.is_none()
+                || site.constructor_result.is_none()
+                || site.closure.is_none()
+            {
+                return Err(invalid_state());
+            }
+            let live = self.checked_quote_sites.len();
+            let work = if live == self.checked_quote_sites.capacity() {
+                live.saturating_mul(2).saturating_add(2)
+            } else {
+                1
+            };
+            self.charge_quote_work(work)?;
+            if live == self.checked_quote_sites.capacity() {
+                self.checked_quote_sites.reserve_exact(1);
+            }
+        }
         let node = F::push_application(
             &mut self.builder,
             ApplicationNode::new(function.node, argument.node),
@@ -19436,6 +19680,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             core_effects,
             origin,
         )?;
+        if let Some(index) = quote_site {
+            let site = self.quote_sites.get(index).ok_or_else(invalid_state)?;
+            self.checked_quote_sites.push(CheckedQuoteSite {
+                owner: site.owner,
+                constructor: site.constructor,
+                template: Arc::clone(&site.template),
+                application: node,
+                callee: function.node,
+                argument: argument.node,
+                constructor_body: site.constructor_body.ok_or_else(invalid_state)?,
+                constructor_result: site.constructor_result.ok_or_else(invalid_state)?,
+                closure: site.closure.ok_or_else(invalid_state)?,
+            });
+        }
         Ok(TypedNode {
             diagnostic: None,
             node,
@@ -25114,6 +25372,8 @@ pub(crate) fn check_module_with_budget_and_rewrite_work(
             constraint_work,
             primary_work,
             rewrite_work,
+            None,
+            None,
         )
     } else {
         check_module_with_budget_family::<PureOperationFamily>(
@@ -25123,12 +25383,15 @@ pub(crate) fn check_module_with_budget_and_rewrite_work(
             constraint_work,
             primary_work,
             rewrite_work,
+            None,
+            None,
         )
     }
 }
 
 /// Checks one module for the public file pipeline's established Effect
 /// profile, including compiler-owned modules with otherwise pure bodies.
+#[cfg(test)]
 pub(crate) fn check_module_in_effect_profile_with_rewrite_work(
     resolved: ResolvedModule,
     type_work: &mut TypeWorkBudget,
@@ -25144,6 +25407,31 @@ pub(crate) fn check_module_in_effect_profile_with_rewrite_work(
         constraint_work,
         primary_work,
         rewrite_work,
+        None,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn check_module_in_effect_profile_with_quote_work(
+    resolved: ResolvedModule,
+    type_work: &mut TypeWorkBudget,
+    coverage_work: &mut UsefulnessBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
+    primary_work: Option<TypeWorkBudget>,
+    rewrite_work: Option<TypeWorkBudget>,
+    syntax_work: Option<&mut crate::syntax_resource::SyntaxBudget>,
+    resource_failure: &mut Option<crate::syntax_resource::ResourceFailure>,
+) -> Result<CheckedModule, TypeError> {
+    check_module_with_budget_family::<EffectOperationFamily>(
+        resolved,
+        type_work,
+        coverage_work,
+        constraint_work,
+        primary_work,
+        rewrite_work,
+        syntax_work,
+        Some(resource_failure),
     )
 }
 
@@ -25160,6 +25448,8 @@ fn check_module_with_budget_family<
     constraint_work: &mut InterfaceConstraintBudget,
     primary_work: Option<TypeWorkBudget>,
     rewrite_work: Option<TypeWorkBudget>,
+    mut syntax_work: Option<&mut crate::syntax_resource::SyntaxBudget>,
+    resource_failure: Option<&mut Option<crate::syntax_resource::ResourceFailure>>,
 ) -> Result<CheckedModule, TypeError> {
     resolved
         .authenticate_owner_definitions(type_work)
@@ -25187,7 +25477,9 @@ fn check_module_with_budget_family<
         primary_work,
         rewrite_work,
     )?;
+    elaborator.quote_syntax_work = syntax_work.as_deref_mut().map(std::mem::take);
     let result: Result<_, TypeError> = (|| {
+        elaborator.install_quote_sites(resolved.module(), resolved.quote_sites())?;
         let interface_facts = checked_interface_facts(
             &resolved,
             &checked_interfaces,
@@ -25342,6 +25634,12 @@ fn check_module_with_budget_family<
             physical_bindings,
         ))
     })();
+    if let (Some(destination), Some(work)) = (syntax_work, elaborator.quote_syntax_work.take()) {
+        *destination = work;
+    }
+    if let Some(destination) = resource_failure {
+        *destination = elaborator.quote_resource_failure.take();
+    }
     *type_work = std::mem::take(&mut elaborator.type_work);
     *coverage_work = std::mem::take(&mut elaborator.coverage_work);
     let (
@@ -25401,6 +25699,7 @@ fn check_module_with_budget_family<
         lexical_captures: elaborator.checked_lexical_captures,
         scoped_owners: elaborator.checked_scoped_owners,
         global_uses: elaborator.global_capture_uses,
+        quote_sites: elaborator.checked_quote_sites,
         generated_type_variables: elaborator.generated_type_variables,
         imported_type_origins: elaborator.imported_type_origins,
         next_generated_type_variable: elaborator.next_generated_type_variable,
@@ -26021,6 +26320,7 @@ enum ElaborationTask<'a> {
         function_span: Span,
         argument: &'a ResolvedExpr,
         recursive_call: bool,
+        quote_site: Option<usize>,
     },
 
     FinishApplication {
@@ -26030,6 +26330,7 @@ enum ElaborationTask<'a> {
         function: TypedNode,
         codomain: ProvenancedType,
         latent_effects: EffectRow,
+        quote_site: Option<usize>,
     },
     AfterMatchScrutinee {
         expression: &'a crate::resolved::ResolvedMatchExpr,
@@ -26374,6 +26675,7 @@ pub(crate) struct CheckedTypedFragment<F: CoreOperationFamily> {
     lexical_captures: Vec<CheckedLexicalCapture>,
     scoped_owners: Vec<CheckedScopedOwner>,
     global_uses: Vec<CheckedGlobalUse>,
+    quote_sites: Vec<CheckedQuoteSite>,
     generated_type_variables: GeneratedTypeVariableRegistry,
     imported_type_origins: HashMap<TypeVariableId, GeneratedTypeOrigin>,
     next_generated_type_variable: u32,
@@ -43458,6 +43760,7 @@ mod tests {
                             },
                             codomain,
                             latent_effects: EffectRow::empty(),
+                            quote_site: None,
                         },
                         &mut TypeContext::new(),
                     ),

@@ -2183,7 +2183,7 @@ fn graph_shape(
                         (
                             names[&edge.target].clone(),
                             edge.import_span.range(),
-                            edge.region_service,
+                            edge.is_compiler_private(),
                         )
                     })
                     .collect(),

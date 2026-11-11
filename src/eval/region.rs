@@ -681,6 +681,16 @@ impl Machine<'_> {
             } else {
                 initialized
             };
+            let initialized = if !closure {
+                if let Some(host) = &mut self.syntax_host {
+                    host.finish_quote(node, &initialized, &self.heap, &mut self.instantiation_work)?
+                        .unwrap_or(initialized)
+                } else {
+                    initialized
+                }
+            } else {
+                initialized
+            };
             self.apply(Transition::direct(Control::Return(initialized)));
             return Ok(());
         };

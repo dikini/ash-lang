@@ -1018,6 +1018,7 @@ pub struct ResolvedModule {
     span: Span,
     defining_sources: Vec<(ModuleId, Arc<crate::source::SourceFile>)>,
     imported_lowerings: Vec<crate::elaborate::SharedModuleLowering>,
+    quote_sites: Vec<crate::syntax::ResolvedQuoteSite>,
 }
 
 pub(crate) struct ResolvedModuleParts {
@@ -1123,7 +1124,16 @@ impl ResolvedModule {
             span: parts.span,
             defining_sources: Vec::new(),
             imported_lowerings: Vec::new(),
+            quote_sites: Vec::new(),
         }
+    }
+
+    pub(crate) fn set_quote_sites(&mut self, sites: Vec<crate::syntax::ResolvedQuoteSite>) {
+        self.quote_sites = sites;
+    }
+
+    pub(crate) fn quote_sites(&self) -> &[crate::syntax::ResolvedQuoteSite] {
+        &self.quote_sites
     }
 
     /// Retains the same immutable defining records reached by dependency edges.

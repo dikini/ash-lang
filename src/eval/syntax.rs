@@ -134,6 +134,8 @@ pub(super) struct SyntaxHost<'inv> {
     introduction: usize,
     contexts: Arc<SyntaxContexts>,
     syntax_work: Option<&'inv mut crate::syntax_resource::SyntaxBudget>,
+    quote_sites: Arc<[crate::syntax::PreparedQuoteSite]>,
+    staged_owners: Option<&'inv mut Vec<crate::syntax::SyntaxOwner>>,
     type_accounting: bool,
     fresh_count: usize,
     captures: Vec<SurfaceSyntaxCapture>,
@@ -153,7 +155,7 @@ pub(super) struct SyntaxHost<'inv> {
 }
 
 impl<'inv> SyntaxHost<'inv> {
-    // Keep invocation inputs separate so their borrows and ownership stay explicit.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         entry: &ValidatedMacroEntry,
@@ -163,7 +165,33 @@ impl<'inv> SyntaxHost<'inv> {
         introduction: usize,
         contexts: Arc<SyntaxContexts>,
         frame: Arc<ExpansionFrame>,
+        syntax_work: Option<&'inv mut crate::syntax_resource::SyntaxBudget>,
+    ) -> Result<Self, RuntimeFailure> {
+        Self::new_with_owners(
+            entry,
+            captures,
+            source,
+            caller,
+            introduction,
+            contexts,
+            frame,
+            syntax_work,
+            None,
+        )
+    }
+
+    // Keep invocation inputs separate so their borrows and ownership stay explicit.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new_with_owners(
+        entry: &ValidatedMacroEntry,
+        captures: &[SurfaceSyntaxCapture],
+        source: &SourceFile,
+        caller: &SurfaceName,
+        introduction: usize,
+        contexts: Arc<SyntaxContexts>,
+        frame: Arc<ExpansionFrame>,
         mut syntax_work: Option<&'inv mut crate::syntax_resource::SyntaxBudget>,
+        staged_owners: Option<&'inv mut Vec<crate::syntax::SyntaxOwner>>,
     ) -> Result<Self, RuntimeFailure> {
         if syntax_work.is_none()
             && captures
@@ -269,9 +297,9 @@ impl<'inv> SyntaxHost<'inv> {
                 .collect()
         };
         if let Some(budget) = syntax_work.as_deref_mut() {
-            // Invocation Arc and Input handle; retained frame and contexts;
-            // the host's capture and diagnostic storage.
-            budget.charge_units(6).map_err(syntax_failure)?;
+            // Invocation Arc and Input handle; retained frame, contexts, and
+            // quote sites; the host's capture and diagnostic storage.
+            budget.charge_units(7).map_err(syntax_failure)?;
             budget
                 .charge_units(source.snapshot_work().unwrap_or(usize::MAX))
                 .map_err(syntax_failure)?;
@@ -289,6 +317,8 @@ impl<'inv> SyntaxHost<'inv> {
             caller: caller.clone(),
             introduction,
             contexts,
+            quote_sites: Arc::clone(&entry.quote_sites),
+            staged_owners,
             fresh_count: 0,
             captures: {
                 let mut copied = Vec::with_capacity(captures.len());
@@ -358,7 +388,66 @@ impl<'inv> SyntaxHost<'inv> {
     }
 
     pub(super) fn fresh_count(&self) -> usize {
-        self.fresh_count
+        if self.staged_owners.is_some() {
+            0
+        } else {
+            self.fresh_count
+        }
+    }
+
+    fn issue_context_owner(
+        &mut self,
+        owner: Option<usize>,
+        declaration: crate::source::Span,
+        import_span: crate::source::Span,
+    ) -> Result<usize, RuntimeFailure> {
+        let contexts =
+            Arc::get_mut(&mut self.contexts).ok_or(RuntimeFailure::InvalidControlState)?;
+        let staged = self
+            .staged_owners
+            .as_deref_mut()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let live = contexts.owner_count();
+        let next = live.checked_add(1).ok_or(RuntimeFailure::HeapCapacity)?;
+        if staged.len() != live {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let contexts_growth = if live == contexts.owner_capacity() {
+            live.saturating_mul(2).saturating_add(1)
+        } else {
+            0
+        };
+        let staged_growth = if live == staged.capacity() {
+            live.saturating_mul(2).saturating_add(1)
+        } else {
+            0
+        };
+        self.syntax_work
+            .as_deref_mut()
+            .ok_or(RuntimeFailure::InvalidControlState)?
+            .charge_units(
+                contexts_growth
+                    .saturating_add(staged_growth)
+                    .saturating_add(2),
+            )
+            .map_err(syntax_failure)?;
+        if live == contexts.owner_capacity() {
+            contexts
+                .reserve_owner()
+                .map_err(|()| RuntimeFailure::HeapCapacity)?;
+        }
+        if live == staged.capacity() {
+            staged
+                .try_reserve_exact(1)
+                .map_err(|_| RuntimeFailure::HeapCapacity)?;
+        }
+        contexts.push_owner(owner);
+        staged.push(crate::syntax::SyntaxOwner {
+            owner,
+            declaration,
+            import_span,
+        });
+        Ok(next)
     }
 
     fn handle(&self, kind: CompilerSyntaxHandleKind) -> Value {
@@ -383,6 +472,247 @@ impl<'inv> SyntaxHost<'inv> {
             budget.charge_units(units).map_err(syntax_failure)?;
         }
         Ok(())
+    }
+
+    // Prepay the known literal copy and the generated constructor/tuple storage
+    // before the ordinary application evaluates any of its operands.
+    pub(super) fn reach_quote(&mut self, node: NodeId) -> Result<(), RuntimeFailure> {
+        for index in 0..self.quote_sites.len() {
+            self.charge(1)?;
+            if self.quote_sites[index].nodes.application != node {
+                continue;
+            }
+            if self.staged_owners.is_none() || self.syntax_work.is_none() {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            self.charge(1)?;
+            let template = Arc::clone(&self.quote_sites[index].nodes.template);
+            let budget = self
+                .syntax_work
+                .as_deref_mut()
+                .ok_or(RuntimeFailure::InvalidControlState)?;
+            // One empty list, one payload tuple and constructor each, and a
+            // closure, pair and constructor for each nonempty list link.
+            let storage = template
+                .holes
+                .checked_mul(3)
+                .and_then(|n| n.checked_add(4))
+                .ok_or(RuntimeFailure::ResourceCapacity)?;
+            budget.charge_units(storage).map_err(syntax_failure)?;
+            budget
+                .charge_units(template.contents.len())
+                .map_err(syntax_failure)?;
+            let mut pending = Vec::new();
+            for item in template.contents.iter().rev() {
+                reserve_type_push(&mut pending, Some(&mut *budget), true)?;
+                pending.push((item, 1_usize));
+            }
+            while let Some((item, depth)) = pending.pop() {
+                budget.charge().map_err(syntax_failure)?;
+                match item {
+                    MacroOutputNode::Identifier(name, origin) => {
+                        crate::syntax::charge_type_name_copy(name, depth, budget)
+                            .map_err(syntax_failure)?;
+                        crate::syntax::charge_type_origin_copy(origin, depth, budget)
+                            .map_err(syntax_failure)?;
+                    }
+                    MacroOutputNode::Token(kind, _, origin) => {
+                        crate::syntax::charge_type_token_copy(kind, budget)
+                            .map_err(syntax_failure)?;
+                        budget.charge().map_err(syntax_failure)?;
+                        crate::syntax::charge_type_origin_copy(origin, depth, budget)
+                            .map_err(syntax_failure)?;
+                    }
+                    MacroOutputNode::Group(_, children, origin) => {
+                        let child = crate::syntax::type_depth(depth, 1).map_err(syntax_failure)?;
+                        crate::syntax::charge_type_origin_copy(origin, child, budget)
+                            .map_err(syntax_failure)?;
+                        budget
+                            .charge_units(children.len())
+                            .map_err(syntax_failure)?;
+                        for item in children.iter().rev() {
+                            reserve_type_push(&mut pending, Some(&mut *budget), true)?;
+                            pending.push((item, child));
+                        }
+                    }
+                    MacroOutputNode::Splice(_) => {}
+                    _ => return Err(RuntimeFailure::InvalidControlState),
+                }
+            }
+            return Ok(());
+        }
+        Ok(())
+    }
+
+    pub(super) fn finish_quote(
+        &mut self,
+        node: NodeId,
+        value: &Value,
+        heap: &[HeapCell],
+        work: &mut TypeWorkBudget,
+    ) -> Result<Option<Value>, RuntimeFailure> {
+        let mut selected = None;
+        for index in 0..self.quote_sites.len() {
+            self.charge(1)?;
+            if self.quote_sites[index].nodes.constructor_result == node {
+                selected = Some(index);
+                break;
+            }
+        }
+        let Some(index) = selected else {
+            return Ok(None);
+        };
+        self.charge(2)?;
+        let site = &self.quote_sites[index];
+        let expected_constructor = site.nodes.constructor;
+        let owner = site.owner;
+        let template = Arc::clone(&site.nodes.template);
+        let source = Arc::clone(&site.source);
+        let (constructor, payload) = constructor_fields(value, heap)?;
+        if constructor != expected_constructor
+            || !constructor.owner().module().is_builtin_compiler_syntax()
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let (ordinal, mut list) = pair(payload.ok_or(RuntimeFailure::InvalidControlState)?, heap)?;
+        if read_integer(ordinal, heap, work)?.to_usize() != Some(template.ordinal) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let empty = self.constructor("NoQuoteHoles")?;
+        let more = self.constructor("MoreQuoteHoles")?;
+        self.charge(template.holes)?;
+        let mut holes = Vec::new();
+        holes
+            .try_reserve_exact(template.holes)
+            .map_err(|_| RuntimeFailure::HeapCapacity)?;
+        loop {
+            self.charge(1)?;
+            let (constructor, payload) = constructor_fields(list, heap)?;
+            if constructor == empty && payload.is_none() {
+                break;
+            }
+            if constructor != more || holes.len() == template.holes {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            let (value, tail) = pair(payload.ok_or(RuntimeFailure::InvalidControlState)?, heap)?;
+            let CompilerSyntaxHandleKind::Expression(fragment) = self.admitted_handle(value)?
+            else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            if self.expressions.get(fragment).is_none() {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            holes.push(fragment);
+            list = tail;
+        }
+        if holes.len() != template.holes {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let introduction =
+            self.issue_context_owner(Some(owner), template.origin, template.origin)?;
+        let output = self.fill_quote_contents(&template, introduction, &holes)?;
+        let capture = crate::parser::parse_macro_expression_fragment(
+            &source,
+            template.origin,
+            output,
+            &self.contexts,
+            &self.frame,
+            self.syntax_work
+                .as_deref_mut()
+                .ok_or(RuntimeFailure::InvalidControlState)?,
+        )
+        .map_err(type_retention_failure)?;
+        self.charge(2)?;
+        reserve_type_push(&mut self.expressions, self.syntax_work.as_deref_mut(), true)?;
+        let result = self.expressions.len();
+        self.expressions.push(capture);
+        Ok(Some(
+            self.handle(CompilerSyntaxHandleKind::Expression(result)),
+        ))
+    }
+
+    fn fill_quote_contents(
+        &mut self,
+        template: &crate::syntax::QuoteTemplate,
+        introduction: usize,
+        holes: &[usize],
+    ) -> Result<Vec<MacroOutputNode>, RuntimeFailure> {
+        struct Group<'a> {
+            nodes: std::slice::Iter<'a, MacroOutputNode>,
+            output: Vec<MacroOutputNode>,
+            delimiter: MacroDelimiter,
+            origin: &'a MacroOrigin,
+        }
+        let mut nodes = template.contents.iter();
+        let mut output = Vec::with_capacity(template.contents.len());
+        let mut groups: Vec<Group<'_>> = Vec::new();
+        let mut next_hole = 0_usize;
+        loop {
+            let node = match nodes.next() {
+                Some(MacroOutputNode::Group(delimiter, children, origin)) => {
+                    reserve_type_push(&mut groups, self.syntax_work.as_deref_mut(), true)?;
+                    let child_output = Vec::with_capacity(children.len());
+                    groups.push(Group {
+                        nodes,
+                        output: std::mem::replace(&mut output, child_output),
+                        delimiter: delimiter.clone(),
+                        origin,
+                    });
+                    nodes = children.iter();
+                    continue;
+                }
+                Some(MacroOutputNode::Identifier(name, origin)) => {
+                    let mut name = name.clone();
+                    name.introduction = introduction;
+                    name.introduced_at = Some(self.frame.invocation);
+                    name.written = false;
+                    MacroOutputNode::Identifier(name, origin.clone())
+                }
+                Some(MacroOutputNode::Token(kind, spelling, origin)) => {
+                    MacroOutputNode::Token(kind.clone(), Arc::clone(spelling), origin.clone())
+                }
+                Some(MacroOutputNode::Splice(name)) => {
+                    let index = *holes
+                        .get(next_hole)
+                        .ok_or(RuntimeFailure::InvalidControlState)?;
+                    next_hole += 1;
+                    let capture = self
+                        .expressions
+                        .get(index)
+                        .ok_or(RuntimeFailure::InvalidControlState)?;
+                    let depth = groups.len().saturating_add(1);
+                    let budget = self
+                        .syntax_work
+                        .as_deref_mut()
+                        .ok_or(RuntimeFailure::InvalidControlState)?;
+                    require_unbridged_charge(crate::syntax::charge_new_expression_retention(
+                        capture, depth, budget,
+                    ))?;
+                    require_unbridged_charge(crate::syntax::charge_new_expression_copy(
+                        &capture.expression,
+                        crate::syntax::type_depth(depth, 1).map_err(syntax_failure)?,
+                        false,
+                        budget,
+                    ))?;
+                    MacroOutputNode::ForwardedExpression(capture.clone(), name.span.into())
+                }
+                Some(_) => return Err(RuntimeFailure::InvalidControlState),
+                None => {
+                    let Some(group) = groups.pop() else {
+                        if next_hole != holes.len() {
+                            return Err(RuntimeFailure::InvalidControlState);
+                        }
+                        return Ok(output);
+                    };
+                    let result =
+                        MacroOutputNode::Group(group.delimiter, output, group.origin.clone());
+                    output = group.output;
+                    nodes = group.nodes;
+                    result
+                }
+            };
+            output.push(node);
+        }
     }
 
     fn charge_origin(&mut self, origin: &MacroOrigin, depth: usize) -> Result<(), RuntimeFailure> {
@@ -868,12 +1198,18 @@ impl<'inv> SyntaxHost<'inv> {
                             .fresh_count
                             .checked_add(1)
                             .ok_or(RuntimeFailure::HeapCapacity)?;
-                        (
+                        let introduction = if self.staged_owners.is_some() {
+                            self.issue_context_owner(
+                                None,
+                                self.frame.definition,
+                                self.frame.invocation,
+                            )?
+                        } else {
                             self.introduction
                                 .checked_add(self.fresh_count)
-                                .ok_or(RuntimeFailure::HeapCapacity)?,
-                            Some(self.frame.invocation),
-                        )
+                                .ok_or(RuntimeFailure::HeapCapacity)?
+                        };
+                        (introduction, Some(self.frame.invocation))
                     }
                     "definition_identifier" => (self.introduction, Some(self.frame.invocation)),
                     _ => (self.caller.introduction, self.caller.introduced_at),
@@ -1795,7 +2131,7 @@ impl<'inv> SyntaxHost<'inv> {
                     rest = self.construct(heap, "NoNodes", None)?;
                     continue;
                 }
-                Some(MacroOutputNode::Splice(_)) => {
+                Some(MacroOutputNode::Splice(_) | MacroOutputNode::TemplateEscape(_)) => {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
                 None => {
@@ -2123,6 +2459,7 @@ mod tests {
                     binder: BinderId::new(0),
                     syntax_module: module,
                     ops,
+                    quote_sites: Arc::from([]),
                 },
                 source,
                 caller: SurfaceName {
@@ -2206,6 +2543,8 @@ mod tests {
             introduction: 0,
             contexts: Arc::new(SyntaxContexts::new(&[], &[], &[])),
             syntax_work: Some(budget),
+            quote_sites: Arc::from([]),
+            staged_owners: None,
             type_accounting: false,
             fresh_count: 0,
             captures: Vec::new(),
@@ -7657,6 +7996,7 @@ mod tests {
                     binder: BinderId::new(0),
                     syntax_module: module,
                     ops,
+                    quote_sites: Arc::from([]),
                 };
                 let name = SurfaceName {
                     text: "name".into(),
@@ -7777,6 +8117,8 @@ mod tests {
                     introduction: 0,
                     contexts,
                     syntax_work: None,
+                    quote_sites: Arc::from([]),
+                    staged_owners: None,
                     type_accounting: false,
                     fresh_count: 0,
                     captures,
@@ -7922,6 +8264,8 @@ mod tests {
             introduction: 0,
             contexts: Arc::new(SyntaxContexts::new(&[], &[], &[])),
             syntax_work: None,
+            quote_sites: Arc::from([]),
+            staged_owners: None,
             type_accounting: false,
             fresh_count: 0,
             captures: vec![SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {

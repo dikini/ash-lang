@@ -125,6 +125,7 @@ pub struct Lexed {
     pub diagnostics: Vec<Diagnostic<LexReason>>,
     syntax_budget: SyntaxBudget,
     resource_failure: Option<ResourceFailure>,
+    needs_quote_dependency: bool,
 }
 
 impl Lexed {
@@ -132,6 +133,10 @@ impl Lexed {
     #[must_use]
     pub const fn resource_failure(&self) -> Option<ResourceFailure> {
         self.resource_failure
+    }
+
+    pub(crate) const fn needs_quote_dependency(&self) -> bool {
+        self.needs_quote_dependency
     }
 
     pub(crate) fn into_parts(
@@ -186,6 +191,7 @@ pub(crate) fn lex_with_budget(
     let mut diagnostics = Vec::new();
     let mut contexts = vec![DelimiterContext::File];
     let mut logical_line_has_token = false;
+    let mut needs_quote_dependency = false;
     macro_rules! charge_syntax {
         () => {
             if let Err(resource_failure) = syntax_budget.charge() {
@@ -194,6 +200,7 @@ pub(crate) fn lex_with_budget(
                     diagnostics,
                     syntax_budget: syntax_budget.clone(),
                     resource_failure: Some(resource_failure),
+                    needs_quote_dependency,
                 });
             }
         };
@@ -392,6 +399,13 @@ pub(crate) fn lex_with_budget(
         };
         update_delimiter_contexts(&mut contexts, &kind);
         logical_line_has_token = true;
+        if matches!(&kind, TokenKind::LeftBrace)
+            && tokens.last().is_some_and(|previous: &Token| {
+                matches!(&previous.kind, TokenKind::SyntaxKeyword | TokenKind::Dollar)
+            })
+        {
+            needs_quote_dependency = true;
+        }
         tokens.push(Token {
             kind,
             span: checked_span(source, start, offset)?,
@@ -409,6 +423,7 @@ pub(crate) fn lex_with_budget(
         diagnostics,
         syntax_budget: syntax_budget.clone(),
         resource_failure: None,
+        needs_quote_dependency,
     })
 }
 

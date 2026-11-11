@@ -1774,6 +1774,7 @@ fn finish_module_resolution(
     crate::kind::check_remaining_module_kinds(&admission.parts, environments, type_work)
         .map_err(ResolveModuleError::Kind)?;
     let mut resolved = ResolvedModule::new(admission.parts);
+    resolved.set_quote_sites(admission.quote_sites);
     resolved
         .retain_defining_sources(
             loaded.retained_source(),
@@ -1814,6 +1815,7 @@ struct ResolvedModuleAdmission {
     parts: ResolvedModuleParts,
     constructor_payload_provenance: Vec<Vec<ConstructorPayloadProvenance>>,
     written_effect_arities: Vec<WrittenEffectArity>,
+    quote_sites: Vec<crate::syntax::ResolvedQuoteSite>,
 }
 
 /// Admission-only origins for malformed written rows. These scalar diagnostics
@@ -1917,7 +1919,7 @@ fn resolve_module_names_with_budget<'a>(
             != loaded
                 .dependencies()
                 .iter()
-                .filter(|edge| !edge.is_region_service())
+                .filter(|edge| !edge.is_compiler_private())
                 .count()
         || dependencies
             .iter()
@@ -1929,18 +1931,27 @@ fn resolve_module_names_with_budget<'a>(
         || loaded
             .dependencies()
             .iter()
-            .filter(|edge| !edge.is_region_service())
+            .filter(|edge| !edge.is_compiler_private())
             .zip(&surface.imports)
             .any(|(edge, import)| edge.import_span() != import.span)
         || loaded
             .dependencies()
             .iter()
-            .filter(|edge| edge.is_region_service())
-            .any(|edge| !edge.target().is_builtin_region() || edge.import_span() != surface.span)
+            .filter(|edge| edge.is_compiler_private())
+            .any(|edge| {
+                (!edge.target().is_builtin_region() && !edge.target().is_builtin_compiler_syntax())
+                    || edge.import_span() != surface.span
+            })
         || loaded
             .dependencies()
             .iter()
             .filter(|edge| edge.is_region_service())
+            .count()
+            > 1
+        || loaded
+            .dependencies()
+            .iter()
+            .filter(|edge| edge.is_compiler_private() && edge.target().is_builtin_compiler_syntax())
             .count()
             > 1
     {
@@ -1959,6 +1970,7 @@ fn resolve_module_names_with_budget<'a>(
     );
     resolver.syntax_inputs = syntax;
     resolver.syntax_expansion = expansion;
+    resolver.surface_quote_sites = loaded.quote_sites();
     let result = (|| {
         resolver
             .constraint_work
@@ -2091,6 +2103,7 @@ fn resolve_module_names_with_budget<'a>(
             },
             constructor_payload_provenance,
             written_effect_arities: std::mem::take(&mut resolver.written_effect_arities),
+            quote_sites: std::mem::take(&mut resolver.quote_sites),
         })
     })();
     *type_work = std::mem::take(&mut resolver.type_work);
@@ -2542,6 +2555,8 @@ struct Resolver<'state, 'inputs> {
     scopes: Vec<HashMap<(String, usize), ResolvedTermBinding>>,
     syntax_inputs: Option<SyntaxInputs<'inputs>>,
     syntax_expansion: Option<&'state mut crate::syntax::SyntaxExpansion<'inputs>>,
+    surface_quote_sites: &'state [crate::syntax::SurfaceQuoteSite],
+    quote_sites: Vec<crate::syntax::ResolvedQuoteSite>,
     active_expansions: usize,
     diagnostic_frames: Vec<Arc<crate::syntax::ExpansionFrame>>,
     binder_introductions: HashMap<BinderId, usize>,
@@ -3028,6 +3043,8 @@ impl Resolver<'_, '_> {
             scopes: vec![HashMap::new()],
             syntax_inputs: None,
             syntax_expansion: None,
+            surface_quote_sites: &[],
+            quote_sites: Vec::new(),
             active_expansions: 0,
             diagnostic_frames: Vec::new(),
             binder_introductions: HashMap::new(),
@@ -4176,13 +4193,22 @@ impl Resolver<'_, '_> {
             let _ = self.clone_summary_namespaces(dependency.summary, surface.span, &mut visits)?;
             self.builtin_region = Some(module);
         }
+        for dependency in dependencies.iter().filter(|dependency| {
+            dependency.edge.is_compiler_private()
+                && dependency.edge.target().is_builtin_compiler_syntax()
+        }) {
+            let module = dependency.edge.target();
+            self.retain_dependency_interface_facts(dependency.summary, module, surface.span)?;
+            let mut visits = CaptureGraphVisits::default();
+            let _ = self.clone_summary_namespaces(dependency.summary, surface.span, &mut visits)?;
+        }
         for (dependency_summary_order, (import, dependency)) in surface
             .imports
             .iter()
             .zip(
                 dependencies
                     .iter()
-                    .filter(|dependency| !dependency.edge.is_region_service()),
+                    .filter(|dependency| !dependency.edge.is_compiler_private()),
             )
             .enumerate()
         {
@@ -13588,12 +13614,78 @@ impl Resolver<'_, '_> {
                     tasks.push(ResolveTask::VisitExpr(&member.initializer));
                 }
             }
-            ResolveTask::FinishApplication { span } => {
+            ResolveTask::FinishApplication { span, quote_site } => {
                 let (function, argument) = take_expression_pair(expressions, span)?;
+                let retained_quote = if let Some(index) = quote_site {
+                    let source = self.surface_quote_sites.get(index).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "the quote site was lost",
+                        )
+                    })?;
+                    let ResolvedExprKind::Constructor(occurrence) = &function.kind else {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            span,
+                            "the quote constructor was not resolved",
+                        ));
+                    };
+                    if !occurrence
+                        .constructor
+                        .owner()
+                        .module()
+                        .is_builtin_compiler_syntax()
+                        || occurrence.spelling != "HiddenExpressionFragment"
+                    {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            span,
+                            "the quote constructor has the wrong owner",
+                        ));
+                    }
+                    let live = self.quote_sites.len();
+                    let work = if live == self.quote_sites.capacity() {
+                        live.saturating_mul(2).saturating_add(2)
+                    } else {
+                        1
+                    };
+                    self.syntax_expansion
+                        .as_deref_mut()
+                        .ok_or_else(|| {
+                            error(
+                                ResolveReason::InternalState,
+                                span,
+                                "the quote budget was lost",
+                            )
+                        })?
+                        .charge_quote_work(work, span)
+                        .map_err(|()| {
+                            error(
+                                ResolveReason::InternalState,
+                                span,
+                                "the quote budget was exhausted",
+                            )
+                        })?;
+                    if live == self.quote_sites.capacity() {
+                        self.quote_sites.reserve_exact(1);
+                    }
+                    Some((occurrence.constructor, Arc::clone(&source.template)))
+                } else {
+                    None
+                };
+                let function = Box::new(function);
+                if let Some((constructor, template)) = retained_quote {
+                    self.quote_sites.push(crate::syntax::ResolvedQuoteSite {
+                        callee: std::ptr::from_ref(function.as_ref()) as usize,
+                        constructor,
+                        template,
+                    });
+                }
                 expressions.push(ResolvedExpr {
                     diagnostic: None,
                     kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
-                        function: Box::new(function),
+                        function,
                         argument: Box::new(argument),
                     }),
                     span,
@@ -14978,8 +15070,35 @@ impl Resolver<'_, '_> {
                 }
             }
             SurfaceExprKind::Apply(application) => {
+                let mut quote_site = None;
+                if !self.surface_quote_sites.is_empty() {
+                    let pointer = std::ptr::from_ref(application.function.as_ref()) as usize;
+                    let expansion = self.syntax_expansion.as_deref_mut().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            expression.span,
+                            "the quote budget was lost",
+                        )
+                    })?;
+                    for (index, site) in self.surface_quote_sites.iter().enumerate() {
+                        expansion
+                            .charge_quote_work(1, expression.span)
+                            .map_err(|()| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    expression.span,
+                                    "the quote budget was exhausted",
+                                )
+                            })?;
+                        if site.callee == pointer {
+                            quote_site = Some(index);
+                            break;
+                        }
+                    }
+                }
                 tasks.push(ResolveTask::FinishApplication {
                     span: expression.span,
+                    quote_site,
                 });
                 tasks.push(ResolveTask::VisitExpr(&application.argument));
                 tasks.push(ResolveTask::VisitExpr(&application.function));
@@ -15335,6 +15454,7 @@ enum ResolveTask<'a> {
     VisitRecursiveGroup(&'a SurfaceRecursiveGroup),
     FinishApplication {
         span: crate::source::Span,
+        quote_site: Option<usize>,
     },
     FinishBinary {
         kind: BinaryKind,

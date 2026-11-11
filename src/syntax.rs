@@ -32,6 +32,41 @@ pub(crate) enum MacroOutputNode {
     Token(crate::lexer::TokenKind, Arc<str>, MacroOrigin),
     Group(MacroDelimiter, Vec<MacroOutputNode>, MacroOrigin),
     Splice(SurfaceName),
+    /// An admitted outer escape and its checked, defining-module adapter.
+    TemplateEscape(SurfaceName),
+}
+
+/// A compiler-created call while its containing surface module is immutable.
+/// The callee address is compared only while that module is borrowed; it is
+/// never dereferenced or carried into a checked fragment.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct SurfaceQuoteSite {
+    pub(crate) callee: usize,
+    pub(crate) template: Arc<QuoteTemplate>,
+}
+
+/// Immutable compiler-owned data shared by the successive checked stages.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct QuoteTemplate {
+    pub(crate) ordinal: usize,
+    pub(crate) origin: Span,
+    pub(crate) contents: Box<[MacroOutputNode]>,
+    pub(crate) holes: usize,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ResolvedQuoteSite {
+    pub(crate) callee: usize,
+    pub(crate) constructor: crate::types::ConstructorId,
+    pub(crate) template: Arc<QuoteTemplate>,
+}
+
+/// Relocated quote IDs and the genuine checked helper/source owners.
+#[derive(Debug)]
+pub(crate) struct PreparedQuoteSite {
+    pub(crate) nodes: crate::elaborate::CheckedQuoteSite,
+    pub(crate) owner: usize,
+    pub(crate) source: Arc<crate::source::SourceFile>,
 }
 
 pub(crate) const MAX_ORIGIN_SPANS: usize = 65_536;
@@ -218,6 +253,21 @@ pub(crate) struct SyntaxContexts {
 }
 
 impl SyntaxContexts {
+    pub(crate) fn owner_count(&self) -> usize {
+        self.owners.len()
+    }
+
+    pub(crate) fn owner_capacity(&self) -> usize {
+        self.owners.capacity()
+    }
+
+    pub(crate) fn reserve_owner(&mut self) -> Result<(), ()> {
+        self.owners.try_reserve_exact(1).map_err(|_| ())
+    }
+
+    pub(crate) fn push_owner(&mut self, owner: Option<usize>) {
+        self.owners.push(owner);
+    }
     pub(crate) fn new(
         caller: &[SelectedSyntax],
         owner_imports: &[Vec<SelectedSyntax>],
@@ -1435,7 +1485,7 @@ fn charge_owned_syntax(
                 MacroOutputNode::Token(_, _, origin) => {
                     charge_type_origin(origin, depth, budget)?;
                 }
-                MacroOutputNode::Splice(name) => {
+                MacroOutputNode::Splice(name) | MacroOutputNode::TemplateEscape(name) => {
                     bridge = true;
                     charge_type_name(name, depth, TypeWork::Inspect, budget)?;
                 }
@@ -1764,7 +1814,8 @@ fn charge_type_retention_inner(
             MacroOutputNode::Expression(_, _)
             | MacroOutputNode::ForwardedExpression(_, _)
             | MacroOutputNode::ForwardedPattern(_, _)
-            | MacroOutputNode::Splice(_) => return Err(MacroParseFailure::Invalid),
+            | MacroOutputNode::Splice(_)
+            | MacroOutputNode::TemplateEscape(_) => return Err(MacroParseFailure::Invalid),
         }
     }
     Ok(())
@@ -1867,7 +1918,9 @@ pub(crate) fn copy_fragment_output_with_type(
                     return Err(MacroParseFailure::Invalid);
                 }
             }
-            MacroOutputNode::Splice(_) => return Err(MacroParseFailure::Invalid),
+            MacroOutputNode::Splice(_) | MacroOutputNode::TemplateEscape(_) => {
+                return Err(MacroParseFailure::Invalid);
+            }
         }
     }
 
@@ -1979,7 +2032,8 @@ pub(crate) fn charge_captured_type_original(
         MacroOutputNode::Expression(_, _)
         | MacroOutputNode::ForwardedExpression(_, _)
         | MacroOutputNode::ForwardedPattern(_, _)
-        | MacroOutputNode::Splice(_) => return Err(MacroParseFailure::Invalid),
+        | MacroOutputNode::Splice(_)
+        | MacroOutputNode::TemplateEscape(_) => return Err(MacroParseFailure::Invalid),
     }
     Ok(())
 }
@@ -2089,7 +2143,9 @@ pub(crate) fn charge_captured_ep_original_selected(
                 charge_type_origin(origin, prefix, budget).map_err(resource)?;
             }
         }
-        MacroOutputNode::Expression(_, _) | MacroOutputNode::Splice(_) => {
+        MacroOutputNode::Expression(_, _)
+        | MacroOutputNode::Splice(_)
+        | MacroOutputNode::TemplateEscape(_) => {
             return Err(MacroParseFailure::Invalid);
         }
     }
@@ -2170,7 +2226,7 @@ pub(crate) struct SyntaxNameUse {
     pub(crate) import_span: Span,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct SyntaxOwner {
     pub(crate) owner: Option<usize>,
     pub(crate) declaration: Span,
@@ -2179,12 +2235,14 @@ pub(crate) struct SyntaxOwner {
 
 pub(crate) type DeclarationTransformer<'a> = dyn for<'call> FnMut(
         &'call SelectedSyntax,
+        Option<&'call SurfaceName>,
         &'call [SurfaceSyntaxCapture],
         &'call crate::source::SourceFile,
         &'call SurfaceName,
         usize,
         Arc<SyntaxContexts>,
         Arc<ExpansionFrame>,
+        &'call mut Vec<SyntaxOwner>,
         &'call mut crate::syntax_resource::SyntaxBudget,
     ) -> Result<(Vec<MacroOutputNode>, usize), Span>
     + 'a;
@@ -2234,6 +2292,21 @@ impl<'a> SyntaxExpansion<'a> {
 
     pub(crate) fn take_parse_failure(&mut self) -> Option<crate::driver::SyntaxParseFailure> {
         self.parse_failure.take()
+    }
+
+    pub(crate) fn charge_quote_work(&mut self, units: usize, span: Span) -> Result<(), ()> {
+        let budget = self.syntax_budget.as_deref_mut().ok_or(())?;
+        if let Err(resource) = budget.charge_units(units) {
+            self.parse_failure = Some(crate::driver::SyntaxParseFailure {
+                diagnostics: Vec::new(),
+                resource: Some(resource),
+                invocation: span,
+                definition: span,
+                teardown: None,
+            });
+            return Err(());
+        }
+        Ok(())
     }
 
     pub(crate) fn owner(&self, introduction: usize) -> Option<SyntaxOwner> {
@@ -2535,7 +2608,7 @@ impl SyntaxOwnerBindings {
             loaded
                 .dependencies()
                 .iter()
-                .filter(|edge| !edge.is_region_service()),
+                .filter(|edge| !edge.is_compiler_private()),
         ) {
             let route = DirectDependencyRoute::new(edge.target(), import.span);
             if edge.import_span() != import.span || !owner.direct_dependencies().contains(&route) {
@@ -2920,6 +2993,41 @@ fn validate_template_syntax_inner(
         charge_declaration_template(template, &declaration.matcher, &captures, budget)?;
     }
     let mut contents = template.to_vec();
+    if let Some(budget) = &mut admission_budget {
+        fn placeholders(
+            contents: &mut [MacroOutputNode],
+            depth: usize,
+            budget: &mut SyntaxBudget,
+        ) -> Result<(), ResourceFailure> {
+            for node in contents {
+                budget.charge()?;
+                match node {
+                    MacroOutputNode::TemplateEscape(name) => {
+                        budget.charge_units(2)?;
+                        let span = name.span;
+                        *node = MacroOutputNode::ForwardedExpression(
+                            SurfaceExpressionCapture {
+                                expression: SurfaceExpr {
+                                    kind: SurfaceExprKind::Unit,
+                                    span,
+                                    diagnostic: None,
+                                },
+                                contents: Arc::from([]),
+                                contains_protected_type: false,
+                            },
+                            span.into(),
+                        );
+                    }
+                    MacroOutputNode::Group(_, children, _) => {
+                        placeholders(children, type_depth(depth, 1)?, budget)?;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        placeholders(&mut contents, 0, budget).map_err(resource)?;
+    }
     substitute_contents(
         &mut contents,
         &declaration.matcher,
@@ -3123,6 +3231,13 @@ fn charge_template_inner(
                     _ => return Err(MacroParseFailure::Invalid),
                 }
             }
+            MacroOutputNode::TemplateEscape(name) => {
+                if new_expression {
+                    charge_type_name_copy(name, depth, budget).map_err(resource)?;
+                } else {
+                    charge_name(name, budget).map_err(resource)?;
+                }
+            }
             MacroOutputNode::Expression(_, _)
             | MacroOutputNode::ForwardedExpression(_, _)
             | MacroOutputNode::ForwardedType(_, _)
@@ -3133,11 +3248,29 @@ fn charge_template_inner(
 }
 
 /// Instantiate supported captures before the existing declaration parser.
+#[cfg(test)]
 pub(crate) fn instantiate_declaration_template(
     selection: &SelectedSyntax,
     captures: &[SurfaceSyntaxCapture],
     introduction: usize,
     invocation: Span,
+    budget: &mut SyntaxBudget,
+) -> Result<Vec<MacroOutputNode>, crate::parser::MacroParseFailure> {
+    let mut output = prepare_declaration_template(selection, captures, budget)?;
+    substitute_contents(
+        &mut output,
+        &selection.declaration.matcher,
+        captures,
+        introduction,
+        invocation,
+    )
+    .map_err(|_| crate::parser::MacroParseFailure::Invalid)?;
+    Ok(output)
+}
+
+pub(crate) fn prepare_declaration_template(
+    selection: &SelectedSyntax,
+    captures: &[SurfaceSyntaxCapture],
     budget: &mut SyntaxBudget,
 ) -> Result<Vec<MacroOutputNode>, crate::parser::MacroParseFailure> {
     use crate::parser::MacroParseFailure;
@@ -3150,16 +3283,7 @@ pub(crate) fn instantiate_declaration_template(
     if charge_declaration_template(template, &selection.declaration.matcher, captures, budget)? {
         return Err(MacroParseFailure::Invalid);
     }
-    let mut output = template.to_vec();
-    substitute_contents(
-        &mut output,
-        &selection.declaration.matcher,
-        captures,
-        introduction,
-        invocation,
-    )
-    .map_err(|_| MacroParseFailure::Invalid)?;
-    Ok(output)
+    Ok(template.to_vec())
 }
 
 pub(crate) fn admit_transformer_output(
@@ -3227,6 +3351,7 @@ pub(crate) fn substitute_contents(
             MacroOutputNode::Group(_, children, _) => {
                 substitute_contents(children, matcher, captures, introduction, invocation)?;
             }
+            MacroOutputNode::TemplateEscape(name) => return Err(name.span),
             MacroOutputNode::Token(_, _, _)
             | MacroOutputNode::Expression(_, _)
             | MacroOutputNode::ForwardedExpression(_, _)

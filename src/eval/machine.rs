@@ -1149,6 +1149,7 @@ impl Drop for TransformerDropObserver {
 pub struct Machine<'runtime> {
     worker: Option<WorkerStartup>,
     syntax_host: Option<syntax::SyntaxHost<'runtime>>,
+    quote_guards: Arc<[NodeId]>,
     source_bindings: Option<&'runtime crate::foreign::source_bindings::SourceNativeBindings>,
     cleanup_limit: usize,
     live_cleanups: usize,
@@ -1334,6 +1335,7 @@ fn run_network_worker(
 // coordinator publishes the one joint commit after both threads exist.
 struct CarrierInput {
     program: Arc<crate::core::dialect::CoreProgram<crate::core::EffectOperationFamily>>,
+    quote_guards: Option<Arc<[NodeId]>>,
     root: NodeId,
     result: NodeId,
     entry: BinderId,
@@ -1636,6 +1638,7 @@ fn run_network_carrier(input: CarrierInput, gate: triomphe::Arc<CarrierGate>) {
     }
     let CarrierInput {
         program,
+        quote_guards,
         root,
         result,
         entry,
@@ -1665,6 +1668,9 @@ fn run_network_carrier(input: CarrierInput, gate: triomphe::Arc<CarrierGate>) {
             return;
         }
     };
+    if let Some(quote_guards) = quote_guards {
+        machine.quote_guards = quote_guards;
+    }
     machine.source_bindings = bindings.as_ref();
     let evaluation = machine.run_loop();
     if evaluation.is_err() {
@@ -1740,6 +1746,7 @@ impl<'runtime> Machine<'runtime> {
         Self {
             worker: None,
             syntax_host: None,
+            quote_guards: Arc::from([]),
             source_bindings: None,
             program: ExecutableProgram::Pure(program.shared()),
             cleanup_limit: 0,
@@ -1789,6 +1796,7 @@ impl<'runtime> Machine<'runtime> {
         Self {
             worker: None,
             syntax_host: None,
+            quote_guards: Arc::from([]),
             source_bindings: None,
             program: ExecutableProgram::Effect(program),
             cleanup_limit: MAX_CAPTURED_FRAME_CELLS,
@@ -1884,6 +1892,21 @@ impl<'runtime> Machine<'runtime> {
                 .ok_or(RuntimeFailure::InvalidControlState)?;
             match control {
                 Control::Evaluate(node, environment) => {
+                    if self.syntax_host.is_none() {
+                        for guard in self.quote_guards.iter() {
+                            charge_effect_work(
+                                &mut self.instantiation_work,
+                                1,
+                                RuntimePhase::Evaluation,
+                            )?;
+                            if *guard == node {
+                                return Err(RuntimeFailure::ForeignBinding);
+                            }
+                        }
+                    }
+                    if let Some(host) = &mut self.syntax_host {
+                        host.reach_quote(node)?;
+                    }
                     if let Some(host) = &mut self.syntax_host
                         && host.occurrence == node
                         && !host.started
@@ -2206,8 +2229,13 @@ impl<'runtime> Machine<'runtime> {
             RuntimePhase::Acquisition,
         )?;
         reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+        // Each carrier retains the same nonempty program-local guard list.
+        if !self.quote_guards.is_empty() {
+            charge_effect_work(&mut self.instantiation_work, 2, RuntimePhase::Acquisition)?;
+        }
         let input = |side, index: usize, bytes, bindings| CarrierInput {
             program: Arc::clone(&program),
+            quote_guards: (!self.quote_guards.is_empty()).then(|| Arc::clone(&self.quote_guards)),
             root: program.root(),
             result,
             entry: admission.entries[index].binder,
@@ -6894,9 +6922,18 @@ pub fn evaluate_effect(program: &ValidatedEffectProgram) -> Result<Evaluation, R
     Machine::new_effect(program).run()
 }
 
+pub(crate) fn evaluate_effect_with_quote_guards(
+    program: &ValidatedEffectProgram,
+    quote_guards: &Arc<[NodeId]>,
+) -> Result<Evaluation, RuntimeFailure> {
+    let mut machine = Machine::new_effect(program);
+    machine.quote_guards = Arc::clone(quote_guards);
+    machine.run()
+}
+
 // Keep invocation inputs separate so their borrows and ownership stay explicit.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn evaluate_transformer(
+pub(crate) fn evaluate_transformer_with_owners<'a>(
     entry: &crate::core::validate::ValidatedMacroEntry,
     captures: &[crate::surface::SurfaceSyntaxCapture],
     source: &crate::source::SourceFile,
@@ -6904,12 +6941,13 @@ pub(crate) fn evaluate_transformer(
     introduction: usize,
     contexts: std::sync::Arc<crate::syntax::SyntaxContexts>,
     frame: std::sync::Arc<crate::syntax::ExpansionFrame>,
-    syntax_work: Option<&mut crate::syntax_resource::SyntaxBudget>,
+    syntax_work: Option<&'a mut crate::syntax_resource::SyntaxBudget>,
+    staged_owners: Option<&'a mut Vec<crate::syntax::SyntaxOwner>>,
 ) -> Result<(crate::syntax::TransformerOutput, usize), RuntimeFailure> {
     let scope = disposal::Scope::enter();
     let mut result = (|| {
         let mut machine = Machine::new_effect(&entry.program);
-        machine.syntax_host = Some(syntax::SyntaxHost::new(
+        machine.syntax_host = Some(syntax::SyntaxHost::new_with_owners(
             entry,
             captures,
             source,
@@ -6918,6 +6956,7 @@ pub(crate) fn evaluate_transformer(
             contexts,
             frame,
             syntax_work,
+            staged_owners,
         )?);
         #[cfg(test)]
         {
@@ -6988,6 +7027,17 @@ pub fn evaluate_effect_with_source_native_program(
     let (program, bindings) = admitted.into_parts();
     let mut machine = Machine::new_effect(program);
     machine.source_bindings = Some(bindings);
+    machine.run()
+}
+
+pub(crate) fn evaluate_effect_with_source_native_quote_guards(
+    admitted: crate::foreign::source_bindings::AdmittedSourceNativeProgram<'_, '_>,
+    quote_guards: &Arc<[NodeId]>,
+) -> Result<Evaluation, RuntimeFailure> {
+    let (program, bindings) = admitted.into_parts();
+    let mut machine = Machine::new_effect(program);
+    machine.source_bindings = Some(bindings);
+    machine.quote_guards = Arc::clone(quote_guards);
     machine.run()
 }
 
@@ -9236,6 +9286,7 @@ value ignored => {handler}
         );
         let make_input = |side| CarrierInput {
             program: program.shared(),
+            quote_guards: None,
             root,
             result,
             entry,
@@ -9538,6 +9589,7 @@ value ignored => {handler}
         let transport = NetworkTransport::prepare(1).unwrap();
         let input = |side| CarrierInput {
             program: program.shared(),
+            quote_guards: None,
             root,
             result,
             entry,
@@ -9911,6 +9963,7 @@ value ignored => {handler}
         .unwrap();
         let input = CarrierInput {
             program: program.shared(),
+            quote_guards: None,
             root,
             result,
             entry,

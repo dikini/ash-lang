@@ -346,6 +346,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         effects: &EffectRow,
         span: Span,
     ) -> Result<NodeId, TypeError> {
+        self.initialize_region_record_with_result(constructor, operands, ty, effects, span)
+            .map(|(body, _)| body)
+    }
+
+    pub(super) fn initialize_region_record_with_result(
+        &mut self,
+        constructor: Option<crate::types::ConstructorId>,
+        operands: Vec<NodeId>,
+        ty: &Type,
+        effects: &EffectRow,
+        span: Span,
+    ) -> Result<(NodeId, NodeId), TypeError> {
         use crate::core::region::{RegionTupleNode, RegionValueRequestNode};
         let api = self.region_api_at(span)?;
         if constructor.is_none()
@@ -394,13 +406,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }),
         )?;
         let result_type = self.clone_type(ty)?;
-        Ok(self.builder.binding(
+        let body = self.builder.binding(
             context,
             query,
             initialized,
             result_type,
             Origin::Source(span),
-        )?)
+        )?;
+        Ok((body, initialized))
     }
 
     pub(super) fn wrap_region_entry(

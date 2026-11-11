@@ -3981,6 +3981,7 @@ mod tests {
         let image = encode_effect_for_build(
             program,
             provenance,
+            &[],
             super::super::NATIVE_TARGET,
             &mut TypeWorkBudget::default(),
         )
@@ -4261,6 +4262,7 @@ mod tests {
             let image = encode_effect_for_build(
                 program,
                 provenance,
+                &[],
                 super::super::NATIVE_TARGET,
                 &mut preparation,
             )
@@ -4291,6 +4293,7 @@ mod tests {
                 &super::super::runtime_fingerprint(),
                 &bytes,
                 facts,
+                &[],
                 &[],
                 None,
             )
@@ -4346,6 +4349,7 @@ mod tests {
         let mut image = encode_effect_for_build(
             program,
             provenance,
+            &[],
             super::super::NATIVE_TARGET,
             &mut TypeWorkBudget::default(),
         )
@@ -4442,6 +4446,7 @@ mod tests {
         let build = encode_effect_for_build(
             program,
             provenance,
+            &[],
             super::super::NATIVE_TARGET,
             &mut TypeWorkBudget::default(),
         )
@@ -4509,6 +4514,7 @@ mod tests {
         let build = encode_effect_for_build(
             program,
             provenance,
+            &[],
             super::super::NATIVE_TARGET,
             &mut TypeWorkBudget::default(),
         )
@@ -4588,6 +4594,7 @@ mod tests {
         let build = encode_effect_for_build(
             &donor,
             &provenance,
+            &[],
             super::super::NATIVE_TARGET,
             &mut TypeWorkBudget::default(),
         )
@@ -4732,6 +4739,7 @@ mod tests {
             let build = encode_effect_for_build(
                 &program,
                 &provenance,
+                &[],
                 super::super::NATIVE_TARGET,
                 &mut TypeWorkBudget::default(),
             )
@@ -4914,6 +4922,7 @@ mod tests {
         let image = encode_effect_for_build(
             program,
             provenance,
+            &[],
             super::super::NATIVE_TARGET,
             &mut TypeWorkBudget::default(),
         )
@@ -5190,6 +5199,7 @@ mod tests {
             let image = encode_effect_for_build(
                 program,
                 provenance,
+                &[],
                 super::super::NATIVE_TARGET,
                 &mut work,
             )
@@ -5245,6 +5255,7 @@ mod tests {
         let image = encode_effect_for_build(
             program,
             provenance,
+            &[],
             super::super::NATIVE_TARGET,
             &mut encode_work,
         )
@@ -5255,6 +5266,7 @@ mod tests {
             encode_effect_for_build(
                 program,
                 provenance,
+                &[],
                 super::super::NATIVE_TARGET,
                 &mut TypeWorkBudget::with_limit(encoded_cost)
             )
@@ -5264,6 +5276,7 @@ mod tests {
             encode_effect_for_build(
                 program,
                 provenance,
+                &[],
                 super::super::NATIVE_TARGET,
                 &mut TypeWorkBudget::with_limit(encoded_cost - 1)
             ),
@@ -5712,10 +5725,15 @@ main () = {
         let compiled = compile_path(tree.configuration()).unwrap();
         let (program, provenance) = compiled.effect_build_input().unwrap();
         let mut work = TypeWorkBudget::default();
-        let image =
-            encode_effect_for_build(program, provenance, super::super::NATIVE_TARGET, &mut work)
-                .unwrap()
-                .image;
+        let image = encode_effect_for_build(
+            program,
+            provenance,
+            &[],
+            super::super::NATIVE_TARGET,
+            &mut work,
+        )
+        .unwrap()
+        .image;
         let required = work.used();
         for prefix in [0, 7] {
             let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
@@ -5724,6 +5742,7 @@ main () = {
                 encode_effect_for_build(
                     program,
                     provenance,
+                    &[],
                     super::super::NATIVE_TARGET,
                     &mut short
                 ),
@@ -5731,8 +5750,14 @@ main () = {
             ));
             let mut exact = TypeWorkBudget::with_limit(prefix + required);
             exact.charge(prefix).unwrap();
-            encode_effect_for_build(program, provenance, super::super::NATIVE_TARGET, &mut exact)
-                .unwrap();
+            encode_effect_for_build(
+                program,
+                provenance,
+                &[],
+                super::super::NATIVE_TARGET,
+                &mut exact,
+            )
+            .unwrap();
             assert_eq!(exact.used(), prefix + required);
         }
         let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
@@ -9028,6 +9053,7 @@ struct RestoredNativeRegistry {
 pub(crate) struct RestoredEffectImage {
     _provenance: Option<RestoredProvenance>,
     pub(crate) program: crate::core::ValidatedEffectProgram,
+    pub(crate) quote_guards: Arc<[crate::core::NodeId]>,
     pub(crate) prepared: Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>,
     pub(crate) symbols: Vec<Arc<crate::foreign::checked_source::CheckedForeignSymbol>>,
     _sources: Vec<SourceFile>,
@@ -9035,8 +9061,17 @@ pub(crate) struct RestoredEffectImage {
 }
 
 impl PureImage {
+    #[cfg(test)]
     pub(crate) fn restore_effect(
         &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<RestoredEffectImage, ImageFailure> {
+        self.restore_effect_with_quote_guards(&[], work)
+    }
+
+    pub(crate) fn restore_effect_with_quote_guards(
+        &self,
+        guard_coordinates: &[u32],
         work: &mut TypeWorkBudget,
     ) -> Result<RestoredEffectImage, ImageFailure> {
         charge(work, 1)?;
@@ -9226,6 +9261,24 @@ impl PureImage {
         let program = builder
             .finish_image(*get(&nodes, self.root)?, anchors, decoder.work)?
             .into_compiler_image(decoder.work)?;
+        // The emitted coordinates select only nodes mapped by this restore.
+        // Pay both the temporary vector and the final shared slice before
+        // retaining the authenticated program-local identities.
+        charge(
+            decoder.work,
+            guard_coordinates.len().saturating_mul(2).saturating_add(1),
+        )?;
+        let mut quote_guards = Vec::new();
+        quote_guards
+            .try_reserve_exact(guard_coordinates.len())
+            .map_err(|_| ImageFailure::Resource)?;
+        for coordinate in guard_coordinates {
+            charge(decoder.work, 1)?;
+            let node = *get(&nodes, *coordinate)?;
+            validate_quote_guard(&program, node, decoder.work)?;
+            quote_guards.push(node);
+        }
+        let quote_guards = Arc::from(quote_guards.into_boxed_slice());
         // Transfer the relocated coordinate arena without copying it.
         drop(decoder);
 
@@ -9234,6 +9287,7 @@ impl PureImage {
         Ok(RestoredEffectImage {
             _provenance: provenance,
             program,
+            quote_guards,
             prepared,
             symbols,
             _sources: sources,
@@ -9936,8 +9990,13 @@ impl Decoder<'_> {
 impl RestoredEffectImage {
     /// Drops startup-only coordinates/arena view after executable admission.
     /// The checked program/descriptor owners retain their original required data.
-    pub(crate) fn into_program(self) -> crate::core::ValidatedEffectProgram {
-        self.program
+    pub(crate) fn into_program_and_quote_guards(
+        self,
+    ) -> (
+        crate::core::ValidatedEffectProgram,
+        Arc<[crate::core::NodeId]>,
+    ) {
+        (self.program, self.quote_guards)
     }
 
     pub(crate) fn relocate_library(
@@ -9995,6 +10054,7 @@ pub(crate) struct NativeBuildImage {
     pub(crate) image: PureImage,
     pub(crate) bridges: Vec<NativeBridgeEmission>,
     pub(crate) libraries: Vec<NativeLibraryEmission>,
+    pub(crate) quote_guards: Vec<u32>,
 }
 #[derive(Debug)]
 pub(crate) enum NativeImageFailure {
@@ -10010,15 +10070,17 @@ impl From<ImageFailure> for NativeImageFailure {
 pub(crate) fn encode_effect_for_build(
     program: &crate::core::ValidatedEffectProgram,
     provenance: &[(ModuleId, Arc<SourceFile>)],
+    quote_guards: &[crate::core::NodeId],
     target: &str,
     work: &mut TypeWorkBudget,
 ) -> Result<NativeBuildImage, NativeImageFailure> {
-    encode_native_preparation(program, provenance, target, work)
+    encode_native_preparation(program, provenance, quote_guards, target, work)
 }
 
 fn encode_native_preparation(
     program: &crate::core::ValidatedEffectProgram,
     provenance: &[(ModuleId, Arc<SourceFile>)],
+    quote_guards: &[crate::core::NodeId],
     target: &str,
     work: &mut TypeWorkBudget,
 ) -> Result<NativeBuildImage, NativeImageFailure> {
@@ -10073,6 +10135,13 @@ fn encode_native_preparation(
         |_encoder| Ok(()),
         |encoder, kind| encoder.encode_effect_node(kind),
     )?;
+    let mut guard_coordinates = Vec::new();
+    for guard in quote_guards {
+        validate_quote_guard(program, *guard, encoder.work)?;
+        charge(encoder.work, 1)?;
+        let coordinate = encoder.node(*guard)?;
+        push(&mut guard_coordinates, coordinate, encoder.work)?;
+    }
     // Descriptors are already encoded. Source interpretations select their
     // exact callbacks and each original owner's separately declared destructor.
     // The latter grants host destruction only; it is not another source effect
@@ -10187,7 +10256,36 @@ fn encode_native_preparation(
         image: encoder.image,
         bridges,
         libraries,
+        quote_guards: guard_coordinates,
     })
+}
+
+fn validate_quote_guard(
+    program: &crate::core::ValidatedEffectProgram,
+    node: crate::core::NodeId,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ImageFailure> {
+    charge(work, 1)?;
+    let crate::core::EffectExprKind::Operation(crate::core::EffectOperation::RegionTuple(tuple)) =
+        &program.node(node).ok_or(ImageFailure::InvalidRecord)?.kind
+    else {
+        return Err(ImageFailure::InvalidRecord);
+    };
+    let constructor = tuple.constructor.ok_or(ImageFailure::InvalidRecord)?;
+    if !constructor.owner().module().is_builtin_compiler_syntax() {
+        return Err(ImageFailure::InvalidRecord);
+    }
+    for known in program.registry().constructors() {
+        charge(work, 1)?;
+        if known.id == constructor {
+            return if known.spelling == "HiddenExpressionFragment" {
+                Ok(())
+            } else {
+                Err(ImageFailure::InvalidRecord)
+            };
+        }
+    }
+    Err(ImageFailure::InvalidRecord)
 }
 
 #[cfg(test)]

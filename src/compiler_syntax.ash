@@ -1,6 +1,6 @@
 pub opaque type Token = HiddenToken
 pub opaque type Identifier = HiddenIdentifier
-pub opaque type ExpressionFragment = HiddenExpressionFragment
+pub opaque type ExpressionFragment = HiddenExpressionFragment(Int, QuoteHoles)
 pub opaque type Input = HiddenInput
 pub opaque type Origin = HiddenOrigin
 pub opaque type ParseFailure = HiddenParseFailure
@@ -102,6 +102,8 @@ pub opaque type PatternFragment = HiddenPatternFragment
 pub opaque type DeclarationFragment = HiddenDeclarationFragment
 pub type Captures = NoCaptures
     | MoreCaptures(Capture, Captures)
+type QuoteHoles = NoQuoteHoles
+    | MoreQuoteHoles(ExpressionFragment, QuoteHoles)
 
 pub effect Ops {
     capture : (Input, Int) -> CaptureResult
