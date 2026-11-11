@@ -79,6 +79,222 @@ fn i19_imported_pattern_binder_and_expression_keep_the_caller_context() {
 }
 
 #[test]
+fn repeated_expression_captures_reach_the_module_consumer_in_order() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "forms.ash",
+        "pub syntax declaration: (terms) $( $name:ident from $value:expr ),+ => {\n$(\npub $name : Unit -> Int\n$name () = $value\n)+\n}\n",
+    );
+    fixture.write(
+        "entry.ash",
+        "import forms (syntax terms)\nterms first from 20, second from 22\nmain : Unit -> Int\nmain () = first(()) + second(())\n",
+    );
+    let program = compile_path(fixture.configuration())
+        .expect("repeated expressions pass through the ordinary module consumer");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
+#[test]
+fn repeated_type_and_pattern_captures_keep_their_categories() {
+    let fixture = Fixture::new();
+    fixture.write("forms.ash", "pub syntax declaration: (ids) $( $name:ident as $T:type ),+ => {\n$(\npub $name : $T -> $T\n$name value = value\n)+\n}\npub syntax declaration: (preds) $( $name:ident when $pat:pattern ),+ => {\n$(\npub $name : Bool -> Int\n$name $pat = 21\n$name _ = 0\n)+\n}\n");
+    fixture.write("entry.ash", "import forms (syntax ids, syntax preds)\nids identity as Int, other as Int\npreds yes when true, no when false\nmain : Unit -> Int\nmain () = identity(yes(true)) + other(no(false))\n");
+    let program =
+        compile_path(fixture.configuration()).expect("repeated type and pattern captures compile");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
+#[test]
+fn repeated_declaration_packets_remain_complete_module_declarations() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "forms.ash",
+        "pub syntax declaration: (pass_all) $( $item:declaration ),+ => {\n$(\n$item\n)+\n}\n",
+    );
+    fixture.write("entry.ash", "import forms (syntax pass_all)\npass_all {\nfirst : Unit -> Int\nfirst () = 20\n}, {\nsecond : Unit -> Int\nsecond () = 22\n}\nmain : Unit -> Int\nmain () = first(()) + second(())\n");
+    let program = compile_path(fixture.configuration())
+        .expect("repeated declaration packets remain distinct");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
+#[test]
+fn nested_ragged_repetitions_use_inner_splices_as_outer_drivers() {
+    let fixture = Fixture::new();
+    fixture.write("forms.ash", "pub syntax declaration: (leaves) $( row ( $( $inner:ident ),* ) );+ => {\n$(\n$(\npub $inner : Unit -> Int\n$inner () = 1\n)*\n)+\n}\n");
+    fixture.write("entry.ash", "import forms (syntax leaves)\nleaves row (first, second); row (); row (third)\nmain : Unit -> Int\nmain () = first(()) + second(()) + third(()) + 39\n");
+    let program = compile_path(fixture.configuration()).expect("ragged nested repetitions compile");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
+#[test]
+fn a_group_boundary_stops_a_preceding_expression_capture() {
+    let fixture = Fixture::new();
+    fixture.write("forms.ash", "pub syntax declaration: (make) $value:expr ( $name:ident ) => {\npub $name : Unit -> Int\n$name () = $value\n}\n");
+    fixture.write(
+        "entry.ash",
+        "import forms (syntax make)\nmake 42 (answer)\nmain : Unit -> Int\nmain () = answer(())\n",
+    );
+    let program =
+        compile_path(fixture.configuration()).expect("the group delimiter stops the expression");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
+#[test]
+fn repeat_follow_checks_use_each_capture_category() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "entry.ash",
+        "import forms (syntax sink)\nmain : Unit -> Int\nmain () = 42\n",
+    );
+    for (matcher, ambiguous) in [
+        ("$( $value:expr ),* 1", true),
+        ("$( $value:ident ),* 1", false),
+        ("$( $value:pattern ),* true", true),
+        ("$( $T:type ),* true", false),
+        ("$( $value:declaration ),* {}", true),
+    ] {
+        fixture.write(
+            "forms.ash",
+            &format!("pub syntax declaration: (sink) {matcher} => {{}}\n"),
+        );
+        let result = compile_path(fixture.configuration());
+        if ambiguous {
+            assert_eq!(
+                result.expect_err(matcher).reason_code(),
+                "parse.matcher-repetition-ambiguous",
+                "{matcher}"
+            );
+        } else {
+            let program = result.unwrap_or_else(|failure| panic!("{matcher}: {failure:?}"));
+            assert_eq!(execute(&program).unwrap().value_display(), "42");
+        }
+    }
+}
+
+#[test]
+fn fixed_repetition_failures_keep_their_actual_causes() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_file_diagnostics, write_human, write_json},
+    };
+    for (entry, reason, primary_file, relationship, invocation) in [
+        (
+            "missing_driver_definition.ash",
+            "parse.repetition-missing-driver",
+            "missing_driver_forms.ash",
+            "repetition_missing_driver",
+            false,
+        ),
+        (
+            "mismatched.ash",
+            "parse.repetition-length-mismatch",
+            "mismatched.ash",
+            "repetition_length_mismatch",
+            true,
+        ),
+        (
+            "empty_plus.ash",
+            "parse.matcher-repetition-empty",
+            "empty_plus.ash",
+            "matcher_repetition_empty",
+            true,
+        ),
+        (
+            "trailing_separator.ash",
+            "parse.matcher-trailing-separator",
+            "trailing_separator.ash",
+            "matcher_trailing_separator",
+            true,
+        ),
+        (
+            "ambiguous_definition.ash",
+            "parse.matcher-repetition-ambiguous",
+            "ambiguous_forms.ash",
+            "matcher_repetition_ambiguous",
+            false,
+        ),
+    ] {
+        let failure = compile_path(captures_fixture(entry)).expect_err(entry);
+        assert_eq!(failure.reason_code(), reason, "{entry}: {failure:?}");
+        let diagnostics = compile_file_diagnostics(&failure).unwrap();
+        let mut human = Vec::new();
+        write_human(
+            &mut human,
+            &diagnostics[0],
+            &Catalogue::new(Locale::English).unwrap(),
+        )
+        .unwrap();
+        let human = String::from_utf8(human).unwrap();
+        assert!(human.contains(primary_file), "{entry}: {human}");
+        let mut json = Vec::new();
+        write_json(&mut json, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        let labels = json["labels"].as_array().unwrap();
+        assert_eq!(labels[0]["relationship"], relationship, "{entry}: {json}");
+        assert!(
+            labels[0]["path"].as_str().unwrap().ends_with(primary_file),
+            "{entry}: {json}"
+        );
+        if invocation {
+            assert!(
+                labels
+                    .iter()
+                    .any(|label| label["relationship"] == "syntax_definition"
+                        && label["path"]
+                            .as_str()
+                            .is_some_and(|path| path.ends_with("forms.ash"))),
+                "{entry}: {json}"
+            );
+            assert!(human.contains("forms.ash"), "{entry}: {human}");
+        }
+        if entry == "trailing_separator.ash" {
+            let source =
+                include_str!("../docs/design/macros/fixtures/captures/trailing_separator.ash");
+            let comma = source.find("first,").unwrap() + "first".len();
+            assert_eq!(labels[0]["byte_start"], comma, "{json}");
+            assert_eq!(labels[0]["byte_end"], comma + 1, "{json}");
+        }
+    }
+}
+
+#[test]
+fn fixed_declaration_capture_rejects_incomplete_and_two_declaration_mutations() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "forms.ash",
+        include_str!("../docs/design/macros/fixtures/captures/forms.ash"),
+    );
+    let original = include_str!("../docs/design/macros/fixtures/captures/main.ash");
+    for (label, mutated) in [
+        ("incomplete", original.replace("    passed () = 42\n", "")),
+        (
+            "two declarations",
+            original.replace(
+                "    passed () = 42\n",
+                "    passed () = 42\n    extra : Unit -> Int\n    extra () = 0\n",
+            ),
+        ),
+    ] {
+        assert_ne!(mutated, original, "{label}");
+        fixture.write("entry.ash", &mutated);
+        let failure = compile_path(fixture.configuration()).expect_err(label);
+        assert_eq!(
+            failure.reason_code(),
+            "parse.expected-form",
+            "{label}: {failure:?}"
+        );
+        let syntax = failure.graph_failure().expect("caller parse failure");
+        let ash::module::LoadGraphError::Syntax(syntax) = syntax else {
+            panic!("{label}: {failure:?}");
+        };
+        assert!(
+            syntax.source.display_path().ends_with("entry.ash"),
+            "{label}"
+        );
+    }
+}
+
+#[test]
 fn nested_declaration_admission_reports_its_depth_failure_through_the_driver() {
     use ash::{
         driver::{FileFailure, PipelineFailure},

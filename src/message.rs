@@ -1600,6 +1600,12 @@ messages! {
     parse_semicolon => "parse-semicolon" {},
     /// This token is not allowed at this grammar position.
     parse_unexpected_token => "parse-unexpected-token" {},
+    parse_repetition_missing_driver => "parse-repetition-missing-driver" {},
+    parse_repetition_length_mismatch => "parse-repetition-length-mismatch" {},
+    parse_repetition_empty => "parse-repetition-empty" {},
+    parse_matcher_repetition_ambiguous => "parse-matcher-repetition-ambiguous" {},
+    parse_matcher_repetition_empty => "parse-matcher-repetition-empty" {},
+    parse_matcher_trailing_separator => "parse-matcher-trailing-separator" {},
     /// Parsing continues from this position.
     parse_recovery => "parse-recovery" {},
     /// Parsing resumes at this boundary.

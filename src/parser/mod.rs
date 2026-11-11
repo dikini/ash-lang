@@ -342,6 +342,18 @@ pub enum ParseReason {
     Semicolon,
     /// Tokens remain where the selected grammar requires another boundary.
     UnexpectedToken,
+    /// A template repetition has no repeated capture at its scope.
+    RepetitionMissingDriver,
+    /// Repetition drivers have different lengths in the current iteration.
+    RepetitionLengthMismatch,
+    /// A one-or-more template repetition received an empty driver.
+    RepetitionEmpty,
+    /// A matcher repetition can meet its following syntax in two ways.
+    MatcherRepetitionAmbiguous,
+    /// A one-or-more matcher repetition has no first iteration.
+    MatcherRepetitionEmpty,
+    /// A matcher separator is not followed by another iteration.
+    MatcherTrailingSeparator,
 }
 
 /// A parser recovery fact retained independently from rendered prose.
@@ -516,6 +528,12 @@ impl fmt::Display for ParseReason {
             Self::UnexpectedAnd => "parse.unexpected-and",
             Self::Semicolon => "parse.semicolon",
             Self::UnexpectedToken => "parse.unexpected-token",
+            Self::RepetitionMissingDriver => "parse.repetition-missing-driver",
+            Self::RepetitionLengthMismatch => "parse.repetition-length-mismatch",
+            Self::RepetitionEmpty => "parse.repetition-empty",
+            Self::MatcherRepetitionAmbiguous => "parse.matcher-repetition-ambiguous",
+            Self::MatcherRepetitionEmpty => "parse.matcher-repetition-empty",
+            Self::MatcherTrailingSeparator => "parse.matcher-trailing-separator",
         })
     }
 }
@@ -532,6 +550,14 @@ impl ParseDiagnostic {
             ParseReason::UnexpectedAnd => Message::parse_unexpected_and(),
             ParseReason::Semicolon => Message::parse_semicolon(),
             ParseReason::UnexpectedToken => Message::parse_unexpected_token(),
+            ParseReason::RepetitionMissingDriver => Message::parse_repetition_missing_driver(),
+            ParseReason::RepetitionLengthMismatch => Message::parse_repetition_length_mismatch(),
+            ParseReason::RepetitionEmpty => Message::parse_repetition_empty(),
+            ParseReason::MatcherRepetitionAmbiguous => {
+                Message::parse_matcher_repetition_ambiguous()
+            }
+            ParseReason::MatcherRepetitionEmpty => Message::parse_matcher_repetition_empty(),
+            ParseReason::MatcherTrailingSeparator => Message::parse_matcher_trailing_separator(),
         })
     }
 
@@ -542,6 +568,12 @@ impl ParseDiagnostic {
             ParseReason::UnclosedGroup => "opening_group",
             ParseReason::RepeatedEquality => "repeated_equality",
             ParseReason::ExpectedRecursiveMember => "expected_recursive_member",
+            ParseReason::RepetitionMissingDriver => "repetition_missing_driver",
+            ParseReason::RepetitionLengthMismatch => "repetition_length_mismatch",
+            ParseReason::RepetitionEmpty => "repetition_empty",
+            ParseReason::MatcherRepetitionAmbiguous => "matcher_repetition_ambiguous",
+            ParseReason::MatcherRepetitionEmpty => "matcher_repetition_empty",
+            ParseReason::MatcherTrailingSeparator => "matcher_trailing_separator",
             ParseReason::UnexpectedAnd | ParseReason::Semicolon | ParseReason::UnexpectedToken => {
                 "unexpected_token"
             }
@@ -653,6 +685,14 @@ pub(crate) enum MacroParseFailure {
         resource: Option<ResourceFailure>,
     },
     Invalid,
+}
+
+pub(crate) fn repetition_failure(reason: ParseReason, span: Span) -> MacroParseFailure {
+    let diagnostic = Diagnostic::new(reason, SourceLabel::new(span, primary_message(reason)));
+    MacroParseFailure::Syntax {
+        diagnostics: vec![ParseDiagnostic::new(diagnostic, None, None, None)],
+        resource: None,
+    }
 }
 
 // The expansion path will connect this syntax-only handoff separately.
@@ -1254,6 +1294,7 @@ fn parse_macro_tree_with_expression_scratch(
     let mut syntax_selections = std::collections::HashMap::new();
     let mut syntax_spellings = std::collections::HashMap::new();
     let mut fragment_count = 0usize;
+    let mut forwarded_declarations = 0usize;
     if fragment_scratch && !output.is_empty() {
         budget
             .charge_units(output.len())
@@ -1329,6 +1370,15 @@ fn parse_macro_tree_with_expression_scratch(
                     tokens.len(),
                     MacroOutputNode::ForwardedDeclaration(capture, origin),
                 );
+                forwarded_declarations += 1;
+                if budgeted {
+                    let digits = fragment_count
+                        .checked_ilog10()
+                        .map_or(1, |n| n as usize + 1);
+                    budget
+                        .charge_units("__ash_declaration_fragment_".len().saturating_add(digits))
+                        .map_err(macro_resource_failure)?;
+                }
                 let name = format!("__ash_declaration_fragment_{fragment_count}");
                 fragment_count += 1;
                 TokenKind::Identifier(name)
@@ -1536,15 +1586,11 @@ fn parse_macro_tree_with_expression_scratch(
         ..
     } = parser;
     let tree = cst::build(tokens, Vec::new(), diagnostics, events, resource_failure);
-    let expected_declarations = original_nodes
-        .values()
-        .filter(|node| matches!(node, MacroOutputNode::ForwardedDeclaration(_, _)))
-        .count();
-    if expected_declarations != 0 {
+    if forwarded_declarations != 0 {
         let root = tree.root.as_ref().ok_or(MacroParseFailure::Invalid)?;
         if budgeted {
             budget
-                .charge_units(original_nodes.len().saturating_add(root.children.len()))
+                .charge_units(root.children.len())
                 .map_err(macro_resource_failure)?;
         }
         let mut actual_declarations = 0;
@@ -1564,7 +1610,7 @@ fn parse_macro_tree_with_expression_scratch(
                 actual_declarations += 1;
             }
         }
-        if actual_declarations != expected_declarations {
+        if actual_declarations != forwarded_declarations {
             return Err(MacroParseFailure::Invalid);
         }
     }
@@ -2280,6 +2326,15 @@ impl Parser<'_> {
         ));
     }
 
+    fn error_at_span(&mut self, reason: ParseReason, span: Span) {
+        if self.resource_failure.is_some() || !self.retain_event(Event::Error(reason)) {
+            return;
+        }
+        let diagnostic = Diagnostic::new(reason, SourceLabel::new(span, primary_message(reason)));
+        self.diagnostics
+            .push(ParseDiagnostic::new(diagnostic, None, None, None));
+    }
+
     fn current_span(&self) -> Option<Span> {
         if let Some(spans) = self.diagnostic_spans
             && let Some(span) = spans.get(&self.position)
@@ -2605,6 +2660,14 @@ const fn primary_message(reason: ParseReason) -> &'static str {
         ParseReason::UnexpectedAnd => "and is only accepted within a recursive binding group",
         ParseReason::Semicolon => "semicolons are not available in Ash",
         ParseReason::UnexpectedToken => "token is not accepted at this grammar position",
+        ParseReason::RepetitionMissingDriver => "the repetition has no capture driver",
+        ParseReason::RepetitionLengthMismatch => "repetition driver lengths differ",
+        ParseReason::RepetitionEmpty => "a one-or-more repetition has no values",
+        ParseReason::MatcherRepetitionAmbiguous => {
+            "the matcher repetition has an ambiguous boundary"
+        }
+        ParseReason::MatcherRepetitionEmpty => "the matcher repetition requires an iteration",
+        ParseReason::MatcherTrailingSeparator => "the matcher separator has no following iteration",
     }
 }
 

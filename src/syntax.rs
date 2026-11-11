@@ -2726,6 +2726,7 @@ impl<'a> SyntaxExpansion<'a> {
                 &selection.declaration.matcher,
                 captures,
                 true,
+                None,
                 budget,
             )? {
                 return Err(MacroParseFailure::Invalid);
@@ -3322,6 +3323,7 @@ fn validate_template_syntax_inner(
             let budget = admission_budget
                 .as_mut()
                 .expect("declaration admission owns its budget");
+            normalize_declaration_line_ends(&mut contents, budget).map_err(resource)?;
             if declaration.contains_quote_or_escape {
                 crate::parser::parse_quote_declaration_template_admission(
                     source,
@@ -3344,14 +3346,6 @@ fn validate_template_syntax_inner(
         }
     }
     Ok(())
-}
-
-fn capture_by_name<'a>(
-    name: &SurfaceName,
-    matcher: &[SurfaceSyntaxMatcherPart],
-    captures: &'a [SurfaceSyntaxCapture],
-) -> Result<&'a SurfaceSyntaxCapture, Span> {
-    capture_by_name_at(name, matcher, captures, &[])
 }
 
 fn capture_by_name_at<'a>(
@@ -3401,6 +3395,174 @@ fn capture_by_name_at<'a>(
     Ok(capture)
 }
 
+#[derive(Clone, Copy)]
+enum RepetitionFailure {
+    Missing(Span),
+    Mismatch(Span),
+    Empty(Span),
+    Invalid(Span),
+    Resource(ResourceFailure, Span),
+}
+
+impl RepetitionFailure {
+    fn span(self) -> Span {
+        match self {
+            Self::Missing(span)
+            | Self::Mismatch(span)
+            | Self::Empty(span)
+            | Self::Invalid(span)
+            | Self::Resource(_, span) => span,
+        }
+    }
+
+    fn diagnostic(self, invocation: Option<Span>) -> crate::parser::MacroParseFailure {
+        use crate::parser::{MacroParseFailure, ParseReason, repetition_failure};
+        match self {
+            Self::Missing(span) => repetition_failure(ParseReason::RepetitionMissingDriver, span),
+            Self::Mismatch(span) => repetition_failure(
+                ParseReason::RepetitionLengthMismatch,
+                invocation.unwrap_or(span),
+            ),
+            Self::Empty(span) => {
+                repetition_failure(ParseReason::RepetitionEmpty, invocation.unwrap_or(span))
+            }
+            Self::Invalid(_) => MacroParseFailure::Invalid,
+            Self::Resource(resource, _) => MacroParseFailure::Syntax {
+                diagnostics: Vec::new(),
+                resource: Some(resource),
+            },
+        }
+    }
+}
+
+fn charge_matcher_lookup(
+    matcher: &[SurfaceSyntaxMatcherPart],
+    name: &SurfaceName,
+    depth: usize,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    for part in matcher {
+        budget.charge_units(3)?;
+        match part {
+            SurfaceSyntaxMatcherPart::Capture {
+                name: candidate, ..
+            } => {
+                budget.charge_units(name.text.len().min(candidate.text.len()).saturating_mul(3))?;
+            }
+            SurfaceSyntaxMatcherPart::Container(container) => {
+                charge_matcher_lookup(&container.body, name, type_depth(depth, 1)?, budget)?;
+            }
+            SurfaceSyntaxMatcherPart::Literal { .. } | SurfaceSyntaxMatcherPart::LineEnd => {}
+        }
+    }
+    Ok(())
+}
+
+/// Inspect all splice uses, including those nested in another repetition.
+fn repetition_length(
+    repeat: &TemplateRepeat,
+    matcher: &[SurfaceSyntaxMatcherPart],
+    captures: &[SurfaceSyntaxCapture],
+    indices: &[usize],
+    prefix: usize,
+    mut budget: Option<&mut SyntaxBudget>,
+) -> Result<usize, RepetitionFailure> {
+    let span = repeat.origin.primary();
+    if let Some(budget) = budget.as_deref_mut() {
+        budget
+            .charge_units(repeat.body.len().saturating_mul(2))
+            .map_err(|error| RepetitionFailure::Resource(error, span))?;
+    }
+    let mut pending = repeat
+        .body
+        .iter()
+        .map(|node| (node, prefix))
+        .collect::<Vec<_>>();
+    let mut length = None;
+    while let Some((node, depth)) = pending.pop() {
+        if let Some(budget) = budget.as_deref_mut() {
+            // The same traversal runs during substitution after preflight.
+            budget
+                .charge_units(4)
+                .map_err(|error| RepetitionFailure::Resource(error, span))?;
+        }
+        match node {
+            MacroOutputNode::Splice(name) => {
+                if let Some(budget) = budget.as_deref_mut() {
+                    charge_matcher_lookup(matcher, name, 0, budget)
+                        .map_err(|error| RepetitionFailure::Resource(error, span))?;
+                    charge_matcher_lookup(matcher, name, 0, budget)
+                        .map_err(|error| RepetitionFailure::Resource(error, span))?;
+                    budget
+                        .charge_units(indices.len().saturating_mul(6))
+                        .map_err(|error| RepetitionFailure::Resource(error, span))?;
+                }
+                if let SurfaceSyntaxCapture::Repeated(values) =
+                    capture_by_name_at(name, matcher, captures, indices)
+                        .map_err(RepetitionFailure::Invalid)?
+                {
+                    if length.is_some_and(|length| length != values.values.len()) {
+                        return Err(RepetitionFailure::Mismatch(span));
+                    }
+                    length = Some(values.values.len());
+                }
+            }
+            MacroOutputNode::Group(_, children, _) => {
+                let next = type_depth(depth, 1)
+                    .map_err(|error| RepetitionFailure::Resource(error, span))?;
+                if let Some(budget) = budget.as_deref_mut() {
+                    budget
+                        .charge_units(children.len().saturating_mul(3))
+                        .map_err(|error| RepetitionFailure::Resource(error, span))?;
+                    if pending.len().saturating_add(children.len()) > pending.capacity() {
+                        budget
+                            .charge_units(
+                                pending
+                                    .len()
+                                    .saturating_mul(2)
+                                    .saturating_add(children.len())
+                                    .saturating_mul(2),
+                            )
+                            .map_err(|error| RepetitionFailure::Resource(error, span))?;
+                    }
+                }
+                pending.reserve_exact(children.len());
+                pending.extend(children.iter().map(|node| (node, next)));
+            }
+            MacroOutputNode::TemplateRepeat(inner) => {
+                let next = type_depth(depth, 1)
+                    .map_err(|error| RepetitionFailure::Resource(error, span))?;
+                if let Some(budget) = budget.as_deref_mut() {
+                    budget
+                        .charge_units(inner.body.len().saturating_mul(3))
+                        .map_err(|error| RepetitionFailure::Resource(error, span))?;
+                    if pending.len().saturating_add(inner.body.len()) > pending.capacity() {
+                        budget
+                            .charge_units(
+                                pending
+                                    .len()
+                                    .saturating_mul(2)
+                                    .saturating_add(inner.body.len())
+                                    .saturating_mul(2),
+                            )
+                            .map_err(|error| RepetitionFailure::Resource(error, span))?;
+                    }
+                }
+                pending.reserve_exact(inner.body.len());
+                pending.extend(inner.body.iter().map(|node| (node, next)));
+            }
+            // Iteration-aware escapes belong to the later E5 delivery.
+            MacroOutputNode::TemplateEscape(_) => return Err(RepetitionFailure::Invalid(span)),
+            _ => {}
+        }
+    }
+    let length = length.ok_or(RepetitionFailure::Missing(span))?;
+    if repeat.one_or_more && length == 0 {
+        return Err(RepetitionFailure::Empty(span));
+    }
+    Ok(length)
+}
+
 /// Reserve the copies performed by declaration-template substitution.
 fn charge_declaration_template(
     template: &[MacroOutputNode],
@@ -3408,7 +3570,7 @@ fn charge_declaration_template(
     captures: &[SurfaceSyntaxCapture],
     budget: &mut SyntaxBudget,
 ) -> Result<bool, crate::parser::MacroParseFailure> {
-    charge_template_inner(template, matcher, captures, false, budget)
+    charge_template_inner(template, matcher, captures, false, None, budget)
 }
 
 fn charge_template_inner(
@@ -3416,6 +3578,7 @@ fn charge_template_inner(
     matcher: &[SurfaceSyntaxMatcherPart],
     captures: &[SurfaceSyntaxCapture],
     new_expression: bool,
+    invocation: Option<Span>,
     budget: &mut SyntaxBudget,
 ) -> Result<bool, crate::parser::MacroParseFailure> {
     use crate::parser::{MacroParseFailure, STRUCTURAL_DEPTH_LIMIT};
@@ -3429,6 +3592,8 @@ fn charge_template_inner(
     }
 
     let mut bridge = false;
+    let mut expanded_nodes = 0usize;
+    let mut repeat_visits = 0usize;
     budget.charge_units(template.len()).map_err(resource)?;
     budget.charge_units(template.len()).map_err(resource)?;
     if new_expression && !template.is_empty() {
@@ -3438,26 +3603,21 @@ fn charge_template_inner(
     }
     let mut pending = template
         .iter()
-        .map(|node| (node, 0usize))
+        .map(|node| (node, 0usize, Vec::<usize>::new()))
         .collect::<Vec<_>>();
-    while let Some((node, depth)) = pending.pop() {
+    while let Some((node, depth, indices)) = pending.pop() {
+        expanded_nodes = expanded_nodes.saturating_add(1);
         budget.charge().map_err(resource)?;
         match node {
             MacroOutputNode::Identifier(name, origin) => {
-                if new_expression {
-                    charge_type_name_copy(name, depth, budget).map_err(resource)?;
-                    charge_type_origin_copy(origin, depth, budget).map_err(resource)?;
-                } else {
-                    charge_name(name, budget).map_err(resource)?;
-                }
+                charge_type_name_copy(name, depth, budget).map_err(resource)?;
+                charge_type_origin_copy(origin, depth, budget).map_err(resource)?;
             }
             MacroOutputNode::Token(kind, spelling, origin) => {
                 budget.charge_units(spelling.len()).map_err(resource)?;
-                if new_expression {
-                    charge_type_token_copy(kind, budget).map_err(resource)?;
-                    budget.charge().map_err(resource)?; // retained spelling Arc
-                    charge_type_origin_copy(origin, depth, budget).map_err(resource)?;
-                }
+                charge_type_token_copy(kind, budget).map_err(resource)?;
+                budget.charge().map_err(resource)?; // retained spelling Arc
+                charge_type_origin_copy(origin, depth, budget).map_err(resource)?;
             }
             MacroOutputNode::Group(_, children, origin) => {
                 if depth >= STRUCTURAL_DEPTH_LIMIT {
@@ -3467,52 +3627,41 @@ fn charge_template_inner(
                 }
                 budget.charge_units(children.len()).map_err(resource)?;
                 budget.charge_units(children.len()).map_err(resource)?;
+                charge_type_origin_copy(origin, depth + 1, budget).map_err(resource)?;
                 if new_expression {
-                    charge_type_origin_copy(origin, depth + 1, budget).map_err(resource)?;
                     if !children.is_empty() {
                         // Vec::clone requests the child buffer before substitution.
                         budget.charge_units(children.len()).map_err(resource)?;
-                        let live = pending.len();
-                        let requested = live.saturating_add(children.len());
-                        if requested > pending.capacity() {
-                            budget
-                                .charge_units(requested.saturating_add(live))
-                                .map_err(resource)?;
-                            pending.reserve_exact(children.len());
-                        }
                     }
                 }
-                pending.extend(children.iter().map(|child| (child, depth + 1)));
+                let live = pending.len();
+                let requested = live.saturating_add(children.len());
+                if requested > pending.capacity() {
+                    budget
+                        .charge_units(requested.saturating_add(live))
+                        .map_err(resource)?;
+                    pending.reserve_exact(children.len());
+                }
+                budget
+                    .charge_units(children.len().saturating_mul(indices.len()))
+                    .map_err(resource)?;
+                pending.extend(
+                    children
+                        .iter()
+                        .map(|child| (child, depth + 1, indices.clone())),
+                );
             }
             MacroOutputNode::Splice(name) => {
-                if new_expression {
-                    charge_type_name_copy(name, depth, budget).map_err(resource)?;
-                } else {
-                    charge_name(name, budget).map_err(resource)?;
-                }
-                for part in matcher {
-                    // This scan, the preflight lookup, and substitution lookup.
-                    budget.charge_units(3).map_err(resource)?;
-                    if let SurfaceSyntaxMatcherPart::Capture { name: capture, .. } = part {
-                        let bytes = name.text.len().min(capture.text.len());
-                        budget.charge_units(bytes).map_err(resource)?;
-                        budget.charge_units(bytes).map_err(resource)?;
-                        budget.charge_units(bytes).map_err(resource)?;
-                        if name.text == capture.text {
-                            break;
-                        }
-                    }
-                }
-                match capture_by_name(name, matcher, captures) {
+                charge_type_name_copy(name, depth, budget).map_err(resource)?;
+                charge_matcher_lookup(matcher, name, 0, budget).map_err(resource)?;
+                budget
+                    .charge_units(indices.len().saturating_mul(3))
+                    .map_err(resource)?;
+                match capture_by_name_at(name, matcher, captures, &indices) {
                     Ok(SurfaceSyntaxCapture::Identifier(capture)) => {
-                        if new_expression {
-                            charge_type_name_copy(&capture.name, depth, budget)
-                                .map_err(resource)?;
-                            charge_type_origin_copy(&capture.origin, depth, budget)
-                                .map_err(resource)?;
-                        } else {
-                            charge_name(&capture.name, budget).map_err(resource)?;
-                        }
+                        charge_type_name_copy(&capture.name, depth, budget).map_err(resource)?;
+                        charge_type_origin_copy(&capture.origin, depth, budget)
+                            .map_err(resource)?;
                     }
                     Ok(SurfaceSyntaxCapture::Type(capture)) => {
                         let type_prefix = type_depth(depth, 1).map_err(resource)?;
@@ -3560,19 +3709,78 @@ fn charge_template_inner(
                 }
             }
             MacroOutputNode::TemplateEscape(name) => {
-                if new_expression {
-                    charge_type_name_copy(name, depth, budget).map_err(resource)?;
-                } else {
-                    charge_name(name, budget).map_err(resource)?;
+                charge_type_name_copy(name, depth, budget).map_err(resource)?;
+            }
+            MacroOutputNode::TemplateRepeat(repeat) => {
+                budget.charge().map_err(resource)?; // retained repeat Arc
+                repeat_visits = repeat_visits.saturating_add(1);
+                let child_depth = type_depth(depth, 1).map_err(resource)?;
+                let count = repetition_length(
+                    repeat,
+                    matcher,
+                    captures,
+                    &indices,
+                    child_depth,
+                    Some(budget),
+                )
+                .map_err(|failure| failure.diagnostic(invocation))?;
+                if repeat.separator.is_some() {
+                    expanded_nodes = expanded_nodes.saturating_add(count.saturating_sub(1));
+                }
+                let entries = repeat.body.len().saturating_mul(count);
+                // Body clones, result buffers, insertion moves and preflight entries.
+                budget
+                    .charge_units(entries.saturating_mul(6))
+                    .map_err(resource)?;
+                budget
+                    .charge_units(count.saturating_mul(3).saturating_add(2))
+                    .map_err(resource)?;
+                budget
+                    .charge_units(entries.saturating_mul(indices.len().saturating_add(1)))
+                    .map_err(resource)?;
+                if let Some((kind, _, origin)) = &repeat.separator {
+                    for _ in 1..count {
+                        charge_type_token_copy(kind, budget).map_err(resource)?;
+                        charge_type_origin_copy(origin, child_depth, budget).map_err(resource)?;
+                        budget.charge_units(3).map_err(resource)?;
+                    }
+                }
+                let live = pending.len();
+                let requested = live.saturating_add(entries);
+                if requested > pending.capacity() {
+                    budget
+                        .charge_units(requested.saturating_add(live))
+                        .map_err(resource)?;
+                    pending.reserve_exact(entries);
+                }
+                for iteration in (0..count).rev() {
+                    let mut selected = Vec::with_capacity(indices.len().saturating_add(1));
+                    selected.extend_from_slice(&indices);
+                    selected.push(iteration);
+                    pending.extend(
+                        repeat
+                            .body
+                            .iter()
+                            .rev()
+                            .map(|node| (node, child_depth, selected.clone())),
+                    );
                 }
             }
             MacroOutputNode::Expression(_, _)
             | MacroOutputNode::ForwardedExpression(_, _)
             | MacroOutputNode::ForwardedType(_, _)
             | MacroOutputNode::ForwardedDeclaration(_, _)
-            | MacroOutputNode::TemplateRepeat(_)
             | MacroOutputNode::ForwardedPattern(_, _) => return Err(MacroParseFailure::Invalid),
         }
+    }
+    if repeat_visits != 0 {
+        // Each splice can move at most the complete expanded sequence once;
+        // piece and final buffers are filled at their exact capacity.
+        budget
+            .charge_units(
+                expanded_nodes.saturating_mul(repeat_visits.saturating_mul(2).saturating_add(3)),
+            )
+            .map_err(resource)?;
     }
     Ok(bridge)
 }
@@ -3586,7 +3794,7 @@ pub(crate) fn instantiate_declaration_template(
     invocation: Span,
     budget: &mut SyntaxBudget,
 ) -> Result<Vec<MacroOutputNode>, crate::parser::MacroParseFailure> {
-    let mut output = prepare_declaration_template(selection, captures, budget)?;
+    let mut output = prepare_declaration_template(selection, captures, invocation, budget)?;
     substitute_contents(
         &mut output,
         &selection.declaration.matcher,
@@ -3601,6 +3809,7 @@ pub(crate) fn instantiate_declaration_template(
 pub(crate) fn prepare_declaration_template(
     selection: &SelectedSyntax,
     captures: &[SurfaceSyntaxCapture],
+    invocation: Span,
     budget: &mut SyntaxBudget,
 ) -> Result<Vec<MacroOutputNode>, crate::parser::MacroParseFailure> {
     use crate::parser::MacroParseFailure;
@@ -3610,7 +3819,14 @@ pub(crate) fn prepare_declaration_template(
         .template_contents
         .as_deref()
         .ok_or(MacroParseFailure::Invalid)?;
-    if charge_declaration_template(template, &selection.declaration.matcher, captures, budget)? {
+    if charge_template_inner(
+        template,
+        &selection.declaration.matcher,
+        captures,
+        false,
+        Some(invocation),
+        budget,
+    )? {
         return Err(MacroParseFailure::Invalid);
     }
     Ok(template.to_vec())
@@ -3642,10 +3858,100 @@ pub(crate) fn substitute_contents(
     introduction: usize,
     invocation: Span,
 ) -> Result<(), Span> {
-    for node in contents {
+    substitute_contents_at(
+        contents,
+        matcher,
+        captures,
+        introduction,
+        invocation,
+        &mut Vec::new(),
+    )
+}
+
+/// Repetitions can leave a line boundary at the start or adjacent to another
+/// boundary. Only the declaration output root is normalized: inner groups,
+/// quoted fragments and forwarded declarations keep their original tokens.
+pub(crate) fn normalize_declaration_line_ends(
+    contents: &mut Vec<MacroOutputNode>,
+    budget: &mut SyntaxBudget,
+) -> Result<(), ResourceFailure> {
+    budget.charge_units(contents.len())?;
+    let mut previous_line_end = true;
+    contents.retain(|node| {
+        let is_line_end = matches!(
+            node,
+            MacroOutputNode::Token(crate::lexer::TokenKind::LineEnd, _, _)
+        );
+        let keep = !is_line_end || !previous_line_end;
+        previous_line_end = is_line_end;
+        keep
+    });
+    Ok(())
+}
+
+fn substitute_contents_at(
+    contents: &mut Vec<MacroOutputNode>,
+    matcher: &[SurfaceSyntaxMatcherPart],
+    captures: &[SurfaceSyntaxCapture],
+    introduction: usize,
+    invocation: Span,
+    indices: &mut Vec<usize>,
+) -> Result<(), Span> {
+    let mut position = 0;
+    while position < contents.len() {
+        if let MacroOutputNode::TemplateRepeat(repeat) = &contents[position] {
+            let repeat = Arc::clone(repeat);
+            let count = repetition_length(&repeat, matcher, captures, indices, indices.len(), None)
+                .map_err(RepetitionFailure::span)?;
+            let mut pieces = Vec::with_capacity(count);
+            let mut output_len = if repeat.separator.is_some() {
+                count.saturating_sub(1)
+            } else {
+                0
+            };
+            for iteration in 0..count {
+                let mut body = repeat.body.clone();
+                if indices.len() == indices.capacity() {
+                    indices.reserve_exact(1);
+                }
+                indices.push(iteration);
+                substitute_contents_at(
+                    &mut body,
+                    matcher,
+                    captures,
+                    introduction,
+                    invocation,
+                    indices,
+                )?;
+                indices.pop();
+                output_len = output_len.saturating_add(body.len());
+                pieces.push(body);
+            }
+            let mut replacement = Vec::with_capacity(output_len);
+            for (iteration, body) in pieces.into_iter().enumerate() {
+                if iteration != 0
+                    && let Some((kind, spelling, origin)) = &repeat.separator
+                {
+                    replacement.push(MacroOutputNode::Token(
+                        kind.clone(),
+                        Arc::clone(spelling),
+                        origin.clone(),
+                    ));
+                }
+                replacement.extend(body);
+            }
+            let emitted = replacement.len();
+            if emitted > 1 {
+                contents.reserve_exact(emitted - 1);
+            }
+            contents.splice(position..=position, replacement);
+            position += emitted;
+            continue;
+        }
+        let node = &mut contents[position];
         match node {
             MacroOutputNode::Splice(name) => {
-                *node = match capture_by_name(name, matcher, captures)? {
+                *node = match capture_by_name_at(name, matcher, captures, indices)? {
                     SurfaceSyntaxCapture::Expression(capture) => {
                         MacroOutputNode::ForwardedExpression(capture.clone(), invocation.into())
                     }
@@ -3687,7 +3993,14 @@ pub(crate) fn substitute_contents(
                 }
             }
             MacroOutputNode::Group(_, children, _) => {
-                substitute_contents(children, matcher, captures, introduction, invocation)?;
+                substitute_contents_at(
+                    children,
+                    matcher,
+                    captures,
+                    introduction,
+                    invocation,
+                    indices,
+                )?;
             }
             MacroOutputNode::TemplateEscape(name) => return Err(name.span),
             MacroOutputNode::TemplateRepeat(repeat) => return Err(repeat.origin.primary()),
@@ -3698,6 +4011,7 @@ pub(crate) fn substitute_contents(
             | MacroOutputNode::ForwardedDeclaration(_, _)
             | MacroOutputNode::ForwardedPattern(_, _) => {}
         }
+        position += 1;
     }
     Ok(())
 }
