@@ -5411,10 +5411,13 @@ mod tests {
         });
     }
 
-    fn assert_generator_cleanup() {
+    fn assert_generator_cleanup(ordinary_executions: usize) {
         use crate::eval::machine_test_hooks as hooks;
         assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
-        assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFORMER_DROPS.get());
+        assert_eq!(
+            hooks::ROOT_CLOSES.get(),
+            hooks::TRANSFORMER_DROPS.get() + ordinary_executions
+        );
         assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
     }
 
@@ -5494,7 +5497,9 @@ mod tests {
         hooks::TRANSFORMER_EVALUATION_OBSERVER.set(None);
         TRANSFORMER_OUTPUT_OBSERVER.set(None);
         STAGED_MODULE_OBSERVER.set(None);
+        assert_generator_cleanup(0);
         assert_eq!(execute(&compiled).unwrap().value_display(), "310");
+        assert_generator_cleanup(1);
         assert_eq!(
             GENERATOR_PLAN.with(|slot| slot.borrow().clone()),
             [
@@ -5532,7 +5537,7 @@ mod tests {
             GENERATOR_LIFECYCLES.with(|slot| slot.borrow().clone()),
             [[1, 0, 1, 1, 0]]
         );
-        assert_generator_cleanup();
+        assert_generator_cleanup(1);
 
         // A separate ordinary consumer calls every unchanged generated output
         // after expansion's host has transferred and closed its root.
@@ -5554,8 +5559,9 @@ mod tests {
         );
         let compiled =
             compile_path(consumer.configuration()).expect("the generated functions remain usable");
+        assert_generator_cleanup(1);
         assert_eq!(execute(&compiled).unwrap().value_display(), "42");
-        assert_generator_cleanup();
+        assert_generator_cleanup(2);
         hooks::reset();
     }
 
@@ -5586,7 +5592,9 @@ mod tests {
             .expect("both independent generator invocations compile");
         TRANSFORMER_OUTPUT_OBSERVER.set(None);
         GENERATOR_LIFECYCLE_OBSERVER.set(None);
+        assert_generator_cleanup(0);
         assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+        assert_generator_cleanup(1);
         assert_eq!(GENERATOR_TRANSFERS.get(), 2);
         assert_eq!(
             GENERATOR_OUTPUT.with(|slot| slot.borrow().clone()),
@@ -5598,7 +5606,7 @@ mod tests {
             GENERATOR_LIFECYCLES.with(|slot| slot.borrow().clone()),
             [[1, 0, 1, 1, 0], [1, 0, 1, 1, 0]]
         );
-        assert_generator_cleanup();
+        assert_generator_cleanup(1);
         hooks::reset();
     }
 
@@ -5626,7 +5634,9 @@ mod tests {
         GENERATOR_LIFECYCLE_OBSERVER.set(None);
         hooks::TRANSFORMER_EVALUATION_OBSERVER.set(None);
         TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        assert_generator_cleanup(0);
         assert_eq!(execute(&compiled).unwrap().value_display(), "546210");
+        assert_generator_cleanup(1);
         assert_eq!(
             GENERATOR_TRACE.with(|slot| slot.borrow().clone()),
             ["next_number"; 6]
@@ -5640,7 +5650,7 @@ mod tests {
             GENERATOR_LIFECYCLES.with(|slot| slot.borrow().clone()),
             [[1, 0, 1, 1, 0]]
         );
-        assert_generator_cleanup();
+        assert_generator_cleanup(1);
 
         // These eight ordinary calls expose the repeated outer values on both
         // sides of each nested repetition, after the host root is closed.
@@ -5662,8 +5672,9 @@ mod tests {
         );
         let compiled =
             compile_path(consumer.configuration()).expect("the mixed-depth outputs remain usable");
+        assert_generator_cleanup(1);
         assert_eq!(execute(&compiled).unwrap().value_display(), "42");
-        assert_generator_cleanup();
+        assert_generator_cleanup(2);
         hooks::reset();
     }
 
