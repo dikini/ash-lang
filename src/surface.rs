@@ -52,6 +52,8 @@ pub struct SurfaceSyntaxDeclaration {
     pub implementation: SurfaceSyntaxImplementation,
     /// The template's original structured syntax, retained for instantiation.
     pub(crate) template_contents: Option<Arc<[crate::syntax::MacroOutputNode]>>,
+    /// Original lexical reads for each defining-module escape computation.
+    pub(crate) template_escapes: Option<Arc<[SurfaceTemplateEscape]>>,
     /// State bindings attached to the whole template, in source order.
     pub(crate) generators: Option<Arc<[SurfaceTemplateGenerator]>>,
     /// Whether the template contains quote or escape syntax, for budget routing.
@@ -60,6 +62,13 @@ pub struct SurfaceSyntaxDeclaration {
     pub(crate) contains_generators: bool,
     /// The complete declaration span.
     pub span: Span,
+}
+
+/// One defining-module escape and its source-ordered distinct capture reads.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SurfaceTemplateEscape {
+    pub(crate) adapter: SurfaceName,
+    pub(crate) reads: Arc<[SurfaceName]>,
 }
 
 /// One generator's original seed and definition-context step reference.

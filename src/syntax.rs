@@ -2200,6 +2200,9 @@ pub(crate) fn charge_selected(
     if let SurfaceSyntaxImplementation::Transformer(name) = &selection.declaration.implementation {
         charge_name(name, budget)?;
     }
+    if selection.declaration.template_escapes.is_some() {
+        budget.charge()?;
+    }
     Ok(())
 }
 
@@ -2225,6 +2228,9 @@ pub(crate) fn charge_selected_expression(
         }
     }
     if selection.declaration.template_contents.is_some() {
+        budget.charge()?;
+    }
+    if selection.declaration.template_escapes.is_some() {
         budget.charge()?;
     }
     if let SurfaceSyntaxImplementation::Transformer(name) = &selection.declaration.implementation {
@@ -6269,6 +6275,68 @@ mod tests {
             assert_eq!(retry.results, 6);
             assert_eq!(exact.consumed(), used);
         }
+    }
+
+    #[test]
+    fn original_escape_reads_keep_quote_holes_as_ordinary_names() {
+        let source = SourceFile::new(
+            "early_categories_forms.ash",
+            include_str!("../docs/design/macros/fixtures/escapes/early_categories_forms.ash"),
+        )
+        .unwrap();
+        let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+        assert!(tree.parse_diagnostics().is_empty());
+        let sites = std::cell::RefCell::new(crate::parser::QuoteProjection {
+            introduction: 1,
+            next_ordinal: 0,
+            sites: Vec::new(),
+        });
+        let mut budget = SyntaxBudget::default();
+        let module = crate::parser::project_declaration_expansions_with_quotes(
+            &source,
+            &tree,
+            &[],
+            &[],
+            &mut Vec::new(),
+            &mut budget,
+            None,
+            Some(&sites),
+        )
+        .expect("the original escape bodies are projected once");
+        let observations = module
+            .syntax_declarations
+            .iter()
+            .map(|declaration| {
+                let reads = declaration
+                    .template_escapes
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|escape| {
+                        escape
+                            .reads
+                            .iter()
+                            .map(|name| name.text.as_str())
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                (declaration.name.text.as_str(), reads)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            observations,
+            [
+                ("make_expr", vec![vec!["value"]]),
+                ("local_capture", vec![vec!["value"]]),
+                ("make_ident", vec![vec!["name"], vec!["name"]]),
+                ("make_type", vec![vec!["T"], vec!["T"]]),
+                ("make_pattern", vec![vec!["pattern"]]),
+                ("pass_declaration", vec![vec!["item"]]),
+            ]
+        );
+        let sites = sites.borrow();
+        assert!(!sites.sites.is_empty());
+        assert!(sites.sites.iter().all(|site| site.callee != 0));
     }
 
     #[test]

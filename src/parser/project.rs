@@ -2376,58 +2376,73 @@ fn project_syntax_declaration(
             _ => return malformed(InternalReason::UnexpectedShape),
         }
     }
-    let (implementation, template_contents, contains_quote_or_escape, nested_generators) =
-        if let Some(block) = child_nodes(child).find(|node| node.kind == NodeKind::TemplateBody) {
-            let (mut contents, contains_quote_or_escape, nested_generators) =
-                capture_template_contents(source, block, tokens, declaration_output, adapters)?;
-            if declaration_output {
-                contents = match contents.pop() {
-                    Some(crate::syntax::MacroOutputNode::Group(
-                        crate::syntax::MacroDelimiter::Braces,
-                        mut children,
-                        _,
-                    )) if contents.is_empty() => {
-                        if matches!(
-                            children.first(),
-                            Some(crate::syntax::MacroOutputNode::Token(
-                                TokenKind::LineEnd,
-                                _,
-                                _
-                            ))
-                        ) {
-                            children.remove(0);
-                        }
-                        children
+    let (
+        implementation,
+        template_contents,
+        template_escapes,
+        contains_quote_or_escape,
+        nested_generators,
+    ) = if let Some(block) = child_nodes(child).find(|node| node.kind == NodeKind::TemplateBody) {
+        let (mut contents, escapes, contains_quote_or_escape, nested_generators) =
+            capture_template_contents(source, block, tokens, declaration_output, adapters)?;
+        if declaration_output {
+            contents = match contents.pop() {
+                Some(crate::syntax::MacroOutputNode::Group(
+                    crate::syntax::MacroDelimiter::Braces,
+                    mut children,
+                    _,
+                )) if contents.is_empty() => {
+                    if matches!(
+                        children.first(),
+                        Some(crate::syntax::MacroOutputNode::Token(
+                            TokenKind::LineEnd,
+                            _,
+                            _
+                        ))
+                    ) {
+                        children.remove(0);
                     }
-                    _ => return malformed(InternalReason::UnexpectedShape),
-                };
-            }
-            (
-                SurfaceSyntaxImplementation::Template,
-                Some(contents.into()),
-                contains_quote_or_escape,
-                nested_generators,
-            )
-        } else {
-            let mut after_arrow = direct_tokens(child, tokens)
-                .skip_while(|token| token.kind != TokenKind::FatArrow)
-                .skip(1);
-            if after_arrow.next().map(|token| &token.token.kind) != Some(&TokenKind::Using) {
-                return malformed(InternalReason::UnexpectedShape);
-            }
-            let transformer = after_arrow.next().ok_or(ProjectionError::MalformedTree(
-                InternalReason::UnexpectedShape,
-            ))?;
-            if after_arrow.next().is_some() {
-                return malformed(InternalReason::UnexpectedShape);
-            }
-            (
-                SurfaceSyntaxImplementation::Transformer(surface_name(transformer)?),
-                None,
-                false,
-                false,
-            )
-        };
+                    children
+                }
+                _ => return malformed(InternalReason::UnexpectedShape),
+            };
+        }
+        (
+            SurfaceSyntaxImplementation::Template,
+            Some(contents.into()),
+            if escapes.is_empty() {
+                None
+            } else {
+                charge_expression_allocation(
+                    escapes.len().saturating_add(1),
+                    tokens.expression_budget,
+                )?;
+                Some(escapes.into())
+            },
+            contains_quote_or_escape,
+            nested_generators,
+        )
+    } else {
+        let mut after_arrow = direct_tokens(child, tokens)
+            .skip_while(|token| token.kind != TokenKind::FatArrow)
+            .skip(1);
+        if after_arrow.next().map(|token| &token.token.kind) != Some(&TokenKind::Using) {
+            return malformed(InternalReason::UnexpectedShape);
+        }
+        let transformer = after_arrow.next().ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?;
+        if after_arrow.next().is_some() {
+            return malformed(InternalReason::UnexpectedShape);
+        }
+        (
+            SurfaceSyntaxImplementation::Transformer(surface_name(transformer)?),
+            None,
+            None,
+            false,
+            false,
+        )
+    };
     let generators = optional_child_of_kind(child, NodeKind::TemplateGeneratorClause)?
         .map(|clause| project_template_generators(source, clause, tokens))
         .transpose()?;
@@ -2444,6 +2459,7 @@ fn project_syntax_declaration(
         matcher,
         implementation,
         template_contents,
+        template_escapes,
         generators,
         contains_quote_or_escape,
         contains_generators,
@@ -7453,8 +7469,17 @@ fn capture_template_contents(
     tokens: &ProjectionTokens<'_>,
     declaration: bool,
     adapters: &mut Vec<SurfaceDefinition>,
-) -> Result<(Vec<crate::syntax::MacroOutputNode>, bool, bool), ProjectionError> {
+) -> Result<
+    (
+        Vec<crate::syntax::MacroOutputNode>,
+        Vec<crate::surface::SurfaceTemplateEscape>,
+        bool,
+        bool,
+    ),
+    ProjectionError,
+> {
     let mut escapes = Vec::new();
+    let mut escape_descriptors = Vec::new();
     let mut generators = Vec::new();
     let mut contains_quote_or_escape = false;
     let mut pending = Vec::new();
@@ -7506,7 +7531,15 @@ fn capture_template_contents(
                 written: false,
                 diagnostic: None,
             };
-            let body = project_expression(source, expression_child(current)?, tokens)?;
+            let mut reads = Vec::new();
+            let empty = std::collections::HashMap::new();
+            let body = project_expression_with_escape_reads(
+                source,
+                expression_child(current)?,
+                tokens,
+                tokens.originals.unwrap_or(&empty),
+                Some(&mut reads),
+            )?;
             reserve_expression_scratch(adapters, 1, tokens.expression_budget)?;
             adapters.push(make_template_escape_adapter(
                 &name,
@@ -7514,6 +7547,18 @@ fn capture_template_contents(
                 body,
                 tokens,
             )?);
+            charge_expression_allocation(
+                name.text
+                    .len()
+                    .saturating_add(reads.len())
+                    .saturating_add(2),
+                tokens.expression_budget,
+            )?;
+            reserve_expression_scratch(&mut escape_descriptors, 1, tokens.expression_budget)?;
+            escape_descriptors.push(crate::surface::SurfaceTemplateEscape {
+                adapter: name.clone(),
+                reads: reads.into(),
+            });
             reserve_expression_scratch(&mut escapes, 1, tokens.expression_budget)?;
             escapes.push((*index, name));
             continue;
@@ -7539,7 +7584,14 @@ fn capture_template_contents(
         Some(&generators),
         declaration,
     )
-    .map(|(contents, _)| (contents, contains_quote_or_escape, nested_generators))
+    .map(|(contents, _)| {
+        (
+            contents,
+            escape_descriptors,
+            contains_quote_or_escape,
+            nested_generators,
+        )
+    })
 }
 
 fn make_template_escape_adapter(
@@ -9501,6 +9553,16 @@ fn project_expression_with_fragments(
     tokens: &ProjectionTokens<'_>,
     original_nodes: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
 ) -> Result<SurfaceExpr, ProjectionError> {
+    project_expression_with_escape_reads(source, node, tokens, original_nodes, None)
+}
+
+fn project_expression_with_escape_reads(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &ProjectionTokens<'_>,
+    original_nodes: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
+    mut escape_reads: Option<&mut Vec<SurfaceName>>,
+) -> Result<SurfaceExpr, ProjectionError> {
     struct CaptureQuotes {
         sites: Vec<crate::syntax::SurfaceQuoteSite>,
         descendants: bool,
@@ -10024,6 +10086,84 @@ fn project_expression_with_fragments(
                             return malformed(InternalReason::UnexpectedShape);
                         }
                         push_result!(capture.expression.clone());
+                    } else if let Some(read) =
+                        optional_child_of_kind(node, NodeKind::EscapeCaptureRead)?
+                    {
+                        let reads =
+                            escape_reads
+                                .as_deref_mut()
+                                .ok_or(ProjectionError::MalformedTree(
+                                    InternalReason::UnexpectedShape,
+                                ))?;
+                        let token = direct_tokens(read, tokens).nth(1).ok_or(
+                            ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+                        )?;
+                        if let Some(budget) = tokens.expression_budget {
+                            let mut budget = budget.borrow_mut();
+                            match token.original {
+                                Some(crate::syntax::MacroOutputNode::Identifier(name, origin)) => {
+                                    crate::syntax::charge_type_name_copy(name, 0, &mut budget)
+                                        .map_err(ProjectionError::ResourceLimit)?;
+                                    crate::syntax::charge_type_origin_copy(origin, 0, &mut budget)
+                                        .map_err(ProjectionError::ResourceLimit)?;
+                                    charge_staged_name_frames(token, &mut budget)
+                                        .map_err(ProjectionError::ResourceLimit)?;
+                                    budget.charge().map_err(ProjectionError::ResourceLimit)?;
+                                }
+                                _ => {
+                                    let bytes = match &token.kind {
+                                        TokenKind::Identifier(text)
+                                        | TokenKind::UpperIdentifier(text) => text.len(),
+                                        _ => return malformed(InternalReason::UnexpectedShape),
+                                    };
+                                    budget
+                                        .charge_units(bytes.saturating_add(1))
+                                        .map_err(ProjectionError::ResourceLimit)?;
+                                }
+                            }
+                        }
+                        let name = surface_name(token)?;
+                        let mut selected = None;
+                        for (index, candidate) in reads.iter().enumerate() {
+                            charge_expression_allocation(
+                                name.text.len().min(candidate.text.len()).saturating_add(1),
+                                tokens.expression_budget,
+                            )?;
+                            if candidate.text == name.text {
+                                selected = Some(index);
+                                break;
+                            }
+                        }
+                        let span = name.span;
+                        let index = if let Some(index) = selected {
+                            index
+                        } else {
+                            reserve_expression_scratch(reads, 1, tokens.expression_budget)?;
+                            let index = reads.len();
+                            reads.push(name);
+                            index
+                        };
+                        let digits = index.checked_ilog10().map_or(1, |n| n as usize + 1);
+                        charge_expression_allocation(
+                            "\0ash_escape_operand_"
+                                .len()
+                                .saturating_add(digits)
+                                .saturating_add(1),
+                            tokens.expression_budget,
+                        )?;
+                        let local = SurfaceName {
+                            text: format!("\0ash_escape_operand_{index}"),
+                            span,
+                            introduction: 0,
+                            introduced_at: None,
+                            written: false,
+                            diagnostic: None,
+                        };
+                        push_result!(SurfaceExpr {
+                            span,
+                            diagnostic: None,
+                            kind: SurfaceExprKind::Name(SurfaceReference::Unqualified(local)),
+                        });
                     } else if let Some(splice) =
                         optional_child_of_kind(node, NodeKind::TemplateSplice)?
                     {
