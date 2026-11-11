@@ -21946,6 +21946,7 @@ mod tests {
                 "| Second\n",
                 "| Third\n",
                 "| Fourth\n",
+                "type Generic<A> = Generic(A)\n",
                 "probe : Unit -> Int\n",
                 "probe () = match Generated {\n",
                 "Generated => 42\n",
@@ -21957,7 +21958,8 @@ mod tests {
                 "shadow : Unit -> Int\n",
                 "shadow () = {\n",
                 "newtype Generated = Generated(Int)\n",
-                "match Generated(42) {\n",
+                "let item : Generated = Generated(42)\n",
+                "match item {\n",
                 "Generated(value) => value\n",
                 "}\n",
                 "}\n",
@@ -21966,9 +21968,23 @@ mod tests {
                 "newtype Generated = Generated(Int)\n",
                 "Missing\n",
                 "}\n",
+                "identity : Generated -> Generated\n",
+                "identity value = value\n",
+                "generic_identity : Generic<Int> -> Generic<Int>\n",
+                "generic_identity value = value\n",
+                "parametric<Generated> : Generated -> Generated\n",
+                "parametric value = value\n",
+                "higher<Generic : Type -> Type> : Generic<Int> -> Generic<Int>\n",
+                "higher value = value\n",
                 "}\n",
                 "pub syntax declaration: (other) => {\n",
                 "type Other = Other\n",
+                "}\n",
+                "pub syntax declaration: (nominal_only) $ctor:ident => {\n",
+                "type Standalone = $ctor\n",
+                "}\n",
+                "pub syntax declaration: (constructor_only) $tname:ident => {\n",
+                "type $tname = Distinct\n",
                 "}\n",
             ),
         )
@@ -21985,7 +22001,11 @@ mod tests {
                 owner: 0,
             })
             .collect();
-        let caller = SourceFile::new("constructor-caller.ash", "spawn\nother\n").unwrap();
+        let caller = SourceFile::new(
+            "constructor-caller.ash",
+            "spawn\nother\nnominal_only Captured\nconstructor_only Authored\n",
+        )
+        .unwrap();
         let (tokens, diagnostics, budget, failure) = lex(&caller).unwrap().into_parts();
         assert!(failure.is_none());
         let (checkpoint, budget) = parse_module_header(tokens, diagnostics, budget);
@@ -22013,21 +22033,39 @@ mod tests {
         let identities = resolver
             .install_nominal_identities(&surface.type_declarations)
             .expect("staged declarations install their original IDs");
-        assert_eq!(identities.len(), 4);
+        assert_eq!(identities.len(), 7);
         assert_eq!(resolver.lexical_constructor_scopes.len(), 1);
+        assert_eq!(resolver.lexical_nominal_scopes.len(), 1);
 
         for (declaration, identity) in surface.type_declarations.iter().zip(&identities) {
+            let name = &declaration.name;
+            assert_eq!(resolver.type_names.get(&name.text), Some(&identity.id));
+            if name.introduction != 0 {
+                assert_eq!(owners[name.introduction - 1].owner, Some(0));
+                assert_eq!(
+                    resolver.lexical_nominal_scopes[0].get(&(name.text.clone(), name.introduction)),
+                    Some(&identity.id),
+                );
+            } else {
+                assert!(!resolver.lexical_nominal_scopes[0].contains_key(&(name.text.clone(), 0)));
+            }
             for (constructor, id) in declaration.constructors.iter().zip(&identity.constructors) {
                 let name = &constructor.name;
-                assert_ne!(name.introduction, 0);
-                assert_eq!(owners[name.introduction - 1].owner, Some(0));
-                assert!(name.introduced_at.is_some());
                 assert_eq!(resolver.constructor_names.get(&name.text), Some(id));
-                assert_eq!(
-                    resolver.lexical_constructor_scopes[0]
-                        .get(&(name.text.clone(), name.introduction)),
-                    Some(id),
-                );
+                if name.introduction != 0 {
+                    assert_eq!(owners[name.introduction - 1].owner, Some(0));
+                    assert!(name.introduced_at.is_some());
+                    assert_eq!(
+                        resolver.lexical_constructor_scopes[0]
+                            .get(&(name.text.clone(), name.introduction)),
+                        Some(id),
+                    );
+                } else {
+                    assert!(
+                        !resolver.lexical_constructor_scopes[0]
+                            .contains_key(&(name.text.clone(), 0))
+                    );
+                }
                 assert_eq!(id.owner(), identity.id);
             }
         }
@@ -22035,7 +22073,7 @@ mod tests {
             surface.type_declarations[0].constructors[0]
                 .name
                 .introduction,
-            surface.type_declarations[3].constructors[0]
+            surface.type_declarations[4].constructors[0]
                 .name
                 .introduction,
         );
@@ -22140,7 +22178,14 @@ mod tests {
         };
         assert_eq!(constructor.owner(), local_owner);
         assert_ne!(constructor, identities[0].constructors[0]);
-        let ResolvedExprKind::Apply(application) = &local_match.scrutinee.kind else {
+        let ResolvedLocalDeclaration::Binding(binding) = &block.declarations[1] else {
+            panic!("expected the annotated local binding")
+        };
+        assert_eq!(
+            binding.annotation.as_ref().unwrap().ty,
+            Type::Nominal(local_owner),
+        );
+        let ResolvedExprKind::Apply(application) = &binding.initializer.kind else {
             panic!("the local constructor is applied to its payload")
         };
         let ResolvedExprKind::Constructor(occurrence) = &application.function.kind else {
@@ -22148,6 +22193,7 @@ mod tests {
         };
         assert_eq!(occurrence.constructor, constructor);
         assert_eq!(resolver.lexical_constructor_scopes.len(), 1);
+        assert_eq!(resolver.lexical_nominal_scopes.len(), 1);
 
         let SurfaceDefinitionKind::Equational(bad) = &surface.definitions[3].kind else {
             panic!("expected the local failure control")
@@ -22160,12 +22206,108 @@ mod tests {
             ResolveReason::UnknownConstructor,
         );
         assert_eq!(resolver.lexical_constructor_scopes.len(), 1);
+        assert_eq!(resolver.lexical_nominal_scopes.len(), 1);
         let generated = &surface.type_declarations[0].constructors[0].name;
         assert_eq!(
             resolver.lexical_constructor_scopes[0]
                 .get(&(generated.text.clone(), generated.introduction)),
             Some(&identities[0].constructors[0]),
         );
+    }
+
+    #[test]
+    fn introduced_module_nominals_resolve_actual_signatures_and_preserve_parameters() {
+        let (surface, owners) = staged_module_constructor_fixture();
+        let mut resolver = Resolver::new(ModuleId::new(7_103));
+        let identities = resolver
+            .install_nominal_identities(&surface.type_declarations)
+            .unwrap();
+        for (definition_index, declaration_index) in [(4, 0), (5, 3)] {
+            let SurfaceDefinitionKind::Equational(function) =
+                &surface.definitions[definition_index].kind
+            else {
+                panic!("expected the generated signature")
+            };
+            let SurfaceTypeKind::Function(arrow) = &function.interface.annotation.kind else {
+                panic!("expected the generated function type")
+            };
+            let reference = match &arrow.domain.kind {
+                SurfaceTypeKind::Named(reference) => reference,
+                SurfaceTypeKind::Application { constructor, .. } => constructor,
+                _ => panic!("expected the generated nominal occurrence"),
+            };
+            let name = &surface.type_declarations[declaration_index].name;
+            assert_ne!(name.introduction, 0);
+            assert_eq!(reference.member().introduction, name.introduction);
+            assert_eq!(reference.member().introduced_at, name.introduced_at);
+            assert_eq!(owners[name.introduction - 1].owner, Some(0));
+            assert_eq!(
+                resolver.nominal_reference(reference).unwrap().id,
+                identities[declaration_index].id
+            );
+            let nominal = Type::Nominal(identities[declaration_index].id);
+            let expected = if declaration_index == 3 {
+                Type::Application(Box::new(nominal), Box::new(Type::Int))
+            } else {
+                nominal
+            };
+            assert_eq!(
+                resolver
+                    .resolve_type(&function.interface.annotation)
+                    .unwrap()
+                    .ty,
+                Type::Function(Box::new(expected.clone()), Box::new(expected)),
+            );
+        }
+
+        // The ordinary explicit parameter still precedes an equally spelled
+        // module nominal in both Named and Application type positions.
+        for (definition_index, higher) in [(6, false), (7, true)] {
+            let SurfaceDefinitionKind::Equational(function) =
+                &surface.definitions[definition_index].kind
+            else {
+                panic!("expected the generated parameter control")
+            };
+            let parameters = function.interface.type_parameters.as_ref().unwrap();
+            let parameter = &parameters[0];
+            let binder = resolver
+                .allocate_type_variable(&parameter.name, parameter.kind.as_ref(), Kind::Type)
+                .unwrap();
+            if higher {
+                assert_eq!(
+                    binder.kind,
+                    Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
+                );
+            } else {
+                assert_eq!(binder.kind, Kind::Type);
+            }
+            let checkpoint = (
+                resolver.type_scopes.len(),
+                resolver.syntax_type_scopes.len(),
+            );
+            resolver
+                .push_prepared_type_scope(
+                    &[(std::slice::from_ref(&binder), Some(parameters.as_slice()))],
+                    function.interface.span,
+                    None,
+                )
+                .unwrap();
+            let variable = Type::Variable(binder.id);
+            let expected = if higher {
+                Type::Application(Box::new(variable), Box::new(Type::Int))
+            } else {
+                variable
+            };
+            assert_eq!(
+                resolver
+                    .resolve_type(&function.interface.annotation)
+                    .unwrap()
+                    .ty,
+                Type::Function(Box::new(expected.clone()), Box::new(expected)),
+            );
+            resolver.type_scopes.truncate(checkpoint.0);
+            resolver.syntax_type_scopes.truncate(checkpoint.1);
+        }
     }
 
     #[test]
@@ -22190,6 +22332,7 @@ mod tests {
             assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
             assert_eq!(short.type_work.used(), prefix);
             assert!(short.lexical_constructor_scopes.is_empty());
+            assert!(short.lexical_nominal_scopes.is_empty());
             for _ in 0..2 {
                 let mut exact =
                     Resolver::with_type_work(module, TypeWorkBudget::with_limit(prefix + work));
@@ -22199,6 +22342,7 @@ mod tests {
                     .expect("a fresh exact retry must retain the complete frame");
                 assert_eq!(exact.type_work.used(), prefix + work);
                 assert_eq!(exact.lexical_constructor_scopes.len(), 1);
+                assert_eq!(exact.lexical_nominal_scopes.len(), 1);
                 assert_eq!(
                     exact.lexical_constructor_scopes[0].len(),
                     measured.lexical_constructor_scopes[0].len()
@@ -22212,6 +22356,7 @@ mod tests {
             .install_nominal_identities(&ordinary.type_declarations)
             .unwrap();
         assert!(plain.lexical_constructor_scopes.is_empty());
+        assert!(plain.lexical_nominal_scopes.is_empty());
         assert_eq!(plain.type_work.used(), 0);
 
         let mut mixed_declarations = surface.type_declarations.clone();
@@ -22229,6 +22374,15 @@ mod tests {
             ids.last().unwrap().constructors[0],
         );
         assert!(!mixed.lexical_constructor_scopes[0].contains_key(&(source_name.text.clone(), 0)));
+        let source_type = &ordinary.type_declarations[0].name;
+        assert_eq!(
+            mixed
+                .nominal_reference(&SurfaceReference::Unqualified(source_type.clone()))
+                .unwrap()
+                .id,
+            ids.last().unwrap().id,
+        );
+        assert!(!mixed.lexical_nominal_scopes[0].contains_key(&(source_type.text.clone(), 0)));
 
         // A fresh module cannot see an introduced constructor from another one.
         let introduced = &surface.type_declarations[0].constructors[0].name;
@@ -22239,6 +22393,49 @@ mod tests {
                 .reason,
             ResolveReason::UnknownConstructor,
         );
+        let introduced_type = &surface.type_declarations[0].name;
+        assert_eq!(
+            plain
+                .nominal_reference(&SurfaceReference::Unqualified(introduced_type.clone()))
+                .unwrap_err()
+                .reason,
+            ResolveReason::UnknownType,
+        );
+
+        // Each base can be reached on its own through real captured names.
+        for (index, has_nominal, has_constructor) in [(5, true, false), (6, false, true)] {
+            let declarations = &surface.type_declarations[index..=index];
+            let mut measured = Resolver::with_type_work(module, TypeWorkBudget::unbounded());
+            measured.install_nominal_identities(declarations).unwrap();
+            let work = measured.type_work.used();
+            assert!(work > 0);
+            assert_eq!(!measured.lexical_nominal_scopes.is_empty(), has_nominal);
+            assert_eq!(
+                !measured.lexical_constructor_scopes.is_empty(),
+                has_constructor
+            );
+            for prefix in [0, 11] {
+                let mut short =
+                    Resolver::with_type_work(module, TypeWorkBudget::with_limit(prefix + work - 1));
+                short.type_work.charge(prefix).unwrap();
+                assert!(short.install_nominal_identities(declarations).is_err());
+                assert_eq!(short.type_work.used(), prefix);
+                assert!(short.lexical_nominal_scopes.is_empty());
+                assert!(short.lexical_constructor_scopes.is_empty());
+                for _ in 0..2 {
+                    let mut exact =
+                        Resolver::with_type_work(module, TypeWorkBudget::with_limit(prefix + work));
+                    exact.type_work.charge(prefix).unwrap();
+                    exact.install_nominal_identities(declarations).unwrap();
+                    assert_eq!(exact.type_work.used(), prefix + work);
+                    assert_eq!(!exact.lexical_nominal_scopes.is_empty(), has_nominal);
+                    assert_eq!(
+                        !exact.lexical_constructor_scopes.is_empty(),
+                        has_constructor
+                    );
+                }
+            }
+        }
     }
 
     #[test]
