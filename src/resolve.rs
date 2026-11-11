@@ -10140,6 +10140,9 @@ impl Resolver<'_, '_> {
     ) -> Result<Vec<NominalDeclarationIdentity>, ResolveError> {
         let mut first_types = HashMap::new();
         let mut nominal_ids = Vec::with_capacity(type_declarations.len());
+        let mut introduced_nominal_count = 0usize;
+        let mut introduced_nominal_bytes = 0usize;
+        let mut introduced_nominal_anchor = None;
         for (index, declaration) in type_declarations.iter().enumerate() {
             if let Some(first) =
                 first_types.insert(declaration.name.text.as_str(), &declaration.name)
@@ -10181,6 +10184,12 @@ impl Resolver<'_, '_> {
             let id = NominalTypeId::new(self.module, index);
             self.type_names.insert(declaration.name.text.clone(), id);
             nominal_ids.push(id);
+            if declaration.name.introduction != 0 {
+                introduced_nominal_count = introduced_nominal_count.saturating_add(1);
+                introduced_nominal_bytes =
+                    introduced_nominal_bytes.saturating_add(declaration.name.text.len());
+                introduced_nominal_anchor.get_or_insert(declaration.name.span);
+            }
         }
 
         let mut first_constructors = HashMap::new();
@@ -10251,53 +10260,102 @@ impl Resolver<'_, '_> {
                 constructors: owned,
             });
         }
-        if let Some(anchor) = introduced_anchor {
-            // Module installation precedes all block-local constructor frames.
-            // Preserve that base for the resolver's lifetime, but allocate it
-            // only for already admitted, nonzero introductions. Existing spelling
-            // conflicts and ConstructorId allocation have already completed.
-            let live_frames = self.lexical_constructor_scopes.len();
-            let frame_work = if live_frames == self.lexical_constructor_scopes.capacity() {
-                live_frames.saturating_mul(2).saturating_add(1)
+        if let Some(anchor) = introduced_anchor.or(introduced_nominal_anchor) {
+            // Module installation precedes all block-local frames. Stage both
+            // bases before publishing either, using only already admitted names
+            // and their existing IDs after the ordinary conflict checks.
+            let constructor_work = if introduced_anchor.is_some() {
+                let live = self.lexical_constructor_scopes.len();
+                let frame = if live == self.lexical_constructor_scopes.capacity() {
+                    live.saturating_mul(2).saturating_add(1)
+                } else {
+                    1
+                };
+                type_declarations
+                    .len()
+                    .saturating_add(constructor_count)
+                    .saturating_add(introduced_count.saturating_mul(4))
+                    .saturating_add(introduced_bytes.saturating_mul(2))
+                    .saturating_add(frame)
             } else {
-                1
+                0
             };
-            let work = type_declarations
-                .len()
-                .saturating_add(constructor_count)
-                .saturating_add(introduced_count.saturating_mul(4))
-                .saturating_add(introduced_bytes.saturating_mul(2))
-                .saturating_add(frame_work);
+            let nominal_work = if introduced_nominal_anchor.is_some() {
+                let live = self.lexical_nominal_scopes.len();
+                let frame = if live == self.lexical_nominal_scopes.capacity() {
+                    live.saturating_mul(2).saturating_add(1)
+                } else {
+                    1
+                };
+                type_declarations
+                    .len()
+                    .saturating_add(introduced_nominal_count.saturating_mul(4))
+                    .saturating_add(introduced_nominal_bytes.saturating_mul(2))
+                    .saturating_add(frame)
+            } else {
+                0
+            };
+            let work = constructor_work.saturating_add(nominal_work);
             self.type_work.charge(work).map_err(|()| {
                 error(
                     ResolveReason::TypeResourceExhausted,
                     anchor,
-                    "introduced module constructor retention exceeded its type-work budget",
+                    "introduced module identity retention exceeded its type-work budget",
                 )
             })?;
-            let mut scope = HashMap::new();
-            scope.try_reserve(introduced_count).map_err(|_| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    anchor,
-                    "introduced module constructor storage could not be reserved",
-                )
-            })?;
-            for (declaration, identity) in type_declarations.iter().zip(&identities) {
-                for (constructor, id) in declaration.constructors.iter().zip(&identity.constructors)
-                {
-                    let name = &constructor.name;
+            let constructor_scope = if introduced_anchor.is_some() {
+                let mut scope = HashMap::new();
+                scope.try_reserve(introduced_count).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        anchor,
+                        "introduced module constructor storage could not be reserved",
+                    )
+                })?;
+                for (declaration, identity) in type_declarations.iter().zip(&identities) {
+                    for (constructor, id) in
+                        declaration.constructors.iter().zip(&identity.constructors)
+                    {
+                        let name = &constructor.name;
+                        if name.introduction != 0 {
+                            let spelling = try_clone_resolution_string(
+                                &name.text,
+                                name.span,
+                                "introduced module constructor name storage could not be reserved",
+                            )?;
+                            scope.insert((spelling, name.introduction), *id);
+                        }
+                    }
+                }
+                Some(scope)
+            } else {
+                None
+            };
+            let nominal_scope = if introduced_nominal_anchor.is_some() {
+                let mut scope = HashMap::new();
+                scope.try_reserve(introduced_nominal_count).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        anchor,
+                        "introduced module nominal storage could not be reserved",
+                    )
+                })?;
+                for (declaration, id) in type_declarations.iter().zip(&nominal_ids) {
+                    let name = &declaration.name;
                     if name.introduction != 0 {
                         let spelling = try_clone_resolution_string(
                             &name.text,
                             name.span,
-                            "introduced module constructor name storage could not be reserved",
+                            "introduced module nominal name storage could not be reserved",
                         )?;
                         scope.insert((spelling, name.introduction), *id);
                     }
                 }
-            }
-            if !scope.is_empty() {
+                Some(scope)
+            } else {
+                None
+            };
+            if constructor_scope.is_some() {
                 debug_assert!(self.lexical_constructor_scopes.is_empty());
                 self.lexical_constructor_scopes
                     .try_reserve(1)
@@ -10308,7 +10366,22 @@ impl Resolver<'_, '_> {
                             "module constructor scope storage could not be reserved",
                         )
                     })?;
+            }
+            if nominal_scope.is_some() {
+                debug_assert!(self.lexical_nominal_scopes.is_empty());
+                self.lexical_nominal_scopes.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        anchor,
+                        "module nominal scope storage could not be reserved",
+                    )
+                })?;
+            }
+            if let Some(scope) = constructor_scope {
                 self.lexical_constructor_scopes.push(scope);
+            }
+            if let Some(scope) = nominal_scope {
+                self.lexical_nominal_scopes.push(scope);
             }
         }
         Ok(identities)
