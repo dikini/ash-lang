@@ -52,10 +52,21 @@ pub struct SurfaceSyntaxDeclaration {
     pub implementation: SurfaceSyntaxImplementation,
     /// The template's original structured syntax, retained for instantiation.
     pub(crate) template_contents: Option<Arc<[crate::syntax::MacroOutputNode]>>,
+    /// State bindings attached to the whole template, in source order.
+    pub(crate) generators: Option<Arc<[SurfaceTemplateGenerator]>>,
     /// Whether the template contains quote or escape syntax, for budget routing.
     pub(crate) contains_quote_or_escape: bool,
     /// The complete declaration span.
     pub span: Span,
+}
+
+/// One generator's original seed and definition-context step reference.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct SurfaceTemplateGenerator {
+    pub(crate) name: SurfaceName,
+    pub(crate) seed: SurfaceExpr,
+    pub(crate) step: SurfaceReference,
+    pub(crate) span: Span,
 }
 
 /// A source syntax definition's output category.

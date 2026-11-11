@@ -44,6 +44,7 @@ pub(crate) enum MacroOutputNode {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct TemplateRepeat {
     pub(crate) body: Vec<MacroOutputNode>,
+    pub(crate) generators: Option<Arc<[crate::surface::SurfaceTemplateGenerator]>>,
     pub(crate) separator: Option<(crate::lexer::TokenKind, Arc<str>, MacroOrigin)>,
     pub(crate) one_or_more: bool,
     pub(crate) origin: MacroOrigin,

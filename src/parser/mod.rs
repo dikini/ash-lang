@@ -81,6 +81,12 @@ pub enum NodeKind {
     SyntaxMatchedIteration,
     /// The balanced token contents of an expression syntax template.
     TemplateBody,
+    /// A template or repetition's source-ordered generator bindings.
+    TemplateGeneratorClause,
+    /// One named state seed and ordinary step reference.
+    TemplateGenerator,
+    /// The ordinary seed expression with its outer capture splices.
+    TemplateGeneratorSeed,
     /// One imported expression syntax invocation.
     SyntaxInvocation,
     /// One imported declaration syntax invocation, awaiting expansion.
@@ -2100,6 +2106,7 @@ enum QuoteMode {
     Ordinary,
     Template,
     DeclarationTemplate,
+    GeneratorSeed,
     Escape,
     Quote,
 }
@@ -2245,7 +2252,8 @@ impl Parser<'_> {
                 .is_some_and(|found| found.as_ref() == spelling);
         }
         let Some(source) = self.syntax_source else {
-            return false;
+            return self.quote_mode == QuoteMode::GeneratorSeed
+                && matches!(kind, TokenKind::Identifier(name) if name == spelling);
         };
         let range = token.span.range();
         source
