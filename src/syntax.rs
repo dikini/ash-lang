@@ -4462,6 +4462,8 @@ fn unknown_capture_failure(
             )?;
             if let Some(location) = name.diagnostic.as_deref() {
                 charge_diagnostic_location_copy(location, budget)?;
+                // The copied frame vector also retains each existing Arc.
+                budget.charge_units(location.frames.len())?;
             }
             Ok(())
         };
@@ -6780,7 +6782,7 @@ mod tests {
             assert_eq!(exact.consumed(), total);
         }
 
-        let (_, invalid) = project(include_str!(
+        let (_, mut invalid) = project(include_str!(
             "../docs/design/macros/fixtures/escapes/out_of_scope_forms.ash"
         ));
         let Err(crate::parser::MacroParseFailure::Syntax { diagnostics, .. }) =
@@ -6795,6 +6797,52 @@ mod tests {
             diagnostics[0].reason,
             crate::parser::ParseReason::UnknownTemplateCapture
         );
+
+        let declaration = &mut invalid.syntax_declarations[0];
+        let descriptors = Arc::get_mut(declaration.template_escapes.as_mut().unwrap()).unwrap();
+        let reads = Arc::get_mut(&mut descriptors[0].reads).unwrap();
+        let name = &mut reads[0];
+        let frame = Arc::new(ExpansionFrame {
+            invocation: name.span,
+            definition: declaration.span,
+        });
+        let mut location = DiagnosticLocation::new(name.span.into());
+        location.frames.push(Arc::clone(&frame));
+        name.diagnostic = Some(Box::new(location));
+        let retained = Arc::strong_count(&frame);
+        let mut measured = SyntaxBudget::default();
+        measured.charge_units(17).unwrap();
+        let failure = resolve_template_escape_reads(declaration, &mut measured).unwrap_err();
+        assert!(matches!(
+            &failure,
+            crate::parser::MacroParseFailure::Syntax { resource: None, .. }
+        ));
+        assert_eq!(Arc::strong_count(&frame), retained + 1);
+        drop(failure);
+        assert_eq!(Arc::strong_count(&frame), retained);
+        let total = measured.consumed();
+        let mut short = SyntaxBudget::with_limit(total - 1);
+        short.charge_units(17).unwrap();
+        assert!(matches!(
+            resolve_template_escape_reads(declaration, &mut short),
+            Err(crate::parser::MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        assert_eq!(Arc::strong_count(&frame), retained);
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(total);
+            exact.charge_units(17).unwrap();
+            let failure = resolve_template_escape_reads(declaration, &mut exact).unwrap_err();
+            assert!(matches!(
+                &failure,
+                crate::parser::MacroParseFailure::Syntax { resource: None, .. }
+            ));
+            assert_eq!(exact.consumed(), total);
+            drop(failure);
+            assert_eq!(Arc::strong_count(&frame), retained);
+        }
     }
 
     #[test]
