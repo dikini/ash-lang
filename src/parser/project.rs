@@ -7859,7 +7859,6 @@ fn capture_contents_with_escapes(
         position: &mut usize,
         tokens: &ProjectionTokens<'_>,
         originals: &std::collections::HashMap<usize, MacroOutputNode>,
-        escapes: Option<&[(usize, SurfaceName)]>,
         index: usize,
         quoted_dollar: bool,
         declaration_metanames: bool,
@@ -7867,21 +7866,7 @@ fn capture_contents_with_escapes(
         output: &mut Vec<MacroOutputNode>,
         contains_protected_type: &mut bool,
     ) -> Result<(), ProjectionError> {
-        let mut adapter = None;
-        for (position, name) in escapes.into_iter().flatten() {
-            charge_expression_allocation(1, tokens.expression_budget)?;
-            if *position == index {
-                adapter = Some(name);
-                break;
-            }
-        }
-        if let Some(adapter) = adapter {
-            if let Some(budget) = tokens.expression_budget {
-                crate::syntax::charge_type_name_copy(adapter, 0, &mut budget.borrow_mut())
-                    .map_err(ProjectionError::ResourceLimit)?;
-            }
-            output.push(MacroOutputNode::TemplateEscape(adapter.clone()));
-        } else if matches!(token.kind, TokenKind::Dollar) && !quoted_dollar {
+        if matches!(token.kind, TokenKind::Dollar) && !quoted_dollar {
             let next = indices
                 .get(*position)
                 .and_then(|(index, _)| tokens.projection_token(*index))
@@ -7994,7 +7979,26 @@ fn capture_contents_with_escapes(
             }
             reserve_expression_scratch(&mut output, 1, tokens.expression_budget)?;
             *position += 1;
-            if allow_repetition
+            // An escape occupies a single recorded token in `indices`. Its
+            // following token belongs to the surrounding template and may be
+            // `(`, so recognize the escape before looking for `$(` repetition.
+            let mut adapter = None;
+            if token.kind == TokenKind::Dollar {
+                for (start, name) in escapes.into_iter().flatten() {
+                    charge_expression_allocation(1, tokens.expression_budget)?;
+                    if *start == index {
+                        adapter = Some(name);
+                        break;
+                    }
+                }
+            }
+            if let Some(adapter) = adapter {
+                if let Some(budget) = tokens.expression_budget {
+                    crate::syntax::charge_type_name_copy(adapter, 0, &mut budget.borrow_mut())
+                        .map_err(ProjectionError::ResourceLimit)?;
+                }
+                output.push(MacroOutputNode::TemplateEscape(adapter.clone()));
+            } else if allow_repetition
                 && token.kind == TokenKind::Dollar
                 && !quoted_dollar
                 && indices
@@ -8112,7 +8116,6 @@ fn capture_contents_with_escapes(
                     position,
                     tokens,
                     originals,
-                    escapes,
                     index,
                     quoted_dollar,
                     allow_repetition,
