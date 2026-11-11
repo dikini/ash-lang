@@ -3146,6 +3146,22 @@ fn generator_admission_matcher(
         Ok(())
     }
 
+    fn charge_duplicate(
+        name: &SurfaceName,
+        budget: &mut SyntaxBudget,
+    ) -> Result<(), MacroParseFailure> {
+        budget
+            .charge_units(crate::parser::duplicate_template_binding_work(name))
+            .map_err(resource)?;
+        if let Some(location) = name.diagnostic.as_deref() {
+            charge_diagnostic_location_copy(location, budget).map_err(resource)?;
+            budget
+                .charge_units(location.frames.len())
+                .map_err(resource)?;
+        }
+        Ok(())
+    }
+
     fn append<'a>(
         bindings: &'a [SurfaceTemplateGenerator],
         matcher: &[SurfaceSyntaxMatcherPart],
@@ -3158,15 +3174,7 @@ fn generator_admission_matcher(
                 capture_by_name_at(&binding.name, matcher, &[], &[]),
                 Err(CaptureLookupFailure::Unknown(_))
             ) {
-                budget
-                    .charge_units(binding.name.text.len().saturating_add(16))
-                    .map_err(resource)?;
-                if let Some(location) = binding.name.diagnostic.as_deref() {
-                    charge_diagnostic_location_copy(location, budget).map_err(resource)?;
-                    budget
-                        .charge_units(location.frames.len())
-                        .map_err(resource)?;
-                }
+                charge_duplicate(&binding.name, budget)?;
                 return Err(crate::parser::duplicate_template_binding(&binding.name));
             }
             for prior in all.iter() {
@@ -3181,15 +3189,7 @@ fn generator_admission_matcher(
                     )
                     .map_err(resource)?;
                 if prior.name.text == binding.name.text {
-                    budget
-                        .charge_units(binding.name.text.len().saturating_add(16))
-                        .map_err(resource)?;
-                    if let Some(location) = binding.name.diagnostic.as_deref() {
-                        charge_diagnostic_location_copy(location, budget).map_err(resource)?;
-                        budget
-                            .charge_units(location.frames.len())
-                            .map_err(resource)?;
-                    }
+                    charge_duplicate(&binding.name, budget)?;
                     return Err(crate::parser::duplicate_template_binding(&binding.name));
                 }
             }
@@ -5273,6 +5273,96 @@ mod tests {
         let mut exact = SyntaxBudget::with_limit(used);
         validate_quote_template_syntax(declaration, &source, &contexts, &mut exact).unwrap();
         assert_eq!(exact.consumed(), used);
+    }
+
+    #[test]
+    fn duplicate_generator_diagnostics_prepay_real_copies_and_retry() {
+        use crate::parser::{ExpectedForm, MacroParseFailure, ParseReason};
+
+        let cases = [
+            "pub syntax declaration: (make) $( $name:ident ),+ => {\n$( pub $name : Unit -> Int\n$name () = 42 )+\n} with { $name from 0 step next }\n",
+            "pub syntax declaration: (make) $( $name:ident ),+ => {\n$( pub $name : Unit -> Int\n$name () = $number )+\n} with {\n$number from 0 step next\n$number from 0 step next\n}\n",
+        ];
+        for text in cases {
+            let source = SourceFile::new("duplicate-generator.ash", text).unwrap();
+            let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+            assert!(tree.parse_diagnostics().is_empty());
+            let module = crate::parser::project_declaration_expansions(
+                &source,
+                &tree,
+                &[],
+                &[],
+                &mut Vec::new(),
+                &mut SyntaxBudget::default(),
+                None,
+            )
+            .unwrap();
+            let declaration = &module.syntax_declarations[0];
+            let binding = &declaration
+                .generators
+                .as_ref()
+                .unwrap()
+                .last()
+                .unwrap()
+                .name;
+            assert!(binding.diagnostic.is_none());
+            let contexts = SyntaxContexts::new(&[], &[], &[]);
+            let mut measured = SyntaxBudget::default();
+            let Err(MacroParseFailure::Syntax {
+                diagnostics,
+                resource: None,
+            }) = validate_quote_template_syntax(declaration, &source, &contexts, &mut measured)
+            else {
+                panic!("the duplicate must reach its ordinary diagnostic")
+            };
+            assert_eq!(diagnostics.len(), 1);
+            assert_eq!(diagnostics[0].reason, ParseReason::ExpectedForm);
+            assert_eq!(
+                diagnostics[0].expected_form(),
+                Some(ExpectedForm::Identifier)
+            );
+            assert_eq!(diagnostics[0].primary.span(), binding.span);
+            assert_eq!(diagnostics[0].found.as_deref(), Some(binding.text.as_str()));
+            let actual_copy_work = diagnostics[0]
+                .primary
+                .message()
+                .len()
+                .saturating_add(diagnostics[0].expected.as_ref().unwrap().len())
+                .saturating_add(binding.text.len())
+                .saturating_add(1);
+            assert_eq!(actual_copy_work, binding.text.len() + 26 + 13 + 1);
+            assert_eq!(
+                crate::parser::duplicate_template_binding_work(binding),
+                actual_copy_work,
+            );
+            let work = measured.consumed();
+            for prefix in [0, 7] {
+                let mut short = SyntaxBudget::with_limit(prefix + work - 1);
+                short.charge_units(prefix).unwrap();
+                assert!(matches!(
+                    validate_quote_template_syntax(declaration, &source, &contexts, &mut short),
+                    Err(MacroParseFailure::Syntax {
+                        diagnostics,
+                        resource: Some(ResourceFailure::SyntaxWork { .. }),
+                    }) if diagnostics.is_empty()
+                ));
+                assert_eq!(short.consumed(), prefix + work - actual_copy_work);
+                for _ in 0..2 {
+                    let mut exact = SyntaxBudget::with_limit(prefix + work);
+                    exact.charge_units(prefix).unwrap();
+                    let Err(MacroParseFailure::Syntax {
+                        diagnostics: actual,
+                        resource: None,
+                    }) =
+                        validate_quote_template_syntax(declaration, &source, &contexts, &mut exact)
+                    else {
+                        panic!("the exact retry must preserve the original diagnostic")
+                    };
+                    assert_eq!(actual, diagnostics);
+                    assert_eq!(exact.consumed(), prefix + work);
+                }
+            }
+        }
     }
 
     #[test]

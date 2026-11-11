@@ -743,6 +743,17 @@ pub(crate) fn duplicate_template_binding(name: &crate::surface::SurfaceName) -> 
     }
 }
 
+// Work retained by `duplicate_template_binding`: the primary and expected
+// strings, the found spelling and the single diagnostic vector entry. The
+// optional diagnostic location is charged separately by its caller.
+pub(crate) fn duplicate_template_binding_work(name: &crate::surface::SurfaceName) -> usize {
+    name.text
+        .len()
+        .saturating_add(primary_message(ParseReason::ExpectedForm).len())
+        .saturating_add(expected_name(ExpectedForm::Identifier).len())
+        .saturating_add(1)
+}
+
 // The expansion path will connect this syntax-only handoff separately.
 #[allow(dead_code)]
 pub(crate) fn parse_macro_declarations(
