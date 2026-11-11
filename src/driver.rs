@@ -1345,7 +1345,7 @@ impl CompilationInput<'_> {
         syntax: &[crate::syntax::SelectedSyntax],
         owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
         owners: &mut Vec<crate::syntax::SyntaxOwner>,
-        transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
+        transformer: Option<&mut crate::module::StagedDeclarationTransformer<'_>>,
         quote_owner: Option<crate::syntax::SyntaxOwner>,
     ) -> Result<bool, FileFailure> {
         match self {
@@ -1668,6 +1668,7 @@ where
                  adapter: Option<&crate::surface::SurfaceName>,
                  captures: &[crate::surface::SurfaceSyntaxCapture],
                  source: &SourceFile,
+                 _staged: &crate::module::StagedModuleLoan<'_>,
                  caller: &crate::surface::SurfaceName,
                  introduction: usize,
                  contexts: Arc<crate::syntax::SyntaxContexts>,
@@ -1751,7 +1752,7 @@ where
             for declaration in &module.surface().syntax_declarations {
                 let admission = if declaration.category
                     != crate::surface::SurfaceSyntaxCategory::Expression
-                    && declaration.contains_quote_or_escape
+                    && (declaration.contains_quote_or_escape || declaration.contains_generators)
                 {
                     let budget = syntax_budget
                         .as_deref_mut()

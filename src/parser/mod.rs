@@ -725,6 +725,24 @@ pub(crate) fn unknown_template_capture(name: &crate::surface::SurfaceName) -> Ma
     }
 }
 
+pub(crate) fn duplicate_template_binding(name: &crate::surface::SurfaceName) -> MacroParseFailure {
+    let reason = ParseReason::ExpectedForm;
+    let primary = SourceLabel::new(name.span, primary_message(reason))
+        .with_location_preserving_span(name.diagnostic.as_deref());
+    let mut diagnostic = Diagnostic::new(reason, primary);
+    diagnostic.expected = Some(expected_name(ExpectedForm::Identifier).to_owned());
+    diagnostic.found = Some(name.text.clone());
+    MacroParseFailure::Syntax {
+        diagnostics: vec![ParseDiagnostic::new(
+            diagnostic,
+            Some(ExpectedForm::Identifier),
+            Some(FoundToken::Identifier),
+            None,
+        )],
+        resource: None,
+    }
+}
+
 // The expansion path will connect this syntax-only handoff separately.
 #[allow(dead_code)]
 pub(crate) fn parse_macro_declarations(

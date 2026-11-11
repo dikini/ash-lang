@@ -2376,9 +2376,9 @@ fn project_syntax_declaration(
             _ => return malformed(InternalReason::UnexpectedShape),
         }
     }
-    let (implementation, template_contents, contains_quote_or_escape) =
+    let (implementation, template_contents, contains_quote_or_escape, nested_generators) =
         if let Some(block) = child_nodes(child).find(|node| node.kind == NodeKind::TemplateBody) {
-            let (mut contents, contains_quote_or_escape) =
+            let (mut contents, contains_quote_or_escape, nested_generators) =
                 capture_template_contents(source, block, tokens, declaration_output, adapters)?;
             if declaration_output {
                 contents = match contents.pop() {
@@ -2406,6 +2406,7 @@ fn project_syntax_declaration(
                 SurfaceSyntaxImplementation::Template,
                 Some(contents.into()),
                 contains_quote_or_escape,
+                nested_generators,
             )
         } else {
             let mut after_arrow = direct_tokens(child, tokens)
@@ -2424,11 +2425,13 @@ fn project_syntax_declaration(
                 SurfaceSyntaxImplementation::Transformer(surface_name(transformer)?),
                 None,
                 false,
+                false,
             )
         };
     let generators = optional_child_of_kind(child, NodeKind::TemplateGeneratorClause)?
         .map(|clause| project_template_generators(source, clause, tokens))
         .transpose()?;
+    let contains_generators = generators.is_some() || nested_generators;
     Ok(SurfaceSyntaxDeclaration {
         category: if derive {
             SurfaceSyntaxCategory::Derive
@@ -2443,6 +2446,7 @@ fn project_syntax_declaration(
         template_contents,
         generators,
         contains_quote_or_escape,
+        contains_generators,
         span: node_span(source, child, tokens)?,
     })
 }
@@ -7327,7 +7331,7 @@ fn capture_template_contents(
     tokens: &ProjectionTokens<'_>,
     declaration: bool,
     adapters: &mut Vec<SurfaceDefinition>,
-) -> Result<(Vec<crate::syntax::MacroOutputNode>, bool), ProjectionError> {
+) -> Result<(Vec<crate::syntax::MacroOutputNode>, bool, bool), ProjectionError> {
     let mut escapes = Vec::new();
     let mut generators = Vec::new();
     let mut contains_quote_or_escape = false;
@@ -7403,6 +7407,7 @@ fn capture_template_contents(
             }
         }
     }
+    let nested_generators = !generators.is_empty();
     capture_contents_with_escapes(
         source,
         node,
@@ -7412,7 +7417,7 @@ fn capture_template_contents(
         Some(&generators),
         declaration,
     )
-    .map(|(contents, _)| (contents, contains_quote_or_escape))
+    .map(|(contents, _)| (contents, contains_quote_or_escape, nested_generators))
 }
 
 fn make_template_escape_adapter(

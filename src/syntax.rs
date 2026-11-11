@@ -3115,6 +3115,294 @@ pub(crate) fn validate_quote_template_syntax(
     validate_template_syntax_inner(declaration, source, contexts, Some(budget))
 }
 
+// Admission uses identifier placeholders solely to check the surrounding
+// declaration grammar. Generator values themselves are produced later by
+// the checked invocation adapter, and never drive a repetition.
+fn generator_admission_matcher(
+    declaration: &SurfaceSyntaxDeclaration,
+    template: &[MacroOutputNode],
+    captures: &mut Vec<SurfaceSyntaxCapture>,
+    identifiers: &mut Vec<SurfaceName>,
+    budget: &mut SyntaxBudget,
+) -> Result<Vec<SurfaceSyntaxMatcherPart>, crate::parser::MacroParseFailure> {
+    use crate::parser::MacroParseFailure;
+    use crate::surface::SurfaceTemplateGenerator;
+
+    fn resource(error: ResourceFailure) -> MacroParseFailure {
+        MacroParseFailure::Syntax {
+            diagnostics: Vec::new(),
+            resource: Some(error),
+        }
+    }
+
+    fn charge_name_copy(
+        name: &SurfaceName,
+        budget: &mut SyntaxBudget,
+    ) -> Result<(), ResourceFailure> {
+        charge_type_name_copy(name, 0, budget)?;
+        if let Some(location) = name.diagnostic.as_deref() {
+            budget.charge_units(location.frames.len())?;
+        }
+        Ok(())
+    }
+
+    fn append<'a>(
+        bindings: &'a [SurfaceTemplateGenerator],
+        matcher: &[SurfaceSyntaxMatcherPart],
+        all: &mut Vec<&'a SurfaceTemplateGenerator>,
+        budget: &mut SyntaxBudget,
+    ) -> Result<(), MacroParseFailure> {
+        for binding in bindings {
+            charge_matcher_lookup(matcher, &binding.name, 0, budget).map_err(resource)?;
+            if !matches!(
+                capture_by_name_at(&binding.name, matcher, &[], &[]),
+                Err(CaptureLookupFailure::Unknown(_))
+            ) {
+                budget
+                    .charge_units(binding.name.text.len().saturating_add(16))
+                    .map_err(resource)?;
+                if let Some(location) = binding.name.diagnostic.as_deref() {
+                    charge_diagnostic_location_copy(location, budget).map_err(resource)?;
+                    budget
+                        .charge_units(location.frames.len())
+                        .map_err(resource)?;
+                }
+                return Err(crate::parser::duplicate_template_binding(&binding.name));
+            }
+            for prior in all.iter() {
+                budget
+                    .charge_units(
+                        binding
+                            .name
+                            .text
+                            .len()
+                            .min(prior.name.text.len())
+                            .saturating_add(1),
+                    )
+                    .map_err(resource)?;
+                if prior.name.text == binding.name.text {
+                    budget
+                        .charge_units(binding.name.text.len().saturating_add(16))
+                        .map_err(resource)?;
+                    if let Some(location) = binding.name.diagnostic.as_deref() {
+                        charge_diagnostic_location_copy(location, budget).map_err(resource)?;
+                        budget
+                            .charge_units(location.frames.len())
+                            .map_err(resource)?;
+                    }
+                    return Err(crate::parser::duplicate_template_binding(&binding.name));
+                }
+            }
+            if all.len() == all.capacity() {
+                budget
+                    .charge_units(all.len().saturating_mul(2).saturating_add(1))
+                    .map_err(resource)?;
+                all.reserve_exact(1);
+            } else {
+                budget.charge().map_err(resource)?;
+            }
+            all.push(binding);
+        }
+        Ok(())
+    }
+
+    fn collect<'a>(
+        nodes: &'a [MacroOutputNode],
+        matcher: &[SurfaceSyntaxMatcherPart],
+        all: &mut Vec<&'a SurfaceTemplateGenerator>,
+        depth: usize,
+        budget: &mut SyntaxBudget,
+    ) -> Result<(), MacroParseFailure> {
+        for node in nodes {
+            budget.charge().map_err(resource)?;
+            match node {
+                MacroOutputNode::Group(_, children, _) => {
+                    collect(
+                        children,
+                        matcher,
+                        all,
+                        type_depth(depth, 1).map_err(resource)?,
+                        budget,
+                    )?;
+                }
+                MacroOutputNode::TemplateRepeat(repeat) => {
+                    if let Some(bindings) = &repeat.generators {
+                        append(bindings, matcher, all, budget)?;
+                    }
+                    collect(
+                        &repeat.body,
+                        matcher,
+                        all,
+                        type_depth(depth, 1).map_err(resource)?,
+                        budget,
+                    )?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn scopes<'a>(
+        nodes: &'a [MacroOutputNode],
+        all: &[&SurfaceTemplateGenerator],
+        active: &mut Vec<&'a SurfaceTemplateGenerator>,
+        depth: usize,
+        budget: &mut SyntaxBudget,
+    ) -> Result<(), MacroParseFailure> {
+        for node in nodes {
+            budget.charge().map_err(resource)?;
+            match node {
+                MacroOutputNode::Splice(name) => {
+                    let mut generator = false;
+                    for candidate in all {
+                        budget
+                            .charge_units(
+                                name.text
+                                    .len()
+                                    .min(candidate.name.text.len())
+                                    .saturating_add(1),
+                            )
+                            .map_err(resource)?;
+                        if name.text == candidate.name.text {
+                            generator = true;
+                            break;
+                        }
+                    }
+                    if generator {
+                        let mut visible = false;
+                        for candidate in active.iter() {
+                            budget
+                                .charge_units(
+                                    name.text
+                                        .len()
+                                        .min(candidate.name.text.len())
+                                        .saturating_add(1),
+                                )
+                                .map_err(resource)?;
+                            if name.text == candidate.name.text {
+                                visible = true;
+                                break;
+                            }
+                        }
+                        if !visible {
+                            return Err(unknown_capture_failure(name, Some(budget)));
+                        }
+                    }
+                }
+                MacroOutputNode::Group(_, children, _) => {
+                    scopes(
+                        children,
+                        all,
+                        active,
+                        type_depth(depth, 1).map_err(resource)?,
+                        budget,
+                    )?;
+                }
+                MacroOutputNode::TemplateRepeat(repeat) => {
+                    let original = active.len();
+                    if let Some(bindings) = &repeat.generators {
+                        let requested = original.saturating_add(bindings.len());
+                        budget.charge_units(bindings.len()).map_err(resource)?;
+                        if requested > active.capacity() {
+                            budget
+                                .charge_units(requested.saturating_add(original))
+                                .map_err(resource)?;
+                            active.reserve_exact(bindings.len());
+                        }
+                        active.extend(bindings.iter());
+                    }
+                    scopes(
+                        &repeat.body,
+                        all,
+                        active,
+                        type_depth(depth, 1).map_err(resource)?,
+                        budget,
+                    )?;
+                    active.truncate(original);
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    let mut all = Vec::new();
+    if let Some(bindings) = &declaration.generators {
+        append(bindings, &declaration.matcher, &mut all, budget)?;
+    }
+    collect(template, &declaration.matcher, &mut all, 0, budget)?;
+    let initial = declaration.generators.as_deref().unwrap_or(&[]);
+    budget
+        .charge_units(initial.len().saturating_mul(2))
+        .map_err(resource)?;
+    let mut active = initial.iter().collect::<Vec<_>>();
+    scopes(template, &all, &mut active, 0, budget)?;
+
+    // Copy the matcher only for a generator-bearing template. The appended
+    // placeholders use the existing capture/substitution admission path.
+    let capacity = declaration.matcher.len().saturating_add(all.len());
+    budget.charge_units(capacity).map_err(resource)?;
+    for part in &declaration.matcher {
+        match part {
+            SurfaceSyntaxMatcherPart::Literal { kind, spelling } => {
+                charge_type_token_copy(kind, budget).map_err(resource)?;
+                budget.charge_units(spelling.len()).map_err(resource)?;
+            }
+            SurfaceSyntaxMatcherPart::Capture { name, .. } => {
+                charge_name_copy(name, budget).map_err(resource)?
+            }
+            SurfaceSyntaxMatcherPart::Container(_) => budget.charge().map_err(resource)?,
+            SurfaceSyntaxMatcherPart::LineEnd => {}
+        }
+    }
+    let mut matcher = Vec::with_capacity(capacity);
+    matcher.extend_from_slice(&declaration.matcher);
+    for binding in all {
+        charge_name_copy(&binding.name, budget).map_err(resource)?;
+        let index = identifiers.len();
+        let digits = index.checked_ilog10().map_or(1, |n| n as usize + 1);
+        let bytes = "__ash_generator_admission_".len().saturating_add(digits);
+        budget
+            .charge_units(bytes.saturating_mul(2).saturating_add(3))
+            .map_err(resource)?;
+        for (len, capacity) in [
+            (captures.len(), captures.capacity()),
+            (identifiers.len(), identifiers.capacity()),
+        ] {
+            if len == capacity {
+                budget
+                    .charge_units(len.saturating_mul(2).saturating_add(1))
+                    .map_err(resource)?;
+            } else {
+                budget.charge().map_err(resource)?;
+            }
+        }
+        captures.reserve_exact(1);
+        identifiers.reserve_exact(1);
+        let placeholder = SurfaceName {
+            text: format!("__ash_generator_admission_{index}"),
+            span: binding.name.span,
+            introduction: usize::MAX
+                .checked_sub(index)
+                .ok_or(MacroParseFailure::Invalid)?,
+            introduced_at: Some(binding.name.span),
+            written: false,
+            diagnostic: None,
+        };
+        matcher.push(SurfaceSyntaxMatcherPart::Capture {
+            name: binding.name.clone(),
+            kind: SurfaceSyntaxCaptureKind::Identifier,
+        });
+        identifiers.push(placeholder.clone());
+        captures.push(SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+            origin: placeholder.span.into(),
+            name: placeholder,
+        }));
+    }
+    Ok(matcher)
+}
+
 fn validate_template_syntax_inner(
     declaration: &SurfaceSyntaxDeclaration,
     source: &crate::source::SourceFile,
@@ -3302,9 +3590,24 @@ fn validate_template_syntax_inner(
         .template_contents
         .as_deref()
         .ok_or(MacroParseFailure::Invalid)?;
+    let generator_matcher = if declaration.contains_generators {
+        let budget = admission_budget
+            .as_deref_mut()
+            .ok_or(MacroParseFailure::Invalid)?;
+        Some(generator_admission_matcher(
+            declaration,
+            template,
+            &mut captures,
+            &mut identifiers,
+            budget,
+        )?)
+    } else {
+        None
+    };
+    let matcher = generator_matcher.as_deref().unwrap_or(&declaration.matcher);
     if let Some(budget) = &mut admission_budget {
         // Admission validates structure without executing protected captures.
-        charge_declaration_template(template, &declaration.matcher, &captures, budget)?;
+        charge_declaration_template(template, matcher, &captures, budget)?;
     }
     let mut contents = template.to_vec();
     if let Some(budget) = &mut admission_budget {
@@ -3354,7 +3657,7 @@ fn validate_template_syntax_inner(
     }
     substitute_contents(
         &mut contents,
-        &declaration.matcher,
+        matcher,
         &captures,
         0,
         declaration.span,
@@ -4863,6 +5166,113 @@ mod tests {
                 .unwrap()
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn generator_admission_tracks_owned_scope_and_refuses_duplicate_names() {
+        fn check(text: &str) -> Result<(), crate::parser::MacroParseFailure> {
+            let source = SourceFile::new("generator-admission.ash", text).unwrap();
+            let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+            assert!(
+                tree.parse_diagnostics().is_empty(),
+                "{:?}",
+                tree.parse_diagnostics()
+            );
+            let mut budget = SyntaxBudget::default();
+            let module = crate::parser::project_declaration_expansions(
+                &source,
+                &tree,
+                &[],
+                &[],
+                &mut Vec::new(),
+                &mut budget,
+                None,
+            )
+            .unwrap();
+            validate_template_syntax_inner(
+                &module.syntax_declarations[0],
+                &source,
+                &SyntaxContexts::new(&[], &[], &[]),
+                Some(&mut budget),
+            )
+        }
+
+        let good = "pub syntax declaration: (make) $( $name:ident ),+ => {\n$( pub $name : Unit -> Int\n$name () = $number )+\n} with { $number from 0 step next }\n";
+        check(good).expect("a template generator is visible within its repetition");
+        let duplicate = "pub syntax declaration: (make) $( $name:ident ),+ => {\n$( pub $name : Unit -> Int\n$name () = $number )+\n} with {\n$number from 0 step next\n$number from 0 step next\n}\n";
+        let Err(crate::parser::MacroParseFailure::Syntax { diagnostics, .. }) = check(duplicate)
+        else {
+            panic!("a duplicate generator must produce an ordinary parse diagnostic");
+        };
+        assert_eq!(
+            diagnostics[0].expected_form(),
+            Some(crate::parser::ExpectedForm::Identifier)
+        );
+        assert!(diagnostics[0].message().is_some());
+        let scope = "pub syntax declaration: (make) $( $name:ident ),+ => {\n$( pub $name : Unit -> Int\n$name () = $number )+ with { $number from 0 step next }\nother : Unit -> Int\nother () = $number\n}\n";
+        let Err(crate::parser::MacroParseFailure::Syntax { diagnostics, .. }) = check(scope) else {
+            panic!("a repetition-owned generator is unavailable outside its repetition");
+        };
+        assert_eq!(
+            diagnostics[0].reason,
+            crate::parser::ParseReason::UnknownTemplateCapture
+        );
+        let no_driver = "pub syntax declaration: (make) => {\n$( value : Unit -> Int\nvalue () = $number )+\n} with { $number from 0 step next }\n";
+        let Err(crate::parser::MacroParseFailure::Syntax { diagnostics, .. }) = check(no_driver)
+        else {
+            panic!("a generator must not become a repetition driver");
+        };
+        assert_eq!(
+            diagnostics[0].reason,
+            crate::parser::ParseReason::RepetitionMissingDriver
+        );
+    }
+
+    #[test]
+    fn generator_admission_uses_the_graph_budget_and_retries() {
+        use crate::parser::MacroParseFailure;
+
+        let source = SourceFile::new(
+            "generator-admission.ash",
+            "pub syntax declaration: (make) $( $name:ident ),+ => {\n$( pub $name : Unit -> Int\n$name () = $number )+\n} with { $number from 0 step next }\n",
+        ).unwrap();
+        let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+        let mut projection_work = SyntaxBudget::default();
+        let module = crate::parser::project_declaration_expansions(
+            &source,
+            &tree,
+            &[],
+            &[],
+            &mut Vec::new(),
+            &mut projection_work,
+            None,
+        )
+        .unwrap();
+        let declaration = &module.syntax_declarations[0];
+        let contexts = SyntaxContexts::new(&[], &[], &[]);
+        let mut measured = SyntaxBudget::default();
+        validate_quote_template_syntax(declaration, &source, &contexts, &mut measured).unwrap();
+        let used = measured.consumed();
+        let mut short = SyntaxBudget::with_limit(used - 1);
+        assert!(matches!(
+            validate_quote_template_syntax(declaration, &source, &contexts, &mut short),
+            Err(MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        let mut spent = SyntaxBudget::with_limit(used);
+        spent.charge().unwrap();
+        assert!(matches!(
+            validate_quote_template_syntax(declaration, &source, &contexts, &mut spent),
+            Err(MacroParseFailure::Syntax {
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+                ..
+            })
+        ));
+        let mut exact = SyntaxBudget::with_limit(used);
+        validate_quote_template_syntax(declaration, &source, &contexts, &mut exact).unwrap();
+        assert_eq!(exact.consumed(), used);
     }
 
     #[test]

@@ -1431,6 +1431,146 @@ struct StagedModule {
     state: VisitState,
 }
 
+// The view exists only while this actual module is being projected. Its
+// snapshot is populated lazily by a reached checked generator adapter.
+pub(crate) struct StagedModuleLoan<'a> {
+    id: ModuleId,
+    source_id: SourceId,
+    canonical_path: &'a Path,
+    imports: &'a [SurfaceImport],
+    dependencies: &'a [ModuleDependency],
+    span: Span,
+    source_snapshot: &'a std::cell::RefCell<Option<std::sync::Arc<SourceFile>>>,
+}
+
+pub(crate) type StagedDeclarationTransformer<'a> = dyn for<'call, 'module> FnMut(
+        &'call crate::syntax::SelectedSyntax,
+        Option<&'call crate::surface::SurfaceName>,
+        &'call [crate::surface::SurfaceSyntaxCapture],
+        &'call SourceFile,
+        &'call StagedModuleLoan<'module>,
+        &'call crate::surface::SurfaceName,
+        usize,
+        std::sync::Arc<crate::syntax::SyntaxContexts>,
+        std::sync::Arc<crate::syntax::ExpansionFrame>,
+        &'call mut Vec<crate::syntax::SyntaxOwner>,
+        &'call mut SyntaxBudget,
+    ) -> Result<(Vec<crate::syntax::MacroOutputNode>, usize), Span>
+    + 'a;
+
+impl StagedModuleLoan<'_> {
+    fn retained_source(
+        &self,
+        source: &SourceFile,
+        budget: &mut SyntaxBudget,
+    ) -> Result<std::sync::Arc<SourceFile>, ResourceFailure> {
+        debug_assert_eq!(source.id(), self.source_id);
+        if let Some(source) = self.source_snapshot.borrow().as_ref() {
+            budget.charge()?;
+            return Ok(std::sync::Arc::clone(source));
+        }
+        // Pay the one deep snapshot, its Arc, and the returned Arc retain
+        // before constructing or publishing any part of the snapshot.
+        budget.charge_units(
+            source
+                .snapshot_work()
+                .unwrap_or(usize::MAX)
+                .saturating_add(2),
+        )?;
+        let retained = std::sync::Arc::new(source.clone());
+        let result = std::sync::Arc::clone(&retained);
+        *self.source_snapshot.borrow_mut() = Some(retained);
+        Ok(result)
+    }
+
+    pub(crate) fn no_quote_adapter_view(
+        &self,
+        source: &SourceFile,
+        definition: crate::surface::SurfaceDefinition,
+        budget: &mut SyntaxBudget,
+    ) -> Result<LoadedModule, ResourceFailure> {
+        use crate::surface::{
+            SurfaceDeclarationIndex, SurfaceImportItem, SurfaceImportSelection, SurfaceModulePath,
+        };
+
+        fn charge_name(
+            name: &crate::surface::SurfaceName,
+            budget: &mut SyntaxBudget,
+        ) -> Result<(), ResourceFailure> {
+            crate::syntax::charge_type_name_copy(name, 0, budget)?;
+            if let Some(location) = name.diagnostic.as_deref() {
+                budget.charge_units(location.frames.len())?;
+            }
+            Ok(())
+        }
+
+        // The view owns an exact copy of the caller's real import syntax and
+        // dependency edge order; only its private adapter is new.
+        budget.charge_units(
+            self.imports
+                .len()
+                .saturating_add(self.dependencies.len().saturating_mul(2))
+                .saturating_add(self.canonical_path.as_os_str().as_encoded_bytes().len())
+                .saturating_add(2),
+        )?;
+        for import in self.imports {
+            let segments = match &import.path {
+                SurfaceModulePath::Relative(segments) => segments,
+                SurfaceModulePath::Absolute { root, segments } => {
+                    charge_name(root, budget)?;
+                    segments
+                }
+            };
+            budget.charge_units(segments.len())?;
+            for name in segments {
+                charge_name(name, budget)?;
+            }
+            match &import.selection {
+                SurfaceImportSelection::Qualified { alias } => charge_name(alias, budget)?,
+                SurfaceImportSelection::Targeted(items) => {
+                    budget.charge_units(items.len())?;
+                    for item in items {
+                        match item {
+                            SurfaceImportItem::Syntax { name, alias, .. }
+                            | SurfaceImportItem::Name { name, alias, .. } => {
+                                charge_name(name, budget)?;
+                                if let Some(alias) = alias {
+                                    charge_name(alias, budget)?;
+                                }
+                            }
+                            SurfaceImportItem::Implementation { interface, .. } => {
+                                charge_name(interface, budget)?
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let source = self.retained_source(source, budget)?;
+        Ok(LoadedModule {
+            id: self.id,
+            canonical_path: self.canonical_path.to_path_buf(),
+            source,
+            surface: SurfaceModule {
+                imports: self.imports.to_vec(),
+                syntax_declarations: Vec::new(),
+                declaration_order: vec![SurfaceDeclarationIndex::Global(0)],
+                foreign_libraries: Vec::new(),
+                type_declarations: Vec::new(),
+                interfaces: Vec::new(),
+                effects: Vec::new(),
+                implementations: Vec::new(),
+                resources: Vec::new(),
+                definitions: vec![definition],
+                span: self.span,
+            },
+            dependencies: self.dependencies.to_vec().into_boxed_slice(),
+            quote_sites: Vec::new(),
+            quote_introduction: None,
+        })
+    }
+}
+
 struct StagedSyntax {
     imports: Vec<SurfaceImport>,
     span: Span,
@@ -1463,7 +1603,7 @@ impl StagedModule {
         syntax: &[crate::syntax::SelectedSyntax],
         owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
         owners: &mut Vec<crate::syntax::SyntaxOwner>,
-        transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
+        transformer: Option<&mut StagedDeclarationTransformer<'_>>,
         quote: (Option<crate::syntax::SyntaxOwner>, &mut usize),
     ) -> Result<LoadedModule, LoadGraphError> {
         let (quote_owner, next_quote_ordinal) = quote;
@@ -1477,6 +1617,7 @@ impl StagedModule {
         let mut completed_owners = None;
         let mut completed_sites = Vec::new();
         let mut completed_quote_introduction = None;
+        let source_snapshot = std::cell::RefCell::new(None);
         let (source, surface) = match body {
             ModuleBody::Parsed(mut surface) => {
                 surface.imports = imports;
@@ -1532,17 +1673,60 @@ impl StagedModule {
                 } else {
                     None
                 };
-                let (source, mut surface) = project_finished_module(
-                    self.source,
-                    tree,
-                    import_span,
-                    syntax,
-                    owner_imports,
-                    &mut staged_owners,
-                    budget,
-                    transformer,
-                    quote_projection.as_ref(),
-                )?;
+                let (source, mut surface) = {
+                    let loan = StagedModuleLoan {
+                        id: self.id,
+                        source_id: self.source.id(),
+                        canonical_path: &self.canonical_path,
+                        imports: &imports,
+                        dependencies: &self.dependencies,
+                        span,
+                        source_snapshot: &source_snapshot,
+                    };
+                    let enabled = transformer.is_some();
+                    let mut transformer = transformer;
+                    let mut routed =
+                        |selection: &crate::syntax::SelectedSyntax,
+                         adapter: Option<&crate::surface::SurfaceName>,
+                         captures: &[crate::surface::SurfaceSyntaxCapture],
+                         source: &SourceFile,
+                         caller: &crate::surface::SurfaceName,
+                         introduction: usize,
+                         contexts: std::sync::Arc<crate::syntax::SyntaxContexts>,
+                         frame: std::sync::Arc<crate::syntax::ExpansionFrame>,
+                         owners: &mut Vec<crate::syntax::SyntaxOwner>,
+                         budget: &mut SyntaxBudget| {
+                            let Some(transformer) = transformer.as_deref_mut() else {
+                                return Err(caller.span);
+                            };
+                            transformer(
+                                selection,
+                                adapter,
+                                captures,
+                                source,
+                                &loan,
+                                caller,
+                                introduction,
+                                contexts,
+                                frame,
+                                owners,
+                                budget,
+                            )
+                        };
+                    let callback = enabled
+                        .then_some(&mut routed as &mut crate::syntax::DeclarationTransformer<'_>);
+                    project_finished_module(
+                        self.source,
+                        tree,
+                        import_span,
+                        syntax,
+                        owner_imports,
+                        &mut staged_owners,
+                        budget,
+                        callback,
+                        quote_projection.as_ref(),
+                    )?
+                };
                 if surface.imports != imports {
                     return Err(LoadGraphError::Projection {
                         source,
@@ -1572,10 +1756,14 @@ impl StagedModule {
         if let Some(staged_owners) = completed_owners {
             *owners = staged_owners;
         }
+        let source = match source_snapshot.into_inner() {
+            Some(retained) => retained,
+            None => std::sync::Arc::new(source),
+        };
         Ok(LoadedModule {
             id: self.id,
             canonical_path: self.canonical_path,
-            source: std::sync::Arc::new(source),
+            source,
             surface,
             dependencies: self.dependencies.into_boxed_slice(),
             quote_sites: completed_sites,
@@ -1667,7 +1855,7 @@ impl HeaderGraph {
         syntax: &[crate::syntax::SelectedSyntax],
         owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
         owners: &mut Vec<crate::syntax::SyntaxOwner>,
-        transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
+        transformer: Option<&mut StagedDeclarationTransformer<'_>>,
     ) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
         self.next_module_with_syntax_and_quote_owner(
             syntax,
@@ -1683,7 +1871,7 @@ impl HeaderGraph {
         syntax: &[crate::syntax::SelectedSyntax],
         owner_imports: &[Vec<crate::syntax::SelectedSyntax>],
         owners: &mut Vec<crate::syntax::SyntaxOwner>,
-        transformer: Option<&mut crate::syntax::DeclarationTransformer<'_>>,
+        transformer: Option<&mut StagedDeclarationTransformer<'_>>,
         quote_owner: Option<crate::syntax::SyntaxOwner>,
     ) -> Result<Option<&LoadedModule>, GraphDiagnostic> {
         let Some(module) = self.pending.pop_front() else {

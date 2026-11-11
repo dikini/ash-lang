@@ -56,6 +56,8 @@ pub struct SurfaceSyntaxDeclaration {
     pub(crate) generators: Option<Arc<[SurfaceTemplateGenerator]>>,
     /// Whether the template contains quote or escape syntax, for budget routing.
     pub(crate) contains_quote_or_escape: bool,
+    /// Whether the template or one of its repetitions owns generators.
+    pub(crate) contains_generators: bool,
     /// The complete declaration span.
     pub span: Span,
 }

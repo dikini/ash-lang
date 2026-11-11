@@ -66,6 +66,166 @@ fn graph_at(entry: &Path, mode: BodyMode, limit: usize) -> Result<HeaderGraph, G
 }
 
 #[test]
+fn staged_adapter_source_snapshot_is_paid_shared_and_dropped() {
+    use std::{cell::RefCell, sync::Arc};
+
+    let tree = Tree::new();
+    let entry = tree.write(
+        "entry.ash",
+        "import dependency (value)\nmain : Unit -> Int\nmain () = value(())\n",
+    );
+    tree.write("dependency.ash", "pub value : Unit -> Int\nvalue () = 42\n");
+    let graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+    let staged = graph
+        .pending
+        .iter()
+        .find(|module| module.canonical_path == entry)
+        .unwrap();
+    let parsed = crate::parser::parse(crate::lexer::lex(&staged.source).unwrap());
+    let mut surface = crate::parser::project_module(&staged.source, &parsed).unwrap();
+    let definition = surface.definitions.pop().unwrap();
+
+    let slot = RefCell::new(None);
+    let loan = StagedModuleLoan {
+        id: staged.id,
+        source_id: staged.source.id(),
+        canonical_path: &staged.canonical_path,
+        imports: &staged.surface.imports,
+        dependencies: &staged.dependencies,
+        span: staged.surface.span,
+        source_snapshot: &slot,
+    };
+    let mut measured = SyntaxBudget::default();
+    let view = loan
+        .no_quote_adapter_view(&staged.source, definition.clone(), &mut measured)
+        .unwrap();
+    let used = measured.consumed();
+    assert!(used > staged.source.snapshot_work().unwrap());
+    assert_eq!(view.id(), staged.id);
+    assert_eq!(view.source().id(), staged.source.id());
+    assert_eq!(view.surface().imports, staged.surface.imports);
+    assert_eq!(view.dependencies(), staged.dependencies);
+    assert_eq!(view.surface().definitions.len(), 1);
+    assert!(Arc::ptr_eq(
+        view.retained_source(),
+        slot.borrow().as_ref().unwrap()
+    ));
+    let weak = Arc::downgrade(view.retained_source());
+    drop(view);
+    drop(loan);
+    drop(slot);
+    assert!(weak.upgrade().is_none());
+
+    let slot = RefCell::new(None);
+    let loan = StagedModuleLoan {
+        id: staged.id,
+        source_id: staged.source.id(),
+        canonical_path: &staged.canonical_path,
+        imports: &staged.surface.imports,
+        dependencies: &staged.dependencies,
+        span: staged.surface.span,
+        source_snapshot: &slot,
+    };
+    let mut short = SyntaxBudget::with_limit(used - 1);
+    assert!(
+        loan.no_quote_adapter_view(&staged.source, definition.clone(), &mut short)
+            .is_err()
+    );
+    assert!(slot.borrow().is_none());
+    let mut exact = SyntaxBudget::with_limit(used);
+    let retried = loan
+        .no_quote_adapter_view(&staged.source, definition, &mut exact)
+        .unwrap();
+    assert_eq!(exact.consumed(), used);
+    assert!(Arc::ptr_eq(
+        retried.retained_source(),
+        slot.borrow().as_ref().unwrap()
+    ));
+}
+
+#[test]
+fn staged_transformer_loan_reuses_the_source_on_success_and_drops_on_failure() {
+    use std::{cell::RefCell, sync::Arc};
+
+    let definition_source = SourceFile::new(
+        "forms.ash",
+        "pub syntax declaration: (go) => using transform\n",
+    )
+    .unwrap();
+    let tree = crate::parser::parse(crate::lexer::lex(&definition_source).unwrap());
+    let declaration = crate::parser::project_module_retaining_templates(&definition_source, &tree)
+        .unwrap()
+        .syntax_declarations
+        .remove(0);
+    let selection = crate::syntax::SelectedSyntax {
+        name: "go".into(),
+        owner: 0,
+        import_span: declaration.span,
+        declaration,
+    };
+    for fail in [false, true] {
+        let fixture = Tree::new();
+        let entry = fixture.write("entry.ash", "go\n");
+        let mut graph = graph_at(&entry, BodyMode::Header, SYNTAX_WORK_LIMIT).unwrap();
+        while graph
+            .pending
+            .front()
+            .is_some_and(|module| module.canonical_path != entry)
+        {
+            graph.next_module().unwrap();
+        }
+        let source_id = graph.pending.front().unwrap().source.id();
+        let observed = RefCell::new(None);
+        let mut callback = |_: &crate::syntax::SelectedSyntax,
+                            _: Option<&crate::surface::SurfaceName>,
+                            _: &[crate::surface::SurfaceSyntaxCapture],
+                            source: &SourceFile,
+                            loan: &StagedModuleLoan<'_>,
+                            caller: &crate::surface::SurfaceName,
+                            _: usize,
+                            _: Arc<crate::syntax::SyntaxContexts>,
+                            _: Arc<crate::syntax::ExpansionFrame>,
+                            _: &mut Vec<crate::syntax::SyntaxOwner>,
+                            budget: &mut SyntaxBudget| {
+            let retained = loan
+                .retained_source(source, budget)
+                .map_err(|_| caller.span)?;
+            *observed.borrow_mut() = Some(Arc::downgrade(&retained));
+            if fail {
+                Err(caller.span)
+            } else {
+                Ok((Vec::new(), 0))
+            }
+        };
+        let result = graph.next_module_with_syntax(
+            std::slice::from_ref(&selection),
+            &[],
+            &mut Vec::new(),
+            Some(&mut callback),
+        );
+        let weak = observed
+            .borrow_mut()
+            .take()
+            .unwrap_or_else(|| panic!("the real staged callback did not run: {result:?}"));
+        if fail {
+            let failure = result.unwrap_err();
+            assert!(
+                matches!(failure.failure(), LoadGraphError::Projection { source, .. } if source.id() == source_id)
+            );
+            assert!(weak.upgrade().is_none());
+            assert!(graph.loaded.is_empty());
+        } else {
+            let loaded = result.unwrap().unwrap();
+            let source = weak
+                .upgrade()
+                .expect("the final module retains the snapshot");
+            assert!(Arc::ptr_eq(&source, loaded.retained_source()));
+            assert_eq!(loaded.source().id(), source_id);
+        }
+    }
+}
+
+#[test]
 fn fixed_escape_failure_drops_its_root_without_publishing_the_module() {
     use crate::{
         driver::{PipelineFailure, compile_staged_graph_for_test},
