@@ -554,6 +554,28 @@ impl LoadedModule {
     pub(crate) fn quote_introduction(&self) -> Option<usize> {
         self.quote_introduction
     }
+
+    pub(crate) fn prepare_escape_probes(
+        &mut self,
+        budget: &mut SyntaxBudget,
+    ) -> Result<Vec<usize>, crate::parser::MacroParseFailure> {
+        crate::syntax::prepare_escape_probes(&mut self.surface, self.quote_introduction, budget)
+    }
+
+    pub(crate) fn finish_escape_probes(
+        &mut self,
+        probes: &[usize],
+        categories: &[crate::syntax::EscapeResultCategory],
+        budget: &mut SyntaxBudget,
+    ) -> Result<(), crate::parser::MacroParseFailure> {
+        crate::syntax::finish_escape_probes(
+            &mut self.surface,
+            self.quote_introduction,
+            probes,
+            categories,
+            budget,
+        )
+    }
 }
 
 /// A canonical module graph ordered with dependencies before dependents.
@@ -580,6 +602,11 @@ impl ModuleGraph {
     #[must_use]
     pub fn modules(&self) -> &[LoadedModule] {
         &self.modules
+    }
+
+    #[cfg(test)]
+    pub(crate) fn module_at_mut(&mut self, index: usize) -> Option<&mut LoadedModule> {
+        self.modules.get_mut(index)
     }
 
     /// Looks up one canonical module by graph-local identity.
@@ -1841,10 +1868,10 @@ impl HeaderGraph {
 
     pub(crate) fn current_module_with_syntax_budget(
         &mut self,
-    ) -> Option<(&LoadedModule, &mut SyntaxBudget, &mut usize)> {
-        let module = match &self.completed {
-            Some(graph) => graph.modules.last(),
-            None => self.loaded.last(),
+    ) -> Option<(&mut LoadedModule, &mut SyntaxBudget, &mut usize)> {
+        let module = match &mut self.completed {
+            Some(graph) => graph.modules.last_mut(),
+            None => self.loaded.last_mut(),
         }?;
         Some((
             module,

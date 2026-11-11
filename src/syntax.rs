@@ -4806,6 +4806,418 @@ pub(crate) fn resolve_template_escape_reads(
     Ok(resolved)
 }
 
+/// Fill only compiler-created escape probe inputs after the complete template
+/// has established their lexical operands. The returned definition indices
+/// identify the probes whose local results must be observed by normal checking.
+pub(crate) fn prepare_escape_probes(
+    module: &mut crate::surface::SurfaceModule,
+    introduction: Option<usize>,
+    budget: &mut SyntaxBudget,
+) -> Result<Vec<usize>, crate::parser::MacroParseFailure> {
+    use crate::parser::MacroParseFailure;
+    use crate::surface::{
+        SurfaceBinder, SurfaceDefinitionKind, SurfacePattern, SurfacePatternKind, SurfaceType,
+        SurfaceTypeKind,
+    };
+
+    fn resource(error: ResourceFailure) -> MacroParseFailure {
+        MacroParseFailure::Syntax {
+            diagnostics: Vec::new(),
+            resource: Some(error),
+        }
+    }
+    fn name(text: String, span: Span, introduction: usize) -> SurfaceName {
+        SurfaceName {
+            text,
+            span,
+            introduction,
+            introduced_at: (introduction != 0).then_some(span),
+            written: false,
+            diagnostic: None,
+        }
+    }
+    fn named_type(text: &str, span: Span, introduction: usize) -> SurfaceType {
+        SurfaceType {
+            kind: SurfaceTypeKind::Named(SurfaceReference::Unqualified(name(
+                text.to_owned(),
+                span,
+                introduction,
+            ))),
+            span,
+            diagnostic: None,
+        }
+    }
+
+    let mut pending = Vec::new();
+    for declaration in &module.syntax_declarations {
+        budget.charge().map_err(resource)?;
+        let Some(escapes) = declaration.template_escapes.as_deref() else {
+            continue;
+        };
+        for schema in resolve_template_escape_reads(declaration, budget)? {
+            let escape = escapes
+                .get(schema.descriptor)
+                .ok_or(MacroParseFailure::Invalid)?;
+            let mut definition = None;
+            for (index, candidate) in module.definitions.iter().enumerate() {
+                budget.charge().map_err(resource)?;
+                let SurfaceDefinitionKind::Equational(global) = &candidate.kind else {
+                    continue;
+                };
+                budget
+                    .charge_units(
+                        escape
+                            .adapter
+                            .text
+                            .len()
+                            .min(global.interface.name.text.len())
+                            .saturating_add(1),
+                    )
+                    .map_err(resource)?;
+                if escape.adapter.text == global.interface.name.text {
+                    definition = Some(index);
+                    break;
+                }
+            }
+            if pending.len() == pending.capacity() {
+                budget
+                    .charge_units(pending.len().saturating_mul(2).saturating_add(1))
+                    .map_err(resource)?;
+                pending.reserve_exact(1);
+            } else {
+                budget.charge().map_err(resource)?;
+            }
+            pending.push((definition.ok_or(MacroParseFailure::Invalid)?, schema.reads));
+        }
+    }
+    if pending.is_empty() {
+        return Ok(Vec::new());
+    }
+    let introduction = introduction.ok_or(MacroParseFailure::Invalid)?;
+    budget.charge_units(pending.len()).map_err(resource)?;
+    let mut definitions = Vec::with_capacity(pending.len());
+    for (definition, reads) in pending {
+        let global = module
+            .definitions
+            .get_mut(definition)
+            .ok_or(MacroParseFailure::Invalid)?;
+        let SurfaceDefinitionKind::Equational(global) = &mut global.kind else {
+            return Err(MacroParseFailure::Invalid);
+        };
+        let SurfaceTypeKind::Function(function) = &mut global.interface.annotation.kind else {
+            return Err(MacroParseFailure::Invalid);
+        };
+        let [equation] = global.equations.as_mut_slice() else {
+            return Err(MacroParseFailure::Invalid);
+        };
+        if equation.patterns.len() != 1 {
+            return Err(MacroParseFailure::Invalid);
+        }
+        let span = global.interface.name.span;
+        budget
+            .charge_units(reads.len().saturating_mul(2).saturating_add(2))
+            .map_err(resource)?;
+        let mut types = Vec::with_capacity(reads.len());
+        let mut patterns = Vec::with_capacity(reads.len());
+        for (index, read) in reads.iter().enumerate() {
+            let kind = match read {
+                EscapeReadSource::Matcher { kind, .. } => *kind,
+                EscapeReadSource::Generator => SurfaceSyntaxCaptureKind::Expression,
+            };
+            let spelling = match kind {
+                SurfaceSyntaxCaptureKind::Expression => "ExpressionFragment",
+                SurfaceSyntaxCaptureKind::Identifier => "Identifier",
+                SurfaceSyntaxCaptureKind::Type => "TypeFragment",
+                SurfaceSyntaxCaptureKind::Pattern => "PatternFragment",
+                SurfaceSyntaxCaptureKind::Declaration => "DeclarationFragment",
+            };
+            let digits = index.checked_ilog10().map_or(1, |n| n as usize + 1);
+            let operand_bytes = "\0ash_escape_operand_".len().saturating_add(digits);
+            let extra = if kind == SurfaceSyntaxCaptureKind::Identifier {
+                "Origin".len().saturating_add(4)
+            } else {
+                0
+            };
+            budget
+                .charge_units(
+                    operand_bytes
+                        .saturating_add(spelling.len())
+                        .saturating_add(extra)
+                        .saturating_add(5),
+                )
+                .map_err(resource)?;
+            let ty = named_type(spelling, span, introduction);
+            types.push(if kind == SurfaceSyntaxCaptureKind::Identifier {
+                SurfaceType {
+                    kind: SurfaceTypeKind::Tuple(vec![
+                        ty,
+                        named_type("Origin", span, introduction),
+                    ]),
+                    span,
+                    diagnostic: None,
+                }
+            } else {
+                ty
+            });
+            patterns.push(SurfacePattern {
+                kind: SurfacePatternKind::Binder(SurfaceBinder {
+                    name: name(format!("\0ash_escape_operand_{index}"), span, 0),
+                    span,
+                }),
+                span,
+                diagnostic: None,
+            });
+        }
+        let domain = match types.len() {
+            0 => SurfaceType {
+                kind: SurfaceTypeKind::Unit,
+                span,
+                diagnostic: None,
+            },
+            1 => types.pop().ok_or(MacroParseFailure::Invalid)?,
+            _ => SurfaceType {
+                kind: SurfaceTypeKind::Tuple(types),
+                span,
+                diagnostic: None,
+            },
+        };
+        let pattern = match patterns.len() {
+            0 => SurfacePattern {
+                kind: SurfacePatternKind::Unit,
+                span,
+                diagnostic: None,
+            },
+            1 => patterns.pop().ok_or(MacroParseFailure::Invalid)?,
+            _ => SurfacePattern {
+                kind: SurfacePatternKind::Tuple(patterns),
+                span,
+                diagnostic: None,
+            },
+        };
+        function.domain = Box::new(domain);
+        equation.patterns[0] = pattern;
+        definitions.push(definition);
+    }
+    Ok(definitions)
+}
+
+/// Find the actual resolved local binder in each compiler-owned probe.
+pub(crate) fn escape_probe_binders(
+    module: &crate::surface::SurfaceModule,
+    resolved: &crate::resolved::ResolvedModule,
+    probes: &[usize],
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<crate::resolved::BinderId>, ()> {
+    use crate::resolved::{
+        ResolvedDefinitionKind, ResolvedExprKind, ResolvedLocalDeclaration, ResolvedPatternKind,
+    };
+    use crate::surface::SurfaceDefinitionKind;
+
+    work.charge(probes.len())?;
+    let mut binders = Vec::new();
+    binders.try_reserve_exact(probes.len()).map_err(|_| ())?;
+    for index in probes {
+        let SurfaceDefinitionKind::Equational(probe) =
+            &module.definitions.get(*index).ok_or(())?.kind
+        else {
+            return Err(());
+        };
+        let mut selected = None;
+        for candidate in resolved.definitions() {
+            work.charge(1)?;
+            let ResolvedDefinitionKind::Equational(global) = &candidate.kind else {
+                continue;
+            };
+            work.charge(
+                global
+                    .interface
+                    .name
+                    .spelling
+                    .len()
+                    .min(probe.interface.name.text.len())
+                    .saturating_add(1),
+            )?;
+            if global.interface.name.spelling == probe.interface.name.text {
+                selected = Some(global);
+                break;
+            }
+        }
+        let global = selected.ok_or(())?;
+        let [equation] = global.equations.as_slice() else {
+            return Err(());
+        };
+        let ResolvedExprKind::Block(block) = &equation.body.kind else {
+            return Err(());
+        };
+        let [ResolvedLocalDeclaration::Binding(binding)] = block.declarations.as_slice() else {
+            return Err(());
+        };
+        let ResolvedPatternKind::Binder(binder) = &binding.pattern.kind else {
+            return Err(());
+        };
+        work.charge(binder.spelling.len().saturating_add(4))?;
+        if binder.spelling.strip_suffix("\0result") != Some(probe.interface.name.text.as_str()) {
+            return Err(());
+        }
+        binders.push(binder.id);
+    }
+    Ok(binders)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EscapeResultCategory {
+    Expression,
+    Identifier,
+    Type,
+    Pattern,
+    Declaration,
+}
+
+/// Classify only identities from the actual admitted compiler syntax module.
+pub(crate) fn escape_result_category(
+    ty: &crate::types::Type,
+    builtin: &CheckedModule,
+    work: &mut TypeWorkBudget,
+) -> Result<Option<EscapeResultCategory>, ()> {
+    use crate::types::Type;
+    fn nominal<'a>(
+        ty: &Type,
+        builtin: &'a CheckedModule,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Option<&'a str>, ()> {
+        work.charge(1)?;
+        let Type::Nominal(id) = ty else {
+            return Ok(None);
+        };
+        if id.module() != builtin.module() || !builtin.module().is_builtin_compiler_syntax() {
+            return Ok(None);
+        }
+        work.charge(1)?;
+        let Some(fact) = builtin.registry().nominal(*id) else {
+            return Ok(None);
+        };
+        work.charge(fact.spelling.len())?;
+        Ok(Some(&fact.spelling))
+    }
+
+    if let Type::Tuple(elements) = ty
+        && let [identifier, origin] = elements.as_ref()
+    {
+        return Ok((nominal(identifier, builtin, work)? == Some("Identifier")
+            && nominal(origin, builtin, work)? == Some("Origin"))
+        .then_some(EscapeResultCategory::Identifier));
+    }
+    Ok(match nominal(ty, builtin, work)? {
+        Some("ExpressionFragment") => Some(EscapeResultCategory::Expression),
+        Some("TypeFragment") => Some(EscapeResultCategory::Type),
+        Some("PatternFragment") => Some(EscapeResultCategory::Pattern),
+        Some("DeclarationFragment") => Some(EscapeResultCategory::Declaration),
+        _ => None,
+    })
+}
+
+/// Finish only the signatures and results of the registered compiler probes.
+/// Their original initializer bodies and quote-site allocations are untouched.
+pub(crate) fn finish_escape_probes(
+    module: &mut crate::surface::SurfaceModule,
+    introduction: Option<usize>,
+    probes: &[usize],
+    categories: &[EscapeResultCategory],
+    budget: &mut SyntaxBudget,
+) -> Result<(), crate::parser::MacroParseFailure> {
+    use crate::parser::MacroParseFailure;
+    use crate::surface::{SurfaceDefinitionKind, SurfaceExpr, SurfaceExprKind, SurfaceTypeKind};
+    let resource = |error| MacroParseFailure::Syntax {
+        diagnostics: Vec::new(),
+        resource: Some(error),
+    };
+    if probes.len() != categories.len() {
+        return Err(MacroParseFailure::Invalid);
+    }
+    let introduction = introduction.ok_or(MacroParseFailure::Invalid)?;
+    for (definition, &category) in probes.iter().zip(categories) {
+        let definition = module
+            .definitions
+            .get_mut(*definition)
+            .ok_or(MacroParseFailure::Invalid)?;
+        let SurfaceDefinitionKind::Equational(global) = &mut definition.kind else {
+            return Err(MacroParseFailure::Invalid);
+        };
+        let SurfaceTypeKind::Function(function) = &mut global.interface.annotation.kind else {
+            return Err(MacroParseFailure::Invalid);
+        };
+        let [equation] = global.equations.as_mut_slice() else {
+            return Err(MacroParseFailure::Invalid);
+        };
+        let SurfaceExprKind::Block(block) = &mut equation.body.kind else {
+            return Err(MacroParseFailure::Invalid);
+        };
+        let span = global.interface.name.span;
+        let spelling = match category {
+            EscapeResultCategory::Expression => "ExpressionFragment",
+            EscapeResultCategory::Identifier => "Identifier",
+            EscapeResultCategory::Type => "TypeFragment",
+            EscapeResultCategory::Pattern => "PatternFragment",
+            EscapeResultCategory::Declaration => "DeclarationFragment",
+        };
+        let extra = if category == EscapeResultCategory::Identifier {
+            "Origin".len().saturating_add(4)
+        } else {
+            0
+        };
+        budget
+            .charge_units(
+                global
+                    .interface
+                    .name
+                    .text
+                    .len()
+                    .saturating_add("\0result".len())
+                    .saturating_add(spelling.len())
+                    .saturating_add(extra)
+                    .saturating_add(6),
+            )
+            .map_err(resource)?;
+        let name = |text: String, introduction| SurfaceName {
+            text,
+            span,
+            introduction,
+            introduced_at: (introduction != 0).then_some(span),
+            written: false,
+            diagnostic: None,
+        };
+        let named = |text: &str| SurfaceType {
+            kind: SurfaceTypeKind::Named(SurfaceReference::Unqualified(name(
+                text.to_owned(),
+                introduction,
+            ))),
+            span,
+            diagnostic: None,
+        };
+        let ty = named(spelling);
+        let ty = if category == EscapeResultCategory::Identifier {
+            SurfaceType {
+                kind: SurfaceTypeKind::Tuple(vec![ty, named("Origin")]),
+                span,
+                diagnostic: None,
+            }
+        } else {
+            ty
+        };
+        let returned = SurfaceExpr {
+            kind: SurfaceExprKind::Name(SurfaceReference::Unqualified(name(
+                format!("{}\0result", global.interface.name.text),
+                0,
+            ))),
+            span,
+            diagnostic: None,
+        };
+        function.codomain = Box::new(ty);
+        block.result = Box::new(returned);
+    }
+    Ok(())
+}
+
 /// Inspect all splice uses, including those nested in another repetition.
 fn repetition_length<'a>(
     repeat: &'a TemplateRepeat,

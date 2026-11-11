@@ -7614,18 +7614,16 @@ fn make_template_escape_adapter(
         span,
         diagnostic: None,
     };
-    // Reserve the generated names before constructing or cloning them.
+    // The first normal check records the ordinary local result type. The
+    // helper's input pattern is filled from the completed matcher afterwards.
+    // The original body is moved once into this binding so its quote-site
+    // callee allocations remain owned by the defining module.
     charge_expression_allocation(
-        "Input".len()
-            + "MacroResult".len()
-            + "Ops".len()
-            + 2 * "\0ash_escape_input".len()
-            + 2 * name.text.len()
-            + 11,
+        "MacroResult".len() + "Ops".len() + 3 * name.text.len() + "\0result".len() + 16,
         tokens.expression_budget,
     )?;
-    let input_name = SurfaceName {
-        text: "\0ash_escape_input".into(),
+    let result_name = SurfaceName {
+        text: format!("{}\0result", name.text),
         span,
         introduction: 0,
         introduced_at: None,
@@ -7634,7 +7632,11 @@ fn make_template_escape_adapter(
     };
     let annotation = SurfaceType {
         kind: SurfaceTypeKind::Function(FunctionType {
-            domain: Box::new(named_type("Input")),
+            domain: Box::new(SurfaceType {
+                kind: SurfaceTypeKind::Unit,
+                span,
+                diagnostic: None,
+            }),
             codomain: Box::new(named_type("MacroResult")),
             effects: Some(SurfaceEffectRow {
                 effects: vec![SurfaceEffectInstance {
@@ -7649,18 +7651,30 @@ fn make_template_escape_adapter(
         span,
         diagnostic: None,
     };
-    let input = SurfaceExpr {
-        kind: SurfaceExprKind::Name(SurfaceReference::Unqualified(input_name.clone())),
+    let tail = quote_constructor_name("NoNodes", introduction, span, tokens)?;
+    let syntax = quote_unary_call("Syntax", introduction, span, tail, tokens)?;
+    let result = quote_unary_call("Expanded", introduction, span, syntax, tokens)?;
+    let block = SurfaceExpr {
+        kind: SurfaceExprKind::Block(SurfaceBlock {
+            declarations: vec![SurfaceLocalDeclaration::Binding(Box::new(SurfaceBinding {
+                pattern: SurfacePattern {
+                    kind: SurfacePatternKind::Binder(SurfaceBinder {
+                        name: result_name,
+                        span,
+                    }),
+                    span,
+                    diagnostic: None,
+                },
+                annotation: None,
+                initializer: body,
+                span,
+            }))],
+            result: Box::new(result),
+            span,
+        }),
         span,
         diagnostic: None,
     };
-    let origin = quote_unary_call("invocation_origin", introduction, span, input, tokens)?;
-    let expression =
-        quote_constructor_call("ExpressionNode", introduction, span, body, origin, tokens)?;
-    let tail = quote_constructor_name("NoNodes", introduction, span, tokens)?;
-    let nodes = quote_constructor_call("MoreNodes", introduction, span, expression, tail, tokens)?;
-    let syntax = quote_unary_call("Syntax", introduction, span, nodes, tokens)?;
-    let result = quote_unary_call("Expanded", introduction, span, syntax, tokens)?;
     Ok(SurfaceDefinition {
         public: false,
         kind: SurfaceDefinitionKind::Equational(EquationalGlobal {
@@ -7674,14 +7688,11 @@ fn make_template_escape_adapter(
             equations: vec![SurfaceEquation {
                 name: name.clone(),
                 patterns: vec![SurfacePattern {
-                    kind: SurfacePatternKind::Binder(SurfaceBinder {
-                        name: input_name,
-                        span,
-                    }),
+                    kind: SurfacePatternKind::Unit,
                     span,
                     diagnostic: None,
                 }],
-                body: result,
+                body: block,
                 span,
             }],
         }),
