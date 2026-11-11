@@ -1665,10 +1665,10 @@ where
         let advanced = {
             let mut transformer =
                 |selection: &crate::syntax::SelectedSyntax,
-                 adapter: Option<&crate::surface::SurfaceName>,
+                 adapter: crate::syntax::DeclarationAdapter<'_>,
                  captures: &[crate::surface::SurfaceSyntaxCapture],
                  source: &SourceFile,
-                 _staged: &crate::module::StagedModuleLoan<'_>,
+                 staged: &crate::module::StagedModuleLoan<'_>,
                  caller: &crate::surface::SurfaceName,
                  introduction: usize,
                  contexts: Arc<crate::syntax::SyntaxContexts>,
@@ -1676,21 +1676,52 @@ where
                  owners: &mut Vec<crate::syntax::SyntaxOwner>,
                  budget: &mut crate::syntax_resource::SyntaxBudget| {
                     let span = frame.invocation;
-                    let result = evaluate_selected_transformer(
-                        selection,
-                        adapter,
-                        captures,
-                        source,
-                        caller,
-                        introduction,
-                        TransformerContexts::Shared(contexts),
-                        frame,
-                        &checked,
-                        &mut transformer_entries,
-                        constraint_work,
-                        Some(&mut *budget),
-                        Some(owners),
-                    )
+                    let result = match adapter {
+                        crate::syntax::DeclarationAdapter::Generators(plan) => {
+                            evaluate_generator_transformer(
+                                plan,
+                                selection,
+                                captures,
+                                source,
+                                staged,
+                                caller,
+                                introduction,
+                                frame,
+                                &selected,
+                                &checked_syntax_imports,
+                                &checked,
+                                &checked_by_module,
+                                &checked_syntax_terms,
+                                owners,
+                                budget,
+                                &mut resolution_type_work,
+                                &mut checking_type_work,
+                                &mut coverage_work,
+                                constraint_work,
+                                source_bytes,
+                                rewrite_limit,
+                            )
+                        }
+                        other => evaluate_selected_transformer(
+                            selection,
+                            match other {
+                                crate::syntax::DeclarationAdapter::Transformer => None,
+                                crate::syntax::DeclarationAdapter::Escape(name) => Some(name),
+                                crate::syntax::DeclarationAdapter::Generators(_) => unreachable!(),
+                            },
+                            captures,
+                            source,
+                            caller,
+                            introduction,
+                            TransformerContexts::Shared(contexts),
+                            frame,
+                            &checked,
+                            &mut transformer_entries,
+                            constraint_work,
+                            Some(&mut *budget),
+                            Some(owners),
+                        ),
+                    }
                     .and_then(|(output, fresh_count)| match output {
                         crate::syntax::TransformerOutput::Expanded(nodes) => {
                             #[cfg(test)]
@@ -2498,6 +2529,219 @@ type TransformerOutputObserver = fn(
 enum TransformerContexts<'a> {
     Shared(Arc<crate::syntax::SyntaxContexts>),
     Quote(&'a mut Option<Arc<crate::syntax::SyntaxContexts>>),
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_generator_transformer(
+    plan: &crate::syntax::GeneratorPlan,
+    selection: &crate::syntax::SelectedSyntax,
+    captures: &[crate::surface::SurfaceSyntaxCapture],
+    source: &SourceFile,
+    staged: &crate::module::StagedModuleLoan<'_>,
+    caller: &crate::surface::SurfaceName,
+    introduction: usize,
+    frame: Arc<crate::syntax::ExpansionFrame>,
+    selected: &[crate::syntax::SelectedSyntax],
+    selected_imports: &[Vec<crate::syntax::SelectedSyntax>],
+    checked: &[Arc<crate::resolved::CheckedModule>],
+    checked_by_module: &HashMap<ModuleId, usize>,
+    checked_terms: &[crate::syntax::SyntaxOwnerBindings],
+    owners: &mut Vec<crate::syntax::SyntaxOwner>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+    resolution_work: &mut TypeWorkBudget,
+    checking_work: &mut TypeWorkBudget,
+    coverage_work: &mut UsefulnessBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
+    source_bytes: usize,
+    rewrite_limit: usize,
+) -> Result<(crate::syntax::TransformerOutput, usize), FileFailure> {
+    let selected_owner = checked
+        .get(selection.owner)
+        .ok_or_else(internal_file_failure)?;
+    budget
+        .charge_units(
+            selected_owner
+                .direct_dependencies()
+                .len()
+                .saturating_add(checked.len())
+                .saturating_add(2),
+        )
+        .map_err(quote_resource_failure)?;
+    let route = selected_owner
+        .direct_dependencies()
+        .iter()
+        .find(|edge| edge.target().is_builtin_compiler_syntax())
+        .ok_or_else(internal_file_failure)?;
+    let builtin_index = *checked_by_module
+        .get(&route.target())
+        .ok_or_else(internal_file_failure)?;
+    let builtin = checked
+        .get(builtin_index)
+        .ok_or_else(internal_file_failure)?;
+    let live = owners.len();
+    budget
+        .charge_units(if live == owners.capacity() {
+            live.saturating_mul(2).saturating_add(1)
+        } else {
+            1
+        })
+        .map_err(quote_resource_failure)?;
+    if live == owners.capacity() {
+        owners.reserve_exact(1);
+    }
+    owners.push(crate::syntax::SyntaxOwner {
+        owner: Some(builtin_index),
+        declaration: builtin.span(),
+        import_span: route.import_span(),
+    });
+    let builtin_introduction = owners.len();
+    let definition = crate::syntax::generator_adapter_definition(
+        plan,
+        &selection.declaration.matcher,
+        captures,
+        introduction,
+        builtin_introduction,
+        frame.invocation,
+        budget,
+    )
+    .map_err(|error| match error {
+        crate::parser::MacroParseFailure::Syntax {
+            diagnostics,
+            resource,
+        } => FileFailure::from(PipelineFailure::SyntaxParse(SyntaxParseFailure {
+            diagnostics,
+            resource,
+            invocation: frame.invocation,
+            definition: selection.declaration.span,
+            teardown: None,
+        })),
+        crate::parser::MacroParseFailure::Invalid => internal_file_failure(),
+    })?;
+    let module = staged
+        .no_quote_adapter_view(source, definition, budget)
+        .map_err(quote_resource_failure)?;
+    budget
+        .charge_units(module.dependencies().len())
+        .map_err(quote_resource_failure)?;
+    let dependencies = module
+        .dependencies()
+        .iter()
+        .map(|edge| {
+            let dependency = checked_by_module
+                .get(&edge.target())
+                .and_then(|index| checked.get(*index))
+                .ok_or_else(internal_file_failure)?;
+            DependencyExports::new(edge, dependency.exports()).map_err(|_| internal_file_failure())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    budget
+        .charge_units(owners.len())
+        .map_err(quote_resource_failure)?;
+    let mut nested =
+        |_: &crate::syntax::SelectedSyntax,
+         _: &[crate::surface::SurfaceSyntaxCapture],
+         span: Span,
+         _: &crate::surface::SurfaceName,
+         _: usize,
+         _: &[Option<usize>],
+         _: &Arc<crate::syntax::ExpansionFrame>,
+         _: &mut InterfaceConstraintBudget,
+         _: Option<crate::syntax::QuoteExpansionLoan<'_>>| Err(span);
+    let mut expansion = crate::syntax::SyntaxExpansion::new(
+        source,
+        selected,
+        selected_imports,
+        owners.to_vec(),
+        Some(&mut *budget),
+        None,
+        &mut nested,
+    );
+    let resolved = crate::resolve::resolve_module_with_syntax(
+        &module,
+        &dependencies,
+        resolution_work,
+        constraint_work,
+        &[],
+        checked,
+        checked_terms,
+        Some(&mut expansion),
+    );
+    let parse_failure = expansion.take_parse_failure();
+    drop(expansion);
+    if let Some(failure) = parse_failure {
+        return Err(FileFailure::from(PipelineFailure::SyntaxParse(failure)));
+    }
+    let resolved = resolved
+        .map_err(|error| match error {
+            ResolveModuleError::Resolution(error) => PipelineFailure::Resolution(error),
+            ResolveModuleError::Kind(error) => PipelineFailure::Kind(error),
+            ResolveModuleError::Representation(error) => PipelineFailure::Typing(error),
+        })
+        .map_err(FileFailure::from)?;
+    let primary = TypeWorkBudget::with_limit(
+        modular_primary_limit(source_bytes).map_err(|()| internal_file_failure())?,
+    );
+    let rewrite = TypeWorkBudget::with_limit(rewrite_limit);
+    let mut quote_resource = None;
+    let checked_module = crate::elaborate::check_module_in_effect_profile_with_quote_work(
+        resolved,
+        checking_work,
+        coverage_work,
+        constraint_work,
+        Some(primary),
+        Some(rewrite),
+        Some(&mut *budget),
+        &mut quote_resource,
+    );
+    if let Some(error) = quote_resource {
+        return Err(quote_resource_failure(error));
+    }
+    let checked_module = checked_module
+        .map_err(PipelineFailure::Typing)
+        .map_err(FileFailure::from)?;
+    budget.charge().map_err(quote_resource_failure)?;
+    let checked_module = Arc::new(checked_module);
+    let binder = checked_module
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.spelling == "\0ash_generator_adapter")
+        .map(|scheme| scheme.binder)
+        .ok_or_else(internal_file_failure)?;
+    budget
+        .charge_units(checked.len().saturating_add(2))
+        .map_err(quote_resource_failure)?;
+    let mut local = Vec::with_capacity(checked.len().saturating_add(1));
+    local.extend(checked.iter().cloned());
+    local.push(Arc::clone(&checked_module));
+    let entry = prepare_transformer_entry(
+        &checked_module,
+        binder,
+        &local,
+        constraint_work,
+        Some(&mut *budget),
+    )?;
+    let contexts =
+        crate::syntax::SyntaxContexts::new_budgeted(selected, selected_imports, owners, budget)
+            .map_err(quote_resource_failure)?;
+    budget.charge().map_err(quote_resource_failure)?;
+    crate::eval::evaluate_transformer_with_owners(
+        &entry,
+        captures,
+        source,
+        caller,
+        introduction,
+        Arc::new(contexts),
+        Arc::clone(&frame),
+        Some(&mut *budget),
+        Some(owners),
+    )
+    .map_err(|cause| {
+        FileFailure::from(PipelineFailure::SyntaxRuntime(SyntaxRuntimeFailure {
+            cause,
+            invocation: frame.invocation,
+            definition: selection.declaration.span,
+        }))
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

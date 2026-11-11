@@ -1445,7 +1445,7 @@ pub(crate) struct StagedModuleLoan<'a> {
 
 pub(crate) type StagedDeclarationTransformer<'a> = dyn for<'call, 'module> FnMut(
         &'call crate::syntax::SelectedSyntax,
-        Option<&'call crate::surface::SurfaceName>,
+        crate::syntax::DeclarationAdapter<'call>,
         &'call [crate::surface::SurfaceSyntaxCapture],
         &'call SourceFile,
         &'call StagedModuleLoan<'module>,
@@ -1687,7 +1687,7 @@ impl StagedModule {
                     let mut transformer = transformer;
                     let mut routed =
                         |selection: &crate::syntax::SelectedSyntax,
-                         adapter: Option<&crate::surface::SurfaceName>,
+                         adapter: crate::syntax::DeclarationAdapter<'_>,
                          captures: &[crate::surface::SurfaceSyntaxCapture],
                          source: &SourceFile,
                          caller: &crate::surface::SurfaceName,

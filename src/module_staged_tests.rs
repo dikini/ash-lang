@@ -177,7 +177,7 @@ fn staged_transformer_loan_reuses_the_source_on_success_and_drops_on_failure() {
         let source_id = graph.pending.front().unwrap().source.id();
         let observed = RefCell::new(None);
         let mut callback = |_: &crate::syntax::SelectedSyntax,
-                            _: Option<&crate::surface::SurfaceName>,
+                            _: crate::syntax::DeclarationAdapter<'_>,
                             _: &[crate::surface::SurfaceSyntaxCapture],
                             source: &SourceFile,
                             loan: &StagedModuleLoan<'_>,

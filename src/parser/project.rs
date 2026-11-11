@@ -3185,58 +3185,119 @@ fn prepare_staged_output(
     let mut actual_expression = false;
     let output = match &invocation.selection.declaration.implementation {
         SurfaceSyntaxImplementation::Template => {
-            let mut output = match crate::syntax::prepare_declaration_template(
-                &invocation.selection,
-                template_captures,
-                anchor,
-                budget,
-            ) {
-                Ok(output) => output,
-                Err(error) => {
+            if invocation.selection.declaration.contains_generators {
+                let (mut output, plan) = match crate::syntax::prepare_generator_template(
+                    &invocation.selection,
+                    template_captures,
+                    introduction,
+                    anchor,
+                    budget,
+                ) {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        return Err(staged_template_failure(
+                            error,
+                            staging_frames,
+                            &frame,
+                            budget,
+                        )?);
+                    }
+                };
+                let callback = transformer
+                    .as_deref_mut()
+                    .ok_or(ProjectionError::MalformedTree(
+                        InternalReason::UnexpectedShape,
+                    ))?;
+                let contexts = crate::syntax::SyntaxContexts::new_budgeted(
+                    selected,
+                    owner_imports,
+                    staged_owners,
+                    budget,
+                )?;
+                budget.charge_units(2)?;
+                let (results, fresh_count) = callback(
+                    &invocation.selection,
+                    crate::syntax::DeclarationAdapter::Generators(&plan),
+                    template_captures,
+                    source,
+                    &invocation.name,
+                    introduction,
+                    std::sync::Arc::new(contexts),
+                    std::sync::Arc::clone(&frame),
+                    staged_owners,
+                    budget,
+                )
+                .map_err(|_| ProjectionError::MalformedTree(InternalReason::UnexpectedShape))?;
+                budget.charge_units(fresh_count)?;
+                staged_owners.extend((0..fresh_count).map(|_| crate::syntax::SyntaxOwner {
+                    owner: None,
+                    declaration: invocation.selection.declaration.span,
+                    import_span: invocation.selection.import_span,
+                }));
+                if results.len() != plan.results {
+                    return Err(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                    );
+                }
+                apply_generator_results(&mut output, &results, budget, 0)?;
+                crate::syntax::normalize_declaration_line_ends(&mut output, budget)?;
+                (actual_pattern, actual_expression) =
+                    charge_transformer_type_metadata_copies_with_expression(&output, budget)?;
+                output
+            } else {
+                let mut output = match crate::syntax::prepare_declaration_template(
+                    &invocation.selection,
+                    template_captures,
+                    anchor,
+                    budget,
+                ) {
+                    Ok(output) => output,
+                    Err(error) => {
+                        return Err(staged_template_failure(
+                            error,
+                            staging_frames,
+                            &frame,
+                            budget,
+                        )?);
+                    }
+                };
+                let escaped = materialize_template_escapes(
+                    &mut output,
+                    &invocation.selection,
+                    template_captures,
+                    source,
+                    &invocation.name,
+                    introduction,
+                    selected,
+                    owner_imports,
+                    staged_owners,
+                    &frame,
+                    transformer,
+                    budget,
+                    0,
+                )?;
+                if let Err(error) = crate::syntax::substitute_contents(
+                    &mut output,
+                    &invocation.selection.declaration.matcher,
+                    template_captures,
+                    introduction,
+                    anchor,
+                    Some(&mut *budget),
+                ) {
                     return Err(staged_template_failure(
-                        error,
+                        error.into_macro_failure(),
                         staging_frames,
                         &frame,
                         budget,
                     )?);
                 }
-            };
-            let escaped = materialize_template_escapes(
-                &mut output,
-                &invocation.selection,
-                template_captures,
-                source,
-                &invocation.name,
-                introduction,
-                selected,
-                owner_imports,
-                staged_owners,
-                &frame,
-                transformer,
-                budget,
-                0,
-            )?;
-            if let Err(error) = crate::syntax::substitute_contents(
-                &mut output,
-                &invocation.selection.declaration.matcher,
-                template_captures,
-                introduction,
-                anchor,
-                Some(&mut *budget),
-            ) {
-                return Err(staged_template_failure(
-                    error.into_macro_failure(),
-                    staging_frames,
-                    &frame,
-                    budget,
-                )?);
+                crate::syntax::normalize_declaration_line_ends(&mut output, budget)?;
+                if escaped {
+                    (actual_pattern, actual_expression) =
+                        charge_transformer_type_metadata_copies_with_expression(&output, budget)?;
+                }
+                output
             }
-            crate::syntax::normalize_declaration_line_ends(&mut output, budget)?;
-            if escaped {
-                (actual_pattern, actual_expression) =
-                    charge_transformer_type_metadata_copies_with_expression(&output, budget)?;
-            }
-            output
         }
         SurfaceSyntaxImplementation::Transformer(_) => {
             let transformer = transformer
@@ -3254,7 +3315,7 @@ fn prepare_staged_output(
             budget.charge_units(2)?;
             let (output, fresh_count) = transformer(
                 &invocation.selection,
-                None,
+                crate::syntax::DeclarationAdapter::Transformer,
                 &invocation.captures,
                 source,
                 &invocation.name,
@@ -3304,6 +3365,67 @@ fn prepare_staged_output(
         actual_expression,
         transformer_output,
     })
+}
+
+fn apply_generator_results(
+    output: &mut [crate::syntax::MacroOutputNode],
+    results: &[crate::syntax::MacroOutputNode],
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+    depth: usize,
+) -> Result<(), DeclarationExpansionFailure> {
+    use crate::syntax::MacroOutputNode;
+    for node in output {
+        budget.charge()?;
+        match node {
+            MacroOutputNode::Group(_, children, _) => apply_generator_results(
+                children,
+                results,
+                budget,
+                crate::syntax::type_depth(depth, 1)?,
+            )?,
+            MacroOutputNode::Identifier(name, _)
+                if name.introduction == usize::MAX
+                    && name.text.starts_with("\0ash_generator_result_") =>
+            {
+                budget.charge_units(name.text.len())?;
+                let index = name.text["\0ash_generator_result_".len()..]
+                    .parse::<usize>()
+                    .map_err(|_| ProjectionError::MalformedTree(InternalReason::UnexpectedShape))?;
+                let Some(MacroOutputNode::Expression(capture, origin)) = results.get(index) else {
+                    return Err(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                    );
+                };
+                if !matches!(
+                    capture.quote_sites,
+                    crate::surface::CapturedQuoteSites::Empty
+                ) {
+                    return Err(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                    );
+                }
+                if crate::syntax::charge_new_expression_copy(
+                    &capture.expression,
+                    crate::syntax::type_depth(depth, 1)?,
+                    false,
+                    budget,
+                )?
+                .is_none()
+                    || crate::syntax::charge_new_expression_retention(capture, depth, budget)?
+                        .is_none()
+                {
+                    return Err(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                    );
+                }
+                crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
+                budget.charge()?;
+                *node = MacroOutputNode::Expression(capture.clone(), origin.clone());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn admit_staged_output<'a>(
@@ -3813,7 +3935,7 @@ fn materialize_template_escapes(
                 budget.charge_units(2)?;
                 let (mut output, fresh_count) = callback(
                     selection,
-                    Some(adapter),
+                    crate::syntax::DeclarationAdapter::Escape(adapter),
                     captures,
                     source,
                     caller,
