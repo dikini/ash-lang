@@ -2615,7 +2615,9 @@ pub(crate) fn generator_adapter_definition(
                 }
             }
         }
-        Ok(expr(SurfaceExprKind::Name(step), generator.span))
+        // This expression is a compiler-created occurrence at the invocation;
+        // the referenced names retain their defining spans and introduction.
+        Ok(expr(SurfaceExprKind::Name(step), span))
     }
     let mut declarations = Vec::with_capacity(
         plan.actions
@@ -2668,6 +2670,16 @@ pub(crate) fn generator_adapter_definition(
                     }
                     _ => return Err(MacroParseFailure::Invalid),
                 };
+                // The shell is created at the invocation; the seed itself
+                // keeps its original source, context and diagnostic packet.
+                let seed = expr(
+                    SurfaceExprKind::Block(SurfaceBlock {
+                        declarations: Vec::new(),
+                        result: Box::new(seed),
+                        span,
+                    }),
+                    span,
+                );
                 // Both match arms are checked ordinarily. The false arm is
                 // never evaluated, but relates the seed and next-state types
                 // and requires an ExpressionFragment even when no step is
@@ -2678,7 +2690,7 @@ pub(crate) fn generator_adapter_definition(
                 let application = call(
                     step_reference(generator, definition_introduction, span, budget)?,
                     reference(probe.clone(), span, 0),
-                    generator.span,
+                    span,
                 );
                 let checked_pattern = SurfacePattern {
                     kind: SurfacePatternKind::Tuple(vec![
@@ -2769,7 +2781,7 @@ pub(crate) fn generator_adapter_definition(
                 let application = call(
                     step_reference(generator, definition_introduction, span, budget)?,
                     reference(state(*old), span, 0),
-                    generator.span,
+                    span,
                 );
                 let pattern = SurfacePattern {
                     kind: SurfacePatternKind::Tuple(vec![
