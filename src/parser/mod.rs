@@ -342,6 +342,8 @@ pub enum ParseReason {
     Semicolon,
     /// Tokens remain where the selected grammar requires another boundary.
     UnexpectedToken,
+    /// A template splice names no capture in its matcher.
+    UnknownTemplateCapture,
     /// A template repetition has no repeated capture at its scope.
     RepetitionMissingDriver,
     /// Repetition drivers have different lengths in the current iteration.
@@ -528,6 +530,7 @@ impl fmt::Display for ParseReason {
             Self::UnexpectedAnd => "parse.unexpected-and",
             Self::Semicolon => "parse.semicolon",
             Self::UnexpectedToken => "parse.unexpected-token",
+            Self::UnknownTemplateCapture => "parse.unknown-template-capture",
             Self::RepetitionMissingDriver => "parse.repetition-missing-driver",
             Self::RepetitionLengthMismatch => "parse.repetition-length-mismatch",
             Self::RepetitionEmpty => "parse.repetition-empty",
@@ -539,7 +542,7 @@ impl fmt::Display for ParseReason {
 }
 
 impl ParseDiagnostic {
-    pub(crate) fn message(&self) -> Option<crate::message::Message<'static>> {
+    pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
         use crate::message::Message;
         Some(match self.reason {
             ParseReason::ExpectedForm => Message::parse_expected(self.expected_form?),
@@ -550,6 +553,9 @@ impl ParseDiagnostic {
             ParseReason::UnexpectedAnd => Message::parse_unexpected_and(),
             ParseReason::Semicolon => Message::parse_semicolon(),
             ParseReason::UnexpectedToken => Message::parse_unexpected_token(),
+            ParseReason::UnknownTemplateCapture => {
+                Message::parse_unknown_template_capture(self.found.as_deref()?)
+            }
             ParseReason::RepetitionMissingDriver => Message::parse_repetition_missing_driver(),
             ParseReason::RepetitionLengthMismatch => Message::parse_repetition_length_mismatch(),
             ParseReason::RepetitionEmpty => Message::parse_repetition_empty(),
@@ -568,6 +574,7 @@ impl ParseDiagnostic {
             ParseReason::UnclosedGroup => "opening_group",
             ParseReason::RepeatedEquality => "repeated_equality",
             ParseReason::ExpectedRecursiveMember => "expected_recursive_member",
+            ParseReason::UnknownTemplateCapture => "unknown_template_capture",
             ParseReason::RepetitionMissingDriver => "repetition_missing_driver",
             ParseReason::RepetitionLengthMismatch => "repetition_length_mismatch",
             ParseReason::RepetitionEmpty => "repetition_empty",
@@ -689,6 +696,21 @@ pub(crate) enum MacroParseFailure {
 
 pub(crate) fn repetition_failure(reason: ParseReason, span: Span) -> MacroParseFailure {
     let diagnostic = Diagnostic::new(reason, SourceLabel::new(span, primary_message(reason)));
+    MacroParseFailure::Syntax {
+        diagnostics: vec![ParseDiagnostic::new(diagnostic, None, None, None)],
+        resource: None,
+    }
+}
+
+pub(crate) const UNKNOWN_TEMPLATE_CAPTURE_LABEL: &str =
+    "the template splice has no matching capture";
+
+pub(crate) fn unknown_template_capture(name: &crate::surface::SurfaceName) -> MacroParseFailure {
+    let reason = ParseReason::UnknownTemplateCapture;
+    let primary = SourceLabel::new(name.span, primary_message(reason))
+        .with_location_preserving_span(name.diagnostic.as_deref());
+    let mut diagnostic = Diagnostic::new(reason, primary);
+    diagnostic.found = Some(format!("${}", name.text));
     MacroParseFailure::Syntax {
         diagnostics: vec![ParseDiagnostic::new(diagnostic, None, None, None)],
         resource: None,
@@ -2660,6 +2682,7 @@ const fn primary_message(reason: ParseReason) -> &'static str {
         ParseReason::UnexpectedAnd => "and is only accepted within a recursive binding group",
         ParseReason::Semicolon => "semicolons are not available in Ash",
         ParseReason::UnexpectedToken => "token is not accepted at this grammar position",
+        ParseReason::UnknownTemplateCapture => UNKNOWN_TEMPLATE_CAPTURE_LABEL,
         ParseReason::RepetitionMissingDriver => "the repetition has no capture driver",
         ParseReason::RepetitionLengthMismatch => "repetition driver lengths differ",
         ParseReason::RepetitionEmpty => "a one-or-more repetition has no values",

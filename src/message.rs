@@ -1600,6 +1600,7 @@ messages! {
     parse_semicolon => "parse-semicolon" {},
     /// This token is not allowed at this grammar position.
     parse_unexpected_token => "parse-unexpected-token" {},
+    parse_unknown_template_capture => "parse-unknown-template-capture" { capture: &'a str = "$name" },
     parse_repetition_missing_driver => "parse-repetition-missing-driver" {},
     parse_repetition_length_mismatch => "parse-repetition-length-mismatch" {},
     parse_repetition_empty => "parse-repetition-empty" {},

@@ -10,7 +10,10 @@ use crate::{
     lexer::LexReason,
     message::{Catalogue, CatalogueError, Message},
     module::{GraphDiagnostic, LoadGraphError, ModuleSyntaxFailure, io_kind_name},
-    parser::{FoundToken, ParseContext, ParseDiagnostic, ResourceFailure, SynchronizationBoundary},
+    parser::{
+        FoundToken, ParseContext, ParseDiagnostic, ParseReason, ResourceFailure,
+        SynchronizationBoundary,
+    },
     source::{SourceError, SourceFile, Span},
 };
 
@@ -1251,6 +1254,18 @@ pub fn compile_parse_diagnostic<'a>(
 ) -> Result<CompileDiagnostic<'a>, PresentationError> {
     let message = diagnostic.message().ok_or(PresentationError::MissingFact)?;
     let mut facts = Vec::new();
+    if diagnostic.reason == ParseReason::UnknownTemplateCapture {
+        facts.push(Fact {
+            name: "capture",
+            kind: "code",
+            value: FactValue::Text(
+                diagnostic
+                    .found
+                    .as_deref()
+                    .ok_or(PresentationError::MissingFact)?,
+            ),
+        });
+    }
     if let Some(expected) = diagnostic.expected_form() {
         facts.push(Fact {
             name: "expected",

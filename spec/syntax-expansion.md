@@ -49,6 +49,8 @@ placeholders, without resolving its free names. When expanded, a literal free
 reference resolves in the defining module's checked environment. An
 unresolved or inaccessible name fails then; an unused template does not fail
 for that name. A caller's same-spelled binding or import cannot supply it.
+An unbound capture splice is a syntax error at definition admission, even when
+the template is unused.
 
 ## Matching and expansion
 

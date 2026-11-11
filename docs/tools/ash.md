@@ -293,6 +293,8 @@ the enclosing parentheses make the invocation an argument to `apply`.
 Malformed captures and missing matcher literals report syntax failures rather
 than falling back to ordinary application. An unused template is checked for
 syntax, while its free names resolve in the defining context when expanded.
+An unbound template splice reports `parse.unknown-template-capture` with the
+capture spelling and source location in human and JSON diagnostics.
 
 Computed transformers use the canonical `@builtin.compiler.syntax` interface.
 Its data, operations, input ownership, and execution boundary are specified in
