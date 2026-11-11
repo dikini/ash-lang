@@ -51,6 +51,28 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn introduced_explicit_global_parameter_reaches_the_ordinary_driver() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "forms.ash",
+        "pub syntax declaration: (emit) $name:ident => {\n\
+             pub $name<A> : A -> A\n\
+             $name value = value\n\
+         }\n",
+    );
+    fixture.write(
+        "entry.ash",
+        "import forms (syntax emit)\n\
+         emit identity\n\
+         main : Unit -> Int\n\
+         main () = identity 42\n",
+    );
+    let program = compile_path(fixture.configuration())
+        .expect("the introduced explicit parameter binds its same-context references");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
+#[test]
 fn i01_identifier_captures_reach_the_ordinary_driver() {
     for name in ["control_01.ash", "case_01.ash"] {
         let program = compile_path(declaration_fixture(name))

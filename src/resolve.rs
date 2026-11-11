@@ -3541,6 +3541,96 @@ impl Resolver<'_, '_> {
         Ok(identities)
     }
 
+    fn push_prepared_type_scope(
+        &mut self,
+        groups: &[(&[ResolvedTypeVariable], Option<&[SurfaceTypeParameter]>)],
+        span: Span,
+        duplicate_error: Option<(&'static str, Option<&'static str>)>,
+    ) -> Result<(), ResolveError> {
+        let exhausted = || {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "prepared type-scope retention exceeded its type-work budget",
+            )
+        };
+        self.type_work.charge(groups.len()).map_err(|()| exhausted())?;
+        let mut entries = 0usize;
+        for (parameters, source) in groups {
+            if source.is_some_and(|source| source.len() != parameters.len()) {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "the resolver retained mismatched type-parameter preparation records",
+                ));
+            }
+            entries = entries.checked_add(parameters.len()).ok_or_else(exhausted)?;
+        }
+        self.type_work.charge(entries).map_err(|()| exhausted())?;
+        let mut ordinary_count = 0usize;
+        let mut contextual_count = 0usize;
+        let mut work = 2usize;
+        for (parameters, source) in groups {
+            for (index, parameter) in parameters.iter().enumerate() {
+                let introduction = source.map_or(0, |source| source[index].name.introduction);
+                let count = if introduction == 0 {
+                    &mut ordinary_count
+                } else {
+                    &mut contextual_count
+                };
+                *count = count.checked_add(1).ok_or_else(exhausted)?;
+                work = parameter
+                    .spelling
+                    .len()
+                    .checked_mul(3)
+                    .and_then(|bytes| bytes.checked_add(1))
+                    .and_then(|entry_work| work.checked_add(entry_work))
+                    .ok_or_else(exhausted)?;
+            }
+        }
+        self.type_work.charge(work).map_err(|()| exhausted())?;
+        let mut ordinary = HashMap::new();
+        ordinary.try_reserve(ordinary_count).map_err(|_| exhausted())?;
+        let mut contextual = HashMap::new();
+        contextual
+            .try_reserve(contextual_count)
+            .map_err(|_| exhausted())?;
+        self.type_scopes.try_reserve(1).map_err(|_| exhausted())?;
+        self.syntax_type_scopes
+            .try_reserve(1)
+            .map_err(|_| exhausted())?;
+        for (parameters, source) in groups {
+            for (index, parameter) in parameters.iter().enumerate() {
+                let introduction = source.map_or(0, |source| source[index].name.introduction);
+                let spelling = try_clone_resolution_string(
+                    &parameter.spelling,
+                    span,
+                    "prepared type-scope spelling could not be retained",
+                )?;
+                let displaced = if introduction == 0 {
+                    ordinary.insert(spelling, parameter.id)
+                } else {
+                    contextual.insert((spelling, introduction), parameter.id)
+                };
+                if displaced.is_some()
+                    && let Some((message, part)) = duplicate_error
+                {
+                    let failure = error(ResolveReason::InternalState, span, message);
+                    return Err(match part {
+                        Some(part) => failure.with_context(ResolveContext::WorkState {
+                            part,
+                            problem: "duplicate",
+                        }),
+                        None => failure,
+                    });
+                }
+            }
+        }
+        self.type_scopes.push(ordinary);
+        self.syntax_type_scopes.push(contextual);
+        Ok(())
+    }
+
     fn allocate_effect_type_parameters(
         &mut self,
         declaration: &EffectSource<'_>,
@@ -3654,52 +3744,12 @@ impl Resolver<'_, '_> {
                 )?);
             }
             let checkpoint = self.type_scopes.len();
-            let mut scope = HashMap::new();
-            scope.try_reserve(parameters.0.len()).map_err(|_| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    declaration.span(),
-                    "effect type-scope storage could not be reserved",
-                )
-            })?;
-            for parameter in &parameters.0 {
-                self.type_work
-                    .charge(parameter.spelling.len())
-                    .map_err(|()| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            declaration.span(),
-                            "effect type-scope spelling exceeded its type-work budget",
-                        )
-                    })?;
-                let spelling = try_clone_resolution_string(
-                    &parameter.spelling,
-                    declaration.span(),
-                    "effect type-scope spelling could not be retained",
-                )?;
-                if scope.insert(spelling, parameter.id).is_some() {
-                    return Err(error(
-                        ResolveReason::InternalState,
-                        declaration.span(),
-                        "an effect type scope repeats a prepared binder",
-                    ));
-                }
-            }
-            self.type_work.charge(1).map_err(|()| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    declaration.span(),
-                    "effect type-scope stack exceeded its type-work budget",
-                )
-            })?;
-            self.type_scopes.try_reserve(1).map_err(|_| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    declaration.span(),
-                    "effect type-scope stack could not be reserved",
-                )
-            })?;
-            self.type_scopes.push(scope);
+            let syntax_checkpoint = self.syntax_type_scopes.len();
+            self.push_prepared_type_scope(
+                &[(&parameters.0, Some(declaration.parameters()))],
+                declaration.span(),
+                Some(("an effect type scope repeats a prepared binder", None)),
+            )?;
             let operations = (|| {
                 self.type_work
                     .charge(declaration.operation_count())
@@ -3780,6 +3830,7 @@ impl Resolver<'_, '_> {
                 Ok::<_, ResolveError>(resolved)
             })();
             self.type_scopes.truncate(checkpoint);
+            self.syntax_type_scopes.truncate(syntax_checkpoint);
             let operations = operations?;
             self.type_work
                 .charge(declaration.name().text.len())
@@ -3961,60 +4012,22 @@ impl Resolver<'_, '_> {
                 .zip(identity.methods)
                 .zip(pending.methods)
             {
-                let scope_width = pending
-                    .parameters
-                    .len()
-                    .checked_add(type_parameters.len())
-                    .ok_or_else(|| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            method.span,
-                            "interface method type scope size is not representable",
-                        )
-                    })?;
-                self.type_work.charge(scope_width).map_err(|()| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        method.span,
-                        "interface method type-scope retention exceeded its type-work budget",
-                    )
-                })?;
-                let mut scope = HashMap::new();
-                scope.try_reserve(scope_width).map_err(|_| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        method.span,
-                        "interface method type-scope storage could not be reserved",
-                    )
-                })?;
-                for parameter in pending.parameters.iter().chain(&type_parameters) {
-                    let spelling = try_clone_resolution_string(
-                        &parameter.spelling,
-                        method.span,
-                        "interface method type-scope spelling could not be retained",
-                    )?;
-                    if scope.insert(spelling, parameter.id).is_some() {
-                        return Err(error(
-                            ResolveReason::InternalState,
-                            method.span,
-                            "an interface method type scope repeats a prepared binder",
-                        )
-                        .with_context(ResolveContext::WorkState {
-                            part: "prepared-method-binder",
-                            problem: "duplicate",
-                        }));
-                    }
-                }
-                self.type_scopes.try_reserve(1).map_err(|_| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        method.span,
-                        "interface method type-scope stack could not be reserved",
-                    )
-                })?;
-                self.type_scopes.push(scope);
+                let checkpoint = self.type_scopes.len();
+                let syntax_checkpoint = self.syntax_type_scopes.len();
+                self.push_prepared_type_scope(
+                    &[
+                        (&pending.parameters, Some(&declaration.parameters)),
+                        (&type_parameters, method.type_parameters.as_deref()),
+                    ],
+                    method.span,
+                    Some((
+                        "an interface method type scope repeats a prepared binder",
+                        Some("prepared-method-binder"),
+                    )),
+                )?;
                 let annotation = self.resolve_type(&method.annotation);
-                let _ = self.type_scopes.pop();
+                self.type_scopes.truncate(checkpoint);
+                self.syntax_type_scopes.truncate(syntax_checkpoint);
                 let annotation = ResolvedTypeOccurrenceOwner::new(annotation?);
                 let type_parameters = if type_parameters.is_empty() {
                     crate::resolved::SharedOwnerParameters::default()
@@ -9625,13 +9638,20 @@ impl Resolver<'_, '_> {
         {
             let type_parameters = ImportedTypeVariableBuffer(type_parameters);
             let type_scope_checkpoint = self.type_scopes.len();
-            self.type_scopes.push(
-                type_parameters
-                    .0
-                    .iter()
-                    .map(|parameter| (parameter.spelling.clone(), parameter.id))
-                    .collect(),
-            );
+            let syntax_type_scope_checkpoint = self.syntax_type_scopes.len();
+            let explicit = match &definition.kind {
+                SurfaceDefinitionKind::Equational(equational) => {
+                    equational.interface.type_parameters.as_deref()
+                }
+                SurfaceDefinitionKind::InlineOperational(operational) => {
+                    operational.header.type_parameters.as_deref()
+                }
+            };
+            self.push_prepared_type_scope(
+                &[(&type_parameters.0, explicit)],
+                definition.span,
+                None,
+            )?;
             let kind = (|| -> Result<ResolvedDefinitionKind, ResolveError> {
                 let kind = match &definition.kind {
                     SurfaceDefinitionKind::Equational(equational) => {
@@ -9853,6 +9873,7 @@ impl Resolver<'_, '_> {
                 Ok(kind)
             })();
             self.type_scopes.truncate(type_scope_checkpoint);
+            self.syntax_type_scopes.truncate(syntax_type_scope_checkpoint);
             let kind = kind?;
             definitions.0.push(ResolvedDefinition {
                 kind,
@@ -9944,14 +9965,18 @@ impl Resolver<'_, '_> {
             ResolvedImplementationBuffer(Vec::with_capacity(declarations.len()));
         for (implementation, pending) in declarations.iter().zip(pending) {
             let type_scope_checkpoint = self.type_scopes.len();
-            self.type_scopes.push(
-                pending
-                    .head_parameters
-                    .iter()
-                    .chain(&pending.prerequisite_only_parameters)
-                    .map(|parameter| (parameter.spelling.clone(), parameter.id))
-                    .collect(),
-            );
+            let syntax_type_scope_checkpoint = self.syntax_type_scopes.len();
+            self.push_prepared_type_scope(
+                &[
+                    (
+                        &pending.head_parameters,
+                        implementation.type_parameters.as_deref(),
+                    ),
+                    (&pending.prerequisite_only_parameters, None),
+                ],
+                implementation.span,
+                None,
+            )?;
 
             let result = (|| -> Result<ResolvedImplementation, ResolveError> {
                 let head = self.resolve_interface_application(&implementation.head)?;
@@ -10095,6 +10120,7 @@ impl Resolver<'_, '_> {
             })();
 
             self.type_scopes.truncate(type_scope_checkpoint);
+            self.syntax_type_scopes.truncate(syntax_type_scope_checkpoint);
             implementations.0.push(result?);
         }
         Ok(implementations.into_vec())
@@ -10537,12 +10563,16 @@ impl Resolver<'_, '_> {
                         "constructor payload-provenance retention could not reserve storage",
                     )
                 })?;
-            self.type_scopes.push(
-                parameters
-                    .iter()
-                    .map(|parameter| (parameter.spelling.clone(), parameter.id))
-                    .collect(),
-            );
+            let type_scope_checkpoint = self.type_scopes.len();
+            let syntax_type_scope_checkpoint = self.syntax_type_scopes.len();
+            if let Err(error) = self.push_prepared_type_scope(
+                &[(parameters, Some(&declaration.parameters))],
+                declaration.span,
+                None,
+            ) {
+                discard_nominals(&mut nominals);
+                return Err(error);
+            }
             let result = (|| -> Result<(), ResolveError> {
                 for (constructor, id) in declaration.constructors.iter().zip(&identity.constructors)
                 {
@@ -10684,7 +10714,8 @@ impl Resolver<'_, '_> {
                 }
                 Ok(())
             })();
-            let _ = self.type_scopes.pop();
+            self.type_scopes.truncate(type_scope_checkpoint);
+            self.syntax_type_scopes.truncate(syntax_type_scope_checkpoint);
             if let Err(error) = result {
                 discard_nominals(&mut nominals);
                 return Err(error);
