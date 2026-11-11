@@ -264,3 +264,164 @@ fn unused_nonempty_declaration_capture_definition_is_admitted() {
         .expect("a valid unused template is admitted");
     assert_eq!(execute(&program).unwrap().value_display(), "42");
 }
+
+#[test]
+fn unused_template_reports_the_unknown_splice_in_human_and_json() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_file_diagnostics, write_human, write_json},
+    };
+
+    let fixture = Fixture::new();
+    let forms = "pub syntax declaration: (bad) $name:ident => {\n    pub $missing : Unit -> Int\n    $missing () = 42\n}\n";
+    fs::write(fixture.0.join("forms.ash"), forms).unwrap();
+    fs::write(
+        fixture.0.join("main.ash"),
+        "import forms (syntax bad)\n\nmain : Unit -> Int\nmain () = 42\n",
+    )
+    .unwrap();
+    let failure = compile_path(RunConfiguration {
+        entry: fixture.0.join("main.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("the unused definition contains an unknown splice");
+    assert_eq!(failure.reason_code(), "parse.unknown-template-capture");
+    let diagnostics = compile_file_diagnostics(&failure).unwrap();
+    let mut human = Vec::new();
+    write_human(
+        &mut human,
+        &diagnostics[0],
+        &Catalogue::new(Locale::English).unwrap(),
+    )
+    .unwrap();
+    let human = String::from_utf8(human).unwrap();
+    assert!(
+        human.contains("$missing") && human.contains("forms.ash"),
+        "{human}"
+    );
+    let mut output = Vec::new();
+    write_json(&mut output, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["responsibility"], "source", "{json}");
+    assert!(
+        json["facts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|fact| { fact["name"] == "capture" && fact["value"] == "$missing" }),
+        "{json}"
+    );
+    let primary = &json["labels"][0];
+    assert_eq!(
+        primary["relationship"], "unknown_template_capture",
+        "{json}"
+    );
+    assert!(
+        primary["path"].as_str().unwrap().ends_with("forms.ash"),
+        "{json}"
+    );
+    let start = primary["byte_start"].as_u64().unwrap() as usize;
+    let end = primary["byte_end"].as_u64().unwrap() as usize;
+    assert_eq!(&forms[start..end], "missing", "{json}");
+}
+
+#[test]
+fn unknown_splice_inside_template_repetition_keeps_its_cause() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.0.join("forms.ash"),
+        "pub syntax declaration: (bad) $( $name:ident ),+ => {\n    $(\n        pub $missing : Unit -> Int\n        $missing () = 42\n    )+\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        fixture.0.join("main.ash"),
+        "import forms (syntax bad)\n\nmain : Unit -> Int\nmain () = 42\n",
+    )
+    .unwrap();
+    let failure = compile_path(RunConfiguration {
+        entry: fixture.0.join("main.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("the repetition contains an unknown splice");
+    assert_eq!(failure.reason_code(), "parse.unknown-template-capture");
+}
+
+#[test]
+fn expression_template_and_fixed_outer_quote_report_unknown_splices() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.0.join("forms.ash"),
+        "pub syntax bad $value:expr => { $missing }\n",
+    )
+    .unwrap();
+    fs::write(
+        fixture.0.join("main.ash"),
+        "import forms (syntax bad)\n\nmain : Unit -> Int\nmain () = 42\n",
+    )
+    .unwrap();
+    let failure = compile_path(RunConfiguration {
+        entry: fixture.0.join("main.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("the unused expression template contains an unknown splice");
+    assert_eq!(failure.reason_code(), "parse.unknown-template-capture");
+
+    let failure = compile_path(RunConfiguration {
+        entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/design/macros/fixtures/escapes/unbound_outer.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("the fixed outer quote contains an unknown outer splice");
+    assert_eq!(failure.reason_code(), "parse.unknown-template-capture");
+}
+
+#[test]
+fn imported_literal_globals_preserve_expansion_origin() {
+    let fixture = Fixture::new();
+    for body in [
+        "main : Unit -> Int\n    main () = 42",
+        "fn main(unit: Unit) -> Int {\n        42\n    }",
+    ] {
+        fs::write(
+            fixture.0.join("forms.ash"),
+            format!("pub syntax declaration: (sink) $item:declaration => {{\n    {body}\n}}\n"),
+        )
+        .unwrap();
+        fs::write(
+            fixture.0.join("main.ash"),
+            "import forms (syntax sink)\nsink {\ndiscarded : Unit -> Int\ndiscarded () = true\n}\n",
+        )
+        .unwrap();
+        let program = compile_path(RunConfiguration {
+            entry: fixture.0.join("main.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the introduced global reaches independent Core validation");
+        assert_eq!(execute(&program).unwrap().value_display(), "42");
+    }
+}
+
+#[test]
+fn literal_template_output_is_checked_while_discarded_input_is_not() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.0.join("main.ash"),
+        "import forms (syntax sink)\nsink {\ndiscarded : Unit -> Int\ndiscarded () = unknown(())\n}\n",
+    )
+    .unwrap();
+    let forms = |expression: &str| {
+        format!(
+            "pub syntax declaration: (sink) $item:declaration => {{\n    main : Unit -> Int\n    main () = {expression}\n}}\n"
+        )
+    };
+    fs::write(fixture.0.join("forms.ash"), forms("43")).unwrap();
+    let configuration = || RunConfiguration {
+        entry: fixture.0.join("main.ash"),
+        roots: ModuleRoots::empty(),
+    };
+    let program = compile_path(configuration()).expect("discarded input is not resolved");
+    assert_eq!(execute(&program).unwrap().value_display(), "43");
+    fs::write(fixture.0.join("forms.ash"), forms("true")).unwrap();
+    let failure = compile_path(configuration()).expect_err("generated output is checked");
+    assert!(failure.reason_code().starts_with("type."), "{failure:?}");
+}

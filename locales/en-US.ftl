@@ -53,6 +53,7 @@ parse-recursive-member = A recursive binding member is required here.
 parse-unexpected-and = `and` is allowed only within a recursive binding group.
 parse-semicolon = Ash does not support semicolons.
 parse-unexpected-token = This token is not allowed at this grammar position.
+parse-unknown-template-capture = Template capture `{ $capture }` is not declared in this matcher.
 parse-repetition-missing-driver = This template repetition has no repeated capture to drive it.
 parse-repetition-length-mismatch = Captures driving this repetition have different lengths.
 parse-repetition-empty = This one-or-more template repetition has no captured values.

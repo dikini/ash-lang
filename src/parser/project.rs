@@ -2597,6 +2597,38 @@ impl From<super::MacroParseFailure> for DeclarationExpansionFailure {
     }
 }
 
+fn staged_template_failure(
+    error: super::MacroParseFailure,
+    staging_frames: &[std::sync::Arc<crate::syntax::ExpansionFrame>],
+    frame: &std::sync::Arc<crate::syntax::ExpansionFrame>,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<DeclarationExpansionFailure, ResourceFailure> {
+    match error {
+        super::MacroParseFailure::Syntax {
+            mut diagnostics,
+            resource,
+        } => {
+            for diagnostic in &mut diagnostics {
+                let existing = diagnostic
+                    .primary
+                    .diagnostic_location()
+                    .map_or(0, |location| location.frames.len());
+                charge_frame_additions(staging_frames.len().saturating_add(1), existing, budget)?;
+                diagnostic.diagnostic.primary.inherit_frames(staging_frames);
+                diagnostic
+                    .diagnostic
+                    .primary
+                    .inherit_frames(std::slice::from_ref(frame));
+            }
+            Ok(DeclarationExpansionFailure::Syntax {
+                diagnostics,
+                resource,
+            })
+        }
+        error => Ok(error.into()),
+    }
+}
+
 enum DeclarationTree<'a> {
     Source(&'a ConcreteTree),
     Output(Box<super::ParsedMacroTree>),
@@ -2922,35 +2954,14 @@ pub(crate) fn project_declaration_expansions_with_quotes(
                     budget,
                 ) {
                     Ok(output) => output,
-                    Err(super::MacroParseFailure::Syntax {
-                        mut diagnostics,
-                        resource,
-                    }) => {
-                        for diagnostic in &mut diagnostics {
-                            let existing = diagnostic
-                                .primary
-                                .diagnostic_location()
-                                .map_or(0, |location| location.frames.len());
-                            charge_frame_additions(
-                                staging_frames.len().saturating_add(1),
-                                existing,
-                                budget,
-                            )?;
-                            diagnostic
-                                .diagnostic
-                                .primary
-                                .inherit_frames(&staging_frames);
-                            diagnostic
-                                .diagnostic
-                                .primary
-                                .inherit_frames(std::slice::from_ref(&frame));
-                        }
-                        return Err(DeclarationExpansionFailure::Syntax {
-                            diagnostics,
-                            resource,
-                        });
+                    Err(error) => {
+                        return Err(staged_template_failure(
+                            error,
+                            &staging_frames,
+                            &frame,
+                            budget,
+                        )?);
                     }
-                    Err(error) => return Err(error.into()),
                 };
                 let escaped = materialize_template_escapes(
                     &mut output,
@@ -2967,14 +2978,21 @@ pub(crate) fn project_declaration_expansions_with_quotes(
                     budget,
                     0,
                 )?;
-                crate::syntax::substitute_contents(
+                if let Err(error) = crate::syntax::substitute_contents(
                     &mut output,
                     &invocation.selection.declaration.matcher,
                     &invocation.captures,
                     introduction,
                     anchor,
-                )
-                .map_err(|_| ProjectionError::MalformedTree(InternalReason::UnexpectedShape))?;
+                    Some(&mut *budget),
+                ) {
+                    return Err(staged_template_failure(
+                        error.into_macro_failure(),
+                        &staging_frames,
+                        &frame,
+                        budget,
+                    )?);
+                }
                 crate::syntax::normalize_declaration_line_ends(&mut output, budget)?;
                 if escaped {
                     (actual_pattern, actual_expression) =
@@ -21413,6 +21431,7 @@ mod tests {
                 captures,
                 0,
                 invocation,
+                None,
             )
             .unwrap();
             let parsed = super::super::parse_macro_tree(
@@ -21455,6 +21474,7 @@ mod tests {
             &matched.captures,
             0,
             invocation,
+            None,
         )
         .unwrap();
         let module = super::super::parse_macro_declarations(
@@ -21812,6 +21832,7 @@ mod tests {
                 &captures,
                 0,
                 outer.span,
+                None,
             )
             .unwrap();
             let mut parse_budget = SyntaxBudget::default();

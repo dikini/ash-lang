@@ -54,6 +54,7 @@ parse-recursive-member = Тук се очаква член на групата �
 parse-unexpected-and = `and` е допустимо само в група от рекурсивни свързвания.
 parse-semicolon = Ash не поддържа точки и запетаи.
 parse-unexpected-token = Тази лексикална единица не е допустима на това място в граматиката.
+parse-unknown-template-capture = Захватът на шаблона `{ $capture }` не е деклариран в този съпоставител.
 parse-repetition-missing-driver = Това повторение в шаблона няма повтарящ се захват, който да го управлява.
 parse-repetition-length-mismatch = Захватите, които управляват повторението, имат различна дължина.
 parse-repetition-empty = Това повторение в шаблона изисква поне една стойност на захвата.

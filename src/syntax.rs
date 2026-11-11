@@ -2484,13 +2484,30 @@ impl<'a> SyntaxExpansion<'a> {
                     .as_ref()
                     .ok_or(invocation)?
                     .to_vec();
-                substitute_contents(
+                if let Err(failure) = substitute_contents(
                     &mut contents,
                     &selection.declaration.matcher,
                     captures,
                     introduction,
                     anchor,
-                )?;
+                    None,
+                ) {
+                    let span = failure.span();
+                    if let crate::parser::MacroParseFailure::Syntax {
+                        diagnostics,
+                        resource,
+                    } = failure.into_macro_failure()
+                    {
+                        self.parse_failure = Some(crate::driver::SyntaxParseFailure {
+                            diagnostics,
+                            resource,
+                            invocation: anchor,
+                            definition: selection.declaration.span,
+                            teardown: None,
+                        });
+                    }
+                    return Err(span);
+                }
                 let contexts = SyntaxContexts::new(self.selected, self.owner_imports, &owners);
                 let expression = match crate::parser::parse_macro_expression(
                     self.source,
@@ -2738,8 +2755,9 @@ impl<'a> SyntaxExpansion<'a> {
                 captures,
                 introduction,
                 anchor,
+                Some(&mut *budget),
             )
-            .map_err(|_| MacroParseFailure::Invalid)?;
+            .map_err(TemplateSubstitutionFailure::into_macro_failure)?;
             let contexts = SyntaxContexts::new_budgeted_expression(
                 self.selected,
                 self.owner_imports,
@@ -3339,8 +3357,9 @@ fn validate_template_syntax_inner(
         &captures,
         0,
         declaration.span,
+        admission_budget.as_deref_mut(),
     )
-    .map_err(|_| crate::parser::MacroParseFailure::Invalid)?;
+    .map_err(TemplateSubstitutionFailure::into_macro_failure)?;
     match declaration.category {
         crate::surface::SurfaceSyntaxCategory::Expression => {
             crate::parser::parse_template_admission(
@@ -3380,12 +3399,50 @@ fn validate_template_syntax_inner(
     Ok(())
 }
 
-fn capture_by_name_at<'a>(
+#[derive(Clone, Copy, Debug)]
+enum CaptureLookupFailure<'a> {
+    Unknown(&'a SurfaceName),
+    Invalid(Span),
+}
+
+fn unknown_capture_failure(
     name: &SurfaceName,
+    budget: Option<&mut SyntaxBudget>,
+) -> crate::parser::MacroParseFailure {
+    use crate::parser::{MacroParseFailure, UNKNOWN_TEMPLATE_CAPTURE_LABEL};
+
+    if let Some(budget) = budget {
+        let mut charge = || {
+            // The diagnostic owns its label, capture spelling, vector and location.
+            budget.charge_units(
+                name.text
+                    .len()
+                    .saturating_add(1)
+                    .saturating_mul(2)
+                    .saturating_add(UNKNOWN_TEMPLATE_CAPTURE_LABEL.len())
+                    .saturating_add(3),
+            )?;
+            if let Some(location) = name.diagnostic.as_deref() {
+                charge_diagnostic_location_copy(location, budget)?;
+            }
+            Ok(())
+        };
+        if let Err(resource) = charge() {
+            return MacroParseFailure::Syntax {
+                diagnostics: Vec::new(),
+                resource: Some(resource),
+            };
+        }
+    }
+    crate::parser::unknown_template_capture(name)
+}
+
+fn capture_by_name_at<'a, 'name>(
+    name: &'name SurfaceName,
     matcher: &[SurfaceSyntaxMatcherPart],
     captures: &'a [SurfaceSyntaxCapture],
     indices: &[usize],
-) -> Result<&'a SurfaceSyntaxCapture, Span> {
+) -> Result<&'a SurfaceSyntaxCapture, CaptureLookupFailure<'name>> {
     fn find(
         parts: &[SurfaceSyntaxMatcherPart],
         name: &SurfaceName,
@@ -3416,19 +3473,26 @@ fn capture_by_name_at<'a>(
         None
     }
 
-    let (index, repetitions) = find(matcher, name, &mut 0, 0).ok_or(name.span)?;
-    let mut capture = captures.get(index).ok_or(name.span)?;
+    let (index, repetitions) =
+        find(matcher, name, &mut 0, 0).ok_or(CaptureLookupFailure::Unknown(name))?;
+    let mut capture = captures
+        .get(index)
+        .ok_or(CaptureLookupFailure::Invalid(name.span))?;
     for index in indices.iter().take(repetitions) {
         let SurfaceSyntaxCapture::Repeated(values) = capture else {
-            return Err(name.span);
+            return Err(CaptureLookupFailure::Invalid(name.span));
         };
-        capture = values.values.get(*index).ok_or(name.span)?;
+        capture = values
+            .values
+            .get(*index)
+            .ok_or(CaptureLookupFailure::Invalid(name.span))?;
     }
     Ok(capture)
 }
 
 #[derive(Clone, Copy)]
-enum RepetitionFailure {
+enum RepetitionFailure<'a> {
+    Unknown(&'a SurfaceName),
     Missing(Span),
     Mismatch(Span),
     Empty(Span),
@@ -3436,9 +3500,10 @@ enum RepetitionFailure {
     Resource(ResourceFailure, Span),
 }
 
-impl RepetitionFailure {
+impl RepetitionFailure<'_> {
     fn span(self) -> Span {
         match self {
+            Self::Unknown(name) => name.span,
             Self::Missing(span)
             | Self::Mismatch(span)
             | Self::Empty(span)
@@ -3447,9 +3512,14 @@ impl RepetitionFailure {
         }
     }
 
-    fn diagnostic(self, invocation: Option<Span>) -> crate::parser::MacroParseFailure {
+    fn diagnostic(
+        self,
+        invocation: Option<Span>,
+        budget: Option<&mut SyntaxBudget>,
+    ) -> crate::parser::MacroParseFailure {
         use crate::parser::{MacroParseFailure, ParseReason, repetition_failure};
         match self {
+            Self::Unknown(name) => unknown_capture_failure(name, budget),
             Self::Missing(span) => repetition_failure(ParseReason::RepetitionMissingDriver, span),
             Self::Mismatch(span) => repetition_failure(
                 ParseReason::RepetitionLengthMismatch,
@@ -3491,14 +3561,14 @@ fn charge_matcher_lookup(
 }
 
 /// Inspect all splice uses, including those nested in another repetition.
-fn repetition_length(
-    repeat: &TemplateRepeat,
+fn repetition_length<'a>(
+    repeat: &'a TemplateRepeat,
     matcher: &[SurfaceSyntaxMatcherPart],
     captures: &[SurfaceSyntaxCapture],
     indices: &[usize],
     prefix: usize,
     mut budget: Option<&mut SyntaxBudget>,
-) -> Result<usize, RepetitionFailure> {
+) -> Result<usize, RepetitionFailure<'a>> {
     let span = repeat.origin.primary();
     if let Some(budget) = budget.as_deref_mut() {
         budget
@@ -3530,8 +3600,12 @@ fn repetition_length(
                         .map_err(|error| RepetitionFailure::Resource(error, span))?;
                 }
                 if let SurfaceSyntaxCapture::Repeated(values) =
-                    capture_by_name_at(name, matcher, captures, indices)
-                        .map_err(RepetitionFailure::Invalid)?
+                    capture_by_name_at(name, matcher, captures, indices).map_err(|failure| {
+                        match failure {
+                            CaptureLookupFailure::Unknown(name) => RepetitionFailure::Unknown(name),
+                            CaptureLookupFailure::Invalid(span) => RepetitionFailure::Invalid(span),
+                        }
+                    })?
                 {
                     if length.is_some_and(|length| length != values.values.len()) {
                         return Err(RepetitionFailure::Mismatch(span));
@@ -3737,7 +3811,13 @@ fn charge_template_inner(
                             charge_type_origin_copy(origin, depth, budget).map_err(resource)?;
                         }
                     }
-                    _ => return Err(MacroParseFailure::Invalid),
+                    Err(CaptureLookupFailure::Unknown(name)) => {
+                        return Err(unknown_capture_failure(name, Some(budget)));
+                    }
+                    Ok(SurfaceSyntaxCapture::Repeated(_))
+                    | Err(CaptureLookupFailure::Invalid(_)) => {
+                        return Err(MacroParseFailure::Invalid);
+                    }
                 }
             }
             MacroOutputNode::TemplateEscape(name) => {
@@ -3747,15 +3827,17 @@ fn charge_template_inner(
                 budget.charge().map_err(resource)?; // retained repeat Arc
                 repeat_visits = repeat_visits.saturating_add(1);
                 let child_depth = type_depth(depth, 1).map_err(resource)?;
-                let count = repetition_length(
+                let count = match repetition_length(
                     repeat,
                     matcher,
                     captures,
                     &indices,
                     child_depth,
-                    Some(budget),
-                )
-                .map_err(|failure| failure.diagnostic(invocation))?;
+                    Some(&mut *budget),
+                ) {
+                    Ok(count) => count,
+                    Err(failure) => return Err(failure.diagnostic(invocation, Some(budget))),
+                };
                 if repeat.separator.is_some() {
                     expanded_nodes = expanded_nodes.saturating_add(count.saturating_sub(1));
                 }
@@ -3844,8 +3926,9 @@ pub(crate) fn instantiate_declaration_template(
         captures,
         introduction,
         invocation,
+        Some(budget),
     )
-    .map_err(|_| crate::parser::MacroParseFailure::Invalid)?;
+    .map_err(TemplateSubstitutionFailure::into_macro_failure)?;
     Ok(output)
 }
 
@@ -3894,13 +3977,35 @@ pub(crate) fn admit_transformer_output(
     Ok(expression)
 }
 
+#[derive(Debug)]
+pub(crate) enum TemplateSubstitutionFailure {
+    Invalid(Span),
+    Syntax(Span, crate::parser::MacroParseFailure),
+}
+
+impl TemplateSubstitutionFailure {
+    fn span(&self) -> Span {
+        match self {
+            Self::Invalid(span) | Self::Syntax(span, _) => *span,
+        }
+    }
+
+    pub(crate) fn into_macro_failure(self) -> crate::parser::MacroParseFailure {
+        match self {
+            Self::Invalid(_) => crate::parser::MacroParseFailure::Invalid,
+            Self::Syntax(_, failure) => failure,
+        }
+    }
+}
+
 pub(crate) fn substitute_contents(
     contents: &mut Vec<MacroOutputNode>,
     matcher: &[SurfaceSyntaxMatcherPart],
     captures: &[SurfaceSyntaxCapture],
     introduction: usize,
     invocation: Span,
-) -> Result<(), Span> {
+    mut budget: Option<&mut SyntaxBudget>,
+) -> Result<(), TemplateSubstitutionFailure> {
     substitute_contents_at(
         contents,
         matcher,
@@ -3908,6 +4013,7 @@ pub(crate) fn substitute_contents(
         introduction,
         invocation,
         &mut Vec::new(),
+        &mut budget,
     )
 }
 
@@ -3939,13 +4045,25 @@ fn substitute_contents_at(
     introduction: usize,
     invocation: Span,
     indices: &mut Vec<usize>,
-) -> Result<(), Span> {
+    budget: &mut Option<&mut SyntaxBudget>,
+) -> Result<(), TemplateSubstitutionFailure> {
     let mut position = 0;
     while position < contents.len() {
         if let MacroOutputNode::TemplateRepeat(repeat) = &contents[position] {
             let repeat = Arc::clone(repeat);
-            let count = repetition_length(&repeat, matcher, captures, indices, indices.len(), None)
-                .map_err(RepetitionFailure::span)?;
+            let count =
+                match repetition_length(&repeat, matcher, captures, indices, indices.len(), None) {
+                    Ok(count) => count,
+                    Err(RepetitionFailure::Unknown(name)) => {
+                        return Err(TemplateSubstitutionFailure::Syntax(
+                            name.span,
+                            unknown_capture_failure(name, budget.as_deref_mut()),
+                        ));
+                    }
+                    Err(failure) => {
+                        return Err(TemplateSubstitutionFailure::Invalid(failure.span()));
+                    }
+                };
             let mut pieces = Vec::with_capacity(count);
             let mut output_len = if repeat.separator.is_some() {
                 count.saturating_sub(1)
@@ -3965,6 +4083,7 @@ fn substitute_contents_at(
                     introduction,
                     invocation,
                     indices,
+                    budget,
                 )?;
                 indices.pop();
                 output_len = output_len.saturating_add(body.len());
@@ -3994,7 +4113,19 @@ fn substitute_contents_at(
         let node = &mut contents[position];
         match node {
             MacroOutputNode::Splice(name) => {
-                *node = match capture_by_name_at(name, matcher, captures, indices)? {
+                let capture = match capture_by_name_at(name, matcher, captures, indices) {
+                    Ok(capture) => capture,
+                    Err(CaptureLookupFailure::Unknown(name)) => {
+                        return Err(TemplateSubstitutionFailure::Syntax(
+                            name.span,
+                            unknown_capture_failure(name, budget.as_deref_mut()),
+                        ));
+                    }
+                    Err(CaptureLookupFailure::Invalid(span)) => {
+                        return Err(TemplateSubstitutionFailure::Invalid(span));
+                    }
+                };
+                *node = match capture {
                     SurfaceSyntaxCapture::Expression(capture) => {
                         MacroOutputNode::ForwardedExpression(capture.clone(), invocation.into())
                     }
@@ -4024,7 +4155,7 @@ fn substitute_contents_at(
                         )
                     }
                     SurfaceSyntaxCapture::Repeated(_) => {
-                        return Err(name.span);
+                        return Err(TemplateSubstitutionFailure::Invalid(name.span));
                     }
                 };
             }
@@ -4043,10 +4174,17 @@ fn substitute_contents_at(
                     introduction,
                     invocation,
                     indices,
+                    budget,
                 )?;
             }
-            MacroOutputNode::TemplateEscape(name) => return Err(name.span),
-            MacroOutputNode::TemplateRepeat(repeat) => return Err(repeat.origin.primary()),
+            MacroOutputNode::TemplateEscape(name) => {
+                return Err(TemplateSubstitutionFailure::Invalid(name.span));
+            }
+            MacroOutputNode::TemplateRepeat(repeat) => {
+                return Err(TemplateSubstitutionFailure::Invalid(
+                    repeat.origin.primary(),
+                ));
+            }
             MacroOutputNode::Token(_, _, _)
             | MacroOutputNode::Expression(_, _)
             | MacroOutputNode::ForwardedExpression(_, _)
@@ -4085,6 +4223,124 @@ mod tests {
             SurfaceTypeCapture, SurfaceTypeKind,
         },
     };
+
+    #[test]
+    fn unknown_capture_is_distinct_from_malformed_capture_storage() {
+        use crate::surface::SurfaceMatcherContainer;
+
+        let source = SourceFile::new("capture.ash", "known missing").unwrap();
+        let known_span = source.span(ByteRange::new(0, 5).unwrap()).unwrap();
+        let missing_span = source.span(ByteRange::new(6, 13).unwrap()).unwrap();
+        let known = SurfaceName {
+            text: "known".into(),
+            span: known_span,
+            introduction: 0,
+            introduced_at: None,
+            written: true,
+            diagnostic: None,
+        };
+        let missing = SurfaceName {
+            text: "missing".into(),
+            span: missing_span,
+            ..known.clone()
+        };
+        let matcher = [SurfaceSyntaxMatcherPart::Capture {
+            name: known.clone(),
+            kind: SurfaceSyntaxCaptureKind::Identifier,
+        }];
+        assert!(matches!(
+            capture_by_name_at(&missing, &matcher, &[], &[]),
+            Err(CaptureLookupFailure::Unknown(_))
+        ));
+        assert!(matches!(
+            capture_by_name_at(&known, &matcher, &[], &[]),
+            Err(CaptureLookupFailure::Invalid(span)) if span == known_span
+        ));
+        let repeated_matcher = [SurfaceSyntaxMatcherPart::Container(Arc::new(
+            SurfaceMatcherContainer {
+                kind: SurfaceMatcherContainerKind::Repeat {
+                    one_or_more: true,
+                    separator: None,
+                },
+                body: matcher.to_vec(),
+            },
+        ))];
+        let flat = [SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+            name: known.clone(),
+            origin: known_span.into(),
+        })];
+        assert!(matches!(
+            capture_by_name_at(&known, &repeated_matcher, &flat, &[0]),
+            Err(CaptureLookupFailure::Invalid(span)) if span == known_span
+        ));
+        let empty = [SurfaceSyntaxCapture::Repeated(Arc::new(
+            SurfaceRepeatedCapture { values: Vec::new() },
+        ))];
+        assert!(matches!(
+            capture_by_name_at(&known, &repeated_matcher, &empty, &[0]),
+            Err(CaptureLookupFailure::Invalid(span)) if span == known_span
+        ));
+        let mut invalid = vec![MacroOutputNode::Splice(known)];
+        assert!(matches!(
+            substitute_contents(&mut invalid, &matcher, &[], 0, known_span, None),
+            Err(TemplateSubstitutionFailure::Invalid(span)) if span == known_span
+        ));
+        let mut unknown = vec![MacroOutputNode::Splice(missing)];
+        assert!(matches!(
+            substitute_contents(&mut unknown, &matcher, &[], 0, known_span, None),
+            Err(TemplateSubstitutionFailure::Syntax(
+                _,
+                crate::parser::MacroParseFailure::Syntax { resource: None, .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn unknown_capture_diagnostic_prepays_its_name_and_retained_location() {
+        let source = SourceFile::new("capture.ash", "missing").unwrap();
+        let span = source.span(ByteRange::new(0, 7).unwrap()).unwrap();
+        let frame = Arc::new(ExpansionFrame {
+            invocation: span,
+            definition: span,
+        });
+        let mut location = DiagnosticLocation::new(span.into());
+        location.add_frame(&frame);
+        let name = SurfaceName {
+            text: "missing".into(),
+            span,
+            introduction: 0,
+            introduced_at: None,
+            written: true,
+            diagnostic: Some(Box::new(location)),
+        };
+        let mut measured = SyntaxBudget::default();
+        let failure = unknown_capture_failure(&name, Some(&mut measured));
+        let cost = measured.consumed();
+        let crate::parser::MacroParseFailure::Syntax {
+            diagnostics,
+            resource: None,
+        } = failure
+        else {
+            panic!("expected an unknown capture diagnostic");
+        };
+        assert_eq!(diagnostics[0].found.as_deref(), Some("$missing"));
+        assert_eq!(diagnostics[0].primary.span(), span);
+        let retained = diagnostics[0].primary.diagnostic_location().unwrap();
+        assert!(Arc::ptr_eq(&retained.frames[0], &frame));
+        assert!(matches!(
+            unknown_capture_failure(&name, Some(&mut SyntaxBudget::with_limit(cost - 1))),
+            crate::parser::MacroParseFailure::Syntax {
+                diagnostics,
+                resource: Some(ResourceFailure::SyntaxWork { .. }),
+            } if diagnostics.is_empty()
+        ));
+        let mut exact = SyntaxBudget::with_limit(cost);
+        assert!(matches!(
+            unknown_capture_failure(&name, Some(&mut exact)),
+            crate::parser::MacroParseFailure::Syntax { resource: None, .. }
+        ));
+        assert_eq!(exact.consumed(), cost);
+    }
 
     #[test]
     fn selected_type_expression_expansion_uses_one_retryable_loan() {
@@ -5134,6 +5390,7 @@ mod tests {
                 std::slice::from_ref(&capture),
                 0,
                 span,
+                None,
             )
             .unwrap();
             match (&capture, output.as_slice()) {
@@ -5691,6 +5948,7 @@ mod tests {
             &[SurfaceSyntaxCapture::Expression(capture)],
             0,
             outer.span,
+            None,
         )
         .unwrap();
         crate::parser::parse_declaration_template_admission(
@@ -5754,7 +6012,7 @@ mod tests {
         let mut exact = SyntaxBudget::with_limit(cost);
         charge_declaration_template(&output, &matcher, &captures, &mut exact).unwrap();
         assert_eq!(exact.consumed(), cost);
-        substitute_contents(&mut output, &matcher, &captures, 0, span).unwrap();
+        substitute_contents(&mut output, &matcher, &captures, 0, span, None).unwrap();
         let [MacroOutputNode::ForwardedDeclaration(forwarded, origin)] = output.as_slice() else {
             panic!("declaration splice must remain a typed packet");
         };

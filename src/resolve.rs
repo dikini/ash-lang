@@ -8840,7 +8840,7 @@ impl Resolver<'_, '_> {
         &mut self,
         definition: &SurfaceDefinition,
     ) -> Result<Binder, ResolveError> {
-        let (global_name, global_name_span) = match &definition.kind {
+        let global_name = match &definition.kind {
             SurfaceDefinitionKind::Equational(equational) => {
                 if equational.equations.is_empty() {
                     return Err(error(
@@ -8875,26 +8875,34 @@ impl Resolver<'_, '_> {
                         return Err(diagnostic.into());
                     }
                 }
-                (
-                    equational.interface.name.text.as_str(),
-                    equational.interface.name.span,
-                )
+                &equational.interface.name
             }
-            SurfaceDefinitionKind::InlineOperational(operational) => (
-                operational.header.name.text.as_str(),
-                operational.header.name.span,
-            ),
+            SurfaceDefinitionKind::InlineOperational(operational) => &operational.header.name,
         };
         let requirement_count = match &definition.kind {
             SurfaceDefinitionKind::Equational(global) => global.interface.requirements.len(),
             SurfaceDefinitionKind::InlineOperational(global) => global.header.requirements.len(),
         };
-        self.allocate_global_name(
-            global_name,
-            global_name_span,
+        let mut binder = self.allocate_global_name(
+            &global_name.text,
+            global_name.span,
             definition.span,
             requirement_count,
-        )
+        )?;
+        if global_name.introduction != 0 {
+            let invocation = global_name.introduced_at.ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    global_name.span,
+                    "introduced binder has no invocation origin",
+                )
+            })?;
+            binder.origin = Origin::Expansion {
+                invocation,
+                definition: global_name.span,
+            };
+        }
+        Ok(binder)
     }
 
     fn allocate_global_name(
