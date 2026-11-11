@@ -1683,6 +1683,15 @@ struct SyntaxOwnerLookup<'a> {
     graph: &'a [Arc<crate::resolved::CheckedModule>],
 }
 
+#[cfg(test)]
+type CheckedCaptureObserver =
+    for<'a> fn(&'a ExportedGlobal, SyntaxOwnerLookup<'a>, crate::source::Span);
+
+#[cfg(test)]
+std::thread_local! {
+    static CHECKED_CAPTURE_OBSERVER: std::cell::Cell<Option<CheckedCaptureObserver>> = const { std::cell::Cell::new(None) };
+}
+
 impl<'a> SyntaxOwnerLookup<'a> {
     fn effect(self, id: EffectId) -> Option<&'a ResolvedEffectDeclaration> {
         self.owner.effect(id).or_else(|| {
@@ -6566,6 +6575,14 @@ impl Resolver<'_, '_> {
         capture_graph_visits: &mut CaptureGraphVisits<'a>,
         owner: Option<SyntaxOwnerLookup<'_>>,
     ) -> Result<(), ResolveError> {
+        #[cfg(test)]
+        if let Some(owner) = owner {
+            CHECKED_CAPTURE_OBSERVER.with(|observer| {
+                if let Some(observe) = observer.get() {
+                    observe(exported, owner, span);
+                }
+            });
+        }
         let constrained = !exported.scheme.requirements.is_empty();
         if constrained {
             self.constraint_work.charge(1).map_err(|()| {
@@ -17921,6 +17938,182 @@ mod tests {
             ResolveReason::InternalState,
             "signature-only effects still require authenticated metadata"
         );
+    }
+
+    struct ObservedCheckedCapture {
+        publication: Arc<crate::resolved::CheckedGlobalScheme>,
+        owner: ModuleId,
+        graph: Vec<Arc<crate::resolved::CheckedModule>>,
+        span: Span,
+    }
+
+    std::thread_local! {
+        static OBSERVED_CHECKED_CAPTURE: std::cell::RefCell<Option<ObservedCheckedCapture>> = const { std::cell::RefCell::new(None) };
+    }
+
+    fn observe_checked_capture(
+        exported: &ExportedGlobal,
+        owner: SyntaxOwnerLookup<'_>,
+        span: Span,
+    ) {
+        let Some(publication) = &exported.publication else {
+            return;
+        };
+        if publication.spelling != "is_first" {
+            return;
+        }
+        OBSERVED_CHECKED_CAPTURE.with(|observed| {
+            *observed.borrow_mut() = Some(ObservedCheckedCapture {
+                publication: Arc::clone(publication),
+                owner: owner.owner.module(),
+                graph: owner.graph.to_vec(),
+                span,
+            });
+        });
+        CHECKED_CAPTURE_OBSERVER.with(|observer| observer.set(None));
+    }
+
+    #[test]
+    fn checked_helper_capture_retains_actual_hidden_nominal_with_shared_work() {
+        use crate::driver::{RunConfiguration, compile_path, execute};
+
+        OBSERVED_CHECKED_CAPTURE.with(|observed| *observed.borrow_mut() = None);
+        CHECKED_CAPTURE_OBSERVER.with(|observer| observer.set(Some(observe_checked_capture)));
+        let compiled = compile_path(RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/design/macros/fixtures/generators/main.ash"),
+            roots: crate::module::ModuleRoots::empty(),
+        })
+        .expect("the original checked generator graph compiles");
+        CHECKED_CAPTURE_OBSERVER.with(|observer| observer.set(None));
+        assert_eq!(execute(&compiled).unwrap().value_display(), "310");
+        let observed = OBSERVED_CHECKED_CAPTURE.with(|slot| {
+            slot.borrow_mut()
+                .take()
+                .expect("the actual checked private helper was reached")
+        });
+        let owner = observed
+            .graph
+            .iter()
+            .find(|checked| checked.module() == observed.owner)
+            .expect("the selected owner is retained in the checked graph");
+        let defining = observed
+            .graph
+            .iter()
+            .find(|checked| {
+                checked
+                    .registry()
+                    .nominals()
+                    .iter()
+                    .any(|nominal| nominal.spelling == "QuoteHoles")
+            })
+            .expect("the checked graph retains the genuine quote owner");
+        let identity = defining
+            .registry()
+            .nominals()
+            .iter()
+            .find(|nominal| nominal.spelling == "QuoteHoles")
+            .unwrap()
+            .id;
+        let original = defining.syntax_nominal_fact(identity).unwrap();
+        assert!(owner.exports().nominal_fact(identity).is_none());
+        assert!(defining.exports().nominal_fact(identity).is_none());
+
+        let publication = &observed.publication;
+        let mut copies = TypeWorkBudget::unbounded();
+        let exported = ExportedGlobal {
+            publication: Some(Arc::clone(publication)),
+            binder: publication.binder,
+            scheme: publication.scheme.clone_with_budget(&mut copies).unwrap(),
+            capture: publication.capture.clone_with_budget(&mut copies).unwrap(),
+            origin: publication.origin.clone(),
+        };
+        let run = |limit, graph: &[Arc<crate::resolved::CheckedModule>]| {
+            let mut resolver = Resolver::with_budgets(
+                ModuleId::new(90_311),
+                TypeWorkBudget::with_limit(limit),
+                InterfaceConstraintBudget::with_limit(usize::MAX),
+            );
+            resolver.type_work.charge(17).unwrap();
+            let result = resolver.retain_imported_global_from_owner(
+                &exported,
+                owner.exports(),
+                observed.span,
+                &mut CaptureGraphVisits::default(),
+                Some(SyntaxOwnerLookup { owner, graph }),
+            );
+            (result, resolver)
+        };
+
+        let (result, mut measured) = run(usize::MAX, &observed.graph);
+        result.expect("the real capture closure is retained");
+        let used = measured.type_work.used();
+        assert!(used > 17);
+        let retained = measured.imported.nominal(identity).unwrap();
+        assert_eq!(retained.id, identity);
+        assert_eq!(retained.access, ImportedTypeAccess::Hidden);
+        assert!(retained.constructors.is_empty());
+        assert_eq!(retained.declaration_kind, original.declaration_kind);
+        assert_eq!(retained.parameter_count, original.parameter_count);
+        assert_eq!(retained.constructor_count, original.constructor_count);
+        assert_eq!(retained.parameters.as_ref(), original.parameters);
+        assert_eq!(retained.representation.as_ref(), original.representation);
+        assert_eq!(
+            retained.representation_provenance.as_ref(),
+            original.representation_provenance
+        );
+        assert_eq!(
+            retained.display_spelling.as_deref(),
+            original.display_spelling
+        );
+        assert_eq!(retained.display_is_private, original.display_is_private);
+        assert_eq!(&retained.origin, original.origin);
+        assert!(!measured.type_names.contains_key("QuoteHoles"));
+        assert!(measured.syntax_nominals.is_empty());
+        assert!(
+            original
+                .constructors
+                .iter()
+                .all(|id| measured.imported.constructor(*id).is_none())
+        );
+
+        let (short, _) = run(used - 1, &observed.graph);
+        assert_eq!(
+            short.unwrap_err().reason,
+            ResolveReason::TypeResourceExhausted
+        );
+        for _ in 0..2 {
+            let (exact, resolver) = run(used, &observed.graph);
+            exact.expect("a fresh exact-work replay retains the same checked fact");
+            assert_eq!(resolver.type_work.used(), used);
+            assert_eq!(
+                resolver.imported.nominal(identity).unwrap().access,
+                ImportedTypeAccess::Hidden
+            );
+        }
+
+        let missing = observed
+            .graph
+            .iter()
+            .filter(|checked| checked.module() != defining.module())
+            .cloned()
+            .collect::<Vec<_>>();
+        let (missing, _) = run(usize::MAX, &missing);
+        assert_eq!(missing.unwrap_err().reason, ResolveReason::InternalState);
+
+        measured.type_work = TypeWorkBudget::unbounded();
+        measured
+            .retain_imported_global_from_owner(
+                &exported,
+                owner.exports(),
+                observed.span,
+                &mut CaptureGraphVisits::default(),
+                Some(SyntaxOwnerLookup {
+                    owner,
+                    graph: &observed.graph,
+                }),
+            )
+            .expect("the repeated actual helper route retains equal metadata");
     }
 
     #[test]

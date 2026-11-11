@@ -2516,6 +2516,7 @@ std::thread_local! {
     static TRANSFORMER_ENTRY_PREPARATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TRANSFORMER_ENTRY_VALIDATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TRANSFORMER_OUTPUT_OBSERVER: std::cell::Cell<Option<TransformerOutputObserver>> = const { std::cell::Cell::new(None) };
+    static GENERATOR_OWNER_OBSERVER: std::cell::Cell<Option<fn(&crate::resolved::CheckedModule, &crate::syntax::GeneratorPlan)>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -2558,6 +2559,10 @@ fn evaluate_generator_transformer(
     let selected_owner = checked
         .get(selection.owner)
         .ok_or_else(internal_file_failure)?;
+    #[cfg(test)]
+    if let Some(observe) = GENERATOR_OWNER_OBSERVER.get() {
+        observe(selected_owner, plan);
+    }
     budget
         .charge_units(
             selected_owner
@@ -5284,6 +5289,236 @@ mod tests {
         static INDEXED_TRANSFERRED: RefCell<Vec<(Vec<crate::surface::SurfaceSyntaxCapture>, Vec<crate::syntax::MacroOutputNode>)>> = const { RefCell::new(Vec::new()) };
         static DERIVE_WORK: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
         static BOUNDED_OUTPUTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static GENERATOR_BINDERS: RefCell<Option<(crate::resolved::BinderId, crate::resolved::BinderId)>> = const { RefCell::new(None) };
+        static GENERATOR_TRACE: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+        static GENERATOR_OUTPUT: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        static GENERATOR_ORDER: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        static GENERATOR_PLAN: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn observe_generator_owner(
+        owner: &crate::resolved::CheckedModule,
+        plan: &crate::syntax::GeneratorPlan,
+    ) {
+        let binder = |name| {
+            owner
+                .schemes()
+                .iter()
+                .find(|scheme| scheme.spelling == name)
+                .expect("the original forms module owns the step")
+                .binder
+        };
+        GENERATOR_BINDERS
+            .with(|slot| *slot.borrow_mut() = Some((binder("is_first"), binder("next_number"))));
+        GENERATOR_PLAN.with(|slot| {
+            *slot.borrow_mut() = plan
+                .actions
+                .iter()
+                .map(|action| match action {
+                    crate::syntax::GeneratorAction::Enter {
+                        generators,
+                        binding,
+                        ..
+                    } => ("enter".to_owned(), generators[*binding].name.text.clone()),
+                    crate::syntax::GeneratorAction::Advance {
+                        generators,
+                        binding,
+                        ..
+                    } => ("step".to_owned(), generators[*binding].name.text.clone()),
+                })
+                .collect();
+        });
+    }
+
+    fn observe_generator_trace(
+        entry: &crate::core::validate::ValidatedMacroEntry,
+        evaluation: &crate::eval::Evaluation,
+    ) {
+        use crate::core::{EffectExprKind, PureExprKind};
+        let (first, number) = GENERATOR_BINDERS.with(|slot| slot.borrow().unwrap());
+        GENERATOR_TRACE.with(|slot| {
+            let mut output = slot.borrow_mut();
+            for event in &evaluation.trace {
+                let crate::eval::TraceEvent::Enter(node) = event;
+                let Some(expression) = entry.program.node(*node) else {
+                    continue;
+                };
+                let EffectExprKind::Pure(PureExprKind::Variable(variable)) = &expression.kind
+                else {
+                    continue;
+                };
+                let name = if variable.binder() == first {
+                    Some("is_first")
+                } else if variable.binder() == number {
+                    Some("next_number")
+                } else {
+                    None
+                };
+                if let Some(name) = name {
+                    output.push(name);
+                }
+            }
+        });
+    }
+
+    fn observe_generator_output(
+        selection: &crate::syntax::SelectedSyntax,
+        _captures: &[crate::surface::SurfaceSyntaxCapture],
+        output: &[crate::syntax::MacroOutputNode],
+    ) {
+        use crate::{surface::SurfaceExprKind, syntax::MacroOutputNode};
+        if selection.declaration.name.text != "make_constants" {
+            return;
+        }
+        GENERATOR_OUTPUT.with(|slot| {
+            let mut values = slot.borrow_mut();
+            for node in output {
+                let MacroOutputNode::Expression(capture, _) = node else {
+                    panic!("the generator returned expression fragments")
+                };
+                values.push(match &capture.expression.kind {
+                    SurfaceExprKind::Boolean(value) => value.to_string(),
+                    SurfaceExprKind::Integer(value) => value.to_string(),
+                    other => panic!("the fixed step returned an unexpected fragment: {other:?}"),
+                });
+            }
+        });
+    }
+
+    fn observe_generator_order(_source: &SourceFile, module: &crate::surface::SurfaceModule) {
+        use crate::surface::SurfaceDefinitionKind;
+        let names = module
+            .definitions
+            .iter()
+            .filter_map(|definition| match &definition.kind {
+                SurfaceDefinitionKind::Equational(global) => {
+                    Some(global.interface.name.text.as_str())
+                }
+                SurfaceDefinitionKind::InlineOperational(_) => None,
+            })
+            .filter(|name| ["first", "second", "third"].contains(name))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if !names.is_empty() {
+            GENERATOR_ORDER.with(|slot| *slot.borrow_mut() = names);
+        }
+    }
+
+    #[test]
+    fn original_generator_steps_once_per_iteration_and_survives_host_teardown() {
+        use crate::eval::machine_test_hooks as hooks;
+        use crate::parser::STAGED_MODULE_OBSERVER;
+
+        hooks::reset();
+        GENERATOR_TRACE.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_OUTPUT.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_ORDER.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_PLAN.with(|slot| slot.borrow_mut().clear());
+        GENERATOR_OWNER_OBSERVER.set(Some(observe_generator_owner));
+        hooks::TRANSFORMER_EVALUATION_OBSERVER.set(Some(observe_generator_trace));
+        TRANSFORMER_OUTPUT_OBSERVER.set(Some(observe_generator_output));
+        STAGED_MODULE_OBSERVER.set(Some(observe_generator_order));
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/design/macros/fixtures/generators");
+        let compiled = compile_path(RunConfiguration {
+            entry: fixtures.join("main.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the unchanged I17 graph compiles");
+        GENERATOR_OWNER_OBSERVER.set(None);
+        hooks::TRANSFORMER_EVALUATION_OBSERVER.set(None);
+        TRANSFORMER_OUTPUT_OBSERVER.set(None);
+        STAGED_MODULE_OBSERVER.set(None);
+        assert_eq!(execute(&compiled).unwrap().value_display(), "310");
+        assert_eq!(
+            GENERATOR_PLAN.with(|slot| slot.borrow().clone()),
+            [
+                ("enter".to_owned(), "number".to_owned()),
+                ("enter".to_owned(), "first".to_owned()),
+                ("step".to_owned(), "first".to_owned()),
+                ("step".to_owned(), "number".to_owned()),
+                ("step".to_owned(), "first".to_owned()),
+                ("step".to_owned(), "number".to_owned()),
+                ("step".to_owned(), "first".to_owned()),
+                ("step".to_owned(), "number".to_owned()),
+            ]
+        );
+        assert_eq!(
+            GENERATOR_TRACE.with(|slot| slot.borrow().clone()),
+            [
+                "is_first",
+                "next_number",
+                "is_first",
+                "next_number",
+                "is_first",
+                "next_number"
+            ]
+        );
+        assert_eq!(
+            GENERATOR_OUTPUT.with(|slot| slot.borrow().clone()),
+            ["true", "0", "false", "1", "false", "2"]
+        );
+        assert_eq!(
+            GENERATOR_ORDER.with(|slot| slot.borrow().clone()),
+            ["first", "second", "third"]
+        );
+        assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 1);
+        assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+        assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFORMER_DROPS.get());
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+        assert!(hooks::ROOT_CLOSES.get() >= 1);
+
+        // A separate ordinary consumer calls every unchanged generated output
+        // after expansion's host has transferred and closed its root.
+        let consumer = TestSource::write(concat!(
+            "import original (first, second, third)\n",
+            "main : Unit -> Int\n",
+            "main () = match (first(()) == 100, second(()) == 1, third(()) == 2) {\n",
+            "    (true, true, true) => 42\n",
+            "    _ => 0\n",
+            "}\n",
+        ));
+        consumer.write_sibling(
+            "original.ash",
+            &fs::read_to_string(fixtures.join("main.ash")).unwrap(),
+        );
+        consumer.write_sibling(
+            "forms.ash",
+            &fs::read_to_string(fixtures.join("forms.ash")).unwrap(),
+        );
+        let compiled =
+            compile_path(consumer.configuration()).expect("the generated functions remain usable");
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+        hooks::reset();
+    }
+
+    #[test]
+    fn two_generator_invocations_do_not_alias_their_checked_entries() {
+        use crate::eval::machine_test_hooks as hooks;
+
+        hooks::reset();
+        let source = TestSource::write(concat!(
+            "import forms (syntax make_constants)\n",
+            "make_constants starting_at 0 names first, second, third\n",
+            "make_constants starting_at 3 names fourth, fifth, sixth\n",
+            "main : Unit -> Int\n",
+            "main () = match (first(()) == 100, second(()) == 1, third(()) == 2, fourth(()) == 103, fifth(()) == 4, sixth(()) == 5) {\n",
+            "    (true, true, true, true, true, true) => 42\n",
+            "    _ => 0\n",
+            "}\n",
+        ));
+        let forms = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/design/macros/fixtures/generators/forms.ash");
+        source.write_sibling("forms.ash", &fs::read_to_string(forms).unwrap());
+        let compiled = compile_path(source.configuration())
+            .expect("both independent generator invocations compile");
+        assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+        assert_eq!(hooks::TRANSFER_ATTEMPTS.get(), 2);
+        assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+        assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFORMER_DROPS.get());
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+        assert!(hooks::ROOT_CLOSES.get() >= 2);
+        hooks::reset();
     }
 
     fn observe_derive_input(
