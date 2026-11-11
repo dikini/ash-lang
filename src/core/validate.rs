@@ -7817,7 +7817,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             // Pay for retaining and comparing a full span before growing the map.
             self.charge_type_work(2)?;
             if !previous_nominal.contains_key(&module) {
-                self.charge_type_work(1)?;
+                let growth = if previous_nominal.len() == previous_nominal.capacity() {
+                    previous_nominal
+                        .capacity()
+                        .saturating_mul(2)
+                        .saturating_add(previous_nominal.len())
+                        .saturating_add(1)
+                } else {
+                    1
+                };
+                self.charge_type_work(growth)?;
                 previous_nominal
                     .try_reserve(1)
                     .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
@@ -7996,7 +8005,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let module = constructor.owner.module();
             self.charge_type_work(2)?;
             if !previous_constructor.contains_key(&module) {
-                self.charge_type_work(1)?;
+                let growth = if previous_constructor.len() == previous_constructor.capacity() {
+                    previous_constructor
+                        .capacity()
+                        .saturating_mul(2)
+                        .saturating_add(previous_constructor.len())
+                        .saturating_add(1)
+                } else {
+                    1
+                };
+                self.charge_type_work(growth)?;
                 previous_constructor
                     .try_reserve(1)
                     .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
@@ -41431,6 +41449,100 @@ mod replacement_owner_api_tests {
 mod registry_order_tests {
     use super::*;
     use crate::{core::CoreBuilder, source::ByteRange};
+
+    #[test]
+    fn span_map_growth_is_paid_before_retention_and_validation_can_retry() {
+        type Family = super::super::effect::EffectOperationFamily;
+        fn fixture(
+            count: usize,
+        ) -> (
+            Vec<SourceFile>,
+            UnvalidatedCoreProgram<Family>,
+            Vec<(ModuleId, SourceId)>,
+        ) {
+            let files = (0..count)
+                .map(|index| SourceFile::new(format!("module-{index}.ash"), "Item").unwrap())
+                .collect::<Vec<_>>();
+            let mut nominals = Vec::new();
+            let mut constructors = Vec::new();
+            let mut relation = Vec::new();
+            for file in &files {
+                let module = ModuleId::from(file.id());
+                let span = file.span(ByteRange::new(0, 4).unwrap()).unwrap();
+                let id = crate::types::NominalTypeId::new(module, 0);
+                let constructor = ConstructorId::new(id, 0);
+                relation.push((module, file.id()));
+                nominals.push(ResolvedNominalType {
+                    id,
+                    declaration_kind: ResolvedNominalDeclarationKind::Data,
+                    spelling: "Item".into(),
+                    constructors: vec![constructor].into_boxed_slice(),
+                    representation: None,
+                    representation_provenance: None,
+                    origin: Origin::Source(span),
+                });
+                constructors.push(ResolvedConstructor {
+                    id: constructor,
+                    owner: id,
+                    spelling: "Value".into(),
+                    payload: None,
+                    origin: Origin::Source(span),
+                });
+            }
+            let registry = Arc::new(crate::resolved::ResolvedRegistry::new(
+                nominals,
+                constructors,
+            ));
+            let mut builder = CoreBuilder::<Family>::with_registry_for_family(registry);
+            let root_span = files[0].span(ByteRange::new(0, 1).unwrap()).unwrap();
+            let root = builder.unit(Type::Unit, Origin::Source(root_span)).unwrap();
+            (files, builder.finish(root).unwrap(), relation)
+        }
+        fn check(
+            files: &[SourceFile],
+            program: &UnvalidatedCoreProgram<Family>,
+            relation: &[(ModuleId, SourceId)],
+            limit: usize,
+        ) -> (Result<(), ValidationReason>, usize) {
+            let sources = files.iter().collect::<Vec<_>>();
+            let mut validator = Validator::new_modules(program, &sources, relation).unwrap();
+            validator.type_work_limit = limit;
+            let result = validator
+                .validate_registry()
+                .map(|_| ())
+                .map_err(|error| error.reason());
+            (result, validator.type_work.get())
+        }
+
+        let fixtures = (2..=4).map(fixture).collect::<Vec<_>>();
+        let costs = fixtures
+            .iter()
+            .map(|(files, program, relation)| {
+                let (result, cost) = check(files, program, relation, usize::MAX);
+                result.unwrap();
+                cost
+            })
+            .collect::<Vec<_>>();
+        let mut capacity = HashMap::<u32, u32>::new();
+        for value in 0..3 {
+            capacity.insert(value, value);
+        }
+        assert_eq!(capacity.len(), capacity.capacity());
+        let growth_extra = capacity.capacity() * 2 + capacity.len();
+        assert_eq!(
+            costs[2] - costs[1],
+            costs[1] - costs[0] + 2 * growth_extra,
+            "both reached span maps must pay for moving their live entries"
+        );
+        let (files, program, relation) = &fixtures[2];
+        for limit in 0..costs[2] {
+            let (result, _) = check(files, program, relation, limit);
+            assert_eq!(result, Err(ValidationReason::Resource), "limit {limit}");
+        }
+        let (result, used) = check(files, program, relation, costs[2]);
+        result.expect("the same immutable registry validates at its measured threshold");
+        assert_eq!(used, costs[2]);
+    }
 
     #[test]
     fn registry_position_checks_allow_only_exact_primary_span_ties() {
