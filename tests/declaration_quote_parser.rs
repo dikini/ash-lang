@@ -17,7 +17,7 @@ fn parse_source(text: &str) -> (SourceFile, ConcreteTree) {
     (source, tree)
 }
 
-fn text_at<'a>(source: &'a SourceFile, span: ash::source::Span) -> &'a str {
+fn text_at(source: &SourceFile, span: ash::source::Span) -> &str {
     assert_eq!(span.source(), source.id());
     &source.text()[span.range().start() as usize..span.range().end() as usize]
 }

@@ -550,9 +550,7 @@ fn charge_type_value_inner(
     budget.charge()?;
     let mut pending = if new_type {
         budget.charge()?;
-        let mut pending = Vec::with_capacity(1);
-        pending.push(Pending::Type(ty, prefix));
-        pending
+        vec![Pending::Type(ty, prefix)]
     } else {
         vec![Pending::Type(ty, prefix)]
     };
@@ -828,9 +826,7 @@ fn charge_owned_syntax(
     let selected_owned = new_pattern || new_expression;
     let mut pending = if selected_owned {
         budget.charge()?;
-        let mut pending = Vec::with_capacity(1);
-        pending.push((root, prefix, work));
-        pending
+        vec![(root, prefix, work)]
     } else {
         vec![(root, prefix, work)]
     };
@@ -1828,10 +1824,10 @@ pub(crate) fn copy_fragment_output_with_type(
                 budget.charge_units(children.len()).map_err(resource)?;
                 budget.charge_units(children.len()).map_err(resource)?;
                 let live = pending.len();
-                let requested = live.checked_add(children.len()).unwrap_or(usize::MAX);
+                let requested = live.saturating_add(children.len());
                 if !children.is_empty() && requested > pending.capacity() {
                     budget
-                        .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                        .charge_units(requested.saturating_add(live))
                         .map_err(resource)?;
                     pending.reserve_exact(children.len());
                 }
@@ -2394,9 +2390,9 @@ impl<'a> SyntaxExpansion<'a> {
             budget.charge().map_err(resource)?;
             if self.owners.len() == self.owners.capacity() {
                 let live = self.owners.len();
-                let requested = live.checked_add(1).unwrap_or(usize::MAX);
+                let requested = live.saturating_add(1);
                 budget
-                    .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                    .charge_units(requested.saturating_add(live))
                     .map_err(resource)?;
                 self.owners.reserve_exact(1);
             }
@@ -3048,10 +3044,10 @@ fn charge_template_inner(
                         // Vec::clone requests the child buffer before substitution.
                         budget.charge_units(children.len()).map_err(resource)?;
                         let live = pending.len();
-                        let requested = live.checked_add(children.len()).unwrap_or(usize::MAX);
+                        let requested = live.saturating_add(children.len());
                         if requested > pending.capacity() {
                             budget
-                                .charge_units(requested.checked_add(live).unwrap_or(usize::MAX))
+                                .charge_units(requested.saturating_add(live))
                                 .map_err(resource)?;
                             pending.reserve_exact(children.len());
                         }

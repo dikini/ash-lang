@@ -2273,6 +2273,8 @@ type TransformerOutputObserver = fn(
     &[crate::syntax::MacroOutputNode],
 );
 
+// Keep invocation inputs separate so their borrows and ownership stay explicit.
+#[allow(clippy::too_many_arguments)]
 fn evaluate_selected_transformer(
     selection: &crate::syntax::SelectedSyntax,
     captures: &[crate::surface::SurfaceSyntaxCapture],
@@ -3933,22 +3935,14 @@ mod tests {
             let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("docs/design/macros/fixtures/header_compat")
                 .join(name);
-            let failure = compile_path(RunConfiguration {
+            let program = compile_path(RunConfiguration {
                 entry,
                 roots: ModuleRoots::empty(),
             })
-            .unwrap_err();
-            let Some(LoadGraphError::Projection { source, error, .. }) = failure.graph_failure()
-            else {
-                panic!("{name}: expected unexpanded invocation refusal: {failure:?}");
-            };
-            assert_eq!(
-                *error,
-                crate::parser::ProjectionError::MalformedTree(
-                    crate::parser::InternalReason::UnexpectedShape
-                )
-            );
-            assert!(source.display_path().ends_with(name));
+            .unwrap_or_else(|failure| panic!("{name}: {failure:?}"));
+            let value = execute(&program).unwrap();
+            assert_eq!(value.value_display(), "42", "{name}");
+            assert_eq!(value.type_display(), "Int", "{name}");
         }
 
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

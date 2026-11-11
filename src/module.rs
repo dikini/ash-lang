@@ -2682,6 +2682,8 @@ fn parse_graph_module(
     ))
 }
 
+// Source, syntax owners and the budget are separate projection inputs.
+#[allow(clippy::too_many_arguments)]
 fn project_finished_module(
     source: SourceFile,
     tree: crate::parser::ConcreteTree,
