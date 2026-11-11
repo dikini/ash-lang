@@ -5965,6 +5965,131 @@ mod tests {
     }
 
     #[test]
+    fn generator_invocation_plans_first_reads_in_capture_iteration_order() {
+        let source = SourceFile::new(
+            "generator-plan.ash",
+            "pub syntax declaration: (make) $( $name:ident ),+ => {\n$( $name : Unit -> Int\n$name () = $first + $number + $number )+\n} with {\n$number from 0 step next_number\n$first from 0 step is_first\n}\n",
+        ).unwrap();
+        let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
+        assert!(tree.parse_diagnostics().is_empty());
+        let mut initial = SyntaxBudget::default();
+        let mut module = crate::parser::project_declaration_expansions(
+            &source,
+            &tree,
+            &[],
+            &[],
+            &mut Vec::new(),
+            &mut initial,
+            None,
+        )
+        .unwrap();
+        let declaration = module.syntax_declarations.remove(0);
+        let span = declaration.span;
+        let selection = SelectedSyntax {
+            name: "make".into(),
+            declaration,
+            owner: 0,
+            import_span: span,
+        };
+        let identifiers = ["one", "two", "three"]
+            .into_iter()
+            .map(|text| {
+                let name = SurfaceName {
+                    text: text.into(),
+                    span,
+                    introduction: 0,
+                    introduced_at: None,
+                    written: true,
+                    diagnostic: None,
+                };
+                SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+                    origin: span.into(),
+                    name,
+                })
+            })
+            .collect();
+        let captures = [SurfaceSyntaxCapture::Repeated(Arc::new(
+            SurfaceRepeatedCapture {
+                values: identifiers,
+            },
+        ))];
+
+        fn run(
+            selection: &SelectedSyntax,
+            captures: &[SurfaceSyntaxCapture],
+            budget: &mut SyntaxBudget,
+        ) -> Result<(Vec<MacroOutputNode>, GeneratorPlan), crate::parser::MacroParseFailure>
+        {
+            prepare_generator_template(selection, captures, 1, selection.declaration.span, budget)
+        }
+        let mut measured = SyntaxBudget::default();
+        measured.charge_units(17).unwrap();
+        let (output, plan) = run(&selection, &captures, &mut measured).unwrap();
+        let used = measured.consumed();
+        assert_eq!(plan.results, 6);
+        let actions = plan
+            .actions
+            .iter()
+            .map(|action| match action {
+                GeneratorAction::Enter {
+                    generators,
+                    binding,
+                    ..
+                } => ("enter", generators[*binding].name.text.as_str()),
+                GeneratorAction::Advance {
+                    generators,
+                    binding,
+                    ..
+                } => ("step", generators[*binding].name.text.as_str()),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actions,
+            [
+                ("enter", "number"),
+                ("enter", "first"),
+                ("step", "first"),
+                ("step", "number"),
+                ("step", "first"),
+                ("step", "number"),
+                ("step", "first"),
+                ("step", "number")
+            ]
+        );
+        fn markers(nodes: &[MacroOutputNode], found: &mut Vec<usize>) {
+            for node in nodes {
+                match node {
+                    MacroOutputNode::Group(_, children, _) => markers(children, found),
+                    MacroOutputNode::Identifier(name, _)
+                        if name.introduction == usize::MAX
+                            && name.text.starts_with("\0ash_generator_result_") =>
+                    {
+                        found.push(
+                            name.text["\0ash_generator_result_".len()..]
+                                .parse()
+                                .unwrap(),
+                        )
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut found = Vec::new();
+        markers(&output, &mut found);
+        assert_eq!(found, [0, 1, 1, 2, 3, 3, 4, 5, 5]);
+        let mut short = SyntaxBudget::with_limit(used - 1);
+        short.charge_units(17).unwrap();
+        assert!(run(&selection, &captures, &mut short).is_err());
+        for _ in 0..2 {
+            let mut exact = SyntaxBudget::with_limit(used);
+            exact.charge_units(17).unwrap();
+            let (_, retry) = run(&selection, &captures, &mut exact).unwrap();
+            assert_eq!(retry.results, 6);
+            assert_eq!(exact.consumed(), used);
+        }
+    }
+
+    #[test]
     fn generator_admission_tracks_owned_scope_and_refuses_duplicate_names() {
         fn check(text: &str) -> Result<(), crate::parser::MacroParseFailure> {
             let source = SourceFile::new("generator-admission.ash", text).unwrap();
