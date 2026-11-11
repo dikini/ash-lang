@@ -6614,7 +6614,72 @@ impl Resolver<'_, '_> {
                     problem: "mismatch",
                 }));
             }
-            self.compare_retained_nominal_closure(&nominal_identities, summary, span)?;
+            if let Some(owner) = owner {
+                // This alternate checked-helper route can need the same
+                // authenticated defining summary as first retention. Prepay
+                // our preliminary probes and the subsequently reached scan.
+                let identities = nominal_identities.identities();
+                let charge = |work: &mut TypeWorkBudget, units| {
+                    work.charge(units).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "checked global owner comparison exceeded its work budget",
+                        )
+                    })
+                };
+                charge(&mut self.type_work, identities.len())?;
+                for id in identities {
+                    charge(&mut self.type_work, 1)?;
+                    if self.imported.resource_fact(*id).is_some() {
+                        continue;
+                    }
+                    charge(&mut self.type_work, 2)?;
+                    if summary.nominal_fact(*id).is_some() {
+                        continue;
+                    }
+                    let mut source = None;
+                    let mut visited = 0usize;
+                    for checked in owner.graph {
+                        charge(&mut self.type_work, 1)?;
+                        visited = visited.saturating_add(1);
+                        if checked.module() == id.module() {
+                            source = Some(checked.exports());
+                            break;
+                        }
+                    }
+                    // The comparator repeats this same checked-owner walk.
+                    charge(&mut self.type_work, visited)?;
+                    let source = source.unwrap_or(summary);
+                    charge(&mut self.type_work, 2)?;
+                    match source.nominal_fact(*id) {
+                        Some(fact)
+                            if fact.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+                                && fact.access == ImportedTypeAccess::Opaque =>
+                        {
+                            // canonical_nominal_fact reaches three summary maps.
+                            charge(&mut self.type_work, 3)?;
+                        }
+                        None => {
+                            // Both this preflight and private_nominal inspect
+                            // the lexical flag and defining module.
+                            charge(&mut self.type_work, 4)?;
+                            if !id.is_lexical() && id.module() == owner.owner.module() {
+                                // Existing private_nominal reaches the checked
+                                // registry, parameter index and export summary.
+                                charge(&mut self.type_work, 7)?;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            self.compare_retained_nominal_closure_from_owner(
+                &nominal_identities,
+                summary,
+                span,
+                owner,
+            )?;
             return Ok(());
         }
         if constrained {
@@ -18000,7 +18065,7 @@ mod tests {
             (result, resolver)
         };
 
-        let (result, mut measured) = run(usize::MAX, owner.graph);
+        let (result, measured) = run(usize::MAX, owner.graph);
         result.expect("the real capture closure is retained");
         let used = measured.type_work.used();
         assert!(used > 17);
@@ -18059,16 +18124,34 @@ mod tests {
                 ResolveReason::InternalState
             );
         }
-        measured.type_work = TypeWorkBudget::unbounded();
-        measured
-            .retain_imported_global_from_owner(
+        let repeat = |limit| {
+            let (first, mut resolver) = run(usize::MAX, owner.graph);
+            first.expect("the initial real helper route is retained");
+            resolver.type_work = TypeWorkBudget::with_limit(limit);
+            resolver.type_work.charge(17).unwrap();
+            let result = resolver.retain_imported_global_from_owner(
                 exported,
                 owner.owner.exports(),
                 span,
                 &mut CaptureGraphVisits::default(),
                 Some(owner),
-            )
-            .expect("the repeated actual helper route retains equal metadata");
+            );
+            (result, resolver)
+        };
+        let (again, repeated) = repeat(usize::MAX);
+        again.expect("the repeated actual helper route retains equal metadata");
+        let repeated_work = repeated.type_work.used();
+        assert!(repeated_work > 17);
+        let (short, _) = repeat(repeated_work - 1);
+        assert_eq!(
+            short.unwrap_err().reason,
+            ResolveReason::TypeResourceExhausted
+        );
+        for _ in 0..2 {
+            let (exact, resolver) = repeat(repeated_work);
+            exact.expect("fresh exact retries retain the same repeated checked helper");
+            assert_eq!(resolver.type_work.used(), repeated_work);
+        }
         OBSERVED_CHECKED_CAPTURE_WORK.set(Some(used));
     }
 

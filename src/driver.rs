@@ -5411,6 +5411,13 @@ mod tests {
         });
     }
 
+    fn assert_generator_cleanup() {
+        use crate::eval::machine_test_hooks as hooks;
+        assert_eq!(hooks::TRANSFER_FAILURES.get(), 0);
+        assert_eq!(hooks::ROOT_CLOSES.get(), hooks::TRANSFORMER_DROPS.get());
+        assert_eq!(hooks::ACTIVE_ROOT_DROPS.get(), 0);
+    }
+
     fn observe_generator_output(
         selection: &crate::syntax::SelectedSyntax,
         _captures: &[crate::surface::SurfaceSyntaxCapture],
@@ -5525,6 +5532,7 @@ mod tests {
             GENERATOR_LIFECYCLES.with(|slot| slot.borrow().clone()),
             [[1, 0, 1, 1, 0]]
         );
+        assert_generator_cleanup();
 
         // A separate ordinary consumer calls every unchanged generated output
         // after expansion's host has transferred and closed its root.
@@ -5547,6 +5555,7 @@ mod tests {
         let compiled =
             compile_path(consumer.configuration()).expect("the generated functions remain usable");
         assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+        assert_generator_cleanup();
         hooks::reset();
     }
 
@@ -5589,6 +5598,7 @@ mod tests {
             GENERATOR_LIFECYCLES.with(|slot| slot.borrow().clone()),
             [[1, 0, 1, 1, 0], [1, 0, 1, 1, 0]]
         );
+        assert_generator_cleanup();
         hooks::reset();
     }
 
@@ -5630,6 +5640,7 @@ mod tests {
             GENERATOR_LIFECYCLES.with(|slot| slot.borrow().clone()),
             [[1, 0, 1, 1, 0]]
         );
+        assert_generator_cleanup();
 
         // These eight ordinary calls expose the repeated outer values on both
         // sides of each nested repetition, after the host root is closed.
@@ -5652,6 +5663,7 @@ mod tests {
         let compiled =
             compile_path(consumer.configuration()).expect("the mixed-depth outputs remain usable");
         assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+        assert_generator_cleanup();
         hooks::reset();
     }
 
