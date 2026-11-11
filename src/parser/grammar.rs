@@ -463,7 +463,8 @@ fn expect_upper_identifier(parser: &mut Parser<'_>) {
 }
 
 fn starts_module_declaration(parser: &Parser<'_>) -> bool {
-    parser.selected_declaration_syntax().is_some()
+    parser.at_forwarded_declaration()
+        || parser.selected_declaration_syntax().is_some()
         || foreign::starts_library(parser)
         || parser.at(&TokenKind::Type)
         || parser.at(&TokenKind::Newtype)
@@ -491,7 +492,12 @@ fn starts_module_declaration(parser: &Parser<'_>) -> bool {
 }
 
 fn module_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
-    if parser.selected_declaration_syntax().is_some() {
+    if parser.at_forwarded_declaration() {
+        parser.start(NodeKind::DeclarationFragment);
+        let _ = parser.bump();
+        parser.finish();
+        TypeParametersOutcome::Complete
+    } else if parser.selected_declaration_syntax().is_some() {
         if !parser.charge_declaration_matcher() {
             return TypeParametersOutcome::Complete;
         }

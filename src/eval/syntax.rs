@@ -2161,7 +2161,12 @@ impl<'inv> SyntaxHost<'inv> {
                     rest = self.construct(heap, "NoNodes", None)?;
                     continue;
                 }
-                Some(MacroOutputNode::Splice(_) | MacroOutputNode::TemplateEscape(_)) => {
+                Some(
+                    MacroOutputNode::Splice(_)
+                    | MacroOutputNode::ForwardedDeclaration(_, _)
+                    | MacroOutputNode::TemplateRepeat(_)
+                    | MacroOutputNode::TemplateEscape(_),
+                ) => {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
                 None => {

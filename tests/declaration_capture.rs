@@ -22,6 +22,27 @@ fn imported_empty_template_captures_a_complete_declaration() {
     assert_eq!(execute(&program).unwrap().value_display(), "42");
 }
 
+#[test]
+fn captured_declaration_is_forwarded_to_the_module_consumer() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.0.join("forms.ash"),
+        "pub syntax declaration: (pass) $item:declaration => { $item }\n",
+    )
+    .unwrap();
+    fs::write(
+        fixture.0.join("main.ash"),
+        "import forms (syntax pass)\n\nbefore : Unit -> Int\nbefore () = 0\npass {\n    passed : Unit -> Int\n    passed () = 42\n}\nafter : Unit -> Int\nafter () = 0\nmain : Unit -> Int\nmain () = before(()) + passed(()) + after(())\n",
+    )
+    .unwrap();
+    let program = compile_path(RunConfiguration {
+        entry: fixture.0.join("main.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("the captured declaration is collected between its neighbors");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
 struct Fixture(PathBuf);
 
 impl Fixture {
@@ -190,7 +211,6 @@ fn removing_one_equation_can_leave_a_complete_declaration() {
 }
 
 #[test]
-#[ignore = "full nonempty declaration-template admission remains D5 #223 / D6 #219 work"]
 fn unused_nonempty_declaration_capture_definition_is_admitted() {
     let fixture = Fixture::new();
     let forms = "pub syntax declaration: (sink) $item:declaration => { type Item = Item }\n";

@@ -10,9 +10,10 @@ use crate::{
     },
     source::Span,
     surface::{
-        SurfaceEffectRow, SurfaceExpr, SurfaceExprKind, SurfaceExpressionCapture,
-        SurfaceIdentifierCapture, SurfaceImportItem, SurfaceImportSelection, SurfaceName,
-        SurfacePattern, SurfacePatternCapture, SurfacePatternKind, SurfaceReference,
+        SurfaceDeclarationCapture, SurfaceEffectRow, SurfaceExpr, SurfaceExprKind,
+        SurfaceExpressionCapture, SurfaceIdentifierCapture, SurfaceImportItem,
+        SurfaceImportSelection, SurfaceMatcherContainerKind, SurfaceName, SurfacePattern,
+        SurfacePatternCapture, SurfacePatternKind, SurfaceReference, SurfaceRepeatedCapture,
         SurfaceSyntaxCapture, SurfaceSyntaxCaptureKind, SurfaceSyntaxCategory,
         SurfaceSyntaxDeclaration, SurfaceSyntaxImplementation, SurfaceSyntaxMatcherPart,
         SurfaceType, SurfaceTypeCapture, SurfaceTypeKind,
@@ -28,12 +29,24 @@ pub(crate) enum MacroOutputNode {
     ForwardedExpression(SurfaceExpressionCapture, MacroOrigin),
     ForwardedType(SurfaceTypeCapture, MacroOrigin),
     ForwardedPattern(SurfacePatternCapture, MacroOrigin),
+    ForwardedDeclaration(SurfaceDeclarationCapture, MacroOrigin),
     Identifier(SurfaceName, MacroOrigin),
     Token(crate::lexer::TokenKind, Arc<str>, MacroOrigin),
     Group(MacroDelimiter, Vec<MacroOutputNode>, MacroOrigin),
     Splice(SurfaceName),
+    /// A declaration-template directive, consumed before ordinary parsing.
+    TemplateRepeat(Arc<TemplateRepeat>),
     /// An admitted outer escape and its checked, defining-module adapter.
     TemplateEscape(SurfaceName),
+}
+
+/// One immutable repetition in a declaration template.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct TemplateRepeat {
+    pub(crate) body: Vec<MacroOutputNode>,
+    pub(crate) separator: Option<(crate::lexer::TokenKind, Arc<str>, MacroOrigin)>,
+    pub(crate) one_or_more: bool,
+    pub(crate) origin: MacroOrigin,
 }
 
 /// A compiler-created call while its containing surface module is immutable.
@@ -1489,6 +1502,8 @@ fn charge_owned_syntax(
                     bridge = true;
                     charge_type_name(name, depth, TypeWork::Inspect, budget)?;
                 }
+                MacroOutputNode::TemplateRepeat(_)
+                | MacroOutputNode::ForwardedDeclaration(_, _) => return Ok(None),
             },
         }
     }
@@ -1814,7 +1829,9 @@ fn charge_type_retention_inner(
             MacroOutputNode::Expression(_, _)
             | MacroOutputNode::ForwardedExpression(_, _)
             | MacroOutputNode::ForwardedPattern(_, _)
+            | MacroOutputNode::ForwardedDeclaration(_, _)
             | MacroOutputNode::Splice(_)
+            | MacroOutputNode::TemplateRepeat(_)
             | MacroOutputNode::TemplateEscape(_) => return Err(MacroParseFailure::Invalid),
         }
     }
@@ -1918,7 +1935,10 @@ pub(crate) fn copy_fragment_output_with_type(
                     return Err(MacroParseFailure::Invalid);
                 }
             }
-            MacroOutputNode::Splice(_) | MacroOutputNode::TemplateEscape(_) => {
+            MacroOutputNode::Splice(_)
+            | MacroOutputNode::ForwardedDeclaration(_, _)
+            | MacroOutputNode::TemplateRepeat(_)
+            | MacroOutputNode::TemplateEscape(_) => {
                 return Err(MacroParseFailure::Invalid);
             }
         }
@@ -2032,7 +2052,9 @@ pub(crate) fn charge_captured_type_original(
         MacroOutputNode::Expression(_, _)
         | MacroOutputNode::ForwardedExpression(_, _)
         | MacroOutputNode::ForwardedPattern(_, _)
+        | MacroOutputNode::ForwardedDeclaration(_, _)
         | MacroOutputNode::Splice(_)
+        | MacroOutputNode::TemplateRepeat(_)
         | MacroOutputNode::TemplateEscape(_) => return Err(MacroParseFailure::Invalid),
     }
     Ok(())
@@ -2144,7 +2166,9 @@ pub(crate) fn charge_captured_ep_original_selected(
             }
         }
         MacroOutputNode::Expression(_, _)
+        | MacroOutputNode::ForwardedDeclaration(_, _)
         | MacroOutputNode::Splice(_)
+        | MacroOutputNode::TemplateRepeat(_)
         | MacroOutputNode::TemplateEscape(_) => {
             return Err(MacroParseFailure::Invalid);
         }
@@ -3089,125 +3113,139 @@ fn validate_template_syntax_inner(
     let SurfaceSyntaxImplementation::Template = &declaration.implementation else {
         return Ok(());
     };
-    let (capture_count, identifier_count) = if let Some(budget) = &mut admission_budget {
-        budget
-            .charge_units(declaration.matcher.len())
-            .map_err(resource)?;
-        let (captures, identifiers, has_declaration, has_container) = declaration
-            .matcher
-            .iter()
-            .fold((0usize, 0usize, false, false), |counts, part| match part {
-                SurfaceSyntaxMatcherPart::Capture { kind, .. } => (
-                    counts.0 + 1,
-                    counts.1 + usize::from(*kind == SurfaceSyntaxCaptureKind::Identifier),
-                    counts.2 || *kind == SurfaceSyntaxCaptureKind::Declaration,
-                    counts.3,
-                ),
-                SurfaceSyntaxMatcherPart::Container(_) => (counts.0, counts.1, counts.2, true),
-                SurfaceSyntaxMatcherPart::Literal { .. } | SurfaceSyntaxMatcherPart::LineEnd => {
-                    counts
+    fn placeholders(
+        matcher: &[SurfaceSyntaxMatcherPart],
+        depth: usize,
+        repetitions: usize,
+        captures: &mut Vec<SurfaceSyntaxCapture>,
+        identifiers: &mut Vec<SurfaceName>,
+        budget: &mut Option<&mut SyntaxBudget>,
+    ) -> Result<(), MacroParseFailure> {
+        for part in matcher {
+            if let Some(budget) = budget.as_deref_mut() {
+                budget.charge().map_err(resource)?;
+            }
+            let (name, kind) = match part {
+                SurfaceSyntaxMatcherPart::Capture { name, kind } => (name, kind),
+                SurfaceSyntaxMatcherPart::Container(container) => {
+                    let next = type_depth(depth, 1).map_err(resource)?;
+                    placeholders(
+                        &container.body,
+                        next,
+                        repetitions
+                            + usize::from(matches!(
+                                &container.kind,
+                                SurfaceMatcherContainerKind::Repeat { .. }
+                            )),
+                        captures,
+                        identifiers,
+                        budget,
+                    )?;
+                    continue;
                 }
-            });
-        if has_declaration || has_container {
-            if !declaration
-                .template_contents
-                .as_deref()
-                .is_some_and(<[_]>::is_empty)
-            {
-                return Err(MacroParseFailure::Invalid);
-            }
-            return crate::parser::parse_declaration_template_admission(
-                source,
-                declaration.span,
-                Vec::new(),
-                contexts,
-                &[],
-                budget,
-            );
-        }
-        budget.charge_units(captures).map_err(resource)?;
-        budget.charge_units(identifiers).map_err(resource)?;
-        (captures, identifiers)
-    } else {
-        (0, 0)
-    };
-    let mut captures = Vec::with_capacity(capture_count);
-    let mut identifiers = Vec::with_capacity(identifier_count);
-    for part in &declaration.matcher {
-        if let Some(budget) = &mut admission_budget {
-            budget.charge().map_err(resource)?;
-        }
-        let SurfaceSyntaxMatcherPart::Capture { name, kind } = part else {
-            continue;
-        };
-        if let Some(budget) = &mut admission_budget {
-            if *kind == SurfaceSyntaxCaptureKind::Identifier {
-                let digits = captures
-                    .len()
-                    .checked_ilog10()
-                    .map_or(1, |n| n as usize + 1);
-                let bytes = "__ash_template_capture_".len().saturating_add(digits);
+                SurfaceSyntaxMatcherPart::Literal { .. } | SurfaceSyntaxMatcherPart::LineEnd => {
+                    continue;
+                }
+            };
+            if let Some(budget) = budget.as_deref_mut() {
+                let slots = captures.len().saturating_add(1);
+                if captures.len() == captures.capacity() {
+                    budget
+                        .charge_units(slots.saturating_add(captures.len()))
+                        .map_err(resource)?;
+                    captures.reserve_exact(1);
+                }
                 budget
-                    .charge_units(bytes.saturating_mul(2))
+                    .charge_units(2usize.saturating_add(repetitions.saturating_mul(3)))
                     .map_err(resource)?;
-                budget.charge_units(2).map_err(resource)?;
-            } else if *kind != SurfaceSyntaxCaptureKind::Declaration {
-                // A placeholder value and its shared empty contents are built here.
-                budget.charge_units(2).map_err(resource)?;
+                if *kind == SurfaceSyntaxCaptureKind::Identifier {
+                    let digits = captures
+                        .len()
+                        .checked_ilog10()
+                        .map_or(1, |n| n as usize + 1);
+                    let bytes = "__ash_template_capture_".len().saturating_add(digits);
+                    budget
+                        .charge_units(bytes.saturating_mul(2))
+                        .map_err(resource)?;
+                    if identifiers.len() == identifiers.capacity() {
+                        budget
+                            .charge_units(identifiers.len().saturating_mul(2).saturating_add(1))
+                            .map_err(resource)?;
+                        identifiers.reserve_exact(1);
+                    }
+                }
             }
+            let mut capture = match kind {
+                SurfaceSyntaxCaptureKind::Expression => {
+                    SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
+                        contains_protected_type: false,
+                        quote_sites: Default::default(),
+                        expression: SurfaceExpr {
+                            diagnostic: None,
+                            kind: SurfaceExprKind::Unit,
+                            span: name.span,
+                        },
+                        contents: Arc::from([]),
+                    })
+                }
+                SurfaceSyntaxCaptureKind::Identifier => {
+                    let placeholder = SurfaceName {
+                        text: format!("__ash_template_capture_{}", captures.len()),
+                        span: name.span,
+                        introduction: usize::MAX - captures.len(),
+                        introduced_at: Some(name.span),
+                        written: false,
+                        diagnostic: None,
+                    };
+                    identifiers.push(placeholder.clone());
+                    SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
+                        origin: placeholder.span.into(),
+                        name: placeholder,
+                    })
+                }
+                SurfaceSyntaxCaptureKind::Type => SurfaceSyntaxCapture::Type(SurfaceTypeCapture {
+                    ty: SurfaceType {
+                        kind: SurfaceTypeKind::Unit,
+                        span: name.span,
+                        diagnostic: None,
+                    },
+                    contents: Arc::from([]),
+                }),
+                SurfaceSyntaxCaptureKind::Pattern => {
+                    SurfaceSyntaxCapture::Pattern(SurfacePatternCapture {
+                        pattern: SurfacePattern {
+                            kind: SurfacePatternKind::Wildcard,
+                            span: name.span,
+                            diagnostic: None,
+                        },
+                        contents: Arc::from([]),
+                    })
+                }
+                SurfaceSyntaxCaptureKind::Declaration => {
+                    SurfaceSyntaxCapture::Declaration(SurfaceDeclarationCapture {
+                        contents: Arc::from([]),
+                    })
+                }
+            };
+            for _ in 0..repetitions {
+                capture = SurfaceSyntaxCapture::Repeated(Arc::new(SurfaceRepeatedCapture {
+                    values: vec![capture],
+                }));
+            }
+            captures.push(capture);
         }
-        let capture = match kind {
-            SurfaceSyntaxCaptureKind::Expression => {
-                SurfaceSyntaxCapture::Expression(SurfaceExpressionCapture {
-                    contains_protected_type: false,
-                    quote_sites: Default::default(),
-                    expression: SurfaceExpr {
-                        diagnostic: None,
-                        kind: SurfaceExprKind::Unit,
-                        span: name.span,
-                    },
-                    contents: Arc::from([]),
-                })
-            }
-            SurfaceSyntaxCaptureKind::Identifier => {
-                let placeholder = SurfaceName {
-                    text: format!("__ash_template_capture_{}", captures.len()),
-                    span: name.span,
-                    introduction: usize::MAX - captures.len(),
-                    introduced_at: Some(name.span),
-                    written: false,
-                    diagnostic: None,
-                };
-                identifiers.push(placeholder.clone());
-                SurfaceSyntaxCapture::Identifier(SurfaceIdentifierCapture {
-                    origin: placeholder.span.into(),
-                    name: placeholder,
-                })
-            }
-            SurfaceSyntaxCaptureKind::Type => SurfaceSyntaxCapture::Type(SurfaceTypeCapture {
-                ty: SurfaceType {
-                    kind: SurfaceTypeKind::Unit,
-                    span: name.span,
-                    diagnostic: None,
-                },
-                contents: Arc::from([]),
-            }),
-            SurfaceSyntaxCaptureKind::Pattern => {
-                SurfaceSyntaxCapture::Pattern(SurfacePatternCapture {
-                    pattern: SurfacePattern {
-                        kind: SurfacePatternKind::Wildcard,
-                        span: name.span,
-                        diagnostic: None,
-                    },
-                    contents: Arc::from([]),
-                })
-            }
-            SurfaceSyntaxCaptureKind::Declaration => {
-                return Err(crate::parser::MacroParseFailure::Invalid);
-            }
-        };
-        captures.push(capture);
+        Ok(())
     }
+    let mut captures = Vec::new();
+    let mut identifiers = Vec::new();
+    placeholders(
+        &declaration.matcher,
+        0,
+        0,
+        &mut captures,
+        &mut identifiers,
+        &mut admission_budget,
+    )?;
     let template = declaration
         .template_contents
         .as_deref()
@@ -3313,17 +3351,54 @@ fn capture_by_name<'a>(
     matcher: &[SurfaceSyntaxMatcherPart],
     captures: &'a [SurfaceSyntaxCapture],
 ) -> Result<&'a SurfaceSyntaxCapture, Span> {
-    let index = matcher
-        .iter()
-        .filter_map(|part| match part {
-            SurfaceSyntaxMatcherPart::Capture { name, .. } => Some(name),
-            SurfaceSyntaxMatcherPart::Literal { .. }
-            | SurfaceSyntaxMatcherPart::Container(_)
-            | SurfaceSyntaxMatcherPart::LineEnd => None,
-        })
-        .position(|capture| capture.text == name.text)
-        .ok_or(name.span)?;
-    captures.get(index).ok_or(name.span)
+    capture_by_name_at(name, matcher, captures, &[])
+}
+
+fn capture_by_name_at<'a>(
+    name: &SurfaceName,
+    matcher: &[SurfaceSyntaxMatcherPart],
+    captures: &'a [SurfaceSyntaxCapture],
+    indices: &[usize],
+) -> Result<&'a SurfaceSyntaxCapture, Span> {
+    fn find(
+        parts: &[SurfaceSyntaxMatcherPart],
+        name: &SurfaceName,
+        offset: &mut usize,
+        repetitions: usize,
+    ) -> Option<(usize, usize)> {
+        for part in parts {
+            match part {
+                SurfaceSyntaxMatcherPart::Capture { name: capture, .. } => {
+                    if capture.text == name.text {
+                        return Some((*offset, repetitions));
+                    }
+                    *offset += 1;
+                }
+                SurfaceSyntaxMatcherPart::Container(container) => {
+                    let nested = repetitions
+                        + usize::from(matches!(
+                            &container.kind,
+                            SurfaceMatcherContainerKind::Repeat { .. }
+                        ));
+                    if let Some(found) = find(&container.body, name, offset, nested) {
+                        return Some(found);
+                    }
+                }
+                SurfaceSyntaxMatcherPart::Literal { .. } | SurfaceSyntaxMatcherPart::LineEnd => {}
+            }
+        }
+        None
+    }
+
+    let (index, repetitions) = find(matcher, name, &mut 0, 0).ok_or(name.span)?;
+    let mut capture = captures.get(index).ok_or(name.span)?;
+    for index in indices.iter().take(repetitions) {
+        let SurfaceSyntaxCapture::Repeated(values) = capture else {
+            return Err(name.span);
+        };
+        capture = values.values.get(*index).ok_or(name.span)?;
+    }
+    Ok(capture)
 }
 
 /// Reserve the copies performed by declaration-template substitution.
@@ -3474,6 +3549,13 @@ fn charge_template_inner(
                             .ok_or(MacroParseFailure::Invalid)?;
                         bridge |= capture_bridge;
                     }
+                    Ok(SurfaceSyntaxCapture::Declaration(capture)) => {
+                        type_depth(depth, 1).map_err(resource)?;
+                        budget.charge().map_err(resource)?;
+                        if let Some(origin) = declaration_capture_origin(capture) {
+                            charge_type_origin_copy(origin, depth, budget).map_err(resource)?;
+                        }
+                    }
                     _ => return Err(MacroParseFailure::Invalid),
                 }
             }
@@ -3487,6 +3569,8 @@ fn charge_template_inner(
             MacroOutputNode::Expression(_, _)
             | MacroOutputNode::ForwardedExpression(_, _)
             | MacroOutputNode::ForwardedType(_, _)
+            | MacroOutputNode::ForwardedDeclaration(_, _)
+            | MacroOutputNode::TemplateRepeat(_)
             | MacroOutputNode::ForwardedPattern(_, _) => return Err(MacroParseFailure::Invalid),
         }
     }
@@ -3582,7 +3666,15 @@ pub(crate) fn substitute_contents(
                             |location| location.primary.clone(),
                         ),
                     ),
-                    SurfaceSyntaxCapture::Declaration(_) | SurfaceSyntaxCapture::Repeated(_) => {
+                    SurfaceSyntaxCapture::Declaration(capture) => {
+                        MacroOutputNode::ForwardedDeclaration(
+                            capture.clone(),
+                            declaration_capture_origin(capture)
+                                .cloned()
+                                .unwrap_or_else(|| invocation.into()),
+                        )
+                    }
+                    SurfaceSyntaxCapture::Repeated(_) => {
                         return Err(name.span);
                     }
                 };
@@ -3598,14 +3690,32 @@ pub(crate) fn substitute_contents(
                 substitute_contents(children, matcher, captures, introduction, invocation)?;
             }
             MacroOutputNode::TemplateEscape(name) => return Err(name.span),
+            MacroOutputNode::TemplateRepeat(repeat) => return Err(repeat.origin.primary()),
             MacroOutputNode::Token(_, _, _)
             | MacroOutputNode::Expression(_, _)
             | MacroOutputNode::ForwardedExpression(_, _)
             | MacroOutputNode::ForwardedType(_, _)
+            | MacroOutputNode::ForwardedDeclaration(_, _)
             | MacroOutputNode::ForwardedPattern(_, _) => {}
         }
     }
     Ok(())
+}
+
+fn declaration_capture_origin(capture: &SurfaceDeclarationCapture) -> Option<&MacroOrigin> {
+    match capture.contents.first()? {
+        MacroOutputNode::Expression(_, origin)
+        | MacroOutputNode::ForwardedExpression(_, origin)
+        | MacroOutputNode::ForwardedType(_, origin)
+        | MacroOutputNode::ForwardedPattern(_, origin)
+        | MacroOutputNode::ForwardedDeclaration(_, origin)
+        | MacroOutputNode::Identifier(_, origin)
+        | MacroOutputNode::Token(_, _, origin)
+        | MacroOutputNode::Group(_, _, origin) => Some(origin),
+        MacroOutputNode::Splice(_)
+        | MacroOutputNode::TemplateRepeat(_)
+        | MacroOutputNode::TemplateEscape(_) => None,
+    }
 }
 
 #[cfg(test)]

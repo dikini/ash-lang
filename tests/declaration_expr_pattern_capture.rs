@@ -58,6 +58,20 @@ fn i19_handwritten_binder_control_reaches_the_ordinary_driver() {
 }
 
 #[test]
+fn i19_complete_capture_and_repetition_graph_reaches_the_ordinary_driver() {
+    let program = compile_path(captures_fixture("main.ash"))
+        .expect("the unchanged I19 capture and repetition graph compiles");
+    assert_eq!(execute(&program).unwrap().value_display(), "128");
+}
+
+#[test]
+fn i19_repetition_counts_reach_the_ordinary_driver() {
+    let program = compile_path(captures_fixture("counts.ash"))
+        .expect("the unchanged I19 repetition counts graph compiles");
+    assert_eq!(execute(&program).unwrap().value_display(), "42");
+}
+
+#[test]
 fn i19_imported_pattern_binder_and_expression_keep_the_caller_context() {
     let program = compile_path(captures_fixture("binder.ash"))
         .expect("the unchanged imported binder graph compiles");

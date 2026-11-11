@@ -83,6 +83,8 @@ pub enum NodeKind {
     SyntaxInvocation,
     /// One imported declaration syntax invocation, awaiting expansion.
     DeclarationSyntaxInvocation,
+    /// One protected declaration fragment at a module declaration boundary.
+    DeclarationFragment,
     /// One identifier or expression captured by an invocation.
     SyntaxArgument,
     /// One passive source-authored foreign library.
@@ -1319,6 +1321,18 @@ fn parse_macro_tree_with_expression_scratch(
                 );
                 TokenKind::Wildcard
             }
+            MacroOutputNode::ForwardedDeclaration(capture, origin) => {
+                if !position.is_declarations() {
+                    return Err(MacroParseFailure::Invalid);
+                }
+                original_nodes.insert(
+                    tokens.len(),
+                    MacroOutputNode::ForwardedDeclaration(capture, origin),
+                );
+                let name = format!("__ash_declaration_fragment_{fragment_count}");
+                fragment_count += 1;
+                TokenKind::Identifier(name)
+            }
             MacroOutputNode::Identifier(identifier, origin) => {
                 let mut admission_identifier = false;
                 for name in placeholders {
@@ -1392,7 +1406,9 @@ fn parse_macro_tree_with_expression_scratch(
                 pieces.extend(children.into_iter().rev());
                 open
             }
-            MacroOutputNode::Splice(_) | MacroOutputNode::TemplateEscape(_) => {
+            MacroOutputNode::Splice(_)
+            | MacroOutputNode::TemplateRepeat(_)
+            | MacroOutputNode::TemplateEscape(_) => {
                 return Err(MacroParseFailure::Invalid);
             }
         };
@@ -1406,10 +1422,13 @@ fn parse_macro_tree_with_expression_scratch(
                 | MacroOutputNode::ForwardedExpression(_, origin)
                 | MacroOutputNode::ForwardedType(_, origin)
                 | MacroOutputNode::ForwardedPattern(_, origin)
+                | MacroOutputNode::ForwardedDeclaration(_, origin)
                 | MacroOutputNode::Identifier(_, origin)
                 | MacroOutputNode::Token(_, _, origin)
                 | MacroOutputNode::Group(_, _, origin) => origin,
-                MacroOutputNode::Splice(_) | MacroOutputNode::TemplateEscape(_) => unreachable!(),
+                MacroOutputNode::Splice(_)
+                | MacroOutputNode::TemplateRepeat(_)
+                | MacroOutputNode::TemplateEscape(_) => unreachable!(),
             };
             (*index, origin.primary())
         })
@@ -1517,6 +1536,38 @@ fn parse_macro_tree_with_expression_scratch(
         ..
     } = parser;
     let tree = cst::build(tokens, Vec::new(), diagnostics, events, resource_failure);
+    let expected_declarations = original_nodes
+        .values()
+        .filter(|node| matches!(node, MacroOutputNode::ForwardedDeclaration(_, _)))
+        .count();
+    if expected_declarations != 0 {
+        let root = tree.root.as_ref().ok_or(MacroParseFailure::Invalid)?;
+        if budgeted {
+            budget
+                .charge_units(original_nodes.len().saturating_add(root.children.len()))
+                .map_err(macro_resource_failure)?;
+        }
+        let mut actual_declarations = 0;
+        for child in &root.children {
+            if let ConcreteElement::Node(node) = child
+                && node.kind == NodeKind::DeclarationFragment
+            {
+                let [ConcreteElement::Token(index)] = node.children.as_slice() else {
+                    return Err(MacroParseFailure::Invalid);
+                };
+                if !matches!(
+                    original_nodes.get(index),
+                    Some(MacroOutputNode::ForwardedDeclaration(_, _))
+                ) {
+                    return Err(MacroParseFailure::Invalid);
+                }
+                actual_declarations += 1;
+            }
+        }
+        if actual_declarations != expected_declarations {
+            return Err(MacroParseFailure::Invalid);
+        }
+    }
     if saw_quote_or_escape {
         check_completed_quote_depth(&tree, budget).map_err(macro_resource_failure)?;
     }
@@ -1666,6 +1717,10 @@ fn charge_staged_output_with_expression_scratch(
             // The adapter moves this preflighted capture into original_nodes;
             // the piece, placeholder token and map entry are reserved above.
             MacroOutputNode::ForwardedType(_, _) => {}
+            MacroOutputNode::ForwardedDeclaration(_, origin) => {
+                crate::syntax::charge_type_origin(origin, depth, budget)
+                    .map_err(macro_resource_failure)?;
+            }
             MacroOutputNode::Expression(capture, origin)
             | MacroOutputNode::ForwardedExpression(capture, origin) => {
                 if matches!(node, MacroOutputNode::Expression(..)) && !expression_scratch {
@@ -1700,7 +1755,9 @@ fn charge_staged_output_with_expression_scratch(
                     return Err(MacroParseFailure::Invalid);
                 }
             }
-            MacroOutputNode::Splice(_) | MacroOutputNode::TemplateEscape(_) => {
+            MacroOutputNode::Splice(_)
+            | MacroOutputNode::TemplateRepeat(_)
+            | MacroOutputNode::TemplateEscape(_) => {
                 return Err(MacroParseFailure::Invalid);
             }
         }
@@ -2003,6 +2060,14 @@ pub(crate) struct Parser<'tokens> {
 }
 
 impl Parser<'_> {
+    fn at_forwarded_declaration(&self) -> bool {
+        matches!(
+            self.declaration_output_nodes
+                .and_then(|nodes| nodes.get(&self.position)),
+            Some(crate::syntax::MacroOutputNode::ForwardedDeclaration(_, _))
+        )
+    }
+
     fn is_admission_identifier(&self) -> bool {
         self.nth_is_admission_identifier(0)
     }

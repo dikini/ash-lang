@@ -137,7 +137,9 @@ impl<'a> ProjectionTokens<'a> {
             | MacroOutputNode::ForwardedExpression(_, _)
             | MacroOutputNode::ForwardedType(_, _)
             | MacroOutputNode::ForwardedPattern(_, _)
+            | MacroOutputNode::ForwardedDeclaration(_, _)
             | MacroOutputNode::Splice(_)
+            | MacroOutputNode::TemplateRepeat(_)
             | MacroOutputNode::TemplateEscape(_) => return None,
         };
         let crate::syntax::MacroOrigin::Source(span) = origin else {
@@ -584,6 +586,7 @@ fn validate_shallow_shape(
                 || shape.peek_node_is(NodeKind::ImplementationDeclaration)
                 || shape.peek_node_is(NodeKind::SyntaxDeclaration)
                 || shape.peek_node_is(NodeKind::DeclarationSyntaxInvocation)
+                || shape.peek_node_is(NodeKind::DeclarationFragment)
                 || shape.peek_node_is(NodeKind::EquationalGlobal)
                 || shape.peek_node_is(NodeKind::InlineOperationalGlobal)
             {
@@ -792,6 +795,9 @@ fn validate_shallow_shape(
             }
         }
         NodeKind::SyntaxMatchedIteration => matched_shape_items(&mut shape, None)?,
+        NodeKind::DeclarationFragment => {
+            shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
+        }
         NodeKind::SyntaxArgument => {
             if shape.peek_token_is(&TokenKind::LeftBrace) {
                 shape.token(&TokenKind::LeftBrace)?;
@@ -2105,20 +2111,14 @@ fn project_syntax_declaration(
         .ok_or(ProjectionError::MalformedTree(
             InternalReason::UnexpectedShape,
         ))?;
-    if let Some(sequence) = extended_matcher(child) {
-        return Ok(SurfaceSyntaxDeclaration {
-            category: SurfaceSyntaxCategory::Declaration,
-            name: surface_name(name)?,
-            matcher: project_matcher_items(source, sequence, tokens)?,
-            implementation: SurfaceSyntaxImplementation::Template,
-            template_contents: Some(Vec::new().into()),
-            contains_quote_or_escape: false,
-            span: node_span(source, child, tokens)?,
-        });
-    }
-    let mut matcher = Vec::new();
+    let extended = extended_matcher(child);
+    let mut matcher = if let Some(sequence) = extended {
+        project_matcher_items(source, sequence, tokens)?
+    } else {
+        Vec::new()
+    };
     let mut prefix = 0;
-    for element in &child.children {
+    for element in child.children.iter().filter(|_| extended.is_none()) {
         match element {
             ConcreteElement::Token(index) => {
                 let token = tokens.get(*index).ok_or(ProjectionError::MalformedTree(
@@ -2145,22 +2145,7 @@ fn project_syntax_declaration(
                 if parts.len() != 4 {
                     return malformed(InternalReason::UnexpectedShape);
                 }
-                let kind = match &parts[3].kind {
-                    TokenKind::Identifier(kind) if kind == "expr" => {
-                        SurfaceSyntaxCaptureKind::Expression
-                    }
-                    TokenKind::Identifier(kind) if kind == "ident" => {
-                        SurfaceSyntaxCaptureKind::Identifier
-                    }
-                    TokenKind::Type if declaration => SurfaceSyntaxCaptureKind::Type,
-                    TokenKind::Identifier(kind) if declaration && kind == "pattern" => {
-                        SurfaceSyntaxCaptureKind::Pattern
-                    }
-                    TokenKind::Identifier(kind) if declaration && kind == "declaration" => {
-                        SurfaceSyntaxCaptureKind::Declaration
-                    }
-                    _ => return malformed(InternalReason::UnexpectedShape),
-                };
+                let kind = syntax_capture_kind(&parts[3].kind, declaration)?;
                 matcher.push(SurfaceSyntaxMatcherPart::Capture {
                     name: surface_name(parts[1])?,
                     kind,
@@ -2234,6 +2219,24 @@ fn project_syntax_declaration(
     })
 }
 
+fn syntax_capture_kind(
+    kind: &TokenKind,
+    declaration: bool,
+) -> Result<SurfaceSyntaxCaptureKind, ProjectionError> {
+    match kind {
+        TokenKind::Identifier(kind) if kind == "expr" => Ok(SurfaceSyntaxCaptureKind::Expression),
+        TokenKind::Identifier(kind) if kind == "ident" => Ok(SurfaceSyntaxCaptureKind::Identifier),
+        TokenKind::Type if declaration => Ok(SurfaceSyntaxCaptureKind::Type),
+        TokenKind::Identifier(kind) if declaration && kind == "pattern" => {
+            Ok(SurfaceSyntaxCaptureKind::Pattern)
+        }
+        TokenKind::Identifier(kind) if declaration && kind == "declaration" => {
+            Ok(SurfaceSyntaxCaptureKind::Declaration)
+        }
+        _ => malformed(InternalReason::UnexpectedShape),
+    }
+}
+
 fn extended_matcher(child: &ConcreteNode) -> Option<&ConcreteNode> {
     match child.children.get(7) {
         Some(ConcreteElement::Node(node)) if node.kind == NodeKind::SyntaxMatcherSequence => {
@@ -2299,65 +2302,69 @@ fn project_matcher_items(
     let body = matcher_body(node, tokens)?;
     let mut result = Vec::with_capacity(body.len());
     for element in body {
-        let part =
-            match element {
-                ConcreteElement::Token(index) => {
-                    let token = tokens.get(*index).ok_or(ProjectionError::MalformedTree(
-                        InternalReason::TokenOutOfRange,
-                    ))?;
-                    if token.kind == TokenKind::LineEnd {
-                        SurfaceSyntaxMatcherPart::LineEnd
-                    } else {
-                        SurfaceSyntaxMatcherPart::Literal {
-                            kind: token.kind.clone(),
-                            spelling: matcher_spelling(source, token)?.to_owned(),
-                        }
+        let part = match element {
+            ConcreteElement::Token(index) => {
+                let token = tokens.get(*index).ok_or(ProjectionError::MalformedTree(
+                    InternalReason::TokenOutOfRange,
+                ))?;
+                if token.kind == TokenKind::LineEnd {
+                    SurfaceSyntaxMatcherPart::LineEnd
+                } else {
+                    SurfaceSyntaxMatcherPart::Literal {
+                        kind: token.kind.clone(),
+                        spelling: matcher_spelling(source, token)?.to_owned(),
                     }
                 }
-                ConcreteElement::Node(capture) if capture.kind == NodeKind::SyntaxCapture => {
-                    let name = direct_tokens(capture, tokens).nth(1).ok_or(
-                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
-                    )?;
-                    SurfaceSyntaxMatcherPart::Capture {
-                        name: surface_name(name)?,
-                        kind: SurfaceSyntaxCaptureKind::Identifier,
-                    }
+            }
+            ConcreteElement::Node(capture) if capture.kind == NodeKind::SyntaxCapture => {
+                let mut parts = direct_tokens(capture, tokens);
+                let name = parts.nth(1).ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                let kind = parts.nth(1).ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                SurfaceSyntaxMatcherPart::Capture {
+                    name: surface_name(name)?,
+                    kind: syntax_capture_kind(&kind.kind, true)?,
                 }
-                ConcreteElement::Node(container)
-                    if matches!(
-                        container.kind,
-                        NodeKind::SyntaxMatcherGroup | NodeKind::SyntaxMatcherRepeat
-                    ) =>
-                {
-                    let kind = if container.kind == NodeKind::SyntaxMatcherGroup {
-                        SurfaceMatcherContainerKind::Group {
-                            braces: matcher_token(&container.children[0], tokens)?.kind
-                                == TokenKind::LeftBrace,
-                        }
+            }
+            ConcreteElement::Node(container)
+                if matches!(
+                    container.kind,
+                    NodeKind::SyntaxMatcherGroup | NodeKind::SyntaxMatcherRepeat
+                ) =>
+            {
+                let kind = if container.kind == NodeKind::SyntaxMatcherGroup {
+                    SurfaceMatcherContainerKind::Group {
+                        braces: matcher_token(&container.children[0], tokens)?.kind
+                            == TokenKind::LeftBrace,
+                    }
+                } else {
+                    let len = container.children.len();
+                    let before_operator = matcher_token(&container.children[len - 2], tokens)?;
+                    let separator = if before_operator.kind == TokenKind::RightParen {
+                        None
                     } else {
-                        let len = container.children.len();
-                        let before_operator = matcher_token(&container.children[len - 2], tokens)?;
-                        let separator = if before_operator.kind == TokenKind::RightParen {
-                            None
-                        } else {
-                            Some((
-                                before_operator.kind.clone(),
-                                matcher_spelling(source, before_operator)?.to_owned(),
-                            ))
-                        };
-                        let operator = matcher_token(&container.children[len - 1], tokens)?;
-                        SurfaceMatcherContainerKind::Repeat {
-                            one_or_more: operator.kind == TokenKind::Plus,
-                            separator,
-                        }
+                        Some((
+                            before_operator.kind.clone(),
+                            matcher_spelling(source, before_operator)?.to_owned(),
+                        ))
                     };
-                    let body = project_matcher_items(source, container, tokens)?;
-                    SurfaceSyntaxMatcherPart::Container(std::sync::Arc::new(
-                        SurfaceMatcherContainer { kind, body },
-                    ))
-                }
-                _ => return malformed(InternalReason::UnexpectedShape),
-            };
+                    let operator = matcher_token(&container.children[len - 1], tokens)?;
+                    SurfaceMatcherContainerKind::Repeat {
+                        one_or_more: operator.kind == TokenKind::Plus,
+                        separator,
+                    }
+                };
+                let body = project_matcher_items(source, container, tokens)?;
+                SurfaceSyntaxMatcherPart::Container(std::sync::Arc::new(SurfaceMatcherContainer {
+                    kind,
+                    body,
+                }))
+            }
+            _ => return malformed(InternalReason::UnexpectedShape),
+        };
         result.push(part);
     }
     Ok(result)
@@ -2396,11 +2403,7 @@ fn charge_matcher_items(
                 let kind = parts.next().ok_or(ProjectionError::MalformedTree(
                     InternalReason::UnexpectedShape,
                 ))?;
-                if !matches!(&kind.kind, TokenKind::Identifier(text) if text == "ident") {
-                    return Err(
-                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
-                    );
-                }
+                let _ = syntax_capture_kind(&kind.kind, true)?;
                 let text = match &name.kind {
                     TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => text,
                     _ => {
@@ -2479,26 +2482,7 @@ fn project_staged_source_child_with_quotes(
             .map_err(Into::into);
     };
     budget.charge_units(4)?;
-    let Some(ConcreteElement::Node(template)) = child.children.get(9) else {
-        return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
-    };
-    if child.kind != NodeKind::SyntaxDeclaration || template.kind != NodeKind::TemplateBody {
-        return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
-    }
-    budget.charge_units(template.children.len())?;
-    let empty = match template.children.as_slice() {
-        [left, right] => {
-            matcher_token(left, &tokens)?.kind == TokenKind::LeftBrace
-                && matcher_token(right, &tokens)?.kind == TokenKind::RightBrace
-        }
-        [left, line, right] => {
-            matcher_token(left, &tokens)?.kind == TokenKind::LeftBrace
-                && matcher_token(line, &tokens)?.kind == TokenKind::LineEnd
-                && matcher_token(right, &tokens)?.kind == TokenKind::RightBrace
-        }
-        _ => false,
-    };
-    if !empty {
+    if child.kind != NodeKind::SyntaxDeclaration {
         return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
     }
     let name = direct_tokens(child, &tokens)
@@ -2510,12 +2494,26 @@ fn project_staged_source_child_with_quotes(
         TokenKind::Identifier(text) => text.len(),
         _ => return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into()),
     };
-    // Declaration slot, name, empty template Arc and the source-span walk.
-    budget.charge_units(8)?;
+    // Declaration name and source-span walk; matcher and template reserve
+    // their own retained structures before projection.
+    budget.charge_units(child.children.len().saturating_add(8))?;
     budget.charge_units(name_length)?;
     charge_matcher_items(source, sequence, &tokens, 0, budget)?;
-    let declaration = project_syntax_declaration(source, child, &tokens, &mut Vec::new())?;
+    let expression_budget = std::cell::RefCell::new(&mut *budget);
+    tokens.expression_budget = Some(&expression_budget);
+    tokens.quote_sites = quote_sites;
+    let mut adapters = Vec::new();
+    let declaration = project_syntax_declaration(source, child, &tokens, &mut adapters)?;
+    reserve_expression_scratch(&mut module.syntax_declarations, 1, Some(&expression_budget))?;
     module.syntax_declarations.push(declaration);
+    for adapter in adapters {
+        reserve_expression_scratch(&mut module.declaration_order, 1, Some(&expression_budget))?;
+        reserve_expression_scratch(&mut module.definitions, 1, Some(&expression_budget))?;
+        module
+            .declaration_order
+            .push(SurfaceDeclarationIndex::Global(module.definitions.len()));
+        module.definitions.push(adapter);
+    }
     Ok(())
 }
 
@@ -2587,6 +2585,7 @@ struct DeclarationFrame<'a> {
     frame: Option<std::sync::Arc<crate::syntax::ExpansionFrame>>,
     expression_pattern: bool,
     pattern_accounting: bool,
+    owns_staging_frame: bool,
 }
 
 impl DeclarationFrame<'_> {
@@ -2690,6 +2689,7 @@ pub(crate) fn project_declaration_expansions_with_quotes(
         frame: None,
         expression_pattern: false,
         pattern_accounting: false,
+        owns_staging_frame: false,
     }];
     let mut staging_frames = Vec::new();
     let mut module = ModuleProjection::default();
@@ -2706,7 +2706,7 @@ pub(crate) fn project_declaration_expansions_with_quotes(
             .as_ref()
             .and_then(|root| root.children.get(index))
         else {
-            if current.invocation.is_some() {
+            if current.owns_staging_frame {
                 staging_frames.pop();
             }
             pending.pop();
@@ -2716,6 +2716,70 @@ pub(crate) fn project_declaration_expansions_with_quotes(
             continue;
         };
         let tokens = current.tokens(&staging_frames);
+        if child.kind == NodeKind::DeclarationFragment {
+            let [ConcreteElement::Token(index)] = child.children.as_slice() else {
+                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+            };
+            let Some(crate::syntax::MacroOutputNode::ForwardedDeclaration(capture, origin)) =
+                tokens.originals.and_then(|nodes| nodes.get(index))
+            else {
+                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+            };
+            charge_forwarded_declaration(capture, depth, budget)?;
+            let anchor = current.invocation.unwrap_or_else(|| origin.primary());
+            let frame = current.frame.clone();
+            let expression_pattern = current.expression_pattern;
+            let pattern_accounting = current.pattern_accounting;
+            let contexts = crate::syntax::SyntaxContexts::new_budgeted(
+                selected,
+                owner_imports,
+                &staged_owners,
+                budget,
+            )?;
+            let parsed = super::parse_macro_tree_with_expression_scratch(
+                source,
+                anchor,
+                capture.contents.to_vec(),
+                &contexts,
+                &[],
+                super::MacroOutputPosition::StagedDeclarations,
+                pattern_accounting,
+                false,
+                budget,
+            )?;
+            for _ in 0..4 {
+                budget.charge_units(parsed.tree.events.len())?;
+            }
+            budget.charge_units(parsed.tree.tokens.len())?;
+            let root = validated_macro_root(source, &parsed.tree)?;
+            validate_node_shape_with_admission(
+                root,
+                &parsed.tree.tokens,
+                Some(&parsed.admission_identifiers),
+            )?;
+            let mut declarations = child_nodes(root);
+            if !declarations
+                .next()
+                .is_some_and(|node| is_capturable_declaration(node.kind))
+                || declarations.next().is_some()
+            {
+                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+            }
+            drop(declarations);
+            budget.charge_units(2)?;
+            pending.push(DeclarationFrame {
+                tree: DeclarationTree::Output(Box::new(parsed)),
+                contexts,
+                next: 0,
+                invocation: Some(anchor),
+                construction: None,
+                frame,
+                expression_pattern,
+                pattern_accounting,
+                owns_staging_frame: false,
+            });
+            continue;
+        }
         if child.kind != NodeKind::DeclarationSyntaxInvocation {
             if current.invocation.is_some() {
                 if matches!(
@@ -2977,6 +3041,7 @@ pub(crate) fn project_declaration_expansions_with_quotes(
             frame: Some(frame),
             expression_pattern,
             pattern_accounting,
+            owns_staging_frame: true,
         });
     }
     *owners = staged_owners;
@@ -3122,7 +3187,9 @@ fn charge_transformer_type_metadata_copies_with_expression(
             MacroOutputNode::Identifier(_, _)
             | MacroOutputNode::Token(_, _, _)
             | MacroOutputNode::ForwardedExpression(_, _)
+            | MacroOutputNode::ForwardedDeclaration(_, _)
             | MacroOutputNode::Splice(_)
+            | MacroOutputNode::TemplateRepeat(_)
             | MacroOutputNode::TemplateEscape(_) => {}
         }
     }
@@ -3705,15 +3772,7 @@ fn charge_declaration_invocation(
     if selection.declaration.category != SurfaceSyntaxCategory::Declaration
         || (executing && !template && !declaration_transformer)
         || (has_declaration
-            && (!executing
-                || has_other_capture
-                || !source_projection_tokens(tokens)
-                || (template
-                    && !selection
-                        .declaration
-                        .template_contents
-                        .as_deref()
-                        .is_some_and(<[_]>::is_empty))))
+            && (!executing || has_other_capture || !source_projection_tokens(tokens)))
     {
         return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
     }
@@ -6024,6 +6083,65 @@ fn capture_declaration_node(argument: &ConcreteNode) -> Result<&ConcreteNode, Pr
     Ok(declaration)
 }
 
+/// Reserve the independent packet copy before the module parser consumes it.
+fn charge_forwarded_declaration(
+    capture: &SurfaceDeclarationCapture,
+    prefix: usize,
+    budget: &mut crate::syntax_resource::SyntaxBudget,
+) -> Result<(), DeclarationExpansionFailure> {
+    use crate::syntax::MacroOutputNode;
+
+    budget.charge_units(capture.contents.len().saturating_mul(3))?;
+    let mut pending = capture
+        .contents
+        .iter()
+        .map(|node| (node, prefix))
+        .collect::<Vec<_>>();
+    while let Some((node, depth)) = pending.pop() {
+        budget.charge()?;
+        match node {
+            MacroOutputNode::Identifier(name, origin) => {
+                crate::syntax::charge_type_name_copy(name, depth, budget)?;
+                crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
+            }
+            MacroOutputNode::Token(kind, _, origin) => {
+                crate::syntax::charge_type_token_copy(kind, budget)?;
+                budget.charge()?;
+                crate::syntax::charge_type_origin_copy(origin, depth, budget)?;
+            }
+            MacroOutputNode::Group(_, children, origin) => {
+                let next = crate::syntax::type_depth(depth, 1)?;
+                crate::syntax::charge_type_origin_copy(origin, next, budget)?;
+                budget.charge_units(children.len().saturating_mul(2))?;
+                let live = pending.len();
+                let requested = live.saturating_add(children.len());
+                if requested > pending.capacity() {
+                    budget.charge_units(requested.saturating_add(live))?;
+                    pending.reserve_exact(children.len());
+                }
+                pending.extend(children.iter().map(|node| (node, next)));
+            }
+            MacroOutputNode::ForwardedExpression(_, _)
+            | MacroOutputNode::ForwardedType(_, _)
+            | MacroOutputNode::ForwardedPattern(_, _) => {
+                if crate::syntax::charge_captured_ep_original_selected(node, depth, true, budget)? {
+                    return Err(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into(),
+                    );
+                }
+            }
+            MacroOutputNode::Expression(_, _)
+            | MacroOutputNode::ForwardedDeclaration(_, _)
+            | MacroOutputNode::Splice(_)
+            | MacroOutputNode::TemplateRepeat(_)
+            | MacroOutputNode::TemplateEscape(_) => {
+                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Reserve the source-only packet and check its retained delimiter depth.
 fn charge_declaration_contents(
     source: &SourceFile,
@@ -6353,8 +6471,15 @@ fn capture_template_contents(
             }
         }
     }
-    capture_contents_with_escapes(source, node, tokens, &Default::default(), Some(&escapes))
-        .map(|(contents, _)| (contents, contains_quote_or_escape))
+    capture_contents_with_escapes(
+        source,
+        node,
+        tokens,
+        &Default::default(),
+        Some(&escapes),
+        declaration,
+    )
+    .map(|(contents, _)| (contents, contains_quote_or_escape))
 }
 
 fn make_template_escape_adapter(
@@ -6567,7 +6692,7 @@ fn capture_contents_and_type(
     tokens: &ProjectionTokens<'_>,
     originals: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
 ) -> Result<(Vec<crate::syntax::MacroOutputNode>, bool), ProjectionError> {
-    capture_contents_with_escapes(source, node, tokens, originals, None)
+    capture_contents_with_escapes(source, node, tokens, originals, None, false)
 }
 
 fn capture_contents_with_escapes(
@@ -6576,6 +6701,7 @@ fn capture_contents_with_escapes(
     tokens: &ProjectionTokens<'_>,
     originals: &std::collections::HashMap<usize, crate::syntax::MacroOutputNode>,
     escapes: Option<&[(usize, SurfaceName)]>,
+    allow_repetition: bool,
 ) -> Result<(Vec<crate::syntax::MacroOutputNode>, bool), ProjectionError> {
     use crate::syntax::{MacroDelimiter, MacroOutputNode};
 
@@ -6686,6 +6812,7 @@ fn capture_contents_with_escapes(
         originals: &std::collections::HashMap<usize, MacroOutputNode>,
         escapes: Option<&[(usize, SurfaceName)]>,
         closing: Option<TokenKind>,
+        allow_repetition: bool,
     ) -> Result<(Vec<MacroOutputNode>, bool), ProjectionError> {
         let mut output = Vec::new();
         let mut contains_protected_type = false;
@@ -6702,7 +6829,70 @@ fn capture_contents_with_escapes(
             }
             reserve_expression_scratch(&mut output, 1, tokens.expression_budget)?;
             *position += 1;
-            if matches!(token.kind, TokenKind::LeftParen | TokenKind::LeftBrace) {
+            if allow_repetition
+                && token.kind == TokenKind::Dollar
+                && !quoted_dollar
+                && indices
+                    .get(*position)
+                    .and_then(|(next, _)| tokens.get(*next))
+                    .is_some_and(|next| next.kind == TokenKind::LeftParen)
+            {
+                *position += 1; // The opening parenthesis belongs to the directive.
+                let (body, child_contains_type) = sequence(
+                    source,
+                    indices,
+                    position,
+                    tokens,
+                    originals,
+                    escapes,
+                    Some(TokenKind::RightParen),
+                    allow_repetition,
+                )?;
+                contains_protected_type |= child_contains_type;
+                let next = indices
+                    .get(*position)
+                    .and_then(|(next, _)| tokens.get(*next))
+                    .ok_or(ProjectionError::MalformedTree(
+                        InternalReason::UnexpectedShape,
+                    ))?;
+                let separator = if matches!(next.kind, TokenKind::Star | TokenKind::Plus) {
+                    None
+                } else {
+                    if !matcher_separator(&next.kind) {
+                        return malformed(InternalReason::UnexpectedShape);
+                    }
+                    *position += 1;
+                    let spelling = matcher_spelling(source, next)?;
+                    charge_expression_allocation(
+                        spelling.len().saturating_add(2),
+                        tokens.expression_budget,
+                    )?;
+                    Some((
+                        next.kind.clone(),
+                        std::sync::Arc::from(spelling),
+                        next.span.into(),
+                    ))
+                };
+                let operator = indices
+                    .get(*position)
+                    .and_then(|(next, _)| tokens.get(*next))
+                    .ok_or(ProjectionError::MalformedTree(
+                        InternalReason::UnexpectedShape,
+                    ))?;
+                if !matches!(operator.kind, TokenKind::Star | TokenKind::Plus) {
+                    return malformed(InternalReason::UnexpectedShape);
+                }
+                *position += 1;
+                charge_expression_allocation(1, tokens.expression_budget)?;
+                output.push(MacroOutputNode::TemplateRepeat(std::sync::Arc::new(
+                    crate::syntax::TemplateRepeat {
+                        body,
+                        separator,
+                        one_or_more: operator.kind == TokenKind::Plus,
+                        origin: join_spans(source, token.span, operator.span)?.into(),
+                    },
+                )));
+            } else if matches!(token.kind, TokenKind::LeftParen | TokenKind::LeftBrace) {
                 let (delimiter, end) = if matches!(token.kind, TokenKind::LeftParen) {
                     (MacroDelimiter::Parentheses, TokenKind::RightParen)
                 } else {
@@ -6716,6 +6906,7 @@ fn capture_contents_with_escapes(
                     originals,
                     escapes,
                     Some(end),
+                    allow_repetition,
                 )?;
                 contains_protected_type |= child_contains_type;
                 push_group(
@@ -6809,7 +7000,16 @@ fn capture_contents_with_escapes(
             }
         }
     }
-    sequence(source, &indices, &mut 0, tokens, originals, escapes, None)
+    sequence(
+        source,
+        &indices,
+        &mut 0,
+        tokens,
+        originals,
+        escapes,
+        None,
+        allow_repetition,
+    )
 }
 
 fn validated_macro_root<'tree>(
@@ -7501,6 +7701,19 @@ pub(super) fn validate_declaration_template(
         quote_sites: None,
     };
     for child in child_nodes(root) {
+        if child.kind == NodeKind::DeclarationFragment {
+            let [ConcreteElement::Token(index)] = child.children.as_slice() else {
+                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+            };
+            budget.charge()?;
+            if !matches!(
+                parsed.original_nodes.get(index),
+                Some(crate::syntax::MacroOutputNode::ForwardedDeclaration(_, _))
+            ) {
+                return Err(ProjectionError::MalformedTree(InternalReason::UnexpectedShape).into());
+            }
+            continue;
+        }
         if child.kind == NodeKind::DeclarationSyntaxInvocation {
             charge_declaration_invocation(source, child, &tokens, contexts, false, budget)?;
         } else {
